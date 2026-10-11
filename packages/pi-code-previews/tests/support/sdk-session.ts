@@ -1,4 +1,3 @@
-// Public Pi SDK session scaffolding: offline models, quiet resources, and scoped session disposal.
 import {
   createAgentSession,
   ModelRuntime,
@@ -20,7 +19,6 @@ import { setCodePreviewSettings } from "../../src/config/state";
 import { codePreviewApplicationLayer } from "../../src/layer";
 import { step } from "./effect-test";
 
-/** Models stored under `directory` that never refresh or reach the network. */
 export const offlineModels = (directory: string) =>
   step(() =>
     ModelRuntime.create({
@@ -32,7 +30,6 @@ export const offlineModels = (directory: string) =>
     }),
   );
 
-/** A session whose scope emits shutdown, disposes it, and restores default preview settings. */
 export const scopedSession = (options: {
   readonly cwd: string;
   readonly agentDir?: string;
@@ -65,13 +62,11 @@ export const scopedSession = (options: {
     return session;
   });
 
-/** Code Previews loading `preview` over the defaults, with an anchor command and no syntax work. */
 export const codePreviewsUnderTest =
   (
     agentDir: string,
     preview: Partial<CodePreviewSettings>,
     options: {
-      /** Host API overrides, such as recording or refusing registrations. */
       readonly api?: (pi: ExtensionAPI) => Partial<ExtensionAPI>;
       readonly registerRenderers?: CodePreviewExtensionDependencies["registerRenderers"];
     } = {},

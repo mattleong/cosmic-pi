@@ -38,14 +38,8 @@ it("decodes only own __proto__ fields without prototype mutation", () => {
     writable: true,
   });
   const ProtoFieldSchema = Schema.Struct({ enabled: Schema.Boolean });
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-  const fields = Object.create(null) as { readonly __proto__: typeof ProtoFieldSchema };
-  Object.defineProperty(fields, "__proto__", {
-    value: ProtoFieldSchema,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
+  const fields = { ["__proto__"]: ProtoFieldSchema };
+  Object.setPrototypeOf(fields, null);
 
   const decoded = decodeTolerantFields(input, fields);
   expect(Object.hasOwn(decoded.value, "__proto__")).toBe(true);
@@ -137,8 +131,6 @@ testLayer(Path.layer)("scoped config store", (it) => {
           )
           .pipe(Effect.forkScoped);
         yield* Deferred.await(locked);
-        // Hold the competing lock while every unlocked existence check still sees absence.
-        // Both seed entrypoints signal before acquiring the lock, including an unsafe write.
         const documents = Layer.succeed(JsonDocumentStore, {
           ...memory.service,
           modifyObject: (path, modify) =>

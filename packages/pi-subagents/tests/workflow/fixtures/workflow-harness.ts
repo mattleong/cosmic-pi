@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -52,20 +51,16 @@ import {
 
 const decodeResult = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
-/** A finished run's value, parsed from its JSON result text. */
 export const resultValue = (run: WorkflowRunView): Schema.Json => decodeResult(run.result?.text);
 
-/** A complete script with the given body, declaring `phases` (a JavaScript array literal). */
 export const script = (body: string, name = "test-workflow", phases = '[{ title: "Main" }]') =>
   `export const meta = { name: ${JSON.stringify(name)}, description: "A test workflow", phases: ${phases} };\n${body}`;
 
-/** An inline workflow source with a complete script around the given body. */
 export const inline = (body: string, name?: string, phases?: string) => ({
   kind: "inline" as const,
   script: script(body, name, phases),
 });
 
-/** Starts `source`, a script body to run inline unless it is a whole source, with null args. */
 export const startScript = (
   workflows: WorkflowServiceContract,
   source: string | WorkflowSourceRequest,
@@ -77,14 +72,9 @@ export const startScript = (
     host,
   );
 
-/** A worktree writer's agent() call for `task`. */
 export const worktreeWriter = (task: string): string =>
   `agent(${JSON.stringify(task)}, { profile: "worker", isolation: "worktree" })`;
 
-/**
- * Starts root children of the main agent, which hold root slots until they report, under the
- * given nesting policy or the default one.
- */
 export const mainChildren = (
   subagents: SubagentServiceContract,
   names: ReadonlyArray<string>,
@@ -99,7 +89,6 @@ export const mainChildren = (
 const writes = (call: Pick<WorkflowAgentSpec, "profile" | "writes">): boolean =>
   call.profile === "worker" || call.writes !== undefined;
 
-/** Resolves every agent to a native-report launch; `worker` and `writes` make it a writer. */
 export const testHost = (
   record: (request: StartSubagentRequest) => void = () => {},
 ): WorkflowHost => ({
@@ -126,27 +115,18 @@ export const testHost = (
     }),
 });
 
-/** Run files kept in memory, with switches that make writing them fail. */
 export interface MemoryRunFiles {
-  /** Saved script copies by run id. */
   readonly scripts: Map<string, string>;
-  /** Results journal lines by journal path. */
   readonly journals: Map<string, string[]>;
-  /** `run.json` texts by run id, in the order runs were first recorded. */
   readonly records: Map<string, string>;
-  /** Full results saved beside a journal, by path. */
   readonly results: Map<string, string>;
-  /** When each run's directory was last written, its heartbeat, by run id. */
   readonly writtenAt: Map<string, number>;
-  /** The live runs each creation was told not to prune. */
   readonly live: Array<ReadonlySet<string>>;
   failCreate: boolean;
   failAppend: boolean;
   failRecord: boolean;
   failResult: boolean;
-  /** The next append writes its line, then waits on this, still holding the journal lock. */
   holdNextAppend: Effect.Effect<void> | undefined;
-  /** Run directories marked recent, in order. */
   readonly touches: string[];
 }
 
@@ -165,7 +145,6 @@ export const memoryRunFiles = (): MemoryRunFiles => ({
   touches: [],
 });
 
-/** The decoded results journal lines a run wrote. */
 export const journalLines = (files: MemoryRunFiles, path: string | undefined) =>
   (path === undefined ? [] : (files.journals.get(path) ?? [])).map((line) => decodeLine(line));
 
@@ -173,13 +152,11 @@ const decodeLine = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
 );
 
-/** A run's saved `run.json`, decoded; undefined before the run is recorded. */
 export const runRecord = (files: MemoryRunFiles, runId: string) => {
   const text = files.records.get(runId);
   return text === undefined ? undefined : decodeLine(text);
 };
 
-/** Rewrites a run's saved record, as another Pi process or a crash would leave it. */
 export const patchRunRecord = (
   files: MemoryRunFiles,
   runId: string,
@@ -192,7 +169,6 @@ export const patchRunRecord = (
 
 const RUN_ID = /^wf-[a-z0-9]+-[1-9][0-9]*$/u;
 
-/** Where the memory store keeps a run's files. */
 export const memoryRunPaths = (runId: string) => {
   const directory = `/agent/subagents/workflow-runs/${runId}`;
   return {
@@ -203,20 +179,14 @@ export const memoryRunPaths = (runId: string) => {
   };
 };
 
-/** Where the memory store says saved workflows live. */
 export const memoryLocations = {
   project: "/project/.pi/workflows",
   projectTrusted: false,
   user: "/agent/workflows",
 };
 
-/** The script file's name without its directory, as the store's errors name it. */
 const fileName = (path: string): string => path.split("/").at(-1) ?? path;
 
-/**
- * A script file read from memory, failing like the real store's read: the full path leads the
- * agent-facing message, and the error names the file.
- */
 const readMemoryScript = (path: string, source: string | undefined) =>
   source === undefined
     ? Effect.fail(
@@ -238,17 +208,12 @@ const readMemoryScript = (path: string, source: string | undefined) =>
         ),
       );
 
-/**
- * Saved workflows and script files from memory: `scripts` holds saved workflows by name and
- * script files by absolute path.
- */
 export const memoryStore = (
   scripts: Readonly<Record<string, string>>,
   files: MemoryRunFiles = memoryRunFiles(),
 ): WorkflowStoreContract => {
   const runIdOf = (paths: { readonly directory: string }) =>
     paths.directory.split("/").at(-1) ?? "";
-  /** Writing in a run's directory marks it recent, as the file system's times do. */
   const written = (runId: string) =>
     Clock.currentTimeMillis.pipe(Effect.map((now) => void files.writtenAt.set(runId, now)));
   const recordFile = (runId: string, text: string) => ({
@@ -367,13 +332,8 @@ export const memoryStore = (
   };
 };
 
-/**
- * What a settled writer left in its worktree, as the fake engine's check for changes finds it:
- * changes (the default), nothing, or a check or discard that fails.
- */
 type FakeWorkerContents = "changed" | "unchanged" | "unreadable" | "undeletable";
 
-/** Holds a workspace operation once it starts, until `release` completes. */
 interface FakeGate {
   readonly entered: Deferred.Deferred<void>;
   readonly release: Deferred.Deferred<void>;
@@ -384,18 +344,11 @@ export const fakeGate: Effect.Effect<FakeGate> = Effect.all({
   release: Deferred.make<void>(),
 });
 
-/** Notes that the gated operation started, then waits for its release. */
 const passGate = (gate: FakeGate | undefined): Effect.Effect<void> =>
   gate
     ? Deferred.succeed(gate.entered, undefined).pipe(Effect.andThen(Deferred.await(gate.release)))
     : Effect.void;
 
-/**
- * A workspace engine that creates isolated checkouts, `workspace-1` onwards, and keeps each one's
- * record through review, preparation, integration and discard, with a one-page diff per revision.
- * `workers` says what each worker holds when it is checked for changes. `createGates` holds the
- * creation of the workspaces listed there, and `checkGates` their checks for changes.
- */
 const creatingWorkspaceEngine = (
   workers: ReadonlyMap<string, FakeWorkerContents>,
   createGates: ReadonlyMap<string, FakeGate>,
@@ -514,7 +467,6 @@ const creatingWorkspaceEngine = (
 
 let nextSession = 1;
 
-/** A journal session no other fixture shares. */
 export const workflowSessionKey = (): string => `workflow-test-${process.pid}-${nextSession++}`;
 
 export interface WorkflowFixtureOptions {
@@ -523,30 +475,18 @@ export interface WorkflowFixtureOptions {
   readonly concurrency?: number;
   readonly scripts?: Readonly<Record<string, string>>;
   readonly worktrees?: boolean;
-  /** Whether the host accepts a workflow notification; accepts by default. */
   readonly accept?: (notification: SubagentWorkflowNotification) => boolean;
-  /** Delivers to a real host notifier instead of only recording. */
   readonly notify?: (
     notification: SubagentWorkflowNotification,
   ) => SubagentNotificationDelivery | undefined;
-  /** Wraps the subagent service the workflow service sees, for example to count calls. */
   readonly decorate?: (service: SubagentServiceContract) => SubagentServiceContract;
-  /** Shares resume journals with another fixture, like a later activation of one session. */
   readonly sessionKey?: string;
-  /**
-   * Starts with an empty resume memory for the session, like a new Pi process; run files shared
-   * through `runFiles` still carry over.
-   */
   readonly restart?: boolean;
-  /** Where runs save their script and results journal. */
   readonly runFiles?: MemoryRunFiles;
-  /** The host's Activity bridge, which sees coalesced publishes. */
   readonly activity?: WorkflowActivitySink;
-  /** Follows which runs still need the main agent, as the ultracode window does. */
   readonly observer?: WorkflowRunObserver;
 }
 
-/** The real subagent service over a native-report backend, plus the workflow service. */
 export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
   const backend = options.backend ?? fakeNativeReportBackendLayer();
   const subagents = nativeReportServiceFixture(backend, {}, options.profiles);
@@ -567,7 +507,6 @@ export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
   const delivered: SubagentWorkflowNotification[] = [];
   const runFiles = options.runFiles ?? memoryRunFiles();
   const sessionKey = options.sessionKey ?? workflowSessionKey();
-  // A new Pi process remembers nothing; only the run files tie it to the session.
   const memoryKey = options.restart ? workflowSessionKey() : sessionKey;
   const decorate = options.decorate;
   const workflowSubagents = decorate
@@ -606,11 +545,8 @@ export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
     workflowNotifications,
     delivered,
     runFiles,
-    /** What each worktree's worker holds when it is checked for changes, by workspace id. */
     workers,
-    /** Workspace creations held until released, by the workspace id they create. */
     createGates,
-    /** Checks for changes held until released, by workspace id. */
     checkGates,
     layer,
   };
@@ -618,7 +554,6 @@ export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
 
 export type WorkflowFixture = ReturnType<typeof workflowFixture>;
 
-/** Runs a body against the fixture's services; the layer closes when it returns. */
 export const withWorkflows = <A, E, R>(
   fixture: WorkflowFixture,
   body: (
@@ -630,14 +565,12 @@ export const withWorkflows = <A, E, R>(
     return yield* body(yield* WorkflowService, yield* SubagentService);
   }).pipe(Effect.scoped, Effect.provide(fixture.layer));
 
-/** What a generator test body works with. */
 export interface WorkflowTestContext {
   readonly fixture: WorkflowFixture;
   readonly workflows: WorkflowServiceContract;
   readonly subagents: SubagentServiceContract;
 }
 
-/** Runs a generator body, as `Effect.gen` would, against the fixture's services. */
 export const inWorkflows = <Eff extends Effect.Effect<unknown, unknown, unknown>, A>(
   fixture: WorkflowFixture,
   body: (context: WorkflowTestContext) => Generator<Eff, A, never>,
@@ -646,13 +579,11 @@ export const inWorkflows = <Eff extends Effect.Effect<unknown, unknown, unknown>
     Effect.gen(() => body({ fixture, workflows, subagents })),
   );
 
-/** Runs a generator body, as `Effect.gen` would, against a new fixture's services. */
 export const workflowTest = <Eff extends Effect.Effect<unknown, unknown, unknown>, A>(
   options: WorkflowFixtureOptions,
   body: (context: WorkflowTestContext) => Generator<Eff, A, never>,
 ) => inWorkflows(workflowFixture(options), body);
 
-/** The live clock with `overrides`; whatever they leave out stays live for the runtime's timers. */
 const liveClockWith = (overrides: (live: Clock.Clock) => Partial<Clock.Clock>) =>
   Clock.clockWith((live) =>
     Effect.succeed<Clock.Clock>({
@@ -667,16 +598,11 @@ const liveClockWith = (overrides: (live: Clock.Clock) => Partial<Clock.Clock>) =
     }),
   );
 
-/** The live clock with its wall-clock milliseconds stopped, so everything reads the same time. */
 export const stoppedWallClock = liveClockWith((live) => {
   const millis = live.currentTimeMillisUnsafe();
   return { currentTimeMillisUnsafe: () => millis, currentTimeMillis: Effect.succeed(millis) };
 });
 
-/**
- * The live clock with every sleep of a minute or more cut to `hurried`, so periodic work such as
- * a live run's directory refresh repeats quickly; shorter sleeps stay live.
- */
 export const hurriedClock = (hurried: Duration.Input) =>
   liveClockWith((live) => ({
     sleep: (duration) =>
@@ -687,13 +613,11 @@ export const hurriedClock = (hurried: Duration.Input) =>
       ),
   }));
 
-/** Uses a session's resume journal, as an activation of that session would. */
 export const withJournal = <A>(
   session: string,
   use: (journal: WorkflowJournalContract) => Effect.Effect<A>,
 ) => WorkflowJournal.use(use).pipe(Effect.provide(WorkflowJournal.layer(session)));
 
-/** Retries a root workspace operation until the writer's process cleanup is confirmed. */
 export const onceSettled = <A>(
   operation: Effect.Effect<A, SubagentError>,
 ): Effect.Effect<A, SubagentError> =>
@@ -705,7 +629,6 @@ export const onceSettled = <A>(
     ),
   );
 
-/** Polls a condition on real time; sandbox scripts run in a worker thread. */
 export const eventually = <A>(probe: () => A | undefined, label: string) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < 1_000; attempt++) {
@@ -716,14 +639,9 @@ export const eventually = <A>(probe: () => A | undefined, label: string) =>
     return yield* Effect.die(new Error(`Timed out waiting for ${label}.`));
   });
 
-/** Polls until `condition` holds, on real time. */
 export const until = (condition: () => boolean, label: string) =>
   eventually(() => (condition() ? true : undefined), label);
 
-/**
- * The first view of a run that satisfies `predicate`, polled from the service's run list on real
- * time. Tests wait only for states that hold until the test acts again.
- */
 export const runWhere = (
   workflows: WorkflowServiceContract,
   id: string,
@@ -741,7 +659,6 @@ export const runWhere = (
 export const finished = (workflows: WorkflowServiceContract, id: string) =>
   runWhere(workflows, id, (run) => run.endedAt !== undefined);
 
-/** The notification the host accepted for run `id`, once it has. */
 export const deliveredFor = (fixture: WorkflowFixture, id: string) =>
   eventually(() => fixture.delivered.find((sent) => sent.runId === id), `${id}'s notification`);
 
@@ -751,7 +668,6 @@ const runsOf = (projections: ReadonlyArray<SubagentProjection>, task: string) =>
 const runningRun = (projections: ReadonlyArray<SubagentProjection>, task: string) =>
   runsOf(projections, task).find((run) => run.state === "running");
 
-/** Waits until the agent with `task` is running, then reports `text` as its result. */
 export const reportTask = (fixture: WorkflowFixture, task: string, text: string) =>
   Effect.gen(function* () {
     const run = yield* eventually(
@@ -763,7 +679,6 @@ export const reportTask = (fixture: WorkflowFixture, task: string, text: string)
     return run.id;
   });
 
-/** The backend process that received `task`, matched on the exact assigned-task section. */
 export const controlForTask = (fixture: WorkflowFixture, task: string) =>
   eventually(
     () =>
@@ -773,10 +688,6 @@ export const controlForTask = (fixture: WorkflowFixture, task: string) =>
     `agent "${task}" to receive its prompt`,
   );
 
-/**
- * Waits until the worktree writer with `task` is running, then sets what its worker will hold
- * when it is checked for changes; returns its workspace id.
- */
 export const leaveInWorktree = (
   fixture: WorkflowFixture,
   task: string,
@@ -791,11 +702,9 @@ export const leaveInWorktree = (
     return workspaceId;
   });
 
-/** Waits until the agent with `task` is running and returns its subagent run id. */
 export const runningTask = (fixture: WorkflowFixture, task: string) =>
   eventually(() => runningRun(fixture.projections, task)?.id, `agent "${task}" to run`);
 
-/** The state of the only subagent run that received `task`. */
 export const stateOfTask = (fixture: WorkflowFixture, task: string) => {
   const runs = runsOf(fixture.projections, task);
   if (runs.length > 1) throw new Error(`Several agents received "${task}".`);

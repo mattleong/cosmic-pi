@@ -430,7 +430,7 @@ describe("editing visit integration", () => {
       openUndo(component);
       component.handleInput("\r");
       yield* step(settleTurn);
-      expect(saveDraft.mock.calls[1]?.[3]).toEqual({ sourceVersion: 6, declaration: [raw] });
+      expect(saveDraft.mock.calls[1]?.[3]).toEqual({ declaration: [raw] });
       expect(editVisit.isEdited(target, "generalist", initial)).toBe(false);
     },
   );
@@ -577,7 +577,7 @@ describe("profile workspace disposal", () => {
     component.handleInput("e");
     component.handleInput("\u001b");
     for (let index = 0; index < 3; index += 1) component.handleInput("\u001b[B");
-    component.handleInput("\r"); // Expand Advanced for worker.
+    component.handleInput("\r");
     component.handleInput("\u001b[B");
     component.handleInput("\u001b");
     component.handleInput("\u001b[B");

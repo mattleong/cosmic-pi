@@ -15,7 +15,6 @@ const progressRun = (
   ...overrides,
 });
 
-/** The progress text's summary line; the run tree below it names every run. */
 const summary = (...args: Parameters<typeof formatAwaitProgress>) =>
   formatAwaitProgress(...args).split("\n")[0];
 

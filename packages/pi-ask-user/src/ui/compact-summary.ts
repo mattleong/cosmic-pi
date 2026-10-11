@@ -22,10 +22,6 @@ import {
   type ReplayedSnapshot,
 } from "./tool-render-projection.ts";
 
-/**
- * Who the row is about: question titles, the questionnaire a control call names, or "all" for a
- * status list, short enough that its counts still fit narrow rows.
- */
 function identity<Args>(args: Args): CompactSummary {
   const control = decodeAsyncControl(args);
   if (control)
@@ -42,7 +38,6 @@ function liveSummary<Args>(args: Args): CompactSummary | undefined {
   return identity(args);
 }
 
-/** Choice labels verified against the call's single question, so no answer text leaks. */
 function verifiedLabels<Args>(args: Args, answer: ReplayedAnswer): readonly string[] | undefined {
   const questions = decodeCompactChoices(args)?.questions;
   const question = questions?.length === 1 ? questions[0] : undefined;
@@ -60,10 +55,6 @@ function verifiedLabels<Args>(args: Args, answer: ReplayedAnswer): readonly stri
   return verified ? labels.map(stripTerminalControls) : undefined;
 }
 
-/**
- * What was answered, in the counter slot. One verified choice question shows its labels; one
- * custom or text answer names its kind; otherwise the count. Answer text never appears here.
- */
 function answerCounters<Args>(args: Args, answers: readonly ReplayedAnswer[]): string[] {
   const count = countLabel(answers.length, "answer");
   const [answer] = answers;
@@ -84,12 +75,10 @@ function settledSummary<Args>(args: Args, outcome: ReplayedOutcome): CompactSumm
   };
 }
 
-/** Transcript summaries never change the separate questionnaire overlay. */
 export const askUserCompactSummary: CompactSummaryProvider = ({ phase, args, result, context }) => {
   if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
   const decoded = decodeOutcome(result?.details);
   if (decoded?.outcome === "cancelled") return settledSummary(args, decoded);
-  // Pi's error text explains the failure; the shell turns its first line into the issue.
   if (context.isError) return { ...identity(args), outcome: "error" };
   return decoded && settledSummary(args, decoded);
 };
@@ -100,10 +89,6 @@ const QUEUED_ORDER = "Queued questionnaires open automatically in order.";
 const RETRIEVE_DELIVERY =
   "Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.";
 
-/**
- * Waiting is a questionnaire's normal state, so it is one informational issue whatever the
- * count, with the await guidance as its detail. A queued one is not on screen yet. Lists count.
- */
 function answersPending(
   states: readonly QuestionnaireState[],
   list: boolean,
@@ -128,7 +113,6 @@ function answersPending(
   };
 }
 
-/** A presenter failure settles the request without an answer. */
 function questionnaireFailed(count: number, list: boolean): CompactIssue | undefined {
   if (count === 0) return undefined;
   return {
@@ -141,7 +125,6 @@ function questionnaireFailed(count: number, list: boolean): CompactIssue | undef
   };
 }
 
-/** Saved results stay retrievable after automatic delivery fails. */
 function deliveryFailed(failed: readonly QuestionnaireState[]): CompactIssue | undefined {
   if (failed.length === 0) return undefined;
   return {
@@ -214,11 +197,8 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
   }));
   if (rows?.every(classified)) {
     const cancelled = rows.length > 0 && rows.every((row) => row.state === "cancelled");
-    // Decoded cancellation wins over Pi's error flag.
     if (!context.isError || cancelled) return rowsSummary(args, rows);
   }
-  // Pi's error text explains the failure; the shell turns its first line into the issue.
   if (context.isError) return { ...identity(args), outcome: "error" };
-  // Inconsistent or malformed replay keeps its raw evidence behind the generic row.
   return undefined;
 };

@@ -17,7 +17,6 @@ const writeCounts = new WeakMap<
   }
 >();
 
-/** Never turn partially validated operations into a successful operation total. */
 export function editResultDetail<Args>(args: Args): string | undefined {
   const edits = getObjectValue(args, "edits");
   const count = Array.isArray(edits) ? edits.length : 1;
@@ -28,7 +27,6 @@ export function editResultDetail<Args>(args: Args): string | undefined {
   return countLabel(count, "edit");
 }
 
-/** Count matching lines, not occurrences; unfamiliar or incomplete output has no total. */
 export function grepResultDetail<Details>(output: string, details: Details): string | undefined {
   if (
     isTruncated(details) ||
@@ -43,8 +41,6 @@ export function grepResultDetail<Details>(output: string, details: Details): str
     if (line === "--") continue;
     const match = /^.+:[1-9]\d*: .*/u.test(line);
     const context = /^.+-[1-9]\d*- .*/u.test(line);
-    // A delimiter in a path or payload can make both interpretations valid.
-    // Without structured records, omit the total rather than count context as a match.
     if (match && context) return undefined;
     if (match) count++;
     else if (!context) return undefined;
@@ -52,12 +48,10 @@ export function grepResultDetail<Details>(output: string, details: Details): str
   return count ? countLabel(count, "matching line") : undefined;
 }
 
-/** Snapshot-keyed, bounded diff work is reused across redraws. */
 export function writeResultDetail<Before>(before: Before, content: string): string | undefined {
   if (!Predicate.isObject(before)) return undefined;
   const cached = writeCounts.get(before);
   const previous = getObjectValue(before, "content");
-  // Published performance configs are frozen and replaced, never mutated in place.
   const policy = codePreviewPerformanceConfig;
   if (cached?.content === content && cached.previous === previous && cached.policy === policy)
     return cached.detail;
@@ -66,7 +60,6 @@ export function writeResultDetail<Before>(before: Before, content: string): stri
   return detail;
 }
 
-/** Stateless variant for transient projections with explicit work limits. */
 export function projectWriteResultDetail<Before>(
   before: Before,
   content: string,

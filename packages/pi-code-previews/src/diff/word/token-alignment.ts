@@ -130,7 +130,6 @@ export function changedTokenGaps(before: WordEmphasisToken[], after: WordEmphasi
     }
     const candidates: Array<{ beforeIndex: number; afterIndex: number }> = [];
     for (let index = beforeStart; index < beforeEnd; index++) {
-      // Only values unique on both sides were indexed.
       const afterIndex = afterUniqueIndexes.get(tokenAt(before, index).value);
       if (afterIndex !== undefined) candidates.push({ beforeIndex: index, afterIndex });
     }

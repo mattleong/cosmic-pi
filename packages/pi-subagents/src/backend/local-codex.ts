@@ -38,7 +38,6 @@ interface PendingResponse {
   readonly deferred: Deferred.Deferred<unknown, SubagentError>;
 }
 
-/** Completed by the matching interrupted turn completion. */
 interface PendingInterrupt extends LocalCliInterrupt {
   readonly turnId: string;
 }
@@ -51,12 +50,6 @@ const OUTCOME_CODES = new Map<CodexRequest["method"], string>([
 const outcomeCode = (method: CodexRequest["method"]): string =>
   OUTCOME_CODES.get(method) ?? `${method.replaceAll("/", "_")}_outcome_uncertain`;
 
-/**
- * Item classification: only known executable item types own a
- * tool_started/tool_finished lifecycle. Reasoning and other informational items
- * surface as activity, forbidden nested-agent/collaboration items stay fatal,
- * and unknown future item types never fabricate tool lifecycle entries.
- */
 const EXECUTABLE_ITEM_TOOL_NAMES = new Map<string, string>([
   ["commandExecution", "Bash"],
   ["fileChange", "ApplyPatch"],
@@ -114,8 +107,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   );
 
   const onUsage = (event: CodexUsage, raw: LocalCliWireEvent) => {
-    // Nonnegative per-turn delta over the cumulative totals; Codex reports no
-    // client-side cost, so it remains unknown rather than a known $0.
     const delta: SubagentUsage = {
       input: Math.max(0, event.total.inputTokens - cumulativeUsage.input),
       output: Math.max(0, event.total.outputTokens - cumulativeUsage.output),
@@ -138,10 +129,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
 
   const onItemStarted = (event: CodexItemEvent, raw: LocalCliWireEvent) => {
     const tool = executableToolName(event.item);
-    if (tool === undefined)
-      // agentMessage, reasoning, and unknown future informational items
-      // are activity; they never fabricate a tool lifecycle entry.
-      return offer({ type: "activity", assignmentEpoch }, raw);
+    if (tool === undefined) return offer({ type: "activity", assignmentEpoch }, raw);
     return offer(
       {
         type: "tool_started",
@@ -170,10 +158,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         raw,
       );
     const tool = executableToolName(event.item);
-    if (tool === undefined)
-      // Completion of an informational or unknown item is acknowledged
-      // without a fabricated tool_finished, matching item_started.
-      return release(raw);
+    if (tool === undefined) return release(raw);
     return offer(
       {
         type: "tool_finished",
@@ -219,9 +204,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         },
         raw,
       );
-    // The MCP helper receives its report result only after SupervisorChannel records
-    // accepted epoch evidence. Codex cannot complete the tool call and then the turn
-    // before that causal write, so this query is independent of adapter queue scheduling.
     return supervisor.hasAcceptedReport(completedEpoch).pipe(
       Effect.matchEffect({
         onFailure: (error) =>
@@ -257,7 +239,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         if (event.type === "warning")
           return offer({ type: "warning", message: event.message }, raw);
         if ("threadId" in event && threadId && event.threadId !== threadId) return release(raw);
-        // Every steerable notification carries a turn id; only turn_started may open one.
         if ("turnId" in event && event.type !== "turn_started" && event.turnId !== activeTurnId)
           return release(raw);
         switch (event.type) {
@@ -397,7 +378,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         ),
     });
 
-  /** One correlated request whose result must decode; only decode failure is a protocol error. */
   const rpcResult = <A>(
     makeRequest: (id: string) => CodexRequest,
     schema: Schema.Decoder<A>,
@@ -473,7 +453,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
             Effect.andThen(currentThread),
             Effect.tap(() =>
               Effect.sync(() => {
-                // Runtime notifications can race ahead of the correlated response.
                 assignmentEpoch = epoch;
               }),
             ),

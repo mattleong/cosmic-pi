@@ -27,7 +27,6 @@ const WorkflowDetails = Schema.Struct({
   cost: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
   agents: Count,
   failed: Count,
-  // Notifications from before stopped agents were counted apart from skipped ones carry none.
   stopped: Schema.optional(Count),
   skipped: Count,
   reused: Count,
@@ -57,18 +56,15 @@ const Envelope = Schema.Struct({
 
 const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 
-// Messages and their details carry fields of their own, such as role and timestamp.
 const decodeEnvelope = Schema.decodeUnknownOption(Envelope, { onExcessProperty: "ignore" });
 const decodeDetails = Schema.decodeUnknownOption(Details, { onExcessProperty: "ignore" });
 const isTextPart = Schema.is(TextPart);
 
 interface NotificationRow {
   readonly summary: CompactSummary;
-  /** Only for messages whose outcome is not recorded: a neutral mark, never a guess. */
   readonly status?: CompactStatus;
 }
 
-/** Notices forwarded into a nested session carry no typed outcome, so they stay neutral. */
 const UNTYPED_SUBJECTS = new Map([
   ["pi-subagents-proxy-notification", "Update about a nested subagent"],
   ["pi-subagents-peer-notice", "Working directory shared with other subagents"],
@@ -106,7 +102,6 @@ const workflowRow = (details: typeof WorkflowDetails.Type): NotificationRow => {
     details.stopped ? `${details.stopped} stopped` : "",
     details.skipped ? `${details.skipped} skipped` : "",
   ].filter(Boolean);
-  // A torn-down run's duration isn't known, only that it was cut short.
   const ended =
     details.outcome === "interrupted" ? verb : `${verb} ${formatDuration(details.durationMs)}`;
   const agents =
@@ -125,13 +120,11 @@ const workflowRow = (details: typeof WorkflowDetails.Type): NotificationRow => {
         `${ended} · ${agents}`,
         ended,
       ],
-      // Failed agents don't fail the workflow; the script decides what null results mean.
       outcome: outcome === "success" && details.failed > 0 ? "warning" : outcome,
     },
   };
 };
 
-/** Typed counts and names when the notifier recorded them; a neutral row otherwise. */
 const notificationRow = (
   customType: string | undefined,
   details: NotificationDetails | undefined,
@@ -154,7 +147,6 @@ const notificationRow = (
   };
 };
 
-/** What expanding a notification reveals, in the words of its kind. */
 const WORKFLOW_EXPANSION = {
   completed: "result",
   failed: "error",
@@ -173,11 +165,6 @@ const expansionLabel = (details: NotificationDetails | undefined): string =>
           : countLabel(details.total, "report")
         : "message";
 
-/**
- * The message content remains the agent's record; collapsed, it is one human row in either
- * style, so run IDs and agent procedures appear only once expanded. Preview style adds the
- * expansion hint its tool rows use.
- */
 export function renderSubagentNotification<Input>(
   input: Input,
   options: { expanded: boolean; outputPad: number },

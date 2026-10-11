@@ -112,7 +112,6 @@ const scopeEntries = (
     ? [
         {
           kind: "invalid-default",
-          // Set keys are `scope:name`, so this key cannot collide with a set named invalid-default.
           key: `${scope}/invalid-default`,
           scope,
           scopeDefault: true,
@@ -156,7 +155,6 @@ export const profileSetPickerEntries = (
   ];
 };
 
-/** Selects the first scope default, else the first set. */
 export const initialProfileSetPickerIndex = (entries: ReadonlyArray<ProfileSetPickerEntry>) => {
   const defaultEntry = entries.findIndex(
     (entry) => entry.kind !== "scope-note" && entry.scopeDefault,

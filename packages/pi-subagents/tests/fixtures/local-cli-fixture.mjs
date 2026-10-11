@@ -60,164 +60,157 @@ if (args.includes("--print")) {
     ],
     mcp_servers: [{ name: "pi_subagents_supervisor", status: "connected" }],
   });
-  lines.on("line", (line) => {
-    const frame = JSON.parse(line);
-    if (frame.type === "control_request") {
-      const success = (response) =>
-        write({
-          type: "control_response",
-          response: (() => {
-            const baseResult = { subtype: "success", request_id: frame.request_id };
-            const withResponse = response === undefined ? baseResult : { ...baseResult, response };
-            return withResponse;
-          })(),
-        });
-      if (frame.request?.subtype === "initialize") {
-        if (
-          frame.request_id === "pi-subagents-model-catalog" &&
-          process.env.HOME?.includes("hanging-catalog")
-        )
-          return;
-        if (
-          frame.request_id === "pi-subagents-model-catalog" &&
-          process.env.HOME?.includes("rejected-claude-catalog")
-        ) {
-          write({
-            type: "control_response",
-            response: {
-              subtype: "error",
-              request_id: frame.request_id,
-              error: "Fixture catalog rejected",
-            },
-          });
-          return;
-        }
-        const initialized = () =>
-          success(
-            model === "bad-init"
-              ? {}
-              : {
-                  models:
-                    frame.request_id === "pi-subagents-model-catalog"
-                      ? [
-                          {
-                            value: "default",
-                            resolvedModel: "claude-opus-fixture",
-                            displayName: process.env.HOME?.includes("unsafe-catalog")
-                              ? "\u001b[31mUnsafe"
-                              : "Default Claude",
-                            description: "Fixture default model",
-                            supportedEffortLevels: ["off", "low", "medium", "high"],
-                          },
-                          {
-                            value: "sonnet",
-                            resolvedModel: "claude-sonnet-fixture",
-                            displayName: "Claude Sonnet",
-                            description: "Fixture\nefficient\tmodel",
-                            supportedEffortLevels: ["low", "high"],
-                          },
-                        ]
-                      : [{ value: model, resolvedModel: model }],
-                },
-          );
-        const catalogDelay = process.env.HOME?.includes("deduplicated-catalog") ? 150 : 0;
-        if (frame.request_id === "pi-subagents-model-catalog" && catalogDelay > 0)
-          setTimeout(initialized, catalogDelay);
-        else initialized();
-        return;
-      }
-      if (frame.request?.subtype === "mcp_status") {
-        success({
-          mcpServers: [
-            {
-              name: "pi_subagents_supervisor",
-              status: model === "missing-helper" ? "failed" : "connected",
-              tools: model === "missing-helper" ? [] : supervisorTools.map((name) => ({ name })),
-            },
-          ],
-        });
-        return;
-      }
-      if (frame.request?.subtype === "interrupt") {
-        const response = () => success();
-        const marker = () =>
-          write(
-            (() => {
-              const baseResult = {
-                type: "user",
-                isReplay: true,
-                session_id: "claude-fixture-session",
-              };
-              const withUuid =
-                model === "interrupt-foreign-marker"
-                  ? { ...baseResult, uuid: "00000000-0000-4000-8000-00000000fade" }
-                  : baseResult;
-              const withMessage = {
-                ...withUuid,
-                message: { role: "user", content: "[Request interrupted by user]" },
-              };
-              return withMessage;
-            })(),
-          );
-        const result = () =>
-          write(
-            (() => {
-              const baseResult = {
-                type: "result",
-                subtype: "error_during_execution",
-                stop_reason:
-                  model === "interrupt-genuine-error" ? "provider_error" : "aborted_streaming",
-                is_error: true,
-                errors:
-                  model === "interrupt-genuine-error"
-                    ? ["genuine fixture failure"]
-                    : ["Request aborted."],
-                session_id: "claude-fixture-session",
-              };
-              const withUserMessageUuid =
-                model === "interrupt-foreign-result"
-                  ? {
-                      ...baseResult,
-                      user_message_uuid: "00000000-0000-4000-8000-00000000dead",
-                    }
-                  : baseResult;
-              return withUserMessageUuid;
-            })(),
-          );
-        const terminal = () => {
-          if (model === "interrupt-result-first") {
-            result();
-            marker();
-          } else {
-            marker();
-            result();
-          }
-        };
-        if (model === "interrupt-late-terminal") {
-          // The correlated marker/result settlement arrives only after the
-          // parent's public interrupt timeout has already expired.
-          response();
-          setTimeout(terminal, 11_000);
-          return;
-        }
-        if (model === "interrupt-terminal-no-response") {
-          terminal();
-        } else if (model === "interrupt-terminal-first") {
-          terminal();
-          response();
-        } else {
-          response();
-          terminal();
-        }
-        return;
-      }
-      success();
+  const success = (frame, response) =>
+    write({
+      type: "control_response",
+      response: (() => {
+        const baseResult = { subtype: "success", request_id: frame.request_id };
+        const withResponse = response === undefined ? baseResult : { ...baseResult, response };
+        return withResponse;
+      })(),
+    });
+  const catalogModels = () => [
+    {
+      value: "default",
+      resolvedModel: "claude-opus-fixture",
+      displayName: process.env.HOME?.includes("unsafe-catalog")
+        ? "\u001b[31mUnsafe"
+        : "Default Claude",
+      description: "Fixture default model",
+      supportedEffortLevels: ["off", "low", "medium", "high"],
+    },
+    {
+      value: "sonnet",
+      resolvedModel: "claude-sonnet-fixture",
+      displayName: "Claude Sonnet",
+      description: "Fixture\nefficient\tmodel",
+      supportedEffortLevels: ["low", "high"],
+    },
+  ];
+  const initialize = (frame) => {
+    if (
+      frame.request_id === "pi-subagents-model-catalog" &&
+      process.env.HOME?.includes("hanging-catalog")
+    )
+      return;
+    if (
+      frame.request_id === "pi-subagents-model-catalog" &&
+      process.env.HOME?.includes("rejected-claude-catalog")
+    ) {
+      write({
+        type: "control_response",
+        response: {
+          subtype: "error",
+          request_id: frame.request_id,
+          error: "Fixture catalog rejected",
+        },
+      });
       return;
     }
-    if (frame.type !== "user") return;
-    const text = Array.isArray(frame.message?.content)
-      ? frame.message.content.map((part) => part.text ?? "").join("\n")
-      : String(frame.message?.content ?? "");
+    const initialized = () =>
+      success(
+        frame,
+        model === "bad-init"
+          ? {}
+          : {
+              models:
+                frame.request_id === "pi-subagents-model-catalog"
+                  ? catalogModels()
+                  : [{ value: model, resolvedModel: model }],
+            },
+      );
+    const catalogDelay = process.env.HOME?.includes("deduplicated-catalog") ? 150 : 0;
+    if (frame.request_id === "pi-subagents-model-catalog" && catalogDelay > 0)
+      setTimeout(initialized, catalogDelay);
+    else initialized();
+  };
+  const reportMcpStatus = (frame) =>
+    success(frame, {
+      mcpServers: [
+        {
+          name: "pi_subagents_supervisor",
+          status: model === "missing-helper" ? "failed" : "connected",
+          tools: model === "missing-helper" ? [] : supervisorTools.map((name) => ({ name })),
+        },
+      ],
+    });
+  const interrupt = (frame) => {
+    const response = () => success(frame);
+    const marker = () =>
+      write(
+        (() => {
+          const baseResult = {
+            type: "user",
+            isReplay: true,
+            session_id: "claude-fixture-session",
+          };
+          const withUuid =
+            model === "interrupt-foreign-marker"
+              ? { ...baseResult, uuid: "00000000-0000-4000-8000-00000000fade" }
+              : baseResult;
+          const withMessage = {
+            ...withUuid,
+            message: { role: "user", content: "[Request interrupted by user]" },
+          };
+          return withMessage;
+        })(),
+      );
+    const result = () =>
+      write(
+        (() => {
+          const baseResult = {
+            type: "result",
+            subtype: "error_during_execution",
+            stop_reason:
+              model === "interrupt-genuine-error" ? "provider_error" : "aborted_streaming",
+            is_error: true,
+            errors:
+              model === "interrupt-genuine-error"
+                ? ["genuine fixture failure"]
+                : ["Request aborted."],
+            session_id: "claude-fixture-session",
+          };
+          const withUserMessageUuid =
+            model === "interrupt-foreign-result"
+              ? {
+                  ...baseResult,
+                  user_message_uuid: "00000000-0000-4000-8000-00000000dead",
+                }
+              : baseResult;
+          return withUserMessageUuid;
+        })(),
+      );
+    const terminal = () => {
+      if (model === "interrupt-result-first") {
+        result();
+        marker();
+      } else {
+        marker();
+        result();
+      }
+    };
+    if (model === "interrupt-late-terminal") {
+      response();
+      setTimeout(terminal, 11_000);
+      return;
+    }
+    if (model === "interrupt-terminal-no-response") {
+      terminal();
+    } else if (model === "interrupt-terminal-first") {
+      terminal();
+      response();
+    } else {
+      response();
+      terminal();
+    }
+  };
+  const control = (frame) => {
+    if (frame.request?.subtype === "initialize") return initialize(frame);
+    if (frame.request?.subtype === "mcp_status") return reportMcpStatus(frame);
+    if (frame.request?.subtype === "interrupt") return interrupt(frame);
+    success(frame);
+  };
+  const replayUser = (frame) => {
     write(
       (() => {
         const baseResult = {
@@ -246,33 +239,28 @@ if (args.includes("--print")) {
         uuid: "00000000-0000-4000-8000-00000000f0f0",
         message: { role: "user", content: "foreign injected input" },
       });
-    if (frame.shouldQuery === false) {
-      write(
-        (() => {
-          const baseResult = {
-            type: "result",
-            subtype: "success",
-            is_error: false,
-            result: "",
-            stop_reason: null,
-            session_id: "claude-fixture-session",
-          };
-          const withUserMessageUuid = frame.uuid
-            ? { ...baseResult, user_message_uuid: frame.uuid }
-            : baseResult;
-          return withUserMessageUuid;
-        })(),
-      );
-      return;
-    }
-    if (model === "malformed") {
-      process.stdout.write("{malformed\n");
-      return;
-    }
-    if (model === "oversized") {
-      process.stdout.write(`${"x".repeat(4 * 1024 * 1024 + 1)}\n`);
-      return;
-    }
+  };
+  const acknowledgeWithoutQuery = (frame) =>
+    write(
+      (() => {
+        const baseResult = {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "",
+          stop_reason: null,
+          session_id: "claude-fixture-session",
+        };
+        const withUserMessageUuid = frame.uuid
+          ? { ...baseResult, user_message_uuid: frame.uuid }
+          : baseResult;
+        return withUserMessageUuid;
+      })(),
+    );
+  const answer = (frame) => {
+    const text = Array.isArray(frame.message?.content)
+      ? frame.message.content.map((part) => part.text ?? "").join("\n")
+      : String(frame.message?.content ?? "");
     assistantCounter += 1;
     const assistantMessage = (usage) => ({
       type: "assistant",
@@ -290,7 +278,6 @@ if (args.includes("--print")) {
       },
     });
     write(assistantMessage({ input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 1 }));
-    // The current CLI repeats cumulative usage for the same assistant message id.
     if (model === "repeated-usage")
       write(assistantMessage({ input_tokens: 3, output_tokens: 6, cache_read_input_tokens: 1 }));
     if (model === "task-notification") {
@@ -312,8 +299,6 @@ if (args.includes("--print")) {
         origin: { kind: "task-notification" },
       });
     }
-    // Interrupt fixtures model a still-running native turn: only the correlated interrupt emits
-    // their terminal result. Other models complete normally and exercise missing-report handling.
     if (model !== "claude-fixture" && !model.startsWith("interrupt")) {
       const emitResult = () =>
         write(
@@ -336,14 +321,192 @@ if (args.includes("--print")) {
             return withUsageAndTotalCostUsd;
           })(),
         );
-      // Exceeds the former two-second grace to characterize real post-tool finalization.
       if (model === "buffered-report-cost") setTimeout(emitResult, 3_000);
       else emitResult();
     }
     if (model === "exit-no-report") process.exit(0);
+  };
+  lines.on("line", (line) => {
+    const frame = JSON.parse(line);
+    if (frame.type === "control_request") return control(frame);
+    if (frame.type !== "user") return;
+    replayUser(frame);
+    if (frame.shouldQuery === false) return acknowledgeWithoutQuery(frame);
+    if (model === "malformed") {
+      process.stdout.write("{malformed\n");
+      return;
+    }
+    if (model === "oversized") {
+      process.stdout.write(`${"x".repeat(4 * 1024 * 1024 + 1)}\n`);
+      return;
+    }
+    answer(frame);
   });
 } else if (args[0] === "app-server") {
   let model = "fixture-codex";
+  const listModels = (frame) => {
+    if (process.env.HOME?.includes("rejected-catalog")) {
+      write({ id: frame.id, error: { code: -32_000, message: "Fixture catalog rejected" } });
+      return;
+    }
+    write({
+      id: frame.id,
+      result: {
+        data: [
+          {
+            id: "gpt-fixture-default",
+            model: "gpt-fixture-default",
+            displayName: "GPT Fixture Default",
+            description: "Fixture Codex default model",
+            isDefault: true,
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low", description: "Low" },
+              { reasoningEffort: "high", description: "High" },
+            ],
+          },
+          {
+            id: "gpt-fixture-fast",
+            model: "gpt-fixture-fast",
+            displayName: "GPT Fixture Fast",
+            description: "Fixture Codex fast model",
+            isDefault: false,
+            supportedReasoningEfforts: [{ reasoningEffort: "minimal", description: "Minimal" }],
+            serviceTiers: [{ id: "priority", name: "Fast", description: "Fixture priority tier" }],
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+  };
+  const startThread = (frame) => {
+    model = frame.params.model;
+    write({
+      id: frame.id,
+      result: {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        cwd: frame.params.cwd,
+        model,
+        modelProvider: "openai",
+        serviceTier:
+          model === "service-tier-mismatch" ? "flex" : (frame.params.serviceTier ?? null),
+        sandbox: { type: frame.params.sandbox === "read-only" ? "readOnly" : "workspaceWrite" },
+        thread: { id: "thread-fixture", sessionId: "session-fixture" },
+      },
+    });
+  };
+  const startTurn = (frame) => {
+    const turn = "turn-fixture";
+    write({ id: frame.id, result: { turn: { id: turn, status: "inProgress", items: [] } } });
+    write({
+      method: "turn/started",
+      params: {
+        threadId: "thread-fixture",
+        turn: { id: turn, status: "inProgress", items: [] },
+      },
+    });
+    if (model === "informational-items") {
+      for (const item of [
+        { id: "reasoning-1", type: "reasoning", text: "thinking" },
+        { id: "future-1", type: "futureInformationalItem" },
+        { id: "command-1", type: "commandExecution", command: "ls", status: "completed" },
+      ]) {
+        write({
+          method: "item/started",
+          params: { threadId: "thread-fixture", turnId: turn, item },
+        });
+        write({
+          method: "item/completed",
+          params: { threadId: "thread-fixture", turnId: turn, item },
+        });
+      }
+    }
+    if (model === "forbidden-completed-item")
+      write({
+        method: "item/completed",
+        params: {
+          threadId: "thread-fixture",
+          turnId: turn,
+          item: { id: "collab-1", type: "collabAgentToolCall" },
+        },
+      });
+    write({
+      method: "item/completed",
+      params: {
+        threadId: "thread-fixture",
+        turnId: turn,
+        completedAtMs: Date.now(),
+        item: { id: "message-fixture", type: "agentMessage", text: "Codex fixture answer" },
+      },
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-fixture",
+        turnId: turn,
+        tokenUsage: {
+          last: {
+            inputTokens: 2,
+            cachedInputTokens: 1,
+            outputTokens: 3,
+            reasoningOutputTokens: 1,
+            totalTokens: 5,
+            cacheWriteInputTokens: 0,
+          },
+          total: {
+            inputTokens: 2,
+            cachedInputTokens: 1,
+            outputTokens: 3,
+            reasoningOutputTokens: 1,
+            totalTokens: 5,
+            cacheWriteInputTokens: 0,
+          },
+        },
+      },
+    });
+    if (model === "exit-no-report") process.exit(0);
+    if (model === "interrupted-without-request")
+      write({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-fixture",
+          turn: { id: turn, status: "interrupted", items: [] },
+        },
+      });
+    if (model === "completed-with-report" || model === "completed-without-report")
+      write({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-fixture",
+          turn: { id: turn, status: "completed", items: [] },
+        },
+      });
+  };
+  const interruptTurn = (frame) => {
+    const response = () => write({ id: frame.id, result: {} });
+    const completed = () =>
+      write({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-fixture",
+          turn: { id: "turn-fixture", status: "interrupted", items: [] },
+        },
+      });
+    if (model === "interrupt-late-completion") {
+      response();
+      setTimeout(completed, 11_000);
+      return;
+    }
+    if (model === "interrupt-completion-no-response") {
+      completed();
+    } else if (model === "interrupt-notification-first") {
+      completed();
+      response();
+    } else {
+      response();
+      completed();
+    }
+  };
   lines.on("line", (line) => {
     const frame = JSON.parse(line);
     if (!frame.id) return;
@@ -360,175 +523,20 @@ if (args.includes("--print")) {
         });
         break;
       case "model/list":
-        if (process.env.HOME?.includes("rejected-catalog")) {
-          write({ id: frame.id, error: { code: -32_000, message: "Fixture catalog rejected" } });
-          break;
-        }
-        write({
-          id: frame.id,
-          result: {
-            data: [
-              {
-                id: "gpt-fixture-default",
-                model: "gpt-fixture-default",
-                displayName: "GPT Fixture Default",
-                description: "Fixture Codex default model",
-                isDefault: true,
-                supportedReasoningEfforts: [
-                  { reasoningEffort: "low", description: "Low" },
-                  { reasoningEffort: "high", description: "High" },
-                ],
-              },
-              {
-                id: "gpt-fixture-fast",
-                model: "gpt-fixture-fast",
-                displayName: "GPT Fixture Fast",
-                description: "Fixture Codex fast model",
-                isDefault: false,
-                supportedReasoningEfforts: [{ reasoningEffort: "minimal", description: "Minimal" }],
-                serviceTiers: [
-                  { id: "priority", name: "Fast", description: "Fixture priority tier" },
-                ],
-              },
-            ],
-            nextCursor: null,
-          },
-        });
+        listModels(frame);
         break;
       case "thread/start":
-        model = frame.params.model;
-        write({
-          id: frame.id,
-          result: {
-            approvalPolicy: "never",
-            approvalsReviewer: "user",
-            cwd: frame.params.cwd,
-            model,
-            modelProvider: "openai",
-            serviceTier:
-              model === "service-tier-mismatch" ? "flex" : (frame.params.serviceTier ?? null),
-            sandbox: { type: frame.params.sandbox === "read-only" ? "readOnly" : "workspaceWrite" },
-            thread: { id: "thread-fixture", sessionId: "session-fixture" },
-          },
-        });
+        startThread(frame);
         break;
-      case "turn/start": {
-        const turn = "turn-fixture";
-        write({ id: frame.id, result: { turn: { id: turn, status: "inProgress", items: [] } } });
-        write({
-          method: "turn/started",
-          params: {
-            threadId: "thread-fixture",
-            turn: { id: turn, status: "inProgress", items: [] },
-          },
-        });
-        if (model === "informational-items") {
-          for (const item of [
-            { id: "reasoning-1", type: "reasoning", text: "thinking" },
-            { id: "future-1", type: "futureInformationalItem" },
-            { id: "command-1", type: "commandExecution", command: "ls", status: "completed" },
-          ]) {
-            write({
-              method: "item/started",
-              params: { threadId: "thread-fixture", turnId: turn, item },
-            });
-            write({
-              method: "item/completed",
-              params: { threadId: "thread-fixture", turnId: turn, item },
-            });
-          }
-        }
-        if (model === "forbidden-completed-item")
-          write({
-            method: "item/completed",
-            params: {
-              threadId: "thread-fixture",
-              turnId: turn,
-              item: { id: "collab-1", type: "collabAgentToolCall" },
-            },
-          });
-        write({
-          method: "item/completed",
-          params: {
-            threadId: "thread-fixture",
-            turnId: turn,
-            completedAtMs: Date.now(),
-            item: { id: "message-fixture", type: "agentMessage", text: "Codex fixture answer" },
-          },
-        });
-        write({
-          method: "thread/tokenUsage/updated",
-          params: {
-            threadId: "thread-fixture",
-            turnId: turn,
-            tokenUsage: {
-              last: {
-                inputTokens: 2,
-                cachedInputTokens: 1,
-                outputTokens: 3,
-                reasoningOutputTokens: 1,
-                totalTokens: 5,
-                cacheWriteInputTokens: 0,
-              },
-              total: {
-                inputTokens: 2,
-                cachedInputTokens: 1,
-                outputTokens: 3,
-                reasoningOutputTokens: 1,
-                totalTokens: 5,
-                cacheWriteInputTokens: 0,
-              },
-            },
-          },
-        });
-        if (model === "exit-no-report") process.exit(0);
-        if (model === "interrupted-without-request")
-          write({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-fixture",
-              turn: { id: turn, status: "interrupted", items: [] },
-            },
-          });
-        if (model === "completed-with-report" || model === "completed-without-report")
-          write({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-fixture",
-              turn: { id: turn, status: "completed", items: [] },
-            },
-          });
+      case "turn/start":
+        startTurn(frame);
         break;
-      }
       case "turn/steer":
         write({ id: frame.id, result: { turnId: "turn-fixture" } });
         break;
-      case "turn/interrupt": {
-        const response = () => write({ id: frame.id, result: {} });
-        const completed = () =>
-          write({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-fixture",
-              turn: { id: "turn-fixture", status: "interrupted", items: [] },
-            },
-          });
-        if (model === "interrupt-late-completion") {
-          response();
-          setTimeout(completed, 11_000);
-          break;
-        }
-        if (model === "interrupt-completion-no-response") {
-          completed();
-        } else if (model === "interrupt-notification-first") {
-          completed();
-          response();
-        } else {
-          response();
-          completed();
-        }
+      case "turn/interrupt":
+        interruptTurn(frame);
         break;
-      }
       default:
         write({ id: frame.id, error: { code: -32601, message: "unsupported fixture method" } });
     }

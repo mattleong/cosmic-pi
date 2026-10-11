@@ -15,7 +15,6 @@ it.live("elapsed readings ignore wall-clock corrections without changing timesta
       expect(synchronousNow()).toBe(timestamp);
       const elapsed = synchronousMonotonicNow() - before;
       expect(elapsed).toBeGreaterThanOrEqual(0);
-      // A wide liveness margin, not a timer precision benchmark. Wall-clock deltas are enormous.
       expect(elapsed).toBeLessThan(60_000);
     }
   }),

@@ -1,13 +1,12 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import type { Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
-import type { ToolRenderContext } from "../tools/renderers/shared/types";
+import type { ShellRenderBody } from "./tool-shell";
 import { withLastComponent } from "./tool-timing";
 
-export type CompactRenderBody = (context: ToolRenderContext<any, any>) => Component;
 export type CompactSlot = "call" | "result";
 
-/** Signals that composition must reconsider only the failed slot's ownership. */
 export class CompactSlotDrawFailure extends Schema.TaggedError<CompactSlotDrawFailure>()(
   "CompactSlotDrawFailure",
   {},
@@ -19,8 +18,7 @@ type Entry = {
   failed: boolean;
 };
 
-/** Original and content-only slots never share lastComponent or failure evidence. */
-export class CompactSlots {
+export class CompactSlots<TArgs, TDetails, TState> {
   private readonly entries = new Map<string, Entry>();
   private inputs: readonly unknown[] = [];
 
@@ -31,9 +29,10 @@ export class CompactSlots {
     return entry;
   }
 
-  update(context: ToolRenderContext<any, any>, result: AgentToolResult<unknown> | undefined): void {
-    // Pi recreates callbacks, contexts and result envelopes on invalidation, but retains
-    // these input references. Expansion and theme changes are not new execution evidence.
+  update(
+    context: ToolRenderContext<TState, TArgs>,
+    result: AgentToolResult<TDetails> | undefined,
+  ): void {
     const inputs = [
       context.args,
       result?.content,
@@ -55,8 +54,8 @@ export class CompactSlots {
   construct(
     slot: CompactSlot,
     content: boolean,
-    render: CompactRenderBody,
-    context: ToolRenderContext<any, any>,
+    render: ShellRenderBody<TArgs, TState>,
+    context: ToolRenderContext<TState, TArgs>,
     fallback: () => Component,
     reuse: boolean,
   ): Component {

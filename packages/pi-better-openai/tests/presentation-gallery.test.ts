@@ -38,7 +38,6 @@ const imageResult = (status: string, request = prompt) => ({
   content: [...text(imageResultText(details(status, request))), image],
   details: details(status, request),
 });
-// Pi turns a rejected tool execution into text content with empty details.
 const failure = (message: string) => ({ content: text(message), details: {} });
 
 const toolScenarios: ReadonlyArray<GalleryScenario> = [

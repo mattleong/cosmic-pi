@@ -2,7 +2,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 
-/** Flags shared by subscription-usage refresh loops. */
 export interface RefreshRequest {
   readonly notify?: boolean;
   readonly force?: boolean;
@@ -21,7 +20,6 @@ const mergeRefreshRequest = (
   force: current?.force === true || next.force === true,
 });
 
-/** Concurrent refreshes merge into one queued request, drained until the owner atomically observes an empty queue and releases ownership. */
 export const makeRefreshCoordinator = <E = never>() =>
   Effect.gen(function* () {
     const state = yield* Ref.make<State<E>>({
@@ -35,14 +33,11 @@ export const makeRefreshCoordinator = <E = never>() =>
     ): Effect.Effect<void, E, R> =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          // Registration must not outlive the finalizer that releases this ownership.
           const candidate = yield* Deferred.make<void, E>();
           const done = yield* Ref.modify(
             state,
             (current): readonly [Deferred.Deferred<void, E>, State<E>] => {
               if (current.active) {
-                // Merging stays open for the whole cycle so a request that arrives while a
-                // follow-up executes is queued and drained instead of resolving unexecuted.
                 return [
                   current.active,
                   { ...current, queued: mergeRefreshRequest(current.queued, request) },
@@ -57,9 +52,6 @@ export const makeRefreshCoordinator = <E = never>() =>
             let pending: RefreshRequest | undefined = request;
             while (pending !== undefined) {
               yield* operation(pending);
-              // Taking the queue and releasing ownership is one atomic transition:
-              // a non-empty queue keeps ownership (so later arrivals still merge), and an
-              // empty queue ends the cycle in that same step, leaving no lost-request window.
               pending = yield* Ref.modify(state, (current) => {
                 if (current.active !== candidate) return [undefined, current] as const;
                 const queued = current.queued;

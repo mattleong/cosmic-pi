@@ -3,7 +3,6 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { nodeSpawn } from "./node-builtins.ts";
 
-/** `present` means the signal was delivered; only ESRCH proves absence. */
 type ProcessSignalResult = "present" | "absent" | "permission" | "failed";
 
 const send = (target: number, signal: NodeJS.Signals | 0): ProcessSignalResult => {
@@ -18,11 +17,9 @@ const send = (target: number, signal: NodeJS.Signals | 0): ProcessSignalResult =
 const signalable = (pid: number | undefined): pid is number =>
   pid !== undefined && Number.isSafeInteger(pid) && pid > 0;
 
-/** Never signals a pid that is not a positive safe integer, so `-0` cannot reach Pi's group. */
 export const signalProcessGroup = (pid: number | undefined, signal: NodeJS.Signals | 0) =>
   signalable(pid) ? send(-pid, signal) : "failed";
 
-/** Single-process signal or liveness probe with the same pid validation. */
 export const signalProcess = (pid: number | undefined, signal: NodeJS.Signals | 0) =>
   signalable(pid) ? send(pid, signal) : "failed";
 
@@ -41,7 +38,6 @@ export class ProcessTreeError extends Schema.TaggedError<ProcessTreeError>()("Pr
 const treeError = (operation: string, code: ProcessTreeError["code"], message: string) =>
   new ProcessTreeError({ operation, code, message });
 
-/** Appends only a bounded uppercase errno code, never native error text. */
 const withErrno = (message: string, cause: unknown) =>
   Predicate.hasProperty(cause, "code") &&
   Predicate.isString(cause.code) &&
@@ -49,7 +45,6 @@ const withErrno = (message: string, cause: unknown) =>
     ? `${message} (${cause.code})`
     : message;
 
-/** POSIX group-signal failure after any caller fallback; EPERM is the only errno kept. */
 export const processGroupSignalError = (result: "permission" | "failed") =>
   treeError(
     "signal process group",
@@ -76,18 +71,10 @@ export interface WindowsProcessTreeTermination {
   readonly pid: number;
   readonly mode: "graceful" | "force";
   readonly spawnTaskkill?: ProcessTreeTerminatorSpawn | undefined;
-  /** Defaults to 2000. */
   readonly taskkillTimeoutMillis?: number | undefined;
-  /** When given, an exited target skips taskkill (PID-reuse guard), and a nonzero taskkill
-   * exit after the target exited counts as success. Error events always fail. */
   readonly targetExited?: (() => boolean) | undefined;
 }
 
-/**
- * Windows lacks POSIX process groups, so `taskkill /pid PID /T [/F]` terminates the tree.
- * Interruption and the timeout clean up synchronously and never await taskkill's own exit:
- * remove the settle listeners, add a harmless late-error listener, SIGKILL, then unref.
- */
 export const terminateWindowsProcessTree = (
   termination: WindowsProcessTreeTermination,
 ): Effect.Effect<void, ProcessTreeError> => {
@@ -95,7 +82,6 @@ export const terminateWindowsProcessTree = (
   const spawnTaskkill: ProcessTreeTerminatorSpawn = termination.spawnTaskkill ?? nodeSpawn;
   const timeoutMillis = termination.taskkillTimeoutMillis ?? 2_000;
   return Effect.callback<void, ProcessTreeError>((resume) => {
-    // Checked when the Effect runs, not when it is built, so a reused Effect never goes stale.
     if (targetExited?.()) return resume(Effect.void);
     let killer: ProcessTreeTerminatorChild;
     try {
@@ -112,7 +98,6 @@ export const terminateWindowsProcessTree = (
         ),
       );
     }
-    // A throwing cleanup method must not suppress the remaining cleanup attempts.
     const attempt = (operation: () => void): boolean => {
       try {
         operation();

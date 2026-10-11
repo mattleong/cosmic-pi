@@ -30,7 +30,6 @@ const requestKey = (request: SyntaxRequest): string =>
 const invokeHostInvalidation = (callback: (() => void) | undefined): void =>
   invokeHostCallback(() => callback?.(), undefined);
 
-/** Owns the bounded synchronous renderer-to-Effect request bridge. */
 export const makeSyntaxIngress = (
   owner: ProjectionOwnership,
   handlers: SyntaxIngressHandlers,
@@ -65,8 +64,6 @@ export const makeSyntaxIngress = (
     });
 
     let overflowing = false;
-    // Pi's invalidate redraws the row synchronously, and that render requests again while the
-    // ingress is still saturated; the row it just redrew is not invalidated a second time.
     const invalidateOverflow = (invalidate: (() => void) | undefined): void => {
       if (overflowing) return;
       overflowing = true;

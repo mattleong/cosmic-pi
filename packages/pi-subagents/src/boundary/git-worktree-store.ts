@@ -42,8 +42,6 @@ export const initializeWorkspaceStore = (root: string) =>
         if (!stat.isDirectory() || stat.isSymbolicLink())
           return yield* workspaceFailure("registry", "Registry ancestor is not a real directory.");
       } else {
-        // Each newly owned entry must survive a crash, including missing agent-dir
-        // ancestors. Recursive mkdir cannot tell us which parents require a flush.
         yield* Effect.gen(function* () {
           yield* workspaceIO("registry", () => fs.mkdir(current, { mode: 0o700 }));
           yield* syncWorkspaceDirectory(parent);
@@ -58,10 +56,6 @@ export const initializeWorkspaceStore = (root: string) =>
       );
   });
 
-/**
- * Durably replaces a workspace's record. `onCommitted` runs inside the uninterruptible commit,
- * once the record is durable, so state that must match the record cannot be separated from it.
- */
 export const saveWorkspaceRecord = (
   root: string,
   record: WorkspaceRecord,
@@ -75,16 +69,12 @@ export const saveWorkspaceRecord = (
     const data = yield* encodeRecord(record).pipe(
       Effect.mapError(() => workspaceFailure("registry", "Invalid workspace record.")),
     );
-    // JSON escaping can exceed the reader's bound even for an allowed raw diff.
     if (Buffer.byteLength(data, "utf8") > MAX_RECORD_BYTES)
       return yield* workspaceFailure(
         "registry",
         "Encoded workspace record exceeds recovery size limit.",
       );
-    // Exclusive creation owns the temporary. A crash leaves it for manual recovery.
     yield* writeWorkspaceFile(temporary, new TextEncoder().encode(data), 0o600);
-    // Rename is not durable until its containing directory is flushed. Failure after
-    // rename is an uncertain registry commit and must stop before source publication.
     yield* Effect.gen(function* () {
       yield* workspaceIO("registry", () =>
         fs.rename(temporary, path.join(directory, "record.json")),
@@ -119,7 +109,6 @@ export const readWorkspaceRecord = (root: string, id: string) =>
     return record;
   });
 
-/** Cross-process operations serialize too. Crash-left locks require explicit manual review. */
 export const withWorkspaceStoreLock = <A, E, R>(root: string, effect: Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
     workspaceIO("lock", () => fs.mkdir(path.join(root, "operation.lock"), { mode: 0o700 })),

@@ -1,7 +1,6 @@
 import * as Schema from "effect/Schema";
 import { COMPACT_ISSUE_MESSAGE_LIMIT, CompactIssueSchema } from "./compact-issues";
 
-/** Retained evidence for receipts crossing a package boundary. Overflow rejects the receipt. */
 export function createBoundedCompactIssuesSchema(limits: {
   maxTextLength: number;
   maxEntries: number;

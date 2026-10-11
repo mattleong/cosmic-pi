@@ -16,39 +16,26 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import { compileWorkflowArgs, type WorkflowArgsContract } from "./args.ts";
 import { NonEmptyText, WORKFLOW_PHASE_TITLE_MAX_CHARS } from "./model.ts";
 
-/** Workflow scripts are model-authored programs, never bulk data. */
 export const WORKFLOW_SCRIPT_MAX_CHARS = 256 * 1024;
 const WORKFLOW_PHASE_LIMIT = 64;
-/** Planned agents one meta phase may declare. */
 export const WORKFLOW_PHASE_AGENT_LIMIT = 64;
-/** Planned agents one script may declare across its phases. */
 export const WORKFLOW_SCRIPT_AGENT_LIMIT = 256;
 
-/** Where a script stopped parsing: the parser's message without its position, and its line. */
 const WorkflowSyntaxProblem = Schema.Struct({
   reason: Schema.String,
   line: Schema.optional(Schema.Finite),
 });
 
-/** A script that doesn't parse, carrying `syntax`, or that isn't a valid workflow. */
 export class WorkflowScriptError extends Schema.TaggedError<WorkflowScriptError>()(
   "WorkflowScriptError",
   { message: Schema.String, syntax: Schema.optional(WorkflowSyntaxProblem) },
 ) {}
 
-/**
- * An agent a phase plans to run: a label, or a label with its profile. It starts nothing and sets
- * no options, but the user can skip it before it starts.
- */
 const WorkflowPlannedAgentSchema = Schema.Union([
   NonEmptyText(80),
   Schema.Struct({ label: NonEmptyText(80), profile: Schema.optional(NonEmptyText(80)) }),
 ]);
 
-/**
- * A phase title, trimmed once here to the form runtime `phase()` titles take, so meta phases,
- * their planned agents and the phases calls name all match.
- */
 const PhaseTitle = Schema.String.pipe(Schema.decode(SchemaTransformation.trim())).check(
   Schema.isMinLength(1),
   Schema.isMaxLength(WORKFLOW_PHASE_TITLE_MAX_CHARS),
@@ -69,26 +56,19 @@ const WorkflowMetaSchema = Schema.Struct({
   phases: Schema.optional(
     Schema.Array(WorkflowPhaseSchema).check(Schema.isMaxLength(WORKFLOW_PHASE_LIMIT)),
   ),
-  /** A JSON Schema for the script's `args`; compiled, and so bounded, when the script is parsed. */
   args: Schema.optional(Schema.Json),
 });
 
 export type WorkflowMeta = typeof WorkflowMetaSchema.Type;
 export type WorkflowPhase = typeof WorkflowPhaseSchema.Type;
 
-/** A planned agent as a run shows it, before it reserves a run id. */
 export interface WorkflowPlannedAgentSpec {
   readonly phase: string;
   readonly label: string;
   readonly profile?: string | undefined;
-  /**
-   * The nested workflow() whose meta declares it, by name; absent for the run's own script. Only
-   * calls made in that workflow claim it outside a phase.
-   */
   readonly workflow?: string | undefined;
 }
 
-/** A phase's planned agents in declaration order, labels and profiles trimmed. */
 export const workflowPlannedAgents = (
   phase: WorkflowPhase,
   title = phase.title,
@@ -101,7 +81,6 @@ export const workflowPlannedAgents = (
     return { phase: title, label: label.trim(), ...(shownProfile && { profile: shownProfile }) };
   });
 
-/** Why the declared planned agents are invalid beyond their shape, if they are. */
 const plannedAgentsProblem = (meta: WorkflowMeta): string | undefined => {
   const planned = (meta.phases ?? []).flatMap((phase) => workflowPlannedAgents(phase));
   if (planned.length > WORKFLOW_SCRIPT_AGENT_LIMIT)
@@ -114,11 +93,8 @@ const plannedAgentsProblem = (meta: WorkflowMeta): string | undefined => {
 
 export interface WorkflowScript {
   readonly meta: WorkflowMeta;
-  /** The compiled `meta.args`; absent when the script accepts any args. */
   readonly args?: WorkflowArgsContract | undefined;
-  /** The script exactly as given, which each run saves for the main agent to edit. */
   readonly source: string;
-  /** The script with `export` removed from its meta declaration; line and column positions are unchanged. */
   readonly body: string;
 }
 
@@ -132,7 +108,6 @@ interface MetaRecord {
   readonly [key: string]: MetaValue;
 }
 
-/** Marks an expression that is not a pure literal. */
 const NOT_LITERAL: unique symbol = Symbol("not-literal");
 type Evaluated = MetaValue | typeof NOT_LITERAL;
 
@@ -188,7 +163,6 @@ function objectLiteral(node: ObjectExpression): Evaluated {
   return Object.fromEntries(entries);
 }
 
-/** Evaluates a pure-literal meta expression without executing anything. */
 function literalValue(node: Expression): Evaluated {
   switch (node.type) {
     case "Literal":
@@ -216,16 +190,11 @@ const isModuleDeclaration = (node: Node): boolean =>
 
 const SyntaxPosition = Schema.Struct({ line: Schema.Finite, column: Schema.Finite });
 
-/** The position acorn's syntax error carries beside its message; its column counts from 0. */
 const decodeSyntaxPosition = Schema.decodeUnknownOption(Schema.Struct({ loc: SyntaxPosition }));
 
 const EXCERPT_BEFORE = 60;
 const EXCERPT_AFTER = 40;
 
-/**
- * The failing line around the parser's position, with a caret under it, so a long one-line
- * script can be fixed in one try instead of guessing at a column.
- */
 const syntaxExcerpt = (source: string, line: number, column: number): string => {
   const text = source.split("\n")[line - 1];
   if (text === undefined) return "";
@@ -236,30 +205,23 @@ const syntaxExcerpt = (source: string, line: number, column: number): string => 
   return `\n  ${lead}${text.slice(from, to)}${tail}\n  ${" ".repeat(lead.length + column - from)}^`;
 };
 
-/** Why the parser rejected the script, where, and the code around it. */
 const syntaxError = (
   source: string,
   message: string,
   position: typeof SyntaxPosition.Type | undefined,
 ): WorkflowScriptError => {
-  // Fits both a slip, such as an unclosed bracket, and TypeScript syntax.
   const near = position === undefined ? "" : ` near line ${position.line}`;
   const excerpt =
     position === undefined ? "" : syntaxExcerpt(source, position.line, position.column);
   return new WorkflowScriptError({
     message: `SyntaxError: ${message}. Check the syntax${near} (scripts are plain JavaScript, without TypeScript types).${excerpt}`,
     syntax: {
-      // Acorn ends its message with the position, which `line` carries instead.
       reason: message.replace(/\s*\(\d+:\d+\)$/u, ""),
       ...(position !== undefined && { line: position.line }),
     },
   });
 };
 
-/**
- * Validates a workflow script before anything runs: plain JavaScript that begins with a
- * pure-literal `export const meta` and has no other module syntax.
- */
 export const parseWorkflowScript = (
   source: string,
 ): Effect.Effect<WorkflowScript, WorkflowScriptError> =>
@@ -326,7 +288,6 @@ export const parseWorkflowScript = (
                 new WorkflowScriptError({ message: `Invalid meta.args: ${error.message}` }),
             ),
           );
-    // Keep `const meta` so the script can read it; blanking `export` keeps every position intact.
     const body = `${source.slice(0, first.start)}${" ".repeat("export".length)}${source.slice(first.start + "export".length)}`;
     return { meta, source, body, ...(args && { args }) };
   });

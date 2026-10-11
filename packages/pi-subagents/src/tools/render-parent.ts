@@ -1,8 +1,3 @@
-/**
- * Presentation of a local Pi child's `contact_parent` tool: its compact summary, content-only
- * expansion, and preview-style bodies. The shared shell draws warning and failure issues; these
- * bodies show the request, the parent's reply, and acknowledgements.
- */
 import type {
   AgentToolResult,
   Theme,
@@ -12,6 +7,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
+  escapeControlChars,
   getTextContent,
   type CodePreviewShellOptions,
   type CompactIssue,
@@ -42,7 +38,6 @@ const ContactSchema = Schema.Struct({
   message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
 });
 
-/** A result of exactly one text part, whose text `text` decodes, and no details. */
 const singleTextResult = <TextSchema extends Schema.Top>(text: TextSchema) =>
   Schema.Struct({
     content: Schema.Array(Schema.Struct({ type: Schema.Literal("text"), text })).check(
@@ -55,22 +50,18 @@ const ReceiptSchema = singleTextResult(Schema.String.check(Schema.isMaxLength(25
 const ReplySchema = singleTextResult(
   Schema.String.check(
     Schema.isMaxLength(MAX_TOOL_OUTPUT_CHARS),
-    // Earlier local children said "Parent replied: ".
     Schema.isPattern(/^Parent repl(?:y|ied): /u),
   ),
 );
 
-/** The parent's reply to a child's question, verbatim, when the result is exactly one. */
 const parentReplyText = <Result>(result: Result): string | undefined =>
   decodeUnknownOrUndefined(ReplySchema, result, { onExcessProperty: "error" })?.content[0]?.text;
 
-/** The child's request, decoded from its arguments; undefined for anything else. */
 const contactRequest = <Args>(args: Args) => {
   const request = decodeUnknownOrUndefined(ContactSchema, args);
   return request?.message.trim() ? request : undefined;
 };
 
-/** The warning's own first line, unless it opens with agent guidance; full text on expansion. */
 const warningIssue = (message: string): CompactIssue => {
   const { line } = quoteText(message, { limit: QUOTED_TEXT_LIMIT });
   return {
@@ -81,10 +72,6 @@ const warningIssue = (message: string): CompactIssue => {
   };
 };
 
-/**
- * Owned acknowledgements, a parent's reply to a question, and rejected calls are classified;
- * any other result declines, so its text stays verbatim.
- */
 export const contactParentCompactSummary: CompactSummaryProvider<unknown, unknown, unknown> = ({
   args,
   result,
@@ -94,7 +81,6 @@ export const contactParentCompactSummary: CompactSummaryProvider<unknown, unknow
   const request = contactRequest(args);
   if (!request) return undefined;
   const warning = request.kind === "warning";
-  // A warning's text is its issue line, so the heading does not repeat it.
   const summary: CompactSummary = {
     action: request.kind,
     subject: warning ? "" : safeTextPrefix(sanitizeTerminalLine(request.message), 120),
@@ -118,7 +104,6 @@ export const contactParentCompactSummary: CompactSummaryProvider<unknown, unknow
   return { ...summary, counters: ["acknowledged"], outcome: warning ? "warning" : "success" };
 };
 
-/** Input evidence and replies only; the shared shell renders acknowledgement and warning issues. */
 export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["expandedContent"]> =
   {
     renderCall: (args, theme, context) => {
@@ -127,7 +112,7 @@ export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["
       const message = "message" in args ? args.message : undefined;
       return new Text(
         (!warning || context.isError) && Predicate.isString(message)
-          ? theme.fg("toolOutput", stripTerminalControls(message))
+          ? theme.fg("toolOutput", escapeControlChars(message))
           : "",
         0,
         0,
@@ -140,31 +125,26 @@ export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["
         result,
         context,
       });
-      const text = stripTerminalControls(getTextContent(result.content));
+      const text = escapeControlChars(getTextContent(result.content));
       if (summary && context.isError) return errorSection(theme, text);
       const shown = !summary || parentReplyText(result) !== undefined ? text : "";
       return new Text(theme.fg("toolOutput", shown), 0, 0);
     },
   };
 
-/** Input the heading's bounded subtitle shows exactly. */
 const fitsHeading = (message: string): boolean =>
   message.length <= 120 && sanitizeTerminalLine(message) === message;
 
-/** Lines of a reply or receipt a collapsed row shows before its expansion affordance. */
 const COLLAPSED_REPLY_LINES = 4;
 
-/** Preview-style call and result bodies. */
 export const contactParentRenderers = {
   renderCall<Args>(args: Args, theme: Theme, context: PreviewRenderContext): Component {
     const request = contactRequest(args);
-    // A warning's text is the shell's issue line, so the heading names only the kind.
     const message = request && request.kind !== "warning" ? request.message : undefined;
     const subject = [request?.kind, message].filter(Boolean).join(": ");
-    // The heading shows one bounded line; longer or multi-line input appears whole.
     const whole =
       context.expanded && message && !fitsHeading(message)
-        ? new Text(theme.fg("toolOutput", stripTerminalControls(message)), 0, 0)
+        ? new Text(theme.fg("toolOutput", escapeControlChars(message)), 0, 0)
         : undefined;
     return previewCall(theme, context, { title: CONTACT_PARENT_LABEL, subtitle: subject }, whole);
   },

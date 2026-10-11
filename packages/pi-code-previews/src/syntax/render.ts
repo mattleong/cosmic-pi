@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { bundledThemesInfo } from "shiki";
-import type { ShikiHighlighter } from "../boundary/shiki";
+import { isShikiLanguage, type ShikiHighlighter } from "../boundary/shiki";
 import { codePreviewPerformanceConfig, codePreviewSettings } from "../config/state";
 import { expandPreviewTabs, hashString } from "../shared/helpers";
 import {
@@ -41,7 +41,6 @@ function claimRenderCache(highlighter: ShikiHighlighter, theme: string): void {
   renderCacheOwner = { highlighter, theme };
 }
 
-/** Discards cache entries only when this highlighter still owns them. */
 export function discardShikiRenderCache(highlighter: ShikiHighlighter): void {
   if (renderCacheOwner?.highlighter !== highlighter) return;
   clearRenderCache();
@@ -69,7 +68,6 @@ export function renderWithShiki(
   const snapshot = syntaxProjection();
   const theme = codePreviewSettings.shikiTheme;
   if (!snapshot?.highlighter || snapshot.theme !== theme) {
-    // A failed theme stays plain; requesting it again would loop through invalidation.
     if (!snapshot?.failedThemes.includes(theme)) requestSyntaxInitialize(theme, invalidate);
     return undefined;
   }
@@ -84,19 +82,15 @@ export function renderWithShiki(
     return cached.value;
   }
   if (!snapshot.loadedLanguages.includes(language)) requestSyntaxLanguage(language, invalidate);
+  if (!isShikiLanguage(language)) return undefined;
   try {
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    const tokens = snapshot.highlighter.codeToTokensBase(code, {
-      lang: language as never,
-      theme: theme as never,
-    });
+    const tokens = snapshot.highlighter.codeToTokensBase(code, { lang: language, theme });
     const rendered = tokens.map((line) =>
       normalizeContrast(line.map((token) => ansiFromToken(token)).join(""), theme),
     );
     const size = rendered.reduce((total, line) => total + line.length, 0);
     renderCache.set(key, { source: code, value: rendered, size });
     renderCacheChars += size;
-    // Map order is recency order: evict from the oldest until both budgets hold.
     for (const [oldest, entry] of renderCache) {
       if (
         renderCache.size <= codePreviewPerformanceConfig.cacheLimit &&
@@ -161,7 +155,6 @@ function isLowContrastFg(parameters: string): boolean {
     [red, green, blue].every(Number.isFinite) && 0.2126 * red + 0.7152 * green + 0.0722 * blue < 72
   );
 }
-/** Shiki font-style flags in open order (bold, italic, underline); closes nest in reverse. */
 const FONT_STYLES = [
   [2, "\x1b[1m", "\x1b[22m"],
   [1, "\x1b[3m", "\x1b[23m"],

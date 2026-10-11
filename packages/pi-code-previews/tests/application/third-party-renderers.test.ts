@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { initTheme, type ToolInfo, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, it } from "vitest";
-import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import { plainTheme } from "pi-cosmic-core/testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
 import {
@@ -18,7 +18,7 @@ afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 const info = (name = "web_search"): ToolInfo => ({
   name,
   description: name,
-  parameters: opaqueFixture({}),
+  parameters: {},
   exposure: "codemode",
   sourceInfo: {
     source: "npm:pi-web-access@0.36.0",

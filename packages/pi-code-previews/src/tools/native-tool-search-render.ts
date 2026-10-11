@@ -8,6 +8,7 @@ import { compactPlainText } from "../preview/compact-row";
 import { expandedSection } from "../preview/expanded-section";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { withCodePreviewRenderers } from "./cooperative-tools";
+import type { RenderCall, RendererState, RenderResult } from "./renderers/shared/types";
 import { getFallbackResultText } from "./data/results";
 import { plainRows, runningLine, safeContent } from "./native-safe-content";
 import {
@@ -29,13 +30,12 @@ function section(theme: Theme, title: string, text: string): Component {
   );
 }
 
-/** Renderer-only native search presentation; it never discovers or activates tools itself. */
 export function createNativeToolSearchRenderers(
   appearance: CodePreviewRendererAppearance,
 ): ToolRenderers {
   const renderArguments = <Args>(args: Args, theme: Theme): Component =>
     section(theme, "Arguments", argumentsText(args));
-  const renderOutput: NonNullable<ToolRenderers["renderResult"]> = (
+  const renderOutput: RenderResult<unknown, unknown, RendererState> = (
     result,
     _options,
     theme,
@@ -46,10 +46,9 @@ export function createNativeToolSearchRenderers(
       ? section(theme, context.isPartial ? "Progress" : context.isError ? "Error" : "Output", text)
       : new Container();
   };
-  const renderCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
+  const renderCall: RenderCall<unknown, RendererState> = (args, theme, context) => {
     const subject = nativeToolSearchSubject(args);
     const body = new Container();
-    // Keep the shared issue slot outside theme fallback so failures cannot hide it.
     body.addChild(
       safeContent(
         () => ({
@@ -65,7 +64,7 @@ export function createNativeToolSearchRenderers(
     if (context.expanded) body.addChild(renderArguments(args, theme));
     return body;
   };
-  const renderResult: NonNullable<ToolRenderers["renderResult"]> = (
+  const renderResult: RenderResult<unknown, unknown, RendererState> = (
     result,
     options,
     theme,

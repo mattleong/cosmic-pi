@@ -30,7 +30,6 @@ export const SUBAGENT_RUN_STATES = [
 ] as const;
 export type SubagentRunState = (typeof SUBAGENT_RUN_STATES)[number];
 
-/** Pi supports every capability; other backends declare subsets of this list. */
 export const PI_SUBAGENT_CAPABILITIES = [
   "steer",
   "interrupt",
@@ -48,10 +47,6 @@ export interface SubagentUsage {
   readonly cacheRead: number;
   readonly cacheWrite: number;
   readonly totalTokens: number;
-  /**
-   * Known client-side cost estimate in USD. Absent means the backend never
-   * reported a known cost; it is never presented as a known `$0`.
-   */
   readonly cost?: number | undefined;
 }
 
@@ -107,7 +102,6 @@ interface SubagentWriteAudit {
   readonly bashWriteHints: number;
 }
 
-/** Native guidance delivery only; never evidence that the model incorporated it. */
 export const STEERING_DELIVERY_STATES = [
   "pending",
   "confirmed",
@@ -117,15 +111,12 @@ export const STEERING_DELIVERY_STATES = [
 ] as const;
 export type SteeringDeliveryState = (typeof STEERING_DELIVERY_STATES)[number];
 
-/** Delivery uncertainty blocks replacement even after process cleanup is confirmed. */
 export const hasUnresolvedSteeringDelivery = (run: {
   readonly steeringDelivery?: SteeringDeliveryState | undefined;
 }): boolean => run.steeringDelivery === "pending" || run.steeringDelivery === "unresolved";
 
-/** Trusted workflow placement of an owned run; never accepted from tool or proxy schemas. */
 export interface SubagentWorkflowMembership {
   readonly workflowId: string;
-  /** Workflow display name for parent-facing notices. */
   readonly name?: string | undefined;
   readonly phase?: string | undefined;
 }
@@ -137,27 +128,17 @@ export interface SubagentRunView {
   readonly task: string;
   readonly profile?: ProfileId | undefined;
   readonly selection: SubagentSelectionProvenance;
-  /** Immutable ancestry. Top-level runs name the root virtual node. */
   readonly parentRunId?: string | undefined;
-  /** Root Pi is depth 0; top-level runs are depth 1. */
   readonly depth?: number | undefined;
-  /** Bounded tree counts projected from the root-owned registry. */
   readonly directChildCount?: number | undefined;
   readonly descendantCount?: number | undefined;
-  /** Runtime-native agents remain internal activity and never become Pi run nodes. */
   readonly nativeActivity?: SubagentNativeActivity | undefined;
-  /** Failed predecessor continued explicitly through the remaining frozen profile route. */
   readonly predecessorRunId?: string | undefined;
-  /** Successor admitted from this failed run's explicit retry claim. */
   readonly supersededByRunId?: string | undefined;
-  /** Configured candidates after the selected candidate, before dynamic retry-time checks. */
   readonly remainingCandidateCount?: number | undefined;
-  /** Remaining candidates were checked and none could be admitted. */
   readonly retryExhausted?: boolean | undefined;
-  /** Continuation encountered ownership uncertainty and is permanently fail-closed. */
   readonly retryBlocked?: boolean | undefined;
   readonly cwd: string;
-  /** Frozen session writer mode and private artifact identity, never a per-worker override. */
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly workspaceId?: string | undefined;
   readonly sourceCwd?: string | undefined;
@@ -165,17 +146,14 @@ export interface SubagentRunView {
   readonly state: SubagentRunState;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  /** Exact cooperative file claims. Absent on a writer means exclusive whole-cwd ownership. */
   readonly writeClaims?: ReadonlyArray<string> | undefined;
   readonly writeAudit?: SubagentWriteAudit | undefined;
   readonly writeAdmissionPaused?: boolean | undefined;
-  /** This run is in the current pool pause's authoritative offender set. */
   readonly writeViolationOffender?: boolean | undefined;
   readonly openaiFastMode: boolean;
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly closeOnReport: boolean;
-  /** Current assignment/report generation. Zero means no report has been accepted yet. */
   readonly reportGeneration: number;
   readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly model: string;
@@ -194,11 +172,9 @@ export interface SubagentRunView {
   readonly question?: PendingParentQuestion | undefined;
   readonly sessionEvents: ReadonlyArray<SubagentSessionEvent>;
   readonly finalText?: string | undefined;
-  /** Observed before report redaction. Absent historical metadata means unknown. */
   readonly reportStatus?: "available" | "claimed" | "delivered" | "missing" | undefined;
   readonly error?: string | undefined;
   readonly usage: SubagentUsage;
-  /** Tool calls the run started across its assignments; only grows. Absent before the first. */
   readonly toolUses?: number | undefined;
 }
 
@@ -221,7 +197,6 @@ export const FAILED_START_RETRY_DISPOSITIONS = [
 ] as const;
 type FailedStartRetryDisposition = (typeof FAILED_START_RETRY_DISPOSITIONS)[number];
 
-/** Settled, privacy-bounded recovery facts for a start that already admitted a run. */
 export interface FailedStartRecovery {
   readonly runId: string;
   readonly cleanupDisposition: FailedStartCleanupDisposition;
@@ -237,9 +212,7 @@ export interface SubagentRetrySupersession {
 
 export interface StartSubagentRequest {
   readonly name?: string | undefined;
-  /** Internal root-owned ancestry. This field is never accepted by public tool schemas. */
   readonly parentRunId?: string | undefined;
-  /** One immutable policy revision captured by the complete start batch. */
   readonly nestingPolicy?: SubagentNestingPolicy | undefined;
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
@@ -247,21 +220,14 @@ export interface StartSubagentRequest {
   readonly task: string;
   readonly profile?: ProfileId | undefined;
   readonly profileGuidance?: string | undefined;
-  /** Exact workspace-relative file claims; absent means an exclusive writer. */
   readonly writes?: ReadonlyArray<string> | undefined;
   readonly selection?: SubagentSelectionProvenance | undefined;
-  /** Frozen configured route and cursor; never accepted from the public start schema. */
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
-  /** Internal exclusive predecessor claim consumed atomically by successor admission. */
   readonly supersedes?: SubagentRetrySupersession | undefined;
-  /** Coordinator-only prepared artifact. Public and proxy schemas cannot supply this. */
   readonly workspace?: WorkspaceHandle | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
-  /** Internal per-run writer mode chosen by a trusted owner; a retry keeps its predecessor's mode. */
   readonly writerWorkspaceModeOverride?: WriterWorkspaceMode | undefined;
-  /** Internal workflow membership, projected to the run view. */
   readonly workflow?: SubagentWorkflowMembership | undefined;
-  /** Internal structured-result contract; a completed run's final text is the result's canonical JSON. */
   readonly resultContract?: ResultContract | undefined;
   readonly cwd: string;
   readonly context: SubagentContextMode;
@@ -283,7 +249,6 @@ export const hasSubagentCapability = (
   capability: SubagentCapability,
 ): boolean => run.capabilities.includes(capability);
 
-/** Parent orchestration must act before an await can make useful progress. */
 export const isParentActionRequiredRun = (
   run: Pick<SubagentRunView, "state" | "writeAdmissionPaused" | "writeViolationOffender"> & {
     readonly question?: unknown;
@@ -314,7 +279,6 @@ const TERMINAL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
 export const isTerminalRunState = (state: SubagentRunState): boolean =>
   TERMINAL_RUN_STATES.has(state);
 
-/** Finished refers to the current assignment, not necessarily to backend resource closure. */
 export const isAssignmentFinishedRunState = (state: SubagentRunState): boolean =>
   state === "reported" || isTerminalRunState(state);
 

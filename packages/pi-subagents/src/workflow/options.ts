@@ -9,21 +9,16 @@ import { NonEmptyText, workflowAgentLabel, workflowPhaseTitle } from "./model.ts
 
 const invalidOptions = (message: string) => new WorkflowAgentCallError({ message });
 
-/** The profile an agent() call without one runs with. */
 const DEFAULT_PROFILE: ProfileId = "generalist";
 
-/** The profile a call runs with: the one it names, or the default. */
 export const workflowAgentProfile = (profile: string | undefined): string =>
   profile ?? DEFAULT_PROFILE;
 
-/** Every profile a call can name, as messages list them. */
 export const AVAILABLE_PROFILES = `Available profiles: ${PROFILE_IDS.join(", ")}.`;
 
-/** Claude Code options that choose an agent's route, which Pi profiles choose instead. */
 const ROUTE_OPTIONS = ["model", "effort", "agentType"] as const;
 type WorkflowRouteOption = (typeof ROUTE_OPTIONS)[number];
 
-/** The Pi profile nearest a Claude Code agent type, when one is close enough to name. */
 const nearestProfile = (agentType: Schema.Json): ProfileId | undefined => {
   if (!Predicate.isString(agentType)) return undefined;
   const type = agentType.trim().toLowerCase();
@@ -33,7 +28,6 @@ const nearestProfile = (agentType: Schema.Json): ProfileId | undefined => {
   return type.includes("review") ? "reviewer" : undefined;
 };
 
-/** What a script passing a Claude Code route option should pass instead. */
 const workflowRouteOptionMessage = (option: WorkflowRouteOption, value: Schema.Json): string => {
   if (option !== "agentType")
     return `agent() option \`${option}\` isn't supported: Pi profiles choose the model and effort. Pass \`profile\` instead. ${AVAILABLE_PROFILES}`;
@@ -44,7 +38,6 @@ const workflowRouteOptionMessage = (option: WorkflowRouteOption, value: Schema.J
 };
 
 const WorkflowAgentOptionsSchema = Schema.Struct({
-  // Presentation only: decoding clips long values and drops empty ones instead of rejecting.
   label: Schema.optional(Schema.String),
   phase: Schema.optional(Schema.String),
   schema: Schema.optional(Schema.Json),
@@ -61,14 +54,8 @@ const SUPPORTED = Object.keys(WorkflowAgentOptionsSchema.fields);
 const isRouteOption = Schema.is(Schema.Literals(ROUTE_OPTIONS));
 
 const decodeRecord = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json));
-// Options outside the schema are rejected by name before decoding.
 const decodeOptions = Schema.decodeUnknownEffect(WorkflowAgentOptionsSchema);
 
-/**
- * Decodes script-supplied agent() options strictly, naming the first route option, with the
- * profile to pass instead, or else the first unsupported option. Null values count as omitted,
- * and the profile is trimmed, so calls that run the same route have the same options.
- */
 export const decodeWorkflowAgentOptions = (
   raw: Schema.Json,
 ): Effect.Effect<WorkflowAgentOptions, WorkflowAgentCallError> =>
@@ -84,7 +71,6 @@ export const decodeWorkflowAgentOptions = (
       return yield* invalidOptions(
         `Unknown agent() option \`${unknown}\`. Supported options: ${SUPPORTED.join(", ")}.`,
       );
-    // A null option counts as omitted, so scripts can pass nullable values straight through.
     const present = Object.fromEntries(
       Object.entries(record.value).filter(([, value]) => value !== null),
     );
@@ -102,11 +88,6 @@ export const decodeWorkflowAgentOptions = (
     };
   });
 
-/**
- * Identity of an agent() call for resume: the same prompt with the same route-affecting options
- * reuses an earlier result. Display options (label, phase) don't matter, and an omitted profile
- * is the default one it runs with.
- */
 export const workflowAgentJournalKey = (
   prompt: string,
   options: WorkflowAgentOptions,

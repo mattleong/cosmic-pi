@@ -1,4 +1,3 @@
-import type { TUI } from "@earendil-works/pi-tui";
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -7,14 +6,12 @@ import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { expect, vi } from "vitest";
 import { editWithExternalEditor } from "../src/boundary/host-external-editor.ts";
-import { opaqueFixture } from "pi-cosmic-core/testing";
-import { makeTuiHost } from "./support/host.ts";
+import { tuiFixture } from "pi-cosmic-core/testing";
 
 const decodeHangingEditorState = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ pid: Schema.Number, target: Schema.String })),
 );
 
-// Writes a Node editor script into a scoped temporary directory beside a suspendable TUI fake.
 const editorScript = (source: string, name = "editor.mjs") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -22,9 +19,10 @@ const editorScript = (source: string, name = "editor.mjs") =>
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-ask-user-editor-test-" });
     const script = path.join(directory, name);
     yield* fs.writeFileString(script, source);
-    const host = makeTuiHost().tui;
-    const tui: TUI = opaqueFixture(host);
-    const { stop, start, requestRender } = host;
+    const stop = vi.fn();
+    const start = vi.fn();
+    const requestRender = vi.fn();
+    const tui = tuiFixture({ stop, start, requestRender });
     const command = `${process.execPath} ${script}`;
     return { fs, path, directory, script, command, tui, stop, start, requestRender };
   });

@@ -1,4 +1,3 @@
-// Actual Pi agent loop and native QuickJS, with an owned subagent backend boundary only.
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -6,7 +5,6 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { workflowSession } from "./fixtures/native-workflow-session.ts";
 import { eventually, reportTask, script } from "./fixtures/workflow-harness.ts";
 
-// Live time is intentional: the script runs in a real QuickJS worker.
 describe("dynamic workflows in a Pi session", () => {
   it.live("runs a script in the background and steers its result into the conversation", () =>
     Effect.gen(function* () {
@@ -26,7 +24,6 @@ describe("dynamic workflows in a Pi session", () => {
       });
       expect(started.isError).toBe(false);
       expect(started.text).toContain("runs in the background");
-      // The result arrives later as one steering message that starts a new turn.
       fake.setResponses([fauxAssistantMessage("Read the workflow result.")]);
       yield* reportTask(fixture, "Map the entry points", "src/index.ts is the entry point.");
       const delivered = yield* eventually(

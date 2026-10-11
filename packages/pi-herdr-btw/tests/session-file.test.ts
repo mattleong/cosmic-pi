@@ -8,8 +8,6 @@ import {
   probeSessionHeader,
 } from "../src/boundary/session-file.ts";
 
-// This suite intentionally exercises the raw-filesystem probe boundary, so it
-// uses the same guarded builtin access as the boundary itself.
 const nodeFs = process.getBuiltinModule("node:fs");
 const nodeOs = process.getBuiltinModule("node:os");
 const nodePath = process.getBuiltinModule("node:path");
@@ -182,8 +180,6 @@ describe("createBlankChildSessionFile", () => {
           sessionDir: join(dir, "missing-directory"),
         }),
       ).toEqual({ _tag: "invalid" });
-      // The ID becomes a filename and an argv marker, so separator-bearing and overlong IDs fail
-      // closed. Without the grammar check, "x/../escape" would normalize to a creatable file.
       for (const sessionId of ["x/../escape", "a".repeat(129)])
         expect(yield* createBlankChildSessionFile({ ...input, sessionId })).toEqual({
           _tag: "invalid",

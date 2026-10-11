@@ -45,7 +45,6 @@ const Details = Schema.Struct({
   unavailable: Schema.optionalKey(Texts),
 });
 
-/** Schema sees copied data slots, never an array accessor supplied by the provider. */
 function arraySnapshot<Value>(value: Value[]): Value[] | undefined {
   const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
   if (!Number.isSafeInteger(length) || length < 0 || length > 256) return undefined;
@@ -58,7 +57,6 @@ function arraySnapshot<Value>(value: Value[]): Value[] | undefined {
   return copied;
 }
 
-/** Materialize only fixed own data fields; never invoke provider getters or scan unknown keys. */
 function snapshot<Value, Key extends string>(
   value: Value,
   fields: readonly Key[],
@@ -90,7 +88,6 @@ export function webAccessSubject<Args>(name: WebAccessTool, args: Args): string 
   }, "");
 }
 
-/** Stored-page results may omit their reference; the exact request retains it. */
 export function webAccessArgumentReference<Args>(args: Args): string {
   return invokeHostCallback(() => {
     const input = snapshot(args, ["responseId"]);
@@ -98,12 +95,13 @@ export function webAccessArgumentReference<Args>(args: Args): string {
   }, "");
 }
 
+export type WebAccessDetails = typeof Details.Type;
+
 interface WebAccessEvidence {
-  readonly details: typeof Details.Type;
+  readonly details: WebAccessDetails;
   readonly researchErrors: number;
 }
 
-/** Count only bounded research errors supplied in the result, never read stored artifacts. */
 function researchErrors<Artifact>(value: Artifact): number | undefined {
   if (!Predicate.isObject(value) || Array.isArray(value)) return undefined;
   let count = 0;
@@ -128,7 +126,27 @@ function researchErrors<Artifact>(value: Artifact): number | undefined {
   return count;
 }
 
-/** A small compatibility projection, not an authoritative provider outcome or claim verdict. */
+const exceeds = (part: number | undefined, whole: number | undefined): boolean =>
+  part !== undefined && (whole === undefined || part > whole);
+
+function inconsistentCounts(details: WebAccessDetails): boolean {
+  return (
+    exceeds(details.successfulQueries, details.queryCount) ||
+    exceeds(details.successful, details.urlCount) ||
+    exceeds(details.returnedMatches, details.matchCount) ||
+    (details.returnedChars !== undefined &&
+      details.contentLength !== undefined &&
+      (details.offset ?? 0) + details.returnedChars > details.contentLength)
+  );
+}
+
+function artifactResearchErrors<Details>(value: Details): number | undefined {
+  if (!Predicate.isObject(value)) return undefined;
+  const artifact = Object.getOwnPropertyDescriptor(value, "artifact");
+  if (artifact && !("value" in artifact)) return undefined;
+  return artifact?.value === undefined ? 0 : researchErrors(artifact.value);
+}
+
 export function webAccessEvidence<Details>(
   name: WebAccessTool,
   value: Details,
@@ -136,30 +154,8 @@ export function webAccessEvidence<Details>(
   return invokeHostCallback(() => {
     const input = snapshot(value, Object.keys(Details.fields));
     const details = input && decodeUnknownOrUndefined(Details, input);
-    if (!details) return undefined;
-    if (
-      (details.successfulQueries !== undefined &&
-        (details.queryCount === undefined || details.successfulQueries > details.queryCount)) ||
-      (details.successful !== undefined &&
-        (details.urlCount === undefined || details.successful > details.urlCount)) ||
-      (details.returnedMatches !== undefined &&
-        (details.matchCount === undefined || details.returnedMatches > details.matchCount)) ||
-      (details.returnedChars !== undefined &&
-        details.contentLength !== undefined &&
-        (details.offset ?? 0) + details.returnedChars > details.contentLength)
-    )
-      return undefined;
-    let errors = 0;
-    if (name === "source_check") {
-      if (!Predicate.isObject(value)) return undefined;
-      const artifact = Object.getOwnPropertyDescriptor(value, "artifact");
-      if (artifact && !("value" in artifact)) return undefined;
-      if (artifact?.value !== undefined) {
-        const counted = researchErrors(artifact.value);
-        if (counted === undefined) return undefined;
-        errors = counted;
-      }
-    }
-    return { details, researchErrors: errors };
+    if (!details || inconsistentCounts(details)) return undefined;
+    const errors = name === "source_check" ? artifactResearchErrors(value) : 0;
+    return errors === undefined ? undefined : { details, researchErrors: errors };
   }, undefined);
 }

@@ -13,7 +13,6 @@ const CODE_PREVIEW_TOOL_ICONS = {
   tool_search: "🔎",
 } as const satisfies Record<CodePreviewToolName, string>;
 
-/** Return the canonical standalone-call icon for a supported built-in tool name. */
 export function getCodePreviewToolIcon(tool: string): string | undefined {
   return isCodePreviewToolName(tool) ? CODE_PREVIEW_TOOL_ICONS[tool] : undefined;
 }

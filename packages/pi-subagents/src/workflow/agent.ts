@@ -46,7 +46,6 @@ import type { WorkflowResultLine } from "./results.ts";
 import { makeWorkflowReuse } from "./reuse.ts";
 import type { WorkflowAgentDraft, WorkflowPlannedClaim } from "./state.ts";
 
-/** An agent() call as profile resolution sees it. */
 export interface WorkflowAgentSpec {
   readonly task: string;
   readonly name: string;
@@ -54,77 +53,42 @@ export interface WorkflowAgentSpec {
   readonly writes?: ReadonlyArray<string> | undefined;
 }
 
-/** Whether a valid call's profile can write; a writer without worktree isolation edits the checkout. */
 export type WorkflowAgentAccess = "writer" | "read-only";
 
-/** Profile resolution captured from the tool call that started the run. */
 export interface WorkflowHost {
-  /**
-   * Rejects calls no environment could admit, unknown profiles and writer options on read-only
-   * routes, and otherwise returns whether the call's profile can write.
-   */
   readonly checkAgent: (
     options: WorkflowAgentOptions,
   ) => Effect.Effect<WorkflowAgentAccess, WorkflowAgentCallError>;
-  /**
-   * Resolves the launch once the call first gets one of its run's slots, which can be well
-   * before it starts when it then waits behind a conflicting writer; failures here are
-   * environmental.
-   */
   readonly resolveAgent: (
     spec: WorkflowAgentSpec,
   ) => Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError>;
 }
 
-/** The workflow run an agent() call belongs to; the service owns every piece of state. */
 export interface WorkflowAgentRun {
   readonly workflowId: string;
   readonly workflowName: string;
   readonly host: WorkflowHost;
   readonly replay: WorkflowReplay | undefined;
-  /** The run's slots, held by each start and the agent it admits, never behind a writer. */
   readonly slots: WorkflowSlots;
-  /** The run's token budget, which also tracks its spent output tokens without a total. */
   readonly budget: WorkflowBudget;
-  /** The next live call position, or undefined once the run's agent limit is reached. */
   readonly nextCall: Effect.Effect<number | undefined>;
-  /** Fails the whole run with `message` from the host, which no catch in the script can stop. */
   readonly failRun: (message: string) => Effect.Effect<void>;
-  /**
-   * Publishes a queued agent whose skip request completes `skip`. It claims the planned entry
-   * its phase and label match, taking over that entry's run id and, when it has no phase, the
-   * entry's phase, and otherwise reserves its own. An agent that claims an entry the user skipped
-   * since the call looked for one is published already skipped.
-   */
   readonly queue: (
     draft: WorkflowAgentDraft,
     skip: Deferred.Deferred<void>,
   ) => Effect.Effect<WorkflowAgentView>;
-  /**
-   * Claims the planned entry the call would claim when the user skipped it, and publishes the
-   * call's view, already skipped and with a position of its own, in the same step; undefined,
-   * changing nothing, when the call would claim no skipped entry.
-   */
   readonly claimSkipped: (
     claim: Omit<WorkflowAgentDraft, "callId" | "queuedAt">,
   ) => Effect.Effect<WorkflowAgentView | undefined>;
   readonly update: (runId: string, change: Partial<WorkflowAgentView>) => Effect.Effect<void>;
   readonly forget: (runId: string) => Effect.Effect<void>;
   readonly log: (level: "info" | "warning", message: string) => Effect.Effect<void>;
-  /** Completed once someone asks the run to stop. */
   readonly stopRequested: Deferred.Deferred<void>;
-  /** Adds what a settled live agent used to the run's usage. */
   readonly count: (spend: WorkflowAgentSpend) => Effect.Effect<void>;
-  /**
-   * Counts a result reused from the resumed run in its display phase, at no cost, and lists its
-   * worktree as a proposal when the entry still names one. The call claims its planned entry
-   * like a live one, and gets it back.
-   */
   readonly reuse: (
     entry: WorkflowJournalEntry,
     claim: WorkflowPlannedClaim,
   ) => Effect.Effect<WorkflowPlannedAgent | undefined>;
-  /** Appends a finished call to the run's results journal file; best effort. */
   readonly writeResult: (line: WorkflowResultLine) => Effect.Effect<void>;
 }
 
@@ -144,23 +108,15 @@ export interface WorkflowAgentServices {
   readonly journal: Pick<WorkflowJournalContract, "record" | "noteWorkspace" | "dropWorkspace">;
 }
 
-/** The prompt and options, then the nested workflow() the call was made in, by name. */
 const CallArguments = Schema.Tuple([Schema.String, Schema.Json, Schema.optionalKey(Schema.String)]);
 const decodeCall = Schema.decodeUnknownEffect(CallArguments);
 
 const reject = (message: string) => new WorkflowAgentCallError({ message });
 
-/**
- * One script `agent(prompt, options)` call. It rejects only for an invalid call; otherwise it
- * replies with a value or null, or with the budget's refusal, which the prelude throws as a
- * budget error, when the budget is spent before its agent starts. Interruption, including a
- * skip, stops the owned subagent and releases its report before the call returns.
- */
 export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowAgentServices) => {
   const { subagents, journal } = services;
   const reuse = makeWorkflowReuse(run, subagents);
 
-  /** Awaits an admitted run's outcome; the caller's scope owns the run until it is consumed. */
   const settle = (
     handle: OwnedRunHandle,
     runId: string,
@@ -187,7 +143,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
       return { ...settlement, startedAt, ...(workspaceId !== undefined && { workspaceId }) };
     });
 
-  /** Admits and runs a queued agent, in its view's phase, which a claimed entry may have set. */
   const launch = (
     task: string,
     options: WorkflowAgentOptions,
@@ -199,8 +154,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
       order,
       label: agent.label,
       owner: { ownerId: run.workflowId, runId: agent.runId },
-      // The route, and a fork-context profile's fork of the root conversation, resolve once,
-      // when the call first gets a slot. A call that waits behind a writer keeps that request.
       resolve: run.host
         .resolveAgent({ task, name: agent.label, profile: options.profile, writes: options.writes })
         .pipe(
@@ -221,11 +174,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
       waiting: (waiting) => run.update(agent.runId, { waiting }),
     });
 
-  /**
-   * Counts what a settled agent used, and what the subagents it started itself used, in its
-   * budget and its run's usage. An agent without an outcome, such as one skipped or stopped while
-   * it ran, counts what its subagent shows, and names the worktree its subagent shows.
-   */
   const account = (runId: string, settlement: WorkflowSettlement, endedAt: number) =>
     Effect.gen(function* () {
       const observed: WorkflowObservedRun = settlement.spend
@@ -243,11 +191,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
       } satisfies WorkflowAccounted;
     });
 
-  /**
-   * Settles a live call's view, usage, resume journal and results journal line, once a worktree
-   * writer's worktree is checked for changes. A call that ends without a result warns why, unless
-   * it ends with its run, whose script is gone.
-   */
   const record = (
     agent: WorkflowAgentView,
     key: string,
@@ -268,8 +211,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
       if (warn && settlement.state !== "completed" && settlement.refusal === undefined)
         yield* run.log("warning", settlementWarning(agent.label, settlement));
       const accounted = yield* account(agent.runId, settlement, endedAt);
-      // A writer whose worktree held no changes left nothing to review or integrate, so a
-      // resume reuses its result like a reader's.
       if (settlement.state === "completed")
         yield* journal.record(run.workflowId, {
           key,
@@ -281,7 +222,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
           ...(settlement.workspaceId !== undefined &&
             !settlement.unchanged && { workspaceId: settlement.workspaceId }),
         });
-      // A discarded worktree isn't one a teardown notice lists for recovery.
       if (settlement.unchanged && settlement.workspaceId !== undefined)
         yield* journal.dropWorkspace(run.workflowId, settlement.workspaceId);
       yield* run.writeResult(settledResultLine(agent, key, settlement, accounted));
@@ -290,10 +230,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
         : workflowRefusalReply(settlement.refusal, accounted.spent);
     });
 
-  /**
-   * A call that claimed a planned agent the user skipped: it resolves null at once, starting
-   * nothing and holding no slot or budget, and only its warning and journal line are left.
-   */
   const skippedBeforeStart = (agent: WorkflowAgentView, key: string) => {
     const settlement = nullSettlement("skipped", WORKFLOW_SKIPPED_BEFORE_START);
     const accounted = { spend: sumWorkflowSpends([]), spent: 0 };
@@ -326,11 +262,8 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
           label: options.label,
           workflow,
         };
-        /** Settles a reused result in the step that took it, so a stop can't drop its journal line. */
         const settleReused = (reused: WorkflowJournalEntry) =>
           Effect.gen(function* () {
-            // Recorded again, as the results file records it, so a resumed run can itself be
-            // resumed; an integrated worktree is left out of both.
             yield* journal.record(run.workflowId, reused);
             const claimed = yield* run.reuse(reused, claim);
             yield* run.writeResult({
@@ -345,26 +278,19 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
               outputTokens: reused.outputTokens,
               result: reused.result,
             });
-            // A reused result costs nothing in this run, so budget.spent() doesn't grow.
             return workflowReply(reused.result, 0);
           });
-        // A call that runs live is checked first; a reused or skipped one starts nothing now.
         const replayed = yield* consult(key, options, run.host.checkAgent(options), settleReused, {
           claim: run.claimSkipped({ ...claim, profile: options.profile }),
           settle: (agent) => skippedBeforeStart(agent, key),
         });
         if (replayed !== undefined) return replayed;
-        // Every live call takes a position, refused ones too, so a script that retries refused
-        // calls ends at the agent limit instead of looping once the budget is spent. The limit
-        // fails the run from the host, so it ends a retry loop that catches every error too.
         const callId = yield* run.nextCall;
         if (callId === undefined) {
           const limit = `A workflow can run at most ${WORKFLOW_AGENT_LIMIT} agents.`;
           yield* run.failRun(limit);
           return yield* reject(limit);
         }
-        // A call once the budget is spent never queues and gets no view; the run counts it and
-        // warns once.
         if (yield* run.budget.exhausted) return workflowRefusalReply(yield* run.budget.refuse, 0);
         const skip = yield* Deferred.make<void>();
         const draft: WorkflowAgentDraft = {
@@ -374,8 +300,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
           profile: options.profile,
         };
         const order = run.slots.order(draft.queuedAt);
-        // Only the launch can be interrupted: a published agent always settles its view, and a
-        // settled call always records its journal line, even when the run stops meanwhile.
         return yield* Effect.uninterruptibleMask((restore) => {
           const live = (agent: WorkflowAgentView) =>
             restore(
@@ -387,9 +311,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
                 ),
               ),
             ).pipe(
-              // The script is gone when its call is interrupted, so only the view, what the
-              // agent used and the journal need settling. A stopped settlement has no worktree and
-              // no result, so it discards nothing and adds no resume journal entry.
               Effect.onInterrupt(() =>
                 record(agent, key, nullSettlement("stopped", "the workflow stopped"), false).pipe(
                   Effect.asVoid,

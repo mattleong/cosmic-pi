@@ -15,7 +15,6 @@ interface Row {
   readonly token?: number | undefined;
 }
 
-/** A synchronous projection of service and mounted-dialog transitions, never draft storage. */
 export function makeQuestionnaireActivity(options: {
   readonly bridge: AskUserDialogBridge;
   readonly isCurrent: () => boolean;
@@ -27,7 +26,6 @@ export function makeQuestionnaireActivity(options: {
     confirmation: "Cancel this questionnaire? Draft answers will be discarded.",
     handoff: false,
   };
-  // Showing the questionnaire takes keyboard focus, so the Activity manager must close first.
   const resumeAction = { id: "resume", label: "Resume", handoff: true };
   const rows = new Map<string, Row>();
   let registration: ActivityProviderRegistration | undefined;

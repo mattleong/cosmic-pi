@@ -16,7 +16,6 @@ const Receipt = Schema.Struct({
   loaded: Schema.Array(ToolName).check(Schema.isMaxLength(MAX_LOADED)),
 });
 
-/** Only bounded own data from Pi's receipt, never accessors or unrelated recovery fields. */
 export function nativeToolSearchReceipt<Details>(
   details: Details,
 ): typeof Receipt.Type | undefined {
@@ -24,20 +23,17 @@ export function nativeToolSearchReceipt<Details>(
   if (!invokeHostCallback(() => Array.isArray(source), false)) return undefined;
   const length = ownData(source, "length", Length);
   if (length === undefined) return undefined;
-  // Holes and accessors read as undefined, which the receipt rejects.
   const loaded = Array.from({ length }, (_, index) =>
     ownData(source, String(index), Schema.Unknown),
   );
   return decodeUnknownOrUndefined(Receipt, { loaded });
 }
 
-/** Argument-only subject; complete arguments remain available on expansion. */
 export function nativeToolSearchSubject<Args>(args: Args): string {
   const query = ownData(args, "query", Schema.String);
   return query === undefined ? "" : visibleDiagnosticLine(query.slice(0, 512), 160);
 }
 
-/** A historical loaded receipt is not evidence of the current active set or domain success. */
 export const nativeToolSearchSummary: CompactSummaryProvider = ({
   phase,
   args,

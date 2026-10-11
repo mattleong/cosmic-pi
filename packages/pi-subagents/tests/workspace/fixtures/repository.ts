@@ -1,4 +1,3 @@
-// Temporary directories and committed git repositories shared by the workspace suites.
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -11,7 +10,6 @@ import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/wo
 
 export const io = <A>(run: () => PromiseLike<A>) => workspaceIO("fixture", run);
 
-/** A real temporary directory removed, best effort, when the enclosing scope closes. */
 export const temporaryDirectory = (prefix: string) =>
   Effect.acquireRelease(
     io(() => fs.mkdtemp(path.join(os.tmpdir(), prefix)).then((dir) => fs.realpath(dir))),
@@ -20,7 +18,6 @@ export const temporaryDirectory = (prefix: string) =>
 
 type RepositoryFiles = ReadonlyArray<readonly [file: string, content: string | Uint8Array]>;
 
-/** Initializes `root` as a repository whose single commit holds exactly `files`. */
 export const commitRepository = (root: string, files: RepositoryFiles) =>
   Effect.gen(function* () {
     yield* io(() => fs.mkdir(root, { recursive: true }));
@@ -46,21 +43,15 @@ export const writeFile = (file: string, content: string | Uint8Array) =>
   io(() => fs.writeFile(file, content));
 export const fails = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.exit(effect).pipe(Effect.map(Exit.isFailure));
-/** The error `effect` fails with; a success fails the test. */
 export const failureOf = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.flip(effect).pipe(Effect.orDie);
 
-/** The target a parent names its own workspace by, after confirming its writer's cleanup. */
 export const workspaceTarget = (handle: WorkspaceHandle) => ({
   workspaceId: handle.workspaceId,
   ownerId: handle.ownerId,
   processCleanupConfirmed: true as const,
 });
 
-/**
- * Registers live workspace tests. Each gets a fresh `root` repository whose one commit holds
- * `files`, a private `agent` directory, and its own WorkspaceService over that directory.
- */
 export const workspaceTests =
   (files: RepositoryFiles) =>
   (

@@ -11,7 +11,6 @@ const sourceError = { messageId: "sourceSpelling" };
 tester.run("anti-slop/no-runtime-type-only-tests", noRuntimeTypeOnlyTestsRule, {
   valid: [
     `${vitest} expectTypeOf<Result>().toEqualTypeOf<Expected>(); assertType<Result>(value);`,
-    // Vitest's typecheck mode collects these files and never runs their test callbacks.
     {
       filename: "/repo/packages/pi-example/tests/contract.test-d.ts",
       code: `${vitest} test('contract', () => { expectTypeOf<Result>().toEqualTypeOf<Expected>(); assertType<Result>(value); });`,
@@ -28,14 +27,12 @@ tester.run("anti-slop/no-runtime-type-only-tests", noRuntimeTypeOnlyTestsRule, {
     `import type { expectTypeOf, assertType } from 'vitest'; it('value', () => { expectTypeOf<Result>(); assertType<Result>(value); });`,
     `import { type expectTypeOf } from 'vitest'; it('value', () => expectTypeOf<Result>());`,
     `${vitest} describe('contracts', () => expectTypeOf<Result>().toEqualTypeOf<Expected>());`,
-    // Fixture/parser/compiler tests and module execution are behavior, not source spellings.
     `${vitest} it('parser', () => expect(parse('import { x } from "x"')).toEqual({ kind: 'import' }));`,
     `${vitest} ${fs} it('fixture', () => expect(readFileSync('../fixtures/src/input.ts', 'utf8')).toContain('export const answer'));`,
     `${vitest} ${fs} it('parser', () => expect(parse(readFileSync('../src/input.ts', 'utf8'))).toEqual('export const answer'));`,
     `${vitest} ${fs} it('compiler', () => expect(compile(readFileSync('../src/input.ts', 'utf8')).output).toContain('export const answer'));`,
     `${vitest} ${fs} it('packaging', () => expect(readFileSync('../dist/index.js', 'utf8')).toContain('from "./public.js"'));`,
     `${vitest} it('Jiti', async () => expect(await jiti.import('../src/protocol.ts')).toHaveProperty('encode'));`,
-    // Ordinary FS assertions, arbitrary strings/regexes, and shadowed read/expect APIs stay valid.
     `${vitest} ${fs} it('stored file', () => expect(readFileSync('/tmp/result.txt', 'utf8')).toBe('export const answer'));`,
     `${vitest} ${fs} it('source contents', () => expect(readFileSync('../src/protocol.ts', 'utf8')).toContain('license'));`,
     `${vitest} ${fs} it('source contents', () => expect(readFileSync('../src/protocol.ts', 'utf8')).not.toMatch(/task\\/model|backend/));`,

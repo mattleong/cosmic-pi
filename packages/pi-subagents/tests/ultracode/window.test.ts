@@ -15,7 +15,6 @@ import type { WorkflowRunHandoff } from "../../src/workflow/run-observer.ts";
 
 type Step = (state: UltracodeWindow) => UltracodeWindow;
 
-/** Applies each step in turn and records whether the window is open after it. */
 const openAfter = (...steps: ReadonlyArray<Step>): ReadonlyArray<boolean> => {
   let state = closedUltracodeWindow;
   return steps.map((step) => {
@@ -25,11 +24,8 @@ const openAfter = (...steps: ReadonlyArray<Step>): ReadonlyArray<boolean> => {
 };
 
 const sent: Step = ultracodeRequestSent;
-/** A run started from the prompt a request sent. */
 const requestPrompt: Step = (state) => ultracodePromptRunStarted(state, true);
-/** A run started from a prompt that carries no request. */
 const otherPrompt: Step = (state) => ultracodePromptRunStarted(state, false);
-/** A run started without a prompt, as a notification's run does. */
 const agentStarted: Step = ultracodeAgentRunStarted;
 const settled: Step = ultracodeAgentRunSettled;
 const opened =
@@ -59,7 +55,6 @@ describe("the one-off ultracode window", () => {
   });
 
   it("drops a request whose prompt never ran when another prompt starts", () => {
-    // Pi refused the request, for example without a model; the next prompt isn't the request.
     expect(openAfter(sent, otherPrompt, settled)).toEqual([true, false, false]);
   });
 
@@ -80,7 +75,6 @@ describe("the one-off ultracode window", () => {
   });
 
   it("holds the next agent run for a notice that waits while an agent run is under way", () => {
-    // The user stopped the run in Activity while the main agent worked on something else.
     expect(
       openAfter(
         sent,

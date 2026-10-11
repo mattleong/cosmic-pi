@@ -14,11 +14,9 @@ const context = (setStatus: (key: string, value: string | undefined) => void) =>
 setFlagsFromString("--expose-gc");
 const gc: () => void = runInNewContext("gc");
 
-// The gate outlives sessions, so every waiter it retained would pin its old session's fiber.
 it.live("forgets each waiter once the gate reopens", () =>
   Effect.gen(function* () {
     const gate = makeAskUserPromptGate();
-    // Each waiter lives only in this generator, so nothing else retains it once it returns.
     const waitOnce = Effect.gen(function* () {
       const release = gate.enter();
       const waiter = yield* Effect.forkChild(gate.awaitOpen, { startImmediately: true });
@@ -27,7 +25,6 @@ it.live("forgets each waiter once the gate reopens", () =>
       return new WeakRef(waiter);
     });
     const references = yield* Effect.replicateEffect(waitOnce, 5);
-    // WeakRef targets stay alive until the current job ends.
     yield* Effect.sleep("1 millis");
     gc();
     expect(references.filter((reference) => reference.deref() !== undefined)).toEqual([]);
@@ -52,7 +49,6 @@ it.effect(
           ),
         ),
       );
-      // A foreign nested prompt produces no second start event in Pi.
       release();
       yield* Effect.yieldNow;
       expect(mounted).toBe(false);

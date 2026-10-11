@@ -6,6 +6,5 @@ export const notifyHerdrBtw = (
   message: string,
   level: "info" | "warning" | "error",
 ): void => {
-  // A stale or shutting-down Pi host cannot own command completion.
   if (invokeHostCallback(() => ctx.hasUI, false)) notifyAtHostBoundary(ctx, message, level);
 };

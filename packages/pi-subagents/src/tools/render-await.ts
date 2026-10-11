@@ -28,7 +28,6 @@ export interface AwaitProgressRun {
   readonly usage?: { readonly totalTokens: number; readonly cost?: number | undefined } | undefined;
 }
 
-/** An await's run hierarchy, which always names its awaited targets. */
 export interface AwaitHierarchy extends RunHierarchy {
   readonly awaitedRunIds: ReadonlySet<string>;
 }
@@ -36,7 +35,6 @@ export interface AwaitHierarchy extends RunHierarchy {
 const firstFinishedSummary = (run: AwaitProgressRun): string =>
   `${sanitizeTerminalLine(run.name)} ${runStateLabel(run.state)} first`;
 
-/** First finished run by earliest end time; relevant only for any_finished waits. */
 const firstFinishedRun = (
   runs: ReadonlyArray<AwaitProgressRun>,
   until: SubagentAwaitUntil,
@@ -49,7 +47,6 @@ const firstFinishedRun = (
 
 const ACTIVE_STATES = ["starting", "running", "waiting_for_parent", "paused", "stopping"] as const;
 
-/** Each nonzero state count in the run rows' words: "2 running", "1 failed". */
 const stateCounts = (
   runs: ReadonlyArray<AwaitProgressRun>,
   states: ReadonlyArray<AwaitProgressRun["state"]>,
@@ -59,10 +56,6 @@ const stateCounts = (
     return count > 0 ? [`${count} ${runStateLabel(state)}`] : [];
   });
 
-/**
- * The wait's routine counters for people: finished targets apart from failed and stopped
- * ones, then usage. Outcomes and problems are the shell's issue lines, not repeated here.
- */
 export const formatAwaitCounters = (
   cards: ReadonlyArray<SubagentRunCard>,
   { awaitedRunIds }: AwaitHierarchy,
@@ -83,7 +76,6 @@ export const formatAwaitCounters = (
   ].join(" · ");
 };
 
-/** The agent's live await text: one summary line, then the run tree with awaited targets marked. */
 export const formatAwaitProgress = (
   runs: ReadonlyArray<AwaitProgressRun>,
   until: SubagentAwaitUntil,
@@ -160,7 +152,6 @@ export const syncAwaitProgressTicker = (
   invokeHostCallback(stop, undefined);
 };
 
-/** A bounded hierarchy says so in passing; which descendants matter is the fleet's job. */
 export const DESCENDANTS_OMITTED = "Some descendants are not shown";
 
 export const renderAwaitProgressComponent = (

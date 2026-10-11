@@ -18,7 +18,6 @@ export function fastModeFooterPrimitive(
     compactText: "⚡",
     tone: "normal",
     color: "warning",
-    // Prefix the effort entry when present; render the glyph standalone otherwise.
     decorates: "effort",
     priority: 80,
     order: 110,
@@ -37,8 +36,6 @@ export function openAIUsageFooterPrimitive(
     id: "openai.usage",
     region: "details",
     text,
-    // The footer wraps provider windows and reset dates itself; keep the complete projection in
-    // compact mode so a narrow terminal never silently loses a reset date.
     compactText: text,
     label: "OpenAI",
     tone: "dim",

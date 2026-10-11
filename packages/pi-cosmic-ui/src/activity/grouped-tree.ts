@@ -35,13 +35,9 @@ export type GroupedActivityRow = PresentationBase &
     | {
         readonly type: "workflow";
         readonly row: ActivityRow;
-        /** Source ancestry above the workflow row, root first. */
         readonly context: readonly ActivityRow[];
-        /** Phases in each state; only done phases count as done. */
         readonly phaseCounts: PhaseCounts;
-        /** Planned declarations outside the workflow's phases, which no phase row counts. */
         readonly unphased: Pick<GroupSummary, "planned" | "unrun">;
-        /** Failed members outside its phases hidden past the live `liveFailures` cap; else zero. */
         readonly hiddenFailures: number;
       }
     | {
@@ -50,15 +46,12 @@ export type GroupedActivityRow = PresentationBase &
         readonly phase: ActivityPhase;
         readonly index: number;
         readonly state: PhaseState;
-        /** Every member source row that names this phase, shown or not. */
         readonly members: readonly ActivityRow[];
-        /** Its failed members hidden past the live workflow's `liveFailures` cap; else zero. */
         readonly hiddenFailures: number;
       }
     | {
         readonly type: "member";
         readonly row: ActivityRow;
-        /** Source ancestry above the member row, root first. */
         readonly context: readonly ActivityRow[];
       }
   );
@@ -81,11 +74,8 @@ interface Node {
   readonly children: Node[];
   section: Section;
   parentId: string | undefined;
-  /** Every visible source in the branch; history reads this. */
   visible: GroupSummary;
-  /** Every source in the branch, with the producer's own counts where it sends them. */
   total: GroupSummary;
-  /** The displayed summary, which omits hidden history outside workflow subtrees. */
   summary: GroupSummary;
   history: boolean;
   state?: PhaseState;
@@ -119,19 +109,10 @@ interface GroupedActivityTreeOptions {
   readonly collapsed?: ReadonlySet<string>;
   readonly expandedHistory?: ReadonlySet<string>;
   readonly focus?: string;
-  /** Hides settled rows but keeps settled phase rows, so a workflow's checklist stays whole. */
   readonly hideHistory?: boolean;
-  /**
-   * With `hideHistory`, keep up to this many failed direct members of each live workflow, most
-   * recent first, so failures stay visible while the run continues.
-   */
   readonly liveFailures?: number;
 }
 
-/**
- * Pure display grouping over explicit ownership. Roots go to their kind's section; a workflow's
- * direct children nest under the phase they name, or directly under the workflow.
- */
 export function groupedActivityTree(
   rows: readonly ActivityRow[],
   options: GroupedActivityTreeOptions = {},
@@ -153,7 +134,6 @@ export function groupedActivityTree(
     section,
   }));
   const sectionNodes = new Map(sections.map((node) => [node.section, node]));
-  // Every presentation node is addressable, so zoom can focus a section, workflow or phase.
   const nodes = new Map<string, Node>(sections.map((node) => [node.id, node]));
   const phases = new Map<string, Map<string, Node>>();
   for (const row of rows) {
@@ -165,7 +145,6 @@ export function groupedActivityTree(
     if (row.kind !== "workflow") continue;
     const byTitle = new Map<string, Node>();
     row.phases?.forEach((phase, index) => {
-      // Ingress rejects duplicate titles; tolerate them here without duplicate node IDs.
       if (byTitle.has(phase.title)) return;
       const branch: Node = {
         ...blankNode(phaseRowId(row.key, phase.title), phase.title, "phase"),
@@ -199,7 +178,6 @@ export function groupedActivityTree(
   const complete = (node: Node, section: Section): void => {
     node.section = section;
     for (const child of node.children) complete(child, section);
-    // A workflow row is a container: its own row shows its state, and summaries count its work.
     const row = node.row;
     const own = row && row.kind !== "workflow" ? summarizeGroup([row]) : emptyGroupSummary;
     node.visible = node.children.reduce((sum, child) => addGroupSummaries(sum, child.visible), own);
@@ -207,14 +185,12 @@ export function groupedActivityTree(
       node,
       node.children.reduce((sum, child) => addGroupSummaries(sum, child.total), own),
     );
-    // Workflows and phases keep finished work in view (failures stay visible as attention).
     node.summary =
       options.hideHistory && node.type !== "workflow" && node.type !== "phase"
         ? node.children
             .filter((child) => !child.history)
             .reduce((sum, child) => addGroupSummaries(sum, child.summary), own)
         : node.total;
-    // Producer counts can't hide a visible member that is still running.
     const settled =
       node.visible.terminal === node.visible.items &&
       node.visible.awaited === 0 &&
@@ -263,13 +239,10 @@ export function groupedActivityTree(
     };
     result.push(groupedEntry(node, base, context, failures.hidden.get(node.id) ?? 0));
     if (!expanded) return;
-    // Phases keep their declared order; other work lists live rows before history, and real
-    // work, finished or not, before what is only planned.
     const rank = (child: Node) =>
       child.type === "phase"
         ? 0
         : 1 + 2 * Number(child.row?.planned === true) + Number(child.history);
-    // Sorting is stable, so each group keeps its published order.
     const ordered = [...children].sort((left, right) => rank(left) - rank(right));
     ordered.forEach((child, index) =>
       visit(child, [...continuations, index < ordered.length - 1], base.breadcrumbs),
@@ -281,7 +254,6 @@ export function groupedActivityTree(
   return result;
 }
 
-/** A workflow's planned members outside its phases: visible rows, and what its producer counts. */
 const unphasedPlanned = (node: Node) => {
   const visible = summarizeGroup(
     node.children.flatMap((child) =>
@@ -291,10 +263,6 @@ const unphasedPlanned = (node: Node) => {
   return { visible, declared: declaredPlanned(node.row!, node.row!.unphasedPlanned, visible) };
 };
 
-/**
- * Failed direct members of each live workflow, most recent first: up to `limit` stay in view and
- * the rest are counted on the phase, or the workflow, they sit under.
- */
 function liveFailures(nodes: Iterable<Node>, limit: number) {
   const pinned = new Set<string>();
   const hidden = new Map<string, number>();
@@ -303,7 +271,6 @@ function liveFailures(nodes: Iterable<Node>, limit: number) {
     const failed = [node, ...node.children.filter((child) => child.type === "phase")]
       .flatMap((branch) => branch.children)
       .filter((child) => child.type === "member" && child.row!.status === "failed")
-      // Sorting is stable, so failures without an end time keep their published order.
       .sort((left, right) => (right.row!.endedAt ?? 0) - (left.row!.endedAt ?? 0));
     for (const child of failed.slice(0, limit)) pinned.add(child.id);
     for (const child of failed.slice(limit))
@@ -312,13 +279,6 @@ function liveFailures(nodes: Iterable<Node>, limit: number) {
   return { pinned, hidden };
 }
 
-/**
- * Replaces visible counts with the producer's own, which include rows it doesn't publish and rows
- * retention dropped: a phase's `work` and `planned`, and a workflow's `unphasedPlanned` for
- * planned members outside its phases. Workflow and section totals then agree with the phase rows,
- * and a phase that ran never reads as skipped. A producer that does not count failures leaves them
- * to the visible members.
- */
 function withProducerCounts(node: Node, total: GroupSummary): GroupSummary {
   if (node.type === "phase") {
     const work = node.phase!.work;
@@ -378,7 +338,6 @@ const groupedEntry = (
   };
 };
 
-/** Presentation ancestry; source ownership remains separately available on `context`. */
 export function groupedActivityPath(
   entries: readonly GroupedActivityRow[],
   id: string,

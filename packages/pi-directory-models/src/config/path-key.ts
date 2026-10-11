@@ -1,4 +1,3 @@
-/** Deterministic, readable preference filenames derived from the canonical working directory. */
 import { sha256Text } from "pi-cosmic-core";
 
 const MAX_SLUG_CHARS = 48;

@@ -12,7 +12,6 @@ interface Task {
   readonly children: ReadonlyArray<Task>;
 }
 
-/** An identified, recursive definition: the generated schema must reference it, not inline it. */
 const Task: Schema.Codec<Task> = Schema.Struct({
   id: Schema.String,
   status: Schema.Literals(["done", "failed"]),
@@ -24,11 +23,9 @@ const Output = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("many"), tasks: Schema.Array(Task) }),
 ]);
 
-/** Reads the returned JSON Schema back on its own, with no access to Effect's separate definitions. */
 const standaloneGuard = (json: Readonly<JsonSchema.JsonSchema>) =>
   Schema.is(SchemaRepresentation.fromJsonSchemaDocument(JsonSchema.fromSchemaDraft2020_12(json)));
 
-/** An output schema whose `note` field compiles to the given reference. */
 const withReference = (reference: string) =>
   Schema.Struct({
     task: Task,

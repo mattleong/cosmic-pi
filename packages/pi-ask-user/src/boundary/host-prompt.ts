@@ -1,10 +1,8 @@
 import * as Latch from "effect/Latch";
 
-/** Pi coalesces nested prompts into one start/end pair, not one pair per dialog. */
 export const makeAskUserPromptGate = () => {
   let promptActive = false;
   let own = false;
-  // Open exactly while canOpen(); opening releases and forgets every current waiter.
   const open = Latch.makeUnsafe(true);
   const canOpen = () => !promptActive && !own;
   const update = () => {
@@ -21,8 +19,6 @@ export const makeAskUserPromptGate = () => {
       update();
     },
     canOpen,
-    // Admission does not grant mount authority. A coalesced nested prompt can
-    // still own input after our overlay closes, until the public end event.
     canQueue: () => own || canOpen(),
     awaitOpen: open.await,
     enter: () => {

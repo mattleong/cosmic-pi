@@ -10,16 +10,13 @@ export interface HerdrBtwParentReference {
 }
 
 export interface ParentReferenceCandidateInput {
-  /** Raw extension CLI flag values; all markers must be valid strings. */
   readonly parentIdMarker: ExtensionFlagValue;
   readonly parentFileMarker: ExtensionFlagValue;
   readonly childSessionMarker: ExtensionFlagValue;
-  /** The child session's own persisted identity. */
   readonly sessionId: string | null | undefined;
   readonly sessionFile: string | null | undefined;
 }
 
-/** Resolves bounded markers against the owning child session without host I/O. */
 export const resolveParentReferenceCandidate = (
   input: ParentReferenceCandidateInput,
 ): HerdrBtwParentReference | undefined => {
@@ -37,7 +34,6 @@ export const resolveParentReferenceCandidate = (
   return { path: parentPath, id: marker };
 };
 
-/** Stable reference-only instruction for a Herdr-created BTW session. */
 export const parentReferenceInstruction = (parentPath: string, parentId: string): string =>
   [
     "## Live parent Pi session (Herdr side session)",

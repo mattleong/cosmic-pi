@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -45,7 +44,6 @@ describe("a run's saved script", () => {
   it.live("gets its own directory when Pi processes start runs in the same millisecond", () =>
     Effect.gen(function* () {
       const runFiles = memoryRunFiles();
-      // Each fixture is a Pi process sharing the agent directory, with the same wall clock.
       const startOne = () =>
         withWorkflows(workflowFixture({ runFiles }), (workflows) =>
           startScript(workflows, "return 1;").pipe(Effect.map((run) => run.id)),
@@ -213,7 +211,6 @@ describe("a run's results journal", () => {
         'return await Promise.all([agent("first", { label: "first" }), agent("second", { label: "second" })]);',
       );
       const journal = memoryRunPaths(started.id).journal;
-      // The first line is written, and its append keeps the journal busy.
       yield* reportTask(fixture, "first", "1");
       yield* eventually(() => journalLines(runFiles, journal)[0], "the first line");
       yield* reportTask(fixture, "second", "2");
@@ -245,7 +242,6 @@ describe("a run's results journal", () => {
       const resumed = yield* startScript(workflows, `${calls}\nreturn both;`, {
         resumeFromRunId: original.id,
       });
-      // One reused line is written and keeps the journal busy; the other call waits to write.
       yield* runWhere(workflows, resumed.id, (run) => run.reused === 2);
       const stopping = yield* workflows.stop(resumed.id).pipe(Effect.forkScoped);
       yield* runWhere(workflows, resumed.id, (run) => run.state === "stopping");

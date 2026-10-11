@@ -1,4 +1,3 @@
-// Resource lifecycle assertions.
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -11,7 +10,6 @@ import {
   capturedTelemetrySnapshot,
   makeCapturedLogger,
   makeCapturedTracer,
-  opaqueFixture,
 } from "pi-cosmic-core/testing";
 import {
   ShikiAdapter,
@@ -19,6 +17,7 @@ import {
   type ShikiAdapterContract,
   type ShikiHighlighter,
 } from "../../src/boundary/shiki";
+import { shikiHighlighterFixture } from "../support/shiki";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import {
@@ -29,14 +28,14 @@ import {
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
 import { getShikiStatus, renderWithShiki } from "../../src/syntax/render";
 
-type TokenFixture = { readonly content: string; readonly color: string; readonly offset?: number };
+type TokenFixture = { readonly content: string; readonly color: string; readonly offset: number };
 
 const highlighter = (
   dispose: () => void = () => undefined,
   codeToTokensBase: (code: string) => TokenFixture[][] = (code) => [
-    [{ content: code, color: "#ffffff" }],
+    [{ content: code, color: "#ffffff", offset: 0 }],
   ],
-) => opaqueFixture({ dispose, codeToTokensBase });
+) => shikiHighlighterFixture({ dispose, codeToTokensBase });
 
 const syntaxLayer = (
   create: ShikiAdapterContract["create"],
@@ -46,7 +45,6 @@ const syntaxLayer = (
     Layer.provide(Layer.succeed(ShikiAdapter, ShikiAdapter.of({ create, loadLanguage }))),
   );
 
-/** Renders like Pi's host, which renders again on every invalidation. */
 const hostRender = (code: string, lang: string) => {
   const render = (): void => void renderWithShiki(code, lang, render);
   return render;
@@ -354,7 +352,6 @@ describe("session syntax service", () => {
         assert.equal(creates, 2);
       }),
     ).pipe(
-      // Renderer requests run on the service's own fibers, so the logger is built beneath it.
       provideBuiltLayer(layer.pipe(Layer.provideMerge(captured.layer))),
       Effect.tap(() =>
         Effect.sync(() => {
@@ -605,7 +602,6 @@ describe("session syntax service", () => {
       const retained = yield* CodePreviewSyntaxService.use((service) =>
         Effect.succeed(service),
       ).pipe(provideBuiltLayer(layer));
-      // A caller outliving the session, such as a joiner retrying an interrupted flight.
       yield* retained.initialize("dark-plus");
       assert.equal(creates, 0);
     });
@@ -615,7 +611,7 @@ describe("session syntax service", () => {
     let renders = 0;
     const reused = highlighter(undefined, (code) => {
       renders++;
-      return [[{ content: `${renders}:${code}`, color: "#ffffff" }]];
+      return [[{ content: `${renders}:${code}`, color: "#ffffff", offset: 0 }]];
     });
     const renderSession = CodePreviewSyntaxService.use((service) =>
       service
@@ -636,7 +632,7 @@ describe("session syntax service", () => {
       let currentRenders = 0;
       const current = highlighter(undefined, (code) => {
         currentRenders++;
-        return [[{ content: `current:${code}`, color: "#ffffff" }]];
+        return [[{ content: `current:${code}`, color: "#ffffff", offset: 0 }]];
       });
       const layer = syntaxLayer((theme) =>
         theme === "github-dark" ? Deferred.await(staleCandidate) : Effect.succeed(current),

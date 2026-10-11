@@ -128,7 +128,6 @@ const failingRows: readonly ActivityRow[] = [
     startedAt: 52_000,
   }),
 ];
-/** The user stopped the run during its second phase; producer counts cover evicted members. */
 const halted = workflowRow("halted", [], "cancelled", "Implement", {
   title: "Migrate settings store",
   startedAt: 0,
@@ -183,7 +182,6 @@ const flakyRows: readonly ActivityRow[] = [
     startedAt: 22_000,
   }),
 ];
-/** Failures past the cap in two phases, one of which has none of the latest failures. */
 const spread = workflowRow("spread", ["Lint", "Build", "Test"], "running", "Test", {
   title: "Monorepo health check",
   startedAt: 0,
@@ -211,7 +209,6 @@ const spreadRows: readonly ActivityRow[] = [
     startedAt: 40_000,
   }),
 ];
-/** The producer counts a failure whose member row it no longer publishes. */
 const counted = workflowRow("counted", [], "running", "Verify", {
   title: "Release candidate",
   startedAt: 0,
@@ -279,7 +276,6 @@ const looseRows: readonly ActivityRow[] = [
     title: "Approve the dependency",
   }),
 ];
-/** Declared agents the script hasn't called; finished workflows never ran them. */
 const plannedRow = (
   id: string,
   workflow: ActivityRow,
@@ -398,7 +394,6 @@ const passed = workflowRow("passed", ["Map", "Review", "Verify"], "running", "Ve
   startedAt: 0,
   actions: [stop],
   phases: [{ title: "Map", planned: 1 }, { title: "Review" }, { title: "Verify" }],
-  // Planned agents in phases past the ones Activity shows.
   unphasedPlanned: 12,
 });
 const passedRows: readonly ActivityRow[] = [
@@ -419,7 +414,6 @@ const passedRows: readonly ActivityRow[] = [
 const scenarios: ReadonlyArray<{
   readonly title: string;
   readonly rows: readonly ActivityRow[];
-  /** Also render the stacked manager tier and the compact widget used beside an input dock. */
   readonly tiers?: boolean;
 }> = [
   { title: "Later phases show the agents a workflow plans to call", rows: planRows },
@@ -475,7 +469,6 @@ const manager = (rows: readonly ActivityRow[], height: number) =>
     invoke: () => undefined,
     requestRender: () => undefined,
   });
-/** Presses `j` until `key` is selected, checking at most `presses` + 1 positions. */
 const select = (component: ActivityComponent, key: string, presses: number) => {
   for (let step = 0; step < presses && component.shell.state.selectedId !== key; step++)
     component.handleInput("j");
@@ -541,7 +534,6 @@ const crowdedActions = activityRow("crowded-actions", "running", undefined, {
     label: `Custom ${index + 1}`,
   })),
 });
-/** Footers only, at each width tier, with the default keys and then the full help. */
 const footerScenarios: ReadonlyArray<readonly [string, readonly ActivityRow[], string]> = [
   ["One stop action", running, review.key],
   ["One skip action", running, queued[0]!.key],
@@ -559,7 +551,6 @@ const footerFrames = (rows: readonly ActivityRow[], key: string) => {
   component.handleInput("?");
   const help = footers("? ");
   component.handleInput("?");
-  // A destructive action asks first: its question fills the body and the footer names it.
   const confirmable = rows.find((row) => row.key === key)?.actions?.[0]?.confirmation;
   if (!confirmable) return [...lines, ...help];
   component.handleInput("x");

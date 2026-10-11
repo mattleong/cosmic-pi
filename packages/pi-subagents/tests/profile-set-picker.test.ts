@@ -332,7 +332,6 @@ describe("saved profile-set library", () => {
     expect(picker.component.hasOverlay).toBe(true);
     picker.component.handleInput("\u001b");
     expect(picker.component.hasOverlay).toBe(false);
-    // A refresh retires a menu built for the previous inspection.
     picker.component.handleInput("a");
     picker.component.updateInspection(inspection(), true);
     expect(picker.component.hasOverlay).toBe(false);

@@ -1,4 +1,3 @@
-/** Per-directory model preferences implemented as an Effect-managed Pi session runtime. */
 import {
   getAgentDir,
   type ExtensionAPI,

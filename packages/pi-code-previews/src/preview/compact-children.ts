@@ -14,7 +14,6 @@ const priority = (child: CompactChild): number =>
       ? 2
       : 1;
 
-/** Prefer active/problem calls, then recent completions; keep their admission order. */
 export function selectCompactChildren(
   children: NonNullable<CompactSummary["children"]>,
   limit = MAX_CHILDREN,
@@ -31,10 +30,6 @@ export function selectCompactChildren(
   return { entries, omitted: Math.max(0, children.total - entries.length), hiddenFailed };
 }
 
-/**
- * Collapsed trees show each call's primary issue on its own row. The flat expanded layout
- * lists every retained call with all of its issues and details beneath it.
- */
 export function renderCompactChildren(
   children: CompactSummary["children"],
   theme: Theme,
@@ -43,7 +38,6 @@ export function renderCompactChildren(
     animationFrame?: number | undefined;
     timingEnabled?: boolean | undefined;
     layout?: "tree" | "flat";
-    /** Show every retained call instead of the five most relevant. */
     all?: boolean;
   } = {},
 ): string[] {
@@ -53,7 +47,6 @@ export function renderCompactChildren(
     children,
     options.all ? Infinity : MAX_CHILDREN,
   );
-  // Omitted calls may be older rows that were evicted or calls never tracked, so say neither.
   const rows =
     flat && omitted > 0
       ? wrapHanging(theme.fg("dim", `… ${omitted} ${calls(omitted)} not listed`), width, "", "", 0)
@@ -70,7 +63,6 @@ export function renderCompactChildren(
         returnedCheckmark: entry.returnedCheckmark,
         summary: { ...entry, subject: entry.subject ?? "" },
         issueLabel: issueLabel || undefined,
-        // The row shows a duration only for a finite, non-negative measurement.
         duration: entry.durationMs === undefined ? undefined : formatDuration(entry.durationMs),
         elapsedMs: entry.durationMs,
         timingEnabled: options.timingEnabled ?? true,
@@ -82,7 +74,6 @@ export function renderCompactChildren(
     );
     rows.push(clipToWidth(`${prefix}${row}`, width, ""));
     if (flat) rows.push(...renderCompactIssues(entry.issues, theme, width, true));
-    // A reason that does not fit on its row moves beneath it rather than disappearing.
     else if (issueLabel && !issueShown) {
       const rail = theme.fg("dim", branch === "├─" ? "  │    " : "       ");
       rows.push(...wrapHanging(issueLabel, width, rail, rail, 8));
@@ -94,7 +85,6 @@ export function renderCompactChildren(
 
 const calls = (count: number) => (count === 1 ? "call" : "calls");
 
-/** Counts are evidence: wrap overflow instead of clipping their digits or hiding a failure. */
 function omissionRows(
   omitted: number,
   hiddenFailed: number,
@@ -108,7 +98,6 @@ function omissionRows(
   if (visibleWidth(single) <= width) return [single];
   const spaces = " ".repeat(visibleWidth(branch));
   const rows = wrapHanging(more, width, branch, spaces, 8);
-  // Drop decoration before splitting a complete failure fact that fits unadorned.
   return failed
     ? rows.concat(wrapHanging(failed, width, spaces, spaces, visibleWidth(failed)))
     : rows;

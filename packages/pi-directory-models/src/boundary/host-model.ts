@@ -41,7 +41,6 @@ export function captureContextModel(ctx: ExtensionContext): SelectedModel | unde
 
 const thinkingReadError = hostError("thinking", "Couldn't read Pi's thinking level");
 
-/** Read and decode Pi's current thinking level; hostile getters and absent levels become typed errors. */
 const readThinkingLevel = (
   pi: ExtensionAPI,
 ): Effect.Effect<ThinkingLevel, DirectoryModelHostError> =>
@@ -64,8 +63,6 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
   ctx: ExtensionContext,
   preference: DirectoryModelPreference,
 ) {
-  // Decode directly rather than through captureSelectedModel: a throwing nested getter must stay a
-  // typed read failure here, not collapse into "no current model" and trigger a host mutation.
   const current = yield* Effect.try({
     try: () => Option.getOrUndefined(decodeSelectedModel(ctx.model)),
     catch: hostError("read", "Couldn't read Pi's current model"),
@@ -77,9 +74,6 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
     });
     if (!model)
       return yield* hostError("find", "The model saved for this directory isn't available")();
-    // Pi's Promise-shaped setModel cannot be cancelled. Keep only its settlement in this narrow
-    // uninterruptible ordering region so runtime replacement/disposal waits before a successor
-    // can start; registry lookup and every surrounding read remain interruptible.
     const applied = yield* Effect.uninterruptible(
       Effect.tryPromise({
         try: () => pi.setModel(model),

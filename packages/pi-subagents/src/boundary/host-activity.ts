@@ -21,12 +21,6 @@ import {
 } from "../ui/run-activity.ts";
 import { workflowRunIdOf } from "../ui/workflow-activity.ts";
 
-/**
- * Synchronous bridge from the workflow service to the Activity provider. It holds the views last
- * published, the only ones the host holds revisions for, so detail and actions resolve against
- * them between the service's coalesced publishes; stop and skip then act on the service's current
- * state by stable run ids.
- */
 export interface WorkflowActivitySource extends WorkflowActivitySink {
   readonly get: () => WorkflowActivitySnapshot;
   readonly subscribe: (listener: () => void) => () => void;
@@ -58,7 +52,6 @@ class SubagentActivityInputError extends Schema.TaggedError<SubagentActivityInpu
   { message: Schema.String },
 ) {}
 
-/** Pi owns the abort-aware input dialog; the Activity manager closes before invoking it. */
 export const promptSubagentActivityInput = (
   ctx: ExtensionContext,
   run: SubagentRunView,
@@ -94,16 +87,11 @@ const sameAssignment = (before: SubagentRunView, after: SubagentRunView): boolea
 const isInputAction = (action: string): action is SubagentActivityInput =>
   action === "resume" || action === "message" || action === "reply" || action === "rename";
 
-/** Root session only. No parent-contact message is promoted to a user question. */
 export function registerSubagentActivity(options: {
   readonly events: ActivityEvents;
   readonly sessionId: string;
   readonly bridge: SubagentProjectionBridge;
   readonly workflows?: WorkflowActivitySource | undefined;
-  /**
-   * Stops a workflow by run id, or skips a planned, queued or running workflow agent by its run
-   * id.
-   */
   readonly actWorkflow?:
     | ((action: "stop" | "skip", id: string, signal: AbortSignal) => Promise<void>)
     | undefined;
@@ -121,7 +109,6 @@ export function registerSubagentActivity(options: {
   ) => Promise<void>;
 }): () => void {
   let disposed = false;
-  /** Current action policy, including whether a running workflow still owns the run. */
   const offers = (run: SubagentRunView, title: string, action: string): boolean => {
     const live = liveWorkflowIds(options.workflows?.get() ?? EMPTY_WORKFLOWS);
     return runActions(run, title, isOwnedByLiveWorkflow(run, live)).some(
@@ -162,8 +149,6 @@ export function registerSubagentActivity(options: {
       return options.input(before, action, signal).then((input) => {
         if (input === undefined) return;
         const after = options.bridge.get().runs.find((run) => run.id === item.id);
-        // The run's own progress changes its revision while typing. Preserve exact
-        // assignment/question identity instead, then re-evaluate current action policy.
         if (
           disposed ||
           !invocationCurrent() ||

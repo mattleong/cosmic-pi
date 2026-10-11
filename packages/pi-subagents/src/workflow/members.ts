@@ -32,7 +32,6 @@ import {
 } from "./state.ts";
 import type { WorkflowStoreContract } from "./store.ts";
 
-/** Everything one live run's sandbox members use. */
 export interface WorkflowRunSetup {
   readonly id: string;
   readonly script: WorkflowScript;
@@ -42,7 +41,6 @@ export interface WorkflowRunSetup {
   readonly slots: WorkflowSlots;
   readonly budget: WorkflowBudget;
   readonly control: WorkflowRunControl;
-  /** The run's private files; undefined when they couldn't be created. */
   readonly files: WorkflowRunFiles | undefined;
 }
 
@@ -54,15 +52,9 @@ interface WorkflowMembersServices {
   readonly sources: Pick<WorkflowSources, "loadNested">;
 }
 
-/** Builds the `__workflow` members of a run's sandbox over the service's state. */
 export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
   const { runs, subagents, journal, store, sources } = services;
 
-  /**
-   * Queues a call atomically: it claims a planned entry, or reserves its own run id, and its skip
-   * is registered before Activity can offer it. A call that claims an entry the user skipped is
-   * already settled, so it registers none.
-   */
   const queueAgent = (
     setup: WorkflowRunSetup,
     draft: WorkflowAgentDraft,
@@ -82,18 +74,12 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
         );
       })
       .pipe(
-        // Host calls end with their run's scope, and a live run is never evicted.
         Effect.filterOrElse(
           (agent): agent is WorkflowAgentView => agent !== undefined,
           () => Effect.die(new Error(`Workflow run ${setup.id} was evicted while it was live.`)),
         ),
       );
 
-  /**
-   * Claims the planned entry the call would claim when the user skipped it, and publishes the
-   * call's view, already skipped, in the same step, so no later call can claim it. Such a call
-   * starts nothing and can't repeat, so it takes a position even past the agent limit.
-   */
   const claimSkipped = (
     setup: WorkflowRunSetup,
     claim: Omit<WorkflowAgentDraft, "callId" | "queuedAt">,
@@ -110,7 +96,6 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
       ),
     );
 
-  /** Logs the run's first run-file failure; later writes are still tried. */
   const warnOnce = (setup: WorkflowRunSetup, error: WorkflowRunFileError) =>
     Effect.suspend(() => {
       const journal = setup.control.journal;
@@ -122,10 +107,6 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
       );
     });
 
-  /**
-   * The line as written: a result too long for it is saved in full beside the journal and the
-   * line names that file; when it can't be saved, the line says a resume can't reuse it.
-   */
   const withFullResult = (
     setup: WorkflowRunSetup,
     files: WorkflowRunFiles,
@@ -134,7 +115,6 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
     Effect.suspend(() => {
       const full = workflowResultOverflow(line.result);
       if (full === undefined) return Effect.succeed(line);
-      // Numbered under the journal lock, so files follow the order of the lines naming them.
       const ordinal = ++setup.control.journal.results;
       return store.writeRunResult(files, ordinal, full).pipe(
         Effect.map((resultFile): WorkflowResultLine => ({ ...line, resultFile })),
@@ -146,10 +126,6 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
       );
     });
 
-  /**
-   * Appends a finished call to the run's results journal. The file shows in the view once its
-   * first line is written; the first failure is logged, and later lines are still tried.
-   */
   const writeResult = (setup: WorkflowRunSetup, line: WorkflowResultLine): Effect.Effect<void> => {
     const files = setup.files;
     if (!files) return Effect.void;

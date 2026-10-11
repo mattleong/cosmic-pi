@@ -4,9 +4,7 @@ import {
   type CosmicFooterContribution,
 } from "../protocol/protocol.ts";
 
-/** Reentrant operations accepted behind one outermost operation; the excess is dropped. */
 export const FOOTER_REENTRANT_OPERATION_LIMIT = 128;
-/** Distinct contribution keys retained while no session is active; the oldest is evicted. */
 export const FOOTER_PRE_SESSION_KEY_LIMIT = 128;
 
 interface FooterRegistrySnapshot {
@@ -22,17 +20,10 @@ export interface FooterRegistry {
   readonly snapshot: () => FooterRegistrySnapshot;
   readonly upsert: (owner: string, contribution: CosmicFooterContribution) => void;
   readonly remove: (owner: string, id?: string) => void;
-  /** Drops every contribution and any queued operation without rendering. */
   readonly clear: () => void;
 }
 
-/**
- * Synchronous keyed store of footer protocol contributions. An operation that arrives while
- * another runs (for example from a render request) queues behind it, so each operation publishes
- * its snapshot before it requests a render.
- */
 export const makeFooterRegistry = (options: {
-  /** Requests a render from the installed footer. */
   readonly requestRender: () => void;
   readonly sessionActive: () => boolean;
 }): FooterRegistry => {

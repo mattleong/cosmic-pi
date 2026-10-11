@@ -22,7 +22,7 @@ import * as Fiber from "effect/Fiber";
 import { Type } from "typebox";
 import type { ActivityItem, ActivityPhase } from "pi-cosmic-ui/activity";
 import { activityGalleryFrames } from "pi-cosmic-ui/activity/testing";
-import { registerSubagentMessageRenderers } from "../src/application/messages.ts";
+import { renderSubagentMessage } from "../src/application/messages.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import {
@@ -89,7 +89,7 @@ import {
 } from "../src/workflow/service.ts";
 import { WorkflowStore } from "../src/workflow/store.ts";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
-import { extensionApiFixture } from "./fixtures/pi-host.ts";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { containedWriter, view, workflowAgentView, workflowRunView } from "./fixtures/run-view.ts";
 import {
   subagentServiceDouble,
@@ -116,8 +116,6 @@ const runtime: SubagentToolRuntime = {
     isLiveHierarchyAvailable: () => false,
   },
 };
-
-// ─── Worker fleet ────────────────────────────────────────────────────────────
 
 const now = synchronousNow();
 const timing = (startedMinutesAgo: number, endedMinutesAgo?: number) => ({
@@ -236,8 +234,6 @@ const lookup = (id: string): Effect.Effect<SubagentRunView, SubagentNotFoundErro
 const updated = (id: string, overrides: Partial<SubagentRunView>) =>
   lookup(id).pipe(Effect.map((run) => ({ ...run, ...overrides })));
 
-// ─── Real execution through the tool's own execute and present path ─────────
-
 const hostApi = extensionApiFixture({
   getThinkingLevel: () => "high",
   getActiveTools: () => ["read"],
@@ -250,13 +246,11 @@ interface Execution {
   readonly scripted?: boolean;
 }
 
-// A text-only result: Pi turns a rejected execution into this, and child receipts share its shape.
 const textResult = (text: string) => ({
   content: [{ type: "text" as const, text }],
   details: {},
 });
 
-/** Runs one call like the registered tool, marking errors as Pi's receipt hook does. */
 const execute = (input: SubagentToolInput, options: Execution = {}) =>
   executeSubagentActionEffect(
     hostApi,
@@ -313,7 +307,6 @@ const startInput: SubagentToolInput<"subagent_start"> = {
   },
 };
 
-/** One launch settles while the other waits, so the first receipt is a real partial. */
 const startScenarios = Effect.gen(function* () {
   const release = yield* Deferred.make<void>();
   const firstReceipt = yield* Deferred.make<GalleryResult>();
@@ -368,7 +361,6 @@ const awaitInput: SubagentToolInput<"subagent_await"> = {
   args: { runIds: ["agent-1", "agent-2"], until: "all_finished" },
 };
 
-/** The live update and the settled result come from one real await. */
 const awaitScenarios = Effect.gen(function* () {
   const updates: GalleryResult[] = [];
   const settled = yield* scenario("both workers report", awaitInput, {
@@ -861,8 +853,6 @@ const workspaceScenarios = Effect.all([
   ),
 ]);
 
-// ─── Hand-built await and start receipts ─────────────────────────────────────
-
 const awaited = (
   title: string,
   runs: Parameters<typeof makeAwaitDetails>[0]["runs"],
@@ -976,12 +966,6 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
   },
 ];
 
-// ─── Child tools ─────────────────────────────────────────────────────────────
-
-/**
- * The child bridge registers this inside an activated session as this exact wrapper over its
- * definition and the contact_parent renderers, so the gallery wraps the same ones.
- */
 const contactParentTool = () =>
   withCodePreviewShell(
     defineTool({
@@ -1020,7 +1004,6 @@ const parentScenarios: ReadonlyArray<ToolScenario> = [
   }),
 ];
 
-/** The child's private result tool, as registered for a launch with a result contract. */
 const resultTool = () =>
   subagentResultTool(
     {
@@ -1072,8 +1055,6 @@ const resultScenarios: ReadonlyArray<ToolScenario> = [
     ),
   },
 ];
-
-// ─── Dynamic workflows ───────────────────────────────────────────────────────
 
 const reviewScript = `export const meta = {
   name: "review-changes",
@@ -1160,7 +1141,6 @@ const completedWorkflow = workflowRun({
     clipped: false,
   },
 });
-/** A script that threw: its running agent was stopped, and its queued one never started. */
 const failedWorkflow = workflowRun({
   id: "wf-mg3k2l-3",
   state: "failed",
@@ -1217,7 +1197,6 @@ const writerWorkflow = workflowRun({
   result: { text: "Fixed 1 finding; proposal in workspace-4.", clipped: false },
 });
 
-/** A migration whose worktree writers mostly found nothing to change, so only one proposal is left. */
 const migrateWorkflow = workflowRun({
   ...completedWorkflow,
   name: "migrate-call-sites",
@@ -1237,7 +1216,6 @@ const migrateWorkflow = workflowRun({
   },
 });
 
-/** A run past its token budget, with agents waiting for a slot and behind a paused writer. */
 const budgetedWorkflow = workflowRun({
   id: "wf-mg3k2l-4",
   name: "fix-findings",
@@ -1277,7 +1255,6 @@ const budgetedWorkflow = workflowRun({
   ],
 });
 
-/** A script that didn't catch the budget error: its saved copy, one refused queued call, one warning. */
 const budgetWarning = {
   at: now - 20_000,
   level: "warning" as const,
@@ -1301,6 +1278,7 @@ const budgetFailedWorkflow = workflowRun({
   logs: [...workflowRun().logs, budgetWarning],
   warnings: [budgetWarning],
   failure: {
+    kind: "script",
     name: WORKFLOW_BUDGET_ERROR,
     message:
       "The workflow's token budget is spent: 512340 of 500000 output tokens. agent() can't start more agents; check budget.remaining() before calling it.",
@@ -1308,10 +1286,6 @@ const budgetFailedWorkflow = workflowRun({
   },
 });
 
-/**
- * A fan-out stuck at its barrier: one long-running agent, a question, a paused writer, a writer
- * held for claim containment and a paused agent its backend can't resume.
- */
 const stuckAgent = (index: number, patch: Partial<WorkflowAgentView> = {}): WorkflowAgentView =>
   workflowAgentView({
     callId: index,
@@ -1404,7 +1378,6 @@ const targetedScript = `export const meta = {
 };
 return await agent(\`Audit \${args.module} for \${args.concern} issues.\`);`;
 
-/** A started run as the service returns it: planned agents from meta, and its saved script. */
 const startedRun = (script: WorkflowScript) =>
   workflowRun({
     agents: [],
@@ -1416,7 +1389,6 @@ const startedRun = (script: WorkflowScript) =>
     scriptPath: `${runDirectory}/script.js`,
   });
 
-/** A run an earlier Pi process of the session left interrupted, as its files describe it. */
 const recordedWorkflow: WorkflowRecordedRun = {
   id: "wf-k3c9-2",
   name: "fix-findings",
@@ -1428,7 +1400,6 @@ const recordedWorkflow: WorkflowRecordedRun = {
   journalPath: "/home/user/.pi/agent/subagents/workflow-runs/wf-k3c9-2/journal.jsonl",
 };
 
-/** A run of the session that another live Pi process still runs. */
 const recordedElsewhere: WorkflowRecordedRun = {
   id: "wf-k3c9-3",
   name: "fix-findings",
@@ -1452,7 +1423,6 @@ const galleryWorkflowStatus: WorkflowServiceContract["status"] = (runId) => {
     workflowRun(),
     workflowRun({
       id: "wf-contract-unavailable",
-      // The display receipt stays valid, but the native producer violates its finite count.
       usage: { ...emptyWorkflowUsage(), input: Number.NaN },
     }),
     budgetedWorkflow,
@@ -1467,10 +1437,8 @@ const galleryWorkflowStatus: WorkflowServiceContract["status"] = (runId) => {
   );
 };
 
-/** A running run whose previous status call, 14 seconds earlier, saw the same counts. */
 const repeatedWorkflow = workflowRun({ id: "wf-mg3k2l-9" });
 
-/** A fixed workflow service: the tool's real execute path, deterministic views. */
 const galleryWorkflows: WorkflowServiceContract = {
   start: (request) =>
     request.source.kind === "inline"
@@ -1642,11 +1610,8 @@ const workflowScenarios = Effect.gen(function* () {
   ];
 });
 
-// ─── Notification messages ───────────────────────────────────────────────────
-
 type SentMessage = Pick<GalleryMessage, "customType" | "content" | "display" | "details">;
 
-/** Messages exactly as the root notifier sends them. */
 const notified = (
   title: string,
   notification: SubagentNotification | SubagentWorkflowNotification,
@@ -1822,9 +1787,6 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
   },
 ];
 
-// ─── Activity ────────────────────────────────────────────────────────────────
-
-/** A workflow member's subagent run, as the root projection shows it. */
 const member = (agent: WorkflowAgentView, overrides: Partial<SubagentRunView> = {}) =>
   view({
     id: agent.runId,
@@ -1908,7 +1870,6 @@ const failedMemberRun = member(failedMemberAgent, {
   ...timing(3, 0.2),
 });
 
-/** A live workflow whose Verify phase has the given agents beside the two reviewers. */
 const reviewWorkflow = (
   agents: ReadonlyArray<WorkflowAgentView>,
   patch: Partial<WorkflowRunView> = {},
@@ -1924,7 +1885,6 @@ const workParts = (phase: ActivityPhase): string =>
     ? `${phase.work.finished}/${phase.work.items} finished, ${phase.work.stopped} stopped, ${phase.work.failed ?? 0} failed, ${phase.work.skipped ?? 0} skipped`
     : "no work count";
 
-/** One published row per line, nested under its workflow and phase as Activity places it. */
 const activityRowLine = (item: ActivityItem): string => {
   const status = item.skipped ? `${item.status} (skipped)` : item.status;
   const head = [status, item.kind, item.title, item.phase, item.profile, item.summary]
@@ -1943,11 +1903,9 @@ interface ActivityScenario {
   readonly title: string;
   readonly runs: ReadonlyArray<SubagentRunView>;
   readonly workflows: ReadonlyArray<WorkflowRunView>;
-  /** Items whose detail pane the scenario shows. */
   readonly details: ReadonlyArray<string>;
 }
 
-/** Calls the token budget refused while they were queued. */
 const budgetRefused = (index: number): WorkflowAgentView => ({
   ...couldNotStart,
   callId: 10 + index,
@@ -2059,8 +2017,6 @@ const activityLines = (): ReadonlyArray<string> =>
       `── activity · ${scenario.title} · published rows`,
       ...items.map(activityRowLine),
       "",
-      // What people see: the persistent widget, wide and beside an input dock, then the manager
-      // with the workflow and each scenario item opened.
       ...activityGalleryFrames({ ...gallery, widths: [60, 80, 100], maxRows: [8] }),
       ...activityGalleryFrames({
         ...gallery,
@@ -2074,7 +2030,6 @@ const activityLines = (): ReadonlyArray<string> =>
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
-  // Worker reports render as Markdown, which reads Pi's global theme.
   beforeAll(() => initTheme("dark", false));
 
   it.effect("renders subagent tools and notifications in both collapsed styles", () =>
@@ -2098,11 +2053,9 @@ describe.skipIf(!directory)("presentation gallery", () => {
           toolCallTiming: false,
         });
         try {
-          // The shell captures the collapsed style at registration.
           const registered = captureRegistrations((pi) => {
             registerSubagentTools(pi, runtime);
             registerWorkflowTool(pi, workflowRuntime);
-            registerSubagentMessageRenderers(pi);
           });
           const tools = [...registered.tools, contactParentTool(), resultTool()];
           for (const { tool, ...entry } of scenarios)
@@ -2114,7 +2067,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
             );
           for (const entry of messageScenarios)
             lines.push(
-              ...galleryMessageFrames(registered.messageRenderers.get(entry.message.customType)!, {
+              ...galleryMessageFrames(renderSubagentMessage, {
                 ...entry,
                 title: `${style} · ${entry.message.customType} · ${entry.title}`,
               }),

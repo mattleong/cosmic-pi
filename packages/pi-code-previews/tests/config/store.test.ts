@@ -1,4 +1,3 @@
-// Explicit test entry-point Effects drive the real settings store boundaries.
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import * as Deferred from "effect/Deferred";
@@ -16,6 +15,7 @@ import { makeSettingsAdmission, withSettingsCoordinator } from "../../src/config
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { loadCodePreviewSettings } from "../../index";
+import { codePreviewApplicationLayer } from "../../src/layer";
 import { runOneShotSettingsEffect } from "../../src/boundary/settings-one-shot";
 import {
   CodePreviewSettingsService,
@@ -25,17 +25,14 @@ import {
 } from "../../src/config/store";
 import type { CodePreviewSettings } from "../../src/config/schema";
 
-// Raw Node builtin access for test scaffolding, mirroring pi-cosmic-core's platform boundary.
 const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
 if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
 const { mkdir, readFile, writeFile } = nodeFsModule.promises;
 const { dirname, join } = nodePathModule;
 
-// Mutating agent-directory and HOME slots is this suite's process-environment host boundary.
 const processEnv: NodeJS.ProcessEnv = process.env;
 
-/** Exercises the real settings service through its named one-shot boundary adapter. */
 const loadSettingsFromDisk = (options: LoadSettingsOptions = {}) =>
   step(() =>
     runOneShotSettingsEffect(
@@ -43,11 +40,9 @@ const loadSettingsFromDisk = (options: LoadSettingsOptions = {}) =>
     ),
   );
 
-/** The public save door; without a session it rehydrates from disk in a one-shot runtime. */
 const saveSettingsToDisk = (settings: CodePreviewSettings, options?: LoadSettingsOptions) =>
   step(() => queueSettingsSave(settings, options));
 
-/** Creates an isolated temp root and points HOME and Pi's agent directory inside it. */
 const settingsRoots = (prefix: string) =>
   temporaryDirectory(prefix).pipe(
     Effect.map((root) => {
@@ -128,7 +123,6 @@ effectTest(
 
     const loaded = yield* loadSettingsFromDisk();
     assert.ok(loaded);
-    // Only flat current keys with current value shapes apply; everything else keeps defaults.
     assert.equal(loaded.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);
     assert.equal(loaded.toolCallBackground, defaultCodePreviewSettings.toolCallBackground);
     assert.deepEqual(loaded.tools, [...defaultCodePreviewSettings.tools]);
@@ -161,7 +155,6 @@ effectTest("concurrent queued saves publish in invocation order", function* () {
 effectTest("loadSettingsFromDisk merges only current locations in precedence order", function* () {
   const { home, agentDir, project } = yield* settingsRoots("pi-code-previews-precedence-");
 
-  // Legacy HOME-derived locations must be ignored entirely, never merged or migrated.
   yield* writeJson(join(home, ".pi", "settings.json"), {
     codePreview: { readCollapsedLines: 11, writeCollapsedLines: 21, writeContentPreview: false },
   });
@@ -187,16 +180,13 @@ effectTest("loadSettingsFromDisk merges only current locations in precedence ord
   const loaded = yield* loadSettingsFromDisk({ projectCwd: project, projectTrusted: true });
   assert.equal(loaded.readCollapsedLines, 16);
   assert.equal(loaded.findResultPreview, false);
-  // An invalid override falls back to the trusted project's value, not the default.
   assert.equal(loaded.lsResultPreview, false);
   assert.equal(loaded.pathListCollapsedLines, 44);
-  // Values that existed only in legacy locations stay at their defaults.
   assert.equal(loaded?.writeCollapsedLines, defaultCodePreviewSettings.writeCollapsedLines);
   assert.equal(loaded?.writeContentPreview, defaultCodePreviewSettings.writeContentPreview);
   assert.equal(loaded?.editDiffPreview, defaultCodePreviewSettings.editDiffPreview);
   assert.equal(loaded?.grepCollapsedLines, defaultCodePreviewSettings.grepCollapsedLines);
   assert.equal(loaded?.bashResultPreview, defaultCodePreviewSettings.bashResultPreview);
-  // An untrusted project's settings never apply.
   const untrusted = yield* loadPreviewSettings(project);
   assert.equal(untrusted.lsResultPreview, defaultCodePreviewSettings.lsResultPreview);
   assert.equal(untrusted.findResultPreview, false);
@@ -253,7 +243,6 @@ effectTest("loadSettingsFromDisk prefers explicit project cwd over process cwd",
   });
   const originalCwd = process.cwd();
   process.chdir(otherProject);
-  // Leave the directory before its scope removes it.
   yield* Effect.addFinalizer(() => Effect.sync(() => process.chdir(originalCwd)));
 
   const fromProcessCwd = yield* loadSettingsFromDisk({ projectTrusted: true });
@@ -264,21 +253,20 @@ effectTest("loadSettingsFromDisk prefers explicit project cwd over process cwd",
 });
 
 effectTest("deduplicated public loads return isolated settings and tools clones", function* () {
-  const load = deferredPromise<CodePreviewSettings>();
+  const { agentDir, project } = yield* settingsRoots("pi-code-previews-deduplicated-load-");
+  yield* writeJson(join(agentDir, "code-previews.json"), { readCollapsedLines: 31 });
+  const gate = deferredPromise();
   let runs = 0;
-  installRunOnlyCapability(<A>() => {
+  installRunOnlyCapability((effect, signal) => {
     runs++;
-    // SAFETY: This fixture resolves with the settings value requested by both load Effects.
-    return load.promise as Promise<A>;
+    return gate.promise.then(() =>
+      Effect.runPromise(Effect.provide(effect, codePreviewApplicationLayer), { signal }),
+    );
   });
 
-  const firstLoad = loadCodePreviewSettings("/project", true);
-  const secondLoad = loadCodePreviewSettings("/project", true);
-  load.resolve({
-    ...defaultCodePreviewSettings,
-    readCollapsedLines: 31,
-    tools: [...defaultCodePreviewSettings.tools],
-  });
+  const firstLoad = loadCodePreviewSettings(project, true);
+  const secondLoad = loadCodePreviewSettings(project, true);
+  gate.resolve();
   const [first, second] = yield* step(() => Promise.all([firstLoad, secondLoad]));
 
   assert.equal(runs, 1);

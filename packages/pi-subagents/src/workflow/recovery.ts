@@ -25,7 +25,6 @@ import type { WorkflowRunRecordFile, WorkflowStoreContract } from "./store.ts";
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 
-/** What tells whether the process the file's record names still runs. */
 const livenessOf = (file: WorkflowRunRecordFile) =>
   Clock.currentTimeMillis.pipe(
     Effect.map(
@@ -39,7 +38,6 @@ const livenessOf = (file: WorkflowRunRecordFile) =>
     ),
   );
 
-/** Characters the journal's lines took to read, newlines included. */
 const charsRead = (lines: ReadonlyArray<string>): number =>
   lines.reduce((total, line) => total + line.length + 1, 0);
 
@@ -61,11 +59,6 @@ const unreadable = (runId: string) => (error: WorkflowRunFileError) =>
     `Workflow run ${runId} can't be resumed: ${error.message}`,
   );
 
-/**
- * What this session finds in the run files of runs no longer in memory, such as those of an
- * earlier Pi process: their results for a resume, the notices still owed, and status summaries.
- * Only runs whose `run.json` names this session count.
- */
 export type WorkflowRecovery = ReturnType<typeof makeWorkflowRecovery>;
 
 export const makeWorkflowRecovery = (services: {
@@ -73,12 +66,10 @@ export const makeWorkflowRecovery = (services: {
     WorkflowStoreContract,
     "readRunRecord" | "hasRunFiles" | "listRunRecords" | "readRunJournal" | "readRunResult"
   >;
-  /** The Pi session id run records must name; without one nothing is read. */
   readonly sessionKey: string | undefined;
 }) => {
   const { store, sessionKey } = services;
 
-  /** The record when it names this session; undefined when it is missing, unreadable or another's. */
   const ownRecord = (file: WorkflowRunRecordFile | undefined) => {
     const record = file && decodeWorkflowRunRecord(file.text, file.runId);
     return record?.sessionKey === sessionKey ? record : undefined;
@@ -89,10 +80,6 @@ export const makeWorkflowRecovery = (services: {
       .readRunJournal(files, WORKFLOW_JOURNAL_MAX_CHARS)
       .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
 
-  /**
-   * A line's entry and the text read for it, its full result read from the file it names within
-   * `budget`; undefined when that result is missing, too large or malformed.
-   */
   const entryOf = (
     files: WorkflowRunFiles,
     { resultFile, ...line }: WorkflowReplayLine,
@@ -115,7 +102,6 @@ export const makeWorkflowRecovery = (services: {
       return { entry, read: text?.length ?? 0 };
     });
 
-  /** Replay entries from the run's journal and result files, reading at most the journal bound. */
   const replayEntries = (files: WorkflowRunFiles, lines: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       let budget = WORKFLOW_JOURNAL_MAX_CHARS - charsRead(lines);
@@ -129,16 +115,11 @@ export const makeWorkflowRecovery = (services: {
       return entries;
     });
 
-  /** A run without a record: its files are gone, or it couldn't save one. */
   const missingRun = (runId: string) =>
     store
       .hasRunFiles(runId)
       .pipe(Effect.flatMap((has) => (has ? unrecordedRun(runId) : unknownRun(runId))));
 
-  /**
-   * The results a run resuming `runId` replays from its files. It fails when the run is unknown
-   * or pruned, left no record, belongs to another session, or still runs in another Pi process.
-   */
   const replay = (runId: string) =>
     Effect.gen(function* () {
       if (sessionKey === undefined) return yield* missingRun(runId);
@@ -166,7 +147,6 @@ export const makeWorkflowRecovery = (services: {
       return makeWorkflowReplay(yield* replayEntries(file.files, lines));
     });
 
-  /** The notice a run owes, or undefined when it owes none or memory reports it. */
   const owedNotice = (
     file: WorkflowRunRecordFile,
     remembered: (runId: string) => Effect.Effect<boolean>,
@@ -189,11 +169,6 @@ export const makeWorkflowRecovery = (services: {
       return notice;
     });
 
-  /**
-   * The newest runs of this session that a teardown interrupted, or whose Pi process is gone
-   * while they ran or before Pi accepted their report, and whose notice Pi never accepted,
-   * oldest first. Runs `remembered` reports are left to the memory that holds them.
-   */
   const interrupted = (remembered: (runId: string) => Effect.Effect<boolean>) =>
     Effect.gen(function* () {
       if (sessionKey === undefined) return [];
@@ -207,7 +182,6 @@ export const makeWorkflowRecovery = (services: {
       return owed.filter((notice) => notice !== undefined);
     });
 
-  /** The run's files and record when the record names this session; undefined otherwise. */
   const ownRun = (runId: string) =>
     Effect.gen(function* () {
       if (sessionKey === undefined) return undefined;
@@ -216,7 +190,6 @@ export const makeWorkflowRecovery = (services: {
       return file && record ? { file, record } : undefined;
     });
 
-  /** A read-only summary of a run of this session from its files; undefined without one. */
   const recorded = (runId: string) =>
     Effect.gen(function* () {
       const own = yield* ownRun(runId);
@@ -230,10 +203,6 @@ export const makeWorkflowRecovery = (services: {
       );
     });
 
-  /**
-   * Whether the run's record names this session and says Pi accepted a notice or report for it,
-   * as another Pi process of the session may have.
-   */
   const noticeAccepted = (runId: string) =>
     ownRun(runId).pipe(Effect.map((own) => own?.record.notified === true));
 

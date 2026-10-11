@@ -1,4 +1,3 @@
-// Real Pi agent loop and native QuickJS, with owned questionnaire service/host boundaries only.
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -38,7 +37,6 @@ const check = `function checked(value, tool) {
   return value;
 }`;
 
-// Live time is intentional for the real QuickJS worker. No model network or real UI prompts.
 describe("native scripted questionnaire workflows", () => {
   it.live(
     "branches on submitted choices and text, and does not confuse cancellation with approval",

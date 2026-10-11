@@ -34,16 +34,10 @@ import {
 const WORKFLOW_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const WORKFLOW_LIST_LIMIT = 64;
 const WORKFLOW_LIST_DIAGNOSTIC_LIMIT = 32;
-/** UTF-8 bound matching the script character bound for ASCII scripts. */
 const SCRIPT_MAX_BYTES = WORKFLOW_SCRIPT_MAX_CHARS * 4;
 
 type WorkflowScope = "project" | "user";
 
-/**
- * Why a workflow source couldn't be loaded: a script file that can't be read, isn't UTF-8 or
- * isn't a valid script (`script` says why), an unknown saved workflow, an invalid name, a path
- * that isn't a `.js` file, or a `workflow()` reference that is neither.
- */
 const WORKFLOW_SOURCE_PROBLEMS = [
   "unreadable",
   "not-utf8",
@@ -54,10 +48,6 @@ const WORKFLOW_SOURCE_PROBLEMS = [
   "bad-reference",
 ] as const;
 
-/**
- * A source nothing ran for. `message` is the agent-facing text, naming the full path and what to
- * do; `subject` is the script file's name without its directory, or the saved workflow's name.
- */
 export class WorkflowSourceError extends Schema.TaggedError<WorkflowSourceError>()(
   "WorkflowSourceError",
   {
@@ -82,7 +72,6 @@ export interface SavedWorkflowSummary {
   readonly meta: WorkflowMeta;
 }
 
-/** Where saved workflows live: the project's directory, read only while it is trusted, and the user's. */
 export interface WorkflowLocations {
   readonly project: string;
   readonly projectTrusted: boolean;
@@ -96,10 +85,6 @@ export interface WorkflowListing {
   readonly locations: WorkflowLocations;
 }
 
-/**
- * The files a saved workflow called `name` can be, in lookup order, as every message names them;
- * an untrusted project's directory is named as unused.
- */
 export const savedWorkflowFiles = (locations: WorkflowLocations, name = "<name>"): string => {
   const user = `${locations.user}/${name}.js`;
   return locations.projectTrusted
@@ -107,82 +92,50 @@ export const savedWorkflowFiles = (locations: WorkflowLocations, name = "<name>"
     : `${user} (${locations.project} is used only in trusted projects)`;
 };
 
-/** A run's files and the text of its `run.json`, as a later Pi process finds them. */
 export interface WorkflowRunRecordFile {
   readonly runId: string;
   readonly files: WorkflowRunFiles;
   readonly text: string;
-  /** When the run's directory was last written, its heartbeat; undefined when unreadable. */
   readonly writtenAt: number | undefined;
 }
 
 export interface WorkflowStoreContract {
-  /** A saved workflow by name; the trusted project's copy wins over the user's. */
   readonly load: (name: string) => Effect.Effect<LoadedWorkflow, WorkflowSourceError>;
-  /** A script file the agent wrote, absolute or relative to the session cwd. */
   readonly loadPath: (path: string) => Effect.Effect<LoadedWorkflow, WorkflowSourceError>;
   readonly list: Effect.Effect<WorkflowListing>;
-  /** Where saved workflows are found right now; project trust is read live. */
   readonly locations: Effect.Effect<WorkflowLocations>;
-  /**
-   * Saves a starting run's script in its own private directory under the agent directory, after
-   * pruning run directories that are neither among the newest nor written in the last day; runs
-   * named in `live` are never pruned.
-   */
   readonly createRunFiles: (
     runId: string,
     source: string,
     live: ReadonlySet<string>,
   ) => Effect.Effect<WorkflowRunFiles, WorkflowRunFileError>;
-  /** Appends one line to a run's results journal, which also keeps its directory from pruning. */
   readonly appendRunJournal: (
     files: WorkflowRunFiles,
     line: string,
   ) => Effect.Effect<void, WorkflowRunFileError>;
-  /** Marks a live run's directory as recent, so no Pi process prunes it; failures are ignored. */
   readonly touchRunFiles: (files: WorkflowRunFiles) => Effect.Effect<void>;
-  /** Replaces a run's `run.json` (0600) atomically. */
   readonly writeRunRecord: (
     files: WorkflowRunFiles,
     text: string,
   ) => Effect.Effect<void, WorkflowRunFileError>;
-  /**
-   * A run's `run.json`, or undefined when no run directory holds one: the run is unknown, or
-   * its files were pruned.
-   */
   readonly readRunRecord: (
     runId: string,
   ) => Effect.Effect<WorkflowRunRecordFile | undefined, WorkflowRunFileError>;
-  /**
-   * Whether a directory holds files of run `runId`, as a run whose record couldn't be saved
-   * leaves them.
-   */
   readonly hasRunFiles: (runId: string) => Effect.Effect<boolean>;
-  /**
-   * The records `keep` accepts among the run directories, newest first, at most `limit` of them.
-   * Every retained directory is considered, so records other sessions wrote more recently never
-   * crowd out the ones kept.
-   */
   readonly listRunRecords: (
     limit: number,
     keep: (file: WorkflowRunRecordFile) => boolean,
   ) => Effect.Effect<ReadonlyArray<WorkflowRunRecordFile>>;
-  /**
-   * Saves result `ordinal`'s full value (0600) beside the results journal, for a line that holds
-   * only its head; returns the name the line gives it.
-   */
   readonly writeRunResult: (
     files: WorkflowRunFiles,
     ordinal: number,
     text: string,
   ) => Effect.Effect<string, WorkflowRunFileError>;
-  /** A result file a journal line names, or undefined when it is unreadable or over `maximumChars`. */
   readonly readRunResult: (
     files: WorkflowRunFiles,
     name: string,
     maximumChars: number,
   ) => Effect.Effect<string | undefined>;
-  /** The complete lines among the first `maximumChars` of a run's results journal. */
   readonly readRunJournal: (
     files: WorkflowRunFiles,
     maximumChars: number,
@@ -192,7 +145,6 @@ export interface WorkflowStoreContract {
 interface WorkflowStoreOptions {
   readonly cwd: string;
   readonly agentDirectory: string;
-  /** Read live: trust can change during a session. */
   readonly isProjectTrusted: () => boolean;
 }
 
@@ -210,7 +162,6 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
         const fs = yield* FileSystem.FileSystem;
         const paths = yield* Path.Path;
         const safeFile = yield* SafeFile;
-        // Only the platform services, never the whole context the layer was built in.
         const platform = Effect.provideContext(
           Context.make(FileSystem.FileSystem, fs).pipe(Context.add(Path.Path, paths)),
         );
@@ -228,13 +179,6 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
           { scope: "user" as const, directory: locations.user },
         ];
 
-        /**
-         * A regular file inside `root`. SafeFile wants a canonical root, but the agent directory,
-         * a saved workflow's directory or a script's can pass through a symlink, as macOS's /tmp
-         * does, so the root is resolved on each read: a run directory may not exist yet when the
-         * store is built. The file itself is still checked: a symlink, or a path that resolves
-         * outside the root, is refused.
-         */
         const readContained = (path: string, root: string, maximumBytes: number) =>
           fs
             .realPath(root)
@@ -365,13 +309,11 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
 
         const createRunFiles = (runId: string, source: string, live: ReadonlySet<string>) =>
           platform(
-            // The new run's directory makes up the number kept.
             pruneWorkflowRunDirectories(runsRoot, WORKFLOW_RUN_DIRECTORIES_KEPT - 1, live).pipe(
               Effect.andThen(createWorkflowRunFiles(runsRoot, runId, source)),
             ),
           );
 
-        /** A private file in a run's directory as text; files are untrusted, so reads are bounded. */
         const readRunText = (path: string, files: WorkflowRunFiles, maximumBytes: number) =>
           readContained(path, files.directory, maximumBytes).pipe(
             Effect.flatMap(({ bytes }) => Effect.try(() => decoder.decode(bytes))),
@@ -392,7 +334,6 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
           return files ? exists(files.directory) : Effect.succeed(false);
         };
 
-        // Pruning bounds the directories read, and each record is read within its bound.
         const listRunRecords = (limit: number, keep: (file: WorkflowRunRecordFile) => boolean) =>
           Effect.gen(function* () {
             const kept: WorkflowRunRecordFile[] = [];
@@ -406,7 +347,6 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
 
         const readRunResult = (files: WorkflowRunFiles, name: string, maximumChars: number) => {
           const path = workflowRunResultPath(paths, files, name);
-          // UTF-8 never takes fewer bytes than UTF-16 code units, so the byte bound holds the text.
           return path === undefined
             ? Effect.undefined
             : readRunText(path, files, maximumChars).pipe(Effect.orElseSucceed(() => undefined));

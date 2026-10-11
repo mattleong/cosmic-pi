@@ -35,7 +35,6 @@ const formatFullScreenKeyId = (value: string): string => {
   return `${modifiers}${parts.includes("shift") && base.length === 1 ? label.toUpperCase() : label}`;
 };
 
-/** Pi's keybindings as full-screen manager options. Labels fall back without `getKeys`. */
 export const fullScreenKeybindingOptions = (keybindings: {
   matches(data: string, id: FullScreenSelectionKeybindingId): boolean;
   getKeys?(id: FullScreenSelectionKeybindingId): ReadonlyArray<string>;
@@ -50,17 +49,6 @@ export const fullScreenKeybindingOptions = (keybindings: {
 
 const SHIFT_LABEL_PREFIX = "⇧";
 
-/**
- * Drops configured key labels that collide with screen-reserved printable actions, so hints
- * never advertise a reserved shortcut as movement. Bare printable labels ("m") and
- * shift-modified printable labels ("⇧J") are matched against their effective printable
- * (case-sensitively, mirroring the keymap's reserved-key check). Named labels such as Space
- * can also be reserved. A label that is exactly the
- * "/" key is treated as that printable. Multi-key labels that contain a "/" key cannot be
- * distinguished from the "/" separators of this display representation without an API
- * redesign, so such labels are deliberately returned unchanged instead of being parsed
- * unsafely. Returns the fallback when nothing is left to show.
- */
 const filterReservedKeyLabel = (
   label: string,
   reservedKeys: ReadonlySet<string>,
@@ -68,7 +56,6 @@ const filterReservedKeyLabel = (
 ): string => {
   if (label === "/") return reservedKeys.has("/") ? fallback : label;
   const parts = label.split("/");
-  // An empty segment means a literal "/" key inside a multi-key label; deferred as ambiguous.
   if (parts.some((part) => part.length === 0)) return label;
   const collides = (part: string): boolean =>
     reservedKeys.has(part) ||
@@ -78,18 +65,12 @@ const filterReservedKeyLabel = (
   return parts.filter((part) => !collides(part)).join("/") || fallback;
 };
 
-/** Text input owns printable keys even when they are configured as selection bindings. */
 export const TEXT_INPUT_KEY_LABELS: ReadonlySet<string> = new Set([
   ...Array.from({ length: 95 }, (_, index) => String.fromCharCode(index + 32)),
   "Space",
   "⇧Space",
 ]);
 
-/**
- * Hint labels for configured selection keys, each minus the `reserved` keys its screen keeps
- * for typing or shortcuts. `movement` is the configured up/down pair, absent without
- * configured labels, and `navigation` adds it after the screen's own j/k.
- */
 export const configuredKeyLabels = (
   keybindingLabel: ((id: FullScreenSelectionKeybindingId, fallback: string) => string) | undefined,
   reserved: ReadonlySet<string>,

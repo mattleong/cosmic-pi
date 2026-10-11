@@ -38,7 +38,6 @@ type CosmicUiSettingChange =
     }
   | { readonly _tag: "SetVisibility"; readonly id: string; readonly visible: boolean };
 
-/** Each row decodes its own third-party SettingsList value into a closed, valid update. */
 const settingDescriptors = [
   {
     id: "enabled",
@@ -64,7 +63,6 @@ const settingDescriptors = [
     },
   },
   ...DEFAULT_FOOTER_ORDER.map((item) => {
-    // Usage rows say automatic/hidden for the same visibility preference.
     const usage = item === "openai.usage";
     const schema = usage ? UsageSettingSchema : BooleanSettingSchema;
     const [shown, hidden] = schema.literals;
@@ -85,15 +83,14 @@ const settingDescriptors = [
   }),
 ];
 
-/** `/cosmic-ui`, whose `settings` use the shared settings shell and picker. */
 export function registerSettingsCommand(
   pi: ExtensionAPI,
   options: {
     config(): ResolvedCosmicUiConfig;
     updateContext(ctx: ExtensionContext): void;
     update(ctx: ExtensionContext): void;
-    run<A, E>(effect: Effect.Effect<A, E, CosmicUiService>, signal?: AbortSignal): Promise<A>;
-    captureAuthority?: () => () => boolean;
+    run<E>(effect: Effect.Effect<void, E, CosmicUiService>, signal?: AbortSignal): Promise<void>;
+    captureAuthority: () => () => boolean;
   },
 ): void {
   const settings = withInvocationAuthority(options.captureAuthority, (isCurrent) =>
@@ -123,7 +120,6 @@ export function registerSettingsCommand(
             ? service.setFooterVisibility(change.id, change.visible)
             : service.updateFooterConfig(change.patch),
         );
-        // Any failed write, including an unavailable runtime, rolls the row back with one error.
         return options.run(update, signal).then(
           () => Result.succeed(undefined),
           () => Result.fail({ message: "Couldn't save Cosmic UI settings" }),

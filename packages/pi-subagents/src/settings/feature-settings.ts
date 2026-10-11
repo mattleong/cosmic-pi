@@ -1,8 +1,3 @@
-/**
- * Feature switches in `/subagents settings`: one `true`, `false`, or `inherit` value per Session,
- * Global, and trusted Project scope. A Session value applies at once and lasts for the session;
- * saved values take effect after /reload.
- */
 import type { SettingItem } from "@earendil-works/pi-tui";
 import {
   DEFAULT_SUBAGENT_FEATURE_TOGGLES,
@@ -29,7 +24,6 @@ const FEATURE_TOGGLES = {
   { readonly label: string; readonly description: string }
 >;
 
-/** The value a scope declares itself, or undefined when it inherits. */
 const ownToggle = (
   inspection: ProfileSettingsInspection,
   scope: ProfileSettingsScope,
@@ -40,7 +34,6 @@ const ownToggle = (
 const shown = (value: boolean | undefined): string =>
   value === undefined ? INHERIT : String(value);
 
-/** What `inherit` falls back to in each scope. */
 const inheritedValue = (scope: ProfileSettingsScope, toggle: SubagentFeatureToggle): string => {
   if (scope === "session") return "the saved value";
   if (scope === "project") return "the global value";
@@ -52,7 +45,6 @@ const effectiveLine = (inspection: ProfileSettingsInspection, toggle: SubagentFe
   return `${toggle} = ${String(config[toggle])} (${config.featureSources[toggle]})`;
 };
 
-/** Help and completion descriptors; the shared settings shell validates their values. */
 export const featureToggleDescriptors = SUBAGENT_FEATURE_TOGGLES.map((toggle) => ({
   id: toggle,
   description: `${FEATURE_TOGGLES[toggle].label}. Session applies now; global or project after /reload.`,
@@ -60,7 +52,6 @@ export const featureToggleDescriptors = SUBAGENT_FEATURE_TOGGLES.map((toggle) =>
   currentValue: () => "",
 }));
 
-/** Picker rows for each editable scope, showing what that scope declares itself. */
 export const featureToggleItems = (
   inspection: ProfileSettingsInspection,
   scopes: readonly ProfileSettingsScope[],
@@ -75,7 +66,6 @@ export const featureToggleItems = (
     })),
   );
 
-/** `status` lines: the values this session runs with, then each scope's own declarations. */
 export const featureToggleStatusLines = (
   inspection: ProfileSettingsInspection,
   scopes: readonly ProfileSettingsScope[],

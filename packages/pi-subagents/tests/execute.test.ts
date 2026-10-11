@@ -1,4 +1,3 @@
-// Tool Promise calls are test-runner boundaries.
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -41,8 +40,6 @@ describe("retry claim ownership", () => {
               }),
             releaseRetryClaim: () => release,
             startRetrySessionOwned: (_request, onOwned) => {
-              // Queue cancellation while the caller is constructing the service Effect.
-              // An acknowledgement before the actual fork strands this claim.
               if (cancelBeforeOwnership) controller.abort();
               return runSessionOwned(
                 scope,

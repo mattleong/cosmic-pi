@@ -1,10 +1,10 @@
-// Native supervisor client lifetime integration over real loopback sockets.
-import { connect, createServer, type AddressInfo, type Server, type Socket } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -21,7 +21,6 @@ interface LoopbackPeer {
   readonly server: Server;
 }
 
-/** An unanswered peer, or a forwarding peer that exposes actual accepted connections. */
 const loopbackPeer = (upstreamPort?: number) =>
   Effect.acquireRelease(
     Effect.callback<LoopbackPeer>((resume) => {
@@ -37,10 +36,14 @@ const loopbackPeer = (upstreamPort?: number) =>
         client.on("data", (chunk) => upstream.write(chunk));
         upstream.on("data", (chunk) => client.write(chunk));
       });
-      server.listen(0, "127.0.0.1", () =>
-        // SAFETY: A loopback TCP listener reports AddressInfo.
-        resume(Effect.succeed({ port: (server.address() as AddressInfo).port, clients, server })),
-      );
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        resume(
+          address === null || Predicate.isString(address)
+            ? Effect.die(new Error("Expected the loopback server to listen on a TCP port."))
+            : Effect.succeed({ port: address.port, clients, server }),
+        );
+      });
     }),
     ({ server, clients }) =>
       Effect.sync(() => {

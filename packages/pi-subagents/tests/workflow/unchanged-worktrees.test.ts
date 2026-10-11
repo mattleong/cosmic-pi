@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -86,7 +85,6 @@ describe("workflow worktree writers that make no changes", () => {
         expect(yield* subagents.workspaceBindingStatus(workspaceId)).toBe("pending");
         expect(warningsFor(workspaceId)).toHaveLength(1);
       }
-      // A discard that failed after a clean check sends the main agent to discard it instead.
       expect(warningsFor(undeletable)[0]?.message).toContain("subagent_workspace");
       expect(warningsFor(unreadable)[0]?.message).not.toContain("subagent_workspace");
       const notification = yield* deliveredFor(fixture, started.id);
@@ -98,7 +96,6 @@ describe("workflow worktree writers that make no changes", () => {
     workflowTest({ worktrees: true }, function* ({ fixture, workflows, subagents }) {
       const started = yield* startScript(workflows, `return ${writer("migrate a")};`);
       const workspaceId = yield* leaveInWorktree(fixture, "migrate a", "unchanged");
-      // A reader the writer started works in its worktree and outlives the writer.
       const writerRunId = yield* runningTask(fixture, "migrate a");
       yield* subagents.startSessionOwnedFrom(
         writerRunId,
@@ -128,7 +125,6 @@ describe("workflow worktree writers that make no changes", () => {
       yield* runWhere(workflows, started.id, (run) => run.state === "stopping");
       yield* Deferred.succeed(gate.release, undefined);
       const run = yield* Fiber.join(stopping);
-      // The discarded worktree is recorded as such, never left listed for review.
       expect(run.agents[0]?.unchanged).toBe(true);
       expect(yield* subagents.workspaceBindingStatus(workspaceId)).toBe("closed");
     }),
@@ -160,7 +156,6 @@ describe("workflow worktree writers that make no changes", () => {
       ).pipe(Effect.forkChild);
       yield* Deferred.await(gate.entered);
 
-      // The second check waits for the first, which holds the turn, until the stop.
       const stop = yield* Deferred.make<void>();
       const waiting = yield* subagents
         .workspaceDiscardUnchanged(second!, stop)
@@ -203,7 +198,6 @@ describe("workflow worktree writers that make no changes", () => {
             );
             yield* reportTask(later, "check it", "Checked.");
             const run = yield* finished(workflows, resumed.id);
-            // Nothing of the writer's awaits review, so it isn't listed as a proposal either.
             expect(resultValue(run)).toEqual(["Nothing to fix.", "Checked."]);
             expect(run.reused).toBe(1);
             expect(run.reusedWorkspaces ?? []).toEqual([]);

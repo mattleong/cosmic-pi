@@ -6,7 +6,6 @@ const tester = new RuleTester({ languageOptions: { parserOptions: { lang: "ts" }
 const prelude = `import { Effect, Queue } from "effect";`;
 const error = { messageId: "eagerCondition" };
 
-// The two ingress ports fixed in eb80fb8d are one regression episode.
 const localCliPort = `
   import * as Effect from "effect/Effect";
   import * as Queue from "effect/Queue";
@@ -48,7 +47,6 @@ const localPiPort = `
 
 tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinalizerConditionRule, {
   valid: [
-    // Immutable/admission-time decisions do not depend on this pipeline's execution.
     `${prelude}
       const admitted = true;
       work.pipe(Effect.ensuring(admitted ? Effect.void : cleanup));`,
@@ -67,7 +65,6 @@ tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinaliz
       let offered = false;
       work.pipe(Effect.ensuring(offered ? Effect.void : cleanup),
         Effect.tap(() => Effect.sync(() => { offered = true; })));`,
-    // Conditions inside finalizer callbacks are evaluated at finalization, not construction.
     `${prelude}
       let offered = false;
       work.pipe(Effect.tap(() => Effect.sync(() => { offered = true; })),
@@ -76,7 +73,6 @@ tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinaliz
       let confirmed = false;
       work.pipe(Effect.tap(() => Effect.sync(() => { confirmed = true; })),
         Effect.ensuring(Effect.sync(() => { if (!confirmed) disable(); })));`,
-    // Reads in branches, rather than the decision, do not trigger this rule.
     `${prelude}
       const admitted = true; let offered = false;
       work.pipe(Effect.tap(() => Effect.sync(() => { offered = true; })),
@@ -89,7 +85,6 @@ tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinaliz
       let offered = false;
       work.pipe(tap(() => sync(() => { offered = true; })),
         finalize(defer(() => offered ? done : cleanup)));`,
-    // A similarly named inner binding is not the decision's captured variable.
     `${prelude}
       let offered = false;
       work.pipe(Effect.tap(() => Effect.sync(() => { let offered = false; offered = true; })),
@@ -98,7 +93,6 @@ tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinaliz
       let offered = false;
       work.pipe(Effect.tap((offered) => Effect.sync(() => { offered = true; })),
         Effect.ensuring(offered ? Effect.void : cleanup));`,
-    // Do not identify lookalikes or a shadowed imported namespace as Effect.
     `const Effect = fake; let offered = false;
       work.pipe(Effect.tap(() => Effect.sync(() => { offered = true; })),
         Effect.ensuring(offered ? Effect.void : cleanup));`,
@@ -122,7 +116,6 @@ tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinaliz
     `import type { Effect } from "effect"; let offered = false;
       work.pipe(Effect.tap(() => Effect.sync(() => { offered = true; })),
         Effect.ensuring(offered ? Effect.void : cleanup));`,
-    // Defining a nested effect/callback is not executing or returning it.
     `${prelude}
       let offered = false;
       work.pipe(Effect.tap(() => {
@@ -143,12 +136,10 @@ tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinaliz
       let offered = false;
       Effect.gen(function* () { return Effect.sync(() => { offered = true; }); }).pipe(
         Effect.ensuring(offered ? Effect.void : cleanup));`,
-    // Property writes are not writes to the lexical decision binding.
     `${prelude}
       const state = { offered: false };
       work.pipe(Effect.tap(() => Effect.sync(() => { state.offered = true; })),
         Effect.ensuring(state.offered ? Effect.void : cleanup));`,
-    // Identifier-shaped property names are not reads of similarly named bindings.
     `${prelude}
       let offered = false;
       work.pipe(Effect.tap(() => Effect.sync(() => { offered = true; })),
@@ -289,7 +280,6 @@ tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinaliz
   ],
 });
 
-// createOnce state must not retain calls/import identity from the preceding files.
 tester.run(
   "anti-slop/no-eager-effect-finalizer-condition file reset",
   noEagerEffectFinalizerConditionRule,

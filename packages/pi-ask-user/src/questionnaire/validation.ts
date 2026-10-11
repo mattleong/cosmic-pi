@@ -8,7 +8,6 @@ import {
   type AskUserRequest,
 } from "./schema.ts";
 
-/** Fixed bounds use JavaScript code units after trimming; invalid input is never truncated. */
 export function validateQuestionnaireInput(
   value: string,
   kind: "custom" | "text" | "note",
@@ -28,7 +27,6 @@ const RESERVED_LABELS = new Set(["write a custom answer", "continue", "submit an
 const fail = (position: string, problem: string): AskUserValidationError =>
   new AskUserValidationError({ message: `${position} ${problem}` });
 
-/** Tool input or a decoded transport request, whose arrays are readonly. */
 interface QuestionnaireInput {
   readonly questions: ReadonlyArray<
     | Exclude<AskUserQuestion, AskUserChoiceQuestion>
@@ -36,7 +34,6 @@ interface QuestionnaireInput {
   >;
 }
 
-/** A detached, trimmed copy; callers never share question or choice objects with their input. */
 export const normalizeAskUserRequest = (request: QuestionnaireInput): AskUserRequest => ({
   questions: request.questions.map((question) => {
     const base = {
@@ -63,10 +60,6 @@ export const normalizeAskUserRequest = (request: QuestionnaireInput): AskUserReq
   }),
 });
 
-/**
- * Internal contract: validate only `normalizeAskUserRequest` output, whose required
- * text fields are already trimmed. Failures stay positional and content-free.
- */
 export function validateAskUserRequest(
   request: AskUserRequest,
 ): AskUserValidationError | undefined {

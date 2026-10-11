@@ -11,6 +11,7 @@ import type {
   CompactSummary,
   CompactSummaryProvider,
 } from "./compact-summary";
+import type { RendererState } from "./renderers/shared/types";
 import {
   nativeCodemodeEvidence,
   type NativeCallEvidence,
@@ -26,10 +27,10 @@ import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-tru
 import {
   createNativeDiscoveryProjector,
   nativeDiscoveryLabel,
+  type NativeDiscoveryIntent,
   type NativeDiscoveryProjector,
 } from "./native-codemode-discovery";
 
-/** Native model rows record only the `provider/id` they resolved, never prompts or image data. */
 const nativeModelCalls: ReadonlySet<string> = new Set(["models.classify", "models.generateImages"]);
 const SCRIPT_ERROR = "Script error:\n";
 
@@ -40,7 +41,6 @@ function issue(code: string, text: string): CompactIssue {
   return detail === message ? projected : { ...projected, detail };
 }
 
-/** Native args are abbreviated JSON, never an execution receipt or complete argument record. */
 function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): CompactChild {
   const preview = nativeArgumentPreview(call.args);
   const target = nativeCodemodeCallSubject(call.name, preview, cwd);
@@ -71,7 +71,6 @@ function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): Comp
     showTiming: true,
     showShortTiming: true,
     subject: visibleDiagnosticLine(target.subject ?? "", 200),
-    // Native dispatch return remains semantically neutral, even with a completion checkmark.
     status:
       call.status === "ok"
         ? "returned"
@@ -86,7 +85,6 @@ function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): Comp
   return entry;
 }
 
-/** Expanded call evidence does not depend on recognizing an outer execution outcome. */
 export function nativeCodemodeChildren(
   evidence: NativeCallEvidence,
   phase: CompactPhase,
@@ -96,7 +94,6 @@ export function nativeCodemodeChildren(
   return { entries: calls.map((call) => child(call, phase, cwd)), total: calls.length };
 }
 
-/** Only the factory's complete outer envelope is execution evidence, never guest output. */
 export function nativeCodemodeHeader(
   result: Pick<AgentToolResult<unknown>, "content">,
 ): "completed" | "failed" | undefined {
@@ -109,16 +106,88 @@ export function nativeCodemodeHeader(
   return header ? (header[1] === "Script failed" ? "failed" : "completed") : undefined;
 }
 
-/**
- * Only the native outer header proves script completion, not success of nested operations.
- * Unknown headers decline; incomplete ledgers cannot prove success. Never sum parallel timings or parse
- * guest output as nested results.
- */
+type NativeSummary = CompactSummary & Required<Pick<CompactSummary, "children" | "issues">>;
+type TruncatedEnvelope = ReturnType<typeof parseNativeTruncatedOutput>;
+
+function evidenceIssues(
+  evidence: NativeCallEvidence,
+  complete: boolean,
+  truncatedEnvelope: TruncatedEnvelope,
+): CompactIssue[] {
+  const truncation = nativeTruncationIssues(truncatedEnvelope, evidence.fullOutputPath, {
+    code: "native",
+    subject: "Script output",
+  });
+  if (complete) return truncation;
+  const message =
+    evidence.kind === "available" ? "Call details are incomplete" : "Call details are unavailable";
+  return [{ code: "native-call-evidence-incomplete", severity: "warning", message }, ...truncation];
+}
+
+function callCounters(
+  evidence: NativeCallEvidence,
+  calls: readonly NativeCodemodeCall[],
+  complete: boolean,
+  intent: NativeDiscoveryIntent | undefined,
+): string[] {
+  if (evidence.kind === "unavailable" || (complete && calls.length === 0 && intent?.discoveryOnly))
+    return [];
+  if (!complete) return [`${countLabel(calls.length, "call")} listed`];
+  const toolCalls = intent && calls.every((call) => !nativeModelCalls.has(call.name));
+  return [countLabel(calls.length, toolCalls ? "tool call" : "call")];
+}
+
+function scriptFailure(
+  summary: NativeSummary,
+  result: Pick<AgentToolResult<unknown>, "content">,
+  diagnosticHidden: boolean,
+): CompactSummary {
+  const diagnostic = diagnosticHidden
+    ? undefined
+    : result.content.findLast((part) => part.type === "text" && part.text.startsWith(SCRIPT_ERROR));
+  const text = diagnostic?.type === "text" ? diagnostic.text.slice(SCRIPT_ERROR.length) : "";
+  const failure = issue("native-script-error", text || "The script failed");
+  const explained = selectCompactChildren(summary.children).entries.some(
+    (entry) =>
+      entry.status === "error" &&
+      entry.issues?.some(
+        (cause) => cause.code === "native-child-error" && cause.message === failure.message,
+      ),
+  );
+  return {
+    ...summary,
+    outcome: "error",
+    issues: explained ? summary.issues : [failure, ...summary.issues],
+  };
+}
+
+function completedOutcome(
+  summary: NativeSummary,
+  calls: readonly NativeCodemodeCall[],
+  complete: boolean,
+  unconfirmed: boolean,
+): CompactSummary {
+  const uncertain = (code: string, message: string): CompactSummary => ({
+    ...summary,
+    outcome: "uncertain",
+    issues: [{ code, severity: "warning", message }, ...summary.issues],
+  });
+  if (unconfirmed)
+    return uncertain("native-outcome-uncertain", "Script completion could not be confirmed");
+  if (!complete) return { ...summary, outcome: "uncertain" };
+  if (calls.some((call) => call.status === "running" || call.status === "cancelled"))
+    return uncertain("native-call-outcome-uncertain", "Some call outcomes are unconfirmed");
+  return {
+    ...summary,
+    outcome: calls.some((call) => call.status === "error") ? "warning" : "success",
+  };
+}
+
 export const nativeCodemodeSummary =
   (
     cwd: string,
     discovery: NativeDiscoveryProjector = createNativeDiscoveryProjector(),
-  ): CompactSummaryProvider<{ code: string }, unknown, any> =>
+  ): CompactSummaryProvider<unknown, unknown, RendererState> =>
   ({ phase, args, result, context }) => {
     const intent = discovery(args);
     const label = nativeDiscoveryLabel(intent);
@@ -132,85 +201,19 @@ export const nativeCodemodeSummary =
     const evidence = nativeCodemodeEvidence(result.details);
     const calls = evidence.kind === "available" ? evidence.calls : [];
     const complete = evidence.kind === "available" && evidence.complete;
-    const children = nativeCodemodeChildren(evidence, phase, cwd);
     const header = nativeCodemodeHeader(result);
     const output = result.content[1];
-    // Native truncation replaces all text output with one envelope, even when its spill fails.
-    // Recognizing this conservative warning never promotes guest output to an execution outcome.
     const truncatedEnvelope =
       header && output?.type === "text" ? parseNativeTruncatedOutput(output.text) : undefined;
-    const issues: CompactIssue[] = [];
-    if (!complete)
-      issues.push({
-        code: "native-call-evidence-incomplete",
-        severity: "warning",
-        message:
-          evidence.kind === "available"
-            ? "Call details are incomplete"
-            : "Call details are unavailable",
-      });
-    issues.push(
-      ...nativeTruncationIssues(truncatedEnvelope, evidence.fullOutputPath, {
-        code: "native",
-        subject: "Script output",
-      }),
-    );
-    const summary = {
+    const summary: NativeSummary = {
       ...heading,
-      counters:
-        evidence.kind === "unavailable" || (complete && calls.length === 0 && intent?.discoveryOnly)
-          ? []
-          : [
-              complete
-                ? countLabel(
-                    calls.length,
-                    intent && calls.every((call) => !nativeModelCalls.has(call.name))
-                      ? "tool call"
-                      : "call",
-                  )
-                : `${countLabel(calls.length, "call")} listed`,
-            ],
-      children,
-      issues,
+      counters: callCounters(evidence, calls, complete, intent),
+      children: nativeCodemodeChildren(evidence, phase, cwd),
+      issues: evidenceIssues(evidence, complete, truncatedEnvelope),
     };
     if (phase !== "settled") return summary;
     if (!header) return undefined;
-    if (header === "failed") {
-      // Native details do not expose a typed stop reason. Even a final native error block
-      // can contain a guest-controlled Error.name/stack, so text cannot prove cancellation.
-      // Pi appends its error block after all guest output; only its own notes, such as one
-      // about generated images the script never showed, may follow.
-      const diagnostic =
-        evidence.fullOutputPath || truncatedEnvelope
-          ? undefined
-          : result.content.findLast(
-              (part) => part.type === "text" && part.text.startsWith(SCRIPT_ERROR),
-            );
-      const text = diagnostic?.type === "text" ? diagnostic.text.slice(SCRIPT_ERROR.length) : "";
-      const failure = issue("native-script-error", text || "The script failed");
-      // When a visible call stopped the program, its row already says why.
-      const explained = selectCompactChildren(children).entries.some(
-        (entry) =>
-          entry.status === "error" &&
-          entry.issues?.some(
-            (cause) => cause.code === "native-child-error" && cause.message === failure.message,
-          ),
-      );
-      return { ...summary, outcome: "error", issues: explained ? issues : [failure, ...issues] };
-    }
-    const uncertain = (code: string, message: string): CompactSummary => ({
-      ...summary,
-      outcome: "uncertain",
-      issues: [{ code, severity: "warning", message }, ...issues],
-    });
-    // An error flag contradicting the completion header is not successful native execution.
-    if (context.isError || result.isError)
-      return uncertain("native-outcome-uncertain", "Script completion could not be confirmed");
-    if (!complete) return { ...summary, outcome: "uncertain" };
-    if (calls.some((call) => call.status === "running" || call.status === "cancelled"))
-      return uncertain("native-call-outcome-uncertain", "Some call outcomes are unconfirmed");
-    return {
-      ...summary,
-      outcome: calls.some((call) => call.status === "error") ? "warning" : "success",
-    };
+    if (header === "failed")
+      return scriptFailure(summary, result, Boolean(evidence.fullOutputPath || truncatedEnvelope));
+    return completedOutcome(summary, calls, complete, Boolean(context.isError || result.isError));
   };

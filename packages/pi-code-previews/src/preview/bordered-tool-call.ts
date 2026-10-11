@@ -6,13 +6,14 @@ import {
   visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
+import * as Predicate from "effect/Predicate";
 import type { RendererState } from "../tools/renderers/shared/types";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance, toolExpandHint } from "pi-cosmic-ui/tool";
 
 type BorderSlot = "call" | "result";
 
-type BorderState = RendererState & {
+interface BorderState {
   codePreviewBorderCallComponent?: Component;
   codePreviewBorderResultComponent?: Component;
   codePreviewBorderShell?: BorderedToolCall;
@@ -22,13 +23,20 @@ type BorderState = RendererState & {
   codePreviewBorderResultExpandLabel?: string | undefined;
   codePreviewBorderLastCallExecutionStarted?: boolean;
   codePreviewBorderLastCallPartial?: boolean;
-};
+}
 
 type BorderColorKey = "borderMuted" | "warning" | "success" | "error";
 
-export function borderState(context: { state: unknown }): BorderState {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  return context.state as BorderState;
+const borderStates = new WeakMap<object, BorderState>();
+
+export function borderState(context: { readonly state: unknown }): BorderState {
+  const owner = context.state;
+  if (!Predicate.isObject(owner)) return {};
+  const existing = borderStates.get(owner);
+  if (existing) return existing;
+  const created: BorderState = {};
+  borderStates.set(owner, created);
+  return created;
 }
 
 export function renderWithBorderSlot<T>(state: BorderState, slot: BorderSlot, render: () => T): T {
@@ -60,7 +68,6 @@ export function borderColorKey(context: { isError: boolean; isPartial: boolean }
   return "success";
 }
 
-/** The row's border frame, reused while its theme is unchanged, around both current slots. */
 export function frameBorderShell(
   context: { state: unknown; isError: boolean; isPartial: boolean },
   theme: Theme,
@@ -98,7 +105,6 @@ export class BorderedToolCall implements Component {
     this.theme = theme;
   }
 
-  /** Frames both slots; a hint the result slot recorded replaces the call slot's. */
   setContent(
     call: Component | undefined,
     result: Component | undefined,
@@ -137,7 +143,6 @@ export class BorderedToolCall implements Component {
   }
 
   private renderUncached(width: number): string[] {
-    // A frame needs two border cells, two padding cells, and at least one content cell.
     if (width < MIN_FRAMED_WIDTH) return this.body.render(Math.max(1, width));
     const innerWidth = width - 4;
     const border = (value: string) => this.theme.fg(this.borderColorKey, value);
@@ -153,10 +158,6 @@ export class BorderedToolCall implements Component {
   private frameLine(line: string, innerWidth: number, border: (value: string) => string): string {
     const truncated = clipToWidth(line, innerWidth, "");
     const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(truncated)));
-    // FullWidthDiffText diff lines have an active diff background that extends
-    // to the end (no trailing \x1b[49m). Let the diff bg cover padding and
-    // the right margin space, then reset bg right before the border │.
-    // For non-diff lines, RESET_ANSI goes before padding to clear attributes.
     if (startsWithDiffBackground(truncated)) {
       return `${border("│")} ${truncated}${padding} \x1b[49m${border("│")}${RESET_ANSI}`;
     }
@@ -180,7 +181,6 @@ function renderBorder(
   return `${border(open)}${border("─".repeat(innerWidth - labelWidth))}${label}${border(close)}`;
 }
 
-/** True when the line opens with a truecolor background sequence (`ESC [48;2;r;g;bm`). */
 function startsWithDiffBackground(line: string): boolean {
   if (!line.startsWith("\x1b[48;2;")) return false;
   const end = line.indexOf("m", 7);
@@ -189,10 +189,6 @@ function startsWithDiffBackground(line: string): boolean {
   return channels.length === 3 && channels.every((channel) => /^\d+$/.test(channel));
 }
 
-/**
- * The affordance for a preview hidden by settings, such as "▸ output · ctrl+o to expand". A
- * bordered row shows only the configured hint, in its bottom border, and returns "".
- */
 export function hiddenPreviewExpandHintForShell(
   state: RendererState,
   theme: Theme,

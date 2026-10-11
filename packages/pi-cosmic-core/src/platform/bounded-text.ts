@@ -1,10 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
-/**
- * Decodes UTF-8 text, failing on the first chunk that takes the total past `maximumBytes`.
- * The final flush turns an incomplete trailing sequence into U+FFFD, as a whole-buffer decode does.
- */
 export const collectBoundedText = <E, TooLarge>(
   bytes: Stream.Stream<Uint8Array, E>,
   maximumBytes: number,

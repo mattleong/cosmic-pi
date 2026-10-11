@@ -50,7 +50,6 @@ interface AskUserSessionInput {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly generation: string;
-  /** Only session_start activations may publish cold-history replay; tree restarts never do. */
   readonly publishesReplay: boolean;
   active: boolean;
   activity?: QuestionnaireActivityBridge;
@@ -63,7 +62,6 @@ type PreviewSettingsLoader = (
   signal?: AbortSignal,
 ) => PromiseLike<CodePreviewSettings | void>;
 
-/** Internal seam for lifecycle and startup-order tests. */
 export function askUserWithDependencies(
   pi: ExtensionAPI,
   loadPreviewSettings: PreviewSettingsLoader = loadCodePreviewSettings,
@@ -71,7 +69,6 @@ export function askUserWithDependencies(
   const bridge = makeAskUserDialogBridge();
   const promptGate = makeAskUserPromptGate();
   registerAsyncAskUserMessageRenderer(pi);
-  // History rebuilt before session_start adopts the first ready activation's presentation.
   const replay = registerCodePreviewReplay(pi, {
     command: "ask-user",
     tools: ["ask_user", "ask_user_async", "ask_user_async_control"],
@@ -134,11 +131,9 @@ export function askUserWithDependencies(
       bridge.setContext(ctx);
       const sessionId = invokeHostCallback(() => ctx.sessionManager.getSessionId(), "");
       const root = !requiresQuestionnaireRelay();
-      // Activity is optional; questionnaires still open without it.
       if (sessionId)
         invokeHostCallback(() => input.activity?.activate(pi.events, sessionId), undefined);
       if (sessionId && root) {
-        // A missing host event bus leaves local questionnaires available.
         input.revokeCapability = invokeHostCallback(
           () =>
             registerQuestionnaireCapability({
@@ -177,7 +172,6 @@ export function askUserWithDependencies(
           scheduleAnimation,
           replay.shell,
         );
-      // After every registration this mode allows; unregistered RPC async rows stay raw.
       if (input.publishesReplay) replay.publish();
     },
     onDeactivated: (input) => {
@@ -206,7 +200,6 @@ export function askUserWithDependencies(
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable" || (!ctx.hasUI && !requiresQuestionnaireRelay()))
       return slot.shutdown();
-    // ctx.signal belongs to the current agent turn, not this session-owned runtime.
     return slot
       .start({
         ctx,
@@ -218,7 +211,6 @@ export function askUserWithDependencies(
       })
       .then(() => undefined);
   };
-  // Settlement closes replay adoption unless the first startup published it.
   pi.on("session_start", (_event, ctx) => {
     try {
       return startSession(ctx, true).finally(replay.finishStartup);

@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -25,14 +24,12 @@ import {
   type WorkflowFixtureOptions,
 } from "./fixtures/workflow-harness.ts";
 
-/** Starts an inline script with a budget of 100 output tokens unless `request` sets another. */
 const startBudgeted = (
   workflows: WorkflowServiceContract,
   body: string,
   request: Partial<WorkflowStartRequest> = {},
 ) => startScript(workflows, body, { budget: 100, ...request });
 
-/** Reports `output` tokens of live usage from the running agent with `task`. */
 const spend = (fixture: WorkflowFixture, task: string, output: number) =>
   Effect.gen(function* () {
     yield* runningTask(fixture, task);
@@ -40,13 +37,11 @@ const spend = (fixture: WorkflowFixture, task: string, output: number) =>
     control.offer({ type: "usage", usage: { ...emptyUsage(), output } });
   });
 
-/** Waits until the run's agent labeled `label` runs, so the budget counts its live usage. */
 const agentRunning = (workflows: WorkflowServiceContract, id: string, label: string) =>
   runWhere(workflows, id, (run) =>
     run.agents.some((agent) => agent.label === label && agent.state === "running"),
   );
 
-/** Waits until the budget refused the run's queued agent labeled `label`. */
 const refusedAgent = (workflows: WorkflowServiceContract, id: string, label: string) =>
   runWhere(workflows, id, (run) =>
     run.agents.some(
@@ -78,7 +73,6 @@ describe("workflow token budget", () => {
       });
       expect(run.budget).toEqual({ total: 100, spent: 150, refused: 1 });
       expect(run.warnings).toHaveLength(1);
-      // A call made once the budget is spent never queues, so it has no view or agent.
       expect(run.agents).toHaveLength(1);
       expect(stateOfTask(fixture, "second")).toBeUndefined();
     }),
@@ -125,7 +119,6 @@ describe("workflow token budget", () => {
       yield* spend(fixture, "first", 150);
       yield* reportTask(fixture, "first", "first done");
       const run = yield* finished(workflows, started.id);
-      // A budget error isn't an invalid call, which would fail the run even inside them.
       expect(run.state).toBe("completed");
       expect(resultValue(run)).toEqual({
         first: "first done",
@@ -188,7 +181,6 @@ describe("workflow token budget", () => {
 
   it.live("counts refused calls toward the agent limit, which ends a catch-all retry loop", () =>
     workflowTest({}, function* ({ fixture, workflows }) {
-      // The catch swallows the limit's error too, so only the host can end this loop.
       const started = yield* startBudgeted(
         workflows,
         `
@@ -226,7 +218,6 @@ describe("workflow token budget", () => {
               return { a: await first, refused };`,
       );
       yield* agentRunning(workflows, started.id, "a");
-      // "b" waits for the run's only slot, which "a" holds.
       yield* runWhere(workflows, started.id, (run) =>
         run.agents.some((agent) => agent.label === "b" && agent.waiting?.kind === "slot"),
       );
@@ -261,11 +252,9 @@ describe("workflow token budget", () => {
         );
         yield* runningTask(fixture, "b");
         yield* agentRunning(workflows, started.id, "a");
-        // The view follows running agents' live usage before the ceiling.
         yield* spend(fixture, "a", 50);
         const live = yield* runWhere(workflows, started.id, (run) => run.budget?.spent === 50);
         expect(live.budget?.refused).toBe(0);
-        // "c" waits for a run slot; "a" spends the rest of the budget while it is still running.
         yield* spend(fixture, "a", 100);
         const refused = yield* runWhere(workflows, started.id, (run) =>
           run.agents.some((agent) => agent.label === "c" && agent.state === "skipped"),
@@ -292,7 +281,6 @@ describe("workflow token budget", () => {
     const mayStart = Deferred.makeUnsafe<void>();
     const options: WorkflowFixtureOptions = {
       concurrency: 2,
-      // "held" gets the first process, which stays initializing; "a" starts after it.
       backend: fakeNativeReportBackendLayer({ initializeGate: initialized }),
       decorate: (service) => ({
         ...service,
@@ -316,7 +304,6 @@ describe("workflow token budget", () => {
       yield* spend(fixture, "a", 150);
       const refused = yield* refusedAgent(workflows, started.id, "held");
       expect(refused.budget).toMatchObject({ spent: 150, refused: 1 });
-      // Its start was interrupted, which stopped the agent before it ran.
       yield* eventually(
         () => (stateOfTask(fixture, "held") === "stopped" ? true : undefined),
         `the "held" agent to stop`,
@@ -337,7 +324,6 @@ describe("workflow token budget", () => {
         workflows,
         'return await parallel(["x.ts", "y.ts"].map((file) => () => agent("Edit " + file, { profile: "worker", label: file })));',
       );
-      // Either writer may start first; the other waits behind it.
       const queued = yield* runWhere(workflows, started.id, (run) =>
         run.agents.some((agent) => agent.waiting?.kind === "writer"),
       );

@@ -65,7 +65,6 @@ describe("usage projection helpers", () => {
   it("synchronizeUsageProjectionContext applies eligibility decisions and status texts", () => {
     const ref = makeProjectionRef();
 
-    // Eligible without overrides: a clearing transition uses the shared unavailable default.
     synchronizeUsageProjectionContext(ref, () => ({ eligible: true, clearUsage: true }));
     expect(MutableRef.get(ref).statusText).toBe("Usage unavailable");
     expect(MutableRef.get(ref).snapshot).toBeUndefined();
@@ -77,12 +76,9 @@ describe("usage projection helpers", () => {
     }));
     expect(MutableRef.get(ref).statusText).toBe(hidden.hiddenStatusText);
 
-    // Omitted hidden text falls back to the generic message.
     synchronizeUsageProjectionContext(ref, () => ({ eligible: false, clearUsage: false }));
     expect(MutableRef.get(ref).statusText).toBe("Usage hidden");
 
-    // An eligible no-clear decision leaves visible fields and status untouched, and the
-    // decision callback observes the pre-synchronization state.
     synchronizeUsageProjectionContext(ref, (state) => ({
       eligible: state.statusLine === undefined,
       clearUsage: false,

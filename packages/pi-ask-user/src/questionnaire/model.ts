@@ -8,7 +8,6 @@ type DraftAnswerContent =
   | { readonly kind: "custom"; readonly text: string }
   | { readonly kind: "text"; readonly text: string };
 
-/** Internal answer content retained until a question supplies its public key and choice labels. */
 export type AskUserAnswerDraft = DraftAnswerContent & {
   readonly note?: string;
 };

@@ -17,7 +17,6 @@ import {
 } from "./service";
 import { cloneCodePreviewSettings } from "./state";
 
-/** Effect settings persistence service — preferred session door. */
 export {
   CodePreviewSettingsService,
   type CodePreviewSettingsServiceContract,
@@ -25,7 +24,6 @@ export {
   type SettingsLoadProblem,
 } from "./service";
 
-/** Run a settings Effect on the live session runtime, or a one-shot runtime when idle. */
 function runSettingsEffect<A, E>(effect: Effect.Effect<A, E, CodePreviewSettingsService>) {
   return hasCodePreviewSessionCapability()
     ? runCodePreviewSessionEffect(effect)
@@ -34,7 +32,6 @@ function runSettingsEffect<A, E>(effect: Effect.Effect<A, E, CodePreviewSettings
 
 const inFlightLoads = new Map<string, Promise<CodePreviewSettings>>();
 
-/** Load settings through the live session, or through the one-shot boundary when idle. */
 export function loadCodePreviewSettings(
   projectCwd?: string,
   projectTrusted = false,
@@ -44,16 +41,12 @@ export function loadCodePreviewSettings(
     const effect = CodePreviewSettingsService.use((service) =>
       service.load(admission, { projectCwd, projectTrusted }),
     );
-    // A replacement may dispose the published session capability between this check and execution.
-    // Retry through one-shot loading unless this requesting startup was cancelled.
     if (!hasCodePreviewSessionCapability()) return runOneShotSettingsEffect(effect, signal);
     return runCodePreviewSessionEffect(effect, signal).catch((error) =>
       signal?.aborted ? Promise.reject(error) : runOneShotSettingsEffect(effect, signal),
     );
   };
 
-  // A signalled startup owns its cancellation and admission. Sharing either would let one session
-  // interrupt another session's settings load.
   if (signal) return execute(makeSettingsAdmission());
 
   const key = JSON.stringify([projectCwd ?? null, projectTrusted]);
@@ -68,12 +61,10 @@ export function loadCodePreviewSettings(
   return load.then(cloneCodePreviewSettings);
 }
 
-/** Synchronous health-panel projection; persistence resolves AgentDirectory in Effect. */
 export function getSettingsPath(): string {
   return nodeJoin(getAgentDir(), "code-previews.json");
 }
 
-/** Queue a settings save through the session runtime, or a one-shot runtime when idle. */
 export function queueSettingsSave(
   settings: CodePreviewSettings,
   loadOptions: LoadSettingsOptions = {},
@@ -86,7 +77,6 @@ export function queueSettingsSave(
   );
 }
 
-/** Remove the flat overrides so `settings.json` and built-in values apply again. */
 export function queueSettingsReset(loadOptions: LoadSettingsOptions = {}): Promise<void> {
   const admission = makeSettingsAdmission();
   const options = hasCodePreviewSessionCapability() ? {} : { rehydrate: loadOptions };
@@ -107,7 +97,6 @@ export function formatSettingsSaveError<ErrorInput>(error: ErrorInput): string {
   return `Couldn't save code preview settings: ${message}`;
 }
 
-/** What a load ignored, for notifications and health: the file, then the fields or the reason. */
 export function describeSettingsProblem(problem: SettingsLoadProblem, cwd: string): string {
   const file = formatDisplayPath(problem.path, cwd);
   return problem.fields

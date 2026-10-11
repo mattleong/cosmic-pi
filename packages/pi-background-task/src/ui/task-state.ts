@@ -1,4 +1,3 @@
-/** Background task states in the shared activity vocabulary every extension draws from. */
 import {
   managerActivityColor,
   managerActivityGlyph,
@@ -8,7 +7,6 @@ import {
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { BackgroundTaskView } from "../task/model.ts";
 
-/** A task as users know it: its name, else its command. */
 export const taskDisplayName = (task: Pick<BackgroundTaskView, "name" | "command">): string =>
   sanitizeTerminalLine(task.name?.trim() || task.command);
 

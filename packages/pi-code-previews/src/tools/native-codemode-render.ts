@@ -14,7 +14,7 @@ import type { CodePreviewRendererAppearance } from "../application/renderer-cont
 import type { CompactSummary } from "./compact-summary";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
-import type { RendererState } from "./renderers/shared/types";
+import type { RenderCall, RendererState, RenderResult } from "./renderers/shared/types";
 import {
   nativeCodemodeChildren,
   nativeCodemodeHeader,
@@ -37,9 +37,8 @@ import {
 const programSource = <Args>(args: Args): string =>
   Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
 
-/** The complete program, highlighted, for the expanded view. */
 const renderSource =
-  (discovery: NativeDiscoveryProjector): NonNullable<ToolRenderers["renderCall"]> =>
+  (discovery: NativeDiscoveryProjector): RenderCall<unknown, RendererState> =>
   (args, theme, context) => {
     const program = renderNativeCodemodeProgram(
       programSource(args),
@@ -50,11 +49,6 @@ const renderSource =
     return safeContent(() => expandedSection(theme, "Program", program), program);
   };
 
-/**
- * Expanded Calls rows, laid out once per width rather than on every frame for up to 256 calls.
- * A new result builds a new list, and invalidation (such as a theme change) clears the rows.
- * Only pending and running rows animate, so only they make the rows depend on the frame.
- */
 function renderCallList(
   children: NonNullable<CompactSummary["children"]>,
   evidence: NativeCallEvidence,
@@ -91,10 +85,6 @@ function renderCallList(
   };
 }
 
-/**
- * Presentation only; the lifecycle admits the current public builtin codemode source. The owning
- * session supplies the scheduler.
- */
 export function createNativeCodemodeRenderers(
   cwd: string,
   appearance: CodePreviewRendererAppearance,
@@ -104,7 +94,7 @@ export function createNativeCodemodeRenderers(
   const previewStyle =
     (appearance.collapsedStyle ?? codePreviewSettings.toolCallCollapsedStyle) === "preview";
 
-  const renderOutput: NonNullable<ToolRenderers["renderResult"]> = (
+  const renderOutput: RenderResult<unknown, unknown, RendererState> = (
     result,
     _options,
     theme,
@@ -137,8 +127,6 @@ export function createNativeCodemodeRenderers(
             new Text(theme.fg("muted", sanitizeDiagnosticContent(evidence.fullOutputPath)), 0, 0),
           ),
         );
-      // Every native text part, including headers, recovery notes, and spill paths, is retained.
-      // Pi displays native images; the shared fallback preserves unavailable-image placeholders.
       if (raw)
         body.addChild(
           expandedSection(
@@ -158,7 +146,7 @@ export function createNativeCodemodeRenderers(
     }, raw);
   };
 
-  return withCodePreviewRenderers(
+  return withCodePreviewRenderers<unknown, unknown, RendererState>(
     { name: "codemode" },
     {
       renderCall(args, theme, context) {
@@ -189,11 +177,12 @@ export function createNativeCodemodeRenderers(
       renderResult(result, options, theme, context) {
         if (options.expanded) return renderOutput(result, options, theme, context);
         const { state, isError } = context;
+        const args = Predicate.isObject(context.args) ? context.args : {};
         const projected = summary({
           phase: options.isPartial ? "running" : "settled",
-          args: context.args,
+          args,
           result,
-          context,
+          context: { ...context, args },
         });
         if (!projected)
           return safeContent(
@@ -208,7 +197,6 @@ export function createNativeCodemodeRenderers(
                 animationFrame,
                 timingEnabled: codePreviewSettings.toolCallTiming,
               });
-              // A discovery hint and dispatch count are independent facts in preview style too.
               const counter = projected.action ? projected.counters?.[0] : undefined;
               if (counter) rows.unshift(clipToWidth(theme.fg("muted", counter), width));
               if (

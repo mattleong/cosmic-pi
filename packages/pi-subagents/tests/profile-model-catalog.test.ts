@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { deferredPromise } from "pi-cosmic-core/testing";
+import { deferredPromise, modelFixture } from "pi-cosmic-core/testing";
 import { createModelPickerChoices } from "pi-cosmic-ui/manager/model-picker";
 import type { NativeRuntimeModel } from "../src/boundary/native-model-catalog.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
@@ -16,7 +16,6 @@ import {
   type ProfileModelRegistryRefreshResult,
 } from "../src/settings/profile-model-catalog.ts";
 import type { ProfileModelOption } from "../src/settings/ui/model-picker.ts";
-import { modelFixture } from "./fixtures/pi-host.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 
 const piModel = (provider: string, id: string, name = id) =>
@@ -174,7 +173,6 @@ describe("profile model catalog", () => {
         piModel("openai", "gpt-old", "Parent\u001b[2J\nrenamed"),
         piModel("openai", "gpt-next", "Next\u0007\tmodel"),
       ]);
-      // Pi rows use the shared picker's default text, so check what the picker displays.
       const displayed = (picker: CandidateModelPickerData) => {
         const choices = createModelPickerChoices(picker.choices, picker.current);
         for (const choice of choices) {
@@ -247,7 +245,6 @@ describe("profile model catalog", () => {
       expect(fastModeFor(fallback)).toBe(false);
       expect(hasTerminalControls(fallback.warning ?? "")).toBe(false);
 
-      // A runtime switch offers only live models, never the previous runtime's model.
       const switching = profileCandidate("openai-codex/gpt-5.6-sol", { runtime: "codex" });
       const pending = yield* loadPicker(catalog, switching, {
         listNativeModels: () => Promise.resolve([advertised]),

@@ -23,6 +23,7 @@ const harness = (options: { readonly trusted?: boolean; readonly started?: boole
       options.started === false
         ? undefined
         : { ...DEFAULT_BACKGROUND_TASK_CONFIG, shellPath: "/bin/\u001b[31mzsh\nspoof" },
+    captureAuthority: () => () => true,
     read,
     write,
   });
@@ -38,11 +39,10 @@ const harness = (options: { readonly trusted?: boolean; readonly started?: boole
   return { write, read, notify, run };
 };
 
-/** The settings list opened in a terminal, driven by keys. */
 const pickerHarness = (
   trusted: boolean,
   read: TaskSettingsActions["read"] = () => Promise.resolve({}),
-  captureAuthority?: TaskSettingsActions["captureAuthority"],
+  captureAuthority: TaskSettingsActions["captureAuthority"] = () => () => true,
 ) => {
   initTheme();
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
@@ -50,7 +50,7 @@ const pickerHarness = (
   const notify = vi.fn();
   const command = taskSettingsSubcommand({
     config: () => DEFAULT_BACKGROUND_TASK_CONFIG,
-    ...(captureAuthority && { captureAuthority }),
+    captureAuthority,
     read,
     write,
   });
@@ -74,9 +74,7 @@ const pickerHarness = (
     screen,
     opened,
     open,
-    // Esc reaches the list as its cancel, which closes the picker.
     close: () => input("\u001b"),
-    /** Mounts a pending opening, as Pi does after its factory, and reports whether one opened. */
     isOpen: () => {
       host.mount();
       return host.editor !== undefined;
@@ -120,7 +118,6 @@ describe("/tasks settings", () => {
       expect(h.write.mock.calls).toEqual([
         [{ cwd: "/project", scope: "global" }, "maxRunning", 16],
         [{ cwd: "/project", scope: "project" }, "maxWaitSeconds", 60],
-        // Inherit removes the scope's own value.
         [{ cwd: "/project", scope: "project" }, "maxRunning", undefined],
       ]);
       yield* h.run("maxRunning 999");
@@ -144,8 +141,6 @@ describe("/tasks settings", () => {
         const h = pickerHarness(trusted);
         yield* macrotask;
         expect(h.isOpen()).toBe(true);
-        // One step past the last global row: the first project row, or, with none, the list
-        // wraps back to the first global row.
         for (const _ of rows) h.input("j");
         h.input("\r");
         yield* macrotask;
@@ -173,7 +168,6 @@ describe("/tasks settings", () => {
       yield* macrotask;
       expect(h.isOpen()).toBe(true);
       expect(h.notify).not.toHaveBeenCalled();
-      // The project row says which file is broken, in the shared message style.
       for (const _ of rows) h.input("j");
       const reason =
         h
@@ -182,7 +176,6 @@ describe("/tasks settings", () => {
           .find((line) => line.includes(path))
           ?.trim() ?? "";
       expect(issueMessageStyleProblems(reason, { maxLength: 200 })).toEqual([]);
-      // The broken scope refuses edits; the global rows still take them.
       h.input("\r");
       yield* macrotask;
       expect(h.write).not.toHaveBeenCalled();
@@ -212,7 +205,6 @@ describe("/tasks settings", () => {
       pending.resolve();
       yield* macrotask;
       expect(h.notify).not.toHaveBeenCalled();
-      // A revoked picker closes on its next key rather than showing a change it never saves.
       h.input("\r");
       expect(h.write).toHaveBeenCalledTimes(1);
       expect(h.isOpen()).toBe(false);

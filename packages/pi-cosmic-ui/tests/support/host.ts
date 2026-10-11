@@ -1,10 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import * as Predicate from "effect/Predicate";
-import { deferredPromise } from "pi-cosmic-core/testing";
+import * as Effect from "effect/Effect";
 import { vi } from "vitest";
-import { COSMIC_UI_HOST_QUERY, type CosmicUiHostQuery } from "../../src/protocol/protocol.ts";
+import {
+  COSMIC_UI_HOST_QUERY,
+  normalizeCosmicUiHostQuery,
+  type CosmicUiHostQuery,
+} from "../../src/protocol/protocol.ts";
 
-/** A real AbortSignal whose `aborted` reads and listener registrations are observable. */
 export function capturedSignal(
   source = new AbortController().signal,
   onAbortedRead = () => {},
@@ -15,16 +17,25 @@ export function capturedSignal(
     if (throwAfterAdd) throw new Error("registered before throwing");
   });
   const removeEventListener = vi.fn(source.removeEventListener.bind(source));
-  const signal = new Proxy(source, {
-    get(target, property) {
-      if (property === "aborted") onAbortedRead();
-      if (property === "addEventListener") return addEventListener;
-      if (property === "removeEventListener") return removeEventListener;
-      // SAFETY: The in check proves this property belongs to the AbortSignal contract.
-      const value = property in target ? target[property as keyof AbortSignal] : undefined;
-      return Predicate.isFunction(value) ? value.bind(target) : value;
+  const signal: AbortSignal = {
+    get aborted() {
+      onAbortedRead();
+      return source.aborted;
     },
-  });
+    get reason() {
+      return source.reason;
+    },
+    get onabort() {
+      return source.onabort;
+    },
+    set onabort(handler) {
+      source.onabort = handler;
+    },
+    throwIfAborted: () => source.throwIfAborted(),
+    addEventListener,
+    removeEventListener,
+    dispatchEvent: (event) => source.dispatchEvent(event),
+  };
   return { signal, addEventListener, removeEventListener };
 }
 
@@ -37,24 +48,15 @@ export const execResult = (stdout = "", code = 0): ExecResult => ({
 });
 export const execOk = (stdout?: string) => Promise.resolve(execResult(stdout));
 
-/** Pending host exec promise that rejects when the probe signal aborts. */
 export const abortablePendingExec = (
   signal: AbortSignal | undefined,
   onAbort: () => void,
-): Promise<ExecResult> => {
-  const pending = deferredPromise<ExecResult>();
-  signal?.addEventListener(
-    "abort",
-    () => {
-      onAbort();
-      pending.reject(new Error("aborted"));
-    },
-    { once: true },
+): Promise<ExecResult> =>
+  Effect.runPromise(
+    Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(onAbort))),
+    signal && { signal },
   );
-  return pending.promise;
-};
 
-/** Synchronous in-memory event bus that records every emitted event. */
 export const eventBus = (onUnsubscribe: (name: string) => void = () => {}) => {
   const listeners = new Map<string, Set<Parameters<ExtensionAPI["events"]["on"]>[1]>>();
   const emitted: Array<{ readonly name: string; readonly data: unknown }> = [];
@@ -75,8 +77,7 @@ export const eventBus = (onUnsubscribe: (name: string) => void = () => {}) => {
   };
   const respondToHostQuery = (state: () => Parameters<CosmicUiHostQuery["respond"]>[0]) =>
     events.on(COSMIC_UI_HOST_QUERY, (data) => {
-      // SAFETY: Only typed host queries are emitted on this event.
-      (data as CosmicUiHostQuery).respond(state());
+      normalizeCosmicUiHostQuery(data)?.respond(state());
     });
   return { events, emitted, respondToHostQuery };
 };

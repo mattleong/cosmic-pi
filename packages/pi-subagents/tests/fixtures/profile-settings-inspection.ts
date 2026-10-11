@@ -22,12 +22,10 @@ import { step } from "../support/effect-test.ts";
 import { mountingCustomUi } from "./pi-host.ts";
 import { declaredCandidate } from "./profiles.ts";
 
-/** Decodes a test document literal into the JSON object a store reads. */
 export const jsonObject = Schema.decodeUnknownSync(
   Schema.Record(Schema.String, Schema.MutableJson),
 );
 
-/** Decodes and resolves Global and optional Project documents at fixed fake paths. */
 export const resolveTestConfig = <GlobalDocument, ProjectDocument>(
   globalDocument: GlobalDocument,
   projectDocument?: ProjectDocument,
@@ -64,10 +62,8 @@ export const makeProfileSettingsInspection = (
   };
 };
 
-/** A route that stays repairable but fails closed on its impossible effort. */
 export const INVALID_ROUTE = declaredCandidate("parent", { effort: "impossible" });
 
-/** A trusted Project default set "partial" that inherits, or also owns, an invalid Global route. */
 export const inheritedInvalidInspection = (
   ownInvalid = false,
   profile: ProfileId = "worker",
@@ -86,7 +82,6 @@ export const inheritedInvalidInspection = (
     projectTrusted: true,
   });
 
-/** Manager actions that reject every call a suite does not supply as an override. */
 export const fleetManagerActionsFixture = (
   overrides: Partial<FleetManagerActions>,
 ): FleetManagerActions => {
@@ -124,7 +119,6 @@ export const fleetManagerActionsFixture = (
   };
 };
 
-/** Opens a registered `/subagents` fleet in a mounted terminal, driven by keys. */
 export const openRegisteredFleet = function* (register: (pi: ExtensionAPI) => void, columns = 120) {
   const { pi, commands } = recordingExtensionHost();
   register(pi);
@@ -148,7 +142,6 @@ export const openRegisteredFleet = function* (register: (pi: ExtensionAPI) => vo
       fleet.render(columns);
     }
   };
-  /** Waits for the one in-flight action to settle into a final outcome. */
   const settled = function* () {
     yield* step(() =>
       vi.waitFor(() => expect([undefined, "info"]).not.toContain(fleet.noticeKind)),

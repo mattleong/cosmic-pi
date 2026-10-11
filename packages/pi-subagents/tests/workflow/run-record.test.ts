@@ -26,7 +26,6 @@ const record = (patch: Partial<WorkflowRunRecord> = {}): WorkflowRunRecord => ({
   ...patch,
 });
 
-/** The other process is alive, and its run's directory was written `age` ago. */
 const liveness = (age: number | undefined, alive = true): WorkflowRunLiveness => ({
   currentPid: THIS_PID,
   bootedAt: BOOTED_AT,
@@ -38,14 +37,12 @@ const liveness = (age: number | undefined, alive = true): WorkflowRunLiveness =>
 describe("a workflow run record's process", () => {
   it("still runs the run while its pid is alive and its directory stays recent", () => {
     expect(isWorkflowRunLiveElsewhere(record(), liveness(WORKFLOW_RUN_HEARTBEAT_MS))).toBe(true);
-    // Without a heartbeat to go by, a live pid is trusted.
     expect(isWorkflowRunLiveElsewhere(record(), liveness(undefined))).toBe(true);
   });
 
   it("is gone when its pid is dead, names this process, or its heartbeat stopped", () => {
     expect(isWorkflowRunLiveElsewhere(record(), liveness(0, false))).toBe(false);
     expect(isWorkflowRunLiveElsewhere(record({ pid: THIS_PID }), liveness(0))).toBe(false);
-    // A reused pid is alive, but nothing refreshes the dead run's directory.
     const stale = liveness(WORKFLOW_RUN_HEARTBEAT_MS + 1);
     expect(isWorkflowRunLiveElsewhere(record(), stale)).toBe(false);
     expect(isWorkflowRunNoticeOwed(record(), stale)).toBe(true);
@@ -60,17 +57,14 @@ describe("a workflow run record's process", () => {
   });
 
   it("is gone when it ran before this machine booted, whatever process now holds its pid", () => {
-    // A boot a few hours earlier: the pid is alive, and the directory was written recently.
     const earlierBoot = { bootedAt: BOOTED_AT - 4 * WORKFLOW_RUN_HEARTBEAT_MS };
     expect(isWorkflowRunLiveElsewhere(record(earlierBoot), liveness(0))).toBe(false);
     expect(isWorkflowRunNoticeOwed(record(earlierBoot), liveness(0))).toBe(true);
     const ended = record({ ...earlierBoot, state: "completed", endedAt: 1 });
     expect(isWorkflowRunNoticeOwed(ended, liveness(0))).toBe(true);
-    // A wall-clock adjustment of a few seconds doesn't make it another boot.
     expect(isWorkflowRunLiveElsewhere(record({ bootedAt: BOOTED_AT + 5_000 }), liveness(0))).toBe(
       true,
     );
-    // A record without a boot time is judged by its pid.
     const { bootedAt: _bootedAt, ...unbooted } = record();
     expect(isWorkflowRunLiveElsewhere(unbooted, liveness(0))).toBe(true);
   });

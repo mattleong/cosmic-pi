@@ -1,7 +1,3 @@
-// Private local CLI harness/auth/config filesystem lifecycle: launch and catalog harness
-// roots, sanitized environment and API-key selection, Codex config builders, scoped
-// failure-atomic prepare/remove, and cancelable bounded auth probes. This boundary owns no wire transport
-// and must not import the LocalCliProcess service.
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -59,15 +55,10 @@ const SAFE_ENV_KEYS = new Set([
 
 export interface LocalCliHarnessOptions {
   readonly agentDirectory: string;
-  /** Package-test seam only. Production always uses the fixed executable names. */
   readonly executables?: { readonly claude: string; readonly codex: string } | undefined;
-  /** Package-test seam only. */
   readonly environment?: NodeJS.ProcessEnv | undefined;
-  /** Package-test seam only: fail after a sensitive harness file was published. */
   readonly harnessFault?: "after-claude-settings" | undefined;
-  /** Package-test seam only: model an unconfirmable partial-harness cleanup. */
   readonly harnessCleanupFault?: boolean | undefined;
-  /** Package-test seam only: pause after unique-directory ownership is established. */
   readonly afterHarnessDirectoryCreated?: (() => Promise<void>) | undefined;
 }
 
@@ -84,7 +75,6 @@ export interface LocalCliHarness {
   readonly env: NodeJS.ProcessEnv;
 }
 
-/** Bounded harness failure that deliberately omits foreign filesystem and auth details. */
 export class LocalCliHarnessError extends Schema.TaggedError<LocalCliHarnessError>()(
   "LocalCliHarnessError",
   {
@@ -142,10 +132,6 @@ export const sanitizeLocalCliEnvironment = (
   };
 };
 
-/**
- * The one platform decision before the pure Claude policy grammar: a writer cwd must be an
- * absolute path for its cwd/scoped-Edit rule pair to exist.
- */
 export const claudeWriterCwdPolicy = (cwd: string | undefined): ClaudeWriterCwdPolicy | undefined =>
   Predicate.isString(cwd) && nodePath.isAbsolute(cwd) ? claudeWriterCwdRulePolicy(cwd) : undefined;
 
@@ -166,7 +152,6 @@ const codexBaseConfig = (openaiFastMode = false): ReadonlyArray<string> => [
   'exclude = ["OPENAI_API_KEY", "CODEX_HOME", "PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PI_SUBAGENT_RUN_ID"]',
   "[agents]",
   "enabled = true",
-  // Every reviewed feature is off except opted-in fast mode.
   "[features]",
   ...CODEX_DISABLED_FEATURES.map(
     (feature) => `${feature} = ${feature === "fast_mode" && openaiFastMode}`,
@@ -185,11 +170,6 @@ export const removeLocalCliHarness = (
 ): Effect.Effect<void, LocalCliHarnessError> =>
   Effect.tryPromise({ try: () => removePrivateDirectory(directory), catch: harnessCleanupFailed });
 
-/**
- * Pre-ownership root preparation is interruptible even inside acquireRelease's mask.
- * Exclusive directory creation, build and partial cleanup stay masked; callers retain the
- * acquisition-to-finalizer mask so successful credential-bearing state cannot be abandoned.
- */
 const prepareOwnedHarness = <Harness>(
   agentDirectory: string,
   rootName: string,
@@ -219,7 +199,6 @@ const prepareOwnedHarness = <Harness>(
     }),
   );
 
-/** Creates a private CODEX_HOME with the given config and only bounded, validated auth. */
 const prepareCodexHome = (
   directory: string,
   config: string,
@@ -310,7 +289,6 @@ export interface CodexCatalogHarness {
   readonly release: Effect.Effect<void, LocalCliHarnessError>;
 }
 
-/** Isolates model discovery from user Codex config while copying only bounded authentication. */
 export const prepareCodexCatalogHarness = (options: {
   readonly agentDirectory: string;
   readonly environment: NodeJS.ProcessEnv;
@@ -375,8 +353,6 @@ export const runIsolatedCodexAuthProbe = (
 ): Effect.Effect<ProbeResult, LocalCliHarnessError> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      // Keep the owned-harness handoff masked until release is guaranteed. Preparation explicitly
-      // permits interruption before ownership; the bounded probe restores caller interruptibility.
       const harness = yield* prepareCodexCatalogHarness({ agentDirectory, environment });
       const result = yield* Effect.exit(
         restore(runProbeEffect(executable, ["login", "status"], harness.env)),

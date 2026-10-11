@@ -29,7 +29,6 @@ function isCanonicalCodexEndpoint(baseUrl: string | undefined): boolean {
   }
 }
 
-/** Adds Codex's priority routing hint to an active fast request for the canonical endpoint. */
 export function applyFastRoutingHeaders(
   headers: ProviderHeaders,
   ctx: ExtensionContext,

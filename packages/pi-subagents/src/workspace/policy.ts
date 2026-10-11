@@ -1,4 +1,3 @@
-// Conservative input policy, not a credential detector or an OS sandbox.
 export const MAX_WORKSPACE_FILE_BYTES = 4 * 1024 * 1024;
 export const MAX_WORKSPACE_BYTES = 32 * 1024 * 1024;
 export const MAX_WORKSPACE_FILES = 4000;

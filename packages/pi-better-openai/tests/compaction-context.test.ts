@@ -27,9 +27,8 @@ const details = {
     api: "openai-responses",
     model: "gpt-5.5",
     output: [{ type: "compaction", encrypted_content: "encrypted" }],
-    rawInputCount: 999,
+    omittedEntryIds: [],
     createdAt: 0,
-    tokensBefore: 100,
   },
 };
 const preparation = {
@@ -74,15 +73,31 @@ describe("owned checkpoint reconstruction", () => {
       { registerFlag: vi.fn(), events: { emit: vi.fn(), on: vi.fn() } },
     );
     betterOpenAIWithDependencies(pi);
-    const host = { sessionManager: history(), abort: vi.fn(), ui: { notify: vi.fn() } };
-    const ctx = extensionContextFixture(host);
+    const abort = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      ...extensionContextFixture({ abort, ui: { notify } }),
+      sessionManager: history(),
+    };
     handlers.get("context_with_system")![0]!(
-      { type: "context_with_system", messages: host.sessionManager.buildSessionContext().messages },
+      { type: "context_with_system", messages: ctx.sessionManager.buildSessionContext().messages },
       ctx,
     );
-    expect(host.abort).toHaveBeenCalledOnce();
-    expect(host.ui.notify).toHaveBeenCalled();
-    expect(handlers.get("session_before_compact")![0]!({}, ctx)).toEqual({ cancel: true });
+    expect(abort).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalled();
+    expect(
+      handlers.get("session_before_compact")![0]!(
+        {
+          type: "session_before_compact",
+          preparation,
+          branchEntries: ctx.sessionManager.getBranch(),
+          reason: "manual",
+          willRetry: false,
+          signal: new AbortController().signal,
+        },
+        ctx,
+      ),
+    ).toEqual({ cancel: true });
   });
   it("restores all dialogue with one canonical snapshot and genuine tail updates, without mutation", () => {
     const manager = history();
@@ -116,8 +131,8 @@ describe("owned checkpoint reconstruction", () => {
     expect(() => repairOpenAIContext(manager.getBranch(), [tail, ...native])).toThrow();
   });
 
-  it("reads old v1 retention, keeps parent anchors and stops at preceding ordinary Pi compaction", () => {
-    const manager = SessionManager.inMemory("/virtual/legacy");
+  it("keeps parent anchors and stops at the preceding ordinary Pi compaction", () => {
+    const manager = SessionManager.inMemory("/virtual/ordinary-boundary");
     appendUser(manager, "already summarized secret");
     const retained = appendUser(manager, "ordinary retained dialogue");
     manager.appendCompaction("ordinary prior summary", retained, 100, {
@@ -125,14 +140,13 @@ describe("owned checkpoint reconstruction", () => {
       modifiedFiles: [],
     });
     appendCheckpoint(manager, retained);
-    const oldCheckpoint = manager.getLeafId()!;
-    appendUser(manager, "legacy tail");
-    appendCheckpoint(manager, oldCheckpoint);
+    appendUser(manager, "checkpoint tail");
+    appendCheckpoint(manager);
     const restored = reconstructOpenAIContext(manager.getBranch())!;
     expect(serializedSnapshot(restored.messages)).not.toContain("already summarized secret");
     expect(serializedSnapshot(restored.messages)).toContain("ordinary prior summary");
     expect(serializedSnapshot(restored.messages)).toContain("ordinary retained dialogue");
-    expect(serializedSnapshot(restored.messages)).toContain("legacy tail");
+    expect(serializedSnapshot(restored.messages)).toContain("checkpoint tail");
     expect(serializedSnapshot(restored.messages)).not.toContain(OPENAI_COMPACTION_SUMMARY);
     appendUser(manager, "native retained");
     const fallback = prepareOpenAIFallback(manager.getBranch(), preparation)!;
@@ -158,7 +172,7 @@ describe("owned checkpoint reconstruction", () => {
   });
 
   for (const omitSnapshots of [false, true])
-    it(`rebuilds authoritative prompt and tools for old v1 snapshots, absent=${omitSnapshots}`, () => {
+    it(`rebuilds authoritative prompt and tools over stale checkpoint snapshots, absent=${omitSnapshots}`, () => {
       const manager = SessionManager.inMemory("/virtual/old-snapshots");
       const obsoleteSystem = {
         role: "system" as const,
@@ -183,13 +197,13 @@ describe("owned checkpoint reconstruction", () => {
       appendUser(manager, "third dialogue");
       appendCheckpoint(manager, first);
       appendUser(manager, "otherwise safe fallback tail");
-      // Modern Pi no longer replays retained older snapshots. Its fresh checkpoints
-      // are safe; legacy fixtures must explicitly carry their obsolete authority.
       expect(prepareOpenAIFallback(manager.getBranch(), preparation)).toBeDefined();
       const branch = manager.getBranch().map((entry) => {
         if (entry.type !== "compaction") return entry;
-        const { systemMessage: _ignored, ...legacy } = entry;
-        return omitSnapshots ? legacy : { ...legacy, systemMessage: obsoleteSystem };
+        const { systemMessage: _ignored, ...withoutSnapshot } = entry;
+        return omitSnapshots
+          ? withoutSnapshot
+          : { ...withoutSnapshot, systemMessage: obsoleteSystem };
       });
       const repaired = repairOpenAIContext(branch, buildSessionContext(branch).messages)!.messages!;
       const prompt = getCurrentSystemPrompt(repaired);
@@ -199,7 +213,6 @@ describe("owned checkpoint reconstruction", () => {
       expect(getCurrentTools(repaired).map((tool) => tool.name)).toEqual(["current"]);
       expect(serializedSnapshot(repaired)).toContain("first dialogue");
       expect(serializedSnapshot(repaired)).toContain("second dialogue");
-      // Pi would persist its unfiltered, obsolete system state on ordinary fallback.
       expect(prepareOpenAIFallback(branch, preparation)).toBeUndefined();
     });
 

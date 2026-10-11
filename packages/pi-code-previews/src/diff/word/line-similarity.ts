@@ -6,14 +6,11 @@ import { requiredAt } from "./types";
 
 type SimilarityTokenWeight = (token: string) => number;
 
-/** One changed line's similarity features and their total IDF weight within its block. */
 type SimilarityLine = { readonly features: string[]; readonly weight: number };
 
-/** The similarity model of one changed block, shared by dense and sparse line matching. */
 export type ChangedLineSimilarity = {
   readonly removed: SimilarityLine[];
   readonly added: SimilarityLine[];
-  /** How many lines of the block contain each feature. */
   readonly documentCounts: ReadonlyMap<string, number>;
   readonly tokenWeight: SimilarityTokenWeight;
 };
@@ -71,7 +68,6 @@ export function hasUniqueSharedSimilarityFeature(
   );
 }
 
-/** Order-insensitive overlap, the cheaper score sparse matching uses for large blocks. */
 export function bagLineSimilarity(
   similarity: ChangedLineSimilarity,
   removedPosition: number,
@@ -99,8 +95,6 @@ export function lineSimilarity(
   if (before.features.length === 0 || after.features.length === 0)
     return before.features.length === after.features.length ? 1 : 0;
   const bagSimilarity = bagLineSimilarity(similarity, removedPosition, addedPosition);
-  // Ordered overlap cannot exceed multiset overlap. Avoid its dynamic program when
-  // the upper bound is already below the caller's minimum useful score.
   if (bagSimilarity < minimumRelevantSimilarity) return bagSimilarity;
   const orderedSimilarity = orderedTokenSimilarity(before, after, similarity.tokenWeight);
   if (orderedSimilarity === undefined) return bagSimilarity;
@@ -169,7 +163,6 @@ function similarityTokenListWeight(tokens: string[], weight: SimilarityTokenWeig
   return tokens.reduce((total, token) => total + weight(token), 0);
 }
 
-/** Weight before rarity scaling; feature bigrams count slightly more than single tokens. */
 function baseSimilarityWeight(token: string): number {
   if (token.startsWith(SIMILARITY_BIGRAM_PREFIX)) return 1.15;
   return wordEmphasisTokenWeight(token);

@@ -33,25 +33,15 @@ export type SubagentNotification =
       readonly requestId: string;
       readonly message: string;
       readonly generation: number;
-      /** A workflow agent's question; the workflow keeps waiting until the reply arrives. */
       readonly workflow?: SubagentWorkflowMembership | undefined;
     };
 
-/**
- * One finished workflow run; `content` carries its result or failure for the main agent. A run
- * the user stopped, or one an earlier activation left running at teardown (`interrupted`),
- * informs the next turn instead of starting one.
- */
 export interface SubagentWorkflowNotification {
   readonly type: "workflow";
   readonly runId: string;
   readonly name: string;
   readonly outcome: "completed" | "failed" | "stopped" | "interrupted";
   readonly durationMs: number;
-  /**
-   * Tokens the run's live agents used, and their cost when every one reported it; reused results
-   * cost nothing. Unknown for an interrupted run.
-   */
   readonly usage?: { readonly totalTokens: number; readonly cost?: number | undefined } | undefined;
   readonly content: string;
   readonly agents: {
@@ -61,7 +51,6 @@ export interface SubagentWorkflowNotification {
     readonly skipped: number;
     readonly reused: number;
   };
-  /** Worktree proposals the main agent reviews with subagent_workspace. */
   readonly workspaces: ReadonlyArray<string>;
 }
 
@@ -76,11 +65,6 @@ export type SubagentNotifier = (
 
 const MAX_NOTIFICATION_CHARS = 32 * 1024;
 
-/**
- * The secret redaction and control-character cleanup every notification's content gets before
- * the host clips it. Producers that budget their content apply it first, so redaction can't push
- * budgeted text past the clip; applying it again changes nothing.
- */
 export const sanitizeNotificationContent = (
   value: string,
   maximumLength = Number.POSITIVE_INFINITY,
@@ -94,7 +78,6 @@ interface CompletionChunk {
   readonly runs: ReadonlyArray<SubagentCompletionNotification>;
 }
 
-// Worker errors often carry their own class prefix; a second "Error:" label adds nothing.
 const ERROR_LABELLED = /^(?:[A-Z][A-Za-z]*)?Error\b/u;
 
 const failureText = (error: string | undefined): string => {
@@ -175,7 +158,6 @@ const completionChunks = (
     sections = [];
   };
 
-  /** What the current chunk can still hold after its header, sections and one more separator. */
   const room = () =>
     MAX_NOTIFICATION_CHARS -
     headerFor(chunks.length).length -
@@ -203,23 +185,12 @@ const questionContent = (
   return `Workflow ${label} agent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with ${reply}; the workflow continues automatically after the reply.`;
 };
 
-/** A display name for compact rows, bounded like the transcript's other one-line labels. */
 const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
-/**
- * Whether a workflow notification joins the agent run under way or starts one. A run the user
- * stopped, or one torn down before it finished, informs the next turn instead of prompting work.
- */
 export const workflowNotificationWakesAgent = (
   notification: SubagentWorkflowNotification,
 ): boolean => notification.outcome === "completed" || notification.outcome === "failed";
 
-/**
- * Steers a displayed message into the parent session: it joins an active run or wakes an idle
- * parent when `triggerTurn` holds. Host acceptance is synchronous; model consumption may occur
- * later. A replaced or closing session can throw before or after accepting, so false leaves the
- * notification for its service to retry.
- */
 const steer = (
   pi: ExtensionAPI,
   message: Omit<Parameters<ExtensionAPI["sendMessage"]>[0], "display">,
@@ -280,8 +251,6 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
             ...(chunk.runs.length === 1 && { name: displayName(chunk.runs[0]!.name) }),
           },
         });
-        // A throw may follow host acceptance. Leave this chunk and later chunks unacknowledged
-        // so the service owns the uncertain retry.
         if (!accepted) break;
         for (const run of chunk.runs) deliveredCompletionKeys.push(`${run.id}:${run.generation}`);
       }

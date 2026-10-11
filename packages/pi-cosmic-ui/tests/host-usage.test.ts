@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture, modelFixture } from "pi-cosmic-core/testing";
 import {
   materializeContextUsage,
   materializeModel,
 } from "../src/boundary/host-footer-projection.ts";
-import { addAssistantUsage, decodeAssistantUsage } from "../src/boundary/host-usage.ts";
+import {
+  addAssistantUsage,
+  decodeAssistantUsage,
+  decodeCompletedAssistantOutput,
+} from "../src/boundary/host-usage.ts";
 
 describe("host numeric decoding", () => {
   it("rejects aggregate overflow without mutating complete totals", () => {
@@ -29,14 +33,22 @@ describe("host numeric decoding", () => {
     expect(totals.input).toBe(Number.MAX_VALUE);
   });
 
+  it("rejects completed outputs that are missing or not counts", () => {
+    const completed = { role: "assistant", stopReason: "stop" };
+    expect(decodeCompletedAssistantOutput({ ...completed, usage: { output: 120 } })).toBe(120);
+    for (const output of [undefined, "100"])
+      expect(decodeCompletedAssistantOutput({ ...completed, usage: { output } })).toBeUndefined();
+    expect(decodeCompletedAssistantOutput(completed)).toBeUndefined();
+  });
+
   it("rejects non-negative-finite context and model counts before rendering", () => {
     const invalidModel = extensionContextFixture({
-      model: {
+      model: modelFixture({
         id: "model",
         provider: "provider",
         reasoning: false,
         contextWindow: Number.POSITIVE_INFINITY,
-      },
+      }),
     });
     expect(materializeModel(invalidModel)).toBeUndefined();
 

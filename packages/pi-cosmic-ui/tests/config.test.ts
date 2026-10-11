@@ -125,7 +125,6 @@ describe("Cosmic UI config", () => {
           footer: { density: "comfortable", enabled: false },
         });
 
-        // The untrusted project document is never stat'd, read, or written.
         expect(memory.operations.length).toBeGreaterThan(0);
         expect(memory.operations.filter((operation) => operation.includes(paths.project))).toEqual(
           [],

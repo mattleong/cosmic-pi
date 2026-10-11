@@ -1,8 +1,8 @@
-// Test/benchmark boundary intentionally reports native timing.
 import { performance } from "node:perf_hooks";
 import { Text } from "@earendil-works/pi-tui";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Predicate from "effect/Predicate";
 import { synchronousNow as previewNow } from "pi-cosmic-core";
 import { createSimpleDiff } from "../src/diff/structured";
@@ -14,6 +14,7 @@ import {
   type CodePreviewSessionCapability,
 } from "../src/application/capability";
 import { previewScheduleEffect } from "../src/application/scheduler";
+import { codePreviewApplicationLayer } from "../src/layer";
 import { resolvePreviewLanguage } from "../src/syntax/language";
 import {
   benchLog,
@@ -71,7 +72,6 @@ const measureDiff = () => timeOnce(() => createSimpleDiff(before, after));
 for (let warmup = 0; warmup < 3; warmup++) measureDiff();
 const cpuSamplesMs = Array.from({ length: 9 }, measureDiff);
 const cpuBlockMs = sampleMedian(cpuSamplesMs);
-// Checked baseline from the documented five-run pre-gate sample on this repository/hardware.
 const committedBaselineMedianMs = 6.329;
 const regressionLimitMs = committedBaselineMedianMs * 1.1;
 if (cpuBlockMs > regressionLimitMs)
@@ -81,18 +81,18 @@ if (cpuBlockMs > regressionLimitMs)
 if (cpuBlockMs > 50)
   throw new Error(`Representative deferred diff blocked for ${cpuBlockMs.toFixed(3)}ms`);
 
-// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-const capability = {
-  run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
-  defer: (task: () => void) => {
+const runtime = ManagedRuntime.make(codePreviewApplicationLayer);
+const capability: CodePreviewSessionCapability = {
+  run: (effect, signal) => runtime.runPromise(effect, signal ? { signal } : undefined),
+  defer: (task) => {
     const fiber = Effect.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
     return () => fiber.interruptUnsafe();
   },
-  schedule: (interval: number, task: () => void) => {
+  schedule: (interval, task) => {
     const fiber = Effect.runFork(previewScheduleEffect(interval, task));
     return () => fiber.interruptUnsafe();
   },
-} as CodePreviewSessionCapability;
+};
 installCodePreviewSessionCapability(capability);
 const cancellationSamplesMs: number[] = [];
 let computed = false;
@@ -108,7 +108,6 @@ const sampleCancellation = Effect.gen(function* () {
     () => undefined,
   );
   preview.cancel();
-  // Samples are intentionally sequential so each latency observes one event-loop turn.
   yield* Effect.sleep(Duration.zero);
   cancellationSamplesMs.push(performance.now() - cancellationStart);
 });
@@ -117,6 +116,7 @@ await Effect.runPromise(
 );
 const cancellationLatencyMs = sampleMedian(cancellationSamplesMs);
 clearCodePreviewSessionCapability();
+await runtime.dispose();
 if (computed) throw new Error("Cancelled deferred preview still computed.");
 if (cancellationLatencyMs > 100)
   throw new Error(`Deferred cancellation latency exceeded 100ms: ${cancellationLatencyMs}`);

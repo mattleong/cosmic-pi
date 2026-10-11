@@ -45,7 +45,6 @@ test.each([
   const added = rows("+");
   assert.ok(removed.length > 0);
   assert.equal(added.length, removed.length);
-  // No changed pair may look identical.
   for (const [index, text] of removed.entries()) assert.notEqual(added[index], text);
 });
 

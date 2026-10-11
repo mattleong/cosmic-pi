@@ -24,11 +24,9 @@ export const isRunInSubtree = (
   return false;
 };
 
-/** Deepest runs first, so a shutdown closes every descendant before its ancestor. */
 export const leafFirst = (records: Iterable<RunRecord>): ReadonlyArray<RunRecord> =>
   [...records].sort((left, right) => runDepth(right.view) - runDepth(left.view));
 
-/** Leaf-first descendant ids of `rootRunId`, excluding the root itself. */
 export const descendantRunIds = (
   records: ReadonlyMap<string, RunRecord>,
   rootRunId: string,
@@ -57,7 +55,6 @@ export const projectRunTree = (
       currentParent = parentIdOf(parent.view);
     }
   }
-  // Each row shares its view's memoized frozen snapshot and freezes only its own envelope.
   return [...records.values()].map(
     (record): SubagentRunView =>
       Object.freeze({

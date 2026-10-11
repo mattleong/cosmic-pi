@@ -1,4 +1,3 @@
-// Pi command handlers are Promise-shaped host boundaries.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
@@ -20,7 +19,6 @@ import { WorkflowStore } from "../workflow/store.ts";
 import type { UltracodeController } from "./ultracode.ts";
 import { isUltracodeWindowOpen } from "./ultracode-window.ts";
 
-/** The facts about the session's current activation that commands act on. */
 export interface CommandActivation {
   readonly ctx: ExtensionContext;
   readonly cwd: string;
@@ -35,15 +33,10 @@ export interface ApplicationCommandHost {
     effect: Effect.Effect<A, E, SubagentApplication>,
     signal?: AbortSignal,
   ) => Promise<A>;
-  /** The activation the runtime serves now, or undefined while none is active. */
   readonly current: () => CommandActivation | undefined;
   readonly isActive: () => boolean;
 }
 
-/**
- * Registers `/subagents` and `/ultracode` over the session's runtime. An action that outlives the
- * activation it started in fails instead of reporting into the session that replaced it.
- */
 export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationCommandHost): void {
   const { bridge, ultracode, run, current, isActive } = host;
   const withCurrentActivation = <A>(
@@ -60,7 +53,6 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
 
   const runCurrent = <A, E>(effect: Effect.Effect<A, E, SubagentApplication>): Promise<A> =>
     withCurrentActivation(() => run(effect));
-  /** Runs a run-registry action whose result the caller doesn't read. */
   const runAction = <E>(
     act: (service: SubagentServiceContract) => Effect.Effect<unknown, E>,
   ): Promise<void> => run(SubagentService.use(act).pipe(Effect.asVoid));
@@ -80,7 +72,6 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
         ),
       );
 
-  /** Applies a session switch, then tells the ultracode controller the session's new value. */
   const applySessionFeature = (
     patchFor: (snapshot: SessionProfileSnapshot) => SessionFeaturePatch,
   ): Promise<void> =>
@@ -127,8 +118,6 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
         SubagentService.use((service) =>
           service.send(id, message).pipe(
             Effect.as<FleetMessageDelivery>("delivered"),
-            // Backend-owned pending guidance is neither delivered nor failed; only that exact
-            // typed disposition resolves. Generic uncertainty and failures still reject.
             Effect.catchIf(isPendingDeliveryError, () =>
               Effect.succeed<FleetMessageDelivery>("pending"),
             ),

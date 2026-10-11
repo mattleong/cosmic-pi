@@ -13,7 +13,6 @@ import {
   taskWait,
 } from "./support/task-service-double.ts";
 
-/** The shared executor over a service double; unsupplied service calls are defects. */
 const execute = (
   input: Parameters<typeof executeBackgroundTaskCommand>[0],
   service: Partial<BackgroundTaskServiceContract>,
@@ -59,7 +58,6 @@ describe("shared background task command", () => {
       const result = yield* execute(input, {
         wait: () => Effect.succeed(taskWait(snapshot, "timeout")),
       });
-      // The applied wait sits beside the shared wait member, never inside it.
       expect(result.details).toMatchObject({ action: "wait", appliedWaitSeconds: 30 });
       expect("wait" in result.details && result.details.wait).not.toHaveProperty(
         "appliedWaitSeconds",
@@ -78,7 +76,6 @@ describe("shared background task command", () => {
   it.effect("keeps the newest log lines when the text is cut and persists only what it holds", () =>
     Effect.gen(function* () {
       const logs = { id: "bg-1", nextCursor: 2, earliestAvailableCursor: 1, droppedBytes: 0 };
-      // A byte-bound cut, and a line-bound cut where the metadata line tips the text over.
       for (const [count, maxTextBytes] of [
         [20, 96],
         [DEFAULT_MAX_LINES + 100, DEFAULT_MAX_BYTES],
@@ -97,7 +94,6 @@ describe("shared background task command", () => {
         expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(maxTextBytes);
         expect(kept.length).toBeGreaterThan(0);
         expect(kept).toEqual(lines.slice(-kept.length));
-        // Details carry log metadata and truncation fields, never the log text itself.
         expect(result.details).toEqual({
           action: "logs",
           logs: { ...logs, state: "running" },
@@ -133,7 +129,6 @@ describe("shared background task command", () => {
       for (const input of [{ action: "status", id: "bg-2" }, { action: "list" }] as const) {
         const result = yield* execute(input, service);
         expect(result.text).toContain("cause: FAIL tests/auth.test.ts > adds");
-        // Details keep metadata only: the snapshot and where the cause sits in the text.
         const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
           result.details,
         );
@@ -159,7 +154,6 @@ describe("shared background task command", () => {
           "code 1: FAIL tests/auth.test.ts > adds",
         );
       }
-      // Text truncated before the cause drops its span; the row keeps the bare exit status.
       const cut = yield* execute({ action: "status", id: "bg-2" }, service, 30);
       expect("causes" in cut.details && cut.details.causes).toBeFalsy();
       expect(

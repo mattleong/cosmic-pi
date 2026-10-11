@@ -1,7 +1,11 @@
-// Promise assertions are test-runner boundaries.
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import {
+  initTheme,
+  type AgentToolResult,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { beforeAll, describe, expect, vi } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import {
@@ -28,7 +32,7 @@ import {
   decodeSubagentProxyResult,
   encodeSubagentProxyPayload,
 } from "../../src/tools/proxy-protocol.ts";
-import type { SubagentStartDetails } from "../../src/tools/details-schema.ts";
+import { SubagentStartDetailsSchema } from "../../src/tools/details-schema.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   type CaptureOptions,
@@ -43,8 +47,7 @@ import {
   testBackendRegistry,
   view,
 } from "./fixtures/tool-harness.ts";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
-import { extensionApiFixture } from "../fixtures/pi-host.ts";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 
 const route = (overrides: Partial<DeclaredProfileCandidate> = {}): DeclaredProfileCandidate => ({
   host: "local",
@@ -56,10 +59,11 @@ const route = (overrides: Partial<DeclaredProfileCandidate> = {}): DeclaredProfi
   ...overrides,
 });
 
+const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
+
 const startTool = (requests: StartSubagentRequest[], options?: CaptureOptions) =>
   captureSubagentTools(startCapturingService(requests), options).get("subagent_start");
 
-/** Resolves every selection to its own runtime and fails preflight when `reject` names a failure. */
 const preflightRegistry = (
   reject: (selection: BackendSelection) => InvalidSubagentRequestError | undefined,
 ): SubagentBackendRegistryContract => {
@@ -323,7 +327,6 @@ describe("subagent tool", () => {
         expect(request.context).toBe(request.profile === "oracle" ? "fork" : "fresh");
         expect(request.effort).toBe(expectedEffort[request.profile ?? "generalist"]);
         expect(request.writeIntent).toBe(expectedIntent[request.profile ?? "generalist"]);
-        // Built-in profile effort defaults are soft preferences, never hard requirements.
         expect(request.effortWasExplicit).toBe(false);
         expect(request.profileGuidance?.length).toBeGreaterThan(20);
         expect(request.selection).toMatchObject({
@@ -468,8 +471,12 @@ describe("subagent tool", () => {
     const profiles = profileServiceFor({
       profiles: {
         reviewer: {
-          ...route({ runtime: "codex", model: "gpt-5.4", effort: "high" }),
           host: "herdr",
+          runtime: "codex",
+          model: "gpt-5.4",
+          effort: "high",
+          context: "fresh",
+          writeIntent: "read-only",
         },
       },
     });
@@ -515,7 +522,7 @@ describe("subagent tool", () => {
   );
 
   effectTest(
-    "clamps unknown host thinking levels to high instead of forwarding them to children",
+    "forwards host thinking levels to children and rejects unknown effort names",
     function* () {
       expect(decodeSubagentEffort("xhigh")).toBe("xhigh");
       expect(decodeSubagentEffort(" MAX ")).toBe("max");
@@ -523,7 +530,7 @@ describe("subagent tool", () => {
       expect(decodeSubagentEffort(42)).toBeUndefined();
       expect(decodeSubagentEffort(undefined)).toBeUndefined();
 
-      const startWithLevel = (thinkingLevel: string | number) =>
+      const startWithLevel = (thinkingLevel: ReturnType<ExtensionAPI["getThinkingLevel"]>) =>
         Effect.gen(function* () {
           const requests: StartSubagentRequest[] = [];
           yield* invokeOptionalTool(
@@ -535,10 +542,7 @@ describe("subagent tool", () => {
         });
 
       expect(yield* startWithLevel("low")).toEqual(["low"]);
-      // Future or malformed host levels clamp to the shared "high" inheritance default.
-      expect(yield* startWithLevel("ultra")).toEqual(["high"]);
-      expect(yield* startWithLevel(42)).toEqual(["high"]);
-      expect(yield* startWithLevel(" MEDIUM ")).toEqual(["medium"]);
+      expect(yield* startWithLevel("xhigh")).toEqual(["xhigh"]);
     },
   );
 
@@ -622,8 +626,7 @@ describe("subagent tool", () => {
       model: "openai-codex/gpt-5.6-sol",
       effort: "high",
     });
-    // SAFETY: The public start tool persists SubagentStartDetails on this path.
-    const details = result?.details as SubagentStartDetails | undefined;
+    const details = decodeStartDetails(result?.details);
     expect(details?.startEntries).toHaveLength(32);
     expect(details?.startEntries?.map((entry) => entry.index)).toEqual(
       Array.from({ length: 32 }, (_, index) => index),
@@ -765,23 +768,20 @@ describe("subagent tool", () => {
       { backend: "claude-cli" },
       { routeContinuation: {} },
       { supersedes: {} },
-    ])
+    ]) {
+      const spec = { task: "Probe", ...forged };
       yield* step(() =>
-        expect(
-          // SAFETY: These hostile shapes prove forged routing fields and internal continuation capabilities cannot enter public start.
-          reject({ task: "Probe", ...forged } as SubagentProfileStartSpec),
-        ).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
+        expect(reject(spec)).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
       );
+    }
   });
 
   effectTest("publishes request-ordered partial receipts for out-of-order launches", function* () {
     const slowLaunch = Deferred.makeUnsafe<void>();
     const updates: Array<{ readonly text: string; readonly details: unknown }> = [];
-    const recordUpdate = (update: { content?: unknown; details?: unknown }) => {
-      // SAFETY: The tool's update contract is a content array of text blocks plus a details payload.
-      const text =
-        (update.content as ReadonlyArray<{ readonly text?: string }> | undefined)?.[0]?.text ?? "";
-      updates.push({ text, details: update.details });
+    const recordUpdate = <Details>(update: AgentToolResult<Details>) => {
+      const first = update.content[0];
+      updates.push({ text: first?.type === "text" ? first.text : "", details: update.details });
     };
     const service = subagentServiceDouble({
       startSessionOwned: (input: StartSubagentRequest) =>
@@ -806,17 +806,13 @@ describe("subagent tool", () => {
     Deferred.doneUnsafe(slowLaunch, Effect.void);
     const result = yield* step(() => execution);
 
-    // The first partial receipt names the two unresolved launches in request order.
     const partial = updates[0]!;
     expect(partial.text).toContain("Processed 1 of 3 launches");
     expect(partial.text).toContain("0 started");
     expect(partial.text).toContain("1 failed");
     expect(partial.text).toContain("2 pending (#1 launch-1, #3 launch-3)");
 
-    // Every published receipt stays request-ordered, and pending entries stay resolving.
-    const receipt = (update: (typeof updates)[number]) =>
-      // SAFETY: The tool constructs these persisted details on this public path.
-      update.details as SubagentStartDetails;
+    const receipt = (update: (typeof updates)[number]) => decodeStartDetails(update.details);
     for (const update of updates)
       expect(receipt(update).startEntries.map((entry) => entry.index)).toEqual([0, 1, 2]);
     const partialReceipt = receipt(partial);

@@ -56,7 +56,6 @@ export type RunProcessControls = ReturnType<typeof makeRunProcessControls>;
 export interface RunProcessInitializerDependencies extends RunContext {
   readonly initialize: RunProcessControls["initialize"];
   readonly handleBackendEvent: RunEventHandler;
-  /** Must durably confirm writer spawn-started evidence before a driver spawn is invoked. */
   readonly prepareBackendSpawn: WriterPreparation;
   readonly markCleanupPending: RunRecordCleanup["markCleanupPending"];
   readonly closeExitedScope: RunRecordCleanup["closeExitedScope"];
@@ -82,8 +81,6 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
       yield* prepareBackendSpawn(record);
       const spawnSettled = yield* Deferred.make<void>();
       let spawnClaimed = false;
-      // Install settlement before admission so permit waiting and driver work stay
-      // interruptible without leaving cleanup waiting on an abandoned spawn claim.
       const process = yield* Effect.gen(function* () {
         yield* withLock(
           Effect.sync(() => {

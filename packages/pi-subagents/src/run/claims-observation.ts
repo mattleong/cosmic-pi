@@ -1,4 +1,3 @@
-import { hasObjectRuntimeType, type JsonObject } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import { normalizeWriteClaim } from "../domain/write-claims.ts";
 
@@ -10,22 +9,15 @@ const FILE_WRITE_TOOL_NAMES = new Set(["edit", "write", "notebookedit", "applypa
 const PATH_KEYS = ["path", "file_path", "filePath"] as const;
 const MOVE_PATH_KEYS = ["move_path", "movePath"] as const;
 
-export const asObject = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
-  if (value === null || !hasObjectRuntimeType(value) || Array.isArray(value)) return undefined;
-  // SAFETY: Runtime guards established a non-null, non-array object before this shallow view.
-  return value as ValueInput & Readonly<JsonObject>;
-};
+export const asObject = <ValueInput>(value: ValueInput) =>
+  Predicate.isObject(value) ? value : undefined;
 
-export const stringField = (
-  value: Readonly<JsonObject> | undefined,
-  key: string,
-): string | undefined => {
-  const field = value?.[key];
+export const stringField = <Container>(value: Container, key: string): string | undefined => {
+  const field = Predicate.isObject(value) ? value[key] : undefined;
   return Predicate.isString(field) && field.trim() ? field.trim() : undefined;
 };
 
-/** The named fields of `keys` that hold paths, in key order. */
-const pathFields = (value: Readonly<JsonObject> | undefined, keys: ReadonlyArray<string>) =>
+const pathFields = <Container>(value: Container, keys: ReadonlyArray<string>) =>
   keys.flatMap((key) => stringField(value, key) ?? []);
 
 const collectKnownPaths = <ArgsInput>(args: ArgsInput): ReadonlyArray<string> => {
@@ -49,7 +41,6 @@ const collectKnownPaths = <ArgsInput>(args: ArgsInput): ReadonlyArray<string> =>
   ];
 };
 
-/** Returns the paths a native file-write tool names, or undefined for other tools. */
 export const observeFileWrite = <ArgsInput>(
   toolName: string,
   args: ArgsInput,
@@ -72,7 +63,6 @@ export const bashCommandMayMutate = <ArgsInput>(toolName: string, args: ArgsInpu
   return command !== undefined && bashMutationPatterns.some((pattern) => pattern.test(command));
 };
 
-/** Writers are unsupported on Windows, so canonical writer cwd paths are POSIX here. */
 export const workspaceRelativeObservedPath = (
   canonicalCwd: string,
   observedPath: string,

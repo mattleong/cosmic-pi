@@ -1,3 +1,4 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -16,7 +17,7 @@ type Options = SettingsCommandOptions<DemoConfig>;
 
 const harness = (
   overrides: Partial<Options> = {},
-  context: { readonly mode?: string; readonly signal?: AbortSignal } = {},
+  context: { readonly mode?: ExtensionContext["mode"]; readonly signal?: AbortSignal } = {},
 ) => {
   const notify = vi.fn();
   const apply = vi.fn<Options["apply"]>(() => Promise.resolve(Result.succeed(undefined)));
@@ -40,13 +41,14 @@ const harness = (
     status: () => "demo diagnostics",
     apply,
     open,
+    isCurrent: () => true,
     ...overrides,
   });
   const ctx = extensionContextFixture({
     mode: context.mode ?? "tui",
     hasUI: true,
     signal: context.signal,
-    ui: { notify, custom: () => Promise.resolve(undefined) },
+    ui: { notify, custom: () => Promise.reject(new Error("Custom UI is closed.")) },
   });
   const invoke = (args: string) =>
     Effect.promise(() => Promise.resolve(command.handler(args, ctx)));
@@ -177,7 +179,6 @@ describe("provider settings command shell", () => {
       yield* aborted.invoke("mode on");
       expect(aborted.notify).not.toHaveBeenCalled();
 
-      // A required signal stays the opening one; an optional one is reread for each picker apply.
       const opening = AbortSignal.abort("opening");
       const later = AbortSignal.abort("later");
       for (const policy of ["required", "optional"] as const) {
@@ -239,7 +240,6 @@ describe("provider settings command shell", () => {
         config: () => ({ mode: "off" }),
       });
       h.open.mockImplementationOnce((_ctx, session) => {
-        // Trust is withdrawn while the picker is open.
         trusted = false;
         return session
           .apply("mode", "on", (value) => void shown.push(value), "project")

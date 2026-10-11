@@ -23,7 +23,6 @@ describe("background-task footer policy", () => {
   it("clears when no active tasks remain, even with retained failures", () => {
     expect(footerStatus({ tasks: [] })).toBeUndefined();
     expect(footerStatus({ tasks: settledTasks })).toBeUndefined();
-    // Hiding terminal tasks in the footer must not discard the manager's failure counts.
     expect(countTaskStates(settledTasks)).toEqual({ active: 0, failed: 2 });
   });
 

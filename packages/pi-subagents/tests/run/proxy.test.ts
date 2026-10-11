@@ -1,8 +1,8 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { BackendProxyResult } from "../../src/backend/model.ts";
 import type { LocalPiParentControl } from "../../src/backend/local-pi-protocol.ts";
@@ -44,11 +44,13 @@ const responseFor = (control: FakeChildControl, requestId: string): ProxyRespons
       message.type === "proxy_response" && message.requestId === requestId,
   );
 
-const payloadCode = (response: ProxyResponse): string =>
-  // SAFETY: Proxy payloads are service-encoded `{ code, message }` JSON bounded by the encoder.
-  (JSON.parse(response.payloadJson) as { code?: string }).code ?? "";
+const decodePayloadCode = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ code: Schema.optionalKey(Schema.String) })),
+);
 
-/** A service whose proxy handler records each started request, then answers through `respond`. */
+const payloadCode = (response: ProxyResponse): string =>
+  decodePayloadCode(response.payloadJson).code ?? "";
+
 const proxyLayer = (
   fake: ReturnType<typeof fakeChildLayer>,
   started: string[],
@@ -86,14 +88,11 @@ describe("SubagentService parent proxy executions", () => {
         offerProxyRequest(control, "req-2");
         yield* yieldUntil(() => started.includes("req-2"));
         offerProxyCancel(control, "req-1");
-        // A distinct identity must be served while the cancelled execution is still finalizing.
         offerProxyRequest(control, "req-3");
         yield* yieldUntil(() => started.includes("req-3"));
         yield* yieldUntil(() => responseFor(control, "req-3") !== undefined);
         expect(responseFor(control, "req-1")).toBeUndefined();
         expect(responseFor(control, "req-2")).toMatchObject({ ok: true });
-        // Release the cancelled execution's finalizer before the scope closes; the FiberMap
-        // finalizer waits for managed fibers to finish interrupting.
         yield* Deferred.succeed(slowCleanup, undefined);
       });
     }),

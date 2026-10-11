@@ -73,7 +73,6 @@ export interface ProfileWorkspaceRenderOptions {
 }
 const selectedProfile = (state: ProfileWorkspaceRenderState): ProfileId =>
   PROFILE_IDS[state.profileIndex] ?? PROFILE_IDS[0];
-/** The selected profile's rows; Undo is available only for its own edits this visit. */
 const editorRows = (state: ProfileWorkspaceRenderState, profile: ProfileId) =>
   profileWorkspaceRows(
     state.draft,
@@ -92,7 +91,6 @@ const destination = (target: ProfileWorkspaceTarget): string =>
     ? "Changes affect later launches. Active runs are unchanged."
     : `Saving to ${qualifiedProfileSetLabel(target.set)} · session not affected`;
 
-/** Reserve metadata first: long configured model selectors must never hide reasoning. */
 export const workspaceCandidateSummary = (
   candidate: ProfileCandidate,
   profile: ProfileId,

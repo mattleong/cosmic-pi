@@ -20,10 +20,8 @@ import type { ActivityRow } from "./model.ts";
 import { activityElapsed, activityType } from "./row-line.ts";
 import { phaseLabels } from "./workflow-row.ts";
 
-/** Optional fields only appear with a value. */
 const optionalField = (label: string, values: readonly string[]): ListDetailField[] =>
   values.length ? [{ label, value: values.join(" · ") }] : [];
-/** Work in each state, then the declarations and waits that are not work states. */
 const memberFields = (
   summary: GroupSummary,
   label = "Agents",
@@ -53,7 +51,6 @@ export function groupedDetail(options: GroupedDetailOptions): string {
     return sourceDetail(options, selected.row, selected.context, breadcrumb);
   if (selected.type === "workflow") {
     const phases = selected.row.phases ?? [];
-    // A workflow's summary is its narrator line, such as its latest log line.
     const narrator = selected.row.summary?.trim();
     return sourceDetail(
       options,
@@ -61,7 +58,6 @@ export function groupedDetail(options: GroupedDetailOptions): string {
       selected.context,
       breadcrumb,
       [
-        // The "Phases" label keeps failed phases apart from their agents' failure counts.
         ...optionalField(
           "Phases",
           phases.length
@@ -85,8 +81,6 @@ export function groupedDetail(options: GroupedDetailOptions): string {
       "Select a source to inspect its details and available actions.",
     ].join("\n");
   const span = workflowMemberSpan(selected.members, options.now);
-  // The summary already carries the producer's counts, which include members and planned work
-  // that are no longer, or never, shown.
   return [
     heading,
     breadcrumb,
@@ -148,7 +142,6 @@ function sourceDetail(
 
 const capitalized = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 
-/** The current page of a row's actions under their number keys, then how to turn the page. */
 function actionLines(row: ActivityRow, page: number): string[] {
   const actions = row.retained ? [] : (row.actions ?? []);
   const pages = activityActionPages(actions);

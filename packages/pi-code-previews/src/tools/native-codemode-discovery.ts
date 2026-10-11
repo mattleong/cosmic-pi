@@ -1,9 +1,18 @@
-import { parse, type AnyNode, type CallExpression, type Expression, type Pattern } from "acorn";
+import {
+  parse,
+  type AnyNode,
+  type CallExpression,
+  type Expression,
+  type MemberExpression,
+  type NewExpression,
+  type Pattern,
+} from "acorn";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { isNativeMcpName } from "./native-mcp-identity";
 import { ownData } from "./native-safe-content";
+import { syntaxChildren } from "./native-codemode-syntax";
 
 const MAX_SOURCE_CHARS = 32768;
 const MAX_NODES = 4096;
@@ -11,14 +20,12 @@ const MAX_DEPTH = 128;
 const Source = Schema.String.check(Schema.isMaxLength(MAX_SOURCE_CHARS));
 const helpers = new Set(["searchTools", "describeTool", "describeNamespace"]);
 
-/** Program intent only; never a helper execution receipt, dispatch count, or remote identity. */
-interface NativeDiscoveryIntent {
+export interface NativeDiscoveryIntent {
   readonly kind: "mcp" | "tools";
   readonly discoveryOnly: boolean;
 }
 export type NativeDiscoveryProjector = <Args>(args: Args) => NativeDiscoveryIntent | undefined;
 
-/** Expanded program annotation, including when unknown result metadata declines a summary. */
 export const nativeDiscoveryNote =
   "Discovery labels reflect program source, not executed helper calls";
 
@@ -52,110 +59,33 @@ function mcpSearch(call: CallExpression): boolean {
   return mcpNamespace(namespace);
 }
 
-/** Typed AST children only; comments, regex contents and template raw text are never source sites. */
-function children(node: AnyNode): readonly AnyNode[] {
-  switch (node.type) {
-    case "Program":
-    case "BlockStatement":
-    case "StaticBlock":
-      return node.body;
-    case "ExpressionStatement":
-      return [node.expression];
-    case "ReturnStatement":
-    case "ThrowStatement":
-    case "UnaryExpression":
-    case "UpdateExpression":
-    case "AwaitExpression":
-    case "YieldExpression":
-    case "SpreadElement":
-    case "RestElement":
-      return node.argument ? [node.argument] : [];
-    case "VariableDeclaration":
-      return node.declarations;
-    case "VariableDeclarator":
-      return node.init ? [node.id, node.init] : [node.id];
-    case "BinaryExpression":
-    case "LogicalExpression":
-    case "AssignmentExpression":
-    case "AssignmentPattern":
-      return [node.left, node.right];
-    case "CallExpression":
-    case "NewExpression":
-      return [node.callee, ...node.arguments];
-    case "MemberExpression":
-      return node.computed ? [node.object, node.property] : [node.object];
-    case "SequenceExpression":
-      return node.expressions;
-    case "ArrayExpression":
-    case "ArrayPattern":
-      return node.elements.filter((element) => element !== null);
-    case "ObjectExpression":
-    case "ObjectPattern":
-      return node.properties;
-    case "Property":
-      return node.computed ? [node.key, node.value] : [node.value];
-    case "FunctionDeclaration":
-    case "FunctionExpression":
-    case "ArrowFunctionExpression":
-      return [...(node.id ? [node.id] : []), ...node.params, node.body];
-    case "ClassDeclaration":
-    case "ClassExpression":
-      return [
-        ...(node.id ? [node.id] : []),
-        ...(node.superClass ? [node.superClass] : []),
-        node.body,
-      ];
-    case "ClassBody":
-      return node.body;
-    case "MethodDefinition":
-    case "PropertyDefinition":
-      return [...(node.computed ? [node.key] : []), ...(node.value ? [node.value] : [])];
-    case "ConditionalExpression":
-      return [node.test, node.consequent, node.alternate];
-    case "IfStatement":
-      return [node.test, node.consequent, ...(node.alternate ? [node.alternate] : [])];
-    case "ForStatement":
-      return [
-        ...(node.init ? [node.init] : []),
-        ...(node.test ? [node.test] : []),
-        ...(node.update ? [node.update] : []),
-        node.body,
-      ];
-    case "ForInStatement":
-    case "ForOfStatement":
-      return [node.left, node.right, node.body];
-    case "WhileStatement":
-    case "DoWhileStatement":
-      return [node.test, node.body];
-    case "SwitchStatement":
-      return [node.discriminant, ...node.cases];
-    case "SwitchCase":
-      return [...(node.test ? [node.test] : []), ...node.consequent];
-    case "TryStatement":
-      return [
-        node.block,
-        ...(node.handler ? [node.handler] : []),
-        ...(node.finalizer ? [node.finalizer] : []),
-      ];
-    case "CatchClause":
-      return [...(node.param ? [node.param] : []), node.body];
-    case "LabeledStatement":
-      return [node.body];
-    case "TemplateLiteral":
-      return node.expressions;
-    case "TaggedTemplateExpression":
-      return [node.tag, node.quasi];
-    case "ChainExpression":
-    case "ParenthesizedExpression":
-      return [node.expression];
-    case "ImportExpression":
-      return [node.source, ...(node.options ? [node.options] : [])];
-    default:
-      return [];
-  }
+const plumbingGlobals: ReadonlySet<string> = new Set(["console", "Promise"]);
+
+function isGlobalThis(node: AnyNode): boolean {
+  return node.type === "Identifier" && node.name === "globalThis";
 }
 
-/** Conservative whole-program shadow/mutation veto, not an incomplete lexical scope analysis. */
+function memberName(member: MemberExpression): string | undefined {
+  if (member.computed) return literalText(member.property);
+  return member.property.type === "Identifier" ? member.property.name : undefined;
+}
+
+function globalThisBindings(member: MemberExpression): readonly string[] {
+  const name = memberName(member);
+  if (name) return [name];
+  return member.computed ? [...helpers] : [];
+}
+
+function memberBindings(pattern: MemberExpression): readonly string[] {
+  const object = pattern.object;
+  if (object.type === "Identifier" && plumbingGlobals.has(object.name)) return [object.name];
+  if (object.type === "MemberExpression" && isGlobalThis(object.object)) {
+    const root = memberName(object);
+    if (root !== undefined && plumbingGlobals.has(root)) return [root];
+  }
+  return isGlobalThis(object) ? globalThisBindings(pattern) : [];
+}
+
 function bindings(pattern: Pattern | Expression): readonly string[] {
   switch (pattern.type) {
     case "Identifier":
@@ -170,27 +100,8 @@ function bindings(pattern: Pattern | Expression): readonly string[] {
       return bindings(pattern.left);
     case "RestElement":
       return bindings(pattern.argument);
-    case "MemberExpression": {
-      const object = pattern.object;
-      if (object.type === "Identifier" && ["console", "Promise"].includes(object.name))
-        return [object.name];
-      if (
-        object.type === "MemberExpression" &&
-        object.object.type === "Identifier" &&
-        object.object.name === "globalThis"
-      ) {
-        const root = object.computed
-          ? literalText(object.property)
-          : object.property.type === "Identifier"
-            ? object.property.name
-            : undefined;
-        if (root && ["console", "Promise"].includes(root)) return [root];
-      }
-      if (object.type !== "Identifier" || object.name !== "globalThis") return [];
-      if (!pattern.computed)
-        return pattern.property.type === "Identifier" ? [pattern.property.name] : [];
-      return literalText(pattern.property) ? [literalText(pattern.property)!] : [...helpers];
-    }
+    case "MemberExpression":
+      return memberBindings(pattern);
     default:
       return [];
   }
@@ -215,9 +126,36 @@ function plumbing(call: CallExpression, shadowed: ReadonlySet<string>): boolean 
   );
 }
 
-function classify(source: string): NativeDiscoveryIntent | undefined {
+interface Frame {
+  readonly node: AnyNode;
+  readonly active: boolean;
+  readonly depth: number;
+}
+
+interface Inspection {
+  readonly calls: CallExpression[];
+  readonly shadowed: Set<string>;
+  exclusive: boolean;
+}
+
+const functionTypes: ReadonlySet<string> = new Set([
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+]);
+
+const nonExclusiveTypes: ReadonlySet<string> = new Set([
+  "NewExpression",
+  "TaggedTemplateExpression",
+  "ImportExpression",
+  "SpreadElement",
+  "ClassDeclaration",
+  "ClassExpression",
+]);
+
+function parseProgram(source: string): AnyNode {
   let tokens = 0;
-  const program = parse(source, {
+  return parse(source, {
     ecmaVersion: "latest",
     sourceType: "script",
     allowAwaitOutsideFunction: true,
@@ -227,106 +165,148 @@ function classify(source: string): NativeDiscoveryIntent | undefined {
       if (++tokens > MAX_NODES) throw new Error("Discovery source budget exceeded");
     },
   });
-  const stack: Array<{ node: AnyNode; active: boolean; depth: number }> = [
-    { node: program, active: true, depth: 0 },
-  ];
-  const shadowed = new Set<string>();
-  const shadow = (pattern: Pattern | Expression) =>
-    bindings(pattern).forEach((name) => shadowed.add(name));
-  const calls: CallExpression[] = [];
-  let exclusive = true;
-  let inspected = 0;
-  while (stack.length) {
-    const { node, active, depth } = stack.pop()!;
-    if (++inspected > MAX_NODES || depth > MAX_DEPTH) return undefined;
-    if (node.type === "VariableDeclarator") shadow(node.id);
-    if (
-      node.type === "FunctionDeclaration" ||
-      node.type === "FunctionExpression" ||
-      node.type === "ArrowFunctionExpression"
-    ) {
-      if (node.id) shadowed.add(node.id.name);
-      node.params.forEach((param) => shadow(param));
-    }
-    if ((node.type === "ClassDeclaration" || node.type === "ClassExpression") && node.id)
-      shadowed.add(node.id.name);
-    if (node.type === "CatchClause" && node.param) shadow(node.param);
-    if (
-      node.type === "AssignmentExpression" ||
-      node.type === "UpdateExpression" ||
-      (node.type === "UnaryExpression" && node.operator === "delete")
-    )
-      shadow(node.type === "AssignmentExpression" ? node.left : node.argument);
-    if (
-      (node.type === "ForInStatement" || node.type === "ForOfStatement") &&
-      node.left.type !== "VariableDeclaration"
-    )
-      shadow(node.left);
-    if (active) {
-      if (node.type === "CallExpression") {
-        if (node.callee.type === "Identifier" && ["eval", "Function"].includes(node.callee.name))
-          return undefined;
-        calls.push(node);
-      }
-      if (
-        node.type === "WithStatement" ||
-        (node.type === "NewExpression" &&
-          node.callee.type === "Identifier" &&
-          node.callee.name === "Function")
-      )
-        return undefined;
-      if (node.type === "Property" && (node.computed || node.method || node.kind !== "init"))
-        exclusive = false;
-      if (
-        [
-          "NewExpression",
-          "TaggedTemplateExpression",
-          "ImportExpression",
-          "SpreadElement",
-          "ClassDeclaration",
-          "ClassExpression",
-        ].includes(node.type)
-      )
-        exclusive = false;
-    }
-    const descend =
-      active &&
-      !["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"].includes(node.type);
-    for (const child of children(node))
-      stack.push({
-        node: child,
-        active:
-          descend && !(node.type === "PropertyDefinition" && !node.static && child === node.value),
-        depth: depth + 1,
-      });
+}
+
+function declaredName(node: AnyNode): string | undefined {
+  switch (node.type) {
+    case "FunctionDeclaration":
+    case "FunctionExpression":
+    case "ArrowFunctionExpression":
+    case "ClassDeclaration":
+    case "ClassExpression":
+      return node.id?.name;
+    default:
+      return undefined;
   }
+}
+
+function reassignedPatterns(node: AnyNode): readonly (Pattern | Expression)[] {
+  switch (node.type) {
+    case "VariableDeclarator":
+      return [node.id];
+    case "FunctionDeclaration":
+    case "FunctionExpression":
+    case "ArrowFunctionExpression":
+      return node.params;
+    case "CatchClause":
+      return node.param ? [node.param] : [];
+    case "AssignmentExpression":
+      return [node.left];
+    case "UpdateExpression":
+      return [node.argument];
+    case "UnaryExpression":
+      return node.operator === "delete" ? [node.argument] : [];
+    case "ForInStatement":
+    case "ForOfStatement":
+      return node.left.type === "VariableDeclaration" ? [] : [node.left];
+    default:
+      return [];
+  }
+}
+
+function recordShadowing(node: AnyNode, shadowed: Set<string>): void {
+  const name = declaredName(node);
+  if (name) shadowed.add(name);
+  for (const pattern of reassignedPatterns(node))
+    for (const binding of bindings(pattern)) shadowed.add(binding);
+}
+
+function calleeNamed(node: CallExpression | NewExpression, names: readonly string[]): boolean {
+  return node.callee.type === "Identifier" && names.includes(node.callee.name);
+}
+
+function forbidden(node: AnyNode): boolean {
+  switch (node.type) {
+    case "WithStatement":
+      return true;
+    case "CallExpression":
+      return calleeNamed(node, ["eval", "Function"]);
+    case "NewExpression":
+      return calleeNamed(node, ["Function"]);
+    default:
+      return false;
+  }
+}
+
+function breaksExclusivity(node: AnyNode): boolean {
+  if (node.type === "Property") return node.computed || node.method || node.kind !== "init";
+  return nonExclusiveTypes.has(node.type);
+}
+
+function visit({ node, active }: Frame, inspection: Inspection): boolean {
+  recordShadowing(node, inspection.shadowed);
+  if (!active) return true;
+  if (forbidden(node)) return false;
+  if (node.type === "CallExpression") inspection.calls.push(node);
+  if (breaksExclusivity(node)) inspection.exclusive = false;
+  return true;
+}
+
+function instanceInitializer(node: AnyNode, child: AnyNode): boolean {
+  return node.type === "PropertyDefinition" && !node.static && child === node.value;
+}
+
+function pushChildren(stack: Frame[], { node, active, depth }: Frame): void {
+  const descend = active && !functionTypes.has(node.type);
+  for (const child of syntaxChildren(node))
+    stack.push({
+      node: child,
+      active: descend && !instanceInitializer(node, child),
+      depth: depth + 1,
+    });
+}
+
+function inspect(program: AnyNode): Inspection | undefined {
+  const inspection: Inspection = { calls: [], shadowed: new Set(), exclusive: true };
+  const stack: Frame[] = [{ node: program, active: true, depth: 0 }];
+  let inspected = 0;
+  for (let frame = stack.pop(); frame; frame = stack.pop()) {
+    if (++inspected > MAX_NODES || frame.depth > MAX_DEPTH) return undefined;
+    if (!visit(frame, inspection)) return undefined;
+    pushChildren(stack, frame);
+  }
+  return inspection;
+}
+
+function discoveryHelper(call: CallExpression, shadowed: ReadonlySet<string>): string | undefined {
+  if (
+    call.callee.type !== "Identifier" ||
+    !helpers.has(call.callee.name) ||
+    shadowed.has(call.callee.name) ||
+    call.optional ||
+    call.arguments.some((arg) => arg.type === "SpreadElement")
+  )
+    return undefined;
+  return call.callee.name;
+}
+
+function targetsMcp(call: CallExpression, helper: string): boolean {
+  if (helper === "searchTools") return mcpSearch(call);
+  const name = literalText(call.arguments[0]);
+  if (helper === "describeNamespace") return mcpNamespace(name);
+  return name !== undefined && isNativeMcpName(name);
+}
+
+function discoveryIntent(inspection: Inspection): NativeDiscoveryIntent | undefined {
   let kind: NativeDiscoveryIntent["kind"] | undefined;
-  for (const call of calls) {
-    if (
-      call.callee.type !== "Identifier" ||
-      !helpers.has(call.callee.name) ||
-      shadowed.has(call.callee.name) ||
-      call.optional ||
-      call.arguments.some((arg) => arg.type === "SpreadElement")
-    ) {
-      if (!plumbing(call, shadowed)) exclusive = false;
+  let exclusive = inspection.exclusive;
+  for (const call of inspection.calls) {
+    const helper = discoveryHelper(call, inspection.shadowed);
+    if (helper === undefined) {
+      if (!plumbing(call, inspection.shadowed)) exclusive = false;
       continue;
     }
-    const target = call.arguments[0];
-    const name = target?.type === "SpreadElement" ? undefined : literalText(target);
-    const mcp =
-      call.callee.name === "searchTools"
-        ? mcpSearch(call)
-        : call.callee.name === "describeNamespace"
-          ? mcpNamespace(name)
-          : name !== undefined && isNativeMcpName(name);
-    if (mcp) kind = "mcp";
+    if (targetsMcp(call, helper)) kind = "mcp";
     else kind ??= "tools";
   }
   return kind ? { kind, discoveryOnly: exclusive } : undefined;
 }
 
-/** One bounded source/projection per originating renderer; no AST or process-global cache. */
+function classify(source: string): NativeDiscoveryIntent | undefined {
+  const inspection = inspect(parseProgram(source));
+  return inspection && discoveryIntent(inspection);
+}
+
 export function createNativeDiscoveryProjector(): NativeDiscoveryProjector {
   let previous: string | undefined;
   let intent: NativeDiscoveryIntent | undefined;

@@ -1,4 +1,3 @@
-// Pi tool execution is a Promise-shaped host boundary.
 import {
   defineTool,
   type AgentToolResult,
@@ -68,10 +67,6 @@ import {
   workflowToolAction,
 } from "./workflow-schema.ts";
 
-/**
- * An example scoped by scouting, with deduplication before evidence-based verification.
- * Labels illustrate independent lenses, not a sizing quota. Exported so tests can run it.
- */
 export const workflowToolExample = `export const meta = { name: "find-bugs", description: "Scoped finders, dedup, then evidence-based verification", phases: [{ title: "Find", agents: ["logic", "errors"] }, { title: "Verify" }] };
 const BUGS = { type: "object", properties: { bugs: { type: "array", items: { type: "object", properties: { file: { type: "string" }, line: { type: "integer" }, desc: { type: "string" }, evidence: { type: "string" } }, required: ["file", "line", "desc", "evidence"], additionalProperties: false } } }, required: ["bugs"], additionalProperties: false };
 const VERDICT = { type: "object", properties: { status: { enum: ["confirmed", "refuted", "unverified"] }, evidence: { type: "string" } }, required: ["status", "evidence"], additionalProperties: false };
@@ -98,7 +93,6 @@ for (let index = 0; index < bugs.length; index++) {
 }
 return result;`;
 
-/** The model's documentation for workflow scripts; `locations` resolves saved workflows. */
 const description = (
   locations: WorkflowLocations,
 ): string => `Run a JavaScript workflow that orchestrates subagents in the background. ${WORKFLOW_SCALING_GUIDANCE} Keep related finding, verification and synthesis in one workflow; separate phases when the main agent needs to inspect results or decide the next scope. Default to pipeline(); use a barrier only when a stage needs all earlier results, such as grouping duplicate candidates before verification. Proximity or similar wording alone does not establish the same bug: retain every distinct claim and its evidence. Read the workflow authoring guide (${workflowAuthoringGuidePath()}) before writing a script.
@@ -128,7 +122,6 @@ const SAVED_LISTED = 20;
 const SAVED_TEXT_CHARS = 200;
 const savedText = (text: string): string => clipWithMarker(text, SAVED_TEXT_CHARS, "…");
 
-/** Appends the saved workflows a session can start by name, like Claude Code's workflow list. */
 export const workflowToolDescription = (
   saved: ReadonlyArray<SavedWorkflowSummary>,
   locations: WorkflowLocations,
@@ -149,9 +142,7 @@ export const workflowToolDescription = (
 
 export interface WorkflowToolRuntime {
   readonly environment: SubagentSessionEnvironment;
-  /** Saved workflows found when the session started, listed in the description. */
   readonly savedWorkflows?: ReadonlyArray<SavedWorkflowSummary> | undefined;
-  /** Where saved workflows were found when the session started, named in the description. */
   readonly savedWorkflowLocations: WorkflowLocations;
   readonly scheduleAnimation?: CompactAnimationScheduler | undefined;
   readonly run: <A, E>(
@@ -181,13 +172,8 @@ const succeed = (
   details: { version: 1, action, ...facts },
 });
 
-/** Longest collapsed issue message, as the shared presentation standard bounds it. */
 const ISSUE_MESSAGE_MAX_CHARS = 120;
 
-/**
- * Where args first don't match the workflow's schema, in one short line; the rest are counted.
- * The problem gets whatever the path and count leave of the line.
- */
 const argsMismatchMessage = (problems: ReadonlyArray<WorkflowArgsProblem> = []): string => {
   const [first, ...rest] = problems;
   if (!first) return "Args don't match the workflow's schema";
@@ -211,13 +197,8 @@ const requestMessage = (error: WorkflowRequestError): string =>
     ? argsMismatchMessage(error.argsProblems)
     : REQUEST_MESSAGES[error.code];
 
-/** Where a script names in compact messages: `Script` inline, or its file's name. */
 const INLINE_SCRIPT = "Script";
 
-/**
- * Why a script can't run, in one short line: the parser's message with its line, since parser
- * errors are terse, or else why it isn't a valid workflow, which already reads as a sentence.
- */
 const scriptIssueMessage = (error: WorkflowScriptError, subject = INLINE_SCRIPT): string => {
   const syntax = error.syntax;
   if (syntax !== undefined)
@@ -226,7 +207,6 @@ const scriptIssueMessage = (error: WorkflowScriptError, subject = INLINE_SCRIPT)
   return subject === INLINE_SCRIPT ? reason : `${subject}: ${reason}`;
 };
 
-/** A source that couldn't load, named by its file's or saved workflow's name, never its path. */
 const sourceIssueMessage = (error: WorkflowSourceError): string => {
   const subject = clipText(error.subject, 60);
   switch (error.problem) {
@@ -249,7 +229,6 @@ const sourceIssueMessage = (error: WorkflowSourceError): string => {
   }
 };
 
-/** A short human message for the row; the full text and recovery stay agent-facing. */
 const issueFor = (error: WorkflowToolError) => {
   switch (error._tag) {
     case "WorkflowToolInputError":
@@ -285,7 +264,6 @@ const fail = (action: WorkflowToolAction, error: WorkflowToolError): WorkflowToo
   };
 };
 
-/** A status call's result: a repeat's short answer while nothing changed, or the full status. */
 const statusResult = (status: WorkflowToolStatus, now: number): WorkflowToolResult => {
   switch (status.kind) {
     case "recorded":
@@ -355,15 +333,9 @@ const executeWorkflowTool = <Args>(
       }
     }
   }).pipe(
-    // A call without a recognizable action fails as a start, the default action.
     Effect.catch((error) => Effect.succeed(fail(workflowToolAction(args) ?? "start", error))),
   );
 
-/**
- * Registers the root-only workflow runner tool, inactive: the application activates
- * it only while the user has opted into workflows with ultracode. `shell` is the application's
- * replay-staging wrapper, which stages history presentation without touching activation.
- */
 export function registerWorkflowTool(
   pi: ExtensionAPI,
   runtime: WorkflowToolRuntime,
@@ -384,7 +356,6 @@ export function registerWorkflowTool(
       "Native codemode may call subagent_workflow only while Ultracode makes it active. Starting a workflow authorizes its ordinary agents, including writers: use only the user-authorized task, with normal writer mode, claims and worktree review. Questions, claim recovery and workspace integration remain main-agent decisions, not scripted approvals.",
       "Native codemode receives success-only pi-subagents/workflow version-1 envelopes. Check contract, version, tool and action, and print a start's run.id immediately. A start is a receipt, not completion; end the turn for the notification, never poll status. Status kind distinguishes a live view, unchanged live view, and recorded summary; recorded finished counts agent results. Terminal workflow state does not prove child process cleanup, and result is bounded text with clipped and optional path, not a parsed full value. Rejected or cancelled calls do not roll back admitted effects: hand uncertainty to the main agent to inspect existing runs, never replay a start blindly.",
     ],
-    // Direct exposure is callable only while active, preserving the Ultracode opt-in.
     exposure: "direct",
     defaultActive: false,
     parameters: WorkflowToolParameters,

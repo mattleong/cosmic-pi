@@ -17,10 +17,10 @@ import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../src/config/schema.
 import { OpenAIImageService } from "../src/image/service.ts";
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from "../src/image/types.ts";
 import { initialProjection } from "../src/usage/projection.ts";
-import { makeResolvedConfig, testContext } from "./helpers.ts";
+import { makeResolvedConfig, testContext, testModel } from "./helpers.ts";
 
 const registryToken = JSON.stringify({ access: "test-token", accountId: "acct_test" });
-const unrelatedModel = { provider: "anthropic", id: "unrelated-model" };
+const unrelatedModel = testModel("unrelated-model", "anthropic", "anthropic-messages");
 const encoder = new TextEncoder();
 const responseBody = Stream.make(
   encoder.encode(
@@ -112,7 +112,6 @@ describe("OpenAIImageService", () => {
         outputFormat: "webp",
         mimeType: "image/webp",
       });
-      // Each request carries its own model and format, not just the reported summary.
       const [defaultBody, overrideBody] = requests.map(({ encodedJsonBody }) =>
         JSON.stringify(encodedJsonBody),
       );

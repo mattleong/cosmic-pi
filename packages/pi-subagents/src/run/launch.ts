@@ -91,21 +91,14 @@ const validateStartRequest = (
     return normalizedClaims?.claims;
   });
 
-/** Available only for an error returned after this service admitted and fully compensated a run. */
 export const getFailedStartRecovery = (error: SubagentError): FailedStartRecovery | undefined =>
   failedStartRecoveries.get(error);
 
 export interface RunLaunchDependencies extends RunContext {
   readonly backendRegistry: SubagentBackendRegistryContract;
-  /** The service-owned run registry; only launch admission inserts and evicts, under the lock. */
   readonly records: Map<string, RunRecord>;
   readonly delivery: RunNotificationDelivery;
-  /** Service-owned shutdown flag, observed under the admission lock. */
   readonly isClosed: () => boolean;
-  /**
-   * Service-owned run ordinal/name allocation, invoked under the admission lock. A trusted
-   * owner's reserved id replaces the next ordinal.
-   */
   readonly allocateRunIdentity: (
     requestedName: string,
     reservedId?: string,
@@ -120,13 +113,6 @@ export interface RunLaunchDependencies extends RunContext {
   readonly workspaces: Pick<RunWorkspaceControl, "bind" | "heldLaunchSlots">;
 }
 
-/**
- * Owns run launch: request validation, admission/eviction under history and
- * process/writer capacity, record construction, backend initialization, prompt
- * issue, and the uninterruptible stopped/failed compensation block. Run
- * identity/token allocators remain service-owned and are invoked under the
- * same admission lock.
- */
 export function makeRunLaunch(dependencies: RunLaunchDependencies) {
   const {
     backendRegistry,
@@ -184,9 +170,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             ? yield* restore(canonicalizeWriterCwd(writerLeases, request.cwd))
             : undefined;
         const cwd = canonicalWriterCwd?.path ?? request.cwd;
-        // Public profile routing already preflights for ordered fallback. Recheck at the service
-        // admission boundary with the canonical writer cwd to close readiness races and protect
-        // direct internal callers; failure belongs to the selected candidate and never falls through.
         yield* restore(
           driver.preflight({
             context: request.context,
@@ -199,14 +182,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         );
         const requestedName = sanitizeName(request.name ?? "");
         const now = yield* Clock.currentTimeMillis;
-        // Reclaim-before-admit eviction transaction. Phase A (`reserveOrClaim`)
-        // claims one eligible terminal candidate under the lock without deleting
-        // it while reserving the prospective process/writer admission; phase B
-        // reclaims its private run state outside the lock; phase C
-        // (`admitReclaimed`) revalidates under the lock and atomically deletes
-        // the evicted record, admits the new record, and creates its scopes.
-        // Reclaim failure clears the claim, keeps the candidate registered, and
-        // admits nothing.
         const evictionEligible = (record: RunRecord): boolean =>
           !record.cleanupPending &&
           record.process === undefined &&
@@ -285,7 +260,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           predecessor: RunRecord | undefined,
         ) =>
           Effect.gen(function* () {
-            // A workflow agent has its workflow's own concurrency instead of a direct-child slot.
             const capacityFailure = request.workflow
               ? undefined
               : processCapacityError(
@@ -308,11 +282,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             if (writerFailure) return yield* writerFailure;
           });
 
-        /**
-         * Every locked admission check, run before phase A claims or admits anything and again
-         * in phase C. `ownReservation` is this start's own claimed candidate, excluded from the
-         * capacity recheck because every concurrent admission already counted its reservation.
-         */
         const checkAdmissionLocked = (ownReservation?: RunRecord) =>
           Effect.gen(function* () {
             if (ownership) yield* ownership.checkLocked;
@@ -379,7 +348,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
 
         const promptRequest = (base: StartSubagentRequest): StartSubagentRequest =>
           writeClaims === undefined ? base : { ...base, writes: writeClaims };
-        // An owned run becomes an ordinary root child once its owner relinquishes it.
         const releasedSystemPrompt =
           request.workflow === undefined && request.resultContract === undefined
             ? undefined
@@ -406,13 +374,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           ...(request.resultContract && { resultContract: request.resultContract }),
         });
 
-        /**
-         * Shared locked final admission and record construction, after `checkAdmissionLocked`
-         * passed under the same lock. Caller must hold the service lock, and every eviction
-         * reclaim must already have definitely succeeded before this deletes the evicted record.
-         * A mutable writer-pool safety transition may still reject phase C; that path
-         * quarantines the already-reclaimed history record against resume.
-         */
         const admitLocked = (
           evicted: RunRecord | undefined,
           { parent, predecessor }: Effect.Success<ReturnType<typeof checkAdmissionLocked>>,
@@ -423,9 +384,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               records.delete(evicted.view.id);
               delivery.discardQuestionLocked(evicted.view.id);
             }
-            // Run scopes are service-owned rather than automatically parent-closed so shutdown
-            // can observe backend cleanup before authorizing shared writer-pool lease release.
-            // They are created only after every eviction reclaim already succeeded.
             const scope = yield* Scope.make();
             const initializationSettled = yield* Deferred.make<void>();
             const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
@@ -479,14 +437,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             yield* publish;
             return record;
           });
-        /**
-         * Phase A: after every admission check passes, admit immediately when no destructive
-         * reclamation is needed, or exclusively claim one eligible candidate whose private state
-         * must still be reclaimed. Checking first means a refused start never reclaims an
-         * unrelated run's resumable state. The claim reserves the prospective process/writer
-         * slot before reclamation, so phase C cannot fail after resumable private state was
-         * removed.
-         */
         const reserveOrClaim = () =>
           withLock(
             Effect.gen(function* () {
@@ -512,15 +462,12 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                       )[0];
               if (candidate && candidate.runStateReclaimState !== "reclaimed") {
                 candidate.evictionClaim = {
-                  // A workflow start reserves no direct-child slot.
                   ...(request.workflow === undefined && { parentRunId }),
                   ...(canonicalWriterCwd && {
                     writerCwdDigest: canonicalWriterCwd.digest,
                     writeClaims,
                   }),
                 };
-                // The claim now reserves this start's process slot, so a worktree launch's
-                // own slot hold ends here rather than counting twice while history is reclaimed.
                 workspaces.bind(request);
                 return { kind: "reclaim" as const, candidate };
               }
@@ -530,13 +477,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               };
             }),
           );
-        /**
-         * Phase C: after a definite reclaim success, revalidate this start's
-         * exclusive claim and the candidate's eligibility under the lock, then
-         * perform the atomic delete+insert. A second reclamation phase is
-         * impossible; any post-reclaim admission rejection quarantines the old
-         * record because its resumable private state is already gone.
-         */
         const admitReclaimed = (candidate: RunRecord): Effect.Effect<RunRecord, SubagentError> =>
           withLock(
             Effect.gen(function* () {
@@ -572,8 +512,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         const initialPrompt = taskPrompt(promptRequest(request), peerNotice);
         const initialize = Effect.gen(function* () {
           const state = yield* initializeProcess(reserved);
-          // Let a terminal frame already queued behind the initialization state
-          // commit its deferred settlement before this start result is returned.
           yield* Effect.yieldNow;
           if (request.effortWasExplicit && state.effort !== request.effort)
             return yield* invalidRequest(
@@ -644,8 +582,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                     sanitizeDiagnosticText(Cause.pretty(cause), MAX_ERROR_CHARS),
                   );
               }
-              // This is the complete backend/process/writer/private-state cleanup barrier.
-              // Recovery metadata is attached only after it settles or quarantines.
               yield* cleanup.closeRecordScope(reserved);
             }),
           ),
@@ -661,9 +597,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     );
 
   return {
-    /** Input/platform and inherited policy checks precede private workspace acquisition. */
     validate,
-    /** Admission, eviction, record construction, initialization, prompt issue, compensation. */
     start,
   };
 }

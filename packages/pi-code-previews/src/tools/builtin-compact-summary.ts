@@ -12,7 +12,6 @@ import {
 import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
 import { isTruncated } from "./data/results";
 
-/** Detached, no-I/O snapshot of the currently published preview policy. */
 export function captureBuiltinCompactPolicy(): BuiltinCompactPolicy {
   return {
     secretWarnings: codePreviewSettings.secretWarnings,
@@ -23,7 +22,6 @@ export function captureBuiltinCompactPolicy(): BuiltinCompactPolicy {
   };
 }
 
-/** Host adapter owns settings and private before-write lookup, never execution. */
 export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
   tool: BuiltinCompactTool,
   { phase, args, result, context }: Parameters<CompactSummaryProvider<TArgs, TDetails, TState>>[0],
@@ -53,7 +51,6 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
   });
   if (projected || phase !== "settled" || context.isError || !isTruncated(result?.details))
     return projected;
-  // Output too large to classify still says that it was cut off.
   return {
     subject: describeBuiltinCompactSubject(tool, args, context.cwd),
     outcome: "success",

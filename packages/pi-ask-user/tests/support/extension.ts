@@ -7,7 +7,6 @@ import { askUserWithDependencies } from "../../src/application.ts";
 
 export type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
 
-/** Clears an inherited Pi child marker before each test; a test that needs one stubs it. */
 export const withoutRelayMarker = () => {
   beforeEach(() => {
     vi.stubEnv("PI_SUBAGENT_CHILD", undefined);
@@ -18,7 +17,6 @@ export const withoutRelayMarker = () => {
   });
 };
 
-/** The actual factory over a host whose public metadata names one source for every registration. */
 export const startExtension = (
   load: (cwd: string, projectTrusted: boolean, signal?: AbortSignal) => PromiseLike<void>,
 ) =>
@@ -26,10 +24,14 @@ export const startExtension = (
     const fs = yield* FileSystem.FileSystem;
     const agentDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-ask-user-agent-" });
     yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory));
-    const host = recordingExtensionHost(
-      {},
-      { events: createEventBus(), sendMessage: vi.fn(), appendEntry: vi.fn() },
+    const sendMessage = vi.fn(
+      (
+        _message: Parameters<ExtensionAPI["sendMessage"]>[0],
+        _options?: Parameters<ExtensionAPI["sendMessage"]>[1],
+      ) => undefined,
     );
+    const appendEntry = vi.fn(<Data>(_customType: string, _data?: Data) => undefined);
+    const host = recordingExtensionHost({}, { events: createEventBus(), sendMessage, appendEntry });
     askUserWithDependencies(host.pi, load);
-    return host;
+    return { ...host, sendMessage, appendEntry };
   });

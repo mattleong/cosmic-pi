@@ -1,4 +1,3 @@
-// Pi dialog APIs are Promise-shaped host boundaries.
 import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import {
@@ -30,7 +29,6 @@ const notifyBestEffort = (
   level: HostNotificationLevel,
 ): Effect.Effect<void> => Effect.sync(() => notifyAtHostBoundary({ ui }, message, level));
 
-/** Adapts one Promise-shaped Pi dialog call; interruption aborts the forwarded signal. */
 const dialogCall = <A>(
   run: (signal: AbortSignal) => Promise<A>,
 ): Effect.Effect<A, AskUserHostError> =>

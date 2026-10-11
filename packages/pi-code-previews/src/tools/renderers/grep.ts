@@ -14,14 +14,19 @@ import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
+import { getObjectValue } from "../../shared/helpers";
 
 export function grepPreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme) {
-      const pattern = Predicate.isString(args.pattern) ? args.pattern : "";
-      const path = Predicate.isString(args.path) && args.path ? args.path : ".";
-      const glob = Predicate.isString(args.glob) && args.glob ? args.glob : undefined;
-      const limit = Predicate.isNumber(args.limit) ? args.limit : undefined;
+      const patternArg = getObjectValue(args, "pattern");
+      const pathArg = getObjectValue(args, "path");
+      const globArg = getObjectValue(args, "glob");
+      const limitArg = getObjectValue(args, "limit");
+      const pattern = Predicate.isString(patternArg) ? patternArg : "";
+      const path = Predicate.isString(pathArg) && pathArg ? pathArg : ".";
+      const glob = Predicate.isString(globArg) && globArg ? globArg : undefined;
+      const limit = Predicate.isNumber(limitArg) ? limitArg : undefined;
       let text = `${renderCodePreviewToolTitle("grep", theme)} ${theme.fg("accent", `/${escapeControlChars(pattern)}/`)} ${theme.fg("muted", "in")} ${renderDisplayPath(path, cwd, theme)}`;
       text += metadata(theme, [
         glob ? escapeControlChars(glob) : undefined,

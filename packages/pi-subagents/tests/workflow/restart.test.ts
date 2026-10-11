@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -37,16 +36,10 @@ import {
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
-/** A session's key and the run files its Pi processes share. */
 const session = () => ({ sessionKey: workflowSessionKey(), runFiles: memoryRunFiles() });
 
-/** A pid no process has: above every platform's pid range. */
 const DEAD_PID = 99_999_999;
 
-/**
- * A report within the backend's bound whose canonical JSON, every quote escaped, is too long for
- * a journal line.
- */
 const longReport = (end: string) => `${'"'.repeat(WORKFLOW_RESULT_LINE_MAX_CHARS / 2 + 1)}${end}`;
 
 const WORKTREE_WRITER = worktreeWriter("edit");
@@ -55,7 +48,6 @@ const FIND_AND_FIX = `
   const found = await agent("find bugs", { label: "finder" });
   const fixed = await agent("fix them", { label: "fixer" });`;
 
-/** The start's refusal: its code and message. */
 const refusal = <A>(start: Effect.Effect<A, WorkflowStartError>) =>
   Effect.flip(start).pipe(
     Effect.map((error) => ({
@@ -73,7 +65,6 @@ const notifiedOnDisk = (files: MemoryRunFiles, runId: string) =>
     "the record to note the accepted notice",
   );
 
-/** Runs FIND_AND_FIX to completion of both agents, then fails; returns the run id. */
 const failAfterTwoAgents = (sessionKey: string, runFiles: MemoryRunFiles) =>
   workflowTest({ sessionKey, runFiles }, function* ({ fixture, workflows }) {
     const started = yield* startScript(workflows, `${FIND_AND_FIX}\nthrow new Error("not yet");`);
@@ -84,7 +75,6 @@ const failAfterTwoAgents = (sessionKey: string, runFiles: MemoryRunFiles) =>
     return started.id;
   });
 
-/** Starts a run whose first agent finishes and second still runs when the session tears down. */
 const interruptWithOneFinished = (sessionKey: string, runFiles: MemoryRunFiles) =>
   workflowTest({ sessionKey, runFiles }, function* ({ fixture, workflows }) {
     const started = yield* startScript(workflows, `${FIND_AND_FIX}\nreturn fixed;`);
@@ -93,10 +83,6 @@ const interruptWithOneFinished = (sessionKey: string, runFiles: MemoryRunFiles) 
     return started.id;
   });
 
-/**
- * Plants a record of the session that the startup scan owes a notice and finds newest, so the
- * scan posts its notice last: once that arrives, the scan has posted every notice it owed.
- */
 const plantSentinel = (files: MemoryRunFiles, sessionKey: string, runId: string) =>
   void files.records.set(
     runId,
@@ -113,7 +99,6 @@ const plantSentinel = (files: MemoryRunFiles, sessionKey: string, runId: string)
     }),
   );
 
-/** The notices the fixture posted by the end of its startup scan, besides the sentinel's. */
 const scannedNotices = (fixture: WorkflowFixture, sentinel: string) =>
   until(
     () => fixture.workflowNotifications.some((notice) => notice.runId === sentinel),
@@ -122,20 +107,17 @@ const scannedNotices = (fixture: WorkflowFixture, sentinel: string) =>
     Effect.map(() => fixture.workflowNotifications.filter((notice) => notice.runId !== sentinel)),
   );
 
-/** Runs `body` in a later Pi process of the session, which remembers nothing but the run files. */
 const afterRestart = <Eff extends Effect.Effect<unknown, unknown, unknown>, A>(
   sessionKey: string,
   runFiles: MemoryRunFiles,
   body: (context: WorkflowTestContext) => Generator<Eff, A, never>,
 ) => workflowTest({ sessionKey, runFiles, restart: true }, body);
 
-/** Why a later Pi process of the session refuses to resume `runId`. */
 const refusedResume = (sessionKey: string, runFiles: MemoryRunFiles, runId: string) =>
   afterRestart(sessionKey, runFiles, function* ({ workflows }) {
     return yield* refusal(resume(workflows, runId, FIND_AND_FIX));
   });
 
-/** Restarts the session and returns the notices its startup posted. */
 const restartNotices = (sessionKey: string, runFiles: MemoryRunFiles, sentinel: string) => {
   plantSentinel(runFiles, sessionKey, sentinel);
   return afterRestart(sessionKey, runFiles, function* ({ fixture }) {
@@ -192,7 +174,6 @@ describe("resuming a workflow run after a Pi restart", () => {
         expect(resultValue(done)).toEqual([long.length, "-end"]);
         expect(stateOfTask(fixture, "write it")).toBeUndefined();
       });
-      // The reused result is saved in full again, so the resumed run can itself be resumed.
       expect([...runFiles.results.values()].map((text) => decodeJson(text))).toEqual([long, long]);
     });
   });
@@ -242,7 +223,6 @@ describe("resuming a workflow run after a Pi restart", () => {
         yield* notifiedOnDisk(runFiles, started.id);
         return started.id;
       });
-      // Each full result takes over half of what one resume reads, so only the first fits.
       expect(runFiles.results.size).toBe(2);
       for (const path of runFiles.results.keys())
         runFiles.results.set(path, `"${"x".repeat(WORKFLOW_JOURNAL_MAX_CHARS / 2 + 1)}"`);
@@ -299,7 +279,6 @@ describe("resuming a workflow run after a Pi restart", () => {
     const { sessionKey, runFiles } = session();
     return Effect.gen(function* () {
       const runId = yield* failAfterTwoAgents(sessionKey, runFiles);
-      // The parent of this test process is alive and isn't this process.
       patchRunRecord(runFiles, runId, { state: "running", pid: process.ppid, notified: false });
       plantSentinel(runFiles, sessionKey, "wf-sentinel-1");
       const restarted = workflowFixture({ sessionKey, runFiles, restart: true });
@@ -310,7 +289,6 @@ describe("resuming a workflow run after a Pi restart", () => {
         ]),
       );
       expect(refused.code).toBe("resume_running_elsewhere");
-      // Its own process still reports it, so this one owes no notice.
       expect(notices).toEqual([]);
     });
   });
@@ -319,8 +297,6 @@ describe("resuming a workflow run after a Pi restart", () => {
     const { sessionKey, runFiles } = session();
     return Effect.gen(function* () {
       const runId = yield* failAfterTwoAgents(sessionKey, runFiles);
-      // A crash left the record running; the pid now names a live process, but nothing has
-      // refreshed the run's directory since.
       patchRunRecord(runFiles, runId, { state: "running", pid: process.ppid, notified: false });
       runFiles.writtenAt.set(runId, 0);
       yield* afterRestart(sessionKey, runFiles, function* ({ fixture, workflows }) {
@@ -372,7 +348,6 @@ describe("workflow runs a restart interrupted", () => {
     const { sessionKey, runFiles } = session();
     return Effect.gen(function* () {
       const runId = yield* interruptWithOneFinished(sessionKey, runFiles);
-      // The teardown marked the run interrupted before Pi exited.
       expect(runRecord(runFiles, runId)).toMatchObject({ state: "interrupted", notified: false });
 
       const notices = yield* restartNotices(sessionKey, runFiles, "wf-sentinel-1");
@@ -394,7 +369,6 @@ describe("workflow runs a restart interrupted", () => {
     const { sessionKey, runFiles } = session();
     return Effect.gen(function* () {
       const runId = yield* interruptWithOneFinished(sessionKey, runFiles);
-      // A crash leaves the record running under a process that is gone.
       patchRunRecord(runFiles, runId, { state: "running", pid: DEAD_PID });
       expect(yield* restartNotices(sessionKey, runFiles, "wf-sentinel-1")).toEqual([
         expect.objectContaining({ runId, outcome: "interrupted" }),
@@ -417,7 +391,6 @@ describe("workflow runs a restart interrupted", () => {
         return started.id;
       });
       expect(runRecord(runFiles, runId)).toMatchObject({ state: "completed", notified: false });
-      // While the live process that ended the run still delivers its report, nothing is owed.
       patchRunRecord(runFiles, runId, { pid: process.ppid });
       expect(yield* restartNotices(sessionKey, runFiles, "wf-sentinel-1")).toEqual([]);
       patchRunRecord(runFiles, runId, { pid: DEAD_PID });
@@ -438,7 +411,6 @@ describe("workflow runs a restart interrupted", () => {
         yield* eventually(() => first.workflowNotifications[0], "the refused report");
         return started.id;
       });
-      // This process remembers how the run ended, and a later one reads it from the record.
       const remembered = yield* withJournal(sessionKey, (journal) => journal.interruptedRuns);
       expect(remembered).toEqual([expect.objectContaining({ runId, ended: "failed" })]);
       patchRunRecord(runFiles, runId, { pid: DEAD_PID });
@@ -506,14 +478,12 @@ describe("workflow runs a restart interrupted", () => {
     const { sessionKey, runFiles } = session();
     return Effect.gen(function* () {
       const runId = yield* interruptWithOneFinished(sessionKey, runFiles);
-      // Another Pi process of the session posted the notice and noted it in the record.
       patchRunRecord(runFiles, runId, { notified: true });
       plantSentinel(runFiles, sessionKey, "wf-sentinel-1");
       const reloaded = workflowFixture({ sessionKey, runFiles });
       expect(
         yield* withWorkflows(reloaded, () => scannedNotices(reloaded, "wf-sentinel-1")),
       ).toEqual([]);
-      // Memory closed the run instead, so later reloads leave it alone too.
       const remembered = yield* withJournal(sessionKey, (journal) => journal.interruptedRuns);
       expect(remembered).toEqual([]);
     });
@@ -557,7 +527,6 @@ describe("workflow runs a restart interrupted", () => {
         );
         const workspaceId = yield* leaveInWorktree(first, "edit", "changed");
         yield* workflows.skip(yield* runningTask(first, "edit"));
-        // The run goes on, so the next agent still runs when the session tears down.
         yield* runningTask(first, "next");
         return { runId: started.id, workspaceId };
       });

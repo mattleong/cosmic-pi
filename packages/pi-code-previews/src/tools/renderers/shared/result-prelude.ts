@@ -6,7 +6,6 @@ import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
 export function renderResultPrelude(options: {
   isPartial: boolean;
   theme: Theme;
-  /** A verb for the running line, such as "Reading…"; without one it is the shared line. */
   loadingLabel?: string;
   isError?: boolean;
   expanded?: boolean;
@@ -20,7 +19,6 @@ export function renderResultPrelude(options: {
       0,
       0,
     );
-  // The issue line above the body already summarises the error; expansion shows it all.
   if (options.isError)
     return renderPreviewError(options.theme, options.expanded, options.errorText);
   return undefined;

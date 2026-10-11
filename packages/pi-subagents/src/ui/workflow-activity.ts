@@ -22,16 +22,9 @@ import { workflowWaitingText } from "../workflow/run-text.ts";
 import { withActivityRevision } from "./activity-revision.ts";
 
 const WORKFLOW_ITEM_PREFIX = "workflow:";
-/** Queued rows per workflow; their phases' `work` counts include the rest. */
 const QUEUED_ROWS_PER_WORKFLOW = 64;
-/** Planned rows per workflow; the phase and workflow planned counts include the rest. */
 const PLANNED_ROWS_PER_WORKFLOW = 64;
-/**
- * Rows per workflow for agents that settled without a subagent run, such as a call that couldn't
- * start or was skipped while queued; their phases' `work` counts include the rest.
- */
 const SETTLED_ROWS_PER_WORKFLOW = 16;
-/** One-line row summaries: what a queued agent waits for, or why a call ended without a result. */
 const ROW_SUMMARY_MAX_CHARS = 200;
 
 const WORKFLOW_STATUS = {
@@ -44,7 +37,6 @@ const WORKFLOW_STATUS = {
 
 const workflowItemId = (runId: string): string => `${WORKFLOW_ITEM_PREFIX}${runId}`;
 
-/** The workflow run id behind an Activity item id, if it names a workflow. */
 export const workflowRunIdOf = (itemId: string): string | undefined =>
   itemId.startsWith(WORKFLOW_ITEM_PREFIX) ? itemId.slice(WORKFLOW_ITEM_PREFIX.length) : undefined;
 
@@ -53,23 +45,12 @@ const line = (text: string, maximumLength: number) =>
 
 const phaseTitle = (title: string) => line(title, ACTIVITY_LIMITS.phaseTitle);
 
-/** A short reason on one line, for a row's summary. */
 export const activityReasonLine = (reason: string): string =>
   line(reason.split("\n", 1)[0] ?? "", ROW_SUMMARY_MAX_CHARS);
 
-/**
- * A call that settled without a subagent run: it couldn't start, or was skipped, refused by the
- * budget or stopped while queued. Only Activity's own row shows it.
- */
 export const isWorkflowAgentUnstarted = (agent: WorkflowAgentView): boolean =>
   isWorkflowAgentFinished(agent.state) && agent.startedAt === undefined;
 
-/**
- * The settled agent() call behind a member run, while its workflow is among `runs` and the call
- * still describes the run: not while the run works, nor once it worked again after the call
- * settled, such as a member resumed after its workflow ended. Each workflow's calls are indexed
- * on first use.
- */
 export const settledWorkflowCalls = (runs: ReadonlyArray<WorkflowRunView>) => {
   const indexes = new Map<string, ReadonlyMap<string, WorkflowAgentView>>();
   const callOf = (run: SubagentRunView, workflowId: string) => {
@@ -97,13 +78,6 @@ const NO_WORK: PhaseWork = Object.freeze({
   skipped: 0,
 });
 
-/**
- * Every agent and reused result per cleaned phase title, so a phase stays done, or failed, after
- * its rows leave Activity, and a phase whose results were all reused on resume reads as finished.
- * Failures count every failed call, whether or not it started. A planned agent the user skipped
- * isn't work until a call claims it, since it never started: until then its phase follows the
- * rules for phases without work.
- */
 const phaseWork = (run: WorkflowRunView): ReadonlyMap<string, PhaseWork> => {
   const work = new Map<string, PhaseWork>();
   const add = (phase: string, more: PhaseWork) => {
@@ -127,13 +101,11 @@ const phaseWork = (run: WorkflowRunView): ReadonlyMap<string, PhaseWork> => {
       skipped: Number(agent.state === "skipped"),
     });
   }
-  // A reused result finished in the run it came from; it has no agent view here.
   for (const [phase, count] of workflowReusedByPhase(run))
     add(phase, { items: count, finished: count, stopped: 0, failed: 0, skipped: 0 });
   return work;
 };
 
-/** Unclaimed planned agents per cleaned phase title, including those without a row. */
 const phasePlanned = (run: WorkflowRunView): ReadonlyMap<string, number> => {
   const planned = new Map<string, number>();
   for (const [phase, count] of workflowPlannedByPhase(run)) {
@@ -143,10 +115,6 @@ const phasePlanned = (run: WorkflowRunView): ReadonlyMap<string, number> => {
   return planned;
 };
 
-/**
- * Display phases: unique after cleaning, bounded for the protocol, with their work counts and
- * planned agents. Planned agents never count as work, nor do skipped ones as planned.
- */
 const workflowActivityPhases = (run: WorkflowRunView): ReadonlyArray<ActivityPhase> => {
   const work = phaseWork(run);
   const planned = phasePlanned(run);
@@ -168,7 +136,6 @@ const workflowActivityPhases = (run: WorkflowRunView): ReadonlyArray<ActivityPha
   return phases;
 };
 
-/** A member's phase when its workflow shows it; otherwise the member sits under the workflow. */
 const shownPhase = (phase: string | undefined, phases: ReadonlyArray<ActivityPhase>) => {
   const title = phase === undefined ? undefined : phaseTitle(phase);
   return title !== undefined && phases.some((candidate) => candidate.title === title)
@@ -176,10 +143,6 @@ const shownPhase = (phase: string | undefined, phases: ReadonlyArray<ActivityPha
     : undefined;
 };
 
-/**
- * An owned run's place under its workflow, from the run's own membership. It holds when the
- * workflow has left the workflow snapshot, so the host's retained workflow row keeps its members.
- */
 export const workflowMembership = (
   membership: SubagentWorkflowMembership,
   providerId: string,
@@ -191,11 +154,6 @@ export const workflowMembership = (
   };
 };
 
-/**
- * Planned agents no shown phase holds, such as those in phases past the ones Activity shows. Their
- * rows sit under the workflow, and the workflow counts them, so none is silently dropped. A
- * skipped one is no longer planned work.
- */
 const unphasedPlanned = (
   run: WorkflowRunView,
   phases: ReadonlyArray<ActivityPhase>,
@@ -206,7 +164,6 @@ const unphasedPlanned = (
   return count > 0 ? { unphasedPlanned: count } : {};
 };
 
-/** The narrator line Activity shows beneath the workflow: its newest log line, when there is one. */
 const narrator = (run: WorkflowRunView): Pick<ActivityItem, "summary"> => {
   const text = run.lastLog === undefined ? "" : line(run.lastLog, WORKFLOW_NARRATOR_MAX_CHARS);
   return text ? { summary: text } : {};
@@ -251,7 +208,6 @@ const workflowItem = (run: WorkflowRunView, phases: ReadonlyArray<ActivityPhase>
   });
 };
 
-/** What every row of a workflow's agent shows: its reserved run id, label, place and profile. */
 const agentRow = (
   agent: Pick<WorkflowAgentView, "runId" | "label" | "phase" | "profile">,
   parent: Parent,
@@ -265,7 +221,6 @@ const agentRow = (
   ...(agent.profile !== undefined && { profile: line(agent.profile, ACTIVITY_LIMITS.profile) }),
 });
 
-/** Skipping is final for the script, so it asks first like every other stop. */
 const skipActions = (confirmation: string): ActivityItem["actions"] =>
   Object.freeze([Object.freeze({ id: "skip", label: "Skip", confirmation, handoff: false })]);
 
@@ -285,13 +240,6 @@ const queuedItem = (
   });
 };
 
-/**
- * A call that settled without a subagent run, under its reserved run id: failed when it couldn't
- * start, cancelled and skipped when the user skipped it or the budget refused it, and cancelled
- * when it was stopped while queued. Its summary
- * is the reason its agent() call returned null, or threw a budget error when the budget refused
- * it; it never started, so it has no start time.
- */
 const settledItem = (
   agent: Pick<
     WorkflowAgentView,
@@ -309,12 +257,6 @@ const settledItem = (
     actions: Object.freeze([]),
   });
 
-/**
- * A declared agent no call has claimed, under the run id its call will take over: pending, with a
- * skip, while the script can still call it, and cancelled once it never will. A never-run row ends
- * with its workflow, so history retention drops older ones first. One the user skipped is no
- * longer planned: it shows as skipped work, as its claiming call will.
- */
 const plannedItem = (
   run: WorkflowRunView,
   agent: WorkflowPlannedAgent,
@@ -347,7 +289,6 @@ const plannedItem = (
   });
 };
 
-/** Settled calls without a subagent run: failures first, then the newest of each kind. */
 const unstartedAgents = (run: WorkflowRunView): ReadonlyArray<WorkflowAgentView> =>
   run.agents
     .filter(isWorkflowAgentUnstarted)
@@ -363,21 +304,12 @@ interface ShownWorkflow {
   readonly parent: Parent;
 }
 
-/**
- * Workflow items, then their placeholders in the slots left: live workflows' settled, queued and
- * planned rows, then finished workflows' settled and planned rows, so history never crowds out a
- * running plan. Placeholders use reserved run ids, so selection survives from planned through
- * queued, running and settled; an id already shown is never repeated.
- */
 export const workflowActivityItems = (input: {
   readonly runs: ReadonlyArray<WorkflowRunView>;
   readonly visibleRunIds: ReadonlySet<string>;
   readonly providerId: string;
-  /** Item slots left for workflows and their placeholders. */
   readonly budget: number;
 }): ReadonlyArray<ActivityItem> => {
-  // Live workflows first, so history yields its slots before running work does. Every shown
-  // workflow gets its row before any placeholder takes a slot.
   const shown: ReadonlyArray<ShownWorkflow> = [
     ...input.runs.filter((run) => !isWorkflowRunFinished(run.state)),
     ...input.runs.filter((run) => isWorkflowRunFinished(run.state)).reverse(),

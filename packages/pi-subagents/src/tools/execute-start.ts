@@ -1,4 +1,4 @@
-import { invokeBestEffort, sanitizeTerminalLine, type JsonObject } from "pi-cosmic-core";
+import { invokeBestEffort, sanitizeTerminalLine } from "pi-cosmic-core";
 import type {
   AgentToolUpdateCallback,
   ExtensionAPI,
@@ -39,12 +39,10 @@ export interface StartBatchInput {
   readonly pi: ExtensionAPI;
   readonly ctx: ExtensionContext;
   readonly environment: SubagentSessionEnvironment;
-  /** Session-owned launch path; the tool runtime decides root versus proxied caller. */
   readonly startOwned: (
     request: StartSubagentRequest,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly onUpdate: AgentToolUpdateCallback<unknown> | undefined;
-  /** Initial native codemode workflows coordinate read-only assignments only. */
   readonly readOnly?: boolean;
 }
 
@@ -58,8 +56,7 @@ const startSpecs = (
         `subagent_start requires between 1 and ${MAX_START_BATCH} agents.`,
       );
     for (const agent of agents) {
-      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-      const disallowedField = firstDisallowedLaunchOverride(agent as Readonly<JsonObject>);
+      const disallowedField = firstDisallowedLaunchOverride(agent);
       if (disallowedField)
         return yield* invalidRequest(
           "launch_override_not_allowed",
@@ -72,7 +69,6 @@ const startSpecs = (
 const entryName = (spec: SubagentStartSpec, index: number): string =>
   sanitizeTerminalLine(spec.name?.trim() || `launch ${index + 1}`);
 
-/** Shared selected-route projection for started runs, resolved failures, and request routes. */
 const routeFields = (
   source: Pick<StartSubagentRequest, "host" | "runtime" | "model" | "effort" | "openaiFastMode">,
   selection?: Pick<SubagentSelectionProvenance, "candidateIndex" | "warning"> | undefined,
@@ -159,7 +155,6 @@ const settleStartOutcomes = (outcomes: Iterable<SubagentStartOutcome>) => {
   };
 };
 
-/** Scripted workflows admit only resolved read-only routes. */
 const admissionError = (
   request: StartSubagentRequest,
   readOnly: boolean,
@@ -171,7 +166,6 @@ const admissionError = (
       )
     : undefined;
 
-/** Runs the batch, publishing hostile-input-proof partial receipts in request order. */
 export const executeStartBatch = (
   input: StartBatchInput,
 ): Effect.Effect<
@@ -197,7 +191,6 @@ export const executeStartBatch = (
           partialOutcomes.has(index) ? [] : [`#${index + 1} ${entryName(spec, index)}`],
         );
         const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pendingEntries.length > 0 ? ` · ${pendingEntries.length} pending (${pendingEntries.join(", ")})` : ""}.`;
-        // A stale or failing progress renderer cannot change the launch outcomes.
         invokeBestEffort(() =>
           input.onUpdate?.({
             content: [{ type: "text", text: summary }],
@@ -229,7 +222,6 @@ export const executeStartBatch = (
         Effect.catch((error) => Effect.succeed(failureFor(spec, index, error))),
         Effect.tap(publishOutcome),
       );
-    // Every outcome passes through publishOutcome, so the published map is the final one.
     yield* Effect.forEach(specs, launchOne, { concurrency: MAX_START_BATCH, discard: true });
     const { ordered, launched, failures } = settleStartOutcomes(partialOutcomes.values());
     return {

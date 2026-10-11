@@ -1,4 +1,3 @@
-/** Explicit projections of authoritative workflow observations; never renderer-limited views. */
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import { sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core";
@@ -28,7 +27,6 @@ import {
 import { WORKFLOW_TOOL_NAME, type WorkflowToolDetails } from "./workflow-schema.ts";
 
 const envelope = { contract: WORKFLOW_CONTRACT_ID, version: 1, tool: WORKFLOW_TOOL_NAME } as const;
-/** Redact diagnostic secrets/terminal controls without clipping recovery evidence. */
 const diagnostic = (value: string): string =>
   sanitizeDiagnosticContent(stripTerminalControls(value), {
     maximumLength: Number.MAX_SAFE_INTEGER,
@@ -197,7 +195,6 @@ export const workflowStatusContract = (status: WorkflowToolStatus): WorkflowStat
   switch (status.kind) {
     case "recorded":
       return { ...base, kind: status.kind, run: recorded(status.run) };
-    // The service produces unchanged only when attention is empty; keep its full current view.
     case "unchanged":
       return {
         ...base,
@@ -265,7 +262,6 @@ export const workflowListContract = (
 const ENCODING_UNCERTAINTY =
   "Structured workflow result unavailable. The action may have taken effect; inspect the retained receipt before deciding what to do next.";
 
-/** An encoding invariant can fail after start/stop acted: preserve its receipt, never imply rollback. */
 export const withWorkflowContract = (
   result: AgentToolResult<WorkflowToolDetails>,
   project: () => WorkflowContract,

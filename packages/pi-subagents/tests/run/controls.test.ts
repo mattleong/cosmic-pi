@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -177,7 +176,6 @@ describe("SubagentService", () => {
     });
   });
 
-  // Each interrupt fault keeps the run running and suppresses the next interrupt command.
   for (const fault of [
     {
       name: "suppresses queue clearing when the child cannot confirm its turn-input barrier",
@@ -363,7 +361,6 @@ describe("SubagentService", () => {
     });
   });
 
-  // A gated steer is still being written; a dropped rename response is still awaited.
   for (const pending of [
     {
       name: "fails an in-flight RPC promptly when stop sweeps its registration",
@@ -502,20 +499,17 @@ describe("SubagentService", () => {
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "steer-vs-reply" }));
 
-      // Hold the steer transport open: `send` is past its guards but has recorded nothing.
       const steerGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateNextSend("steer", steerGate);
       const sending = yield* service.send(run.id, "Continue").pipe(Effect.forkScoped);
       yield* yieldUntil(() => fake.controls[0]?.sent("steer") === true);
 
-      // A question arrives and the parent claims it while that steer is still in flight.
       yield* askParent(fake.controls[0]!, projections, "question-1");
       const replyGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateNextIpc(replyGate);
       const replying = yield* service.reply(run.id, "Answer").pipe(Effect.forkScoped);
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
 
-      // The run is "running" again, so only the reply claim can reject the guidance.
       yield* Deferred.succeed(steerGate, undefined);
       const failure = yield* Fiber.join(sending).pipe(Effect.flip);
       expect(failure).toMatchObject({
@@ -605,7 +599,6 @@ describe("SubagentService", () => {
       expect(yield* service.reply(run.id, "Proceed.").pipe(Effect.flip)).toMatchObject({
         code: "reply_send_failed",
       });
-      // A pre-send failure proves non-delivery: the question rolls back for an immediate retry.
       const status = yield* service.status(run.id);
       expect(status.state).toBe("waiting_for_parent");
       expect(status.question).toMatchObject({ requestId: "unsent-question" });
@@ -739,8 +732,6 @@ describe("SubagentService", () => {
     });
   });
 
-  // Without an idle drain, queuing the next question must wake the sleeping retry loop
-  // without any clock advancement past the pending backoff delay.
   for (const idle of [true, false])
     it.effect(
       idle

@@ -8,7 +8,6 @@ import { freezeSnapshot, makeFrozenProjection, ProjectionError } from "../src/pr
 import { interruptingScheduler } from "../testing.ts";
 import { thrownInstance } from "./support/thrown.ts";
 
-/** The typed failure raised for a value that cannot be projected. */
 const projectionFailure = <Value>(value: Value) =>
   thrownInstance(ProjectionError, () => freezeSnapshot(value));
 
@@ -188,11 +187,15 @@ it.effect("rejects invalid projection preparation without committing and release
   }),
 );
 
+interface RecordedValues {
+  readonly values: ReadonlyArray<number>;
+}
+
 it.effect("serializes transitions and publishes each successful next state", () =>
   Effect.gen(function* () {
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    const initial: RecordedValues = { values: [] };
     const projection = yield* makeFrozenProjection(
-      { values: [] as number[] },
+      initial,
       (state) => state,
       () => undefined,
     );

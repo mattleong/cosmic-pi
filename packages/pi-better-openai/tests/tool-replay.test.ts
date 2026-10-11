@@ -1,14 +1,18 @@
-// Pi draws history before session_start: on /reload and session replacement the factory has run,
-// but the image tool registers only after trusted preview settings load.
 import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
+import { plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
-import { OPENAI_IMAGE_TOOL } from "../src/image/register.ts";
+import { createOpenAIImageMessageRenderer, OPENAI_IMAGE_TOOL } from "../src/image/register.ts";
 import { extensionHarness, ownerSource } from "./extension-harness.ts";
-import { countImages, pngPart as image, textPart as text } from "./image-fixtures.ts";
+import {
+  countImages,
+  imageMessage,
+  pngPart as image,
+  textPart as text,
+  type ImageCustomMessage,
+} from "./image-fixtures.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -26,9 +30,14 @@ const details = {
   action: "generate" as const,
   outputFormat: "png" as const,
 };
-// The applied presentation settings stand in for the trusted settings startup loads.
-const harness = (toolSource = ownerSource) =>
-  extensionHarness({ dependencies: { loadPreviewSettings: () => Promise.resolve() }, toolSource });
+const harness = (
+  toolSource = ownerSource,
+  imageMessageRenderer = createOpenAIImageMessageRenderer(),
+) =>
+  extensionHarness({
+    dependencies: { loadPreviewSettings: () => Promise.resolve(), imageMessageRenderer },
+    toolSource,
+  });
 
 const presentation = (style: (typeof styles)[number]) =>
   Effect.acquireRelease(
@@ -55,7 +64,6 @@ layer(nodeFilePlatformLayer)("Better OpenAI history before session_start", (it) 
           const before = structuredClone(result);
           row.call(args);
           row.result(result);
-          // Before startup the row keeps raw evidence only.
           expect(row.render().join("\n")).toContain(PROVIDER_TEXT);
 
           yield* h.emit("session_start");
@@ -66,7 +74,6 @@ layer(nodeFilePlatformLayer)("Better OpenAI history before session_start", (it) 
               expect(text).toContain(PROVIDER_TEXT);
               if (owner === "owned") expect(text).toContain(details.revisedPrompt);
             } else {
-              // Owned presentation keeps provider text for expansion; raw fallback always shows it.
               expect(text.includes(PROVIDER_TEXT)).toBe(owner === "foreign");
             }
           }
@@ -76,55 +83,42 @@ layer(nodeFilePlatformLayer)("Better OpenAI history before session_start", (it) 
       );
 
   for (const style of styles)
-    it.effect(
-      `image messages render before session_start with native and legacy images (${style})`,
-      () =>
-        Effect.gen(function* () {
-          yield* presentation(style);
-          const h = yield* harness();
-          const savedPath = `${h.cwd}/.pi/generated-images/otter.png`;
-          const record = { ...details, savedPath };
-          // Pi looks the renderer up whenever it draws a message, including reloaded history.
-          const render = (message: { readonly content: unknown; readonly details: unknown }) => {
-            const renderer = h.messageRenderers.get("openai-image");
-            expect(renderer).toBeDefined();
-            return renderer!(
-              opaqueFixture({
-                role: "custom",
-                customType: "openai-image",
-                display: true,
-                ...message,
-              }),
-              { expanded: true, outputPad: 0 },
-              theme,
-            )!;
-          };
-          const expectImages = () => {
-            for (const message of [
-              { content: [text(PROVIDER_TEXT), image], details: record },
-              { content: "", details: { ...record, data: image.data } },
-            ]) {
-              const component = render(message);
-              expect(countImages(component)).toBe(1);
-              expect(component.render(400).join("\n")).toContain(details.revisedPrompt);
-            }
-          };
-          // Without an image component the saved path is the only cwd-dependent text.
-          const savedPathShown = () =>
-            render({ content: [text(PROVIDER_TEXT)], details: record })
-              .render(400)
-              .join("\n");
+    it.effect(`image messages render before session_start with their native image (${style})`, () =>
+      Effect.gen(function* () {
+        yield* presentation(style);
+        const messageRenderer = createOpenAIImageMessageRenderer();
+        const h = yield* harness(ownerSource, messageRenderer);
+        expect(h.messageRenderers.get("openai-image")).toBe(messageRenderer.render);
+        const savedPath = `${h.cwd}/.pi/generated-images/otter.png`;
+        const record = { ...details, savedPath };
+        const render = <Details>(message: {
+          readonly content: ImageCustomMessage["content"];
+          readonly details: Details;
+        }) =>
+          messageRenderer.render(
+            imageMessage(message.content, message.details),
+            { expanded: true, outputPad: 0 },
+            theme,
+          )!;
+        const expectImages = () => {
+          const component = render({ content: [text(PROVIDER_TEXT), image], details: record });
+          expect(countImages(component)).toBe(1);
+          expect(component.render(400).join("\n")).toContain(details.revisedPrompt);
+        };
+        const savedPathShown = () =>
+          render({ content: [text(PROVIDER_TEXT)], details: record })
+            .render(400)
+            .join("\n");
 
-          expectImages();
-          // A temp directory under HOME may already be abbreviated with ~/ before startup.
-          const beforeStartup = savedPathShown();
-          expect(beforeStartup).toContain(".pi/generated-images/otter.png");
-          yield* h.emit("session_start");
-          expectImages();
-          expect(savedPathShown()).toContain(".pi/generated-images/otter.png");
-          expect(savedPathShown()).not.toEqual(beforeStartup);
-          expect(savedPathShown()).not.toContain(h.cwd);
-          yield* h.emit("session_shutdown");
-        }),
+        expectImages();
+        const beforeStartup = savedPathShown();
+        expect(beforeStartup).toContain(".pi/generated-images/otter.png");
+        yield* h.emit("session_start");
+        expectImages();
+        expect(savedPathShown()).toContain(".pi/generated-images/otter.png");
+        expect(savedPathShown()).not.toEqual(beforeStartup);
+        expect(savedPathShown()).not.toContain(h.cwd);
+        yield* h.emit("session_shutdown");
+      }),
     );
 });

@@ -39,12 +39,9 @@ const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
 export interface RunEventDependencies {
   readonly settlement: RunSettlement;
-  /** Called inside mutateEventView's locked transition before projection publication. */
   readonly queueQuestionLocked: RunNotificationDelivery["queueActionNotificationLocked"];
-  /** Starts asynchronous containment after an unambiguous native file-tool violation. */
   readonly onWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
   readonly onProxyEvent: RunProxyExecution;
-  /** Answers every submission, including those of inactive runs, so a child never waits. */
   readonly onStructuredResult: RunStructuredResults;
 }
 
@@ -57,7 +54,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     onStructuredResult,
   } = dependencies;
 
-  /** Reads the clock before mutateEventView takes the lock, then passes that time to `update`. */
   const mutateAt = (
     record: RunRecord,
     assignmentEpoch: number | undefined,
@@ -98,7 +94,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         name: current.name,
         requestId: envelope.requestId,
         message,
-        // A workflow keeps waiting only while it still owns the run.
         ...(current.workflow && record.owner?.live && { workflow: current.workflow }),
       });
       return {
@@ -135,7 +130,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     });
   };
 
-  /** Observes paths and claims when the returned effect runs, before the view lock. */
   const handleToolStarted = (
     record: RunRecord,
     event: Extract<BackendEvent, { readonly type: "tool_started" }>,
@@ -153,7 +147,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                   OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
               );
       const claims = record.view.writeClaims;
-      // A resolved relative path is never the marker, so the marker stands for unresolved paths.
       const violatingPaths =
         claims === undefined
           ? []
@@ -195,7 +188,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             ? recordRunWarning(record, sessionEvents, "system", violationMessage, now)
             : { sessionEvents }),
           currentTool: [...record.activeTools.values()].at(-1),
-          // Handing back a structured result is how the agent ends, not work it did.
           toolUses:
             event.toolName === SUBAGENT_RESULT_TOOL_NAME
               ? current.toolUses
@@ -246,8 +238,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     >,
   ): Effect.Effect<unknown, SubagentError> => {
     if (event.type !== "exit" && isInactiveRunRecord(record))
-      // A backend may report final cumulative usage/cost only at its native result, after the
-      // accepted report settled the run. That exact epoch's usage still merges into the outcome.
       return event.type === "assistant_message"
         ? settlement.mergeLateUsage(record, event.assignmentEpoch, event.usage)
         : Effect.void;

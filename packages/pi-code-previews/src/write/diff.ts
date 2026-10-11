@@ -22,13 +22,8 @@ const decodeSkippedExistingFilePreview = Schema.decodeUnknownOption(SkippedExist
 
 const currentMaxWriteDiffBytes = () => codePreviewPerformanceConfig.maxWriteDiffBytes;
 const currentMaxChangedLineCells = () => codePreviewPerformanceConfig.maxWriteDiffChangedLineCells;
-// Pi writes content verbatim, so a leading byte order mark is part of the previous text.
 const utf8 = new TextDecoder("utf-8", { ignoreBOM: true });
 
-/**
- * Reads an already resolved path. Resolving Pi's write target again would also rewrite Unicode
- * spaces in the working directory, which Pi's own resolution keeps.
- */
 export const readExistingFileForPreviewEffect = Effect.fn("CodePreviewWrite.readExisting")(
   function* (absolutePath: string, nextContent: string) {
     const nextBytes = Buffer.byteLength(nextContent, "utf8");
@@ -37,7 +32,6 @@ export const readExistingFileForPreviewEffect = Effect.fn("CodePreviewWrite.read
       return skippedExistingFile("new content too large", nextBytes, true, maxBytes);
     const fs = yield* FileSystem.FileSystem;
     return yield* Effect.gen(function* () {
-      // Only a regular file is opened: opening a FIFO blocks until a writer arrives.
       const info = yield* fs.stat(absolutePath);
       const size = ByteSize.toBigInt(info.size);
       if (info.type !== "File")
@@ -79,8 +73,6 @@ export function getWriteDiffSkipReason<BeforeInput>(
   );
 }
 
-// A skipped snapshot is a quiet size guard only when its validated measurements
-// establish that the previous file exceeded its recorded bound.
 export function hasWriteDiffSizeEvidence<BeforeInput>(before: BeforeInput): boolean {
   const decoded = decodeSkippedExistingFilePreview(before);
   if (Option.isNone(decoded)) return false;
@@ -99,7 +91,6 @@ export function getWriteDiffGuard(
   maxBytes = currentMaxWriteDiffBytes(),
   maxCells = currentMaxChangedLineCells(),
 ): "size" | "complexity" | undefined {
-  // UTF-16 length is a cheap lower bound on UTF-8 bytes; avoid scanning huge inputs.
   if (before.length + after.length > maxBytes || exceedsWriteDiffBytes([before, after], maxBytes))
     return "size";
   if (before !== after && shouldSkipWriteDiffComplexity(before, after, maxCells))

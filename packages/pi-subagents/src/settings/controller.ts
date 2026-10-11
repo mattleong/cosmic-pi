@@ -1,4 +1,3 @@
-// Pi command and custom-UI handlers are Promise-shaped host boundaries.
 import type * as Effect from "effect/Effect";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -53,7 +52,6 @@ export interface SessionProfileSetSnapshotWrite extends Omit<
 }
 
 export interface FleetManagerActions {
-  /** False only before unified-view admission; rejection must never open a second surface. */
   readonly openActivity?: (signal?: AbortSignal) => Promise<boolean>;
   readonly isAvailable: () => boolean;
   readonly captureModelRefresh: () => {
@@ -63,7 +61,6 @@ export interface FleetManagerActions {
   readonly stop: (id: string) => Promise<void>;
   readonly interrupt: (id: string) => Promise<void>;
   readonly resume: (id: string, message?: string) => Promise<void>;
-  /** Pending native delivery resolves as `pending`; every other typed failure still rejects. */
   readonly send: (id: string, message: string) => Promise<FleetMessageDelivery>;
   readonly reply: (id: string, message: string) => Promise<void>;
   readonly rename: (id: string, name: string) => Promise<void>;
@@ -76,12 +73,9 @@ export interface FleetManagerActions {
   readonly renameProfileSet: (patch: SubagentRenameProfileSetPatch) => Promise<void>;
   readonly deleteProfileSet: (patch: SubagentDeleteProfileSetPatch) => Promise<void>;
   readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
-  /** Saves or clears one scope's feature switch; the running session keeps its value until /reload. */
   readonly patchFeatureToggle: (patch: SubagentFeatureTogglePatch) => Promise<void>;
-  /** Sets or clears this session's own value for a feature switch, which applies at once. */
   readonly patchSessionFeatureToggle: (patch: SessionFeaturePatch) => Promise<void>;
   readonly inspectWriterWorkspace: () => Promise<WriterWorkspaceInspection>;
-  /** The coordinator rejects unsafe switches and persists accepted preferences for new sessions. */
   readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;
   readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<SessionProfileSnapshot>;
   readonly replaceSessionProfiles: (
@@ -156,7 +150,6 @@ function openFleetManager(
   });
 }
 
-/** `/subagents profiles [profile]`: the profile dashboard, optionally on one profile. */
 const profilesSubcommand = (
   pi: ExtensionAPI,
   actions: FleetManagerActions,
@@ -187,7 +180,6 @@ const profilesSubcommand = (
   },
 });
 
-/** `/subagents` opens the fleet; `profiles` and `settings` are its subcommands. */
 export function registerSubagentManagerCommand(
   pi: ExtensionAPI,
   bridge: SubagentProjectionBridge,

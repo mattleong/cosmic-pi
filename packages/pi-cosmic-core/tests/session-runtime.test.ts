@@ -1,7 +1,3 @@
-// Pi lifecycle characterization intentionally exercises AbortController.
-// Test-only runtime driver captures the host-boundary startup span.
-import * as Predicate from "effect/Predicate";
-
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,6 +6,7 @@ import { vi } from "vitest";
 import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
+  PiApi,
   type PiManagedRuntime,
   type PiSessionRuntimeSlot,
 } from "../index.ts";
@@ -20,7 +17,6 @@ import {
   makeLifecycleProbe,
 } from "../testing.ts";
 
-/** A fake managed runtime whose unused `fork` fails loudly. */
 const fakeRuntime = (
   run: PiManagedRuntime<never, never>["run"],
   dispose: () => Promise<void>,
@@ -33,7 +29,10 @@ const fakeRuntime = (
 });
 
 const hostRuntime = <R, E>(layer: Layer.Layer<R, E>) =>
-  makePiManagedRuntime(extensionApiFixture({}), layer);
+  makePiManagedRuntime(extensionApiFixture(), layer);
+
+const runStartup: PiManagedRuntime<never, never>["run"] = (effect) =>
+  Effect.runPromise(Effect.provideService(effect, PiApi, extensionApiFixture()));
 
 const rejects = <A>(run: () => Promise<A>) =>
   Effect.promise(() =>
@@ -43,7 +42,6 @@ const rejects = <A>(run: () => Promise<A>) =>
     ),
   );
 
-/** Starts input 1, aborts it while startup stalls, and holds its runtime disposal until released. */
 function abortStalledStart() {
   const events: string[] = [];
   const startedGate = Deferred.makeUnsafe<void>();
@@ -53,14 +51,12 @@ function abortStalledStart() {
   const slot = makePiSessionRuntimeSlot<number, never, never, never>({
     makeRuntime: (input) =>
       fakeRuntime(
-        (_effect, signal) => {
+        (effect, signal) => {
           events.push(`run:${input}`);
           if (input !== 1) {
-            // SAFETY: This harness invokes run only with Effect<void>; its resolved value is therefore undefined.
-            return Promise.resolve(undefined as never);
+            return runStartup(effect);
           }
           Deferred.doneUnsafe(startedGate, Effect.void);
-          // Settles only through abort-driven interruption, like the replaced host runtime.
           return Effect.runPromise(Effect.never, signal ? { signal } : undefined);
         },
         () => {
@@ -82,18 +78,15 @@ function abortStalledStart() {
 }
 
 function makeHostileSignal(operation: "addEventListener" | "aborted"): AbortSignal {
-  const target = new AbortController().signal;
-  return new Proxy(target, {
-    get(signal, property) {
-      if (property === operation) throw new Error(`hostile ${operation}`);
-      // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
-      const value = property in signal ? signal[property as keyof AbortSignal] : undefined;
-      return Predicate.isFunction(value) ? value.bind(signal) : value;
+  const { signal } = new AbortController();
+  Object.defineProperty(signal, operation, {
+    get() {
+      throw new Error(`hostile ${operation}`);
     },
   });
+  return signal;
 }
 
-/** A counting slot whose startup or runtime `run` throws synchronously when `fail` names it. */
 function makeCountingSlot(fail: string) {
   let disposals = 0;
   const failures: number[] = [];
@@ -101,11 +94,10 @@ function makeCountingSlot(fail: string) {
   const slot = makePiSessionRuntimeSlot<void, never, never, never>({
     makeRuntime: () =>
       fakeRuntime(
-        () => {
+        (effect) => {
           runs++;
           if (fail === "run") throw new Error("hostile runtime.run");
-          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-          return Promise.resolve(undefined as never);
+          return runStartup(effect);
         },
         () => {
           disposals++;
@@ -218,20 +210,17 @@ it.effect("ends captured command authority at the next lifecycle change, never r
             ),
     });
 
-    // Help before any session stays available until a session starts.
     const beforeStart = slot.captureAuthority();
     expect(beforeStart()).toBe(true);
     const starting = slot.start("ready");
     expect(beforeStart()).toBe(false);
 
-    // A command invoked while the session starts keeps working once it activates.
     yield* Deferred.await(startupEntered);
     const duringStartup = slot.captureAuthority();
     yield* Deferred.succeed(releaseStartup, undefined);
     expect(yield* Effect.promise(() => starting)).toBe(1);
     expect(duringStartup()).toBe(true);
 
-    // A failed replacement and a shutdown each end it, and nothing captured earlier returns.
     const active = slot.captureAuthority();
     expect(yield* Effect.promise(() => slot.start("fail"))).toBeUndefined();
     expect(active()).toBe(false);
@@ -331,7 +320,6 @@ it.effect("disposes an already-aborted start and leaves the slot unavailable", (
   }),
 );
 
-/** A real host-runtime slot whose startup stalls until interrupted; counts interruptions and hooks. */
 const stalledSlot = Effect.gen(function* () {
   const started = yield* Deferred.make<void>();
   let interruptions = 0;

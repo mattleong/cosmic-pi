@@ -4,10 +4,8 @@ import type { BackendEvent } from "./model.ts";
 
 type ClaudeReport = Extract<BackendEvent, { readonly type: "report" }>;
 
-// Native finalization after the report tool may require another model step.
 const RESULT_REPORT_GRACE = "10 seconds";
 
-/** Delivers already-accepted reports without owning supervisor acceptance or transport recovery. */
 export const makeLocalClaudeReportDelivery = (
   offer: (event: BackendEvent) => Effect.Effect<void>,
 ) => {
@@ -17,8 +15,6 @@ export const makeLocalClaudeReportDelivery = (
   const forwardedReportEpochs = new Set<number>();
 
   function forwardReport(report: ClaudeReport): Effect.Effect<void> {
-    // Install ownership and cleanup together. The enqueue and joiner waits stay
-    // interruptible; a cancelled enqueue releases its claim so a waiter can retry.
     return Effect.uninterruptibleMask((restore) =>
       Effect.suspend(() => {
         const epoch = report.assignmentEpoch;
@@ -63,8 +59,6 @@ export const makeLocalClaudeReportDelivery = (
     Effect.suspend(() => {
       if (forwardedReportEpochs.has(report.assignmentEpoch)) return Effect.void;
       if (nativeResultEpochs.has(report.assignmentEpoch)) return forwardReport(report);
-      // Final usage/cost must reach the queue before report settlement closes the
-      // backend scope. The scoped bound preserves completion if no result arrives.
       bufferedReports.set(report.assignmentEpoch, report);
       return Effect.sleep(RESULT_REPORT_GRACE).pipe(
         Effect.andThen(

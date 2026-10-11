@@ -68,7 +68,6 @@ const menuChoice = (
   ...(disabledHint && { enabled: false, disabledReason: description, disabledHint }),
 });
 
-/** More-menu choices carry complete actions; a default set keeps Delete visible but unavailable. */
 export const savedSetMenuChoices = (
   entry: SavedSetMenuEntry,
 ): ReadonlyArray<SearchableSelectPageChoice<ProfileSetPickerAction>> => {
@@ -110,7 +109,6 @@ export const savedSetMenuChoices = (
   ];
 };
 
-/** The saved-set More menu is the shared selector over complete library actions. */
 const savedSetMenuPage = (
   entry: SavedSetMenuEntry,
   host: Omit<
@@ -162,7 +160,6 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     return this._focused;
   }
 
-  /** The More menu owns a `/` filter input, so focus follows it while open. */
   set focused(value: boolean) {
     this._focused = value;
     if (this.menu) this.menu.focused = value;
@@ -179,7 +176,6 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     this.allEntries = profileSetPickerEntries(inspection, projectTrusted);
     const index = this.entries().findIndex((entry) => entry.key === selected);
     this.selectedIndex = index < 0 ? 0 : index;
-    // A refreshed library cannot keep a menu built for the previous entry.
     this.menu = undefined;
   }
 
@@ -243,7 +239,6 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     this.renderSoon();
   }
 
-  /** Shared list-motion handling for both input modes; endpoints keep the message untouched. */
   private applyMotionAction(action: string, steps: PageSteps): boolean {
     if (!isListMotion(action)) return false;
     this.selectedIndex = nextListMotionIndex(
@@ -340,7 +335,6 @@ export class ProfileSetPickerComponent implements Component, Focusable {
   handleInput(data: string): void {
     if (this.disposed) return;
     if (this.menu) {
-      // Shared selectors treat Right as confirmation; Right never chooses a saved-set action.
       if (!matchesKey(data, "right")) this.menu.handleInput(data);
       return;
     }

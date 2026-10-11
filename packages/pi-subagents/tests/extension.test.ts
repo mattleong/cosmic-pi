@@ -1,4 +1,3 @@
-// Exercise the real source-only entrypoint without starting application resources.
 import { fileURLToPath } from "node:url";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { expect, it } from "@effect/vitest";
@@ -7,7 +6,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import { createJiti } from "jiti";
 import { afterEach, vi } from "vitest";
-import { extensionApiFixture } from "./fixtures/pi-host.ts";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 
 type Extension = typeof import("../src/extension.ts").default;
 
@@ -20,7 +19,6 @@ it.effect.each([
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-subagents-entry-" });
-    // A partial installed package proves the child does not evaluate parent-only imports.
     yield* fs.copy(fileURLToPath(new URL("../src", import.meta.url)), `${directory}/src`);
     yield* fs.remove(`${directory}/src/application`, { recursive: true });
     vi.stubEnv("PI_SUBAGENT_CHILD", marker);

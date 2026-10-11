@@ -8,11 +8,6 @@ import type { RunContext, RunRecord } from "./internal.ts";
 import { isTerminalRunState } from "./model.ts";
 import { recordRunWarning } from "./warnings.ts";
 
-/**
- * Owns spawn-settlement → backend scope cleanup → token-confirmed lease release
- * ordering plus run-state reclamation and fail-closed cleanup quarantine for a
- * run record. Every field mutation stays under the shared service lock.
- */
 export function makeRunRecordCleanup(dependencies: RunContext) {
   const { withLock, publish, writerPools } = dependencies;
 
@@ -78,15 +73,12 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
           record.view.state === "failed" ||
           record.view.state === "stopped" ||
           record.view.state === "stopping";
-        // A terminal run settled before its process slot was released here; publish the slot
-        // release too, so admission waiters wake. Non-terminal runs publish when they settle.
         const publishRelease =
           record.view.pid !== undefined || isTerminalRunState(record.view.state);
         if (record.view.pid !== undefined) {
           const { pid: _pid, ...view } = record.view;
           record.view = view;
         }
-        // A pid-less, non-terminal release still frees a slot; the lock release rechecks it.
         if (publishRelease) yield* publish;
         return { owned: true as const, shouldReclaim, cleanupSettlement };
       }),
@@ -227,8 +219,6 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
               () => record.scope === scope && record.closingScopeSettled !== claim.settled,
             ),
           );
-          // A pre-close owner can relinquish its claim. Existing joiners must retry,
-          // not mistake that owner's wakeup for completed resource cleanup.
           if (abandoned) yield* restore(closeRecordScope(record, scope));
           return;
         }
@@ -244,17 +234,11 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
                     record.closingScope = undefined;
                     record.closingScopeSettled = undefined;
                   }
-                  // The scope is still open. Keep cleanupDisposition and its shared
-                  // settlement pending so late launch compensation can finish cleanup.
                   Deferred.doneUnsafe(closeSettled, Effect.void);
                 }),
               ),
             ),
           );
-        // Scope.close marks the scope closed before running finalizers. Once started,
-        // its owned releases and outcome publication must finish before a shutdown
-        // interrupt can settle the shared latch. A stalled release therefore keeps
-        // shutdown waiting; it must not be reported as completed cleanup.
         yield* Scope.close(scope, Exit.void).pipe(
           Effect.andThen(detachWriterPoolAfterCleanup(record, scope)),
           Effect.exit,
@@ -292,17 +276,10 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
     );
 
   return {
-    /** Exclusive pending→running→reclaimed private run-state reclamation; failure re-arms. */
     reclaimRecordRunState,
     markCleanupPending,
-    /**
-     * Fail-closed quarantine retaining process capacity and writer ownership for the session.
-     * Launch also quarantines uncertain/partial eviction reclamation so the old run cannot resume.
-     */
     retainCleanupQuarantine,
-    /** Spawn settlement → scope close → lease release → clear/quarantine, exactly once per scope. */
     closeRecordScope,
-    /** Defers scope closure while initialization still owns the record. */
     closeExitedScope,
   };
 }

@@ -76,7 +76,6 @@ export interface CompletionDeliverySelection {
 const compareRecordIds = (left: RunRecord, right: RunRecord): number =>
   left.view.id.localeCompare(right.view.id, undefined, { numeric: true });
 
-/** Caller must hold the service lock. */
 export function collectCompletionDeliveryBatch(
   records: ReadonlyMap<string, RunRecord>,
 ): ReadonlyArray<CompletionDeliverySelection> {
@@ -98,7 +97,6 @@ export function collectCompletionDeliveryBatch(
   return selected;
 }
 
-/** Caller must hold the service lock. */
 export const hasEligibleCompletion = (records: ReadonlyMap<string, RunRecord>): boolean => {
   for (const record of records.values())
     for (const generation of record.completionGenerations.keys())
@@ -110,15 +108,12 @@ export function deliveredCompletionKeys(
   delivery: SubagentNotificationDelivery | undefined,
   runs: ReadonlyArray<SubagentCompletionNotification>,
 ): ReadonlySet<string> {
-  // Existing embedders use void callbacks. A callback that returns normally is a
-  // successful synchronous delivery unless it explicitly reports partial delivery.
   return new Set(
     delivery?.deliveredCompletionKeys ??
       runs.map((run) => completionNotificationKey(run.id, run.generation)),
   );
 }
 
-/** Caller must hold the service lock and the completion gate. */
 export function acknowledgeCompletionSelections(
   selected: ReadonlyArray<CompletionDeliverySelection>,
   delivered: ReadonlySet<string>,

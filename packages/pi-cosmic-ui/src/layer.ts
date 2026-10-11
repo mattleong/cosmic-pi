@@ -9,7 +9,6 @@ import { CosmicUiService, type CosmicUiProjection } from "./protocol/service.ts"
 import { ActivityService } from "./activity/service.ts";
 import type { ActivityHost } from "./boundary/host-activity.ts";
 
-/** Plain session values captured by the Pi adapter before runtime construction. */
 export interface CosmicUiSessionInput {
   readonly ctx: ExtensionContext;
   readonly context: MutableRef.MutableRef<ExtensionContext>;
@@ -27,7 +26,6 @@ export interface CosmicUiApplicationLayerOptions {
   readonly activityHost: ActivityHost;
 }
 
-/** Compose the complete Cosmic UI dependency graph for one Pi session. */
 export const makeCosmicUiApplicationLayer = (
   { context, cwd, initialTotals, projectTrusted, publicationOwner }: CosmicUiSessionInput,
   options: CosmicUiApplicationLayerOptions,

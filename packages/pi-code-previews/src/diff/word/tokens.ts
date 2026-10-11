@@ -26,7 +26,6 @@ export function wordEmphasisTokens(text: string): WordEmphasisToken[] {
   return matchedTokens(text, WORD_TOKEN_PATTERN, 0);
 }
 
-/** `matchAll` iterates a clone, so the shared global patterns keep no `lastIndex` state. */
 function matchedTokens(text: string, pattern: RegExp, offset: number): WordEmphasisToken[] {
   return Array.from(text.matchAll(pattern), ({ 0: value, index }) => ({
     value,

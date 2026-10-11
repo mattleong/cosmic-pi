@@ -1,7 +1,5 @@
 import sharp from "sharp";
 
-// This fixed one-shot process is the native cancellation boundary. Nothing loads
-// Sharp in the parent, and no native error or raw pixel leaves this process.
 sharp.cache(false);
 sharp.concurrency(1);
 
@@ -25,8 +23,6 @@ try {
   const { format } = await input.metadata();
   if (!["png", "jpeg", "jpg", "webp", "gif"].includes(format))
     throw new Error("unsupported format");
-  // sRGB plus uchar bounds raw output to at most four bytes per pixel, including
-  // animation pages. timeout is secondary and cooperative, not cancellation.
   await input.toColourspace("srgb").raw({ depth: "uchar" }).timeout({ seconds: 30 }).toBuffer();
   process.stdout.write(JSON.stringify({ format }));
 } catch {

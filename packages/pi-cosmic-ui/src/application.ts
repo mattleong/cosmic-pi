@@ -1,4 +1,3 @@
-/** Cosmic UI host with one Effect-managed runtime per Pi session. */
 import * as Predicate from "effect/Predicate";
 
 import {
@@ -61,7 +60,6 @@ export interface CosmicUiApplicationDependencies {
   readonly workingRow?: WorkingRowOptions;
 }
 
-/** `dependencies` supplies owned clock/ticker and host-cleanup boundaries in tests. */
 export function registerCosmicUiApplication(
   pi: ExtensionAPI,
   dependencies: CosmicUiApplicationDependencies = {},
@@ -86,7 +84,6 @@ export function registerCosmicUiApplication(
   };
   const hostState = () => ({
     active: footerInstallation.isActive(),
-    // Activation follows startup, which loads the session's visibility preferences.
     ready: activatedToken !== undefined,
     hidden: [...config().footer.hidden],
   });
@@ -129,7 +126,6 @@ export function registerCosmicUiApplication(
   };
   const totalsFromSession = (ctx: ExtensionContext): FooterTotals => {
     const generation = lifecycleGeneration;
-    // Any invalid record or overflow discards the whole rescan.
     const read = invokeHostCallback<FooterTotals | undefined>(() => {
       let totals = emptyTotals();
       for (const entry of ctx.sessionManager.getEntries()) {
@@ -184,7 +180,6 @@ export function registerCosmicUiApplication(
         pi,
         makeCosmicUiApplicationLayer(input, {
           projection,
-          // Config commits can change hidden IDs, so they also republish host state.
           requestRender: () => {
             footerInstallation.requestRender();
             publishHostState();
@@ -217,14 +212,12 @@ export function registerCosmicUiApplication(
       workingRow.deactivate();
       activityHost.deactivate();
       footerInstallation.uninstall();
-      // A start that never activated keeps pre-session contributions for the next start.
       if (activatedToken === token) {
         activatedToken = undefined;
         registry.clear();
       }
       publishHostState();
     },
-    // The start then settles without a token, which retires this input.
     onStartFailure: ({ ctx }) => notifyAtHostBoundary(ctx, "Cosmic UI couldn't start", "warning"),
   });
 
@@ -240,7 +233,6 @@ export function registerCosmicUiApplication(
     handler: (_args, ctx) => runFrom(activityHost.open(ctx).pipe(Effect.ignore), ctx),
   });
 
-  /** The runtime owns a released forwarder for the event's current host signal. */
   const hostSignal = (ctx: ExtensionContext) => {
     const captured = captureHostSignal(ctx);
     return captured._tag === "Captured" ? captured.signal : undefined;
@@ -249,7 +241,6 @@ export function registerCosmicUiApplication(
     slot.run(effect, hostSignal(ctx));
   const forkFrom = <A, E>(effect: Effect.Effect<A, E, CosmicUiService>, ctx: ExtensionContext) =>
     slot.fork(effect, hostSignal(ctx));
-  /** Pi awaits event handlers before its agent loop continues, so Git probes run beside it. */
   const forkGitRefresh = (ctx: ExtensionContext, force?: boolean) =>
     forkFrom(
       CosmicUiService.use((service) => service.refreshGit(force)),
@@ -290,15 +281,12 @@ export function registerCosmicUiApplication(
     captureAuthority: slot.captureAuthority,
   });
 
-  /** Retires the current input's publication authority and usage ticker. */
   const beginLifecycle = () => {
-    // Revoke before resetting projections or awaiting disposal, including pending starts.
     retirePublication();
     stopUsageTicker?.();
     stopUsageTicker = undefined;
     return ++lifecycleGeneration;
   };
-  /** Delayed cleanup applies only while no newer lifecycle has begun. */
   const clearRetired = (generation: number, clearRegistry: boolean) => {
     if (generation !== lifecycleGeneration) return;
     currentContext = undefined;
@@ -342,8 +330,6 @@ export function registerCosmicUiApplication(
       )
       .then((token) => {
         if (token === undefined) {
-          // A failed or superseded start never activates: stop publishing this dead context
-          // unless a newer start already replaced it.
           retirePublication(publicationOwner);
           if (currentContext === context) currentContext = undefined;
           abort.release();
@@ -411,7 +397,6 @@ export function registerCosmicUiApplication(
     updateContext(ctx);
     workingRow.promptEnd();
   });
-  // This main-agent-only boundary precedes provider work. Provider hooks also see cache warming.
   pi.on("context_with_system", () => {
     workingRow.callStart();
   });

@@ -89,7 +89,6 @@ describe("activity presentation", () => {
         memberRow(`planned-${index}`, workflow, "Test", "pending", { planned: true }),
       ),
     ];
-    // Distinct running, finished and planned counts, without depending on wording or layout.
     const line = renderActivityWidget(rows, 60, 12, { now: 10_000 }).find((text) =>
       text.includes("Test"),
     );
@@ -160,7 +159,6 @@ describe("activity presentation", () => {
     component.handleInput("r");
     component.render(120);
     loads[1]!.deliver(logs(40));
-    // New lines may fill the old trailing blank rows, but must not move viewed log lines.
     expect(visibleLogs()?.slice(0, original?.length)).toEqual(original);
     component.handleInput("k");
     const scrolled = visibleLogs();
@@ -194,7 +192,6 @@ describe("activity presentation", () => {
     const opened = visible();
     expect(opened[0]).toBe("line-0");
     expect(opened).not.toContain("line-59");
-    // Later frames keep the place, and scrolling moves it without springing back.
     expect(visible()).toEqual(opened);
     component.handleInput("j");
     const moved = visible();
@@ -284,7 +281,6 @@ describe("activity presentation", () => {
     component.handleInput("1");
     component.handleInput("1");
     expect(invoked).toEqual([]);
-    // The source's own progress leaves the confirmed scope and action unchanged.
     current = { ...current, revision: "2", summary: "still running" };
     component.handleInput("accept");
     expect(invoked[0]).toMatchObject({ revision: "2", actionId: "stop" });
@@ -296,7 +292,6 @@ describe("activity presentation", () => {
       actions: [{ ...stop, confirmation: "Stop this branch and its three descendants?" }],
     };
     component.handleInput("accept");
-    // A changed scope keeps the displayed revision, which the service rejects as stale.
     expect(invoked[1]).toMatchObject({ revision: "2", actionId: "stop" });
     expect(closed).toEqual([]);
   });
@@ -461,7 +456,6 @@ describe("grouped activity interaction", () => {
     const queued = memberRow("queued", workflow, "Find", "pending", {
       actions: [{ id: "skip", label: "Skip", handoff: false }],
     });
-    // A producer that never declares handoff may open its own UI, so the manager closes first.
     const asking = memberRow("asking", workflow, "Find", "needs-input", {
       actions: [{ id: "reply", label: "Reply" }],
     });

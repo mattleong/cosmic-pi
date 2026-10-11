@@ -30,6 +30,7 @@ import {
   questionnaireState,
   stateCounts,
   stateWords,
+  type QuestionnaireState,
   type ReplayedAnswer,
   type ReplayedSnapshot,
 } from "./tool-render-projection.ts";
@@ -48,14 +49,11 @@ const notification = projection(
     outcome: answerOutcome,
   }),
 );
-/** Async replay accepts string content as well as text parts. */
 const rawText = <Content>(content: Content): string => fallbackText(content, true);
-/** Async snapshots carry answer keys only; their questions stay with the opening call. */
 const NO_TITLES: ReadonlyMap<string, string> = new Map();
 
 type ResultContext = Partial<Pick<RenderContext, "args" | "isError">>;
 
-/** "Ask user" with its question titles, or "Questionnaire" with the control action. */
 export function renderAsyncCall<Args>(
   args: Args,
   theme: Theme,
@@ -68,7 +66,6 @@ export function renderAsyncCall<Args>(
   return callBody(header, args, theme, context);
 }
 
-/** A consistent single snapshot's answers; stale or mismatched outcomes are never shown. */
 function submittedAnswers(
   rows: readonly ReplayedSnapshot[] | undefined,
 ): readonly ReplayedAnswer[] | undefined {
@@ -81,7 +78,6 @@ function submittedAnswers(
     : undefined;
 }
 
-/** The expanded body in both styles: the labeled agent-facing text. */
 export function renderAsyncContent<Input>(
   input: Input,
   _options: ToolRenderResultOptions,
@@ -98,10 +94,6 @@ export function renderAsyncContent<Input>(
   );
 }
 
-/**
- * Collapsed, a questionnaire shows its answers or its routine state; a list shows its counts.
- * Failures are the shell's issue lines; a returned cancellation is stated here, once.
- */
 export function renderAsyncResult<Input>(
   input: Input,
   options: ToolRenderResultOptions,
@@ -114,7 +106,6 @@ export function renderAsyncResult<Input>(
   const states = rows?.map(questionnaireState);
   const list = !rows || rows.length !== 1 || isStatusList(context.args);
   const [state] = states ?? [];
-  // The shell states failures and the cancellations Pi reports; the body states the rest.
   const cancelled = !list && state === "cancelled" && !context.isError;
   if (options.expanded) {
     const content = renderAsyncContent(input, options, theme, context);
@@ -124,9 +115,19 @@ export function renderAsyncResult<Input>(
   if (!rows || !states || states.some((entry) => entry === undefined))
     return new Text(rawText(result?.content), 0, 0);
   const known = states.flatMap((entry) => (entry ? [entry] : []));
+  return collapsedRows(rows, known, list, theme);
+}
+
+function collapsedRows(
+  rows: readonly ReplayedSnapshot[],
+  states: readonly QuestionnaireState[],
+  list: boolean,
+  theme: Theme,
+): Component {
   if (rows.length === 0) return mutedState(["No questionnaires retained", "None retained"], theme);
-  if (list) return mutedState(stateCounts(known), theme);
-  if (cancelled) return cancelledLine(theme);
+  if (list) return mutedState(stateCounts(states), theme);
+  const [state] = states;
+  if (state === "cancelled") return cancelledLine(theme);
   const answers = submittedAnswers(rows);
   if (answers) return answersBody(answers, NO_TITLES, theme, true);
   return state === "waiting" || state === "queued"
@@ -134,7 +135,6 @@ export function renderAsyncResult<Input>(
     : emptyBody();
 }
 
-/** Lines under the transcript's output padding. */
 function padded(parts: readonly Component[], pad: number): Component {
   return {
     render(width) {
@@ -148,10 +148,6 @@ function padded(parts: readonly Component[], pad: number): Component {
   };
 }
 
-/**
- * Automatic answer messages. Collapsed they show the answers (or only a compact row); expanded
- * they show the message the agent received. Delivery and generation IDs never appear.
- */
 export function renderAsyncMessage<Input>(
   input: Input,
   options: MessageRenderOptions,
@@ -169,7 +165,6 @@ export function renderAsyncMessage<Input>(
       : outcome.outcome === "cancelled"
         ? "Questionnaire cancelled"
         : "Answers submitted";
-    // Malformed notifications have no outcome; the planner marks them unconfirmed.
     const { collapsedSummary } = planCompactPresentation({
       summary: outcome && {
         subject,

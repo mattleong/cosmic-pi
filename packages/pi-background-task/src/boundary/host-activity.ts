@@ -24,10 +24,6 @@ const ACTIVITY_STATUS = {
   timed_out: "failed",
 } as const satisfies Record<BackgroundTaskState, ActivityItem["status"]>;
 
-/**
- * One snapshot holds at most `ACTIVITY_LIMITS.items`, or the host rejects all of it. Retained
- * finished tasks can exceed that, so active tasks come first and the oldest finished ones drop.
- */
 export function backgroundTaskActivityItems(
   projection: BackgroundTaskProjection,
 ): readonly ActivityItem[] {
@@ -74,7 +70,6 @@ export function backgroundTaskActivityItems(
   );
 }
 
-/** Materialize only the selected task's bounded tail, never a fleet-wide log snapshot. */
 export function backgroundTaskActivityDetail(
   projection: BackgroundTaskProjection,
   id: string,
@@ -106,7 +101,6 @@ export function backgroundTaskActivityDetail(
   });
 }
 
-/** Commands have no ownerRunId; keep them at the root and never infer ancestry. */
 export function registerBackgroundTaskActivity(options: {
   readonly events: ActivityEvents;
   readonly sessionId: string;

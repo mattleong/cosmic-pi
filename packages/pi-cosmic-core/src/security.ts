@@ -33,7 +33,6 @@ interface DiagnosticSanitizerOptions {
   readonly maximumLength?: number;
 }
 
-/** Whether a string contains a Unicode control character (General Category Cc). */
 export const hasControlCharacter = (value: string): boolean => CONTROL_CHARACTER_REGEXP.test(value);
 
 const replaceContentControlCharacters = (value: string): string =>
@@ -46,7 +45,6 @@ const replaceContentControlCharacters = (value: string): string =>
 
 export const stripAnsi = (value: string): string => value.replace(ANSI_ESCAPE_REGEXP, "");
 
-/** Index of a control sequence's final byte, or the input length when unterminated. */
 const skipControlSequence = (value: string, start: number): number => {
   for (let index = start; index < value.length; index += 1) {
     const current = value.charCodeAt(index);
@@ -55,7 +53,6 @@ const skipControlSequence = (value: string, start: number): number => {
   return value.length;
 };
 
-/** Index of BEL, C1 ST (only when accepted), or ESC-backslash's backslash; else the length. */
 const skipTerminalString = (value: string, start: number, acceptC1Terminator: boolean): number => {
   for (let index = start; index < value.length; index += 1) {
     const current = value.charCodeAt(index);
@@ -65,7 +62,6 @@ const skipTerminalString = (value: string, start: number, acceptC1Terminator: bo
   return value.length;
 };
 
-/** Remove terminal control strings while preserving Markdown-significant newlines and tabs. */
 export function stripTerminalControls(value: string): string {
   let result = "";
   for (let index = 0; index < value.length; index += 1) {
@@ -92,7 +88,6 @@ export function stripTerminalControls(value: string): string {
   return result;
 }
 
-/** Strip terminal controls and collapse whitespace into a single trimmed line. */
 export const sanitizeTerminalLine = (text: string): string =>
   stripTerminalControls(text).replace(/\s+/g, " ").trim();
 
@@ -107,10 +102,6 @@ const redactSensitiveText = (message: string): string =>
     )
     .replace(/\[REDACTED\](?:\])+/g, REDACTED);
 
-/**
- * Clips to `maximumLength` without splitting a surrogate pair. A limit too small to keep any
- * text still marks the clip.
- */
 const clipDiagnostic = (text: string, maximumLength = DIAGNOSTIC_MAX_LENGTH): string =>
   text.length <= maximumLength ? text : maximumLength > 1 ? clipText(text, maximumLength) : "…";
 
@@ -119,11 +110,6 @@ export function decodeJwtPayloadText(token: string): string | undefined {
   return payload ? Result.getOrUndefined(Base64Url.decodeString(payload)) : undefined;
 }
 
-/**
- * Decodes one JWT payload claim set, returning `undefined` for a missing or invalid payload.
- * `payloadSchema` is a from-string schema over the JSON payload text (for example
- * `Schema.fromJsonString(JwtPayloadSchema)`); Redacted token wrapping stays at the call site.
- */
 export const extractJwtClaim = <S extends Schema.ConstraintDecoder<unknown>>(
   token: string | undefined,
   payloadSchema: S,
@@ -134,7 +120,6 @@ export const extractJwtClaim = <S extends Schema.ConstraintDecoder<unknown>>(
   return decodeUnknownOrUndefined(payloadSchema, source);
 };
 
-/** Redacted OAuth-token field schema shared by provider auth documents. */
 export const redactedTokenSchema = (label: string) =>
   Schema.RedactedFromValue(Schema.Trim.check(Schema.isMinLength(1)), { label });
 
@@ -148,14 +133,12 @@ export function sanitizeDiagnosticError(
   message: string,
   options: DiagnosticSanitizerOptions = {},
 ): string {
-  // Each run of controls and spaces becomes one space.
   const redacted = redactSensitiveText(message)
     .replace(/[\p{Cc} ]+/gu, " ")
     .trim();
   return clipDiagnostic(redacted || "Unknown error.", options.maximumLength);
 }
 
-/** Redact secrets and terminal controls without collapsing Markdown-significant whitespace. */
 export function sanitizeDiagnosticContent(
   content: string,
   options: DiagnosticSanitizerOptions = {},
@@ -166,7 +149,6 @@ export function sanitizeDiagnosticContent(
   );
 }
 
-/** Shared field policy for structured diagnostics and incomplete JSON previews. */
 export const isSensitiveDiagnosticKey = (key: string): boolean => {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
   return (
@@ -186,7 +168,6 @@ export function redactDiagnosticValue<ValueInput>(value: ValueInput): Schema.Jso
     if (depth >= 16 || seen.has(current)) return "[TRUNCATED]";
     seen.add(current);
     try {
-      // Array.from visits holes too, so a sparse array redacts to nulls instead of holes.
       if (Array.isArray(current)) return Array.from(current, (entry) => redact(entry, depth + 1));
       return Object.fromEntries(
         Object.entries(current).map(([key, entry]) => [

@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -13,7 +12,12 @@ import type { SubagentProjection } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { backendLaunch } from "../fixtures/backend-supervisor.ts";
 import { view } from "../fixtures/run-view.ts";
-import { makeRunContext, partialRecord, runningAssignment } from "./fixtures/run-context.ts";
+import {
+  launchFixture,
+  makeRunContext,
+  runningAssignment,
+  runRecordFixture,
+} from "./fixtures/run-context.ts";
 import {
   localServiceFixture,
   nativeReportRequest,
@@ -57,7 +61,6 @@ const ackFor = (control: FakeChildControl, requestId: string) =>
     return find()!;
   });
 
-/** Ends the assignment the way a terminating result tool does: a tool-use turn, then settle. */
 const settleAfterToolUse = (control: FakeChildControl) => {
   control.offer({
     type: "message_end",
@@ -70,7 +73,6 @@ const settleAfterToolUse = (control: FakeChildControl) => {
   control.offer({ type: "agent_settled" });
 };
 
-/** Waits for the run's terminal projection, then reads its status. */
 const settled = (
   projections: ReadonlyArray<SubagentProjection>,
   service: SubagentServiceContract,
@@ -128,7 +130,6 @@ describe("local Pi structured results", () => {
       expect(yield* ackFor(control, "first")).toMatchObject({ ok: true });
       submit(control, "second", { verdict: "bad", findings: [] });
       expect(yield* ackFor(control, "second")).toMatchObject({ ok: false });
-      // A later turn's valid JSON text does not replace the accepted result either.
       control.settle(canonicalResultJson({ verdict: "bad", findings: [] }));
       const result = yield* settled(projections, service, run.id);
       expect(result).toMatchObject({ state: "completed", finalText: canonicalResultJson(OK) });
@@ -234,12 +235,11 @@ describe("structured result admission", () => {
   it.effect("refuses submissions from an earlier assignment or an inactive run", () =>
     Effect.gen(function* () {
       const contract = yield* contractFor(FINDINGS);
-      // Result admission reads only these fields, the launch contract, and its own slot.
-      const record = partialRecord({
+      const record = yield* runRecordFixture({
         view: view({ state: "running" }),
         stoppedByParent: false,
         assignment: runningAssignment(2),
-        launch: { resultContract: contract },
+        launch: launchFixture({ resultContract: contract }),
       });
       const answers: Array<{ readonly ok: boolean; readonly message?: string | undefined }> = [];
       const accept = makeRunStructuredResults(yield* makeRunContext());

@@ -1,4 +1,3 @@
-// Effect test entry points own the profile service lifecycle.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -82,28 +81,29 @@ describe("session profile overrides", () => {
           return local;
         },
       });
-      const invalidRoutes = [
-        { candidates: [{ ...local, host: "herdr" }] },
-        { candidates: [{ ...local, closeOnReport: false }] },
-        { candidates: [local, { ...local, host: "herdr" }] },
-        { candidates: [{ ...local, host: "herdr" }, local] },
+      const staysOpen = { ...local, closeOnReport: false };
+      const invalidRoutes: ReadonlyArray<ProfileRoute> = [
+        { candidates: [staysOpen] },
+        { candidates: [local, staysOpen] },
+        { candidates: [staysOpen, local] },
         { candidates: [accessorCandidate] },
         { candidates: accessorArray },
       ];
       const beforePublication = [...published];
       for (const invalidRoute of invalidRoutes) {
-        // SAFETY: Deliberately exercise the public mutation boundary with invalid unknown input.
-        const route = invalidRoute as never;
         const result = yield* service
-          .patchSessionProfile({ profile: "worker", route, expectedRevision: initial.revision })
+          .patchSessionProfile({
+            profile: "worker",
+            route: invalidRoute,
+            expectedRevision: initial.revision,
+          })
           .pipe(Effect.result);
         expect(result._tag).toBe("Failure");
-        // A saved-set apply boundary must reject the same routes even through a typed call.
         const rejectedSet = yield* service
           .replaceSessionProfiles({
             ...initial.baseline,
             expectedRevision: initial.revision,
-            profiles: { ...initial.baseline.profiles, worker: route },
+            profiles: { ...initial.baseline.profiles, worker: invalidRoute },
           })
           .pipe(Effect.result);
         expect(rejectedSet._tag).toBe("Failure");
@@ -197,7 +197,6 @@ describe("session profile overrides", () => {
           : route(`openai/${source}`);
     const accepted = Object.fromEntries(
       Object.entries(origins).map(([name, origin]) => {
-        // Sibling profiles carry the origin's own provenance so only the reviewer varies.
         const siblingSource: ProfileRouteSource =
           name === "global-invalid" || name === "project-invalid" ? name : "builtin";
         const siblingRoutes = siblingSource === "builtin" ? BUILTIN_PROFILE_ROUTES : EMPTY_ROUTES;
@@ -624,7 +623,14 @@ describe("session profile overrides", () => {
   it.effect("allows a session route to repair an invalid loaded project route temporarily", () =>
     Effect.gen(function* () {
       const initial = makeSessionProfileSnapshot(
-        resolveTestConfig({ version: 4 }, { version: 4, profiles: { reviewer: null } }),
+        resolveTestConfig(
+          { version: 6 },
+          {
+            version: 6,
+            defaultProfileSet: "default",
+            profileSets: { default: { profiles: { reviewer: null } } },
+          },
+        ),
       );
       expect(initial.effectiveConfig.profileSources.reviewer).toBe("project-invalid");
       const repaired = yield* patchSessionProfileSnapshot(initial, {
@@ -674,7 +680,6 @@ describe("session profile overrides", () => {
         ultracode: false,
         featureSources: { ultracode: "session" },
       });
-      // A repeated value changes nothing, so a stale revision isn't needed for it.
       expect(
         (yield* service.patchSessionFeature({
           toggle: "ultracode",

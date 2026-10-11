@@ -32,7 +32,6 @@ import type { CodePreviewRendererSession } from "./renderer-contract";
 import { rendererFields, RetainedRendererGate, retainedCodePreviewRenderers } from "./renderer-row";
 import { isThirdPartyPreviewName, thirdPartyAdapter } from "../third-party/registry";
 
-/** An origin token: readiness can change once, but ownership never follows the global slot. */
 export class CodePreviewPresentationOwner extends RetainedRendererGate {
   session: CodePreviewRendererSession | undefined;
   private readonly cancellations = new Set<() => void>();
@@ -75,15 +74,10 @@ export class CodePreviewPresentationOwner extends RetainedRendererGate {
   override retire(): void {
     super.retire();
     this.scheduler = undefined;
-    // Revoke authority and cancel subscriptions synchronously, before Effect scope disposal.
     for (const cancel of this.cancellations) invokeHostCallback(cancel, undefined);
   }
 }
 
-/**
- * Source admission happens once, here. Declining leaves downstream untouched; no execution
- * definition or manager is registered for presentation.
- */
 function select(
   name: string,
   downstream: ToolRenderers | undefined,
@@ -105,11 +99,9 @@ function select(
     return session.enabledTools.includes("tool_search")
       ? createNativeToolSearchRenderers(presentation)
       : undefined;
-  // Every remaining admitted name is a native MCP tool or resource.
   return createNativeMcpRenderers(name, host.tools.get(name), downstream, presentation);
 }
 
-/** One resolver registration per extension factory, not per session. */
 export function createCodePreviewRendererResolver(
   pi: ExtensionAPI,
   currentOwner: () => CodePreviewPresentationOwner,
@@ -133,11 +125,8 @@ export function createCodePreviewRendererResolver(
           ),
         undefined,
       );
-    // Rows resolved after readiness are ordinary renderers in Pi's own shell, frozen now.
     if (owner.ready && owner.session) return selected(false) ?? downstream;
     const host = invokeHostCallback(() => capturePreviewHostTools(pi), undefined);
-    // Prebind discovery may be empty or unavailable. A raw self facade claims no native identity;
-    // semantic source admission is deferred until the originating session becomes ready.
     const deferredAdmission = isCodePreviewToolName(name) && !host?.tools.has(name);
     if (
       !deferredAdmission &&
@@ -146,8 +135,6 @@ export function createCodePreviewRendererResolver(
           !thirdPartyAdapter(name, host.tools.get(name))))
     )
       return downstream;
-    // Pi fixes a row's shell when it is built, so cold replay keeps a self shell and adopts the
-    // first-ready appearance.
     return retainedCodePreviewRenderers(name, downstream, owner, () => selected(true));
   };
 }

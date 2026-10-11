@@ -1,4 +1,3 @@
-// Public SDK host boundary: real agent loop, nested tool hooks and native QuickJS; no inference.
 import type { AuthOperationOptions, ModelType } from "@earendil-works/pi-ai";
 import * as Effect from "effect/Effect";
 import { fauxCodemodeSession } from "pi-cosmic-core/testing/sdk";
@@ -38,8 +37,6 @@ export const nativeCodemodeSession = (
   return fauxCodemodeSession({
     prefix: "subagents-workflow-",
     provider: "workflow-session-test",
-    // Availability stays fixture-only: a classifier authenticated by the developer's environment
-    // must never be preferred, reached, or required by these tests.
     prepareModels: (models) => {
       const listAvailable = models.getAvailableOfType.bind(models);
       models.getAvailableOfType = <TType extends ModelType>(

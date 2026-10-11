@@ -1,9 +1,3 @@
-/**
- * Version-1 machine-readable `background_task` result contract for native Code Mode scripts. It
- * is separate from the persisted display details: it carries only projected domain facts, never
- * formatted text, and encodes strictly, so an unexpected key or out-of-bounds value is a producer
- * invariant failure rather than silently accepted data.
- */
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot, utf8ByteLength } from "pi-cosmic-core";
@@ -18,12 +12,9 @@ import {
 export const BACKGROUND_TASK_CONTRACT_ID = "pi-background-task/task";
 export const BACKGROUND_TASK_CONTRACT_VERSION = 1;
 export const BACKGROUND_TASK_TOOL_NAME = "background_task";
-/** Newest UTF-8 bytes of combined log output that one `logs` contract carries. */
 export const MAX_CONTRACT_LOG_OUTPUT_BYTES = 1_048_576;
-/** A failure cause is error-like metadata and shares the error bound. */
 export const MAX_CONTRACT_CAUSE_CHARS = BOUNDS.maxErrorChars;
 
-// The persisted member fields are reused as values; their schemas and order stay unchanged.
 const snapshot = BackgroundTaskSnapshotSchema.fields;
 const logs = BackgroundLogMetadataSchema.fields;
 const wait = BackgroundTaskWaitResultSchema.fields;
@@ -39,7 +30,6 @@ const Finished = Schema.Boolean.annotate({
     "The task state is terminal. Not proof that the process tree exited, was cleaned up, or succeeded.",
 });
 
-/** One task's metadata. Command, cwd, pid, waiter marks, and log events are never projected. */
 const TaskContractSchema = Schema.Struct({
   id: snapshot.id,
   name: snapshot.name,
@@ -59,7 +49,6 @@ const TaskContractSchema = Schema.Struct({
   droppedLogBytes: snapshot.droppedLogBytes,
 });
 
-// The UTF-16 length bound is the JSON Schema-visible form of the UTF-8 byte bound.
 const LogOutput = Schema.String.annotate({
   description:
     "Newest sanitized stdout/stderr from the requested slice, at most 1 MiB of UTF-8. Stderr prefixes may be clipped. Not credential-redacted; defaults to the last 200 lines.",
@@ -117,7 +106,6 @@ const ClearContractSchema = Schema.Struct({
   removed: Schema.Natural,
 });
 
-/** Success-only contract: typed failures reject the call and carry no contract. */
 export const BackgroundTaskContractSchema = Schema.Union([
   TaskActionContractSchema,
   TasksActionContractSchema,
@@ -140,11 +128,6 @@ const encodeContract = Schema.encodeExit(
   STRICT_PARSE_OPTIONS,
 );
 
-/**
- * Strictly encodes one contract with the JSON codec the native `outputSchema` describes and
- * returns detached, deeply frozen `structuredContent`. A producer invariant failure returns
- * `undefined`, never a partial value.
- */
 export const encodeBackgroundTaskContract = (
   contract: BackgroundTaskContract,
 ): Schema.Json | undefined => {

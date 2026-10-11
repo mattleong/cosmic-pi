@@ -10,7 +10,6 @@ import {
 import { decodeWorkflowAgentOptions, workflowAgentJournalKey } from "../../src/workflow/options.ts";
 import { withJournal, workflowSessionKey } from "./fixtures/workflow-harness.ts";
 
-/** Where an inline script without a saved copy restarts from. */
 const inlineOrigin = { source: { kind: "inline" } } as const;
 const decode = (raw: Schema.Json) => Effect.runSync(Effect.result(decodeWorkflowAgentOptions(raw)));
 const rejection = (raw: Schema.Json): string => {
@@ -164,10 +163,8 @@ describe("workflow journal", () => {
           yield* journal.finish("wf-large");
         }),
       );
-      // It just failed, so the main agent may resume it right away.
       const replay = yield* withJournal(session, (journal) => journal.replay("wf-large"));
       expect(replay?.take("big")?.result).toBe("kept");
-      // Once a newer run finishes, the size bound applies to it again.
       yield* withJournal(session, (journal) =>
         Effect.andThen(journal.open("wf-next", "next", inlineOrigin), journal.finish("wf-next")),
       );
@@ -186,7 +183,6 @@ describe("workflow journal", () => {
           yield* journal.open("wf-torn", "migration", inlineOrigin);
           yield* journal.record("wf-torn", { ...entry("a", "ok"), workspaceId: "workspace-1" });
           yield* journal.noteWorkspace("wf-torn", "workspace-2");
-          // A worktree discarded because it held no changes leaves nothing to recover.
           yield* journal.noteWorkspace("wf-torn", "workspace-3");
           yield* journal.dropWorkspace("wf-torn", "workspace-3");
           yield* journal.open("wf-stopping", "cleanup", inlineOrigin);
@@ -211,13 +207,11 @@ describe("workflow journal", () => {
           origin: inlineOrigin,
         },
       ]);
-      // A notice a teardown dropped is reported again by the next activation.
       expect(yield* withJournal(session, (journal) => journal.interruptedRuns)).toHaveLength(2);
       yield* withJournal(session, (journal) =>
         Effect.andThen(journal.finish("wf-torn"), journal.finish("wf-stopping")),
       );
       expect(yield* withJournal(session, (journal) => journal.interruptedRuns)).toEqual([]);
-      // The interrupted run can still be resumed.
       const replay = yield* withJournal(session, (journal) => journal.replay("wf-torn"));
       expect(replay?.take("a")?.result).toBe("ok");
     }),

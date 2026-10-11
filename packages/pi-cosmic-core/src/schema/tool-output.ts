@@ -1,17 +1,11 @@
-/**
- * Native Pi `outputSchema` derivation. Effect Schema stays authoritative; Pi receives the generated
- * draft 2020-12 JSON Schema as one self-contained, immutable value.
- */
 import type * as JsonSchema from "effect/JsonSchema";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "../projection.ts";
 
-/** A generated output schema contains a reference that its own `$defs` cannot resolve. */
 export class ToolOutputSchemaError extends Schema.TaggedError<ToolOutputSchemaError>()(
   "ToolOutputSchemaError",
   {
-    /** JSON Pointer to the rejected `$ref`, relative to the returned root schema. */
     path: Schema.String,
     message: Schema.String,
   },
@@ -19,7 +13,6 @@ export class ToolOutputSchemaError extends Schema.TaggedError<ToolOutputSchemaEr
 
 const DEFINITION_REFERENCE_PREFIX = "#/$defs/";
 
-/** Decodes a direct `#/$defs/<escaped-token>` reference, the one form Effect emits and Pi resolves. */
 const definitionName = (reference: string): string | undefined => {
   if (!reference.startsWith(DEFINITION_REFERENCE_PREFIX)) return undefined;
   const token = reference.slice(DEFINITION_REFERENCE_PREFIX.length);
@@ -52,14 +45,6 @@ const checkReferences = (
   }
 };
 
-/**
- * Derives a native Pi `ToolDefinition.outputSchema` from an Effect schema.
- *
- * Definitions from `Schema.toJsonSchemaDocument` move under the root `$defs`, so every local
- * reference resolves within the returned value. The schema describes the encoded side of
- * `Schema.toCodecJson(schema)`; encode `structuredContent` with that codec. A remote, root,
- * nested-pointer, or missing reference throws `ToolOutputSchemaError`. The result is deeply frozen.
- */
 export const toPiToolOutputSchema = (
   schema: Schema.Constraint,
 ): Readonly<JsonSchema.JsonSchema> => {

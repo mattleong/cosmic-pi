@@ -63,7 +63,6 @@ import {
   profileReloadSessionKey,
 } from "./profile-reload-handoff.ts";
 
-// The workflow tool is root-only and outside the child proxy catalog, but shares its lifecycle.
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set([
   ...SUBAGENT_TOOL_NAMES,
   WORKFLOW_TOOL_NAME,
@@ -83,10 +82,6 @@ const LIVE_APPLICATION_BOUNDARIES: SubagentApplicationBoundaries = {
   getAgentDirectory: getAgentDir,
 };
 
-/**
- * What started an activation. A session start or reload publishes history replay and rebuilds
- * session overrides from the reload handoff, if any; `/tree` keeps the in-memory overrides.
- */
 type ActivationTrigger = "start" | "reload" | "tree";
 
 interface CapturedActivation {
@@ -104,16 +99,9 @@ interface PreparedActivation {
   readonly savedWorkflows: ReadonlyArray<SavedWorkflowSummary>;
   readonly savedWorkflowLocations: WorkflowLocations;
   readonly toolRuntime: SubagentToolRuntime;
-  /** The session's effective ultracode setting when its tools register. */
   readonly ultracode: boolean;
 }
 
-/**
- * Deactivates active Subagents tools, optionally only those in `only`, and returns the names it
- * removed. Pi drops its pending restore list (tools still registering after /reload, such as
- * MCP tools) whenever a call removes a tool, so nothing is set when nothing would be removed.
- * A stale host cannot turn registration cleanup into an unhandled callback error.
- */
 const deactivateSubagentTools = (
   pi: ExtensionAPI,
   only?: ReadonlyArray<string>,
@@ -150,7 +138,6 @@ export function registerSubagentApplication(
   boundaries: SubagentApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
 ): void {
   registerSubagentMessageRenderers(pi);
-  // Pi draws history before session_start registers the tools; `/subagents` anchors ownership.
   const replay = registerCodePreviewReplay(pi, {
     command: "subagents",
     tools: [...SUBAGENT_TOOL_NAME_SET],
@@ -168,14 +155,9 @@ export function registerSubagentApplication(
   let incompatibleReload = false;
   let retainingTools = false;
 
-  /** Deactivates every Subagents tool, remembering what it removed for the next activation. */
   const disableTools = (): void => {
     startupFailureTools = [...new Set([...startupFailureTools, ...deactivateSubagentTools(pi)])];
   };
-  /**
-   * Ends the current activation's host presence. `keepTools` leaves the tools active, because Pi
-   * drops its pending restore list whenever a tool is deactivated.
-   */
   const detachActivation = (keepTools: boolean): void => {
     receipts.deactivate();
     releaseActivity?.();
@@ -186,12 +168,6 @@ export function registerSubagentApplication(
     bridge.clear();
     workflowViews.clear();
   };
-  /**
-   * Runs a slot transition whose synchronous deactivation of the outgoing runtime keeps the
-   * tools active, because Pi drops its pending restore list whenever a tool is deactivated.
-   * Tree navigation awaits the replacement, which still deactivates the tools if it ends
-   * without an activation; reload invalidates the outgoing instance's tools after shutdown.
-   */
   const retainingToolsDuring = <A>(transition: () => A): A => {
     retainingTools = true;
     try {
@@ -282,11 +258,7 @@ export function registerSubagentApplication(
           );
           const projection = yield* SubagentService.use((service) => service.projection);
           const scheduler = yield* CodePreviewSchedulerService;
-          // Feature switches follow the session's frozen base config and its own values, so saved
-          // changes apply after /reload while /tree keeps the values this session started with.
           const profiles = yield* SubagentProfileService.use((service) => service.capture);
-          // The inactive workflow tool's description lists saved workflows as the session found
-          // them at start; the model sees them only while workflows are opted in.
           const store = yield* WorkflowStore;
           const savedWorkflows = (yield* store.list).workflows;
           const savedWorkflowLocations = yield* store.locations;
@@ -311,7 +283,6 @@ export function registerSubagentApplication(
         try {
           const scheduleAnimation = (interval: number, tick: () => void) =>
             slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined;
-          // Tools a tree replacement kept active are not activations by this registration.
           const keptActive = new Set(activeSubagentTools(pi));
           registerSubagentTools(
             pi,
@@ -319,7 +290,6 @@ export function registerSubagentApplication(
             { receipts, owner: receipts.activate() },
             replay.shell,
           );
-          // Registered inactive; the ultracode controller activates it while workflows are on.
           registerWorkflowTool(
             pi,
             {
@@ -331,8 +301,6 @@ export function registerSubagentApplication(
             },
             replay.shell,
           );
-          // A first registration keeps what Pi activated. Later ones deactivate only tools Pi
-          // activated that the session had not kept active.
           if (hasRegisteredTools)
             deactivateSubagentTools(
               pi,
@@ -359,7 +327,6 @@ export function registerSubagentApplication(
           profileReloadHandoff.clear(activation.sessionKey);
         bridge.setContext(activation.ctx);
         ultracode.activate(activation.ctx, prepared.ultracode);
-        // The workflow tool's activation is the ultracode controller's alone.
         reactivateSubagentTools(
           pi,
           startupFailureTools.filter((name) => name !== WORKFLOW_TOOL_NAME),
@@ -431,11 +398,7 @@ export function registerSubagentApplication(
 
   const prepareActivation = (ctx: ExtensionContext, trigger: ActivationTrigger): Promise<void> => {
     const tree = trigger === "tree";
-    // No registered Subagents tool may target the inactive slot while capture or replacement is
-    // pending. Preserve only names that were active before deactivation. A replacement that
-    // keeps the tools deactivates them only if it ends without an activation.
     detachActivation(tree);
-    // Runs the replaced activation leaves open are announced again, which reopens the window.
     ultracode.reset();
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") return slot.shutdown();
@@ -462,7 +425,6 @@ export function registerSubagentApplication(
   };
 
   pi.on("session_start", (event, ctx) => {
-    // Pi emits one session_start per factory load; history adopts only if this startup publishes.
     try {
       const trigger = event.reason === "reload" ? "reload" : "start";
       if (trigger === "start") profileReloadHandoff.clear();
@@ -478,7 +440,6 @@ export function registerSubagentApplication(
     bridge.setContext(currentActivation.ctx);
   });
 
-  // Pi restored the target branch's tool loadout just before this event.
   pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, "tree"));
 
   pi.on("session_shutdown", (event, ctx) => {
@@ -491,7 +452,6 @@ export function registerSubagentApplication(
       const authoritative = profileOverrideHandoff.captureAuthoritative();
       if (sessionKey && authoritative) profileReloadHandoff.publish(sessionKey, authoritative);
     } else profileReloadHandoff.clear();
-    // Clearing the handoff also retires the outgoing runtime's publication.
     profileOverrideHandoff.clear();
     return reload ? retainingToolsDuring(() => slot.shutdown()) : slot.shutdown();
   });

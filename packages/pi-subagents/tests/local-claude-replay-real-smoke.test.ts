@@ -1,5 +1,3 @@
-// Optional live reproduction. This invokes the installed Claude CLI and can incur
-// provider usage; it is excluded unless the caller sets the explicit gate.
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { synchronousRandomHex, provideBuiltLayer } from "pi-cosmic-core";

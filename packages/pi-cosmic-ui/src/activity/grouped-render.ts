@@ -33,6 +33,7 @@ import { groupSummaryLabels, summarizeGroup } from "./group-summary.ts";
 import { groupedDetail } from "./grouped-detail.ts";
 import type { ActivityComponentOptions } from "./component.ts";
 import type { ActivityDetailRequest } from "./service.ts";
+import type { ActivityRow } from "./model.ts";
 
 function rowLine(
   entry: GroupedActivityRow,
@@ -47,7 +48,6 @@ function rowLine(
     return groupedMemberLine(entry, width, paint, "manager", focusedStyle);
   if (entry.type !== "section")
     return workflowRowLine(entry, width, paint, "manager", focusedStyle);
-  // Sections are the tree's top level, so they carry no guide.
   const fold = entry.children ? (entry.expanded ? "▾ " : "▸ ") : "  ";
   const summary = groupSummaryLabels(entry.summary).join(" · ");
   return clipToWidth(
@@ -57,7 +57,6 @@ function rowLine(
   );
 }
 
-/** The pending action named, with the keys that confirm it, then a plain confirm. */
 function confirmationFooterVariants(
   confirmation: { readonly label: string; readonly key: string | undefined },
   confirm: string,
@@ -70,10 +69,6 @@ function confirmationFooterVariants(
   ];
 }
 
-/**
- * The full help, widest first. Action keys outrank zoom and follow once space runs out, and the
- * narrowest variants fall back to bare keys.
- */
 function helpFooterVariants(
   actions: ActivityActionHints,
   follow: string | undefined,
@@ -106,25 +101,119 @@ function helpFooterVariants(
   ];
 }
 
-/** Synchronous presentation only. The component owns all fetching and input transitions. */
+interface GroupedActivityState {
+  readonly shell: ListDetailShell;
+  readonly entries: readonly GroupedActivityRow[];
+  readonly selected: GroupedActivityRow | undefined;
+  readonly alternateHelp: boolean;
+  readonly actionPage: number;
+  readonly loaded: { readonly request: ActivityDetailRequest; readonly text: string } | undefined;
+  readonly confirmation:
+    | { readonly text: string; readonly label: string; readonly key: string | undefined }
+    | undefined;
+  readonly follow: boolean;
+  readonly technical: boolean;
+  readonly detailPosition: DetailWindowPosition;
+}
+
+interface GroupedBodyContext {
+  readonly options: ActivityComponentOptions;
+  readonly state: GroupedActivityState;
+  readonly rows: readonly ActivityRow[];
+  readonly urgent: readonly ActivityRow[];
+  readonly row: ActivityRow | undefined;
+  readonly listFocused: boolean;
+}
+
+function needsYouLine(
+  { options, rows, urgent }: GroupedBodyContext,
+  first: ActivityRow,
+  listWidth: number,
+): string {
+  const more = urgent.length > 1 ? ` +${urgent.length - 1}` : "";
+  return options.theme.fg(
+    "warning",
+    `Needs you [w]: ${activityOwnerLabel(rows, first, Math.max(0, listWidth - 15 - more.length))}${more}`,
+  );
+}
+
+function activityList(
+  context: GroupedBodyContext,
+  listHeight: number,
+  listWidth: number,
+): string[] {
+  const { options, state, urgent, listFocused } = context;
+  const { shell, entries, selected } = state;
+  const showHeading = listHeight > 1;
+  const first = listHeight > 2 ? urgent[0] : undefined;
+  const window = shell.visibleWindow(
+    entries.length,
+    listHeight - Number(showHeading) - Number(first !== undefined),
+  );
+  const list = entries.slice(window.start, window.end).map((entry) => {
+    const isSelected = entry.id === selected?.id;
+    const prefix = isSelected ? "> " : "  ";
+    return padListDetailRow(
+      `${prefix}${rowLine(entry, Math.max(0, listWidth - prefix.length), options, isSelected && listFocused)}`,
+      listWidth,
+    );
+  });
+  if (!list.length) list.push(options.theme.fg("dim", "No activity yet"));
+  if (first) list.unshift(needsYouLine(context, first, listWidth));
+  if (showHeading)
+    list.unshift(
+      listDetailHeading(
+        options.theme,
+        entries.length
+          ? `Activity · ${window.start + 1}–${Math.min(window.end, entries.length)} of ${entries.length}`
+          : "Activity · none",
+        listFocused,
+      ),
+    );
+  while (list.length < listHeight) list.push("");
+  return list;
+}
+
+function activityDetail(
+  { options, state, row, listFocused }: GroupedBodyContext,
+  detailHeight: number,
+  detailWidth: number,
+) {
+  const sameItem =
+    row &&
+    state.loaded?.request.key === row.key &&
+    state.loaded.request.generation === row.generation;
+  const detailText = groupedDetail({
+    selected: state.selected,
+    theme: options.theme,
+    focused: !listFocused,
+    now: options.now?.(),
+    loaded: sameItem ? state.loaded?.text : undefined,
+    actionPage: state.actionPage,
+    technical: state.technical,
+  });
+  const showFreshness = detailHeight > 1;
+  const details = state.shell.detailWindow(
+    detailText.split("\n").flatMap((line) => wrapTextWithAnsi(line, detailWidth)),
+    detailHeight - Number(showFreshness),
+    state.detailPosition,
+  );
+  if (!showFreshness) return details.visible;
+  const freshness = row
+    ? `${sameItem && state.loaded?.request.revision !== row.revision ? "Older output" : "Output"} · r refresh · follow ${state.follow ? "on" : "off"}`
+    : "Summary · no execution actions";
+  return [
+    options.theme.fg("dim", clipToWidth(freshness, detailWidth, "…")),
+    ...(details.overflow
+      ? [options.theme.fg("dim", detailWindowPositionLabel(details.overflow))]
+      : []),
+    ...details.visible,
+  ];
+}
+
 export function renderGroupedActivity(
   options: ActivityComponentOptions,
-  state: {
-    readonly shell: ListDetailShell;
-    readonly entries: readonly GroupedActivityRow[];
-    readonly selected: GroupedActivityRow | undefined;
-    readonly alternateHelp: boolean;
-    readonly actionPage: number;
-    readonly loaded: { readonly request: ActivityDetailRequest; readonly text: string } | undefined;
-    /** A pending action's question, its label and the direct key that also confirms it. */
-    readonly confirmation:
-      | { readonly text: string; readonly label: string; readonly key: string | undefined }
-      | undefined;
-    readonly follow: boolean;
-    readonly technical: boolean;
-    /** Where the detail window places its slice this frame. */
-    readonly detailPosition: DetailWindowPosition;
-  },
+  state: GroupedActivityState,
   width: number,
 ): string[] {
   if (width <= 0) return [];
@@ -144,6 +233,7 @@ export function renderGroupedActivity(
   const movement = `${hint("tui.select.up", "↑")}/${hint("tui.select.down", "↓")}`;
   const listFocused = shell.state.pane === "list";
   const row = groupedActivitySource(selected);
+  const context: GroupedBodyContext = { options, state, rows, urgent, row, listFocused };
   const navigation = listFocused
     ? `${movement}/j/k Move · h/l Collapse/expand · ${confirm} Inspect`
     : `j/k Scroll · h/${cancel} Back`;
@@ -197,73 +287,12 @@ export function renderGroupedActivity(
         tier === "wide"
           ? wideListDetailGeometry(width, 38, 0.42)
           : { listWidth: inner, detailWidth: Math.max(1, inner) };
-      const showHeading = listHeight > 1;
-      const showNeedsYou = urgent.length > 0 && listHeight > 2;
-      const window = shell.visibleWindow(
-        entries.length,
-        listHeight - Number(showHeading) - Number(showNeedsYou),
+      const list = activityList(context, listHeight, listWidth);
+      const detailRows = activityDetail(
+        context,
+        tier === "stacked" ? Math.max(0, bodyHeight - listHeight - 1) : bodyHeight,
+        detailWidth,
       );
-      // History rows recede through their identity tone, so every row keeps one guide column.
-      const list = entries.slice(window.start, window.end).map((entry) => {
-        const isSelected = entry.id === selected?.id;
-        const prefix = isSelected ? "> " : "  ";
-        return padListDetailRow(
-          `${prefix}${rowLine(entry, Math.max(0, listWidth - prefix.length), options, isSelected && listFocused)}`,
-          listWidth,
-        );
-      });
-      if (!list.length) list.push(options.theme.fg("dim", "No activity yet"));
-      if (showNeedsYou)
-        list.unshift(
-          options.theme.fg(
-            "warning",
-            `Needs you [w]: ${activityOwnerLabel(rows, urgent[0]!, Math.max(0, listWidth - 15 - (urgent.length > 1 ? ` +${urgent.length - 1}`.length : 0)))}${urgent.length > 1 ? ` +${urgent.length - 1}` : ""}`,
-          ),
-        );
-      if (showHeading)
-        list.unshift(
-          listDetailHeading(
-            options.theme,
-            entries.length
-              ? `Activity · ${window.start + 1}–${Math.min(window.end, entries.length)} of ${entries.length}`
-              : "Activity · none",
-            listFocused,
-          ),
-        );
-      while (list.length < listHeight) list.push("");
-      const sameItem =
-        row &&
-        state.loaded?.request.key === row.key &&
-        state.loaded.request.generation === row.generation;
-      const freshness = row
-        ? `${sameItem && state.loaded?.request.revision !== row.revision ? "Older output" : "Output"} · r refresh · follow ${state.follow ? "on" : "off"}`
-        : "Summary · no execution actions";
-      const detailText = groupedDetail({
-        selected,
-        theme: options.theme,
-        focused: !listFocused,
-        now: options.now?.(),
-        loaded: sameItem ? state.loaded?.text : undefined,
-        actionPage: state.actionPage,
-        technical: state.technical,
-      });
-      const detailHeight =
-        tier === "stacked" ? Math.max(0, bodyHeight - listHeight - 1) : bodyHeight;
-      const showFreshness = detailHeight > 1;
-      const details = shell.detailWindow(
-        detailText.split("\n").flatMap((line) => wrapTextWithAnsi(line, detailWidth)),
-        detailHeight - Number(showFreshness),
-        state.detailPosition,
-      );
-      const detailRows = showFreshness
-        ? [
-            options.theme.fg("dim", clipToWidth(freshness, detailWidth, "…")),
-            ...(details.overflow
-              ? [options.theme.fg("dim", detailWindowPositionLabel(details.overflow))]
-              : []),
-            ...details.visible,
-          ]
-        : details.visible;
       if (tier === "wide")
         return framedWideRows(frame, {
           left: list,

@@ -40,7 +40,6 @@ src/
     host-*.ts           # dedicated Pi host adapters
   <feature>/            # feature services, policy, and helpers
   ui/                   # pure rendering and projection
-  compat/               # temporary legacy call shapes, when needed
 tests/**/*.test.ts
 ARCHITECTURE.md
 ```
@@ -50,7 +49,9 @@ ARCHITECTURE.md
 - Config has one public persistence entrypoint, `config/store.ts`, including any Promise compatibility helpers. Do not add a peer `persistence.ts` or a separate service API for the same job. Name persistence modules store/service, never repository. Existing `resolve.ts` names may remain until renamed.
 - Keep Effect resources and authoritative state in feature services. Top-level `ui/` is pure. Feature-local rendering is allowed; document it in `ARCHITECTURE.md`.
 - Boundaries contain I/O or third-party adapters, not pure helpers. Dedicated Pi adapters use the `host-*` prefix. Leave direct stateless host calls at their call site rather than wrapping them solely for placement.
-- Prefer one public entrypoint per role and small implementation files. Split before roughly 400 to 500 lines of hard logic; do not merge files merely to reduce file count.
+- Prefer one public entrypoint per role and small implementation files. Split before roughly 400 to 500 lines of hard logic; do not merge files merely to reduce file count. Oxlint caps `src` files at 600 non-blank lines and every function at complexity 20.
+- Write no comments, no explicit `any`, and no type assertions other than `as const`; Oxlint rejects all three. Carry intent in names, types, and tests, and decode unknown input with Effect Schema instead of asserting its type.
+- Keep no backwards-compatibility, migration, or legacy paths. Rename and replace outright; Oxlint rejects identifiers containing "legacy" or "deprecated".
 - Put tests under package-root `tests/`, never under `src/`, and use `*.test.ts`, never `*.spec.ts`. Large packages should mirror source structure; small packages may use flat test names.
 - Keep each package's `ARCHITECTURE.md` concise and focused on ownership, boundaries, and lifecycle, not a full file tree. Update it when those change. Package-level `AGENTS.md` files must not conflict with this file.
 - Shared Effect platform code belongs in `pi-cosmic-core`; do not invent parallel runtime helpers in feature packages. Group core modules by concern. Keep the public `index.ts` and `testing.ts` exports that workspace packages use stable, and remove exports that nothing in the workspace uses.

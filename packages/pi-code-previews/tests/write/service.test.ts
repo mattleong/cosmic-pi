@@ -1,4 +1,3 @@
-// Scoped cache lifecycle assertions.
 import assert from "node:assert/strict";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

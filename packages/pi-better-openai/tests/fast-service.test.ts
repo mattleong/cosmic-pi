@@ -34,14 +34,13 @@ const fakeUsageLayer = Layer.succeed(OpenAIUsageService, {
   refresh: () => Effect.void,
   contextChanged: () => Effect.void,
   updateSetting: () => Effect.void,
-  persistFast: (_active, _desiredActive, afterCommit) => Effect.uninterruptible(afterCommit),
+  persistFast: (_desiredActive, afterCommit) => Effect.uninterruptible(afterCommit),
   readConfigDocument: Effect.succeed({}),
 });
 
 const PROJECT_CONFIG = "/project/.pi/extensions/pi-better-openai.json";
 const GLOBAL_CONFIG = "/agent/extensions/pi-better-openai.json";
 
-/** Fast mode over the real usage service and config store for a trusted `/project`. */
 const persistedFastLayer = (
   documents: ReturnType<typeof makeInMemoryDocuments>,
   ctx: ExtensionContext,
@@ -92,7 +91,7 @@ describe("FastModeService", () => {
       yield* Deferred.await(committed);
 
       const persistedAtCommit = [...documents.documents.values()][0];
-      expect(persistedAtCommit).toMatchObject({ active: false, desiredActive: false });
+      expect(persistedAtCommit).toMatchObject({ desiredActive: false });
       expect(MutableRef.get(fastProjection)).toMatchObject({
         active: true,
         desiredActive: true,
@@ -109,9 +108,7 @@ describe("FastModeService", () => {
       });
       yield* fast.modelChanged(current.ctx);
       expect(MutableRef.get(fastProjection)).toMatchObject({ active: false, desiredActive: false });
-      // Fast persistence rewrites only its own keys and preserves unknown fields.
       expect([...documents.documents.values()][0]).toEqual({
-        active: false,
         desiredActive: false,
         unknownField: "keep me",
         usage: { unknownUsageField: 123 },
@@ -131,7 +128,6 @@ describe("FastModeService", () => {
     const current = makeContext("gpt-5.5");
     return Effect.gen(function* () {
       const fast = yield* FastModeService;
-      // The resolved intent came from the global document; the project file must stay untouched.
       yield* fast.initialize(current.ctx, makeResolvedConfig({ desiredActive: true }), false);
       current.setModel("future-model", "other-provider");
       yield* fast.modelChanged(current.ctx);
@@ -141,7 +137,6 @@ describe("FastModeService", () => {
       yield* fast.initialize(current.ctx, makeResolvedConfig(), true);
       expect(documents.documents.get(PROJECT_CONFIG)).toEqual({
         ...projectDocument,
-        active: false,
         desiredActive: true,
       });
     }).pipe(
@@ -189,7 +184,6 @@ describe("FastModeService", () => {
         usage: usageProjection,
       });
       return Effect.gen(function* () {
-        // An API-key model is eligible only once another session stops requiring subscriptions.
         expect(MutableRef.get(usageProjection).eligible).toBe(false);
         documents.documents.set(GLOBAL_CONFIG, { usage: { showOnlyOnSubscriptionModels: false } });
         yield* (yield* FastModeService).setDesired(ctx, true);
@@ -214,7 +208,6 @@ describe("FastModeService", () => {
             !interrupted &&
             (interrupted = true),
         );
-        // The ingress worker inherits this scheduler and is interrupted exactly after publication.
         yield* Effect.scoped(
           FastModeService.make({ projection }).pipe(
             Effect.tap((service) =>

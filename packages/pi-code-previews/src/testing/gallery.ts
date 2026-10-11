@@ -1,26 +1,17 @@
-/**
- * Plain-text frames of registered tool calls for visual review. Galleries render typical
- * scenarios so wording and layout changes can be read and diffed; nothing here is asserted.
- */
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
-import type { AdaptableToolRenderers } from "../tools/cooperative-tools";
+import type { CodePreviewRenderers } from "../tools/renderers/shared/types";
 import { createToolPresentationHarness } from "./tool-presentation";
 
-/**
- * `pending` is a call awaiting execution (argument warnings show here); `running` is a started
- * call with an optional partial result; `settled` (the default) is a finished call.
- */
 type GalleryPhase = "pending" | "running" | "settled";
 
-export interface GalleryScenario {
+export interface GalleryScenario<TArgs = unknown, TDetails = unknown> {
   readonly title: string;
-  readonly args: unknown;
-  readonly result?: AgentToolResult<unknown> | undefined;
+  readonly args: TArgs;
+  readonly result?: AgentToolResult<TDetails> | undefined;
   readonly isError?: boolean;
   readonly phase?: GalleryPhase;
-  /** Replay a measured duration in the presentation fixture, without starting a real clock. */
   readonly durationMs?: number;
 }
 
@@ -29,24 +20,27 @@ interface GalleryView {
   readonly width: number;
 }
 
-/** Collapsed at a wide and a narrow width, then expanded. */
 const GALLERY_VIEWS: readonly GalleryView[] = [
   { expanded: false, width: 100 },
   { expanded: false, width: 60 },
   { expanded: true, width: 100 },
 ];
 
-/** One scenario through a registered tool, each view in a fresh harness. */
-export function galleryFrames(
-  tool: Pick<AdaptableToolRenderers, "renderShell" | "renderCall" | "renderResult">,
-  scenario: GalleryScenario,
+interface TimingSeed {
+  readonly codePreviewTimingStartedAt: number;
+  readonly codePreviewTimingEndedAt: number;
+}
+
+export function galleryFrames<TArgs, TDetails>(
+  tool: CodePreviewRenderers<TArgs, TDetails, TimingSeed | Record<PropertyKey, never>>,
+  scenario: GalleryScenario<TArgs, TDetails>,
   views: readonly GalleryView[] = GALLERY_VIEWS,
 ): string[] {
   const isError = scenario.isError ?? false;
   const phase = scenario.phase ?? "settled";
   const live = { isPartial: phase !== "settled", executionStarted: phase !== "pending" };
   return views.flatMap(({ expanded, width }) => {
-    const harness = createToolPresentationHarness(tool, {
+    const harness = createToolPresentationHarness<TArgs, TDetails, TimingSeed>(tool, {
       width,
       ...(scenario.durationMs !== undefined && {
         state: {
@@ -70,7 +64,6 @@ export interface GalleryMessageScenario {
   readonly message: Parameters<MessageRenderer>[0];
 }
 
-/** One custom message through its registered renderer; Pi's default card when it declines. */
 export function galleryMessageFrames(
   render: MessageRenderer,
   scenario: GalleryMessageScenario,

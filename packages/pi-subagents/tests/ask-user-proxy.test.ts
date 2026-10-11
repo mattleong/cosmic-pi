@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import {
-  QUESTIONNAIRE_CAPABILITY_QUERY,
   queryQuestionnaireRelay,
   type AskUserRequest,
   type AskUserOutcome,
@@ -18,7 +17,11 @@ import {
   decodeSubagentProxyRequest,
 } from "../src/tools/proxy-protocol.ts";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
-import { eventBus as bus, pickQuestionnaire as request } from "./support/questionnaire.ts";
+import {
+  answerCapabilityQueries,
+  eventBus as bus,
+  pickQuestionnaire as request,
+} from "./support/questionnaire.ts";
 
 const owner = (requestId: string): QuestionnaireOwner => ({
   runId: "run",
@@ -34,11 +37,10 @@ const capability = (overrides: Partial<QuestionnaireCapability> = {}): Questionn
   ...overrides,
 });
 
-/** A child relay whose proxy decodes each wire request and asks the root's capability as `asker`. */
 const relayToRoot = (rootCapability: QuestionnaireCapability, asker: QuestionnaireOwner) => {
   const root = bus();
   const child = bus();
-  root.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(rootCapability));
+  answerCapabilityQueries(root, () => rootCapability);
   const detach = publishChildQuestionnaireRelay(
     child,
     "child",
@@ -147,25 +149,23 @@ describe("structured questionnaire proxy boundary", () => {
       const cancelled = deferredPromise();
       let finished = false;
       let generation = "g1";
-      events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) =>
-        query.respond({
-          version: 1,
-          sessionId: "root",
-          generation,
-          ask: () =>
-            ending === "rejection"
-              ? Promise.reject(new Error("private root error"))
-              : Promise.resolve(ending === "invalid" ? {} : { outcome: "cancelled", answers: [] }),
-          cancel: (received: QuestionnaireOwner) => {
-            expect(received).toBe(questionOwner);
-            cancelled.resolve();
-            return cleanup.promise.then(() => {
-              if (ending === "replacement") generation = "g2";
-              if (ending === "cleanup-rejection") throw new Error("private cleanup error");
-            });
-          },
-        }),
-      );
+      answerCapabilityQueries(events, () => ({
+        version: 1,
+        sessionId: "root",
+        generation,
+        ask: () =>
+          ending === "rejection"
+            ? Promise.reject(new Error("private root error"))
+            : Promise.resolve(ending === "invalid" ? {} : { outcome: "cancelled", answers: [] }),
+        cancel: (received: QuestionnaireOwner) => {
+          expect(received).toBe(questionOwner);
+          cancelled.resolve();
+          return cleanup.promise.then(() => {
+            if (ending === "replacement") generation = "g2";
+            if (ending === "cleanup-rejection") throw new Error("private cleanup error");
+          });
+        },
+      }));
       const result = Effect.runPromise(
         Effect.result(askParentQuestionnaire(events, "root", request, questionOwner)),
       ).then((value) => {
@@ -190,19 +190,17 @@ describe("structured questionnaire proxy boundary", () => {
     const events = bus();
     let entered = false;
     let cancelled = false;
-    events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) =>
-      query.respond(
-        capability({
-          ask: () => {
-            entered = true;
-            return Promise.resolve({ outcome: "cancelled", answers: [] });
-          },
-          cancel: () => {
-            cancelled = true;
-            return Promise.resolve();
-          },
-        }),
-      ),
+    answerCapabilityQueries(events, () =>
+      capability({
+        ask: () => {
+          entered = true;
+          return Promise.resolve({ outcome: "cancelled", answers: [] });
+        },
+        cancel: () => {
+          cancelled = true;
+          return Promise.resolve();
+        },
+      }),
     );
     return expect(
       Effect.runPromise(askParentQuestionnaire(events, "different-session", request, owner("q"))),
@@ -217,16 +215,14 @@ describe("structured questionnaire proxy boundary", () => {
   it("rejects a stale root answer after capability replacement", () => {
     const events = bus();
     let generation = "g1";
-    events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) =>
-      query.respond(
-        capability({
-          generation,
-          ask: () => {
-            generation = "g2";
-            return Promise.resolve({ outcome: "cancelled", answers: [] });
-          },
-        }),
-      ),
+    answerCapabilityQueries(events, () =>
+      capability({
+        generation,
+        ask: () => {
+          generation = "g2";
+          return Promise.resolve({ outcome: "cancelled", answers: [] });
+        },
+      }),
     );
     const result = Effect.runPromise(askParentQuestionnaire(events, "root", request, owner("q")));
     return expect(result).rejects.toBeInstanceOf(InvalidSubagentRequestError);

@@ -167,7 +167,6 @@ test("subject recovery leaves native receipts unchanged and never reads plausibl
       calls: [
         call("edit/1", "edit", { path: "actual.ts", edits: [{ oldText: "x".repeat(300) }] }),
         call("edit/2", "edit", { edits: [{ oldText: "x".repeat(300) }], path: "hidden.ts" }),
-        // Invariant: a target with nothing visible leaves the row without a subject.
         call("task/1", "background_task", { action: "start", name: " \t" }),
       ],
     },

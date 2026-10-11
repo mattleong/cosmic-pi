@@ -42,11 +42,9 @@ const NestedCallSchema = Schema.Tuple([
 ]);
 const decodeNestedCall = Schema.decodeUnknownOption(NestedCallSchema);
 
-/** Script sources, resume lookup and planned-agent reservations for the session's runs. */
 export const makeWorkflowSources = (services: WorkflowSourcesServices) => {
   const { store, journal, recovery, subagents, runs } = services;
 
-  /** Parses an inline script, or loads a saved workflow or a script file, and says which. */
   const load = (
     source: WorkflowSourceRequest,
   ): Effect.Effect<
@@ -80,14 +78,6 @@ export const makeWorkflowSources = (services: WorkflowSourcesServices) => {
     }
   };
 
-  /**
-   * The results a run resuming `runId` replays: from memory, or else from the run's files when
-   * they name this session. It fails with `resume_running` while that run still runs here,
-   * `resume_running_elsewhere` while it runs in another Pi process, `resume_other_session` for
-   * another session's run, `resume_unrecorded` when its files hold no record,
-   * `resume_unreadable` when its record or results journal can't be read, and `resume_unknown`
-   * when neither memory nor files hold it.
-   */
   const resumeReplay = (runId: string): Effect.Effect<WorkflowReplay, WorkflowRequestError> =>
     Effect.gen(function* () {
       const earlier = yield* runs.find(runId);
@@ -96,11 +86,9 @@ export const makeWorkflowSources = (services: WorkflowSourcesServices) => {
           "resume_running",
           `Workflow ${runId} is still running. Stop it or wait for its result before resuming it.`,
         );
-      // Memory holds the session's recent runs until Pi exits; run files cover the rest.
       return (yield* journal.replay(runId)) ?? (yield* recovery.replay(runId));
     });
 
-  /** Planned agents with the subagent run ids their claiming calls will start under. */
   const reservePlanned = (specs: ReadonlyArray<WorkflowPlannedAgentSpec>) =>
     Effect.forEach(
       specs.slice(0, WORKFLOW_RUN_PLANNED_LIMIT),
@@ -108,13 +96,6 @@ export const makeWorkflowSources = (services: WorkflowSourcesServices) => {
         subagents.reserveRunId.pipe(Effect.map((runId) => ({ runId, ...spec }))),
     );
 
-  /**
-   * Loads a script's `workflow(reference, args)` call, `[reference, args]` with args null when
-   * omitted, where the reference is a saved workflow name or `{ scriptPath }`. It adds the nested
-   * workflow's phases and planned agents to run `id` and returns its name and body for the
-   * sandbox. It fails, adding nothing, when the reference doesn't load (`WorkflowSourceError`) or
-   * args don't match its `meta.args` (`args_mismatch`); the script sees either as an invalid call.
-   */
   const loadNested = (
     id: string,
     call: Schema.Json,

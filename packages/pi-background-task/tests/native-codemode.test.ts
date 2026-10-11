@@ -1,4 +1,3 @@
-// Actual Pi agent loop and native QuickJS, with owned task-service and Path boundaries only.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -22,7 +21,6 @@ import {
 } from "./support/task-service-double.ts";
 
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
-/** A JavaScript string literal for embedding test data in a script. */
 const literal = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 const output = (text: string) => {
   const line = text.split("\n").find((line) => line.startsWith("WORKFLOW_RESULT "));
@@ -32,7 +30,6 @@ const output = (text: string) => {
 const print = (expression: string) => `text('WORKFLOW_RESULT ' + JSON.stringify(${expression}));`;
 const envelope = { contract: "pi-background-task/task", version: 1, tool: "background_task" };
 
-// Live time is intentional: each test drives the actual native QuickJS worker, not an LLM.
 describe("native scripted background task workflows", () => {
   it.live(
     "carries start, output wait, cursor logs, and stop as structured task objects",
@@ -48,7 +45,6 @@ describe("native scripted background task workflows", () => {
           logs: (request) =>
             Effect.sync(() => {
               logRequests.push(request);
-              // One new line after the match, then nothing past it.
               return request.afterCursor === 2
                 ? taskLogSlice("task-1", "running", [{ stream: "stdout", text: "GET / 200\n" }], {
                     from: 3,
@@ -111,7 +107,6 @@ describe("native scripted background task workflows", () => {
             task: { id: "task-1", state: "stopped", finished: true, exitCode: null },
           },
         });
-        // Scripts receive task metadata only: never the command, cwd, or process ID.
         for (const field of ["command", "cwd", "pid"])
           expect(value).not.toHaveProperty(["started", "task", field]);
         expect(logRequests.map((request) => request.afterCursor)).toEqual([2, 3]);
@@ -216,7 +211,6 @@ describe("native scripted background task workflows", () => {
     "rejects an unencodable result in scripts while keeping the original receipt",
     () =>
       Effect.gen(function* () {
-        // A fact outside the contract bounds: the start happened, so its receipt must survive.
         const service = taskServiceDouble({
           start: () =>
             Effect.succeed(taskStatus({ id: "task-7", state: "running", startedAt: -1 })),
@@ -277,7 +271,6 @@ describe("native scripted background task workflows", () => {
   );
 });
 
-// One offline smoke over the real service and a live scoped process; nothing reaches a model.
 const realServiceLayer = BackgroundTaskService.layer().pipe(
   Layer.provide(
     Layer.mergeAll(

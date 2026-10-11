@@ -36,7 +36,6 @@ const renderRouteRail = (run: SubagentRunCard, width: number, theme: Theme): str
   return routeLines.map((line) => clipToWidth(`${prefix}${line}`, width));
 };
 
-/** One run's row parts, each computed once for every layout. */
 interface RunRow {
   readonly run: SubagentRunCard;
   readonly identity: { readonly plain: string; readonly themed: string };
@@ -83,7 +82,6 @@ export interface RunHierarchy {
 
 interface ResponsiveRunRowOptions {
   readonly frame?: number;
-  /** Expanded rows show every run ID; collapsed rows only tell same-named runs apart. */
   readonly fullId?: boolean;
   readonly hierarchy?: RunHierarchy | undefined;
 }
@@ -100,7 +98,6 @@ export const renderResponsiveRunRows = (
   const sharedNames = duplicateRunNames(displayRuns);
   const rows = displayRuns.map((run, index): RunRow => {
     const glyph = runStateGlyph(run.state, options.frame);
-    // All of the ID expanded, a short form for a shared name, else none.
     const shownId = options.fullId
       ? run.id
       : sharedNames.has(run.name)

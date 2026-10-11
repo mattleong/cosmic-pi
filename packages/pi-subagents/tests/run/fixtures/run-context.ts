@@ -1,14 +1,23 @@
+import type * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import type {
+  BackendDriver,
+  BackendEvent,
+  BackendHandle,
+  BackendLaunchRequest,
+} from "../../../src/backend/model.ts";
 import { WriterLeaseService } from "../../../src/boundary/writer-lease.ts";
 import { SubagentNotFoundError } from "../../../src/run/errors.ts";
 import type { RunContext, RunRecord } from "../../../src/run/internal.ts";
 import type { RunNotificationDelivery } from "../../../src/run/notification-delivery.ts";
 import { makeRunSettlement } from "../../../src/run/settlement.ts";
+import { view } from "../../fixtures/run-view.ts";
 import { fakeWriterLeaseLayer } from "./service-harness.ts";
 
-/** Service-owned run primitives with inert defaults; a factory test overrides what it exercises. */
 export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
@@ -36,27 +45,118 @@ export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
     return context;
   }).pipe(Effect.provide(fakeWriterLeaseLayer()));
 
-/** Settlement over inert run primitives, for paths that never deliver or close a completion. */
+const unexpectedDelivery = (): never => {
+  throw new Error("Unexpected run notification delivery in this fixture.");
+};
+
+const inertDelivery: RunNotificationDelivery = {
+  queueActionNotificationLocked: unexpectedDelivery,
+  claimQuestionsLocked: unexpectedDelivery,
+  questionReceiptLocked: unexpectedDelivery,
+  acknowledgeQuestionsLocked: unexpectedDelivery,
+  releaseQuestionClaimsLocked: unexpectedDelivery,
+  insertCompletionLocked: unexpectedDelivery,
+  wakeCompletionLocked: unexpectedDelivery,
+  discardQuestionLocked: unexpectedDelivery,
+};
+
 export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
   makeRunContext(overrides).pipe(
     Effect.map((context) =>
       makeRunSettlement({
         ...context,
-        // SAFETY: The exercised paths neither deliver a completion nor discard a question.
-        delivery: {} as RunNotificationDelivery,
+        delivery: inertDelivery,
         closeRecordScope: () => Effect.void,
       }),
     ),
   );
 
-/** A record for a factory test whose exercised path reads only `fields`, themselves partial. */
-export const partialRecord = (fields: {
-  readonly [Field in keyof RunRecord]?: Partial<RunRecord[Field]>;
-}): RunRecord =>
-  // SAFETY: Each caller supplies every field its exercised code path reads.
-  fields as RunRecord;
+const inertDriver: BackendDriver = {
+  host: "local",
+  runtime: "pi",
+  capabilities: [],
+  supportsContext: () => true,
+  preflight: () => Effect.void,
+  spawn: () => Effect.die("unused"),
+};
 
-/** A started assignment at `epoch` with no buffered report or settlement. */
+export const launchFixture = (
+  overrides: Partial<BackendLaunchRequest> = {},
+): BackendLaunchRequest => ({
+  runId: "agent-1",
+  name: "agent-1",
+  cwd: "/project",
+  context: "fresh",
+  writeIntent: "read-only",
+  openaiFastMode: false,
+  model: "test/model",
+  effort: "high",
+  activeTools: [],
+  projectTrusted: true,
+  parentSessionId: "parent",
+  systemPrompt: "",
+  ...overrides,
+});
+
+export const backendHandleFixture = (overrides: Partial<BackendHandle> = {}) =>
+  Effect.gen(function* () {
+    const handle: BackendHandle = {
+      events: yield* Queue.unbounded<BackendEvent, Cause.Done>(),
+      awaitExit: Effect.never,
+      controls: {
+        initialize: Effect.succeed({ effort: "high", sessionId: "fixture" }),
+        start: () => Effect.void,
+        steer: () => Effect.void,
+        interrupt: Effect.void,
+        renameDisplay: () => Effect.void,
+        reply: () => Effect.void,
+        notifyPeers: () => Effect.void,
+      },
+      acknowledge: () => {},
+      terminate: () => Effect.void,
+      cancelPending: () => {},
+      ...overrides,
+    };
+    return handle;
+  });
+
+export const runRecordFixture = (overrides: Partial<RunRecord> = {}) =>
+  Effect.gen(function* () {
+    const record: RunRecord = {
+      scriptOrigin: false,
+      view: view(),
+      scope: yield* Scope.make(),
+      driver: inertDriver,
+      launch: launchFixture(),
+      activeTools: new Map(),
+      nativeAgents: new Set(),
+      cleanupSettlement: yield* Deferred.make<"confirmed" | "quarantined">(),
+      cleanupDisposition: "pending",
+      pauseRequested: false,
+      stoppedByParent: false,
+      cleanupPending: false,
+      runStateReclaimState: "pending",
+      writeViolationContainmentStarted: false,
+      initializationPending: false,
+      notificationGeneration: 0,
+      completionGeneration: 0,
+      warningSlots: {},
+      completionGenerations: new Map(),
+      completionClaims: new Map(),
+      assignment: {
+        epoch: 1,
+        phase: "preparing",
+        attemptToken: "fixture",
+        startedObserved: false,
+        outcomeUncertain: false,
+        pendingRunSettled: false,
+      },
+      nextAssignmentEpoch: 2,
+      ...overrides,
+    };
+    return record;
+  });
+
 export const runningAssignment = (epoch: number): RunRecord["assignment"] => ({
   epoch,
   phase: "running",

@@ -15,7 +15,6 @@ import {
   type RuntimeFunction,
 } from "../shared/ast.ts";
 
-/** `@effect/vitest` re-exports all of Vitest, including its type assertions. */
 const vitestSources = new Set(["vitest", "@effect/vitest"]);
 const matchers = new Set(["toContain", "toMatch", "toBe", "toEqual"]);
 const modifiers = new Set([
@@ -37,7 +36,6 @@ const modifiers = new Set([
   "prop",
 ]);
 
-/** Vitest's typecheck mode collects these files and never runs their callbacks. */
 const typecheckFile = (filename: string): boolean =>
   /\.(?:test|spec)-d\.[cm]?[jt]sx?$/u.test(filename);
 
@@ -190,7 +188,33 @@ function productionPath(path: string | null): boolean {
   );
 }
 
-/** Trace a raw FS read or one local read wrapper, not parsers, compilers, or execution. */
+function parameterBindings(
+  sourceCode: SourceCode,
+  fn: RuntimeFunction,
+  call: ESTree.CallExpression,
+  substitutions: Substitutions,
+): Substitutions {
+  const bindings = new Map(substitutions);
+  const parameters = sourceCode.getDeclaredVariables(fn);
+  for (let index = 0; index < fn.params.length; index++) {
+    const parameter = fn.params[index];
+    const argument = call.arguments[index];
+    if (
+      parameter?.type !== "Identifier" ||
+      argument === undefined ||
+      argument.type === "SpreadElement"
+    )
+      continue;
+    const variable = parameters.find(
+      (candidate) =>
+        candidate.name === parameter.name &&
+        candidate.defs.some((entry) => entry.type === "Parameter"),
+    );
+    if (variable !== undefined && isImmutable(variable)) bindings.set(variable, argument);
+  }
+  return bindings;
+}
+
 function sourceText(
   sourceCode: SourceCode,
   expression: ESTree.Expression,
@@ -220,24 +244,7 @@ function sourceText(
   if (fn === null) return false;
   const result = returned(fn);
   if (result === null) return false;
-  const bindings = new Map(substitutions);
-  const parameters = sourceCode.getDeclaredVariables(fn);
-  for (let index = 0; index < fn.params.length; index++) {
-    const parameter = fn.params[index];
-    const argument = node.arguments[index];
-    if (
-      parameter?.type !== "Identifier" ||
-      argument === undefined ||
-      argument.type === "SpreadElement"
-    )
-      continue;
-    const variable = parameters.find(
-      (candidate) =>
-        candidate.name === parameter.name &&
-        candidate.defs.some((entry) => entry.type === "Parameter"),
-    );
-    if (variable !== undefined && isImmutable(variable)) bindings.set(variable, argument);
-  }
+  const bindings = parameterBindings(sourceCode, fn, node, substitutions);
   return sourceText(sourceCode, result, bindings, depth + 1, wrappers - 1);
 }
 
@@ -279,7 +286,6 @@ function sourceSpellingTest(sourceCode: SourceCode, node: ESTree.CallExpression)
   );
 }
 
-/** Runtime tests need runtime behavior, not erased types or raw source spellings. */
 export const noRuntimeTypeOnlyTestsRule = defineRule({
   meta: {
     type: "problem",

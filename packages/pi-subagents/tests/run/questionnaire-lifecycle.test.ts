@@ -5,14 +5,13 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { deferredPromise, yieldUntil } from "pi-cosmic-core/testing";
 import {
-  QUESTIONNAIRE_CAPABILITY_QUERY,
   type AskUserOutcome,
   type AskUserRequest,
   type QuestionnaireCapability,
   type QuestionnaireOwner,
 } from "pi-ask-user/protocol";
 import { askParentQuestionnaire } from "../../src/boundary/host-ask-user.ts";
-import { eventBus, pickQuestionnaire } from "../support/questionnaire.ts";
+import { answerCapabilityQueries, eventBus, pickQuestionnaire } from "../support/questionnaire.ts";
 import {
   fakeChildLayer,
   request,
@@ -36,7 +35,6 @@ interface QuestionnaireProbe {
   cleaned: boolean;
 }
 
-/** A questionnaire that never answers; its interruption cleanup waits for `release`. */
 const blockingQuestionnaire = (release: Deferred.Deferred<void>) => {
   const state: QuestionnaireProbe = { interrupted: false, cleaned: false };
   const handler = (_request: AskUserRequest, owner: QuestionnaireOwner) => {
@@ -102,16 +100,12 @@ describe("assignment-owned questionnaire proxy", () => {
           generation: "g1",
           ask: (_request, authenticatedOwner, signal) => {
             owner = authenticatedOwner;
-            signal.addEventListener(
-              "abort",
-              () => {
-                aborted = true;
-              },
-              { once: true },
-            );
-            // The user never answers. Only the explicit owned cleanup acknowledgement
-            // may retain the relay after interruption, not this foreign Promise.
-            return deferredPromise<AskUserOutcome>().promise;
+            const recordAbort = Effect.sync(() => {
+              aborted = true;
+            });
+            return Effect.runPromiseExit(Effect.never.pipe(Effect.onInterrupt(() => recordAbort)), {
+              signal,
+            }).then(() => deferredPromise<AskUserOutcome>().promise);
           },
           cancel: (authenticatedOwner) => {
             expect(authenticatedOwner).toBe(owner);
@@ -121,7 +115,7 @@ describe("assignment-owned questionnaire proxy", () => {
             });
           },
         };
-        events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(capability));
+        answerCapabilityQueries(events, () => capability);
         const layer = serviceLayer({
           questionnaireHandler: (input, authenticatedOwner) =>
             askParentQuestionnaire(events, "root", input, authenticatedOwner),
@@ -189,7 +183,6 @@ describe("assignment-owned questionnaire proxy", () => {
         yield* Deferred.succeed(promptGate, undefined);
         yield* yieldUntil(() => questionnaire.state.interrupted);
         for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
-        // Record before releasing so a regression fails here instead of stalling shutdown.
         const releasedBeforeCleanup = child.released();
         yield* Deferred.succeed(release, undefined);
         const failure = yield* Fiber.join(starting);

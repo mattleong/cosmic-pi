@@ -1,4 +1,3 @@
-// Node process and session-file ownership is intentionally isolated at this boundary.
 import { sha256Text, synchronousRandomUuid } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { nodeFsPromises, nodePath } from "./node-builtins.ts";
@@ -92,7 +91,6 @@ const subagentRunDirectory = (agentDirectory: string, parentSessionId: string, r
     safeSubagentDirectorySegment(runId),
   );
 
-/** One owned filesystem step, failing typed with its operation name. */
 const fileStep = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
   Effect.tryPromise({ try: evaluate, catch: (error) => processError(operation, error) });
 
@@ -131,7 +129,6 @@ const encodeResultContractDocument = Schema.encodeEffect(
   Schema.fromJsonString(LocalPiResultContractDocument),
 );
 
-/** Writes the private result contract a child reads at session start; returns its CLI flag. */
 const writeResultContract = (request: ChildLaunchRequest, runDir: string) =>
   Effect.gen(function* () {
     const contract = request.resultContract;
@@ -169,8 +166,6 @@ function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
   };
 }
 
-// Children do not load Better OpenAI's checkpoint decoder. Restore its plaintext branch
-// instead of inheriting an opaque checkpoint with only one retained conversation entry.
 const isEncryptedWorkspaceCheckpoint = Schema.is(
   Schema.Struct({ type: Schema.Literal("pi-better-openai.compaction.v1") }),
 );
@@ -185,7 +180,6 @@ const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry 
     (entry.type === "message" && entry.message.role === "system") ||
     (entry.type === "compaction" && isEncryptedWorkspaceCheckpoint(entry.details))
   ) {
-    // Keep tree/compaction anchors, but never inherit parent prompt or tool authority.
     return {
       type: "custom",
       customType: "pi-subagents-fork-anchor",
@@ -205,7 +199,6 @@ const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry 
       parentId,
       message: {
         ...entry.message,
-        // Signed/redacted provider thinking blocks are not portable across child models.
         content: entry.message.content.filter((part) => part.type !== "thinking"),
       },
     };
@@ -233,7 +226,6 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
         "fork parent session",
         "The parent session has no valid session header.",
       );
-    // Native loading migrates entries, but persistence must stay disabled: open() can repair the parent.
     const branch = yield* Effect.try({
       try: () =>
         SessionManager.inMemory(request.cwd, undefined, parsedEntries).getBranch(
@@ -292,7 +284,6 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       ? yield* createForkedSession(request, runDir)
       : undefined;
 
-  // Pi's published CLI bundles dependencies absent from the unbundled dist/cli.js.
   const cliEntry = join(getPackageDir(), "dist", "bundle", "cli.js");
   const toolPolicy = childToolPolicy(request.activeTools, request.resultContract !== undefined);
   const cliArgs = [
@@ -336,7 +327,6 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       label: "Subagent RPC",
       error: processError,
       message: (value): ChildWireEvent => ({ type: "rpc_message", value }),
-      // Pi reports parser overflow to its backend; unlike native CLIs it does not kill here.
       terminateOnParserOverflow: false,
       synchronousWriteFailure: "not_sent",
       requestAbort: requestCooperativeAbort,
@@ -362,8 +352,6 @@ export class ChildProcess extends Context.Service<ChildProcess, ChildProcessCont
   ) => {
     const agentDirectory = options.agentDirectory ?? getAgentDir();
     return Layer.succeed(this, {
-      // Preparation and spawn settle as one masked acquisition, so an interrupted launch never
-      // leaves a run-state write still in flight behind it.
       spawn: (request) =>
         Effect.uninterruptible(acquireChild(agentDirectory, request, options.transportRuntime)),
       reclaimRunState: (request) => reclaimChildRunState(agentDirectory, request),

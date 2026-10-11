@@ -92,13 +92,10 @@ it.effect.each([
   "secret-body",
   '{"ok":"secret-value"}',
   "",
-  // A complete body followed by the first two bytes of a three-byte character.
   Uint8Array.of(...new TextEncoder().encode('{"ok":true}'), 0xe2, 0x82),
 ])("maps malformed response %s to a decode failure with or without a byte limit", (body) =>
   Effect.gen(function* () {
     const http = yield* JsonHttpClient;
-    // Regression: an unbounded non-JSON body failed as "response", a bounded one as "decode",
-    // and a bounded read dropped a truncated UTF-8 tail that the unbounded read rejects.
     for (const request of [okRequest, { ...okRequest, maxResponseBytes: 1024 }]) {
       const failure = yield* Effect.flip(http.request(request));
       expect(failure.operation).toBe("decode");
@@ -205,17 +202,14 @@ it.effect("bounds JSON response buffering before decoding", () =>
   }).pipe(json('{"ok":true}')),
 );
 
-it.effect("rejects undefined JSON encodings before production or test transport", () =>
+it.effect("rejects non-JSON encodings before production or test transport", () =>
   Effect.gen(function* () {
-    // SAFETY: This deliberately invalid codec exercises rejection of a non-JSON encoded value.
-    const undefinedAsJson = Schema.Undefined as typeof Schema.Undefined &
-      Schema.ConstraintCodec<undefined, Schema.Json, never, never>;
     const request = StreamingHttpClient.use((http) =>
       Effect.result(
-        http.requestJsonRawBytes<undefined, Schema.Json, never>(
+        http.requestJsonRawBytes(
           { url: "https://example.invalid", method: "POST" },
-          undefinedAsJson,
-          undefined,
+          Schema.Number,
+          Number.NaN,
         ),
       ),
     );

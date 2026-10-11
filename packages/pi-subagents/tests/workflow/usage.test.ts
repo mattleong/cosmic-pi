@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type { SubagentUsage } from "../../src/run/model.ts";
@@ -25,7 +24,6 @@ const usage = (input: number, output: number, cost?: number): SubagentUsage => (
   ...(cost !== undefined && { cost }),
 });
 
-/** Has the running agent with `task` start `tools` tool calls and spend `spent`, then report. */
 const work = (fixture: WorkflowFixture, task: string, spent: SubagentUsage, tools: number) =>
   Effect.gen(function* () {
     yield* runningTask(fixture, task);
@@ -84,7 +82,6 @@ describe("workflow usage", () => {
       yield* work(fixture, "first", usage(100, 10, 0.5), 2);
       yield* work(fixture, "second", usage(200, 20), 3);
       const earlier = yield* finished(workflows, first.id);
-      // One agent reported no cost, so the known cost is a lower bound.
       expect(earlier.usage).toMatchObject({ cost: 0.5, unpriced: 1 });
 
       const resumed = yield* startScript(workflows, PAIR, { resumeFromRunId: first.id });

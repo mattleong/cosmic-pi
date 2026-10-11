@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import type { AgentToolResult, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { it } from "vitest";
-import { opaqueFixture } from "pi-cosmic-core/testing";
 import { createToolPresentationHarness, withPresentationSettings } from "../../../testing";
 import { createWebAccessRenderers } from "../../../src/third-party/web-access/render";
 
@@ -23,14 +22,15 @@ const args = Object.freeze({
   proxy: "https://proxy.test",
 });
 const image = Object.freeze({ type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" });
-const content = Object.freeze([
+const content: AgentToolResult<unknown>["content"] = [
   Object.freeze({ type: "text" as const, text: `${"Page text ".repeat(100)}OUTPUT_TAIL` }),
   Object.freeze({
     type: "text" as const,
     text: "RECOVERY_TAIL use the stored reference private-reference",
   }),
   image,
-]);
+];
+Object.freeze(content);
 
 for (const style of ["preview", "compact"] as const)
   for (const mode of ["on", "off", "border"] as const)
@@ -44,7 +44,7 @@ for (const style of ["preview", "compact"] as const)
                 ? { urlCount: 7, successful: 7, responseId: "private-reference" }
                 : { version: "future" },
             );
-            const value: AgentToolResult<unknown> = { content: opaqueFixture(content), details };
+            const value: AgentToolResult<unknown> = { content, details };
             const harness = createToolPresentationHarness(
               createWebAccessRenderers("fetch_content", downstream, {
                 mode,

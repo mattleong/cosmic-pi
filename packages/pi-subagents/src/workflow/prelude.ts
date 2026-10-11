@@ -1,45 +1,10 @@
-/** Host bridge namespace installed by the sandbox boundary; members return promises. */
 export const WORKFLOW_HOST_NAMESPACE = "__workflow";
-/** Store key holding the script's verbatim `args`. */
 export const WORKFLOW_ARGS_KEY = "__workflow_args";
-/** Store key holding the run's token budget, absent without one. */
 export const WORKFLOW_BUDGET_KEY = "__workflow_budget";
-/** One parallel()/pipeline() call accepts at most this many items. */
 const WORKFLOW_BATCH_LIMIT = 4_096;
-/**
- * Phase titles the prelude forwards are cut to this length; the host clips them further for
- * display, so a long title never travels with every agent() call or makes it invalid.
- */
 const WORKFLOW_PRELUDE_PHASE_MAX_CHARS = 1_024;
-/**
- * The `name` of the error an agent() call throws once the run's token budget is spent, so a
- * script's catch can tell it from other errors and the failure notice from other failures.
- */
 export const WORKFLOW_BUDGET_ERROR = "WorkflowBudgetError";
 
-/**
- * JavaScript evaluated inside the sandbox before the script body, on the script's first line so
- * reported line numbers match the script. It defines the Claude-Code-style workflow hooks as
- * non-writable globals; scripts may shadow them locally without a redeclaration error.
- *
- * Host members: `agent(prompt, options, workflow?)`, where a nested workflow's calls pass its name,
- * resolves to `{ result, outputTokens, refusal? }` (result
- * `null` when the agent failed, was stopped or was skipped; `outputTokens` what the call spent in
- * this run, 0 for a reused result; `refusal` the budget error's message when the budget was spent
- * before the agent started) and rejects only for invalid calls; `event(event)` records phase and
- * log events; `load(reference, args)` returns a saved script `{ name, body }` for `workflow()` and
- * rejects only for invalid calls, such as a reference that doesn't load or args that don't match
- * the script's `meta.args`.
- * `budget` is shared with nested workflows: `spent()` sums the replies so far, which is what the
- * host counted for settled agents, so it excludes agents still running.
- *
- * Errors from invalid agent(), parallel(), pipeline() and workflow() calls carry a private,
- * non-enumerable marker. parallel() and pipeline() rethrow a marked error, so an invalid call
- * fails the run even inside them. A budget error, named {@link WORKFLOW_BUDGET_ERROR}, carries a marker of its own:
- * agent() throws it like any error, so an uncaught one fails the run, but parallel() and
- * pipeline() resolve its item to null without a warning, since the run already warned once. Any other throw in an item or stage resolves that
- * item to null with a warning. The prelude is joined into one line, so it can't hold line comments.
- */
 const preludeSource = `(() => {
   "use strict";
   const host = globalThis.${WORKFLOW_HOST_NAMESPACE};
@@ -193,23 +158,15 @@ const preludeSource = `(() => {
   define("budget", Object.freeze({ total, spent: () => spent, remaining: () => (total === null ? Infinity : Math.max(0, total - spent)) }));
 })();`;
 
-/** The prelude as a single line, so it can share the script's first line. */
 export const WORKFLOW_PRELUDE = preludeSource.replace(/\n\s*/g, " ");
 
-/** Sandbox source: prelude plus the parsed script body, with script line numbers preserved. */
 export const workflowSandboxSource = (body: string): string => `${WORKFLOW_PRELUDE}${body}`;
 
-/** pi-codemode's worker evaluates `(async (tools, console) => {<code>\n})`, so line 1 starts with it. */
 const SANDBOX_WRAPPER_CHARS = "(async (tools, console) => {".length;
 const STACK_FRAME = /^\s*at /u;
 const NATIVE_FRAME = /\(native\)$/u;
 const SANDBOX_POSITION = /^(\s*at .*?)\(?codemode\.js:(\d+):(\d+)\)?$/u;
 
-/**
- * A failed script's stack in script terms, one unindented frame per line: sandbox positions become
- * `line L:C` of the script, frames inside the prelude and native frames are dropped, and so are
- * the leading message lines, which the failure line already shows. Undefined when no frame is left.
- */
 export const workflowScriptStack = (stack: string): string | undefined => {
   const frames = stack.split("\n").flatMap((line): ReadonlyArray<string> => {
     if (!STACK_FRAME.test(line) || NATIVE_FRAME.test(line)) return [];
@@ -217,7 +174,6 @@ export const workflowScriptStack = (stack: string): string | undefined => {
     if (!position) return [line.trim()];
     const [, head = "", lineText = "", columnText = ""] = position;
     const lineNumber = Number(lineText);
-    // Line 1 holds the wrapper and the prelude ahead of the script's first line.
     const column =
       Number(columnText) - (lineNumber === 1 ? SANDBOX_WRAPPER_CHARS + WORKFLOW_PRELUDE.length : 0);
     return column > 0 ? [`${head.trim()} (line ${lineNumber}:${column})`] : [];

@@ -1,4 +1,3 @@
-/** Static route-discovery fields, composed with the shared orchestration envelope. */
 import * as Schema from "effect/Schema";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
@@ -27,7 +26,6 @@ export const ModelsContractFields = {
       defaultContext: Schema.Literals(PROFILE_CANDIDATE_CONTEXTS),
       defaultWriteIntent: Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS),
       defaultEffort: Schema.optionalKey(Schema.Literals(SUBAGENT_EFFORTS)),
-      /** Declared order, including statically skipped candidates; not launch readiness. */
       candidates: Schema.Array(
         Schema.Struct({
           host: Schema.Literals(PROFILE_CANDIDATE_HOSTS),

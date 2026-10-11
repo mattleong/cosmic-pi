@@ -21,7 +21,6 @@ export interface SharpMetadata {
 }
 
 export interface SharpAdapterContract {
-  /** Fully decode the exact bytes that will be uploaded or persisted. */
   readonly decode: (bytes: Uint8Array) => Effect.Effect<SharpMetadata, SharpError>;
 }
 
@@ -34,13 +33,9 @@ const decodeMetadata = Schema.decodeUnknownEffect(metadataSchema, { onExcessProp
 const decodeError = () =>
   new SharpError({ operation: "decode", message: "Image data is not readable." });
 
-// Independently built session runtimes share immediate admission. Never queue image buffers.
 const admission = Semaphore.makeUnsafe(1);
 const disabled = MutableRef.make(false);
 
-/** Owned runner seam. Report confirmed exit from scoped cleanup, even on interruption.
- * Returning from the platform scope alone is not proof that its child exited.
- */
 export type SharpProcessRunner = (
   bytes: Uint8Array,
   onCleanup: (confirmed: boolean) => void,
@@ -79,7 +74,6 @@ export const makeSharpAdapter = (run: SharpProcessRunner = runDecoder): SharpAda
             ),
             Effect.ensuring(
               Effect.sync(() => {
-                // This commit precedes permit release on success, error and cancellation.
                 if (!cleanupConfirmed) MutableRef.set(disabled, true);
               }),
             ),
@@ -96,7 +90,6 @@ export const makeSharpAdapter = (run: SharpProcessRunner = runDecoder): SharpAda
             return yield* decodeError();
           return yield* decodeMetadata(result.stdout);
         }).pipe(
-          // The runner's whole scoped cleanup is inside the permit, including cancellation.
           admission.withPermitsIfAvailable(1),
           Effect.flatMap((result) => Effect.fromOption(result)),
           Effect.mapError(decodeError),

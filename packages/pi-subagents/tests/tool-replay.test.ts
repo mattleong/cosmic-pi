@@ -1,4 +1,3 @@
-// Promise assertions are test-runner boundaries.
 import { tmpdir } from "node:os";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import {
@@ -7,7 +6,12 @@ import {
   type ToolPresentationHarness,
 } from "pi-code-previews/testing";
 import * as Effect from "effect/Effect";
-import { deferredPromise, recordingExtensionHost } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  recordingExtensionHost,
+  type DefaultedEventName,
+  type ExtensionEventNamed,
+} from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
@@ -18,7 +22,6 @@ const output: AgentToolResult<unknown> = {
   content: [{ type: "text", text: "COMPLETE_OUTPUT recovery /tmp/evidence.txt" }],
   details: undefined,
 };
-/** One coordinator tool and the inactive workflow runner, with their complete evidence. */
 const SAMPLES = [
   {
     name: "subagent_start",
@@ -39,10 +42,6 @@ const frames = (row: ToolPresentationHarness, sample: Sample) =>
 const context = (signal?: AbortSignal) =>
   sessionContextFixture({ signal, isProjectTrusted: () => false });
 
-/**
- * The root application over a sourced host; `loadSettings` runs inside each startup. The test's
- * scope quits its session.
- */
 const replayApplication = (loadSettings: () => Promise<void> = () => Promise.resolve()) =>
   Effect.gen(function* () {
     const host = recordingExtensionHost();
@@ -50,14 +49,21 @@ const replayApplication = (loadSettings: () => Promise<void> = () => Promise.res
       getAgentDirectory: () => nodePath.join(tmpdir(), "pi-subagents-tool-replay-tests"),
       loadSettings,
     });
-    const dispatch = (name: string, event: { readonly reason?: string }, ctx = context()) =>
-      host.emit(name, ctx, event);
-    const emit = (name: string, event: { readonly reason?: string }, ctx = context()) =>
-      settle(() => dispatch(name, event, ctx));
-    yield* Effect.addFinalizer(() => emit("session_shutdown", { reason: "quit" }));
+    const dispatch = <Name extends DefaultedEventName>(
+      name: Name,
+      event?: ExtensionEventNamed<Name>,
+      ctx = context(),
+    ) => host.emit(name, ctx, event);
+    const emit = <Name extends DefaultedEventName>(
+      name: Name,
+      event?: ExtensionEventNamed<Name>,
+      ctx = context(),
+    ) => settle(() => dispatch(name, event, ctx));
+    yield* Effect.addFinalizer(() =>
+      emit("session_shutdown", { type: "session_shutdown", reason: "quit" }),
+    );
     return {
       host,
-      /** Pi reconstructs history, retaining each row's renderers, before startup registers tools. */
       coldRow: (sample: Sample) => {
         expect(host.tools.has(sample.name)).toBe(false);
         return createToolPresentationHarness(host.resolve(sample.name)!);
@@ -74,7 +80,6 @@ const expectEvidence = (rendered: ReturnType<typeof frames>, sample: Sample) => 
     for (const evidence of sample.evidence) expect(text).toContain(evidence);
 };
 
-/** Compact presentation for the rest of the test. */
 const compactSettings = Effect.acquireRelease(
   Effect.sync(() =>
     applyPresentationSettings({
@@ -100,10 +105,9 @@ describe("subagent tool history replay", () => {
         const row = app.coldRow(sample);
         return { sample, row, cold: frames(row, sample) };
       });
-      // Resolved before startup but first drawn after a later registration or shutdown.
       const lazy = SAMPLES.map((sample) => ({ sample, row: app.coldRow(sample) }));
       const retired = SAMPLES.map((sample) => ({ sample, row: app.coldRow(sample) }));
-      yield* app.emit("session_start", { reason: "startup" });
+      yield* app.emit("session_start", { type: "session_start", reason: "startup" });
       expect(app.host.active()).toContain("subagent_start");
       expect(app.host.active()).not.toContain("subagent_workflow");
       const first = new Map(SAMPLES.map((sample) => [sample, app.registeredFrames(sample)]));
@@ -116,18 +120,17 @@ describe("subagent tool history replay", () => {
       }
 
       treeStyle = true;
-      yield* app.emit("session_tree", {});
+      yield* app.emit("session_tree");
       expect(app.host.active()).not.toContain("subagent_workflow");
       for (const { sample, row } of [...drawn, ...lazy]) {
         expect(app.registeredFrames(sample)).not.toEqual(first.get(sample));
         expect(frames(row, sample)).toEqual(first.get(sample));
-        // Later rows use the registered definition itself.
         expect(app.host.resolve(sample.name)?.renderCall).toBe(
           app.host.tools.get(sample.name)?.renderCall,
         );
       }
 
-      yield* app.emit("session_shutdown", { reason: "reload" });
+      yield* app.emit("session_shutdown", { type: "session_shutdown", reason: "reload" });
       for (const { sample, row } of drawn) expect(frames(row, sample)).toEqual(first.get(sample));
       for (const { sample, row } of retired) {
         const raw = frames(row, sample);
@@ -155,23 +158,29 @@ describe("subagent tool history replay", () => {
       });
       if (failure === "registration") {
         app.host.rejectTools(true);
-        yield* app.emit("session_start", { reason: "startup" });
+        yield* app.emit("session_start", { type: "session_start", reason: "startup" });
         app.host.rejectTools(false);
       } else if (failure === "aborted")
-        yield* app.emit("session_start", { reason: "startup" }, context(AbortSignal.abort()));
+        yield* app.emit(
+          "session_start",
+          { type: "session_start", reason: "startup" },
+          context(AbortSignal.abort()),
+        );
       else {
-        const starting = app.dispatch("session_start", { reason: "startup" });
+        const starting = app.dispatch("session_start", {
+          type: "session_start",
+          reason: "startup",
+        });
         yield* step(() => vi.waitFor(() => expect(loadSettings).toHaveBeenCalled()));
         const superseding =
           failure === "tree"
-            ? app.dispatch("session_tree", {})
-            : app.dispatch("session_shutdown", { reason: "quit" });
+            ? app.dispatch("session_tree")
+            : app.dispatch("session_shutdown", { type: "session_shutdown", reason: "quit" });
         preview.resolve();
         yield* step(() => Promise.all([starting, superseding]));
       }
-      // A later successful registration in this factory still cannot adopt.
       if (failure !== "tree")
-        yield* app.emit(failure === "shutdown" ? "session_start" : "session_tree", {});
+        yield* app.emit(failure === "shutdown" ? "session_start" : "session_tree");
       for (const { sample, row, cold } of drawn) {
         expect(app.host.tools.has(sample.name)).toBe(true);
         const after = frames(row, sample);

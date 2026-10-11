@@ -20,9 +20,7 @@ export type SubagentQuestionNotification = Extract<
 >;
 
 export interface RunNotificationDeliveryDependencies extends RunContext {
-  /** Serializes both delivery workers against await claim acquisition. */
   readonly withCompletionGate: WithRunLock;
-  /** Host/ancestor boundary; must be called outside the service lock. */
   readonly notify: (
     notification: SubagentNotification,
   ) => Effect.Effect<SubagentNotificationDelivery | undefined>;
@@ -35,7 +33,6 @@ export interface QuestionNotificationReceipt {
   readonly claimToken: string;
 }
 
-/** Retry backoff: reset after progress or an empty outbox, otherwise doubled up to the cap. */
 const nextRetryDelay = (delayMillis: number, reset: boolean): number =>
   reset ? COMPLETION_RETRY_INITIAL_MILLIS : Math.min(COMPLETION_RETRY_MAX_MILLIS, delayMillis * 2);
 
@@ -43,24 +40,17 @@ type ActionDeliveryState =
   | { readonly _tag: "Idle" }
   | { readonly _tag: "Retry"; readonly immediate: boolean; readonly delayMillis: number };
 
-/**
- * Owns completion and question delivery. Completion payloads live only in each
- * RunRecord's completionGenerations map; the reusable latch is only a wakeup.
- */
 export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.make")(function* (
   dependencies: RunNotificationDeliveryDependencies,
 ) {
   const { ownerScope, records, withLock, withCompletionGate, notify } = dependencies;
   const pendingActionNotifications = new Map<string, SubagentQuestionNotification>();
-  // Await owns the carrier from admission through successful result construction. A
-  // claim can precede its question, so publication cannot race an active await.
   const questionClaims = new Map<string, string>();
   const completionWake = yield* Latch.make();
   const actionWake = yield* Latch.make();
   let completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
   let actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
 
-  // Effect.gen reruns its body on every execution, so each pass reads the current delay.
   const flushPendingCompletions = Effect.gen(function* () {
     yield* Effect.sleep(Duration.millis(completionRetryDelayMillis));
     yield* withCompletionGate(
@@ -194,8 +184,6 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
   yield* Effect.forkIn(completionWorker, ownerScope, { startImmediately: true });
   yield* Effect.forkIn(actionWorker, ownerScope, { startImmediately: true });
 
-  // These operations require the service lock. Await admission also takes the
-  // completion gate, in the same order as both notification workers.
   const queueActionNotificationLocked = (
     record: RunRecord,
     notification: Omit<SubagentQuestionNotification, "generation">,
@@ -251,16 +239,13 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
     questionReceiptLocked,
     acknowledgeQuestionsLocked,
     releaseQuestionClaimsLocked,
-    /** Caller must hold the service lock; inserts one payload and wakes delivery atomically. */
     insertCompletionLocked: (record: RunRecord, completion: CompletionGenerationRecord): void => {
       record.completionGenerations.set(completion.generation, completion);
       Latch.openUnsafe(completionWake);
     },
-    /** Caller must hold the service lock; used when a matching claim is released. */
     wakeCompletionLocked: (): void => {
       Latch.openUnsafe(completionWake);
     },
-    /** Caller must hold the service lock; drops the run's queued question. */
     discardQuestionLocked: (id: string): void => void pendingActionNotifications.delete(id),
   };
 });

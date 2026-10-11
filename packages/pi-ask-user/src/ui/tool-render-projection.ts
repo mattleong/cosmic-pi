@@ -3,7 +3,6 @@ import { countLabel, decodeUnknownOrUndefined, stripTerminalControls } from "pi-
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import { MAX_CHOICES, MAX_QUESTIONS } from "../questionnaire/schema.ts";
 
-/** Decodes untrusted replay data; hostile getters and mismatches yield undefined. */
 export const projection =
   <S extends Schema.ConstraintDecoder<unknown>>(schema: S) =>
   <Input>(input: Input): S["Type"] | undefined =>
@@ -11,7 +10,6 @@ export const projection =
 
 const note = { note: Schema.optional(Schema.String) };
 
-/** Replayed answers and their notes. A malformed note declines the whole projection. */
 export const answerOutcome = Schema.Union([
   Schema.Struct({ outcome: Schema.Literal("cancelled") }),
   Schema.Struct({
@@ -49,7 +47,6 @@ const asyncSnapshotFields = {
   ),
 };
 
-// Historical expanded replay accepts any string ID. Compact identity needs a bounded, nonempty ID.
 const compactIdentity = Schema.String.check(Schema.isBetweenLength(1, 256));
 const compactAsyncSnapshot = Schema.Struct({
   ...asyncSnapshotFields,
@@ -85,7 +82,6 @@ export const decodeAsyncControl = projection(
   }),
 );
 
-/** Status without a request ID lists every retained questionnaire. */
 export const isStatusList = <Args>(args: Args): boolean => {
   const control = decodeAsyncControl(args);
   return control?.action === "status" && control.requestId === undefined;
@@ -99,13 +95,11 @@ export const decodeCallQuestions = projection(
   }),
 );
 
-/** The call's question titles, or undefined when the arguments hold none. */
 export const callTitles = <Args>(args: Args): string | undefined =>
   decodeCallQuestions(args)
     ?.questions.map((question) => stripTerminalControls(question.title))
     .join(", ") || undefined;
 
-/** Question titles by answer key, so answers read as the user saw them. */
 export const titlesByKey = <Args>(args: Args): ReadonlyMap<string, string> =>
   new Map(
     (decodeCallQuestions(args)?.questions ?? []).flatMap((question) =>
@@ -113,7 +107,6 @@ export const titlesByKey = <Args>(args: Args): ReadonlyMap<string, string> =>
     ),
   );
 
-/** Compact-only evidence for matching a selected label; expanded replay stays title-only. */
 export const decodeCompactChoices = projection(
   Schema.Struct({
     questions: Schema.Array(
@@ -144,10 +137,8 @@ export function fallbackText<Content>(content: Content, allowString = false): st
     .join("\n");
 }
 
-/** Where one async questionnaire stands, in the words people read. */
 export type QuestionnaireState = "waiting" | "queued" | "answered" | "cancelled" | "failed";
 
-/** Undefined for inconsistent snapshots, which keep their raw evidence instead. */
 export function questionnaireState(
   row: Pick<ReplayedSnapshot, "status" | "delivery" | "presentation" | "outcome">,
 ): QuestionnaireState | undefined {
@@ -167,7 +158,6 @@ export function questionnaireState(
   }
 }
 
-/** Each state's wording, long then short. */
 const STATE_WORDS = {
   waiting: ["waiting for answers", "waiting"],
   queued: ["queued", "queued"],
@@ -183,12 +173,10 @@ const STATE_ORDER: readonly QuestionnaireState[] = [
   "cancelled",
 ];
 
-/** One questionnaire's state, longest wording first; the first that fits is shown. */
 export const stateWords = (state: QuestionnaireState): readonly string[] => [
   ...new Set(STATE_WORDS[state]),
 ];
 
-/** A retained list's states as counts, longest wording first; the first that fits is shown. */
 export function stateCounts(states: readonly QuestionnaireState[]): readonly string[] {
   if (states.length === 0) return ["none retained", "none"];
   const counted = STATE_ORDER.flatMap((state) => {

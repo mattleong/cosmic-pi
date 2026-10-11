@@ -1,6 +1,6 @@
-import type { JsonObject } from "pi-cosmic-core";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { StringEnum } from "@earendil-works/pi-ai";
+import * as Predicate from "effect/Predicate";
+import { StringEnum, validateToolArguments } from "@earendil-works/pi-ai";
+import { isJsonObject, type JsonValue } from "pi-cosmic-core";
 import { Type, type Static } from "typebox";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
@@ -167,7 +167,6 @@ const ClaimsParameters = Type.Object(
 );
 
 type ClaimsField = Exclude<keyof SubagentClaimsInput, "action">;
-/** The fields each action requires, in reporting order; every other field is rejected. */
 const CLAIMS_ACTION_FIELDS = {
   list: ["runIds"],
   grant: ["runId", "paths"],
@@ -176,12 +175,7 @@ const CLAIMS_ACTION_FIELDS = {
 } as const satisfies Record<SubagentClaimsInput["action"], ReadonlyArray<ClaimsField>>;
 const CLAIMS_FIELDS = ["runIds", "runId", "paths"] as const satisfies ReadonlyArray<ClaimsField>;
 
-/**
- * Per-action field requirements the flattened claims schema cannot express as one object.
- * Returns the error message, or undefined when the operation is well-formed for its action.
- */
 export const claimsOperationError = (operation: SubagentClaimsInput): string | undefined => {
-  // Pi `tool_call` handlers may mutate validated input, so an unknown action can still arrive.
   if (!Object.hasOwn(CLAIMS_ACTION_FIELDS, operation.action))
     return "subagent_claims requires a supported action.";
   const required: ReadonlyArray<ClaimsField> = CLAIMS_ACTION_FIELDS[operation.action];
@@ -246,7 +240,6 @@ const WORKSPACE_FIELDS = Object.keys(WorkspaceParameters.properties).filter(
   (field): field is WorkspaceField => field !== "action",
 );
 
-/** Enforce action-specific requirements without provider-incompatible union tool schemas. */
 export const workspaceOperationError = (operation: SubagentWorkspaceInput): string | undefined => {
   const fields = WORKSPACE_ACTION_FIELDS[operation.action];
   const missing = fields.required.find((field) => operation[field] === undefined);
@@ -271,13 +264,11 @@ export type SubagentStartInput = Static<typeof StartParameters>;
 export type SubagentLifecycleInput = Static<typeof LifecycleParameters>;
 export type SubagentClaimsInput = Static<typeof ClaimsParameters>;
 
-/** Proxy decoding rejects this; the root path reports it only for interrupt, stop, and resume. */
 export const lifecycleMessageError = (input: SubagentLifecycleInput): string | undefined =>
   input.action !== "resume" && input.message !== undefined
     ? 'subagent_lifecycle message is valid only when action="resume".'
     : undefined;
 
-/** The one tool catalog: each Pi parameter schema plus any cross-field rule it cannot express. */
 export const SUBAGENT_TOOL_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.models]: { parameters: ModelsParameters },
   [SUBAGENT_TOOL_NAME.start]: { parameters: StartParameters },
@@ -302,57 +293,73 @@ export type SubagentToolParameters<N extends SubagentToolName> =
   (typeof SUBAGENT_TOOL_SCHEMAS)[N]["parameters"];
 export type SubagentToolArgs<N extends SubagentToolName> = Static<SubagentToolParameters<N>>;
 
-/** One public tool call, keyed by tool name; its args are exactly the tool's wire arguments. */
 export type SubagentToolInput<N extends SubagentToolName = SubagentToolName> = {
   readonly [P in N]: { readonly tool: P; readonly args: SubagentToolArgs<P> };
 }[N];
 
 type ToolNameAction = keyof typeof SUBAGENT_TOOL_NAME;
-/** Lifecycle carries its own action; every other tool's action is its SUBAGENT_TOOL_NAME key. */
-type ToolAction<I extends SubagentToolInput> =
-  I extends SubagentToolInput<typeof SUBAGENT_TOOL_NAME.lifecycle>
-    ? I["args"]["action"]
+type ToolActions = {
+  readonly [N in SubagentToolName]: N extends typeof SUBAGENT_TOOL_NAME.lifecycle
+    ? SubagentToolArgs<N>["action"]
     : {
-        readonly [A in ToolNameAction]: (typeof SUBAGENT_TOOL_NAME)[A] extends I["tool"]
-          ? A
-          : never;
+        readonly [A in ToolNameAction]: (typeof SUBAGENT_TOOL_NAME)[A] extends N ? A : never;
       }[ToolNameAction];
-export type SubagentToolAction = ToolAction<SubagentToolInput>;
+};
+export type SubagentToolAction = ToolActions[SubagentToolName];
 
-const TOOL_NAME_ACTIONS = new Map<string, string>(
-  Object.entries(SUBAGENT_TOOL_NAME).map(([action, tool]) => [tool, action]),
-);
+type ToolActionResolvers = {
+  readonly [N in SubagentToolName]: (args: SubagentToolArgs<N>) => ToolActions[N];
+};
 
-/** The persisted details action for a call, and the subject of its argument errors. */
-export const subagentToolAction = <I extends SubagentToolInput>(input: I): ToolAction<I> =>
-  // SAFETY: ToolAction mirrors this lookup for every catalog tool.
-  (input.tool === SUBAGENT_TOOL_NAME.lifecycle
-    ? input.args.action
-    : TOOL_NAME_ACTIONS.get(input.tool)) as ToolAction<I>;
+const TOOL_ACTIONS: ToolActionResolvers = {
+  [SUBAGENT_TOOL_NAME.models]: () => "models",
+  [SUBAGENT_TOOL_NAME.start]: () => "start",
+  [SUBAGENT_TOOL_NAME.list]: () => "list",
+  [SUBAGENT_TOOL_NAME.status]: () => "status",
+  [SUBAGENT_TOOL_NAME.await]: () => "await",
+  [SUBAGENT_TOOL_NAME.send]: () => "send",
+  [SUBAGENT_TOOL_NAME.reply]: () => "reply",
+  [SUBAGENT_TOOL_NAME.lifecycle]: (args) => args.action,
+  [SUBAGENT_TOOL_NAME.rename]: () => "rename",
+  [SUBAGENT_TOOL_NAME.claims]: () => "claims",
+  [SUBAGENT_TOOL_NAME.workspace]: () => "workspace",
+};
 
-export const prepareSubagentStartArguments = <ArgsInput>(args: ArgsInput): SubagentStartInput => {
-  // Pi performs the authoritative TypeBox validation immediately after this friendly preflight.
-  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-  const prepared = args as SubagentStartInput;
-  if (!args || !hasObjectRuntimeType(args) || Array.isArray(args)) return prepared;
-  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-  const record = args as Readonly<JsonObject>;
-  const agents = record.agents;
-  if (!Array.isArray(agents)) {
-    if (Object.hasOwn(record, "task"))
-      throw new Error(
-        '[invalid_start_shape] subagent_start requires { agents: [{ task: "..." }] }; wrap the top-level launch fields in the agents array.',
-      );
-    return prepared;
-  }
+export const subagentToolAction = <N extends SubagentToolName>(
+  input: SubagentToolInput<N>,
+): ToolActions[N] => TOOL_ACTIONS[input.tool](input.args);
+
+const START_ARGUMENTS_TOOL = {
+  name: SUBAGENT_TOOL_NAME.start,
+  description: "subagent_start arguments",
+  parameters: StartParameters,
+};
+
+const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
   agents.forEach((agent, index) => {
-    if (!agent || !hasObjectRuntimeType(agent) || Array.isArray(agent)) return;
-    // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-    const disallowedField = firstDisallowedLaunchOverride(agent as Readonly<JsonObject>);
+    if (!Predicate.isObject(agent)) return;
+    const disallowedField = firstDisallowedLaunchOverride(agent);
     if (disallowedField)
       throw new Error(
         disallowedLaunchOverrideMessage(disallowedField, `subagent_start agents[${index}]`),
       );
   });
-  return prepared;
+
+export const prepareSubagentStartArguments = <ArgsInput>(args: ArgsInput): SubagentStartInput => {
+  if (!isJsonObject(args))
+    throw new Error(
+      `Validation failed for tool "${SUBAGENT_TOOL_NAME.start}": arguments must be a JSON object.`,
+    );
+  const agents = args.agents;
+  if (Array.isArray(agents)) checkStartAgents(agents);
+  else if (Object.hasOwn(args, "task"))
+    throw new Error(
+      '[invalid_start_shape] subagent_start requires { agents: [{ task: "..." }] }; wrap the top-level launch fields in the agents array.',
+    );
+  return validateToolArguments(START_ARGUMENTS_TOOL, {
+    type: "toolCall",
+    id: "prepare-arguments",
+    name: SUBAGENT_TOOL_NAME.start,
+    arguments: args,
+  });
 };

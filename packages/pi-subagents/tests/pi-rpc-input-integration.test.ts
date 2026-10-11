@@ -135,7 +135,6 @@ describe("installed Pi RPC input hooks", () => {
           expect(yield* request("clear_queue")).toMatchObject({
             success: true,
             data: {
-              // Idle queue commands still carry rpc source, but are not mid-stream inputs.
               steering: ["rpc:undefined:steering\u2028payload"],
               followUp: ["rpc:undefined:next\u2029payload"],
             },

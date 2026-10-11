@@ -8,7 +8,6 @@ import { JsonHttpClient, mergeHeaders } from "pi-cosmic-core";
 import {
   JsonObjectSchema,
   NonNegativeIntSchema,
-  type OpenAICompactionCheckpoint,
   type OpenAICompactionJsonObject,
 } from "../compaction/protocol.ts";
 
@@ -64,9 +63,16 @@ export interface OpenAICompactRequest {
   readonly serviceTier?: "priority";
 }
 
+export interface OpenAICompactUsage {
+  readonly inputTokens: number;
+  readonly cachedInputTokens?: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+}
+
 export interface OpenAICompactResult {
   readonly output: readonly OpenAICompactionJsonObject[];
-  readonly usage: NonNullable<OpenAICompactionCheckpoint["usage"]>;
+  readonly usage: OpenAICompactUsage;
 }
 
 export interface OpenAICompactionClientContract {

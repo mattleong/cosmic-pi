@@ -27,7 +27,6 @@ it.effect("settings edits wait until a session has loaded the settings they chan
       ui: { custom: host.ctx.ui.custom, notify: (message: string) => notifications.push(message) },
     });
 
-    // No session has loaded the settings, so an edit would be built from guessed values.
     yield* step(() => Promise.resolve(settings.handler("readCollapsedLines 20", ctx)));
     const opening = Promise.resolve(settings.handler("", ctx));
     host.mount();

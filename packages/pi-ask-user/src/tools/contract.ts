@@ -1,4 +1,3 @@
-/** Pure, explicit projections of service facts; never infer decisions from formatted text. */
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type {
   AsyncQuestionnaireResult,
@@ -21,7 +20,6 @@ const envelope = {
   version: QUESTIONNAIRE_CONTRACT_VERSION,
 } as const;
 
-/** User-supplied keys, values, labels, text and notes are copied verbatim, never sanitized. */
 const projectOutcome = (outcome: AskUserOutcome): AskUserOutcome =>
   outcome.outcome === "cancelled"
     ? { outcome: outcome.outcome, answers: outcome.answers }
@@ -76,10 +74,6 @@ export const askUserAsyncControlContract = (
   ),
 });
 
-/**
- * The service already ran. A producer invariant failure must preserve its original receipt and
- * details, never synthesize cancellation, retry effects, or disclose codec diagnostics.
- */
 export const questionnaireToolResult = <Details>(
   text: string,
   details: Details,

@@ -30,7 +30,6 @@ export type CodexCredentials = {
   readonly accountId: string;
 };
 
-/** Lossy registry key parsing: a JSON credential payload, else a JWT carrying the account claim. */
 const parseRegistryCredentials = (value: string): CodexCredentials | undefined => {
   const parsed = decodeUnknownOrUndefined(RegistryCredentialsFromJsonSchema, value);
   const parsedToken = parsed?.access ?? parsed?.token;
@@ -43,10 +42,6 @@ const parseRegistryCredentials = (value: string): CodexCredentials | undefined =
   return { accessToken: Redacted.make(value, { label: "OpenAI Codex access token" }), accountId };
 };
 
-/**
- * Resolves openai-codex credentials through Pi's model registry, which owns refresh and
- * persistence. A rejected lookup keeps a fixed message because Pi errors can carry provider text.
- */
 export const getCodexCredentials = Effect.fn("CodexAuth.getCredentials")(function* (
   ctx: Pick<ExtensionContext, "modelRegistry">,
 ) {
@@ -59,7 +54,6 @@ export const getCodexCredentials = Effect.fn("CodexAuth.getCredentials")(functio
         message: "Unable to read openai-codex credentials.",
       }),
   });
-  // Only an empty key is missing; a whitespace-only key is a malformed registry value.
   if (!apiKey) return undefined;
   const credentials = parseRegistryCredentials(apiKey.trim());
   if (credentials) return credentials;

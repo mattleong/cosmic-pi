@@ -284,7 +284,6 @@ describe("internal dashboard dialogs", () => {
     });
     dialog.focused = true;
     for (const key of keys) dialog.handleInput(key);
-    // The Input renders first, so its cursor survives small heights.
     expect(dialog.render(40).some((row) => row.includes(CURSOR_MARKER))).toBe(true);
     dialog.handleInput("\r");
     expect(close).toHaveBeenCalledExactlyOnceWith({ scope, name });
@@ -474,7 +473,6 @@ describe("persistent dashboard", () => {
       press("e", "\u001b[A", "\r");
       yield* step(eventLoopTurn);
       expect(f.saveDraft).toHaveBeenCalledOnce();
-      // Keep worker's Context row expanded while visiting reviewer's Reasoning row.
       press(
         "\u001b[B",
         "\u001b[B",
@@ -502,21 +500,19 @@ describe("persistent dashboard", () => {
         expect.objectContaining({ candidates: [expect.objectContaining({ context: "fork" })] }),
         undefined,
       );
-      // Resizing and switching tabs retain the renamed editor and its Undo receipt.
       f.setHeight(24);
       expect(f.component.render(100).length).toBeLessThanOrEqual(24);
       press("\t", "\t");
       f.setHeight(35);
       expect(f.component.render(128).length).toBeLessThanOrEqual(35);
       expect(f.close).not.toHaveBeenCalled();
-      // Undo remains owned after the rename and restores the originally absent declaration.
       press("G", "\r", "\r");
       yield* step(eventLoopTurn);
       expect(f.saveDraft).toHaveBeenLastCalledWith(
         { kind: "profile-set", set: { scope: "project", name: "renamed" } },
         "worker",
         expect.anything(),
-        { sourceVersion: 6 },
+        { declaration: undefined },
       );
       press("\u001b", "\u001b[B", "\r", "\r", "\u001b[A", "\r");
       yield* step(eventLoopTurn);
@@ -565,7 +561,6 @@ describe("persistent dashboard", () => {
       f.press("\u001b[A", "\r");
       expect(f.close).not.toHaveBeenCalled();
       f.component.dispose();
-      // Session, deleted saved editor, and recreated saved editor each have a distinct lifetime.
       expect(disposed).toHaveBeenCalledTimes(3);
       disposed.mockRestore();
     },
@@ -585,9 +580,8 @@ describe("persistent dashboard", () => {
   effectTest("Tab switches targets from either pane while picker Tab stays local", function* () {
     for (const paneKey of ["h", "l"]) {
       const f = dashboard();
-      // Tab opens the saved library; Enter edits its selected set.
       f.press(paneKey, "\t", "\r", "e");
-      f.press("\t", "j", "\r"); // This Tab belongs to the picker, not the dashboard.
+      f.press("\t", "j", "\r");
       yield* step(eventLoopTurn);
       expect(f.saveDraft).toHaveBeenLastCalledWith(
         { kind: "profile-set", set: { scope: "project", name: "common" } },
@@ -595,7 +589,7 @@ describe("persistent dashboard", () => {
         expect.anything(),
         undefined,
       );
-      f.press("\u001b[Z", "e", "k", "\r"); // Shift+Tab returns directly to Current Session.
+      f.press("\u001b[Z", "e", "k", "\r");
       yield* step(eventLoopTurn);
       expect(f.saveDraft).toHaveBeenLastCalledWith(
         { kind: "session" },
@@ -680,7 +674,6 @@ describe("persistent dashboard", () => {
     f.untrust();
     f.component.handleInput("s");
     yield* step(eventLoopTurn);
-    // Two toggles would return a trusted dialog to Project.
     f.press(..."snapshot", "\u001b[A", "\u001b[B", "\r");
     yield* step(eventLoopTurn);
     expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledWith(

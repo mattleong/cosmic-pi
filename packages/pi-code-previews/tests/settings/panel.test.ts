@@ -126,7 +126,6 @@ effectTest("restoring defaults waits for a second press and saves no values", fu
   model.onChange("resetToDefaults", "reset now", list);
   yield* step(eventLoopTurn);
   assert.equal(resets, 1);
-  // Restoring removes overrides; it never writes the built-in values over settings.json.
   assert.deepEqual(saved, []);
 });
 
@@ -162,12 +161,10 @@ effectTest(
     const list = listFor(model);
     model.onChange("readCollapsedLines", "20", list);
     model.onChange("readCollapsedLines", "40", list);
-    // An older failure leaves the newer draft in place.
     pending[0]!.fail();
     yield* step(eventLoopTurn);
     model.onChange("readLineNumbers", "off", list);
     assert.equal(pending[2]!.next.readCollapsedLines, 40);
-    // The latest failure restores what was actually published.
     pending[1]!.pass();
     pending[2]!.fail();
     yield* step(eventLoopTurn);

@@ -31,7 +31,6 @@ describe("subagent session output projection", () => {
     expect(text).toContain(`${runStateGlyph("running")} ${runStateLabel("running")}`);
     expect(text).toContain("provider/model");
     expect(text).toContain("read-only");
-    // Idle guidance uses the state word every extension uses.
     expect(text.toLowerCase()).toContain(`${managerActivityLabel("running")}…`);
     expect(text).not.toContain("agent-1");
   });
@@ -47,7 +46,6 @@ describe("subagent session output projection", () => {
     );
     expect(reported.match(/Report body text\./g)).toHaveLength(1);
 
-    // A completed run without a report says why, distinctly for each report status.
     const statuses = [undefined, "claimed", "delivered", "missing"] as const;
     const silent = statuses.map((reportStatus) =>
       render(baseRun({ state: "completed", endedAt: 60_000, reportStatus })),

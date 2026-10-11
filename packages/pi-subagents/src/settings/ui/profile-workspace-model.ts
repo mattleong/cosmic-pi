@@ -206,7 +206,6 @@ export type ProfileWorkspaceRow = ProfileWorkspaceFieldRow &
     | { readonly scope: "profile"; readonly candidateIndex?: undefined }
   );
 
-/** Headings and section spacing are presentation, never keyboard navigation stops. */
 export const profileWorkspaceRows = (
   draft: ProfileRouteDraft,
   profile: ProfileId,
@@ -315,7 +314,6 @@ export const candidateFieldChoices = (
   if (field === "openaiFastMode")
     return [
       { value: "false", label: "Off", description: "Do not request priority service" },
-      // The fast-mode picker always opens with the selected model's checked availability.
       ...(options.fastModeAvailable === true
         ? [
             {
@@ -329,7 +327,6 @@ export const candidateFieldChoices = (
   return [];
 };
 
-// SAFETY: Every value comes from candidateFieldChoices for the same field.
 export function selectCandidateField(
   candidate: ProfileCandidate,
   field: SelectableCandidateField,

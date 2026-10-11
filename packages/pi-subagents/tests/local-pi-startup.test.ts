@@ -13,7 +13,6 @@ import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import type { SubagentError } from "../src/run/errors.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 
-/** A local Pi child that records its first RPC request and exits only through `awaitExit`. */
 const fakePiChild = Effect.gen(function* () {
   const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
   const receipt = yield* Deferred.make<ProcessExit>();
@@ -60,8 +59,6 @@ describe("local Pi startup transport closure", () => {
           Effect.forkScoped,
         );
         yield* yieldUntil(() => state.requested);
-        // Force queue completion ahead of the receipt. The old generic finalizer rejected
-        // startup here, permanently losing stderr that arrived through awaitExit afterward.
         Queue.endUnsafe(events);
         yield* yieldUntil(() => state.readingExit || failure !== undefined);
         expect(failure).toBeUndefined();
@@ -74,7 +71,6 @@ describe("local Pi startup transport closure", () => {
           expect(error.message).toContain("missing entrypoint");
           expect(error.message).toContain("code 1");
         } else {
-          // Teardown must not wait for a never-arriving process receipt.
           yield* Scope.close(scope, Exit.void);
           expect((yield* Fiber.join(initializing))._tag).toBe("SubagentProcessError");
         }

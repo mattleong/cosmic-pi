@@ -30,7 +30,6 @@ for (const failure of ["typed", "defect"] as const) {
       const slot = makePiSessionRuntimeSlot({
         makeRuntime: () => {
           const runtime = makePiManagedRuntime(pi, Layer.empty);
-          // Model the host's deferred disposal door while preserving the real runtime.
           return { ...runtime, dispose: () => disposal.promise.then(() => runtime.dispose()) };
         },
         startup: () => Effect.void,
@@ -52,7 +51,7 @@ for (const failure of ["typed", "defect"] as const) {
       try {
         yield* Effect.promise(() => admitted.promise);
         foreign.reject(new Error("foreign failure"));
-        const shutdown = slot.shutdown(); // synchronous revocation, before native disposal
+        const shutdown = slot.shutdown();
         yield* Effect.promise(() => work);
         expect(notify).not.toHaveBeenCalled();
         disposal.resolve(undefined);

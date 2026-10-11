@@ -1,4 +1,3 @@
-// Writer ownership adapts pi-cosmic-core's CrossProcessLock; Node supplies stable cwd identity.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -9,7 +8,7 @@ import {
   type CrossProcessLease,
   type CrossProcessLockContract,
 } from "pi-cosmic-core";
-import { ensurePrivateDirectory, nodeErrorCode } from "./harness-shared.ts";
+import { ensurePrivateDirectory } from "./harness-shared.ts";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 
 const { join } = nodePath;
@@ -44,15 +43,11 @@ export class WriterLeaseReleaseError extends Schema.TaggedError<WriterLeaseRelea
 ) {}
 
 export interface CanonicalWriterCwd {
-  /** Canonical path is retained only for launch and diagnostics. */
   readonly path: string;
-  /** Bounded local filesystem object identity, never persisted verbatim. */
   readonly filesystemIdentity: string;
-  /** SHA-256 of filesystemIdentity; this is the coordination and in-memory guard key. */
   readonly digest: string;
 }
 
-/** Opaque ownership: only the service instance that acquired this exact object can use it. */
 export interface WriterLease {
   readonly canonicalCwd: string;
   readonly filesystemIdentityDigest: string;
@@ -65,7 +60,6 @@ export interface WriterLeaseAcquireRequest {
 }
 
 export interface WriterLeaseContract {
-  /** Injected in tests; production is process.platform. */
   readonly platform: NodeJS.Platform;
   readonly canonicalize: (
     cwd: string,
@@ -73,11 +67,9 @@ export interface WriterLeaseContract {
   readonly acquire: (
     request: WriterLeaseAcquireRequest,
   ) => Effect.Effect<WriterLease, WriterLeaseConflictError | WriterLeaseAcquireError>;
-  /** Durable native-pending commit that must confirm before any spawn; returns the same lease. */
   readonly markSpawnStarted: (
     lease: WriterLease,
   ) => Effect.Effect<WriterLease, WriterLeaseMarkError>;
-  /** Settles a marked lease before releasing it. Any failure keeps the slot held for good. */
   readonly release: (lease: WriterLease) => Effect.Effect<void, WriterLeaseReleaseError>;
 }
 
@@ -113,7 +105,6 @@ const canonicalize: WriterLeaseContract["canonicalize"] = (cwd) =>
       }),
   });
 
-/** The refusal names the lock to recover and the check to make before removing it. */
 const recoveryMessage = (slot: string | undefined): string =>
   `Writer ownership of this directory needs manual recovery, so writer startup was denied.\n${
     slot === undefined
@@ -131,32 +122,11 @@ export const makeWriterLease = (
   const denied = (reason: string) =>
     new WriterLeaseAcquireError({ message: `${reason}; writer startup was denied.` });
 
-  // Pre-ownership I/O. The v2 check is a temporary migration shim; docs/local-backends.md
-  // records its removal criterion.
-  const prepare = (cwdDigest: string) =>
-    Effect.gen(function* () {
-      const legacy = join(packageRoot, "writer-leases-v2", `${cwdDigest}.lease`);
-      const absent = yield* Effect.promise(() =>
-        fs.lstat(legacy).then(
-          () => false,
-          (error) => nodeErrorCode(error) === "ENOENT",
-        ),
-      );
-      if (!absent)
-        return yield* new WriterLeaseConflictError({
-          reason: "recovery-required",
-          message: `A protocol-v2 writer lease remains at ${legacy}. It may belong to an older Pi session that is still running, so writer startup was denied. Remove it only after every older Pi session has exited.`,
-        });
-      yield* Effect.tryPromise({
-        try: () => ensurePrivateDirectory(packageRoot),
-        catch: () => denied("Unable to prepare private writer-lease state"),
-      });
-    });
+  const prepare = Effect.tryPromise({
+    try: () => ensurePrivateDirectory(packageRoot),
+    catch: () => denied("Unable to prepare private writer-lease state"),
+  });
 
-  /**
-   * Ownership is uncertain until a core commit returns, so any throw fails closed for good. The
-   * phase change and the commit run in one synchronous step, with no interruption point between.
-   */
   const transition = <E>(
     lease: WriterLease,
     from: ReadonlyArray<OwnershipPhase>,
@@ -182,8 +152,7 @@ export const makeWriterLease = (
     Effect.gen(function* () {
       if (process.platform === "win32" || !validFilesystemIdentity(cwd))
         return yield* denied("Writer-lease ownership input or platform was invalid");
-      // Pre-ownership I/O stays interruptible even under a caller's acquisition mask.
-      yield* Effect.interruptible(prepare(cwd.digest));
+      yield* Effect.interruptible(prepare);
       return yield* lock.tryAcquire(cwd.digest).pipe(
         Effect.mapError((error) =>
           error.reason === "recovery-required"
@@ -209,7 +178,6 @@ export const makeWriterLease = (
           owners.set(lease, { handle, phase: "reserved" });
           return Effect.succeed(lease);
         }),
-        // A live core handle is always registered, so interruption cannot leak it.
         Effect.uninterruptible,
       );
     });
@@ -241,7 +209,6 @@ export const makeWriterLease = (
               "Writer-lease release could not be confirmed; the lease remains held and fail-closed.",
           }),
         (handle, phase) => {
-          // Core defers release while native work is pending, so settle durably first.
           if (phase === "spawn-started") handle.mutationSettled();
           handle.release();
         },
@@ -252,7 +219,6 @@ export const makeWriterLease = (
 export class WriterLeaseService extends Context.Service<WriterLeaseService, WriterLeaseContract>()(
   "pi-subagents/boundary/writer-lease/WriterLeaseService",
 ) {
-  /** One private per-agent-directory lock root; exclusion covers sessions sharing it. */
   static readonly layer = (options: {
     readonly agentDirectory: string;
   }): Layer.Layer<WriterLeaseService> =>

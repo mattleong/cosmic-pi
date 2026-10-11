@@ -1,4 +1,3 @@
-/** Internal Effect settings service room. Public persistence door: `store.ts`. */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -33,17 +32,13 @@ import {
 import { normalizeSettingsWithDiagnostics } from "./values";
 
 type SettingsSaveContext = {
-  /** Defaults plus the agent-directory `settings.json`: what every project inherits. */
   readonly globalBaseline: CodePreviewSettings;
-  /** The global baseline plus a trusted project's `settings.json`. */
   readonly baseline: CodePreviewSettings;
   readonly loaded: CodePreviewSettings;
 };
 
-/** A settings file that couldn't be read, or whose invalid fields were ignored. */
 export type SettingsLoadProblem = {
   readonly path: string;
-  /** Ignored invalid fields; absent when the whole file was ignored. */
   readonly fields?: readonly string[];
 };
 
@@ -66,7 +61,6 @@ export interface CodePreviewSettingsServiceContract {
     admission: SettingsAdmission,
     options?: SaveSettingsOptions,
   ) => Effect.Effect<void, JsonDocumentError>;
-  /** Removes the flat overrides, restoring the `settings.json` and built-in values. */
   readonly reset: (
     admission: SettingsAdmission,
     options?: SaveSettingsOptions,
@@ -98,14 +92,12 @@ function withoutKnownSettings(latest: JsonObject): JsonObject {
   return document;
 }
 
-/** Flat current-shape package document: unknown root fields are preserved untouched. */
 function settingsDocument(
   settings: CodePreviewSettings,
   context: SettingsSaveContext,
   latestGlobalDocument: JsonObject,
 ): JsonObject {
   const document = withoutKnownSettings(latestGlobalDocument);
-  // Preserve existing known-key order before appending newly edited overrides.
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
     const value = latestGlobalDocument[key];
     if (value !== undefined) document[key] = value;
@@ -113,8 +105,6 @@ function settingsDocument(
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
     const value = settings[key];
     if (Equal.equals(value, context.loaded[key])) continue;
-    // The flat file is global: dropping an override must leave this project and every project
-    // that only inherits the global baseline on the chosen value.
     if (
       Equal.equals(value, context.baseline[key]) &&
       Equal.equals(value, context.globalBaseline[key])
@@ -125,7 +115,6 @@ function settingsDocument(
   return document;
 }
 
-/** `settings.json` documents contribute settings through their nested `codePreview` object only. */
 function nestedCodePreviewSettings(document: JsonObject): JsonObject {
   const nested = document.codePreview;
   return isJsonObject(nested) ? nested : {};
@@ -142,7 +131,6 @@ export class CodePreviewSettingsService extends Context.Service<
       const documents = yield* JsonDocumentStore;
       const path = yield* Path.Path;
       const flatSettingsPath = path.join(agentDir, "code-previews.json");
-      // The Ref starts private. Layer construction must not publish settings from an unstarted runtime.
       const state = yield* Ref.make(
         freezeSnapshot<SettingsSaveContext>({
           globalBaseline: defaultCodePreviewSettings,
@@ -186,16 +174,11 @@ export class CodePreviewSettingsService extends Context.Service<
         return normalized.settings;
       });
 
-      /**
-       * Current settings sources only: nested `codePreview` objects in the agent-directory and
-       * trusted-project `settings.json` baselines, then the flat package `code-previews.json`.
-       */
       const loadSaveContext = Effect.fn("CodePreviewSettings.loadSaveContext")(function* (
         options: LoadSettingsOptions,
       ) {
         const projectCwd = options.projectCwd ?? process.cwd();
         const problems: SettingsLoadProblem[] = [];
-        // Unchanged layers may share objects; the commit publishes only a frozen deep clone.
         const globalBaseline = yield* loadFile(
           path.join(agentDir, "settings.json"),
           nestedCodePreviewSettings,
@@ -215,7 +198,6 @@ export class CodePreviewSettingsService extends Context.Service<
         return { context, problems };
       });
 
-      // Private replacement and gated publication share one commit that interruption cannot split.
       const commit = (
         coordinator: SettingsCoordinator,
         context: SettingsSaveContext,
@@ -235,11 +217,6 @@ export class CodePreviewSettingsService extends Context.Service<
         );
       };
 
-      /**
-       * One locked replacement of the flat document. An unchanged document is not rewritten, but
-       * the operation still applies: the store skips `afterCommit` without a write, so it runs here.
-       * Building the commit preflights the complete plain state before rename.
-       */
       const commitDocument = (
         coordinator: SettingsCoordinator,
         next: SettingsSaveContext,
@@ -276,7 +253,6 @@ export class CodePreviewSettingsService extends Context.Service<
         );
       });
 
-      /** Restore removes every known flat override, so `settings.json` values apply again. */
       const resetState = Effect.fn("CodePreviewSettings.resetState")(
         (context: SettingsSaveContext, coordinator: SettingsCoordinator) =>
           commitDocument(
@@ -296,7 +272,6 @@ export class CodePreviewSettingsService extends Context.Service<
       ) =>
         withSettingsCoordinator(admission, (coordinator) =>
           Effect.gen(function* () {
-            // A newer successful publication makes this save obsolete before document mutation.
             if (!coordinator.isCurrent()) return;
             let current = yield* Ref.get(state);
             if (options.rehydrate !== undefined) {
@@ -304,8 +279,6 @@ export class CodePreviewSettingsService extends Context.Service<
               current = freezeSnapshot(context);
               yield* Ref.set(state, current);
             }
-            // The commit runs while holding the coordinator and document locks, so it must not
-            // reacquire either one.
             yield* write(current, coordinator);
           }),
         );

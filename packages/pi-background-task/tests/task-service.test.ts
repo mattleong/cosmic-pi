@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -138,7 +137,6 @@ function serviceHarness(
   const layer = BackgroundTaskService.layer({ publish: onProjection }).pipe(
     Layer.provide(dependencies),
   );
-  // Preserve the original ownership order: the provided service outlives the test's inner scope.
   const run = <A, Eff extends Effect.Effect<unknown, unknown, unknown>>(
     test: (service: BackgroundTaskServiceContract) => Generator<Eff, A, unknown>,
   ) =>
@@ -601,7 +599,6 @@ describe("BackgroundTaskService", () => {
       expect(line).not.toContain("hunter2secret");
       expect(line.length).toBeLessThanOrEqual(OUTPUT_FAILURE_LINE_LIMIT);
 
-      // A clean exit keeps metadata only, even when its output mentions errors.
       const clean = yield* service.start(taskInput({ command: "check" }));
       yield* emitAndRead(service, harness.controls[1], clean.id, 0, "error handling tests ok\n");
       const exiting = yield* service.wait(exitWait(clean.id)).pipe(forkNow);
@@ -859,8 +856,6 @@ describe("BackgroundTaskService", () => {
       const waitingForExit = yield* service.wait(exitWait(first.id)).pipe(forkNow);
       yield* Effect.yieldNow;
 
-      // Both monitors are ready before either runs. The first completion wakes the admitted
-      // readers, then the second completion evicts that terminal record before they resume.
       harness.controls[0]?.complete();
       harness.controls[1]?.complete();
       expect(yield* service.wait(exitWait(second.id))).toMatchObject({
@@ -869,7 +864,6 @@ describe("BackgroundTaskService", () => {
       });
       const missing = yield* service.status(first.id).pipe(Effect.flip);
       expect(missing).toMatchObject({ _tag: "BackgroundTaskNotFoundError" });
-      // People see the first line, without the ID; the agent's copy still names it.
       const [headline = ""] = missing.message.split("\n");
       expect(issueMessageStyleProblems(headline, { forbidden: [first.id] })).toEqual([]);
       expect(missing.message).toContain(first.id);
@@ -907,7 +901,6 @@ describe("BackgroundTaskService", () => {
       const [failed] = yield* service.list();
       expect(failed).toMatchObject({ state: "failed", error: expect.any(String) });
       expect(failed?.endedAt).toBeDefined();
-      // With one running slot, a second start is admitted only if the first released it.
       expect(yield* refusedStart(service)).toMatchObject({ _tag: "BackgroundSpawnError" });
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });

@@ -124,7 +124,6 @@ for (const style of ["compact", "preview"] as const)
   });
 
 const missing = "ENOENT: no such file or directory, open '/project/missing.ts'";
-/** Pi's result when a script awaits a failing nested call without catching it. */
 const uncaught = (calls: unknown[], notes: string[] = []) =>
   scriptResult(
     "failed",
@@ -145,14 +144,12 @@ test("a visible call that stopped its program explains the failure once", () => 
   assert.equal(explained.outcome, "error");
   assert.equal(compactStatus("settled", explained), "error");
   assert.equal(scriptError(uncaught([stoppedBy(missing)])), undefined);
-  // A different cause, or one hidden behind five later failures, keeps the program's own line.
   assert.ok(scriptError(uncaught([stoppedBy("Permission denied")]))?.message.includes("ENOENT"));
   const hidden = [
     stoppedBy(missing),
     ...Array.from({ length: 5 }, (_, index) => stoppedBy(`Other failure ${index}`)),
   ];
   assert.ok(scriptError(uncaught(hidden))?.message.includes("ENOENT"));
-  // Pi's note about generated images the script never showed follows its error block.
   const note =
     "Note: models.generateImages() returned 1 image that the script did not show. Show each image block of result.output with image(block).";
   assert.ok(scriptError(uncaught([], [note]))?.message.includes("ENOENT"));

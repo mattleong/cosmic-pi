@@ -50,7 +50,6 @@ type DiffRenderOptions = {
   limit: number;
   invalidate?: (() => void) | undefined;
   wordEmphasis: DiffWordEmphasis;
-  /** False when the numbers are not file positions, such as a proposed edit's snippet. */
   lineNumbers: boolean;
 };
 
@@ -98,7 +97,6 @@ function renderDiffParsedLine(
 ): string {
   const content =
     highlighted ?? theme.fg("toolOutput", escapeControlChars(expandPreviewTabs(parsed.content)));
-  // Emphasis ranges index the visible content, so they are injected before the gutter is added.
   const rendered = emphasis
     ? injectVisibleRanges(content, emphasis, {
         open: wordEmphasisBackground(parsed.kind === "+"),

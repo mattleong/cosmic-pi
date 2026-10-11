@@ -1,4 +1,3 @@
-// Pi tool execution and synchronous rendering are host boundaries.
 import {
   defineTool,
   type AgentToolResult,
@@ -75,7 +74,6 @@ export function registerAskUserTool(
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(toolRunningLine(theme), 0, 0);
       const details = decodeOutcome(result.details);
-      // The shell states failures and the cancellations Pi reports; the body states the rest.
       const cancelled = details?.outcome === "cancelled" && !context.isError;
       if (options.expanded)
         return cancelled
@@ -100,7 +98,6 @@ export function registerAskUserTool(
   );
 }
 
-/** The labeled agent-facing text; a replay without text shows its answers whole. */
 function expandedContent<Details>(
   result: AgentToolResult<Details>,
   theme: Theme,

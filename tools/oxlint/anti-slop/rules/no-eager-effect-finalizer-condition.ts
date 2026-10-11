@@ -61,7 +61,6 @@ function importIdentity(imported: ImportedValue): Identity | null {
   return null;
 }
 
-/** Only actual imports and immutable aliases identify Effect, never spelling alone. */
 function identityOf(
   sourceCode: SourceCode,
   expression: ESTree.Expression,
@@ -101,8 +100,19 @@ function methodOf(sourceCode: SourceCode, call: ESTree.CallExpression): string |
   return identity?.startsWith("effect:") ? identity.slice(7) : null;
 }
 
+type Children = ReadonlyMap<ESTree.Node, readonly ESTree.Node[]>;
+
+function isTypeChild(parent: ESTree.Node, child: ESTree.Node): boolean {
+  return (
+    ("typeAnnotation" in parent && parent.typeAnnotation === child) ||
+    ("typeArguments" in parent && parent.typeArguments === child) ||
+    ("typeParameters" in parent && parent.typeParameters === child) ||
+    ("returnType" in parent && parent.returnType === child)
+  );
+}
+
 function walkEager(
-  sourceCode: SourceCode,
+  children: Children,
   node: ESTree.Node,
   visit: (node: ESTree.Node) => void,
 ): void {
@@ -113,29 +123,25 @@ function walkEager(
   )
     return;
   visit(node);
-  // SAFETY: Oxlint visitor keys identify only AST child nodes, arrays of child nodes, or null.
-  const children = node as ESTree.Node &
-    Readonly<Record<string, ESTree.Node | ESTree.Node[] | null | undefined>>;
-  for (const key of sourceCode.visitorKeys[node.type] ?? []) {
-    // Type-only identifiers cannot participate in a runtime branch decision.
-    if (
-      key === "typeAnnotation" ||
-      key === "typeArguments" ||
-      key === "typeParameters" ||
-      key === "returnType"
-    )
-      continue;
-    const child = children[key];
-    if (Array.isArray(child)) {
-      for (const element of child) if (element !== null) walkEager(sourceCode, element, visit);
-    } else if (child !== null && child !== undefined) walkEager(sourceCode, child, visit);
+  for (const child of children.get(node) ?? []) {
+    if (!isTypeChild(node, child)) walkEager(children, child, visit);
   }
 }
 
-/** Read only branch decisions, not values mentioned in the selected finalizer. */
-function decisionVariables(sourceCode: SourceCode, finalizer: ESTree.Expression): Set<Variable> {
+interface Pipeline {
+  readonly sourceCode: SourceCode;
+  readonly children: Children;
+  readonly callbacks: Set<RuntimeFunction>;
+  readonly seen: Set<ESTree.Expression>;
+}
+
+function decisionVariables(
+  sourceCode: SourceCode,
+  children: Children,
+  finalizer: ESTree.Expression,
+): Set<Variable> {
   const variables = new Set<Variable>();
-  walkEager(sourceCode, finalizer, (node) => {
+  walkEager(children, finalizer, (node) => {
     const decision =
       node.type === "ConditionalExpression"
         ? node.test
@@ -143,7 +149,7 @@ function decisionVariables(sourceCode: SourceCode, finalizer: ESTree.Expression)
           ? node.left
           : null;
     if (decision === null) return;
-    walkEager(sourceCode, decision, (reference) => {
+    walkEager(children, decision, (reference) => {
       if (!isReference(reference)) return;
       const variable = resolveVariable(sourceCode, reference);
       if (variable?.references.some((ref) => ref.identifier === reference && ref.isRead())) {
@@ -169,88 +175,99 @@ function isPipe(sourceCode: SourceCode, call: ESTree.CallExpression): boolean {
   );
 }
 
-/** Follow explicit effect inputs and effect-returning callbacks, not arbitrary nearby calls. */
-function collectCallbacks(
-  sourceCode: SourceCode,
-  expression: ESTree.Expression,
-  callbacks: Set<RuntimeFunction>,
-  seen: Set<ESTree.Expression>,
-): void {
+function collectCallbacks(pipeline: Pipeline, expression: ESTree.Expression): void {
   const node = unwrapExpression(expression);
-  if (seen.has(node)) return;
-  seen.add(node);
-  const collect = (input: ESTree.Expression) =>
-    collectCallbacks(sourceCode, input, callbacks, seen);
+  if (pipeline.seen.has(node)) return;
+  pipeline.seen.add(node);
   if (node.type === "Identifier") {
-    const variable = resolveVariable(sourceCode, node);
+    const variable = resolveVariable(pipeline.sourceCode, node);
     const declarator = variable === null ? null : constDeclarator(variable);
     if (declarator?.init !== null && declarator !== null && declarator.id.type === "Identifier") {
-      collect(declarator.init);
+      collectCallbacks(pipeline, declarator.init);
     }
-    return;
+  } else if (node.type === "ConditionalExpression") {
+    collectCallbacks(pipeline, node.consequent);
+    collectCallbacks(pipeline, node.alternate);
+  } else if (node.type === "LogicalExpression") {
+    collectCallbacks(pipeline, node.left);
+    collectCallbacks(pipeline, node.right);
+  } else if (node.type === "CallExpression") {
+    collectCall(pipeline, node);
   }
-  if (node.type === "ConditionalExpression") {
-    collect(node.consequent);
-    collect(node.alternate);
-    return;
-  }
-  if (node.type === "LogicalExpression") {
-    collect(node.left);
-    collect(node.right);
-    return;
-  }
-  if (node.type !== "CallExpression") return;
+}
+
+function collectCall(pipeline: Pipeline, node: ESTree.CallExpression): void {
   const args = expressionArguments(node);
   if (args === null) return;
-  if (isPipe(sourceCode, node)) {
+  if (isPipe(pipeline.sourceCode, node)) {
     const callee = unwrapExpression(node.callee);
-    if (callee.type === "MemberExpression") collect(callee.object);
-    for (const argument of args) collect(argument);
+    if (callee.type === "MemberExpression") collectCallbacks(pipeline, callee.object);
+    for (const argument of args) collectCallbacks(pipeline, argument);
     return;
   }
-  const method = methodOf(sourceCode, node);
+  const method = methodOf(pipeline.sourceCode, node);
   if (method === null) {
-    const callee = unwrapExpression(node.callee);
-    if (callee.type !== "CallExpression" || args.length !== 1) return;
-    const operator = methodOf(sourceCode, callee);
-    if (
-      operator === null ||
-      constructors.has(operator) ||
-      (!effectCallbacks.has(operator) && !valueCallbacks.has(operator) && operator !== "ensuring")
-    )
-      return;
-    collect(callee);
-    collect(args[0]);
-    return;
+    collectCurriedCall(pipeline, node, args);
+  } else if (method === "ensuring") {
+    for (const argument of args) collectCallbacks(pipeline, argument);
+  } else if (inputOperators.has(method)) {
+    if (args.length !== 0) collectCallbacks(pipeline, args[0]);
+  } else {
+    collectOperation(pipeline, method, args);
   }
-  if (method === "ensuring") {
-    for (const argument of args) collect(argument);
+}
+
+function collectCurriedCall(
+  pipeline: Pipeline,
+  node: ESTree.CallExpression,
+  args: readonly ESTree.Expression[],
+): void {
+  const callee = unwrapExpression(node.callee);
+  if (callee.type !== "CallExpression" || args.length !== 1) return;
+  const operator = methodOf(pipeline.sourceCode, callee);
+  if (
+    operator === null ||
+    constructors.has(operator) ||
+    (!effectCallbacks.has(operator) && !valueCallbacks.has(operator) && operator !== "ensuring")
+  )
     return;
-  }
-  if (inputOperators.has(method)) {
-    if (args.length !== 0) collect(args[0]);
-    return;
-  }
+  collectCallbacks(pipeline, callee);
+  collectCallbacks(pipeline, args[0]);
+}
+
+function collectOperation(
+  pipeline: Pipeline,
+  method: string,
+  args: readonly ESTree.Expression[],
+): void {
   if (!effectCallbacks.has(method) && !valueCallbacks.has(method) && method !== "gen") return;
-  if (!constructors.has(method) && args.length === 2) collect(args[0]);
+  if (!constructors.has(method) && args.length === 2) collectCallbacks(pipeline, args[0]);
   const argument = constructors.has(method) ? args[0] : args.at(-1);
   if (argument === undefined) return;
-  const callback = resolveFunction(sourceCode, argument);
+  const callback = resolveFunction(pipeline.sourceCode, argument);
   if (callback === null) {
-    if (effectCallbacks.has(method)) collect(argument);
+    if (effectCallbacks.has(method)) collectCallbacks(pipeline, argument);
     return;
   }
-  callbacks.add(callback);
+  pipeline.callbacks.add(callback);
   if ((!effectCallbacks.has(method) && method !== "gen") || callback.body === null) return;
-  if (callback.body.type !== "BlockStatement") {
-    collect(callback.body);
+  collectResults(pipeline, method === "gen", callback.body);
+}
+
+function collectResults(
+  pipeline: Pipeline,
+  generator: boolean,
+  body: ESTree.FunctionBody | ESTree.Expression,
+): void {
+  if (body.type !== "BlockStatement") {
+    collectCallbacks(pipeline, body);
     return;
   }
-  walkEager(sourceCode, callback.body, (child) => {
-    if (method !== "gen" && child.type === "ReturnStatement" && child.argument !== null)
-      collect(child.argument);
-    if (method === "gen" && child.type === "YieldExpression" && child.argument !== null)
-      collect(child.argument);
+  walkEager(pipeline.children, body, (child) => {
+    if (!generator && child.type === "ReturnStatement" && child.argument !== null)
+      collectCallbacks(pipeline, child.argument);
+    if (generator && child.type === "YieldExpression" && child.argument !== null)
+      collectCallbacks(pipeline, child.argument);
   });
 }
 
@@ -292,7 +309,6 @@ function writtenInCallback(variable: Variable, callback: RuntimeFunction): boole
   });
 }
 
-/** A construction-time decision cannot observe a later mutation by its wrapped effect. */
 export const noEagerEffectFinalizerConditionRule = defineRule({
   meta: {
     type: "problem",
@@ -307,40 +323,47 @@ export const noEagerEffectFinalizerConditionRule = defineRule({
   },
   createOnce(context) {
     const calls: ESTree.CallExpression[] = [];
+    const children = new Map<ESTree.Node, ESTree.Node[]>();
+    const check = (call: ESTree.CallExpression) => {
+      const sourceCode = context.sourceCode;
+      if (methodOf(sourceCode, call) !== "ensuring") return;
+      const args = expressionArguments(call);
+      if (args === null || (args.length !== 1 && args.length !== 2)) return;
+      const finalizer = args.at(-1);
+      if (finalizer === undefined) return;
+      const variables = decisionVariables(sourceCode, children, finalizer);
+      if (variables.size === 0) return;
+      const pipeline: Pipeline = { sourceCode, children, callbacks: new Set(), seen: new Set() };
+      for (const input of wrappedInputs(sourceCode, call)) collectCallbacks(pipeline, input);
+      const callbacks = Array.from(pipeline.callbacks);
+      const written = Array.from(variables).find(
+        (variable) =>
+          variable.defs.some((def) => def.type === "Variable" || def.type === "Parameter") &&
+          callbacks.some((callback) => writtenInCallback(variable, callback)),
+      );
+      if (written !== undefined)
+        context.report({
+          node: finalizer,
+          messageId: "eagerCondition",
+          data: { name: written.name },
+        });
+    };
     return {
       Program() {
         calls.length = 0;
+        children.clear();
+      },
+      "*"(node: ESTree.Node) {
+        if (node.parent === null) return;
+        const siblings = children.get(node.parent);
+        if (siblings === undefined) children.set(node.parent, [node]);
+        else siblings.push(node);
       },
       CallExpression(node) {
         calls.push(node);
       },
       "Program:exit"() {
-        for (const call of calls) {
-          if (methodOf(context.sourceCode, call) !== "ensuring") continue;
-          const args = expressionArguments(call);
-          if (args === null || (args.length !== 1 && args.length !== 2)) continue;
-          const finalizer = args.at(-1);
-          if (finalizer === undefined) continue;
-          const variables = decisionVariables(context.sourceCode, finalizer);
-          if (variables.size === 0) continue;
-          const callbacks = new Set<RuntimeFunction>();
-          const seen = new Set<ESTree.Expression>();
-          for (const input of wrappedInputs(context.sourceCode, call)) {
-            collectCallbacks(context.sourceCode, input, callbacks, seen);
-          }
-          for (const variable of variables) {
-            if (!variable.defs.some((def) => def.type === "Variable" || def.type === "Parameter"))
-              continue;
-            if (!Array.from(callbacks).some((callback) => writtenInCallback(variable, callback)))
-              continue;
-            context.report({
-              node: finalizer,
-              messageId: "eagerCondition",
-              data: { name: variable.name },
-            });
-            break;
-          }
-        }
+        for (const call of calls) check(call);
       },
     };
   },

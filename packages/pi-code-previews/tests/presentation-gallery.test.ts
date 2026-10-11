@@ -25,7 +25,6 @@ import {
 import { nativeCall as callRecord, nativeReceipt, scriptResult } from "./support/native-codemode";
 import { builtinToolInfo, inertScheduler } from "./support/renderer-host";
 
-/** Registered builtin renderers in one collapsed style. */
 function registered(style: "compact" | "preview") {
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
@@ -75,14 +74,12 @@ function registered(style: "compact" | "preview") {
   );
 }
 
-/** Opaque third-party content; the adapter preserves it and adds exact raw expansion. */
 const webCall: ToolRenderers = {
   renderCall: (args) => new Text(JSON.stringify(args), 0, 0),
   renderResult: (result) =>
     new Text(result.content.find((part) => part.type === "text")?.text.slice(0, 200) ?? "", 0, 0),
 };
 
-/** The shape of Pi's own MCP call: its `server/tool` label, then the arguments. */
 const nativeMcpCall: ToolRenderers = {
   renderCall: (args, _theme, context) => {
     const fields = Object.entries(Predicate.isObject(args) ? args : {});
@@ -103,7 +100,6 @@ const text = <Details>(value: string, details?: Details): AgentToolResult<unknow
   details: details ?? {},
 });
 const docsLookup = { server: "docs", tool: "lookup" };
-/** Live before-write evidence; replayed details carry only its size. */
 const writeBefore = (content: string | undefined) => ({
   codePreviewBeforeWrite: content === undefined ? undefined : { kind: "content", content },
 });

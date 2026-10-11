@@ -25,12 +25,6 @@ const Count = Schema.Int.check(
 const ActivityPhaseSchema = Schema.Struct({
   title: PhaseTitle,
   detail: Schema.optional(Text),
-  /**
-   * The producer's own count of the phase's work, including members it no longer publishes or
-   * the host no longer retains. When present, the phase state comes from it, not visible members.
-   * `stopped` and the optional `failed` and `skipped` are disjoint parts of `finished`; a phase
-   * with failures is never shown as done.
-   */
   work: Schema.optional(
     Schema.Struct({
       items: Count,
@@ -40,10 +34,6 @@ const ActivityPhaseSchema = Schema.Struct({
       skipped: Schema.optional(Count),
     }),
   ),
-  /**
-   * The producer's own count of planned members in this phase that never started, including
-   * planned rows it does not publish. When present, phase rows show it instead of visible rows.
-   */
   planned: Schema.optional(Count),
 });
 export type ActivityPhase = typeof ActivityPhaseSchema.Type;
@@ -65,30 +55,12 @@ const ActivityFields = {
   parent: Schema.optional(Schema.Struct({ providerId: Id, itemId: Id })),
   summary: Schema.optional(Text),
   detail: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.detail))),
-  /** Workflow items only: ordered display phases, at most `ACTIVITY_LIMITS.phases`. */
   phases: Schema.optional(
     Schema.Array(ActivityPhaseSchema).check(Schema.isMaxLength(ACTIVITY_LIMITS.phases)),
   ),
-  /** A workflow's current phase, or the phase a direct workflow member belongs to. */
   phase: Schema.optional(PhaseTitle),
-  /**
-   * Workflow items only: the producer's own count of planned members outside its published
-   * `phases`, such as those in phases past the ones shown, including rows it does not publish. When
-   * present, it replaces the count of visible planned rows directly under the workflow.
-   */
   unphasedPlanned: Schema.optional(Count),
-  /**
-   * Work its producer declared but has not started, such as a workflow agent its script has not
-   * called yet. Planned items are never workflows. They are `pending` while their owner may still
-   * start them, when they may offer actions such as skipping them, and `cancelled`, with no
-   * actions, once it never will.
-   */
   planned: Schema.optional(Schema.Boolean),
-  /**
-   * Cancelled work that was skipped before it started, such as a queued workflow agent the user
-   * skipped or a budget refused, as opposed to work someone stopped. Never planned, a workflow or
-   * a question.
-   */
   skipped: Schema.optional(Schema.Boolean),
   actions: Schema.optional(
     Schema.Array(
@@ -96,10 +68,6 @@ const ActivityFields = {
         id: Id,
         label: Text,
         confirmation: Schema.optional(Text),
-        /**
-         * Whether the producer opens its own UI for this action, so the manager closes first.
-         * Defaults to true; only `false` actions, which open no UI, run with the manager open.
-         */
         handoff: Schema.optional(Schema.Boolean),
       }),
     ).check(Schema.isMaxLength(ACTIVITY_LIMITS.actions)),
@@ -139,9 +107,7 @@ export interface ActivityProviderOptions {
   readonly sessionId: string;
   readonly providerId: string;
   readonly snapshot: () => readonly ActivityItem[];
-  /** Active launch requests, including the interval before run rows exist. */
   readonly starting?: () => number;
-  /** Recheck session, revision, ownership and allowed action immediately before operating. */
   readonly invoke: (
     itemId: string,
     actionId: string,
@@ -200,7 +166,6 @@ const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityIte
 
 const unavailable = () => Promise.reject(new Error("Activity provider unavailable."));
 
-/** Plain callback adapter. Its owner must dispose it when the producer session closes. */
 export function registerActivityProvider(
   events: ActivityEvents,
   options: ActivityProviderOptions,
@@ -214,15 +179,12 @@ export function registerActivityProvider(
     available = next;
     try {
       options.onAvailability?.(next);
-    } catch {
-      /* Producer presentation is best effort. */
-    }
+    } catch {}
   };
   const send = (operation: ActivityEnvelope["operation"]) => {
     if (disposed || !hostToken) return;
     const registrationHost = hostToken;
     const { getDetail } = options;
-    // Capabilities work only while this registration is available to its own host.
     const usable = (signal: AbortSignal) =>
       !disposed && available && hostToken === registrationHost && !signal.aborted;
     try {
@@ -261,15 +223,11 @@ export function registerActivityProvider(
         hostToken = data.hostToken;
         send("register");
       } else if (hostToken === data.hostToken) acknowledge(false);
-    } catch {
-      /* Malformed host announcements cannot change provider ownership. */
-    }
+    } catch {}
   });
   try {
     events.emit(ACTIVITY_DISCOVER, { version: ACTIVITY_VERSION, sessionId: options.sessionId });
-  } catch {
-    /* Missing host leaves fallback active. */
-  }
+  } catch {}
   return {
     publish: () => send(available ? "publish" : "register"),
     isAvailable: () => available && !disposed,
@@ -288,25 +246,18 @@ interface RevisionedActivityProviderOptions {
   readonly providerId: string;
   readonly isCurrent: () => boolean;
   readonly items: () => readonly ActivityItem[];
-  /** Detail for an item that passed the session and exact-revision checks. */
   readonly detail: (item: ActivityItem) => string;
-  /** Recheck invocationCurrent after user input or another yield before changing source state. */
   readonly act: (
     item: ActivityItem,
     actionId: string,
     signal: AbortSignal,
     invocationCurrent: () => boolean,
   ) => Promise<void>;
-  /** Change sources that republish the snapshot; each returns its unsubscribe. */
   readonly subscriptions: ReadonlyArray<(publish: () => void) => () => void>;
   readonly starting?: () => number;
   readonly onAvailability?: (available: boolean, current: () => boolean) => void;
 }
 
-/**
- * Registers a provider whose detail and actions require the current session and the exact item
- * revision, and whose actions must be offered by that revision. Returns the disposer.
- */
 export function registerRevisionedActivityProvider(
   events: ActivityEvents,
   options: RevisionedActivityProviderOptions,

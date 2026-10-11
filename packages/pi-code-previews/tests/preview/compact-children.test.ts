@@ -240,7 +240,6 @@ describe("compact child issues", () => {
       expect(rows.join("").replace(/[\s│]/gu, "")).toContain(issue.message.replace(/\s/gu, ""));
       expect(rows.filter((row) => row.includes("read"))).toHaveLength(1);
     }
-    // With room, the reason stays on the row itself.
     expect(
       plain(compactChildren([{ label: "bash", status: "error", issues: [issue] }], 100)),
     ).toHaveLength(1);
@@ -304,7 +303,6 @@ describe("compact child rows", () => {
     "shows measured %s durations only when timing is enabled",
     (layout) => {
       const statuses = ["pending", "running", "success", "error", "cancelled"] as const;
-      // Every call, bash included, shows its duration only from one second.
       for (const [label, measured, shown] of [
         ["bash", 1_230, "1.2s"],
         ["bash", 123, undefined],

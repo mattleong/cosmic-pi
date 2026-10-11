@@ -6,12 +6,12 @@ import type {
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
-import { extensionContextFixture, opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import { extensionContextFixture, plainTheme, tuiFixture } from "pi-cosmic-core/testing";
 import { projectionOf, view } from "./fixtures/run-view.ts";
 
 type WidgetFactory = (tui: TUI, theme: Theme) => Component & { dispose?(): void };
 
-const tui = (requestRender = vi.fn()): TUI => opaqueFixture({ requestRender });
+const tui = (requestRender = vi.fn()): TUI => tuiFixture({ requestRender });
 
 const context = (
   setWidget: (
@@ -28,7 +28,6 @@ const context = (
     ui: { setWidget, setStatus },
   });
 
-/** A bridge whose ticker never fires and whose clock stands still. */
 const quietBridge = () =>
   makeSubagentProjectionBridge(undefined, {
     startTicker: () => () => undefined,

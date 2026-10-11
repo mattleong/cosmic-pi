@@ -62,8 +62,6 @@ describe("questionnaire compact outcome projection", () => {
       });
       for (const details of [pending, { requests: [pending] }]) {
         const summary = summarize(asyncAskUserCompactSummary, details);
-        // Waiting is a questionnaire's normal state: the call succeeded, and the counter and one
-        // informational issue say what it waits for, with guidance kept for expansion.
         expect(summary?.outcome).toBe("success");
         expect(JSON.stringify([summary?.subject, summary?.counters])).not.toContain("request-1");
         expect(summary?.counters?.[0]).toMatch(presentation === "queued" ? /queued/ : /waiting/);
@@ -107,7 +105,6 @@ describe("questionnaire compact outcome projection", () => {
     const lengths = summary?.counters?.map((counter) => counter.length) ?? [];
     expect(lengths.length).toBeGreaterThan(1);
     expect(lengths).toEqual([...lengths].sort((a, b) => b - a));
-    // Every pending request shares one wait fact.
     expect(summary?.issues).toEqual([expect.objectContaining({ severity: "info" })]);
   });
 
@@ -183,7 +180,6 @@ describe("questionnaire compact outcome projection", () => {
         expect(summary?.outcome).toBe("success");
         expect(summary?.subject).toContain(question.title);
         expect(summary?.subject).not.toMatch(/Compact|Unverified|LLLL/);
-        // Selected labels sit in the counter slot, where other answers show a count or kind.
         if (sample.selected) expect(summary?.counters?.[0]).toContain("Compact");
         else expect(summary?.counters?.join(" ")).not.toMatch(/Compact|Unverified|LLLL/);
         expect(JSON.stringify(summary)).not.toMatch(/PRIVATE/);
@@ -223,7 +219,6 @@ describe("questionnaire compact outcome projection", () => {
     );
     expect(cancelledDelivery?.outcome).toBe("cancelled");
     expect(cancelledDelivery?.issues).toEqual([failedDelivery]);
-    // Several failed deliveries are one fact with one retrieval procedure.
     const several = summarize(asyncAskUserCompactSummary, {
       requests: [
         row({ delivery: "failed" }),
@@ -315,7 +310,6 @@ describe("questionnaire compact outcome projection", () => {
       { requests: Array.from({ length: 17 }, () => row()) },
     ])
       expect(summarize(asyncAskUserCompactSummary, details)).toBeUndefined();
-    // Pi's error flag wins over submitted answers; the shell explains it from the error text.
     for (const summary of [
       summarize(askUserCompactSummary, submitted, { isError: true }),
       summarize(asyncAskUserCompactSummary, row(), { isError: true }),

@@ -1,30 +1,40 @@
-import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
+import type {
+  ExtensionUIContext,
+  KeybindingsManager,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
+import type { Component, OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import * as Predicate from "effect/Predicate";
+import {
+  extensionContextFixture,
+  piKeybindingsFixture,
+  plainTheme,
+  tuiFixture,
+  type HostTui,
+} from "pi-cosmic-core/testing";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { expect, vi } from "vitest";
 import type { makeAskUserPromptGate } from "../../src/boundary/host-prompt.ts";
 import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../../src/boundary/host-ui.ts";
-import type { AskUserOutcome } from "../../src/questionnaire/model.ts";
 
-type Factory = (
-  tui: TUI,
+type SettleOpen = <Outcome>(completed: Promise<Outcome>) => Promise<Outcome>;
+type Surface = Component & { dispose?(): void };
+type CustomFactory<Outcome> = (
+  tui: HostTui,
   theme: Theme,
-  keys: KeybindingsManager,
-  done: (outcome: AskUserOutcome) => void,
-) => Component;
-type CustomOptions = { onHandle: (handle: OverlayHandle) => void; overlayOptions: OverlayOptions };
+  keybindings: KeybindingsManager,
+  done: (result: Outcome) => void,
+) => Surface | Promise<Surface>;
+type CustomOptions = Parameters<ExtensionUIContext["custom"]>[1];
 
-/** Keeps this package's spy surface over the shared pinned-Pi fake, whose `done` pops the
- * global overlay stack. Factory execution and the onHandle mount stay separate. */
 export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => {
   const host = fakeCustomSurfaceHost({
     columns: 200,
     rows: 60,
     theme: plainTheme,
-    keybindings: opaqueFixture({
-      matches: (data: string, key: string) =>
+    keybindings: piKeybindingsFixture({
+      matches: (data, key) =>
         (data === "\r" && key === "tui.select.confirm") ||
         (data === "external" && key === "app.editor.external") ||
         (data === "\u001b" && key === "tui.select.cancel"),
@@ -33,8 +43,13 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
   const ownedHide = vi.fn();
   const guardHide = vi.fn();
   const createGuard = vi.fn();
-  const done = vi.fn<(outcome: AskUserOutcome) => void>();
+  const done = vi.fn(<Outcome>(_outcome: Outcome) => undefined);
+  const requestRender = vi.fn();
+  const stop = vi.fn();
+  const start = vi.fn();
   let component: Component | undefined;
+  let settleOpen: SettleOpen | undefined;
+  let openFailure: Error | undefined;
   const spyHide = (handle: OverlayHandle, spy: () => void): OverlayHandle => ({
     ...handle,
     hide: () => {
@@ -42,39 +57,51 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
       handle.hide();
     },
   });
-  const tui = {
+  const tui = tuiFixture({
     terminal: host.terminal,
-    requestRender: vi.fn(),
-    stop: vi.fn(),
-    start: vi.fn(),
+    requestRender,
+    stop,
+    start,
     showOverlay: (item: Component, options?: OverlayOptions) => {
       createGuard();
       return spyHide(host.tui.showOverlay(item, options), guardHide);
     },
-  };
+  });
+  function custom<Outcome>(
+    factory: CustomFactory<Outcome>,
+    options?: CustomOptions,
+  ): Promise<Outcome> {
+    if (openFailure) return Promise.reject(openFailure);
+    gate?.started();
+    const completed = host.ctx.ui
+      .custom<Outcome>(
+        (_tui, hostTheme, keys, hostDone) => {
+          const created = factory(tui, hostTheme, keys, (outcome) => {
+            done(outcome);
+            hostDone(outcome);
+          });
+          if (!Predicate.isPromiseLike(created)) component = created;
+          return created;
+        },
+        {
+          ...options,
+          overlay: true,
+          onHandle: (handle) => options?.onHandle?.(spyHide(handle, ownedHide)),
+        },
+      )
+      .finally(() => gate?.ended());
+    if (!settleOpen) return completed;
+    host.mount();
+    return settleOpen(completed);
+  }
   const ui = {
     notify: vi.fn(),
     setStatus: vi.fn(),
-    setWidget: vi.fn(host.ctx.ui.setWidget),
-    custom: vi.fn((factory: Factory, options: CustomOptions) => {
-      gate?.started();
-      return host.ctx.ui
-        .custom<AskUserOutcome>(
-          (_tui, hostTheme, keys, hostDone) =>
-            (component = factory(opaqueFixture(tui), hostTheme, keys, (outcome) => {
-              done(outcome);
-              hostDone(outcome);
-            })),
-          {
-            ...options,
-            overlay: true,
-            onHandle: (handle) => options.onHandle(spyHide(handle, ownedHide)),
-          },
-        )
-        .finally(() => gate?.ended());
-    }),
+    setWidget: host.ctx.ui.setWidget,
+    custom,
   };
-  const ctx: ExtensionContext = opaqueFixture({
+  const customSpy = vi.spyOn(ui, "custom");
+  const ctx = extensionContextFixture({
     mode: "tui",
     hasUI: true,
     cwd: process.cwd(),
@@ -85,22 +112,28 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
     ctx,
     ui,
     tui,
+    tuiControls: { requestRender, stop, start },
+    resize: host.resize,
     widgets: host.widgets,
-    /** Visible overlays, bottom to top. */
     get stack() {
       return host.overlays;
     },
     showOverlay: (item: Component) => host.showUnrelated(item),
+    settleOnOpen: (settle: SettleOpen) => {
+      settleOpen = settle;
+    },
+    failOpen: (error: Error) => {
+      openFailure = error;
+    },
     done,
     ownedHide,
     guardHide,
     createGuard,
     get customCalls() {
-      return ui.custom.mock.calls.length;
+      return customSpy.mock.calls.length;
     },
-    /** Mounts the oldest pending opening, once any custom call has run. */
     get mount() {
-      return ui.custom.mock.calls.length > 0 ? host.mount : undefined;
+      return customSpy.mock.calls.length > 0 ? host.mount : undefined;
     },
     get component() {
       return component;
@@ -110,16 +143,12 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
 
 type TuiHost = ReturnType<typeof makeTuiHost>;
 
-/** An unrelated overlay that owned closes must leave in place. */
 export const foreign: Component = { render: () => ["foreign"], invalidate: () => {} };
 
-/** Polls `assertion` until it passes, as one test step. */
 export const eventually = (assertion: () => void) => Effect.promise(() => vi.waitFor(assertion));
 
-/** Waits for the custom factory; the test still decides when onHandle mounts it. */
 export const waitMounted = (h: TuiHost) => eventually(() => expect(h.mount).toBeDefined());
 
-/** Starts an abortable presentation on a fresh dialog bridge and waits for its factory. */
 export const openPresentation = <A, E>(
   h: TuiHost,
   start: (bridge: AskUserDialogBridge) => Effect.Effect<A, E>,

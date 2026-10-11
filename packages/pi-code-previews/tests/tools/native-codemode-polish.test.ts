@@ -120,13 +120,11 @@ for (const style of ["compact", "preview"] as const)
               },
             };
             h.result(final, { expanded });
-            // Pi rebuilds both slots at settlement, including a previously partial border call.
             h.invalidate();
             const assertMeasurements = () => {
               const rows = stripAnsi(h.render(160).join("\n"));
               for (const duration of [parentMs, 137, 253, 211])
                 assert.equal(rows.split(formatDuration(duration)).length - 1, enabled ? 1 : 0);
-              // Concurrent children are not summed into the parent or each other.
               assert.equal(rows.includes(formatDuration(390)), false);
               assert.ok(rows.includes("atlassian / tool_call"));
               assert.ok(rows.includes("CHECK_FAILURE_RETAINED"));
@@ -163,7 +161,6 @@ for (const style of ["compact", "preview"] as const)
           h.call(args, { expanded, executionStarted: true, isPartial: false });
           h.result(final, { expanded });
           const rows = stripAnsi(h.render(160).join("\n"));
-          // Only the child's actual recorded zero is eligible; the header is not a new clock.
           assert.equal(rows.split(formatDuration(0)).length - 1, durationMs === 0 ? 1 : 0);
           assert.equal(rows.includes(formatDuration(250)), false);
           assert.equal(h.context.state.codePreviewTimingStartedAt, undefined);

@@ -19,7 +19,6 @@ function summarize(args: ContactArguments, text?: string | string[], isError = f
   });
 }
 
-/** Everything a summary says: its heading subject and its issue lines. */
 const evidence = (summary: CompactSummary | undefined) =>
   [summary?.subject, ...(summary?.issues ?? []).map((issue) => issue.message)].join("\n");
 
@@ -29,7 +28,6 @@ describe("child compact acknowledgement policy", () => {
       const summary = summarize({ kind, message: "Cleanup is incomplete" });
       expect(summary).toBeDefined();
       expect(summary?.outcome).toBe(kind === "warning" ? "warning" : undefined);
-      // A warning's text is its issue line; other requests head the row with it.
       expect(evidence(summary)).toContain("Cleanup is incomplete");
     }
     expect(summarize({ kind: "unknown", message: "x" })).toBeUndefined();
@@ -43,16 +41,13 @@ describe("child compact acknowledgement policy", () => {
       const receipt = `Parent received ${kind}.`;
       expect(summarize(args, receipt)?.outcome).toBe(kind === "warning" ? "warning" : "success");
       expect(summarize(args, `${receipt} Important recovery instructions`)).toBeUndefined();
-      // Additional content is never discarded beside a recognized acknowledgement.
       expect(summarize(args, [receipt, "Recovery evidence"])).toBeUndefined();
-      // A rejected call keeps its heading and explains itself; its text stays expanded.
       const rejected = summarize(args, "Parent contact is unavailable for this session.", true);
       expect(rejected?.outcome).toBe("error");
       expect(rejected?.issues?.some((issue) => issue.severity === "error")).toBe(true);
     }
     const question = { kind: "question", message: "continue?" };
     expect(summarize(question, "Parent received question.")).toBeUndefined();
-    // A reply to a question is classified as answered.
     expect(summarize(question, "Parent reply: continue")?.outcome).toBe("success");
     expect(summarize(question, ["Parent reply: continue", "extra"])).toBeUndefined();
     expect(summarize(question, "An unrelated result")).toBeUndefined();
@@ -63,11 +58,9 @@ describe("child compact acknowledgement policy", () => {
     expect(summarize({ kind: "progress", message })?.subject.length).toBeLessThanOrEqual(120);
     const summary = summarize({ kind: "warning", message }, "Parent received warning.");
     expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["warning"]);
-    // The warning quotes its own bounded first line and keeps the full text expanded.
     expect(summary?.issues?.[0]?.message.length).toBeLessThanOrEqual(120);
     expect(issueMessageStyleProblems(summary?.issues?.[0]?.message ?? "")).toEqual([]);
     expect(summary?.issues?.[0]?.detail).toBe(message);
-    // Text that opens with an instruction is not quoted as the message.
     const guidance = summarize(
       { kind: "warning", message: "Use the fallback route before retrying." },
       "Parent received warning.",

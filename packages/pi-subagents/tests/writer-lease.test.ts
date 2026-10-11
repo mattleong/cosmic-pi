@@ -1,4 +1,3 @@
-// Adapter policy runs over a fake core lock; exclusion runs over the real private lock root.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -17,7 +16,6 @@ type LockOutcome = "live" | "recovery-required" | "unavailable";
 
 const RECOVERY_SLOT = "/agent/subagents/writer-leases-v3/slot";
 
-/** One fake core slot that records handle calls; `failing` makes a call throw. */
 const fakeLock = (outcomes: Array<LockOutcome> = []) => {
   const calls: Array<keyof CrossProcessLease | "tryAcquire"> = [];
   const failing = new Set<keyof CrossProcessLease>();
@@ -77,10 +75,8 @@ describe.skipIf(process.platform === "win32")("writer lease adapter", () => {
       expect(yield* Effect.flip(acquire)).toMatchObject({ reason: "live" });
       const recovery = yield* Effect.flip(acquire);
       expect(recovery).toMatchObject({ reason: "recovery-required" });
-      // A refusal that needs a person names the lock to recover.
       expect(recovery.message).toContain(RECOVERY_SLOT);
       expect(yield* Effect.flip(acquire)).toMatchObject({ _tag: "WriterLeaseAcquireError" });
-      // Core's single call already retries after retiring a dead owner; the adapter never retries.
       yield* acquire;
       expect(calls).toEqual(["tryAcquire", "tryAcquire", "tryAcquire", "tryAcquire"]);
       expect(
@@ -126,20 +122,6 @@ describe.skipIf(process.platform === "win32")("writer lease adapter", () => {
         });
         expect(held()).toBe(true);
       }
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("fails closed on a leftover protocol-v2 slot until it is removed", () =>
-    Effect.gen(function* () {
-      const { agentDirectory, service, cwd, acquire, calls } = yield* adapter();
-      const legacy = join(agentDirectory, "subagents", "writer-leases-v2", `${cwd.digest}.lease`);
-      yield* Effect.promise(() => fs.mkdir(legacy, { recursive: true }));
-      const conflict = yield* Effect.flip(acquire);
-      expect(conflict).toMatchObject({ reason: "recovery-required" });
-      expect(conflict.message).toContain(legacy);
-      expect(calls).toEqual([]);
-      yield* Effect.promise(() => fs.rm(legacy, { recursive: true }));
-      yield* service.release(yield* acquire);
     }).pipe(Effect.scoped),
   );
 

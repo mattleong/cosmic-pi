@@ -50,7 +50,7 @@ describe("owned custom surfaces", () => {
         [160, 29, 160, 29, "top-left"],
         [125, 30, 112, 27, "center"],
       ] as const) {
-        Object.assign(h.terminal, { columns, rows });
+        h.resize(columns, rows);
         expect([options.width, options.maxHeight, height(), options.anchor]).toEqual([
           width,
           allocated,
@@ -318,7 +318,6 @@ describe("owned custom surfaces", () => {
       expect(yield* Fiber.join(mounted)).toBe("saved");
       expect([h.editor, h.overlays, h.doneCalls]).toEqual([undefined, [], 2]);
 
-      // A throwing inline done is contained and leaves Pi's Promise in charge.
       const hostile = capture();
       const pending = yield* open(h, {
         placement: "inline",

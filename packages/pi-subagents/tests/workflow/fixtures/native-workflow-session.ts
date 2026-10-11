@@ -1,4 +1,3 @@
-// Public SDK/Promise boundary: actual Pi and QuickJS, offline inference and owned backend fakes.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -36,13 +35,11 @@ const claudeProfiles = profileLayerFor({
   },
 });
 
-/** A real session, including ultracode's lifecycle gate, over the real workflow/run services. */
 export const workflowSession = (
   options: WorkflowFixtureOptions & {
     readonly mode?: "on" | "only";
     readonly enabled?: boolean;
     readonly notifyConversation?: boolean;
-    /** Pauses only the outer native script, after it has received its start receipt. */
     readonly barrier?: {
       readonly entered: Deferred.Deferred<void>;
       readonly interrupted: Deferred.Deferred<void>;
@@ -107,7 +104,6 @@ export const workflowSession = (
     if (!controller || !context)
       return yield* Effect.die(new Error("Pi did not bind the workflow extension context."));
     base.session.settingsManager.applyOverrides({ codemode: { mode: options.mode ?? "on" } });
-    // Refresh Pi's native loadout after the in-memory settings override, without changing it.
     base.session.setActiveToolsByName(base.session.getActiveToolNames());
     controller.activate(context, options.enabled ?? true);
     const services = yield* step(() =>

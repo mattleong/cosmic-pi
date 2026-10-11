@@ -111,7 +111,6 @@ describe("results journal lines", () => {
       workflowResultJsonLine(line({ key: "k-2", runId: "agent-2", workspaceId: "workspace-2" })),
     ]);
     expect(reading.workspaces).toEqual(["workspace-2"]);
-    // Nothing of the writer's awaits review, so a resume reuses its result like a reader's.
     expect(reading.replayable[0]).toMatchObject({ key: "k-1" });
     expect(reading.replayable[0]?.workspaceId).toBeUndefined();
     expect(reading.replayable[1]).toMatchObject({ key: "k-2", workspaceId: "workspace-2" });

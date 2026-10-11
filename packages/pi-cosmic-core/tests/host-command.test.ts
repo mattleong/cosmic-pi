@@ -55,7 +55,6 @@ describe("extension command routing", () => {
     });
     expect(routeExtensionCommand("", [usage])._tag).toBe("Overview");
     expect(routeExtensionCommand("unknown", [usage])._tag).toBe("Unknown");
-    // Names match exactly; a prompt that merely starts like one stays text.
     expect(routeExtensionCommand("usages", [usage])._tag).toBe("Unknown");
     const bare = { handler: vi.fn() };
     expect(routeExtensionCommand("", [usage], bare)).toEqual({ _tag: "Bare", args: "" });

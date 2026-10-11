@@ -7,7 +7,6 @@ const SECRET_WARNINGS = {
   JWT: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
 };
 
-/** Secret categories in `text`, scanning only its head and tail when longer than `limit`. */
 export function getSecretWarnings(text: string, limit = Infinity): string[] {
   const sample = secretScanSample(text, limit);
   return Object.entries(SECRET_WARNINGS)
@@ -18,7 +17,6 @@ export function getSecretWarnings(text: string, limit = Infinity): string[] {
 function secretScanSample(source: string, limit: number): string {
   if (source.length <= limit) return source;
   const half = Math.floor(limit / 2);
-  // slice(-0) would scan the entire source when the configured budget is one.
   if (half === 0) return source.slice(0, limit);
   return `${source.slice(0, half)}\n${source.slice(-half)}`;
 }

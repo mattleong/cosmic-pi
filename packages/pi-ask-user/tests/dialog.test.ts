@@ -1,8 +1,14 @@
-import { initTheme, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { deferredPromise, opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import {
+  deferredPromise,
+  keybindingsFixture,
+  plainTheme as theme,
+  terminalFixture,
+  tuiFixture,
+} from "pi-cosmic-core/testing";
 import { cancelled, submitted } from "./support/questionnaire.ts";
 import { expectWithin, pageViews } from "./support/viewport.ts";
-import { CURSOR_MARKER, type KeyId, matchesKey, type TUI } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, type KeyId, matchesKey } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
@@ -42,8 +48,8 @@ const KEY_BINDINGS: KeybindingFixture = {
   "app.editor.external": "ctrl+g",
 };
 
-const keybindings: KeybindingsManager = opaqueFixture({
-  matches(data: string, id: string) {
+const keybindings = keybindingsFixture({
+  matches(data, id) {
     const key = KEY_BINDINGS[id];
     return key !== undefined && matchesKey(data, key);
   },
@@ -56,9 +62,9 @@ const makeDialog = (
 ) => {
   const done = vi.fn<(outcome: AskUserOutcome) => void>();
   const collapse = vi.fn();
-  const tui: TUI = opaqueFixture({
+  const tui = tuiFixture({
     requestRender: vi.fn(),
-    terminal: { rows: 60, columns: 120 },
+    terminal: terminalFixture({ rows: 60, columns: 120 }),
   });
   const dialog = new AskUserDialog({
     tui,

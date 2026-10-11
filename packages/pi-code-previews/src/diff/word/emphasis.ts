@@ -31,7 +31,6 @@ export function changedRangesWithConfidence(
 
   const { gaps, confidence } = changedTokenGaps(beforeTokens, afterTokens);
   const ranges = refinedRangesForChangedTokens(before, beforeTokens, after, afterTokens, gaps);
-  // The smart filter only removes ranges, so it never turns an empty result non-empty.
   const shown =
     wordEmphasis === "smart" ? filterLowSignalWordEmphasis(before, after, ranges) : ranges;
   return { ...shown, confidence: hasWordChangeRanges(shown) ? confidence : "low" };

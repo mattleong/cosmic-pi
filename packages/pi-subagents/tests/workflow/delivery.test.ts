@@ -23,7 +23,6 @@ const notification: SubagentWorkflowNotification = {
   workspaces: [],
 };
 
-/** A host that refuses every notification until told to accept, and a close that is recorded. */
 const fakeHost = () => {
   const host = { attempts: 0, accept: false, finished: new Array<string>() };
   return {
@@ -36,7 +35,6 @@ const fakeHost = () => {
   };
 };
 
-/** Delays between attempts: doubling from the initial delay, then held at the maximum. */
 const backoff = (count: number): ReadonlyArray<number> =>
   Array.from({ length: count }, (_, index) =>
     Math.min(DELIVERY_RETRY_INITIAL_MS * 2 ** index, DELIVERY_RETRY_MAX_MS),
@@ -51,7 +49,6 @@ describe("workflow completion delivery", () => {
       yield* TestClock.adjust(0);
       expect(host.attempts).toBe(1);
       const delays = backoff(12);
-      // The schedule reaches the maximum and stays there.
       expect(delays.at(-1)).toBe(DELIVERY_RETRY_MAX_MS);
       for (const [index, delay] of delays.entries()) {
         yield* TestClock.adjust(delay - 1);
@@ -82,7 +79,6 @@ describe("workflow completion delivery", () => {
       yield* TestClock.adjust(10 * DELIVERY_RETRY_MAX_MS);
       expect(host.attempts).toBe(2);
       expect(yield* delivery.closed).toBe(true);
-      // A report the teardown dropped leaves the run open for the next activation.
       expect(host.finished).toEqual([]);
     }),
   );
@@ -95,7 +91,6 @@ describe("workflow completion delivery", () => {
       const delivery = yield* makeWorkflowDelivery(notify).pipe(Scope.provide(scope));
       const closing = yield* Deferred.make<void>();
       const saved = yield* Deferred.make<void>();
-      // The close is still saving, like a run record write, when the teardown comes.
       yield* delivery.report(
         notification,
         Deferred.succeed(closing, undefined).pipe(

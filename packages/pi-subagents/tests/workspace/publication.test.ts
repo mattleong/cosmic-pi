@@ -34,7 +34,6 @@ const setup = () => {
 const helper = fileURLToPath(
   new URL("../../src/boundary/git-worktree-publish-helper.ts", import.meta.url),
 );
-// Execute test-only ordering hooks in a disposable child, never chdir the test runner.
 const hooked = (request: ReturnType<typeof setup>, hook: string, phase = "captured") => {
   const code = `const {createJiti}=await import(${JSON.stringify(import.meta.resolve("jiti"))});const jiti=createJiti(${JSON.stringify(import.meta.url)});const {executePublication}=await jiti.import(${JSON.stringify(helper)});const Effect=await jiti.import('effect/Effect');const fs=await import('node:fs');const request=${JSON.stringify({ ...request, before: { bytes: Buffer.from("before").toString("base64"), mode: 0o644 }, after: { bytes: Buffer.from("after").toString("base64"), mode: 0o644 } })};const result=await Effect.runPromise(executePublication(request,{${phase}:()=>{${hook}}}));process.stdout.write(JSON.stringify(result));`;
   return JSON.parse(

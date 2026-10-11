@@ -73,7 +73,6 @@ export const materializeFooterHostProjection = (options: {
     [],
   );
   return Object.freeze({
-    // The frozen view only adds its host `source`, which built-in contributions never read.
     model,
     cwd: ctx ? invokeHostCallback(() => ctx.sessionManager.getCwd(), "?") : "?",
     branch: invokeHostCallback<string | null>(() => footerData.getGitBranch(), null),

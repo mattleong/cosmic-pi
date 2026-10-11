@@ -13,11 +13,6 @@ type WriterPoolState =
   | "paused"
   | "quarantined";
 
-/**
- * One parent session owns at most one cross-process lease per canonical cwd.
- * Every field is mutated under SubagentService's shared lock, except the
- * release authorization flag consumed by the lease-scope finalizer.
- */
 export interface WriterPoolEntry {
   readonly cwd: CanonicalWriterCwd;
   readonly leaseScope: Scope.Closeable;
@@ -32,7 +27,6 @@ export interface WriterPoolEntry {
   pauseReason?: string | undefined;
 }
 
-/** Call under the service lock so pool creation and member admission stay together. */
 export const addWriterPoolMemberLocked = (
   pools: Map<string, WriterPoolEntry>,
   cwd: CanonicalWriterCwd,

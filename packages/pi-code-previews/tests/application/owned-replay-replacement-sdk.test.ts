@@ -1,4 +1,3 @@
-// Actual /resume and interactive /fork replacement boundaries, without provider calls.
 import assert from "node:assert/strict";
 import {
   createAgentSessionFromServices,
@@ -17,7 +16,7 @@ import { beforeAll, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { opaqueFixture } from "pi-cosmic-core/testing";
+import { tuiFixture } from "pi-cosmic-core/testing";
 import { registerCodePreviewReplay } from "../../index";
 import { drawToolRow } from "../../testing";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
@@ -29,7 +28,6 @@ import { setPlainPreviewSettings } from "../support/renderer-host";
 
 beforeAll(() => initTheme("dark", false));
 
-/** Pi invokes these Promise-shaped replacement callbacks outside the test fiber. */
 const runSdkHostCallback = <A>(effect: Effect.Effect<A>) => Effect.runPromise(effect);
 
 const toolName = "owned_replay_replacement";
@@ -62,7 +60,6 @@ const setStyle = (style: "preview" | "compact") =>
   setPlainPreviewSettings({ toolCallCollapsedStyle: style });
 const draw = (row: ToolExecutionComponent, expanded = false) => drawToolRow(row, expanded, 180);
 
-/** Reconstruct exclusively from SDK-restored messages, not the fixture inputs. */
 function historicalRows(session: AgentSession) {
   const assistant = session.messages.find((message) => message.role === "assistant");
   assert.ok(assistant?.role === "assistant");
@@ -85,7 +82,7 @@ function historicalRows(session: AgentSession) {
       call.arguments,
       { showImages: true },
       renderers,
-      opaqueFixture({ requestRender() {} }),
+      tuiFixture({ requestRender() {} }),
       session.sessionManager.getCwd(),
     );
     row.setArgsComplete();
@@ -93,10 +90,8 @@ function historicalRows(session: AgentSession) {
     return row;
   };
   const cold = resolve();
-  // One row is drawn cold; another is constructed but not drawn until after retirement.
   const row = makeRow(cold);
   const undrawn = makeRow(cold);
-  // No render callback for this facade runs until its originating owner is retired.
   const lazy = resolve();
   const image = row.children.find((child) => child instanceof Image);
   assert.ok(image, "Pi keeps the native image child outside the renderer shell");
@@ -153,11 +148,11 @@ it.live(
       let executions = 0;
       let observedArgs: unknown;
       let observedResult: unknown;
-      const tool: ToolDefinition<any, any, any> = {
+      const tool: ToolDefinition = {
         name: toolName,
         label: "Owned replay",
         description: "SDK historical renderer fixture",
-        parameters: opaqueFixture({ type: "object", properties: {} }),
+        parameters: { type: "object", properties: {} },
         exposure: "model-only",
         defaultActive: false,
         execute: () => {
@@ -212,7 +207,6 @@ it.live(
                         });
                         pi.on("session_start", (event, ctx) => {
                           try {
-                            // The owner loads its trusted appearance only at startup, not factory time.
                             setStyle(startupStyle);
                             const wrapped = replay.shell(tool, {
                               compactSummary: () => ({
@@ -284,7 +278,6 @@ it.live(
             assert.ok(!coldText.includes("OWNED_INPUT"));
             assert.ok(!coldText.includes("OWNED_SUMMARY"));
             yield* step(() => bind(session));
-            // Crucially keep and draw the exact component constructed before bindExtensions.
             const readyText = draw(rows.row);
             assert.ok(
               readyText.includes(startupStyle === "compact" ? "OWNED_SUMMARY" : "OWNED_INPUT"),
@@ -298,7 +291,6 @@ it.live(
       assert.deepEqual(yield* step(() => runtime.switchSession(sessionFile)), { cancelled: false });
       const resumed = runtime.session;
       const resumedRows = retained[0]!;
-      // SDK restoration may append its own model/thinking entries before presentation begins.
       const resumedFile = yield* fs.readFileString(sessionFile);
       assert.notEqual(resumed, initial);
       assert.equal(resumed.sessionFile, sessionFile);
@@ -306,7 +298,6 @@ it.live(
       assert.deepEqual(starts, ["startup", "resume"]);
       assert.deepEqual(shutdowns, ["resume"]);
       assert.deepEqual(authority(resumed), initialAuthority);
-      // Ambient settings may change before the next draw; first readiness, not draw time, wins.
       setStyle("preview");
       assert.ok(draw(resumedRows.row).includes("OWNED_SUMMARY"));
 
@@ -337,7 +328,6 @@ it.live(
       assert.deepEqual(shutdowns, ["resume", "fork"]);
       assert.deepEqual(authority(forked), initialAuthority);
       assert.ok(!draw(forkedRows.row).includes("OWNED_SUMMARY"));
-      // Adopted rows keep their retired owner's compact style, even if never drawn while ready.
       for (const row of [resumedRows.row, resumedRows.undrawn])
         assert.ok(draw(row).includes("OWNED_SUMMARY"));
       const lazyOldRow = resumedRows.lateRow();

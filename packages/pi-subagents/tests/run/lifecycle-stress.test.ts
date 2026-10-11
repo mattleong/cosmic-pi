@@ -1,4 +1,3 @@
-// Each cycle uses owned process fakes and explicit release barriers, never wall-clock sleeps.
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -56,8 +55,6 @@ describe("SubagentService lifecycle stress", () => {
           if (cancelled) {
             expect(Exit.isFailure(result), `interruption checkpoint ${interruptAt}`).toBe(true);
             expect(projections.at(-1)?.runs[0]?.state).toBe("stopped");
-            // A cancellation inside the driver's masked acquisition may already
-            // own a backend; it must be released before compensation settles.
             expect(fake.controls.every((control) => control.released() === 1)).toBe(true);
             expect(leases.release).toBe(1);
             const spawnedBeforeStop = fake.controls.length;
@@ -140,7 +137,6 @@ describe("SubagentService lifecycle stress", () => {
         const id = projections.at(-1)!.runs[0]!.id;
         const stopping = yield* service.stop(id).pipe(Effect.forkScoped);
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopping");
-        // Let the stop owner enter its spawn wait before owner shutdown interrupts it.
         yield* TestClock.adjust("30 seconds");
         const shutdown = yield* Scope.close(owner, Exit.void).pipe(Effect.forkScoped);
         yield* TestClock.adjust("30 seconds");
@@ -150,7 +146,6 @@ describe("SubagentService lifecycle stress", () => {
         const publicationsAtShutdown = projections.length;
         yield* Deferred.succeed(spawnGate, undefined);
         yield* Fiber.join(shutdown);
-        // Shutdown itself is the ownership barrier, not a later join of callers.
         expect(fake.controls).toHaveLength(1);
         expect(fake.controls[0]!.released()).toBe(1);
         expect(cleanupOrder).toEqual(["backend", "lease"]);
@@ -201,8 +196,6 @@ describe("SubagentService lifecycle stress", () => {
             yield* Fiber.interrupt(observing);
             const updatesAtCancellation = cancelledUpdates;
 
-            // Neither ancestor has reached its own stop yet, but the subtree claim must
-            // already prevent new descendants from escaping both traversals.
             for (const id of [parent.id, child.id]) {
               expect(
                 yield* service.startSessionOwnedFrom(id, request()).pipe(Effect.flip),
@@ -214,7 +207,6 @@ describe("SubagentService lifecycle stress", () => {
             expect(childControl.released()).toBe(0);
             expect(stoppingChild.pollUnsafe()).toBeUndefined();
 
-            // An unrelated root completes and resumes while descendant cleanup is blocked.
             siblingControl.settle();
             yield* yieldUntil(() => siblingControl.released() === 1);
             expect((yield* service.resume(sibling.id, "Next assignment")).state).toBe("running");
@@ -293,7 +285,6 @@ describe("SubagentService lifecycle stress", () => {
               Effect.forkScoped({ startImmediately: true }),
             );
             yield* TestClock.adjust("30 seconds");
-            // Scope closure must join the in-flight release, not abandon its ancestors.
             expect(shutdown.pollUnsafe()).toBeUndefined();
             expect(fake.controls.slice(0, 3).map((control) => control.released())).toEqual([
               0, 0, 0,

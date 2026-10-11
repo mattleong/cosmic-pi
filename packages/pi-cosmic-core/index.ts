@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 
-/** Shared Effect-first foundations for cosmic-pi extensions. */
 export { PiApi } from "./src/runtime/pi-api.ts";
 export {
   makePiManagedRuntime,

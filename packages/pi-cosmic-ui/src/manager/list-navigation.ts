@@ -1,6 +1,5 @@
 import type { PageSteps } from "./keymap.ts";
 
-/** Signed row offset of each one-row and page motion under the given page steps. */
 const MOVEMENT_OFFSETS = {
   up: () => -1,
   down: () => 1,
@@ -10,10 +9,8 @@ const MOVEMENT_OFFSETS = {
   "full-page-down": (steps: PageSteps) => steps.page,
 };
 
-/** One-row and page motions that shift the selection by a signed offset. */
 type MovementMotion = keyof typeof MOVEMENT_OFFSETS;
 
-/** Motion keybindings shared by settings list pages; endpoint motions jump to the bounds. */
 export type ListMotion = MovementMotion | "first" | "last";
 
 export const isMovementMotion = (action: string): action is MovementMotion =>
@@ -22,11 +19,9 @@ export const isMovementMotion = (action: string): action is MovementMotion =>
 export const isListMotion = (action: string): action is ListMotion =>
   action === "first" || action === "last" || isMovementMotion(action);
 
-/** Signed row offset for a movement motion under the given page steps. */
 export const movementOffset = (motion: MovementMotion, steps: PageSteps): number =>
   MOVEMENT_OFFSETS[motion](steps);
 
-/** Pure clamped arithmetic for one list motion; single-row motions may wrap when allowed. */
 export const nextListMotionIndex = (
   motion: ListMotion,
   current: number,

@@ -70,9 +70,7 @@ export function createCodePreviewSettingsModel({
     for (const item of createSettingsCategoryItems(() => draftSettings, constVoid))
       list.updateValue(item.id, item.currentValue);
   };
-  // Group rows never arrive here: the settings surface filters their changes.
   const handleSettingChange = (list: SettingsList, id: string, value: string) => {
-    // The reset row asks for a second press: its middle value only arms the reset.
     if (id === "resetToDefaults" && value !== "reset now") {
       if (value === "keep current") sync(list);
       return;
@@ -81,7 +79,6 @@ export function createCodePreviewSettingsModel({
     const changeRevision = ++revision;
     let saved: Promise<void>;
     if (id === "resetToDefaults") {
-      // The restored values come from the settings files, so the draft follows the publication.
       sync(list);
       saved = effects.queueReset(loadOptions).then(() => {
         if (revision === changeRevision) {
@@ -99,8 +96,6 @@ export function createCodePreviewSettingsModel({
       saved = persistSettingsChange(next, previousTheme, loadOptions, effects);
     }
     void saved.catch((error) => {
-      // Only the latest failed edit rolls the panel draft back. Older saves may fail while a
-      // newer serialized save is still able to publish the complete draft.
       if (revision === changeRevision) {
         draftSettings = cloneCodePreviewSettings(codePreviewSettings);
         sync(list);

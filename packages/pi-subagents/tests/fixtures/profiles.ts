@@ -6,7 +6,6 @@ import {
 } from "../../src/profiles/model.ts";
 import type { SessionProfileBaseline } from "../../src/profiles/session-overrides.ts";
 
-/** A normalized local Pi candidate; overrides replace any field. */
 export const profileCandidate = (
   model = "parent",
   overrides: Partial<ProfileCandidate> = {},
@@ -22,7 +21,6 @@ export const profileCandidate = (
   ...overrides,
 });
 
-/** A raw persisted candidate without openaiFastMode, so it stays valid in every config version. */
 export const declaredCandidate = (model: string, overrides: JsonObject = {}): JsonObject => ({
   host: "local",
   runtime: "pi",
@@ -34,7 +32,6 @@ export const declaredCandidate = (model: string, overrides: JsonObject = {}): Js
   ...overrides,
 });
 
-/** A complete seven-profile baseline of saved set "saved" whose reviewer comes from that set. */
 export const completeBaseline = (
   scope: "global" | "project",
   reviewerModel = "parent",

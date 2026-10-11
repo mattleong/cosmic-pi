@@ -20,7 +20,6 @@ test("line counters preserve file, preview, and mixed newline semantics", () => 
   assert.equal(countContentLines("one\n"), 1);
   assert.equal(countContentLines("\n\n"), 2);
   assert.equal(countContentLines("\r\n\r\n"), 2);
-  // Like Pi's read, a lone carriage return is content, not a line break.
   assert.equal(countContentLines("one\rtwo\r"), 1);
   assert.equal(countContentLines("one\r\ntwo\nthree\rfour"), 3);
   assert.equal(selectPreviewTextLines("\n\n", 0).total, 1);
@@ -49,7 +48,6 @@ test("text preview selection preserves head and split window behavior", () => {
     hidden: 5,
     total: 12,
   });
-  // The split begins at a limit of eight; seven still shows only the head.
   const headOnly = selectPreviewTextLines(twelveLines, 7);
   assert.deepEqual(
     headOnly.entries,

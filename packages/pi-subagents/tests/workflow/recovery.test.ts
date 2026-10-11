@@ -51,7 +51,6 @@ describe("workflow failure recovery", () => {
         expect(text).toContain(`resumeFromRunId: "${run.id}"`);
         expect(text).toContain("Cannot find module worker.js");
         expect(text).toContain("at workflow:4");
-        // The sandbox also stops when the script exhausts its memory.
         expect(text).toMatch(/memory/i);
         if (run.source.kind === "saved") expect(text).toContain('name: "audit"');
         if (run.source.kind === "file") expect(text).toContain(`scriptPath: "${run.source.path}"`);
@@ -71,14 +70,11 @@ describe("workflow failure recovery", () => {
     });
   }
 
-  it("preserves legacy script recovery and budget consent", () => {
-    const legacy = { ...failedRun("script"), failure: { message: "old failure" } };
-    for (const text of recoverySurfaces(legacy)) expect(text).toMatch(/fix the script/i);
+  it("asks for budget consent only after a script budget failure", () => {
     for (const text of recoverySurfaces(failedRun("script", WORKFLOW_BUDGET_ERROR))) {
       expect(text).toContain("ask the user");
       expect(text).toContain("budget.remaining()");
     }
-    // Foreign names must not override an explicitly classified infrastructure failure.
     const budget = { budget: { spent: 10, total: 10, refused: 0 } };
     const sandbox = failedRun("sandbox", WORKFLOW_BUDGET_ERROR, budget);
     for (const text of recoverySurfaces(sandbox)) {

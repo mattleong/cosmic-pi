@@ -1,4 +1,3 @@
-// The Effect RPC client of the private supervisor channel used by the native MCP helper.
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -20,12 +19,6 @@ import { SupervisorToolFailure, type SupervisorToolClient } from "../supervisor/
 
 const CONNECT_TIMEOUT_MILLIS = 5_000;
 
-/**
- * Opens one authenticated connection in a child of the caller's Scope. A failed or interrupted
- * open closes that child at once while the parent stays open. The assignment watch runs in the
- * parent scope; once it ends for any reason, `closed` completes and a separate parent-scoped fiber
- * closes the connection, which also stops the protocol's reconnect policy from redialing.
- */
 export const openSupervisorClient = (
   config: SupervisorChannelConfig,
 ): Effect.Effect<
@@ -87,7 +80,6 @@ export const openSupervisorClient = (
           Effect.ensuring(Deferred.succeed(closed, undefined)),
           Effect.forkIn(parent, { startImmediately: true }),
         );
-        // An interrupted close would skip the remaining connection finalizers.
         yield* Deferred.await(closed).pipe(
           Effect.andThen(Effect.uninterruptible(Scope.close(connection, Exit.void))),
           Effect.forkIn(parent, { startImmediately: true }),

@@ -13,7 +13,6 @@ interface FooterInstallationOptions {
   readonly config: () => ResolvedCosmicUiConfig;
   readonly currentContext: () => ExtensionContext | undefined;
   readonly refreshAfterBranchChange: (ctx: ExtensionContext) => void;
-  /** Runs whenever the installed footer may have changed; the host deduplicates its broadcast. */
   readonly onActiveChange: () => void;
 }
 
@@ -26,7 +25,6 @@ const inertFooter = (): FooterInstance => ({
   dispose: () => undefined,
 });
 
-/** One setFooter call: pending while Pi installs it, then active once installation succeeds. */
 interface FooterAttempt {
   instance: object | undefined;
   renderRequest: (() => void) | undefined;
@@ -38,10 +36,6 @@ const disposeAttempt = (attempt: FooterAttempt | undefined) => {
   for (const dispose of attempt?.disposers ?? []) dispose();
 };
 
-/**
- * Owns the synchronous Pi footer installation attempts, exact-once disposal state, and the render
- * request: only the newest instance of the active attempt receives render requests.
- */
 export const createFooterInstallation = (options: FooterInstallationOptions) => {
   const { pi, registry, projection, config } = options;
   let installedContext: ExtensionContext | undefined;
@@ -135,7 +129,6 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
               installedContext = undefined;
               options.onActiveChange();
             } else if (pending === attempt) {
-              // Promotion must not revive this disposed instance or its render request.
               attempt.instance = undefined;
               attempt.renderRequest = undefined;
               if (attempt.component === component) attempt.component = undefined;
@@ -155,7 +148,6 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
       options.onActiveChange();
     } else {
       if (pending === attempt) pending = undefined;
-      // The attempt is now neither pending nor active, so its disposers only unsubscribe.
       disposeAttempt(attempt);
     }
   };

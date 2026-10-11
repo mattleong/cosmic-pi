@@ -21,7 +21,6 @@ const SHELL_READINESS_ATTEMPTS = 31;
 const SHELL_READINESS_DELAY_MILLIS = 200;
 const REQUIRED_STABLE_SHELL_READINGS = 6;
 
-/** Exact blank child identity from a valid, unparented session header. */
 export const isValidBlankChildProbe = (
   probe: SessionHeaderProbe,
   childSessionId: string,
@@ -141,10 +140,6 @@ export const waitForAvailableShell = Effect.fn("HerdrBtw.waitForAvailableShell")
   );
 });
 
-/**
- * Fail-closed parent/child file-distinctness: the child path must differ textually AND compare
- * distinct (an unavailable identity never counts as distinct).
- */
 export const isDistinctChildSessionPath = (
   childPath: string,
   parentSessionFile: string,
@@ -158,7 +153,6 @@ const piAgentSession = (agent: HerdrPane) => {
   return session?.source === "herdr:pi" && session.agent === "pi" ? session : undefined;
 };
 
-/** Exact pane, terminal, name, and path-based child evidence required after startup. */
 export const isOwnedStartedAgent = (
   agent: HerdrPane,
   pane: HerdrPane,
@@ -192,7 +186,6 @@ const linkedAgentSessionIdentity = (
   return compareSessionFileIdentity(session.value, link.childSessionPath);
 };
 
-/** A recorded name or non-distinct child identity remains conflicting. */
 export const isLinkedAgentConflictCandidate = (
   agent: HerdrPane,
   link: HerdrBtwLink,
@@ -203,7 +196,6 @@ export const isLinkedAgentConflictCandidate = (
   return identity !== undefined && identity !== "distinct";
 };
 
-/** Exact recorded Herdr identity required before focusing a linked live Pi. */
 export const isExactLinkedAgent = (
   agent: HerdrPane,
   link: HerdrBtwLink,

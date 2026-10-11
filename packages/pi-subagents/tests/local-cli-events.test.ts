@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns the captured logger.
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -133,7 +132,6 @@ it.effect("Pi reconciles cumulative charges before settlement without blocking R
       assignmentEpoch: 1,
       terminal: { stopReason: "stop", text: "Final report" },
     });
-    // An idle cache-warm entry belongs to the retained assignment, not a new assistant message.
     tokens = 115;
     yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "entry_appended" } });
     expect(yield* Queue.take(backend.events)).toMatchObject({
@@ -348,10 +346,8 @@ describe("local CLI raw event ownership", () => {
         expect(yield* Queue.take(events)).toBe(event);
         ownership.acknowledge(event);
         expect(acknowledged).toEqual(["raw-1"]);
-        // A second acknowledgement of a released event is inert.
         ownership.acknowledge(event);
         expect(acknowledged).toEqual(["raw-1"]);
-        // A successful offer must not log an overflow warning.
         expect(warnings()).not.toContain("ingress overflowed");
       }),
     ),
@@ -374,7 +370,6 @@ describe("local CLI raw event ownership", () => {
     withOwnership(1, ({ acknowledged, ownership, warnings }) =>
       Effect.gen(function* () {
         yield* ownership.offer(backendEvent(1));
-        // The saturated bounded queue suspends the next offer until it is interrupted.
         const blocked = yield* Effect.forkChild(ownership.offer(backendEvent(2), rawEvent(3)));
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(blocked);
@@ -443,8 +438,6 @@ describe("local Codex event driver raw safety", () => {
       Effect.gen(function* () {
         const rawStale: LocalCliWireEvent = { type: "message", value: { id: "stale", result: {} } };
         const rawTurn1: LocalCliWireEvent = { type: "message", value: turnStartedFrame("turn-1") };
-        // Uncorrelated responses are released without owning a normalized event;
-        // the first turn/started owns its raw behind the normalized run_started event.
         offerRaw(rawStale);
         offerRaw(rawTurn1);
         const started = yield* takeBackendEvent(backend);
@@ -452,11 +445,9 @@ describe("local Codex event driver raw safety", () => {
         expect([...acknowledged]).toEqual([rawStale]);
         backend.acknowledge(started);
         expect([...acknowledged]).toEqual([rawStale, rawTurn1]);
-        // A second acknowledgement of the released event is inert.
         backend.acknowledge(started);
         expect([...acknowledged]).toEqual([rawStale, rawTurn1]);
 
-        // A duplicate turn/started for the already-tracked turn is released exactly once.
         offerRaw({ type: "message", value: turnStartedFrame("turn-1") });
         yield* settle;
         expect([...acknowledged]).toEqual([

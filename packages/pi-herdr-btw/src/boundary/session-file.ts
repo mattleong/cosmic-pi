@@ -1,4 +1,3 @@
-// Pi session-file identity and blank-child creation boundary for /herdr-btw.
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -7,8 +6,6 @@ import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, synchronousRandomUuid } from "pi-cosmic-core";
 import { BoundedId, BoundedPath, parseHerdrBtwSessionId } from "../btw/marker.ts";
 
-// Synchronous host-boundary validation needs raw Node fs semantics. Effect
-// FileSystem cannot express this pre-runtime, never-mutating no-follow probe.
 const nodeFs = process.getBuiltinModule("node:fs");
 const nodePath = process.getBuiltinModule("node:path");
 if (!nodeFs || !nodePath) throw new Error("Node fs/path builtins are unavailable.");
@@ -54,7 +51,6 @@ const withRegularSessionDescriptor = <A>(
   let descriptor: number | undefined;
   try {
     if (!lstatSync(path).isFile()) return undefined;
-    // O_NOFOLLOW closes the path-replacement window against symlinks.
     descriptor = openSync(
       path,
       constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
@@ -67,18 +63,10 @@ const withRegularSessionDescriptor = <A>(
     if (descriptor !== undefined)
       try {
         closeSync(descriptor);
-      } catch {
-        // Read-only validation is best effort and never exposes close failures.
-      }
+      } catch {}
   }
 };
 
-/**
- * Compares two regular session files by descriptor identity. Paths are bounded
- * before normalization, and each no-follow open bounds its normalized path
- * again. Any failed probe makes identity unavailable, never evidence that the
- * files are distinct.
- */
 export const compareSessionFileIdentity: SessionFileIdentityComparator = (leftPath, rightPath) => {
   if (!isBoundedSessionPath(leftPath) || !isBoundedSessionPath(rightPath)) return "unavailable";
 
@@ -107,11 +95,6 @@ const readFirstLine = (path: string): string | undefined =>
     return undefined;
   });
 
-/**
- * Reads only the first header line of a Pi session file with bounded bytes.
- * The probe never follows symlinks, never writes, and never opens the file
- * through SessionManager, so it cannot migrate or rewrite the session.
- */
 export const probeSessionHeader = (path: string): SessionHeaderProbe => {
   const line = readFirstLine(path);
   const header =
@@ -131,7 +114,6 @@ export type BlankChildSessionFileResult =
   | { readonly _tag: "created"; readonly path: string }
   | { readonly _tag: "invalid" };
 
-/** Cryptographically strong preassigned child ID compatible with Pi session IDs. */
 export const createChildSessionId = (): string => synchronousRandomUuid();
 
 const createBlankChildSessionFileAt = (
@@ -169,12 +151,6 @@ const createBlankChildSessionFileAt = (
   }
 };
 
-/**
- * Creates one blank persisted Pi session with exclusive ownership. Starting Pi
- * with `--session` against this header makes even a no-prompt side session
- * resumable immediately; Pi does not flush a brand-new `--session-id` session
- * until its first user or assistant message.
- */
 export const createBlankChildSessionFile = (
   input: BlankChildSessionFileInput,
 ): Effect.Effect<BlankChildSessionFileResult> =>

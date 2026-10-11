@@ -36,7 +36,6 @@ export interface SearchableSelectPageChoice<A> {
   readonly payload: A;
   readonly enabled?: boolean | undefined;
   readonly disabledReason?: string | undefined;
-  /** Short caller-owned reason shown beside an unavailable choice. */
   readonly disabledHint?: string | undefined;
   readonly tone?: Parameters<Theme["fg"]>[0] | undefined;
 }
@@ -63,7 +62,6 @@ export interface SearchableSelectPageOptions<A> extends SearchableSelectHostOpti
   readonly emptyText?: string | undefined;
   readonly initialQuery?: string | undefined;
   readonly initialSearchMode?: boolean | undefined;
-  /** Default preserves the existing Escape-clears-search interaction. */
   readonly cancelBehavior?: "close" | "clear-search" | undefined;
   readonly select: (value: A) => void;
   readonly cancel: () => void;
@@ -74,7 +72,6 @@ interface SearchableSelectSearchState {
   readonly active: boolean;
 }
 
-/** Responsive full-page fuzzy-search input and dropdown shared by settings selectors. */
 export class SearchableSelectPage<A> implements Component, Focusable {
   private readonly input = new Input();
   private readonly options: SearchableSelectPageOptions<A>;
@@ -105,12 +102,10 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     return this._focused;
   }
 
-  /** Stable selected identity exposed for pure wrappers such as the scoped model picker. */
   get selectedValue(): string | undefined {
     return this.selectedIdentity;
   }
 
-  /** Current filter state exposed so a wrapper can rebuild without losing search context. */
   get searchState(): SearchableSelectSearchState {
     return { query: this.query, active: this.searchMode };
   }
@@ -166,7 +161,6 @@ export class SearchableSelectPage<A> implements Component, Focusable {
           this.searchMode ? theme.fg("muted", text) : focusedField(theme, text),
         selectedText: (text: string) => {
           if (this.searchMode) return text;
-          // Disabled rows retain their dim warning affordance under the selection background.
           if (this.selectedChoice()?.enabled === false) {
             const disabled = theme.bold(theme.fg("dim", stripTerminalControls(text)));
             return theme.bg?.("selectedBg", disabled) ?? disabled;
@@ -184,7 +178,6 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     return list;
   }
 
-  /** Non-motion keymap actions shared by search and navigation modes. */
   private handleSelectAction(action: string): void {
     switch (action) {
       case "cancel":
@@ -273,7 +266,6 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     this.feedback = undefined;
   }
 
-  /** Configured key labels, minus keys that the current mode keeps for typing or shortcuts. */
   private keys() {
     return configuredKeyLabels(
       this.options.keybindingLabel,
@@ -281,7 +273,6 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     );
   }
 
-  /** While searching, cancel either leaves search or closes the page. */
   private searchCancel(): string {
     const verb = this.options.cancelBehavior === "close" ? "Cancel" : "Done";
     return `${this.keys().key("tui.select.cancel", "Esc")} ${verb}`;

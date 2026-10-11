@@ -87,7 +87,6 @@ export type CodexImageResult = {
   mimeType: string;
   savedPath?: string;
   model: string;
-  // Older saved results predate explicit image model selection.
   imageModel?: string;
   action: ImageAction;
   outputFormat: ImageOutputFormat;
@@ -97,7 +96,6 @@ export type CodexImageDetails = Omit<CodexImageResult, "data">;
 const isOptionalString = <Value>(value: Value): value is Value & (string | undefined) =>
   value === undefined || Predicate.isString(value);
 
-/** Shared shape guard for persisted image tool/message details. */
 export const isCodexImageDetails = <Value>(value: Value): value is Value & CodexImageDetails =>
   Predicate.isObject(value) &&
   Predicate.isString(value.id) &&

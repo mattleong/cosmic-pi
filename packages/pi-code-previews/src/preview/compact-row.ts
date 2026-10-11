@@ -15,7 +15,6 @@ import {
 import { layoutCompactHeader } from "./compact-header";
 import { TIMING_VISIBLE_MS } from "./tool-timing";
 
-/** Subjects and metadata are plain, single-line text. ANSI input is displayed inertly. */
 export function compactSingleLine(value: string): string {
   return escapeControlChars(value).replace(/\s+/gu, " ").trim();
 }
@@ -26,7 +25,6 @@ export type CompactRowInput = {
   summary: CompactSummary;
   status?: CompactStatus;
   returnedCheckmark?: true | undefined;
-  /** Colored issue text that replaces the routine counter on one-line child rows. */
   issueLabel?: string | undefined;
   duration?: string | undefined;
   elapsedMs?: number | undefined;
@@ -43,7 +41,6 @@ const ACTIVITY_KINDS = {
   cancelled: "stopped",
 } as const satisfies Record<string, ManagerActivityKind>;
 
-/** ✓ ⚠ ✗ ⊘ for settled outcomes; ? when the outcome cannot be confirmed. */
 function compactStatusIcon(
   status: CompactStatus,
   theme: Theme,
@@ -58,12 +55,10 @@ function compactStatusIcon(
   return theme.fg(managerActivityColor(kind), managerActivityGlyph(kind, animationFrame));
 }
 
-/** Shared semantic heading policy. Branch decoration is outside the row's width. */
 export function renderCompactRow(input: CompactRowInput, theme: Theme, width: number): string {
   return layoutCompactRow(input, theme, width).row;
 }
 
-/** The heading row plus whether its issue label fit; callers place an unfitted label below. */
 export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: number) {
   if (width <= 0) return { row: "", issueShown: false };
   const { phase, summary } = input;

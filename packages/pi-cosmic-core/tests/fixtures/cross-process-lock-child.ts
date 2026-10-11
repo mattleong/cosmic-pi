@@ -18,7 +18,6 @@ if (mode === "death-before-publish" || mode === "write-fault") {
     return rename(from, to);
   };
 }
-// Polls the non-waiting door until this process owns the slot or admission fails.
 const acquire = CrossProcessLock.use((lock) =>
   Effect.gen(function* () {
     for (;;) {

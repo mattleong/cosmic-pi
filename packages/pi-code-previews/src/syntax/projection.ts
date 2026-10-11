@@ -15,16 +15,10 @@ export type ShikiStatus = ShikiProjectionStatus &
     maxHighlightChars: number;
   }>;
 
-/**
- * Immutable renderer metadata plus the one unavoidable synchronous Shiki capability.
- * The highlighter is never frozen or mutated by renderers except through Shiki's synchronous
- * `codeToTokensBase`; all lifecycle and language loading remains owned by the session service.
- */
 export type CodePreviewSyntaxSnapshot = Readonly<{
   theme: string | undefined;
   highlighter: ShikiHighlighter | undefined;
   loadedLanguages: readonly string[];
-  /** Session failures that renderers show as plain text instead of requesting again. */
   failedThemes: readonly string[];
   failedLanguages: readonly string[];
   status: ShikiProjectionStatus;

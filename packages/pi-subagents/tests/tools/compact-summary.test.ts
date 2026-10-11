@@ -40,11 +40,9 @@ const details = (issues: readonly CompactIssue[] | undefined) =>
   (issues ?? []).map((issue) => issue.detail ?? "").join("\n");
 const messages = (issues: readonly CompactIssue[] | undefined) =>
   (issues ?? []).map((issue) => issue.message).join("\n");
-/** Everything an issue retains: a quoted line may be the message alone. */
 const evidence = (issues: readonly CompactIssue[] | undefined) =>
   `${messages(issues)}\n${details(issues)}`;
 
-/** Launch entries before and after route selection. */
 const pending = {
   index: 0,
   name: "worker",
@@ -63,11 +61,9 @@ const selected = {
   openaiFastMode: false,
 };
 
-/** A status receipt over run views with these overrides. */
 const statusOf = (...runs: ReadonlyArray<Partial<SubagentRunView>>) =>
   makeCompactToolDetails({ action: "status", runs: runs.map((run) => view(run)) });
 
-/** An await receipt over status-projected cards that states target scope only through `extra`. */
 const awaitReceipt = (
   runs: ReadonlyArray<SubagentRunView>,
   extra: Partial<SubagentAwaitDetails> = {},
@@ -144,7 +140,6 @@ describe("subagent compact semantic policy", () => {
         runs: [view({ id: "one", state: "running" }), view({ id: "two", state: "completed" })],
       }),
     );
-    // Counters use the run rows' state words.
     expect(summary?.counters?.[0]).toContain("1 running");
     expect(summary?.counters?.[0]).toContain("1 finished");
     expect(summary?.metadata).toEqual([]);
@@ -168,7 +163,6 @@ describe("subagent compact semantic policy", () => {
               },
         context: renderContextFixture(),
       });
-      // Before a receipt names the run, the heading has no subject rather than its ID.
       expect(summary?.subject).toBe(phase === "pending" ? "" : "Worker");
       expect(summary?.action).toBe("interrupt");
       expect(summary?.metadata).not.toContain("target-1");
@@ -187,7 +181,6 @@ describe("subagent compact semantic policy", () => {
         { action: "retry", runIds: ["source-1"] },
       );
       expect(summary?.action).toBe("retry");
-      // The successor's name heads the row; a name that is only an ID never does.
       expect(summary?.subject).toBe(name === "Retry worker" ? name : "");
       expect(summary?.metadata).not.toContain("successor-2");
       expect(summary?.metadata).not.toContain("source-1");
@@ -213,7 +206,6 @@ describe("subagent compact semantic policy", () => {
       statusOf({ state: "running", writeIntent: "writer", writeClaims: ["src/a.ts"] }),
     );
     expect(summary?.outcome).toBe("success");
-    // A sole target shows its decoded state, never the result's text.
     expect(summary?.counters).toContain("running");
     expect(summary?.metadata).toEqual([]);
   });
@@ -263,7 +255,6 @@ describe("subagent compact semantic policy", () => {
       for (const phase of ["running", "settled"] as const) {
         const issues = summarize("status", projected, phase)?.issues;
         expect(compactIssueSeverity(issues)).toBeDefined();
-        // The worker's own words are the attention; procedures and IDs are not.
         if (quoted) expect(messages(issues)).toContain(quoted);
         expect(messages(issues)).not.toMatch(/PRIVATE-RUN|subagent_/);
         for (const issue of issues ?? [])
@@ -361,7 +352,6 @@ describe("subagent compact semantic policy", () => {
         const summary = summarize(action, details);
         const receipt = summary?.counters?.join(" ");
         const word = action === "send" ? "sent" : "replied";
-        // A zero beside a failure count says nothing; accepted operations are counted.
         if (accepted > 0) expect(receipt).toContain(`${accepted} ${word}`);
         else expect(receipt).not.toContain(word);
         expect(receipt).toContain("1 failed");
@@ -459,7 +449,6 @@ describe("subagent compact semantic policy", () => {
       const pendingIssues = (summary?.issues ?? []).filter((issue) =>
         issue.code.startsWith("run:pending-run:"),
       );
-      // Pending is a warning, never an error; identity and code stay expanded-only.
       expect(pendingIssues.map((issue) => issue.severity)).toEqual(["warning", "info"]);
       expect(messages(pendingIssues)).not.toMatch(/pending-run|steer_outcome_uncertain|failed/);
       expect(details(pendingIssues)).toContain("steer_outcome_uncertain");
@@ -467,7 +456,6 @@ describe("subagent compact semantic policy", () => {
       expect(details(pendingIssues)).toContain("stop remains available");
       if (outcome !== "error") expect(compactIssueSeverity(summary?.issues)).toBe("warning");
     }
-    // A flag decoded on another action keeps its code-based uncertainty.
     const reply = makeCompactToolDetails({
       action: "reply",
       runs: [],
@@ -664,7 +652,6 @@ describe("subagent compact semantic policy", () => {
       ],
     });
     expect(summary?.outcome).toBe("error");
-    // Cleanup and the retry it allows share one expanded-only line.
     expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["error", "info"]);
     expect(details(summary?.issues)).toContain('action: "retry"');
   });
@@ -765,7 +752,6 @@ describe("subagent compact semantic policy", () => {
       "settled",
       { runIds: ["target"] },
     );
-    // An unnamed target stays unnamed: its ID is expanded-only detail.
     expect(summary?.subject).toBe("");
     expect(summary?.counters).toContain("0/1 finished");
     expect(summary?.outcome).toBe("uncertain");
@@ -853,10 +839,8 @@ describe("subagent compact semantic policy", () => {
     if (reports.action === "models") throw new Error("Expected run details");
     const { reportsOnlyOmitted, ...unknown } = reports;
     expect(reportsOnlyOmitted).toBe(true);
-    // A list never carries reports, so any omission there is one routine note.
     expect(summarize("list", unknown)?.outcome).toBe("success");
     expect(summarize("list", unknown)?.issues?.map((issue) => issue.severity)).toEqual(["info"]);
-    // A status view that loses evidence cannot confirm its targets.
     const status = statusOf({});
     const omittedStatus = { ...status, contentOmitted: true };
     expect(summarize("status", omittedStatus)?.outcome).toBe("uncertain");
@@ -980,9 +964,7 @@ describe("subagent compact semantic policy", () => {
       const projected = statusOf({ ...overrides, state: "completed", finalText: "report" });
       const summary = summarize("status", projected);
       const isolated = overrides.writerWorkspaceMode === "worktree";
-      // Review is the normal next step: a heading label and expanded note, never a warning.
       expect(summary?.outcome).toBe("success");
-      // The label joins the counter, with the bare counter as the narrow-row fallback.
       expect(summary?.counters).toHaveLength(isolated ? 2 : 1);
       if (isolated) expect(summary?.counters?.[0]?.startsWith(summary.counters[1]!)).toBe(true);
       expect(
@@ -1216,10 +1198,12 @@ describe("subagent compact semantic policy", () => {
         issue.message,
       ).toEqual([]);
   });
-  it("keeps failed actions and rejected calls in people's terms, with service text expanded", () => {
-    const id = "agent-ns-42";
-    const serviceText = (code: string) =>
-      `Subagent ${id} failed [${code}]; use subagent_status({ runIds: ["${id}"] }) first.`;
+  const failedActionId = "agent-ns-42";
+  const failedActionText = (code: string) =>
+    `Subagent ${failedActionId} failed [${code}]; use subagent_status({ runIds: ["${failedActionId}"] }) first.`;
+  it("keeps failed actions in people's terms, with service text expanded", () => {
+    const id = failedActionId;
+    const serviceText = failedActionText;
     const codes = [
       "run_waiting_for_parent",
       "parent_question_missing",
@@ -1258,7 +1242,10 @@ describe("subagent compact semantic policy", () => {
               issue.message,
             ).toEqual([]);
       }
-    // A visible card names the failed target instead of a generic subject.
+  });
+  it("names the failed run in people's terms", () => {
+    const id = failedActionId;
+    const serviceText = failedActionText;
     const named = summarize(
       "send",
       makeCompactToolDetails({
@@ -1268,7 +1255,9 @@ describe("subagent compact semantic policy", () => {
       }),
     );
     expect(messages(named?.issues)).toContain("auth-review");
-    // Calls rejected before any receipt keep their heading and explain themselves.
+  });
+  it("keeps rejected calls in people's terms, with service text expanded", () => {
+    const id = failedActionId;
     const provider = (tool: string) => createSubagentCompactSummary(`subagent_${tool}`);
     for (const [tool, args, text] of [
       [
@@ -1295,7 +1284,6 @@ describe("subagent compact semantic policy", () => {
     }
   });
   it("treats requested results and routine history as routine, not warnings", () => {
-    // A pause the call asked for is its result.
     const interrupted = summarize(
       "lifecycle",
       makeCompactToolDetails({ action: "interrupt", runs: [view({ state: "paused" })] }),
@@ -1304,7 +1292,6 @@ describe("subagent compact semantic policy", () => {
     );
     expect(interrupted?.outcome).toBe("success");
     expect(interrupted?.issues?.map((issue) => issue.severity)).toEqual(["info"]);
-    // A retry moving past its failed option is the expected step, explained in people's terms.
     const key =
       "local/pi/anthropic/claude-opus-4-7:high:fresh:read-only:openaiFastMode=false:closeOnReport=true";
     const retried = summarize(
@@ -1336,7 +1323,6 @@ describe("subagent compact semantic policy", () => {
     expect(skipped?.severity).toBe("info");
     expect(skipped?.detail).not.toContain("openaiFastMode=");
     expect(skipped?.detail).not.toContain("source");
-    // A list leaves report text out on purpose: one note for the whole list, not one per run.
     const listed = summarize(
       "list",
       makeCompactToolDetails({

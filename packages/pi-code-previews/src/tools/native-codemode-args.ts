@@ -23,7 +23,6 @@ function credentialStart(value: string, partial: boolean): number | undefined {
   return userinfo === undefined ? ordinary : Math.min(ordinary, userinfo);
 }
 
-/** A cut quoted credential cannot be safely redacted by matching its missing closing quote. */
 export function safeNativeArgumentText(value: string, partial = false): string {
   const boundary = credentialStart(value, partial);
   const redacted = boundary !== undefined ? `${value.slice(0, boundary)}[REDACTED]` : value;
@@ -36,7 +35,6 @@ export interface NativeArgumentPreview {
   readonly values: Readonly<Record<string, NativeArgumentScalar>>;
   readonly partialFields: ReadonlySet<string>;
   readonly complete: boolean;
-  /** Original bounded preview with sensitive value spans masked, not repaired JSON. */
   readonly text: string;
 }
 
@@ -64,10 +62,15 @@ const stringEscapes = new Map([
 const whitespace = (value: string | undefined) =>
   value === " " || value === "\n" || value === "\r" || value === "\t";
 
-/**
- * Scan only JSON grammar, including nested containers. A native truncated receipt is a
- * prefix, never repaired into a full argument object. Only observed root scalars survive.
- */
+function fieldValue(
+  key: string,
+  scalar: string | number | boolean | null,
+  complete: boolean,
+): NativeArgumentScalar {
+  if (isSensitiveDiagnosticKey(key)) return "[REDACTED]";
+  return Predicate.isString(scalar) ? safeNativeArgumentText(scalar, !complete) : scalar;
+}
+
 export function nativeArgumentPreview(raw: string): NativeArgumentPreview | undefined {
   if (!raw || raw.length > 4096) return undefined;
   const decoded = decodeUnknownOrUndefined(Args, raw);
@@ -121,7 +124,28 @@ export function nativeArgumentPreview(raw: string): NativeArgumentPreview | unde
     return { complete: false, scalar: value };
   }
 
-  /** An object or array; only objects have keys, and only root object fields are retained. */
+  function objectKey(keys: Set<string>): string | Value | undefined {
+    if (source[cursor] !== '"') return undefined;
+    const parsed = string(true);
+    if (!parsed) return undefined;
+    if (!parsed.complete) return unfinished();
+    if (!Predicate.isString(parsed.scalar) || keys.has(parsed.scalar)) return undefined;
+    keys.add(parsed.scalar);
+    skipWhitespace();
+    if (cursor === source.length) return unfinished();
+    if (source[cursor++] !== ":") return undefined;
+    skipWhitespace();
+    return parsed.scalar;
+  }
+
+  function recordField(key: string | undefined, depth: number, start: number, item: Value) {
+    if (key === undefined) return;
+    if (isSensitiveDiagnosticKey(key)) redactions.push({ start, end: cursor });
+    if (depth !== 0 || item.scalar === undefined) return;
+    fields.set(key, fieldValue(key, item.scalar, item.complete));
+    if (!item.complete) partialFields.add(key);
+  }
+
   function container(depth: number, close: "}" | "]"): Value | undefined {
     cursor++;
     const keys = new Set<string>();
@@ -133,34 +157,14 @@ export function nativeArgumentPreview(raw: string): NativeArgumentPreview | unde
     while (cursor < source.length) {
       let key: string | undefined;
       if (close === "}") {
-        if (source[cursor] !== '"') return undefined;
-        const parsed = string(true);
-        if (!parsed) return undefined;
-        if (!parsed.complete) return unfinished();
-        if (!Predicate.isString(parsed.scalar) || keys.has(parsed.scalar)) return undefined;
-        key = parsed.scalar;
-        keys.add(key);
-        skipWhitespace();
-        if (cursor === source.length) return unfinished();
-        if (source[cursor++] !== ":") return undefined;
-        skipWhitespace();
+        const parsedKey = objectKey(keys);
+        if (!Predicate.isString(parsedKey)) return parsedKey;
+        key = parsedKey;
       }
       const start = cursor;
       const item = parseValue(depth + 1);
       if (!item) return undefined;
-      if (key !== undefined && isSensitiveDiagnosticKey(key))
-        redactions.push({ start, end: cursor });
-      if (key !== undefined && depth === 0 && item.scalar !== undefined) {
-        fields.set(
-          key,
-          isSensitiveDiagnosticKey(key)
-            ? "[REDACTED]"
-            : Predicate.isString(item.scalar)
-              ? safeNativeArgumentText(item.scalar, !item.complete)
-              : item.scalar,
-        );
-        if (!item.complete) partialFields.add(key);
-      }
+      recordField(key, depth, start, item);
       if (!item.complete) return unfinished();
       skipWhitespace();
       if (cursor === source.length) return unfinished();
@@ -168,7 +172,6 @@ export function nativeArgumentPreview(raw: string): NativeArgumentPreview | unde
       if (delimiter === close) return { complete: true };
       if (delimiter !== ",") return undefined;
       skipWhitespace();
-      // A trailing comma is not a valid JSON prefix if its closing bracket is present.
       if (source[cursor] === close) return undefined;
     }
     return unfinished();
@@ -189,7 +192,6 @@ export function nativeArgumentPreview(raw: string): NativeArgumentPreview | unde
       ![",", "}", "]"].includes(source[cursor]!)
     )
       cursor++;
-    // Without a delimiter, digits may be a prefix of a larger number.
     if (cursor === source.length && truncated) {
       const token = source.slice(start, cursor);
       const literal = ["true", "false", "null"].some((word) => word.startsWith(token));
@@ -206,7 +208,6 @@ export function nativeArgumentPreview(raw: string): NativeArgumentPreview | unde
   skipWhitespace();
   if (!root || cursor !== source.length || root.complete === truncated) return undefined;
 
-  // Merge nested redactions so a sensitive parent value always hides its whole span.
   const spans: Redaction[] = [];
   for (const span of redactions.toSorted((left, right) => left.start - right.start)) {
     const previous = spans.at(-1);

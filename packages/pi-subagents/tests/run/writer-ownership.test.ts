@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -23,7 +22,6 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 
-/** A local service whose writer-lease fake takes `leases`. */
 const leaseFixture = (
   leases: Parameters<typeof fakeWriterLeaseLayer>[0],
   fake = fakeChildLayer(),

@@ -38,7 +38,6 @@ export const boundToolOutput = (text: string): string =>
 export const joinBoundedToolText = (parts: ReadonlyArray<string>): string =>
   boundToolOutput(parts.filter(Boolean).join("\n\n"));
 
-/** One terminal-safe line, clipped to `maximum` characters with a visible marker. */
 export const boundedLine = (value: string, maximum: number): string =>
   clipWithMarker(sanitizeTerminalLine(value), maximum, "… [truncated]");
 
@@ -169,7 +168,6 @@ const statusField = (label: string, value: string): string =>
 const optionalStatusField = (label: string, value: string | undefined): string | undefined =>
   value ? statusField(label, value) : undefined;
 
-/** The workflow that launched a run, by name and run id; empty for other runs. */
 const workflowOwnerText = (run: SubagentRunView): string => {
   const workflow = run.workflow;
   if (!workflow) return "";
@@ -447,14 +445,12 @@ const actionFailureLine = (failure: SubagentActionFailure): string => {
   return `  ${sanitizeTerminalLine(failure.id)}${code}: ${boundedLine(failure.message, 320)}`;
 };
 
-/** Each disposition's section title, and the guidance the agent text closes it with. */
 export const ACTION_FAILURE_SECTIONS = [
   ["pending", "Guidance awaiting confirmation", pendingDeliveryEvidence.detail],
   ["unconfirmed", "Unconfirmed targets", unconfirmedActionRecovery],
   ["failed", "Failed targets", undefined],
 ] as const satisfies ReadonlyArray<readonly [ActionFailureDisposition, string, string | undefined]>;
 
-/** Pending delivery is neither delivered nor failed; each disposition keeps its own section. */
 export const formatActionFailures = (
   action: SubagentToolAction,
   failures: ReadonlyArray<SubagentActionFailure>,

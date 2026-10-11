@@ -34,7 +34,6 @@ const run = (
     ...patch,
   });
 
-/** The distinct agent run ids a status text names. */
 const namedRunIds = (text: string): ReadonlySet<string> =>
   new Set(text.match(/\bagent-\d+\b/gu) ?? []);
 
@@ -65,13 +64,11 @@ describe("workflow status", () => {
       NOW,
     );
     const at = (fact: string) => text.indexOf(fact);
-    // The longest-running agent comes first, so a stuck one is easy to name.
     expect(at("agent-5")).toBeGreaterThan(-1);
     expect(at("agent-5")).toBeLessThan(at("agent-4"));
     expect(at("agent-4")).toBeLessThan(at("agent-3"));
     expect(at("agent-3")).toBeLessThan(at("item-2"));
     expect(text).toContain("tests failed");
-    // A completed agent isn't listed by id, only counted, and a queued agent has no subagent yet.
     expect(namedRunIds(text).has("agent-1")).toBe(false);
     expect(namedRunIds(text).has("agent-2")).toBe(false);
   });
@@ -94,7 +91,6 @@ describe("workflow status", () => {
     const text = workflowStatusText(run(agents), NOW);
     const named = namedRunIds(text);
     expect(named.size).toBeLessThanOrEqual(24);
-    // The oldest running agent, a failed one and a queued one all keep a row.
     for (const runId of ["agent-151", "agent-167"]) expect(named.has(runId)).toBe(true);
     expect(text).toContain("item-187");
     expect(text.length).toBeLessThan(12 * 1024);
@@ -120,7 +116,6 @@ describe("workflow status", () => {
           state: "queued",
           startedAt: undefined,
           endedAt: undefined,
-          // A root writer the user paused, which only its run id targets.
           waiting: { kind: "writer", runId: "agent-90", name: "root-writer", paused: true },
         }),
       ]),
@@ -146,9 +141,7 @@ describe("workflow status", () => {
         view({ id: "agent-1", state: "waiting_for_parent", question }),
         view({ id: "agent-2", state: "paused", writeIntent: "writer" }),
         view({ id: "agent-3", state: "running" }),
-        // A finished agent's subagent no longer holds the run up.
         view({ id: "agent-4", state: "paused" }),
-        // Paused by its own claim violation, not by a person.
         containedWriter({ id: "agent-5", state: "paused" }),
         view({ id: "agent-6", state: "paused", capabilities: ["steer", "interrupt"] }),
         view({ id: "agent-7", writeIntent: "writer", writeAdmissionPaused: true }),
@@ -165,7 +158,6 @@ describe("workflow status", () => {
   });
 
   it("sends a contained writer to its claim recovery and never resumes an unresumable agent", () => {
-    // Without agent rows, each run id appears only on its attention line.
     const text = workflowStatusText(run([]), NOW, [
       { kind: "containment", runId: "agent-1", writer: true },
       { kind: "paused", runId: "agent-2", writer: false, canResume: false },
@@ -211,7 +203,6 @@ describe("workflow status", () => {
     expect(text).toContain("workspace-3");
     for (const discarded of ["workspace-1", "workspace-2", "workspace-4"])
       expect(text).not.toContain(discarded);
-    // The count is on a line of its own, apart from the listed proposal.
     expect(
       text.split("\n").some((line) => /\b3\b/u.test(line) && !line.includes("workspace-")),
     ).toBe(true);

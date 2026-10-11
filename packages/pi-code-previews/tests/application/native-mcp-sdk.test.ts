@@ -1,4 +1,3 @@
-/** Native MCP remains an independent public SDK extension; presentation never composes it. */
 import assert from "node:assert/strict";
 import {
   createMcpExtension,
@@ -12,7 +11,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { vi } from "vitest";
-import { opaqueFixture } from "pi-cosmic-core/testing";
 import { nativeManagerFixture } from "../support/native-mcp";
 import { step } from "../support/effect-test";
 import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
@@ -165,14 +163,23 @@ it.live(
         ],
       });
       const sessionManager = SessionManager.inMemory(cwd);
-      sessionManager.appendMessage(
-        opaqueFixture({
-          role: "assistant",
-          content: [{ type: "toolCall", name: "probe", arguments: {}, id: "parent-call" }],
-          stopReason: "toolUse",
-          timestamp: 0,
-        }),
-      );
+      sessionManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", name: "probe", arguments: {}, id: "parent-call" }],
+        api: "faux",
+        provider: "faux",
+        model: "faux",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
+        timestamp: 0,
+      });
       const session = yield* scopedSession({
         cwd,
         agentDir,

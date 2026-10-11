@@ -1,4 +1,3 @@
-// Read only the user model selector, never Claude's executable settings or project config.
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { homedir } from "node:os";
@@ -14,7 +13,6 @@ const UserModelPreference = Schema.fromJsonString(
 );
 const decodePreference = Schema.decodeUnknownEffect(UserModelPreference);
 
-/** The caller supplies the sanitized child environment, so stripped config overrides stay stripped. */
 export const readClaudeModelPreference = (
   environment: NodeJS.ProcessEnv,
   safeFile: SafeFileContract,
@@ -22,7 +20,6 @@ export const readClaudeModelPreference = (
   Effect.gen(function* () {
     const home = environment.HOME || homedir();
     if (!nodePath.isAbsolute(home) || home.length > 4_096 || /\p{Cc}/u.test(home)) return "default";
-    // Follow only this user-owned config link, including common dotfile-manager layouts.
     const path = yield* Effect.tryPromise(() =>
       fs.realpath(nodePath.join(home, ".claude", "settings.json")),
     );

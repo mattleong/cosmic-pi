@@ -2,14 +2,9 @@ import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core"
 import { ACTIVITY_LIMITS } from "./limits.ts";
 import type { ActivityItem } from "./protocol.ts";
 
-/** One display line, stripped of terminal controls and redacted, within its own limit. */
 const cleanText = (text: string, limit: number) =>
   sanitizeDiagnosticContent(sanitizeTerminalLine(text.slice(0, limit)), { maximumLength: limit });
 
-/**
- * Copies an item and cleans every display field within its own limit; producer and host ingress
- * supply their own detail cleaner.
- */
 export const detachActivityItem = (
   item: ActivityItem,
   detail: (value: string) => string,

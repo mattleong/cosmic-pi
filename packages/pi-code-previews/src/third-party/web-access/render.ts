@@ -9,7 +9,12 @@ import { escapeControlChars } from "../../shared/terminal-text";
 import { withCodePreviewRenderers } from "../../tools/cooperative-tools";
 import { getFallbackResultText } from "../../tools/data/results";
 import { plainRows } from "../../tools/native-safe-content";
-import type { ToolRenderContext } from "../../tools/renderers/shared/types";
+import type {
+  RenderCall,
+  RendererState,
+  RenderResult,
+  ToolRenderContext,
+} from "../../tools/renderers/shared/types";
 import { webAccessSubject } from "./evidence";
 import {
   admitsWebAccessSource,
@@ -28,9 +33,8 @@ export const webAccessAdapter = {
     isWebAccessTool(name) ? createWebAccessRenderers(name, downstream, appearance) : undefined,
 } satisfies ThirdPartyAdapter;
 
-type Context = ToolRenderContext<any, any>;
+type Context = ToolRenderContext<RendererState, unknown>;
 
-/** No provider imports or execution access. Pi retains image rendering and all result objects. */
 export function createWebAccessRenderers(
   name: WebAccessTool,
   downstream: ToolRenderers | undefined,
@@ -40,7 +44,6 @@ export function createWebAccessRenderers(
   const originals = new WeakMap<Component, Component>();
   const failures = new WeakMap<object, Partial<Record<"call" | "result", readonly unknown[]>>>();
 
-  /** Preserve opaque components/caches/mouse input, but never replay a failed slot for this input. */
   function compose(
     slot: "call" | "result",
     input: readonly unknown[],
@@ -49,7 +52,6 @@ export function createWebAccessRenderers(
     extra: () => Component,
     fallback: Component,
   ): Component {
-    // The returned component's closures share this scope; they keep the state, never the context.
     const { state } = context;
     const failed = failures.get(state);
     const prior = failed?.[slot];
@@ -73,7 +75,6 @@ export function createWebAccessRenderers(
       return fallback;
     }
     let broken = false;
-    /** The first throw retires the body for this component; later calls use the fallback. */
     const guarded = <A>(run: () => A, otherwise: () => A): A => {
       if (!broken)
         try {
@@ -100,7 +101,7 @@ export function createWebAccessRenderers(
     return component;
   }
 
-  const renderCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
+  const renderCall: RenderCall<unknown, RendererState> = (args, theme, context) => {
     const full = invokeHostCallback(() => JSON.stringify(args, null, 2) ?? "", "");
     const subject = webAccessSubject(name, args);
     const fallback = context.expanded
@@ -121,7 +122,7 @@ export function createWebAccessRenderers(
       fallback,
     );
   };
-  const renderResult: NonNullable<ToolRenderers["renderResult"]> = (
+  const renderResult: RenderResult<unknown, unknown, RendererState> = (
     result,
     options,
     theme,

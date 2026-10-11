@@ -1,9 +1,5 @@
-/**
- * Preview style's shared issue lines. They come from the tool's compact summary, so preview and
- * compact styles report the same problems in the same words, and sit between the tool's own
- * call and result bodies. Tools render only their bodies; the shell owns attention.
- */
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
+import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { invokeHostCallback } from "pi-cosmic-core";
@@ -19,65 +15,62 @@ import {
   type CompactSummaryProvider,
 } from "../tools/compact-summary";
 import { getTextContent } from "../tools/data/results";
-import type { RendererState, ToolRenderContext } from "../tools/renderers/shared/types";
 import { renderCompactIssues } from "./compact-issues";
 
-type Provider = CompactSummaryProvider<any, any, any>;
-type Context = ToolRenderContext<any, any>;
-
-interface PreviewResult {
-  readonly result: AgentToolResult<unknown>;
+interface PreviewResult<TDetails> {
+  readonly result: AgentToolResult<TDetails>;
   readonly partial: boolean;
 }
-
-type FrameState = RendererState & {
-  codePreviewFrameResult?: PreviewResult | undefined;
-  codePreviewFrameContext?: Context | undefined;
-  codePreviewIssueSlot?: IssueSlot | undefined;
-};
-
-function frameState(context: { readonly state: unknown }): FrameState {
-  // SAFETY: Pi initializes renderer state as an object shared by the call and result slots.
-  return context.state as FrameState;
-}
-
-/** The newest render context; Pi renders both slots per update, but either may come last. */
-const latestContext = (context: Context): Context =>
-  frameState(context).codePreviewFrameContext ?? context;
 
 interface PreviewIssues {
   readonly issues: readonly CompactIssue[];
   readonly cancelled: boolean;
 }
 
-const cache = new WeakMap<object, { inputs: readonly unknown[]; value: PreviewIssues }>();
-
-/** Remembers the result Pi last rendered, so the call slot can explain it. */
-export function recordPreviewResult(context: Context, result: AgentToolResult<unknown>): void {
-  const state = frameState(context);
-  state.codePreviewFrameContext = context;
-  state.codePreviewFrameResult = { result, partial: context.isPartial };
+interface PreviewFrame<TArgs, TDetails, TState> {
+  context?: ToolRenderContext<TState, TArgs> | undefined;
+  result?: PreviewResult<TDetails> | undefined;
+  issues?: { readonly inputs: readonly unknown[]; readonly value: PreviewIssues } | undefined;
 }
 
-function currentResult(context: Context): AgentToolResult<unknown> | undefined {
-  const recorded = frameState(context).codePreviewFrameResult;
-  // Pi renders the call before the result; a retained streaming result is not a final one.
-  return recorded && recorded.partial === context.isPartial ? recorded.result : undefined;
+export class PreviewFrames<TArgs, TDetails, TState extends object> {
+  private readonly frames = new WeakMap<object, PreviewFrame<TArgs, TDetails, TState>>();
+
+  frame(context: ToolRenderContext<TState, TArgs>): PreviewFrame<TArgs, TDetails, TState> {
+    const existing = this.frames.get(context.state);
+    if (existing) return existing;
+    const created: PreviewFrame<TArgs, TDetails, TState> = {};
+    this.frames.set(context.state, created);
+    return created;
+  }
+
+  record(context: ToolRenderContext<TState, TArgs>, result: AgentToolResult<TDetails>): void {
+    const frame = this.frame(context);
+    frame.context = context;
+    frame.result = { result, partial: context.isPartial };
+  }
+
+  latest(context: ToolRenderContext<TState, TArgs>): ToolRenderContext<TState, TArgs> {
+    return this.frame(context).context ?? context;
+  }
+
+  currentResult(context: ToolRenderContext<TState, TArgs>): AgentToolResult<TDetails> | undefined {
+    const recorded = this.frame(context).result;
+    return recorded && recorded.partial === context.isPartial ? recorded.result : undefined;
+  }
 }
 
-/** Pi renders the call before the result, so only a result it no longer streams settles. */
-export const compactPhase = (
-  result: AgentToolResult<unknown> | undefined,
-  context: Context,
+export const compactPhase = <TArgs, TDetails, TState>(
+  result: AgentToolResult<TDetails> | undefined,
+  context: ToolRenderContext<TState, TArgs>,
 ): CompactPhase =>
   result && !context.isPartial ? "settled" : context.executionStarted ? "running" : "pending";
 
-/** Presentation-planning evidence. A broken projector loses semantic ownership, not the shell. */
-export const compactPresentationInput = (
-  provider: Provider,
+export const compactPresentationInput = <TArgs, TDetails, TState>(
+  provider: CompactSummaryProvider<TArgs, TDetails, TState>,
   phase: CompactPhase,
-  result: AgentToolResult<unknown> | undefined,
-  context: Context,
+  result: AgentToolResult<TDetails> | undefined,
+  context: ToolRenderContext<TState, TArgs>,
 ) => ({
   summary: invokeHostCallback<CompactSummary | undefined>(
     () => provider({ phase, args: context.args, result, context }),
@@ -88,11 +81,13 @@ export const compactPresentationInput = (
   errorText: context.isError ? getTextContent(result?.content ?? []) : "",
 });
 
-function previewIssues(provider: Provider, context: Context): PreviewIssues {
-  const result = currentResult(context);
+function previewIssues<TArgs, TDetails, TState extends object>(
+  frames: PreviewFrames<TArgs, TDetails, TState>,
+  provider: CompactSummaryProvider<TArgs, TDetails, TState>,
+  context: ToolRenderContext<TState, TArgs>,
+): PreviewIssues {
+  const result = frames.currentResult(context);
   const phase = compactPhase(result, context);
-  // Pi builds a new result envelope on every update, including each animation tick, but keeps
-  // its content and details. Settings replace atomically, covering the policy providers read.
   const inputs = [
     result?.content,
     result?.details,
@@ -101,7 +96,8 @@ function previewIssues(provider: Provider, context: Context): PreviewIssues {
     phase,
     codePreviewSettings,
   ];
-  const cached = cache.get(context.state);
+  const frame = frames.frame(context);
+  const cached = frame.issues;
   if (cached && inputs.every((value, index) => Object.is(value, cached.inputs[index])))
     return cached.value;
   const { collapsedSummary } = planCompactPresentation({
@@ -110,18 +106,15 @@ function previewIssues(provider: Provider, context: Context): PreviewIssues {
   });
   const value = {
     issues: collapsedSummary.issues ?? [],
-    // Only a call Pi itself reports as aborted says so here; a producer's cancelled outcome,
-    // such as a stopped task, is already stated by the tool's own body.
     cancelled:
       phase === "settled" &&
       context.isError &&
       compactStatus(phase, collapsedSummary) === "cancelled",
   };
-  cache.set(context.state, { inputs, value });
+  frame.issues = { inputs, value };
   return value;
 }
 
-/** A tool's call body with the shell's issue lines beneath it. */
 class PreviewIssuesFrame extends Container {
   readonly body: Component;
 
@@ -133,7 +126,6 @@ class PreviewIssuesFrame extends Container {
   }
 }
 
-/** The tool's own component, so it can reuse what it rendered last time. */
 const unwrapPreviewIssues = (component: Component | undefined): Component | undefined =>
   component instanceof PreviewIssuesFrame ? component.body : component;
 
@@ -145,35 +137,28 @@ interface IssueSlot {
   placed: boolean;
 }
 
-/**
- * The shell's issue lines for a tool that shows content under its heading, such as a diff, and
- * wants warnings above it. Tools that do not place them get them after their call body.
- */
+const issueSlots = new WeakMap<object, IssueSlot>();
+
 export function previewIssuesSlot(context: { readonly state: unknown }): Component {
   if (!Predicate.isObject(context.state)) return EMPTY;
-  const slot = frameState(context).codePreviewIssueSlot;
+  const slot = issueSlots.get(context.state);
   if (!slot) return EMPTY;
   slot.placed = true;
   return slot.lines;
 }
 
-/**
- * Renders the tool's call body with the issue lines compact style would show, computed when
- * drawn so they follow the latest result. A cancelled call without issues says so.
- */
-export function renderWithPreviewIssues(
-  render: (context: Context) => Component,
-  provider: Provider,
-  context: Context,
+export function renderWithPreviewIssues<TArgs, TDetails, TState extends object>(
+  frames: PreviewFrames<TArgs, TDetails, TState>,
+  render: (context: ToolRenderContext<TState, TArgs>) => Component,
+  provider: CompactSummaryProvider<TArgs, TDetails, TState>,
+  context: ToolRenderContext<TState, TArgs>,
   theme: Theme,
 ): Component {
-  const state = frameState(context);
-  state.codePreviewFrameContext = context;
-  // Drawing never needs the prior component; holding it would chain every earlier frame.
-  const detached: Context = { ...context, lastComponent: undefined };
+  frames.frame(context).context = context;
+  const detached: ToolRenderContext<TState, TArgs> = { ...context, lastComponent: undefined };
   const lines = composeToolComponent((width) => {
-    const current = latestContext(detached);
-    const { issues, cancelled } = previewIssues(provider, current);
+    const current = frames.latest(detached);
+    const { issues, cancelled } = previewIssues(frames, provider, current);
     const draw = (style: Pick<Theme, "fg">) => {
       const rows = renderCompactIssues(issues, style, width, current.expanded, "");
       return rows.length === 0 && cancelled && width > 0
@@ -183,16 +168,15 @@ export function renderWithPreviewIssues(
     try {
       return draw(theme);
     } catch {
-      // A failing host theme cannot hide what went wrong, nor widen the row past the terminal.
       return draw(UNSTYLED);
     }
   });
   const slot: IssueSlot = { lines, placed: false };
-  state.codePreviewIssueSlot = slot;
+  issueSlots.set(context.state, slot);
   try {
     const body = render({ ...context, lastComponent: unwrapPreviewIssues(context.lastComponent) });
     return new PreviewIssuesFrame(body, slot.placed ? EMPTY : lines);
   } finally {
-    state.codePreviewIssueSlot = undefined;
+    issueSlots.delete(context.state);
   }
 }

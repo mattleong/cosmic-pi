@@ -1,7 +1,3 @@
-/**
- * Private RPC requires malformed frames to close the peer, not disappear. Effect's NDJSON
- * decoder skips malformed lines, so keep its codec/encoder but own bounded, strict decoding.
- */
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";

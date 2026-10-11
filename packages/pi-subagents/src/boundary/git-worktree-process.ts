@@ -14,7 +14,6 @@ export const workspaceIO = <A>(operation: string, run: () => PromiseLike<A>) =>
         "Workspace filesystem operation failed; retained artifacts may require recovery.",
       ),
   });
-/** Like workspaceIO, but a missing path (ENOENT) yields undefined. */
 export const workspaceIOIfPresent = <A>(operation: string, run: () => Promise<A>) =>
   workspaceIO(operation, () =>
     run().catch((error: NodeJS.ErrnoException) => {
@@ -23,8 +22,6 @@ export const workspaceIOIfPresent = <A>(operation: string, run: () => Promise<A>
     }),
   );
 
-// Deliberately construct, never spread, the environment. No inherited Git selectors,
-// config, pager, credentials, alternate object directories, hooks or shell helpers.
 export const git = (
   cwd: string,
   args: ReadonlyArray<string>,
@@ -101,11 +98,9 @@ export const git = (
     ),
   );
 
-/** The NUL-separated fields of a `-z` Git listing, without the empty trailing one. */
 export const gitFields = (cwd: string, args: ReadonlyArray<string>) =>
   git(cwd, args).pipe(Effect.map((output) => output.split("\0").filter(Boolean)));
 
-/** A registry directory that another user owns, or that group or others can reach. */
 export const isSharedOrForeign = (stat: { readonly mode: number; readonly uid: number }) =>
   (stat.mode & 0o077) !== 0 || (process.getuid !== undefined && stat.uid !== process.getuid());
 
@@ -126,7 +121,6 @@ export const oid = (text: string) =>
     ? Effect.succeed(text.trim())
     : Effect.fail(workspaceFailure("git", "Unsupported Git object identifier."));
 
-/** Reject every symlink component, even one that resolves inside the same root. */
 export const checkDirectory = (directory: string, allowMissing = false) =>
   Effect.gen(function* () {
     const absolute = path.resolve(directory);

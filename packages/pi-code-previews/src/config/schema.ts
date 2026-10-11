@@ -1,5 +1,6 @@
 import { bundledThemes } from "shiki";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../tools/names";
 
 export const DIFF_BACKGROUND_INTENSITIES = ["off", "subtle", "medium"] as const;
@@ -11,7 +12,7 @@ export const PATH_ICON_MODES = ["unicode", "nerd", "off"] as const;
 const PositiveIntegerSchema = Schema.Int.check(Schema.isGreaterThan(0));
 
 export const CodePreviewSettingsSchema = Schema.Struct({
-  shikiTheme: Schema.Literals(Object.keys(bundledThemes)),
+  shikiTheme: Schema.Literals(Struct.keys(bundledThemes)),
   diffIntensity: Schema.Literals(DIFF_BACKGROUND_INTENSITIES),
   wordEmphasis: Schema.Literals(DIFF_WORD_EMPHASES),
   toolCallBackground: Schema.Literals(TOOL_CALL_BACKGROUND_MODES),
@@ -46,12 +47,10 @@ export type DiffWordEmphasis = SchemaSettings["wordEmphasis"];
 export type ToolCallBackgroundMode = SchemaSettings["toolCallBackground"];
 export type ToolCallCollapsedStyle = SchemaSettings["toolCallCollapsedStyle"];
 export type PathIconMode = SchemaSettings["pathIcons"];
-/** Settings edited by value; the tool selection has its own submenu. */
 export type CodePreviewEditableSettingId =
   | Exclude<keyof CodePreviewSettings, "tools">
   | "resetToDefaults";
 
 export const CODE_PREVIEW_SETTING_KEYS = Object.freeze(
-  // SAFETY: The authoritative struct fields and CodePreviewSettings are derived from the same schema.
-  Object.keys(CodePreviewSettingsSchema.fields) as (keyof CodePreviewSettings)[],
+  Struct.keys(CodePreviewSettingsSchema.fields),
 );

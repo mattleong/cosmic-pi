@@ -89,8 +89,6 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
         state
           .transition((current) => Effect.succeed([undefined, f(current)] as const))
           .pipe(Effect.orDie);
-      // `onChange` is total by construction (invoke-wrapped render requests), so a throw
-      // would be a violated invariant, not an expected failure.
       const notifyChanged = Effect.sync(() => {
         if (options.canPublish?.() !== false) options.onChange();
       });
@@ -108,7 +106,6 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
           () => MutableRef.get(options.context).mode,
           "rpc",
         ) === "tui";
-      // Each engine reads this key, and with it the cwd, before every fetch and commit.
       const currentKey = state.getState.pipe(
         Effect.map((current) => `${currentCwd()}\u0000${current.probeRevision}`),
       );
@@ -172,8 +169,6 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
             concurrency: 2,
             discard: true,
           }),
-        // Both refresh engines must exclude validation/publication while branch state
-        // changes. Commits hold only their own gate; invalidation always takes git then PR.
         invalidateProbes: gitRefresh
           .invalidateWith(
             pullRefresh.invalidateWith(

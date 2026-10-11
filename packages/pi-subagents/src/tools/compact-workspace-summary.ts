@@ -3,14 +3,12 @@ import type { CompactIssue, CompactSummary } from "pi-code-previews";
 import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { WorkspaceToolDetailsSchema, type WorkspaceToolDetails } from "./details-schema.ts";
 
-/** Where a diff page sits, in people's terms; never raw offsets or IDs. */
 function reviewPosition(details: WorkspaceToolDetails): string {
   const first = (details.offset ?? 0) === 0;
   if (details.nextOffset === undefined) return first ? "whole diff" : "last diff page";
   return `${first ? "first" : "next"} diff page, more to read`;
 }
 
-/** A workspace receipt's result as one short line, or undefined when there is nothing to say. */
 export function workspaceReceiptLine(details: WorkspaceToolDetails): string | undefined {
   switch (details.operation) {
     case "list": {
@@ -178,13 +176,11 @@ function operationIssues(details: WorkspaceToolDetails): CompactIssue[] {
   }
 }
 
-/** Review, test, and integration gates are procedure, not problems: shown only on expansion. */
 export function compactWorkspaceSummary<ValueInput>(
   value: ValueInput,
   operation: string,
 ): CompactSummary | undefined {
   const details = decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, value);
-  // Receipt fields are optional in the transport union, but required by these operations.
   if (
     details?.operation !== operation ||
     !hasOperationReceipt(details) ||
@@ -195,7 +191,6 @@ export function compactWorkspaceSummary<ValueInput>(
   const issues = operationIssues(details);
   return {
     action: operation === "list" ? "inspect" : operation,
-    // Workspace IDs stay in expanded evidence; the heading names what the workspace holds.
     subject: "Proposed changes",
     counters: line === undefined ? [] : [line],
     metadata: details.operation === "list" && line === undefined ? ["workspace metadata"] : [],

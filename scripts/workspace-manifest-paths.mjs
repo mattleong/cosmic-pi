@@ -11,7 +11,6 @@ export async function workspacePackageDirectories(rootDir = resolve(import.meta.
       directories.push(directory);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      // Retired packages can leave ignored node_modules and native-agent state behind.
     }
   }
   return directories.sort();

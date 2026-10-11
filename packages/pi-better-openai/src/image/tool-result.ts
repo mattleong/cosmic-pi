@@ -6,7 +6,6 @@ import { ImageOutputFormatSchema } from "../config/schema.ts";
 import { imageResultText } from "./result-text.ts";
 import { IMAGE_ACTIONS, type CodexImageDetails, type CodexImageResult } from "./types.ts";
 
-/** The native script result; image bytes retain the service's existing validation and limits. */
 const ImageToolResultSchema = Schema.Struct({
   contract: Schema.Literal("pi-better-openai/image"),
   version: Schema.Literal(1),
@@ -33,11 +32,9 @@ const encode = Schema.encodeExit(Schema.toCodecJson(ImageToolResultSchema), {
   onExcessProperty: "error",
 });
 
-/** Existing renderer/history details remain byte-free, including command messages. */
 export const imageDetails = ({ data: _data, ...details }: CodexImageResult): CodexImageDetails =>
   details;
 
-/** Pure projection: no byte decoding, re-encoding, persistence, or prompt rewriting. */
 const structuredImageResult = (result: CodexImageResult): Schema.Json | undefined => {
   try {
     const encoded = encode({
@@ -61,7 +58,6 @@ const structuredImageResult = (result: CodexImageResult): Schema.Json | undefine
   }
 };
 
-/** A failed invariant cannot undo generation/save or discard its original image and receipt. */
 export const imageToolResult = (result: CodexImageResult): AgentToolResult<CodexImageDetails> => {
   const structuredContent = structuredImageResult(result);
   const text = imageResultText(result);

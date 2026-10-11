@@ -1,7 +1,6 @@
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { expect } from "vitest";
-import { type HerdrStartSideSessionInput } from "../src/boundary/herdr-client.ts";
 import { makeAgentName, parentBtwDisplayName, selectSplitDirection } from "../src/btw/policy.ts";
 import {
   CHILD_ALIAS,
@@ -64,9 +63,7 @@ describe("herdr-btw workflow", () => {
         direction: "right",
         cwd: CWD,
       });
-      expect(
-        operationInputs<HerdrStartSideSessionInput>(test.calls, "start side-session Pi")[0],
-      ).toMatchObject({
+      expect(operationInputs(test.calls, "start side-session Pi")[0]).toMatchObject({
         agentName: result.agentName,
         paneId: "w1:p2",
         childSessionId: CHILD_ID,

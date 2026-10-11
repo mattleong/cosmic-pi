@@ -1,5 +1,11 @@
-// Promise assertions are test-runner boundaries.
-import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import {
+  defineTool,
+  type AgentToolResult,
+  type ExtensionAPI,
+  type ExtensionToolContext,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import type { BackendDriver } from "../../../src/backend/model.ts";
 import {
@@ -7,7 +13,7 @@ import {
   type SubagentBackendRegistryContract,
 } from "../../../src/backend/service.ts";
 import { resolveSubagentConfig } from "../../../src/config/options.ts";
-import { decodeSubagentConfig } from "../../../src/config/schema.ts";
+import { decodeSubagentConfig, type SubagentNestingPolicy } from "../../../src/config/schema.ts";
 import {
   makeSubagentProfileService,
   SubagentProfileService,
@@ -21,34 +27,37 @@ import { SubagentService, type SubagentServiceContract } from "../../../src/run/
 import type { SubagentToolRuntime } from "../../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../../src/tools/subagent.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
-import { extensionApiFixture } from "../../fixtures/pi-host.ts";
+import type { JsonValue } from "pi-cosmic-core";
+import { extensionApiFixture, extensionContextFixture, modelFixture } from "pi-cosmic-core/testing";
 import { view } from "../../fixtures/run-view.ts";
 import { maybe } from "../../support/effect-test.ts";
 
 export { view };
 
-type NativeExecute = ToolDefinition<any, any, any>["execute"];
+type RegisteredTool = ToolDefinition;
+type NativeExecute = RegisteredTool["execute"];
 type CapturedToolResult = Omit<Awaited<ReturnType<NativeExecute>>, "content"> & {
   readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
 };
 
-export type CapturedTool = Omit<ToolDefinition<any, any, any>, "execute"> & {
+export type CapturedTool = Omit<RegisteredTool, "execute"> & {
   readonly execute: (
     id: Parameters<NativeExecute>[0],
     params: Parameters<NativeExecute>[1],
-    signal?: Parameters<NativeExecute>[2],
-    onUpdate?: Parameters<NativeExecute>[3],
-    ctx?: Parameters<NativeExecute>[4],
+    signal: Parameters<NativeExecute>[2],
+    onUpdate: Parameters<NativeExecute>[3],
+    ctx: Parameters<NativeExecute>[4],
   ) => Promise<CapturedToolResult>;
 };
 
-const profileDocument = <Input extends object>(input: Input | undefined) => {
-  // SAFETY: This harness accepts only JSON-shaped profile fixtures and immediately decodes them.
-  const value = (input ?? {}) as Input & {
-    readonly profiles?: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>>;
-  };
-  const { profiles, ...rest } = value;
+interface ProfileDocumentInput {
+  readonly profiles?: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute | JsonValue>>>;
+  readonly nesting?: SubagentNestingPolicy;
+}
+
+const profileDocument = (input: ProfileDocumentInput | undefined) => {
+  if (input === undefined) return { version: 6 };
+  const { profiles, ...rest } = input;
   return {
     version: 6,
     ...rest,
@@ -59,9 +68,9 @@ const profileDocument = <Input extends object>(input: Input | undefined) => {
   };
 };
 
-export const profileServiceFor = <Global extends object = never, Project extends object = never>(
-  global: Global | undefined,
-  project?: Project,
+export const profileServiceFor = (
+  global: ProfileDocumentInput | undefined,
+  project?: ProfileDocumentInput,
   initialSessionOverrides?: SessionProfileOverrideSeed,
 ) =>
   Effect.runSync(
@@ -102,10 +111,21 @@ export type CaptureOptions = {
   readonly profiles?: SubagentProfileServiceContract;
   readonly registry?: SubagentBackendRegistryContract;
   readonly environment?: SubagentToolRuntime["environment"];
-  readonly thinkingLevel?: string | number;
+  readonly thinkingLevel?: ReturnType<ExtensionAPI["getThinkingLevel"]>;
   readonly startUiTicker?: SubagentToolRuntime["startUiTicker"];
   readonly toolPresentation?: SubagentToolRuntime["toolPresentation"];
 };
+
+const textResult = <Details>(result: AgentToolResult<Details>): CapturedToolResult => ({
+  ...result,
+  content: result.content.flatMap((part) => (part.type === "text" ? [part] : [])),
+});
+
+const capturedTool = (tool: RegisteredTool): CapturedTool => ({
+  ...tool,
+  execute: (id, params, signal, onUpdate, ctx) =>
+    tool.execute(id, params, signal, onUpdate, ctx).then(textResult),
+});
 
 export const captureSubagentTools = (
   service: SubagentServiceContract,
@@ -121,7 +141,9 @@ export const captureSubagentTools = (
 ): ReadonlyMap<string, CapturedTool> => {
   const tools = new Map<string, CapturedTool>();
   const pi = extensionApiFixture({
-    registerTool: (tool: CapturedTool) => tools.set(tool.name, tool),
+    registerTool: (tool) => {
+      tools.set(tool.name, capturedTool(defineTool(tool)));
+    },
     getThinkingLevel: () => thinkingLevel,
     getActiveTools: () => [...activeTools],
   });
@@ -142,13 +164,13 @@ export const captureSubagentTools = (
   return tools;
 };
 
-const parentModel = {
+const parentModel = modelFixture({
   provider: "openai-codex",
   id: "gpt-5.6-sol",
   name: "GPT 5.6 Sol",
   reasoning: true,
   thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-};
+});
 
 export const context: ExtensionToolContext = extensionContextFixture({
   cwd: "/project",
@@ -173,7 +195,8 @@ export const context: ExtensionToolContext = extensionContextFixture({
       type: "message",
       id: "assistant-1",
       parentId: "user-1",
-      message: { role: "assistant" },
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: fauxAssistantMessage(""),
     }),
   },
   scopedModels: [],
@@ -196,7 +219,6 @@ type InvocationOptions = {
   readonly context?: Parameters<NativeExecute>[4];
 };
 
-/** Runs a captured or natively registered tool at its raw Promise boundary. */
 export const executeTool = <Result>(
   tool: {
     readonly execute: (
@@ -218,7 +240,6 @@ export const executeTool = <Result>(
     options.context ?? context,
   );
 
-// Preserve optional captured-tool calls at the existing Promise test boundary.
 export const invokeOptionalTool = (
   tool: CapturedTool | undefined,
   params: Parameters<NativeExecute>[1],

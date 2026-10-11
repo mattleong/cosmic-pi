@@ -1,4 +1,3 @@
-// Actual SDK/native factory boundary; no provider, network, or discovered fixture execution.
 import assert from "node:assert/strict";
 import {
   createToolSearchExtension,
@@ -60,7 +59,6 @@ for (const order of ["native-first", "previews-first"] as const)
               },
             ),
           };
-          // CLI-equivalent native factory, independently loaded without interception or source fixtures.
           const native: InlineExtension = {
             name: "tool-search",
             factory: createToolSearchExtension(),
@@ -130,7 +128,6 @@ for (const order of ["native-first", "previews-first"] as const)
             isError: false,
           };
           const before = structuredClone(result);
-          // One real Pi row, constructed before bindExtensions/session_start, not resolved again.
           const renderers = session.extensionRunner.resolveToolRenderers(
             "tool_search",
             () => definition,
@@ -177,8 +174,6 @@ for (const order of ["native-first", "previews-first"] as const)
           );
           assert.equal(fixtureExecutions, 0);
 
-          // Deliberate native execution only after explicit activation. Search activates metadata
-          // matches; it does not execute them. This is not a presentation or replay operation.
           session.setActiveToolsByName([...active, "tool_search"]);
           assert.equal(session.getCallableToolNames().includes("tool_search"), false);
           const search = session.agent.state.tools.find((tool) => tool.name === "tool_search");

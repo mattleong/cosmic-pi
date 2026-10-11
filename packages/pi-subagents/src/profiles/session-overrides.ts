@@ -16,6 +16,7 @@ import {
 import { BUILTIN_PROFILE_ROUTES } from "./definitions.ts";
 import {
   cloneProfileRoute,
+  completeProfileRecord,
   isProfileId,
   mapProfileIds,
   PROFILE_IDS,
@@ -27,12 +28,10 @@ import {
 } from "./model.ts";
 
 export type SessionProfileOverrides = Partial<Readonly<Record<ProfileId, ProfileRoute>>>;
-/** Feature switches this session sets itself, over the persistent configuration. */
 export type SessionFeatureOverrides = Partial<
   Readonly<Record<SubagentFeatureToggle, boolean | undefined>>
 >;
 
-/** Revisions remain exact integers; a state at this value is immutable except for no-op requests. */
 export const MAX_SESSION_PROFILE_REVISION = Number.MAX_SAFE_INTEGER;
 
 export interface SessionProfileBaseline {
@@ -46,7 +45,6 @@ export interface SessionProfileOverrideSeed {
   readonly overrides: SessionProfileOverrides;
   readonly nesting?: SubagentNestingPolicy | undefined;
   readonly features?: SessionFeatureOverrides | undefined;
-  /** Optional only for decoding handoffs published before complete baselines were introduced. */
   readonly baseline?: SessionProfileBaseline | undefined;
 }
 
@@ -58,7 +56,6 @@ export interface SessionProfileSnapshot extends SessionProfileOverrideSeed {
 
 export interface SessionProfilePatch {
   readonly profile: ProfileId;
-  /** Undefined clears the temporary declaration and reveals the frozen session baseline route. */
   readonly route?: ProfileRoute | undefined;
   readonly expectedRevision: number;
 }
@@ -68,14 +65,12 @@ export interface SessionProfileSetPatch extends SessionProfileBaseline {
 }
 
 export interface SessionNestingPatch {
-  /** Undefined clears the session policy and reveals persistent configuration. */
   readonly nesting?: SubagentNestingPolicy | undefined;
   readonly expectedRevision: number;
 }
 
 export interface SessionFeaturePatch {
   readonly toggle: SubagentFeatureToggle;
-  /** Undefined clears the session value and reveals persistent configuration. */
   readonly enabled?: boolean | undefined;
   readonly expectedRevision: number;
 }
@@ -89,7 +84,6 @@ export class SessionProfileConflictError extends Schema.TaggedError<SessionProfi
   },
 ) {}
 
-/** Route records stay `Unknown` here: they are decoded descriptor-safely, never by Schema. */
 const SessionProfileOverrideSeedInputSchema = Schema.Struct({
   revision: Schema.Finite.check(
     Schema.isInt(),
@@ -120,15 +114,9 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
   ),
 });
 
-/**
- * Snapshots the profile-keyed route record held in the own data property `key` without invoking
- * accessors or iterators; `complete` requires a route for every profile. Each candidate array is
- * bounded before any element is read.
- */
 const decodeRouteRecord = <ValueInput>(
   value: ValueInput,
   key: string,
-  complete: boolean,
 ): Partial<Record<ProfileId, ProfileRoute>> | undefined => {
   const field = ownDataProperty(value, key);
   const record = field.valid && field.present ? field.value : undefined;
@@ -140,7 +128,7 @@ const decodeRouteRecord = <ValueInput>(
   const routes: Partial<Record<ProfileId, ProfileRoute>> = {};
   for (const profile of PROFILE_IDS) {
     const routeField = ownDataProperty(record, profile);
-    if (!routeField.valid || (complete && !routeField.present)) return undefined;
+    if (!routeField.valid) return undefined;
     if (!routeField.present) continue;
     const route = decodeProfileRoute(routeField.value);
     if (!route) return undefined;
@@ -172,12 +160,10 @@ const baselineFromConfig = (config: ResolvedSubagentConfig): SessionProfileBasel
     profileSources: config.profileSources,
   });
 
-/** A named origin needs a valid set name; an unnamed one survives only as an invalid default. */
 const isValidOrigin = (origin: ResolvedProfileSetSelection): boolean =>
   origin.scope === "builtin" ||
   (origin.name === undefined ? origin.invalid === true : isProfileSetName(origin.name));
 
-/** Route sources a detached baseline may carry per valid origin scope; "session" is never one. */
 const DETACHED_BASELINE_SOURCES = {
   builtin: ["builtin"],
   global: ["builtin", "global", "global-invalid"],
@@ -203,7 +189,6 @@ const isDetachedBaselineProvenanceValid = (baseline: SessionProfileBaseline): bo
   });
 };
 
-/** The switches a session sets, or undefined when it sets none. */
 const cloneFeatures = (
   features: SessionFeatureOverrides | undefined,
 ): SessionFeatureOverrides | undefined => {
@@ -239,27 +224,24 @@ export const cloneSessionProfileOverrideSeed = (
   });
 };
 
-/** Strict unknown-boundary decoder for process-memory tree and reload handoffs. */
 export const decodeSessionProfileOverrideSeed = <ValueInput>(
   value: ValueInput,
 ): SessionProfileOverrideSeed | undefined =>
   invokeHostCallback(() => {
-    const overrides = decodeRouteRecord(value, "overrides", false);
+    const overrides = decodeRouteRecord(value, "overrides");
     const baselineField = ownDataProperty(value, "baseline");
-    const baselineRoutes =
+    const baselineRecord =
       baselineField.valid && baselineField.present
-        ? decodeRouteRecord(baselineField.value, "profiles", true)
+        ? decodeRouteRecord(baselineField.value, "profiles")
         : undefined;
+    const baselineRoutes = baselineRecord && completeProfileRecord(baselineRecord);
     if (!overrides || !baselineField.valid || (baselineField.present && !baselineRoutes))
       return undefined;
     const decoded = decodeUnknownOrUndefined(SessionProfileOverrideSeedInputSchema, value, {
       onExcessProperty: "error",
     });
-    const baseline = decoded?.baseline && {
-      ...decoded.baseline,
-      // SAFETY: A complete route record holds a decoded route for every fixed profile ID.
-      profiles: baselineRoutes as Record<ProfileId, ProfileRoute>,
-    };
+    const baseline = decoded?.baseline &&
+      baselineRoutes && { ...decoded.baseline, profiles: baselineRoutes };
     if (
       !decoded ||
       (baseline && !(isValidOrigin(baseline.origin) && isDetachedBaselineProvenanceValid(baseline)))
@@ -303,7 +285,6 @@ export const makeSessionProfileSnapshot = (
   });
 };
 
-/** Every published seed carries the complete detached baseline, even before the first edit. */
 export const sessionProfileSeed = (snapshot: SessionProfileSnapshot): SessionProfileOverrideSeed =>
   cloneSessionProfileOverrideSeed(snapshot);
 
@@ -325,10 +306,6 @@ const STALE_PROFILES =
 const STALE_SETTINGS =
   "Session subagent settings changed while this page was open; refresh and try again.";
 
-/**
- * One revision-checked Current Session edit. After the stale check, `edit` returns the changed
- * seed fields, undefined for a no-op that keeps the snapshot, or a rejection message.
- */
 const editSnapshot = (
   snapshot: SessionProfileSnapshot,
   expectedRevision: number,
@@ -340,7 +317,6 @@ const editSnapshot = (
   const changes = edit();
   if (Predicate.isString(changes)) return conflict(snapshot, expectedRevision, changes);
   if (changes === undefined) return Effect.succeed(snapshot);
-  // Snapshot revisions are always clamped exact integers.
   if (snapshot.revision >= MAX_SESSION_PROFILE_REVISION)
     return conflict(
       snapshot,

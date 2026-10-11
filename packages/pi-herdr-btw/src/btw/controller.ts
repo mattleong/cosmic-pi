@@ -12,7 +12,6 @@ const SUCCESS_MESSAGES = {
   created: "Opened a new BTW side session",
 } satisfies Record<HerdrBtwResult["mode"], string>;
 
-/** Runs one side-session request from a terminal and reports how it went. */
 const sideSession =
   (usage: string, run: SideSessionRun) =>
   (args: string, ctx: ExtensionCommandContext): Promise<void> => {
@@ -24,7 +23,6 @@ const sideSession =
     return run(trimmed || undefined).then(
       (result) => notifyHerdrBtw(ctx, SUCCESS_MESSAGES[result.mode], "info"),
       (failure) => {
-        // Only workflow failures carry user-facing text; runtime and defect rejections do not.
         const message =
           failure instanceof HerdrBtwError ? failure.message : "Couldn't open a BTW side session";
         notifyHerdrBtw(ctx, message, "error");
@@ -32,10 +30,6 @@ const sideSession =
     );
   };
 
-/**
- * `/herdr-btw [prompt]` opens or returns to the side session; `/herdr-btw new [prompt]` starts a
- * fresh one. A prompt whose first word is exactly `new` therefore starts a fresh session.
- */
 export const registerHerdrBtwCommands = (
   pi: ExtensionAPI,
   handlers: { readonly open: SideSessionRun; readonly openNew: SideSessionRun },

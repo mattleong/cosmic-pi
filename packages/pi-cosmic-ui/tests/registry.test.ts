@@ -14,7 +14,6 @@ const text = (id: string, value = id): CosmicFooterTextContribution => ({
   text: value,
 });
 
-/** A registry whose render request runs `onRender` with the registry itself. */
 function registry(onRender: (registry: FooterRegistry) => void = () => undefined) {
   const renders = vi.fn(() => onRender(store));
   const store = makeFooterRegistry({ requestRender: renders, sessionActive: () => true });

@@ -1,41 +1,20 @@
-import type { ESTree } from "@oxlint/plugins";
-
-type VisitorKeys = Readonly<Record<string, readonly string[]>>;
-
-function isObject<Value>(value: Value): value is Value & object {
-	return value !== null && Object(value) === value;
-}
-
-function isNode<Value>(value: Value): value is Value & ESTree.Node {
-	return isObject(value) && "type" in value && String(value.type) === value.type;
-}
+import type { ESTree, SourceCode } from "@oxlint/plugins";
 
 function collectInferTypeParameterNames(
+	sourceCode: SourceCode,
 	node: ESTree.Node,
-	visitorKeys: VisitorKeys,
 	names: Set<string>,
 ): void {
-	if (node.type === "TSInferType") names.add(node.typeParameter.name.name);
-	// SAFETY: Oxlint visitor keys name only child-node or child-node-array properties.
-	const record = node as ESTree.Node &
-		Readonly<Record<string, ESTree.Node | readonly ESTree.Node[] | undefined>>;
-	for (const key of visitorKeys[node.type] ?? []) {
-		const value = record[key];
-		if (isNode(value)) {
-			collectInferTypeParameterNames(value, visitorKeys, names);
-			continue;
-		}
-		if (!Array.isArray(value)) continue;
-		for (const child of value) {
-			if (isNode(child)) collectInferTypeParameterNames(child, visitorKeys, names);
-		}
+	for (const token of sourceCode.getTokens(node)) {
+		if (token.value !== "infer") continue;
+		const inferred = sourceCode.getNodeByRangeIndex(token.start);
+		if (inferred?.type === "TSInferType") names.add(inferred.typeParameter.name.name);
 	}
 }
 
-/** Collect type binders that are in scope at a node and can shadow module aliases. */
 export function lexicalTypeParameterNames(
 	node: ESTree.Node,
-	visitorKeys: VisitorKeys,
+	sourceCode: SourceCode,
 ): ReadonlySet<string> {
 	const names = new Set<string>();
 	let descendant: ESTree.Node = node;
@@ -53,7 +32,7 @@ export function lexicalTypeParameterNames(
 			names.add(current.key.name);
 		}
 		if (current.type === "TSConditionalType" && descendant === current.trueType) {
-			collectInferTypeParameterNames(current.extendsType, visitorKeys, names);
+			collectInferTypeParameterNames(sourceCode, current.extendsType, names);
 		}
 		descendant = current;
 		current = current.parent;

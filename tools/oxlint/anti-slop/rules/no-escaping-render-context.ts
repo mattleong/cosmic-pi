@@ -15,26 +15,15 @@ import {
 
 type Invocation = ESTree.CallExpression | ESTree.NewExpression;
 
-/**
- * A helper's callback arguments either outlive the call (`retained`) or run during it and may
- * return a component (`builders`). `values` are arguments that may themselves be components.
- */
 export interface KnownHelper {
   readonly name: string;
-  /** The defining module under `packages/`, without its extension. */
   readonly definition: string;
-  /** A package export that provides it, besides relative imports of the definition. */
   readonly specifier?: string;
   readonly retained?: readonly number[];
   readonly builders?: readonly number[];
   readonly values?: readonly number[];
 }
 
-/**
- * Owned helpers only, never a local function with a matching name. Linting a definition checks
- * that its callback parameters are exactly these positions, so a signature change cannot
- * silently disable a check.
- */
 export const knownHelpers: readonly KnownHelper[] = [
   {
     name: "composeToolComponent",
@@ -138,7 +127,6 @@ function knownHelper(
   );
 }
 
-/** Parameters of a module-level function, function-valued const, or class constructor. */
 function declaredParameters(
   program: ESTree.Program,
   name: string,
@@ -194,7 +182,6 @@ function parameterVariable(
   );
 }
 
-/** The expression a reference supplies once type-only wrappers are stripped. */
 function valueOf(reference: ESTree.Node): ESTree.Node {
   let node = reference;
   while (
@@ -209,7 +196,6 @@ function valueOf(reference: ESTree.Node): ESTree.Node {
   return node;
 }
 
-/** Only identity-preserving const aliases carry the whole context; fields/destructuring do not. */
 function contextAliases(sourceCode: SourceCode, root: Variable): Set<Variable> {
   const aliases = new Set([root]);
   for (const variable of aliases) {
@@ -226,7 +212,173 @@ function contextAliases(sourceCode: SourceCode, root: Variable): Set<Variable> {
   return aliases;
 }
 
-/** Prevent retained renderer closures from keeping the lastComponent chain alive. */
+function renderContextParameters(
+  sourceCode: SourceCode,
+  properties: readonly ESTree.ObjectProperty[],
+): Map<RuntimeFunction, Variable> {
+  const renderers = new Map<RuntimeFunction, Variable>();
+  for (const property of properties) {
+    const name = staticPropertyName(property.key, property.computed);
+    const index = name === "renderCall" ? 2 : name === "renderResult" ? 3 : null;
+    if (index === null) continue;
+    const callback = resolveFunction(sourceCode, property.value);
+    if (callback === null) continue;
+    const variable = parameterVariable(sourceCode, callback, index);
+    if (variable !== null) renderers.set(callback, variable);
+  }
+  return renderers;
+}
+
+function followContextIntoHelpers(
+  sourceCode: SourceCode,
+  renderers: Map<RuntimeFunction, Variable>,
+): void {
+  const pending = [...renderers.values()];
+  for (let variable = pending.pop(); variable !== undefined; variable = pending.pop()) {
+    for (const alias of contextAliases(sourceCode, variable)) {
+      for (const reference of alias.references) {
+        const argument = valueOf(reference.identifier);
+        const call = argument.parent;
+        if (call?.type !== "CallExpression" || call.callee === argument) continue;
+        const index = call.arguments.findIndex((candidate) => candidate === argument);
+        const helper = resolveFunction(sourceCode, call.callee);
+        if (index < 0 || helper === null || renderers.has(helper)) continue;
+        const parameter = parameterVariable(sourceCode, helper, index);
+        if (parameter === null) continue;
+        renderers.set(helper, parameter);
+        pending.push(parameter);
+      }
+    }
+  }
+}
+
+function retainedCallbacks(
+  sourceCode: SourceCode,
+  invocations: readonly Invocation[],
+  filename: string,
+): Set<RuntimeFunction> {
+  const escaping = new Set<RuntimeFunction>();
+  for (const invocation of invocations) {
+    const site = knownHelper(sourceCode, invocation.callee, filename);
+    for (const index of site?.retained ?? []) {
+      const argument = argumentAt(invocation, index);
+      const callback = argument === null ? null : resolveFunction(sourceCode, argument);
+      if (callback !== null) escaping.add(callback);
+    }
+  }
+  return escaping;
+}
+
+function componentCallbacks(
+  sourceCode: SourceCode,
+  value: ESTree.ObjectExpression,
+): RuntimeFunction[] {
+  const methods = value.properties.filter(
+    (property): property is ESTree.ObjectProperty =>
+      property.type === "Property" && staticPropertyName(property.key, property.computed) !== null,
+  );
+  if (
+    !methods.some(
+      (property) =>
+        staticPropertyName(property.key, property.computed) === "render" &&
+        resolveFunction(sourceCode, property.value) !== null,
+    )
+  )
+    return [];
+  const callbacks: RuntimeFunction[] = [];
+  for (const property of methods) {
+    const name = staticPropertyName(property.key, property.computed);
+    if (name !== "render" && name !== "invalidate") continue;
+    const callback = resolveFunction(sourceCode, property.value);
+    if (callback !== null) callbacks.push(callback);
+  }
+  return callbacks;
+}
+
+function returnedComponentCallbacks(
+  sourceCode: SourceCode,
+  filename: string,
+  returns: readonly ESTree.ReturnStatement[],
+  renderers: Iterable<RuntimeFunction>,
+  escaping: Set<RuntimeFunction>,
+): void {
+  const seenFunctions = new Set<RuntimeFunction>();
+  const seenValues = new Set<ESTree.Expression>();
+  const inspectFunction = (callback: RuntimeFunction) => {
+    if (seenFunctions.has(callback)) return;
+    seenFunctions.add(callback);
+    if (callback.body !== null && callback.body.type !== "BlockStatement") {
+      inspectValue(callback.body);
+    }
+    for (const statement of returns) {
+      if (statement.argument !== null && nearestCallback(statement) === callback) {
+        inspectValue(statement.argument);
+      }
+    }
+  };
+  const inspectCall = (call: ESTree.CallExpression) => {
+    const immediate = resolveFunction(sourceCode, call.callee);
+    if (immediate !== null) inspectFunction(immediate);
+    const site = knownHelper(sourceCode, call.callee, filename);
+    for (const index of site?.builders ?? []) {
+      const argument = argumentAt(call, index);
+      const callback = argument === null ? null : resolveFunction(sourceCode, argument);
+      if (callback !== null) inspectFunction(callback);
+    }
+    for (const index of site?.values ?? []) {
+      const argument = argumentAt(call, index);
+      if (argument !== null) inspectValue(argument);
+    }
+  };
+  const inspectValue = (expression: ESTree.Expression) => {
+    const value = unwrapExpression(expression);
+    if (seenValues.has(value)) return;
+    seenValues.add(value);
+    if (value.type === "Identifier") {
+      const variable = resolveVariable(sourceCode, value);
+      const init = variable === null ? null : constInitializer(variable);
+      if (init !== null) inspectValue(init);
+    } else if (value.type === "ObjectExpression") {
+      for (const callback of componentCallbacks(sourceCode, value)) escaping.add(callback);
+    } else if (value.type === "ConditionalExpression") {
+      inspectValue(value.consequent);
+      inspectValue(value.alternate);
+    } else if (value.type === "LogicalExpression") {
+      inspectValue(value.left);
+      inspectValue(value.right);
+    } else if (value.type === "CallExpression") {
+      inspectCall(value);
+    }
+  };
+  for (const renderer of renderers) inspectFunction(renderer);
+}
+
+function escapingReads(
+  sourceCode: SourceCode,
+  renderers: ReadonlyMap<RuntimeFunction, Variable>,
+  escaping: ReadonlySet<RuntimeFunction>,
+): ESTree.Node[] {
+  const reads: ESTree.Node[] = [];
+  const reported = new Set<RuntimeFunction>();
+  for (const variable of renderers.values()) {
+    for (const alias of contextAliases(sourceCode, variable)) {
+      const declaration = alias.identifiers[0];
+      const owner = declaration === undefined ? null : nearestCallback(declaration);
+      if (owner === null || ![...escaping].some((callback) => within(callback, owner))) continue;
+      for (const reference of alias.references) {
+        if (!reference.isRead()) continue;
+        let closure = nearestCallback(reference.identifier);
+        while (closure !== null && closure !== owner && nearestCallback(closure) !== owner)
+          closure = nearestCallback(closure);
+        if (closure === null || closure === owner || reported.has(closure)) continue;
+        reported.add(closure);
+        reads.push(reference.identifier);
+      }
+    }
+  }
+  return reads;
+}
+
 export const noEscapingRenderContextRule = defineRule({
   meta: {
     type: "problem",
@@ -302,132 +454,18 @@ export const noEscapingRenderContextRule = defineRule({
       "Program:exit"() {
         const sourceCode = context.sourceCode;
         if (program !== null) verifyDefinitions(program);
-        const escaping = new Set<RuntimeFunction>();
-        const renderers = new Map<RuntimeFunction, Variable>();
-        for (const property of properties) {
-          const name = staticPropertyName(property.key, property.computed);
-          const index = name === "renderCall" ? 2 : name === "renderResult" ? 3 : null;
-          if (index === null) continue;
-          const callback = resolveFunction(sourceCode, property.value);
-          if (callback === null) continue;
-          const variable = parameterVariable(sourceCode, callback, index);
-          if (variable !== null) renderers.set(callback, variable);
-        }
-
-        // A whole context passed to a local helper is that helper's context too.
-        const pending = [...renderers.values()];
-        for (let variable = pending.pop(); variable !== undefined; variable = pending.pop()) {
-          for (const alias of contextAliases(sourceCode, variable)) {
-            for (const reference of alias.references) {
-              const argument = valueOf(reference.identifier);
-              const call = argument.parent;
-              if (call?.type !== "CallExpression" || call.callee === argument) continue;
-              const index = call.arguments.findIndex((candidate) => candidate === argument);
-              const helper = resolveFunction(sourceCode, call.callee);
-              if (index < 0 || helper === null || renderers.has(helper)) continue;
-              const parameter = parameterVariable(sourceCode, helper, index);
-              if (parameter === null) continue;
-              renderers.set(helper, parameter);
-              pending.push(parameter);
-            }
-          }
-        }
-
-        for (const invocation of invocations) {
-          const site = knownHelper(sourceCode, invocation.callee, context.filename);
-          for (const index of site?.retained ?? []) {
-            const argument = argumentAt(invocation, index);
-            const callback = argument === null ? null : resolveFunction(sourceCode, argument);
-            if (callback !== null) escaping.add(callback);
-          }
-        }
-
-        // Immediate construction callbacks may return a component whose methods run later.
-        const seenFunctions = new Set<RuntimeFunction>();
-        const seenValues = new Set<ESTree.Expression>();
-        const inspectFunction = (callback: RuntimeFunction) => {
-          if (seenFunctions.has(callback)) return;
-          seenFunctions.add(callback);
-          if (callback.body !== null && callback.body.type !== "BlockStatement") {
-            inspectValue(callback.body);
-          }
-          for (const statement of returns) {
-            if (statement.argument !== null && nearestCallback(statement) === callback) {
-              inspectValue(statement.argument);
-            }
-          }
-        };
-        const inspectValue = (expression: ESTree.Expression) => {
-          const value = unwrapExpression(expression);
-          if (seenValues.has(value)) return;
-          seenValues.add(value);
-          if (value.type === "Identifier") {
-            const variable = resolveVariable(sourceCode, value);
-            const init = variable === null ? null : constInitializer(variable);
-            if (init !== null) inspectValue(init);
-          } else if (value.type === "ObjectExpression") {
-            const methods = value.properties.filter(
-              (property): property is ESTree.ObjectProperty =>
-                property.type === "Property" &&
-                staticPropertyName(property.key, property.computed) !== null,
-            );
-            if (
-              !methods.some(
-                (property) =>
-                  staticPropertyName(property.key, property.computed) === "render" &&
-                  resolveFunction(sourceCode, property.value) !== null,
-              )
-            )
-              return;
-            for (const property of methods) {
-              const name = staticPropertyName(property.key, property.computed);
-              if (name !== "render" && name !== "invalidate") continue;
-              const callback = resolveFunction(sourceCode, property.value);
-              if (callback !== null) escaping.add(callback);
-            }
-          } else if (value.type === "ConditionalExpression") {
-            inspectValue(value.consequent);
-            inspectValue(value.alternate);
-          } else if (value.type === "LogicalExpression") {
-            inspectValue(value.left);
-            inspectValue(value.right);
-          } else if (value.type === "CallExpression") {
-            const immediate = resolveFunction(sourceCode, value.callee);
-            if (immediate !== null) inspectFunction(immediate);
-            const site = knownHelper(sourceCode, value.callee, context.filename);
-            for (const index of site?.builders ?? []) {
-              const argument = argumentAt(value, index);
-              const callback = argument === null ? null : resolveFunction(sourceCode, argument);
-              if (callback !== null) inspectFunction(callback);
-            }
-            for (const index of site?.values ?? []) {
-              const argument = argumentAt(value, index);
-              if (argument !== null) inspectValue(argument);
-            }
-          }
-        };
-        for (const renderer of renderers.keys()) inspectFunction(renderer);
-
-        // Closures share their scope's captured bindings: an escaping closure anywhere in the
-        // declaring function keeps the context alive once any closure there captures it.
-        const reported = new Set<RuntimeFunction>();
-        for (const variable of renderers.values()) {
-          for (const alias of contextAliases(sourceCode, variable)) {
-            const declaration = alias.identifiers[0];
-            const owner = declaration === undefined ? null : nearestCallback(declaration);
-            if (owner === null || ![...escaping].some((callback) => within(callback, owner)))
-              continue;
-            for (const reference of alias.references) {
-              if (!reference.isRead()) continue;
-              // One report per closure the declaring function creates, however deep the read.
-              let closure = nearestCallback(reference.identifier);
-              while (closure !== null && closure !== owner && nearestCallback(closure) !== owner)
-                closure = nearestCallback(closure);
-              if (closure === null || closure === owner || reported.has(closure)) continue;
-              reported.add(closure);
-              context.report({ node: reference.identifier, messageId: "escapingRenderContext" });
-            }
-          }
+        const renderers = renderContextParameters(sourceCode, properties);
+        followContextIntoHelpers(sourceCode, renderers);
+        const escaping = retainedCallbacks(sourceCode, invocations, context.filename);
+        returnedComponentCallbacks(
+          sourceCode,
+          context.filename,
+          returns,
+          renderers.keys(),
+          escaping,
+        );
+        for (const node of escapingReads(sourceCode, renderers, escaping)) {
+          context.report({ node, messageId: "escapingRenderContext" });
         }
       },
     };

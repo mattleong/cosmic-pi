@@ -27,40 +27,27 @@ import {
 } from "./model.ts";
 import { WORKFLOW_BUDGET_ERROR } from "./prelude.ts";
 
-// Text sections every description of a run shares: the completion notification, the tool's
-// status text and the Activity detail. Each view orders and bounds them itself.
-
-/** Marks a warning among a run's log lines, in every view. */
 const WORKFLOW_WARNING_MARKER = "warning: ";
 
-/** Worktree proposals the notification and status list by id; the rest are counted. */
 export const WORKFLOW_WORKSPACE_LINES = 40;
-/** Each log line the notification and status repeat is shortened to this. */
 export const WORKFLOW_LOG_LINE_MAX_CHARS = 400;
-/** A failed script's error message, as the notification and status show it. */
 const WORKFLOW_FAILURE_MESSAGE_MAX_CHARS = 4 * 1024;
-/** A failed script's stack, as the notification and status show it. */
 const WORKFLOW_STACK_MAX_CHARS = 8 * 1024;
 
-/** Heads a finished run's worktree proposals in its completion notification. */
 export const WORKFLOW_WORKSPACES_TITLE =
   "Worktree proposals (review and integrate each with subagent_workspace):";
 
-/** Heads the worktrees in the status text, which may list writers that are still running. */
 export const WORKFLOW_STATUS_WORKSPACES_TITLE =
   "Worktree workspaces (review with subagent_workspace):";
 
 const verbatim = (text: string): string => text;
 
-/** How every view names a run. */
 export const workflowRunSubject = (name: string, id: string): string =>
   `Workflow "${name}" (${id})`;
 
-/** Time from the run's start to its end, or to `now` while it runs. */
 const elapsed = (run: WorkflowRunView, now: number): string =>
   formatDuration(Math.max(0, (run.endedAt ?? now) - run.startedAt));
 
-/** A finished run's opening sentence: its outcome, who stopped it and how long it ran. */
 export const workflowOutcomeHeadline = (run: WorkflowRunView): string => {
   const subject = workflowRunSubject(run.name, run.id);
   const duration = elapsed(run, run.startedAt);
@@ -72,11 +59,9 @@ export const workflowOutcomeHeadline = (run: WorkflowRunView): string => {
 
 const STOPPED_BY = { tool: " (stopped by you)", user: " (stopped by the user)" } as const;
 
-/** Who stopped a run, as a state line names them after the state; empty when nobody did. */
 export const workflowStoppedByText = (origin: WorkflowStopOrigin | undefined): string =>
   origin === undefined ? "" : STOPPED_BY[origin];
 
-/** A run's state as of `now`, who stopped it, and how long it ran or has been running. */
 export const workflowStateLine = (run: WorkflowRunView, now: number): string => {
   const stoppedBy =
     run.state === "stopped" || run.state === "stopping" ? workflowStoppedByText(run.stoppedBy) : "";
@@ -84,14 +69,8 @@ export const workflowStateLine = (run: WorkflowRunView, now: number): string => 
   return `${workflowRunSubject(run.name, run.id)}: ${run.state}${stoppedBy} ${span} ${elapsed(run, now)}.`;
 };
 
-/**
- * What the run's live agents used as of `now`: all tokens with the output share, the cost when
- * known (a lower bound when some agents reported none), tool calls and how long the run took.
- * Results reused on resume cost nothing and are only counted.
- */
 export const workflowUsageLine = (run: WorkflowRunView, now: number): string | undefined => {
   const usage = run.usage;
-  // A run whose agents never ran has nothing to report.
   if (usage.totalTokens === 0 && usage.toolUses === 0 && run.reused === 0) return undefined;
   return [
     `Usage: ${formatTokens(usage.totalTokens)} tokens (${formatTokens(usage.output)} output)`,
@@ -104,10 +83,6 @@ export const workflowUsageLine = (run: WorkflowRunView, now: number): string | u
     .join(" · ");
 };
 
-/**
- * The run's token budget, what its agents spent of it, and the calls it refused; undefined without
- * one. `tokens` writes each count, exact by default.
- */
 export const workflowBudgetLine = (
   run: WorkflowRunView,
   tokens: (count: number) => string = String,
@@ -121,7 +96,6 @@ export const workflowBudgetLine = (
   return `Budget: ${tokens(budget.spent)} of ${tokens(budget.total)} output tokens spent${refused}`;
 };
 
-/** What a queued agent waits for, as status and Activity name it. */
 export const workflowWaitingText = (waiting: WorkflowAgentWaiting | undefined): string => {
   switch (waiting?.kind) {
     case undefined:
@@ -133,7 +107,6 @@ export const workflowWaitingText = (waiting: WorkflowAgentWaiting | undefined): 
   }
 };
 
-/** Queued agents by what they wait for; undefined when none is queued. */
 export const workflowWaitingLine = (run: WorkflowRunView): string | undefined => {
   const counts = new Map<string, number>();
   for (const agent of run.agents)
@@ -145,10 +118,6 @@ export const workflowWaitingLine = (run: WorkflowRunView): string | undefined =>
   return `Queued: ${[...counts].map(([text, count]) => `${count} ${text}`).join(" · ")}`;
 };
 
-/**
- * Agents by state, empty states left out; `reused` counts results a resume reused, and
- * `skippedPlanned` planned agents the user skipped before any call claimed them.
- */
 export const workflowAgentCountsText = (
   agents: ReadonlyArray<WorkflowAgentView>,
   reused = 0,
@@ -169,17 +138,11 @@ export const workflowAgentCountsText = (
     .join(" · ");
 };
 
-/** A live or finished run's agents line: the total, then the counts by state. */
 export const workflowAgentsLine = (run: WorkflowRunView): string => {
   const counts = workflowAgentCountsText(run.agents, run.reused, workflowSkippedPlanned(run));
   return `Agents: ${workflowAgentTotal(run)} total${counts ? ` · ${counts}` : ""}`;
 };
 
-/**
- * A finished run's agents: how many started, then how many failed, were stopped or skipped,
- * whether or not they started, planned agents skipped before any call claimed them included, then
- * the calls that never started, results reused and planned agents never called.
- */
 export const workflowFinishedAgentsLine = (run: WorkflowRunView): string => {
   const counts = countWorkflowRunAgents(run);
   const neverCalled = run.planned.length - workflowSkippedPlanned(run);
@@ -198,7 +161,6 @@ export const workflowFinishedAgentsLine = (run: WorkflowRunView): string => {
     .join(" · ")}.`;
 };
 
-/** Keeps the head and tail of long text, which usually hold a value's summary and conclusion. */
 export const clipWorkflowText = (text: string, maximum = WORKFLOW_RESULT_MAX_CHARS): string => {
   if (text.length <= maximum) return text;
   const marker = `\n… ${text.length - maximum} characters clipped …\n`;
@@ -207,11 +169,6 @@ export const clipWorkflowText = (text: string, maximum = WORKFLOW_RESULT_MAX_CHA
   return `${safeTextPrefix(text, head)}${marker}${safeTextSuffix(text, budget - head)}`;
 };
 
-/**
- * A completed run's result: a header naming the file a clipped value was saved to, which comes
- * first so no later clipping can drop it, then the text, which `clip` bounds. The main agent is
- * also told how to read that file; people only where it is.
- */
 export const workflowResultSection = (
   result: WorkflowResult,
   options: {
@@ -229,17 +186,12 @@ export const workflowResultSection = (
   return `Result (clipped; ${saved}):\n${text}`;
 };
 
-/** The script's error on one line, led by its name (`Error` when it has none); `clip` bounds the text. */
 export const workflowFailureLine = (
   failure: WorkflowFailure | undefined,
   clip: (text: string) => string = verbatim,
 ): string =>
   `${failure?.name || "Error"}: ${clip(failure ? failure.message : "The script failed.")}`;
 
-/**
- * A failed run's error, its stack and how to fix and restart the script, as separate sections;
- * `bound` clips the error and the stack to the sizes it is given.
- */
 export const workflowFailureSection = (
   run: WorkflowRunView,
   bound: (text: string, maximum: number) => string,
@@ -249,16 +201,11 @@ export const workflowFailureSection = (
   workflowRetryLine(run),
 ];
 
-/** A log line, its warning marked; `clip` bounds the message. */
 export const workflowLogLine = (
   entry: WorkflowLogEntry,
   clip: (text: string) => string = verbatim,
 ): string => `${entry.level === "warning" ? WORKFLOW_WARNING_MARKER : ""}${clip(entry.message)}`;
 
-/**
- * The newest `limit` warnings, kept apart from the log, and how many earlier ones aren't shown;
- * undefined when the run logged none. `line` renders each warning.
- */
 export const workflowWarningsSection = (
   run: WorkflowRunView,
   limit: number,
@@ -274,7 +221,6 @@ export const workflowWarningsSection = (
   ].join("\n");
 };
 
-/** At most `limit` worktree lines, then how many more subagent_workspace lists. */
 export const workflowWorkspaceLines = <Workspace>(
   workspaces: ReadonlyArray<Workspace>,
   line: (workspace: Workspace) => string,
@@ -287,7 +233,6 @@ export const workflowWorkspaceLines = <Workspace>(
   ];
 };
 
-/** How many worktree writers left no changes, whose worktrees were discarded; undefined for none. */
 const unchangedWorkspacesLine = (run: WorkflowRunView): string | undefined => {
   const count = workflowUnchangedWorkspaces(run);
   if (count === 0) return undefined;
@@ -295,11 +240,6 @@ const unchangedWorkspacesLine = (run: WorkflowRunView): string | undefined => {
   return `${countLabel(count, "worktree writer")} made no changes, so ${discarded} discarded.`;
 };
 
-/**
- * The run's worktree proposals under `title`, at most `limit` listed, then how many writers made
- * no changes, which are only counted; undefined when there are neither. `stateText` names each
- * writer's state, exactly by default.
- */
 export const workflowWorkspacesSection = (
   run: WorkflowRunView,
   title: string,
@@ -317,16 +257,9 @@ export const workflowWorkspacesSection = (
   return lines.length === 0 ? undefined : lines.join("\n");
 };
 
-/** Where the main agent reads every finished agent's actual return value. */
 export const workflowJournalLine = (path: string): string =>
   `Results journal: ${path} has one JSON line per finished agent() call (label, phase, state, reason, usage, result); Read it to check what each agent actually returned.`;
 
-/**
- * Where a run's script is fixed and started again, as the file a fix edits and the start argument
- * that runs it: a saved workflow's or script file's own path, so the fix outlives the run, and
- * only an inline script's private copy. Undefined for an inline script whose copy couldn't be
- * saved.
- */
 export const workflowRestart = (
   source: WorkflowSource,
   scriptPath: string | undefined,
@@ -343,13 +276,11 @@ export const workflowRestart = (
   }
 };
 
-/** The script a fix edits, when there is one. */
 export const workflowScriptLine = (run: WorkflowRunView): string | undefined => {
   const restart = workflowRestart(run.source, run.scriptPath);
   return restart === undefined ? undefined : `Script: ${restart.file}`;
 };
 
-/** The edit-and-restart loop over the run's script: its own file, or an inline script's copy. */
 export const workflowEditLine = (run: WorkflowRunView): string | undefined => {
   const restart = workflowRestart(run.source, run.scriptPath);
   if (restart === undefined) return undefined;
@@ -360,7 +291,6 @@ export const workflowEditLine = (run: WorkflowRunView): string | undefined => {
   return `${edit} with your file tools and start it again with ${restart.argument}, adding resumeFromRunId: "${run.id}" to reuse agents that finished.`;
 };
 
-/** How the main agent extends or adjusts a completed run, reusing its unchanged agent() calls. */
 export const workflowExtendLine = (run: WorkflowRunView): string => {
   const restart = workflowRestart(run.source, run.scriptPath);
   const resume = `resumeFromRunId: "${run.id}"; unchanged agent() calls are reused.`;
@@ -369,17 +299,9 @@ export const workflowExtendLine = (run: WorkflowRunView): string => {
     : `To extend or adjust this run, edit ${restart.file} and start it with ${restart.argument} plus ${resume}`;
 };
 
-/** An uncaught budget error from the script itself; a foreign name never decides recovery. */
 export const isWorkflowBudgetFailure = (failure: WorkflowFailure | undefined): boolean =>
-  failure?.name === WORKFLOW_BUDGET_ERROR &&
-  (failure.kind === undefined || failure.kind === "script");
+  failure?.name === WORKFLOW_BUDGET_ERROR && failure.kind === "script";
 
-/**
- * Failure-specific recovery: runtime failures need a user-managed restart, not script edits.
- * The sandbox also stops when a script exhausts its memory, so that guidance offers both.
- * When an uncaught budget error failed the run, it says first that a resumed run gets a new
- * budget, since the limit the user set is already spent.
- */
 const workflowRetryLine = (run: WorkflowRunView): string => {
   const restart = workflowRestart(run.source, run.scriptPath);
   const resume = `resumeFromRunId: "${run.id}" to reuse the results of agents that already finished`;

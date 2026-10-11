@@ -1,7 +1,3 @@
-/**
- * Real Pi SDK sessions for end-to-end tests: the actual agent loop and extension runner with faux
- * inference, offline in-memory models, and only the extensions under test. Test-runner neutral.
- */
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -24,7 +20,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { step } from "./steps.ts";
 
-/** A faux provider in offline in-memory models; it is unregistered when the scope closes. */
 export const fauxModels = (provider: string) =>
   Effect.gen(function* () {
     const fake = fauxProvider({ provider, tokensPerSecond: 0 });
@@ -44,7 +39,6 @@ export const fauxModels = (provider: string) =>
     return { fake, models };
   });
 
-/** In-memory settings without compaction or retries. */
 export const quietSettings = (overrides: Parameters<typeof SettingsManager.inMemory>[0] = {}) =>
   SettingsManager.inMemory({
     compaction: { enabled: false },
@@ -52,7 +46,6 @@ export const quietSettings = (overrides: Parameters<typeof SettingsManager.inMem
     ...overrides,
   });
 
-/** Loads only the given extensions: no skills, prompts, themes, or context files. */
 export const QUIET_RESOURCES = {
   noSkills: true,
   noPromptTemplates: true,
@@ -60,13 +53,11 @@ export const QUIET_RESOURCES = {
   noContextFiles: true,
 } as const;
 
-/** A reloaded loader over `QUIET_RESOURCES`. */
 export const quietLoader = (options: ConstructorParameters<typeof DefaultResourceLoader>[0]) => {
   const loader = new DefaultResourceLoader({ ...QUIET_RESOURCES, ...options });
   return step(() => loader.reload()).pipe(Effect.as(loader));
 };
 
-/** A session bound in print mode; its scope aborts it, emits `session_shutdown`, then disposes it. */
 export const scopedPrintSession = (options: CreateAgentSessionOptions) =>
   Effect.gen(function* () {
     const { session } = yield* Effect.acquireRelease(
@@ -86,21 +77,15 @@ export const scopedPrintSession = (options: CreateAgentSessionOptions) =>
 interface FauxCodemodeSessionOptions {
   readonly prefix: string;
   readonly provider: string;
-  /** The extension under test, loaded beside Pi's builtin codemode in the session directory. */
   readonly extension: {
     readonly name: string;
     readonly factory: (cwd: string) => ExtensionFactory;
   };
-  /** Adjusts the offline models before the session starts. */
   readonly prepareModels?: (models: ModelRuntime) => void;
   readonly prompt?: string;
   readonly reply?: string;
 }
 
-/**
- * A scoped in-memory Pi session with native `codemode` and one extension under test. Inference is
- * faux, model network is off, and credentials, models, settings, and the session stay in memory.
- */
 export const fauxCodemodeSession = (options: FauxCodemodeSessionOptions) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -126,7 +111,6 @@ export const fauxCodemodeSession = (options: FauxCodemodeSessionOptions) =>
       sessionManager: SessionManager.inMemory(directory),
       resourceLoader: loader,
     });
-    /** One model-issued tool call through the real agent loop, then a final reply. */
     const call = (name: string, args: JsonObject, callId?: string) =>
       Effect.gen(function* () {
         const toolCall = fauxToolCall(

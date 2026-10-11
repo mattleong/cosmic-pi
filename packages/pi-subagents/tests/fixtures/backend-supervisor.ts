@@ -40,7 +40,6 @@ export const supervisorMetadata = (
   },
 });
 
-// Queues and stateful behavior stay with each test's resource owner.
 export const backendSupervisor = (
   metadata: SupervisorConnectionMetadata,
   events: SupervisorChannelHandle["events"],
@@ -74,7 +73,6 @@ export const backendLaunch = (
   ...overrides,
 });
 
-/** Takes the next backend event within a bounded wait, optionally acknowledging its raw owner. */
 export const takeBackendEvent = (
   backend: Pick<BackendHandle, "events" | "acknowledge">,
   options: { readonly timeout?: Duration.Input; readonly acknowledge?: boolean } = {},

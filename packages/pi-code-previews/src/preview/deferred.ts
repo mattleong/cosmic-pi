@@ -4,15 +4,10 @@ import { deferCodePreview } from "../application/capability";
 import { codePreviewPerformanceConfig } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 
-/** Callers pass the size of what they would render, so measuring never builds a copy. */
 export function shouldRenderDeferred(characters: number): boolean {
   return characters > codePreviewPerformanceConfig.asyncRenderChars;
 }
 
-/**
- * Deferred same-thread publication. This deliberately does not claim CPU offload: the pure render
- * still runs on the session fiber after a yield and remains synchronously compatible with Pi/TUI.
- */
 export class DeferredPreview implements Component {
   private component: Component;
   private cancelled = false;

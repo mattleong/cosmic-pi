@@ -27,8 +27,8 @@ const harness = () => {
   return {
     ctx,
     notify,
-    start: () => host.emit("session_start", ctx, { type: "session_start" }),
-    shutdown: () => host.emit("session_shutdown", ctx, { reason: "quit" }),
+    start: () => host.emit("session_start", ctx),
+    shutdown: () => host.emit("session_shutdown", ctx),
   };
 };
 

@@ -1,4 +1,3 @@
-// Fixed Node process and Herdr protocol boundary for the /herdr-btw command.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -197,7 +196,6 @@ const herdrTransportFailure = (
   request: HerdrCommandRequest,
   failure?: BoundedProcessError | undefined,
 ): HerdrBtwError => {
-  // Only a spawn failure proves that a mutating request was never dispatched.
   const uncertain = request.mutation && failure?.operation !== "spawn";
   return new HerdrBtwError({
     operation: request.operation,
@@ -243,7 +241,6 @@ const decodeJson = <A>(
 
 export const makeHerdrClient = (
   sourceEnvironment: Readonly<NodeJS.ProcessEnv>,
-  /** Test seam for deterministic process lifecycle and transport outcomes. */
   { processRunner = runBoundedProcessNode }: { readonly processRunner?: HerdrProcessRunner } = {},
 ) => {
   const environment = selectHerdrEnvironment(sourceEnvironment);

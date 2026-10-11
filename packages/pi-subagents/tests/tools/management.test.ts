@@ -1,4 +1,3 @@
-// Promise assertions are test-runner boundaries.
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -31,7 +30,6 @@ const resultText = (result: {
 }): string =>
   result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 
-/** Awaits one run whose terminal observation is already available. */
 const awaitSingle = (run: SubagentRunView) =>
   invokeOptionalTool(
     captureSubagentTools(
@@ -42,7 +40,6 @@ const awaitSingle = (run: SubagentRunView) =>
     { runIds: [run.id], until: "all_finished" },
   );
 
-/** Asserts each needle's first occurrence in order, then `last` after the final needle. */
 const expectInOrder = (text: string, needles: ReadonlyArray<string>, last: string) => {
   const indexes = needles.map((needle) => text.indexOf(needle));
   indexes.push(text.indexOf(last, indexes.at(-1)));
@@ -529,7 +526,6 @@ describe("subagent tool", () => {
       });
       const sections = resultText(result!).split("\n\n");
       const section = (id: string) => sections.find((entry) => entry.includes(`  ${id} [`)) ?? "";
-      // Only confirmed targets are acknowledged as delivered.
       expect(sections[0]).toContain("good");
       expect(sections[0]).not.toMatch(/pending|unflagged|bad/);
       expect(section("pending")).toContain("awaiting confirmation");
@@ -803,7 +799,6 @@ describe("subagent tool", () => {
       consumeCompletions: (receipts) => Effect.sync(() => void consumed.push(...receipts)),
     });
     const tools = captureSubagentTools(service);
-    // Text formatting succeeds, but projection of the persisted details fails.
     Object.defineProperty(completed, "warningSource", {
       configurable: true,
       get: () => {
@@ -1059,7 +1054,6 @@ describe("subagent tool", () => {
     });
     const tool = captureSubagentTools(service).get("subagent_lifecycle");
 
-    // Root retry accepts and ignores a message; only interrupt, stop, and resume reject one.
     const result = yield* invokeOptionalTool(tool, {
       action: "retry",
       runIds: ["agent-1"],
@@ -1172,7 +1166,6 @@ describe("subagent tool", () => {
         action: "list",
         runIds: [completed.id],
       });
-      // The claims listing never shows the report, so it must not consume it either.
       expect(listed?.content[0]?.text).toContain("agent-writer: src/a.ts");
       expect(listed?.content[0]?.text).not.toContain("Writer report to deliver.");
       expect(consumed).toEqual([]);

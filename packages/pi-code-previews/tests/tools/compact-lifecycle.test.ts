@@ -272,7 +272,6 @@ test("missing outcomes, malformed summaries, declines and throwing providers kee
         assert.equal(rows.length, isError ? 2 : 1);
         const collapsed = rows.join("\n");
         assert.doesNotMatch(collapsed, /CALL file.ts|MALFORMED|recovery-step-[1-9]/u);
-        // A Pi error explains itself with its first line; anything else stays unconfirmed.
         assert.equal(collapsed.includes("recovery-step-0"), isError);
         const expanded = h.update({ expanded: true }).join("\n");
         assert.match(expanded, /CALL file.ts/u);
@@ -433,7 +432,6 @@ test("the timing preference gates overall and nested measured durations together
         showTiming: true,
         counters: ["3 tools"],
         children: {
-          // Nested durations of at least one second are shown beside their call.
           entries: [{ label: "nested-read", status: "success", durationMs: 12_500 }],
           total: 1,
         },
@@ -480,7 +478,6 @@ test("redraws reuse the summary until the row updates, and still follow settings
     h.update({ expanded, isPartial: false }, result("first"));
     h.rows();
     const before = provided;
-    // Every TUI frame redraws each row, at whatever width the terminal has.
     for (const width of [120, 40, 120, 80]) h.rows(width);
     assert.equal(provided, before, `expanded ${expanded}`);
   }
@@ -542,7 +539,6 @@ it.effect("cooperative animation uses its injected owner without a previews runt
             const current = h.rows(240).join("\n");
             assert.notEqual(current, previous);
             if (!timing) {
-              // Ignore the activity token without coupling the test to its glyph or color.
               assert.equal(current.replace(/^\S+/u, ""), initial.replace(/^\S+/u, ""));
             }
             previous = current;

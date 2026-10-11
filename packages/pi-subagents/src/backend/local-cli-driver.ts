@@ -28,7 +28,6 @@ import { supervisorError } from "./driver-shared.ts";
 
 const REPORT_TOOL = SUPERVISOR_MCP_TOOL_NAMES[3];
 
-/** Fixed local-CLI bridge instructions; no profile can alter the supervisor/report contract. */
 export const withLocalSupervisorInstructions = (
   request: BackendLaunchRequest,
 ): BackendLaunchRequest => ({
@@ -49,10 +48,6 @@ export const withLocalSupervisorInstructions = (
   ].join("\n\n"),
 });
 
-/** Transfer terminal evidence before ending ingress, without waiting on the consumer
- * in transport cleanup. The backend scope owns the pending transfer and interrupts
- * it on shutdown; either completion or interruption ends the queue.
- */
 export const deliverTerminalReport = (
   events: Queue.Queue<BackendEvent, Cause.Done>,
   delivery: Effect.Effect<void>,
@@ -65,16 +60,10 @@ export const deliverTerminalReport = (
     Effect.asVoid,
   );
 
-/** A runtime handle's native controls; the shared driver adds the supervisor-owned ones. */
 type LocalCliBackendHandle = Omit<BackendHandle, "controls"> & {
   readonly controls: Pick<BackendControls, "initialize" | "start" | "steer" | "interrupt">;
 };
 
-/**
- * Shared local Claude/Codex driver: acquisition, the supervisor reply it opens, and refusal of
- * the capabilities it does not advertise. Native initialization and event lifecycles belong
- * to each runtime's handle.
- */
 export const makeLocalCliBackendDriver =
   (
     runtime: LocalCliRuntime,

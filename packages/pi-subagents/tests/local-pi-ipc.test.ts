@@ -159,10 +159,8 @@ describe("Local Pi IPC boundary", () => {
           protocolErrors.push(message);
         },
       });
-      // Registered after the child's kill, so the listeners detach first.
       yield* Effect.addFinalizer(() => Effect.sync(ipc.detach));
 
-      // Takes at most four contacts until every predicate has matched one of them.
       const takeUntil = (...predicates: ReadonlyArray<(contact: LocalPiContact) => boolean>) =>
         Effect.gen(function* () {
           const taken: LocalPiContact[] = [];
@@ -196,7 +194,6 @@ describe("Local Pi IPC boundary", () => {
       const responses = yield* takeUntil(isPeer, isReply);
       expect(responses.some(isPeer)).toBe(true);
       expect(responses.some(isReply)).toBe(true);
-      // The fixture exits nonzero on any failure it observes.
       yield* exited;
       expect(child.exitCode).toBe(0);
       expect(protocolErrors).toEqual([]);

@@ -1,4 +1,3 @@
-/** Source-only, test-runner-independent registered-tool presentation helpers. */
 export {
   animationSchedulerProbe,
   applyPresentationSettings,

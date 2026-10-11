@@ -1,4 +1,3 @@
-// Effect-owned settings persistence and interruption assertions.
 import assert from "node:assert/strict";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { it } from "@effect/vitest";
@@ -47,13 +46,11 @@ function settingsLayer(documents: JsonDocumentStoreContract) {
   return CodePreviewSettingsService.layer.pipe(Layer.provide(dependencies));
 }
 
-/** Runs `use` against a settings service built over `documents`. */
 const usingSettings = <A, E, R>(
   documents: JsonDocumentStoreContract,
   use: (service: CodePreviewSettingsServiceContract) => Effect.Effect<A, E, R>,
 ) => CodePreviewSettingsService.use(use).pipe(provideBuiltLayer(settingsLayer(documents)));
 
-/** Holds the first document read until `release` completes; later reads pass through. */
 const gateFirstRead = (fake: InMemoryDocuments, onRead: (read: number) => void = () => undefined) =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
@@ -61,7 +58,6 @@ const gateFirstRead = (fake: InMemoryDocuments, onRead: (read: number) => void =
     let reads = 0;
     const documents = JsonDocumentStore.of({
       ...fake.service,
-      // Reads hold no document lock, so only the cross-Layer settings coordinator can block them.
       readObject: (path) =>
         Effect.suspend(() => {
           onRead(++reads);
@@ -288,7 +284,6 @@ it.effect("save persists the flat document and publishes the committed settings"
       const loaded = yield* loadSettings(service);
       assert.equal(Object.hasOwn(loaded, "owner"), false);
       yield* saveSettings(service, { ...loaded, readCollapsedLines: 42 });
-      // A legacy nested block is an unknown root field: preserved verbatim, never migrated.
       assert.deepEqual(fake.documents.get("/agent/code-previews.json"), {
         owner: "keep",
         codePreview: { readCollapsedLines: 12 },
@@ -367,9 +362,7 @@ it.effect("runtime-invalid settings fail before document modification or publica
     Effect.gen(function* () {
       const loaded = yield* loadSettings(service);
       const published = codePreviewSettings;
-      const invalidFixture = { ...loaded, tools: null };
-      // SAFETY: This deliberately malformed fixture exercises save-time schema validation.
-      const invalid = invalidFixture as typeof invalidFixture & typeof loaded;
+      const invalid = { ...loaded, readCollapsedLines: 0 };
       const failure = yield* saveSettings(service, invalid).pipe(Effect.flip);
       assert.ok(failure instanceof JsonDocumentError);
       assert.equal(failure.operation, "validate");
@@ -482,7 +475,6 @@ it.effect("choosing the project's value writes a global override instead of dele
       const loaded = yield* service.load(makeSettingsAdmission(), project);
       assert.equal(loaded.shikiTheme, "github-dark");
       yield* saveSettings(service, { ...loaded, shikiTheme: "nord" });
-      // Deleting the override would leave other projects on the built-in theme.
       assert.equal((yield* loadSettings(service)).shikiTheme, "nord");
     }),
   );
@@ -560,7 +552,6 @@ it.effect.each(nestedSettingsCases)(
         const loaded = yield* loadSettings(service);
         assert.equal(loaded.readCollapsedLines, expected);
         assert.equal(loaded.shikiTheme, "nord");
-        // A non-object block is ignored silently, never reported as an unreadable file.
         assert.deepEqual(codePreviewSettingsProblems, []);
       }),
     );

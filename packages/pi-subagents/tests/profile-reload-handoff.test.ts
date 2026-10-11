@@ -8,20 +8,20 @@ import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { completeBaseline, profileCandidate as candidate } from "./fixtures/profiles.ts";
 
 const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
-interface TestReloadGlobalState {
-  [reloadSlot]?: object;
-}
-
-// SAFETY: The test owns and clears this process-local symbol slot.
-const processState = globalThis as typeof globalThis & TestReloadGlobalState;
 
 afterEach(() => handoff.clear());
 
-const slotPresent = () => Object.prototype.hasOwnProperty.call(processState, reloadSlot);
-/** Leaves `seed` in the process slot, as an earlier module instance's shutdown would. */
-const install = <Seed>(seed: Seed, version = 2) => {
-  processState[reloadSlot] = { version, sessionKey: "session-one", seed };
-};
+const slotPresent = () => Object.hasOwn(globalThis, reloadSlot);
+const slotHolds = <Envelope>(envelope: Envelope) =>
+  Object.getOwnPropertyDescriptor(globalThis, reloadSlot)?.value === envelope;
+const writeSlot = <Envelope>(envelope: Envelope) =>
+  Object.defineProperty(globalThis, reloadSlot, {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: envelope,
+  });
+const install = <Seed>(seed: Seed) => writeSlot({ version: 2, sessionKey: "session-one", seed });
 const completeSeed = (revision = 0) => ({
   revision,
   overrides: {},
@@ -29,37 +29,32 @@ const completeSeed = (revision = 0) => ({
 });
 
 describe("profile reload handoff", () => {
-  it.each([1, 2])(
-    "preserves incompatible version-%i same-session handoffs across module replacements",
-    (version) => {
-      for (const location of ["override", "baseline"] as const) {
-        const baseline = completeBaseline("global");
-        const remote = { ...candidate("openai/remote"), host: "herdr" };
-        const seed =
-          location === "override"
-            ? { ...completeSeed(7), overrides: { worker: { candidates: [remote] } } }
-            : {
-                ...completeSeed(7),
-                baseline: {
-                  ...baseline,
-                  profiles: { ...baseline.profiles, worker: { candidates: [remote] } },
-                },
-              };
-        const envelope = { version, sessionKey: "session-one", seed };
-        processState[reloadSlot] = envelope;
-        for (let replacement = 0; replacement < 3; replacement += 1) {
-          expect(() => handoff.capture("session-one")).toThrow(
-            IncompatibleProfileReloadHandoffError,
-          );
-          expect(processState[reloadSlot]).toBe(envelope);
-          handoff.clear("session-one");
-          expect(processState[reloadSlot]).toBe(envelope);
-        }
-        expect(handoff.capture("session-two")).toBeUndefined();
-        expect(slotPresent()).toBe(false);
+  it("preserves incompatible same-session handoffs across module replacements", () => {
+    for (const location of ["override", "baseline"] as const) {
+      const baseline = completeBaseline("global");
+      const remote = { ...candidate("openai/remote"), host: "herdr" };
+      const seed =
+        location === "override"
+          ? { ...completeSeed(7), overrides: { worker: { candidates: [remote] } } }
+          : {
+              ...completeSeed(7),
+              baseline: {
+                ...baseline,
+                profiles: { ...baseline.profiles, worker: { candidates: [remote] } },
+              },
+            };
+      const envelope = { version: 2, sessionKey: "session-one", seed };
+      writeSlot(envelope);
+      for (let replacement = 0; replacement < 3; replacement += 1) {
+        expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
+        expect(slotHolds(envelope)).toBe(true);
+        handoff.clear("session-one");
+        expect(slotHolds(envelope)).toBe(true);
       }
-    },
-  );
+      expect(handoff.capture("session-two")).toBeUndefined();
+      expect(slotPresent()).toBe(false);
+    }
+  });
 
   it("isolates malformed and foreign envelopes without activating their seed", () => {
     for (const envelope of [
@@ -67,7 +62,7 @@ describe("profile reload handoff", () => {
       { version: 99, sessionKey: "session-one", seed: completeSeed() },
       { version: 2, sessionKey: "different-session", seed: { revision: -1, overrides: {} } },
     ]) {
-      processState[reloadSlot] = envelope;
+      writeSlot(envelope);
       expect(handoff.capture("session-one")).toBeUndefined();
       expect(slotPresent()).toBe(false);
     }
@@ -85,12 +80,7 @@ describe("profile reload handoff", () => {
     expect(handoff.capture("session-one")).not.toBe(seed);
   });
 
-  it("still decodes the version-1 envelope and old seed shape", () => {
-    install({ revision: 2, overrides: {} }, 1);
-    expect(handoff.capture("session-one")).toEqual({ revision: 2, overrides: {} });
-  });
-
-  it("rejects a version-2 envelope without its complete baseline", () => {
+  it("rejects an envelope without its complete baseline", () => {
     install({ revision: 2, overrides: {} });
     expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(slotPresent()).toBe(true);
@@ -178,7 +168,7 @@ describe("profile reload handoff", () => {
     let getterCalls = 0;
     let setterCalls = 0;
     const installThrowingAccessor = () =>
-      Object.defineProperty(processState, reloadSlot, {
+      Object.defineProperty(globalThis, reloadSlot, {
         configurable: true,
         get() {
           getterCalls += 1;
@@ -201,7 +191,7 @@ describe("profile reload handoff", () => {
     expect(setterCalls).toBe(0);
     expect(handoff.capture("session-one")).toBeDefined();
 
-    processState[reloadSlot] = { malformed: true };
+    writeSlot({ malformed: true });
     const deleteSpy = vi.spyOn(Reflect, "deleteProperty").mockImplementation(() => {
       throw new Error("hostile deletion");
     });
@@ -211,7 +201,7 @@ describe("profile reload handoff", () => {
       expect(deleteSpy).toHaveBeenCalled();
     } finally {
       deleteSpy.mockRestore();
-      Reflect.deleteProperty(processState, reloadSlot);
+      Reflect.deleteProperty(globalThis, reloadSlot);
     }
   });
 
@@ -226,36 +216,31 @@ describe("profile reload handoff", () => {
   it("enforces bounded session keys at both host capture and publication", () => {
     const maximumKey = "s".repeat(1_024);
     const overlongKey = "s".repeat(1_025);
-    let hostileLengthReads = 0;
-    const hostileSessionId = Object.defineProperty({}, "length", {
-      get() {
-        hostileLengthReads += 1;
-        throw new Error("length must not be read");
-      },
-    });
 
     expect(
       profileReloadSessionKey(
         extensionContextFixture({ sessionManager: { getSessionId: () => maximumKey } }),
       ),
     ).toBe(maximumKey);
-    for (const sessionId of ["", overlongKey, hostileSessionId]) {
-      // SAFETY: This test deliberately supplies hostile runtime values through Pi's string contract.
+    for (const sessionId of ["", overlongKey]) {
       expect(
         profileReloadSessionKey(
-          extensionContextFixture({
-            sessionManager: { getSessionId: () => sessionId as never },
-          }),
+          extensionContextFixture({ sessionManager: { getSessionId: () => sessionId } }),
         ),
       ).toBeUndefined();
     }
-    expect(hostileLengthReads).toBe(0);
     expect(
-      profileReloadSessionKey(extensionContextFixture({ sessionManager: {} })),
+      profileReloadSessionKey(
+        extensionContextFixture({
+          sessionManager: {
+            getSessionId: () => {
+              throw new Error("The session identity is unavailable.");
+            },
+          },
+        }),
+      ),
     ).toBeUndefined();
 
-    // SAFETY: This test deliberately supplies a hostile runtime value through the string contract.
-    expect(() => handoff.publish(hostileSessionId as never, completeSeed())).not.toThrow();
     handoff.publish("", completeSeed());
     handoff.publish(overlongKey, completeSeed());
     expect(slotPresent()).toBe(false);

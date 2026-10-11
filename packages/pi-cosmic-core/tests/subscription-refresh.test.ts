@@ -189,7 +189,6 @@ it.effect("keeps polling after the refresh it joined is interrupted", () =>
     yield* yieldUntil(() => intervalReads === 1);
     yield* TestClock.adjust("1 second");
     for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
-    // The poller has joined the owner's refresh, which replays this interruption to it.
     yield* Fiber.interrupt(owner);
     yield* yieldUntil(() => intervalReads === 2);
     yield* TestClock.adjust("1 second");

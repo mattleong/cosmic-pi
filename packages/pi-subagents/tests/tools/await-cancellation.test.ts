@@ -1,4 +1,3 @@
-// The registered tool and managed runtime are the Promise-shaped Pi host boundary.
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -22,7 +21,6 @@ import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { step } from "../support/effect-test.ts";
 import { executeTool } from "./fixtures/tool-harness.ts";
 
-/** The real service in a managed runtime, before any tools are registered against it. */
 const managedTools = Effect.gen(function* () {
   const fixture = nativeReportServiceFixture();
   const { pi, tools } = recordingExtensionHost();
@@ -110,7 +108,7 @@ it.live("keeps late-abort delivery uncertain and recoverable after consumption",
       deliveryId: "late-report",
       text: "Recover after late abort",
     });
-    yield* Deferred.await(entered); // Result constructed, consumed, and original claim scope released.
+    yield* Deferred.await(entered);
     controller.abort();
     yield* Deferred.succeed(release, undefined);
     const result = yield* step(() => pending);
@@ -195,7 +193,6 @@ it.live(
       yield* Deferred.await(progress);
       expect(activePresentations).toBe(1);
       expect(awaitLeases).toEqual([[[child.id], "all_finished"]]);
-      // The real service owns the claim while waiting on the SubscriptionRef revision source.
       const conflict = yield* step(() =>
         runtime.run(awaitRuns(service, [child.id], "all_finished").pipe(Effect.flip)),
       );
@@ -219,7 +216,6 @@ it.live(
       expect(fixture.backend.controls[0]!.terminations).toEqual([]);
       expect((yield* step(() => runtime.run(service.status(child.id)))).state).toBe("running");
 
-      // A replacement await must acquire the same report claim immediately after cancellation.
       const replacementProgress = Deferred.makeUnsafe<void>();
       const replacement = executeTool(
         tool,

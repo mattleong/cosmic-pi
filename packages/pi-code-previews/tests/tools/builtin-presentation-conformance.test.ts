@@ -51,7 +51,6 @@ const cases = [
   { name: "ls", args: { path: "/project" }, output: "first.ts\nlast.ts", retained: "last.ts" },
 ] as const;
 
-/** An actual registered builtin renderer, captured with this background and collapsed style. */
 function builtin(
   name: BuiltinCompactTool,
   mode: "off" | "on" | "border" = "off",
@@ -70,7 +69,6 @@ function plain(lines: string[]) {
 }
 beforeEach(() => applyPresentationSettings({ toolCallTiming: false, ...previewBodiesDisabled }));
 
-/** Call source that expansion must keep, including when the call fails. */
 const sourceMarkers = (name: string): string[] =>
   name === "bash"
     ? ["FIRST_COMMAND", "LAST_COMMAND"]
@@ -111,7 +109,6 @@ describe("registered builtin presentation", () => {
           harness.call(fixture.args, { expanded });
           harness.result(failure, { expanded, isError: true });
           const text = plain(harness.render(160));
-          // One issue line; expansion adds the raw error once under its own label.
           expect(count(text, "UNCLASSIFIED_FAILURE")).toBe(expanded ? 2 : 1);
           expect(count(text, "Inspect destination before retrying")).toBe(expanded ? 1 : 0);
           for (const marker of sourceMarkers(fixture.name))
@@ -157,7 +154,6 @@ describe("registered builtin presentation", () => {
     };
     harness.call(args);
     harness.result(output);
-    // Diff availability is informational: expansion explains it, collapsed rows stay quiet.
     expect(plain(harness.render(120))).not.toContain("Diff unavailable");
     harness.call(args, { expanded: true });
     harness.result(output, { expanded: true });
@@ -210,7 +206,6 @@ describe("registered builtin presentation", () => {
       expect(text).toContain("OUTPUT_LINE");
     }
     expect(failure).toEqual(before);
-    // Only Pi's status on a failed call is folded into the issue; ordinary output stays.
     const printed = builtin("bash", "off", "preview");
     printed.call({ command: "cat status.txt" });
     printed.result(result("Command exited with code 3"));
@@ -257,7 +252,6 @@ describe("registered builtin presentation", () => {
     expect(expanded("grep", { pattern, path: "/project" })).toContain(JSON.stringify(pattern));
     const long = `/project/${"deep/".repeat(20)}file.ts`;
     expect(expanded("read", { path: long })).toContain(long);
-    // Without truncation or a limit, a notice-shaped final line is file content.
     const text = "body\n\n[10 more lines in file. Use offset=11 to continue.]";
     expect(expanded("read", { path: "/project/a.md" }, text)).toContain("offset=11");
   });
@@ -270,7 +264,6 @@ describe("registered builtin presentation", () => {
       return plain(harness.render(100));
     };
     expect(count(lines("pnpm lint"), "pnpm lint")).toBe(1);
-    // Multi-line commands keep their formatted source beneath the one-line heading.
     const multiline = lines("printf 'FIRST'\nprintf 'SECOND'").split("\n");
     expect(multiline.map((line) => line.trim())).toContain("printf 'SECOND'");
     const long = `echo ${"x".repeat(120)} END_OF_COMMAND`;

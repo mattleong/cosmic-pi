@@ -1,4 +1,3 @@
-/** Provider-agnostic subscription-usage refresh controller shared by provider extensions. */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -27,32 +26,26 @@ import { withUsageEligibility, type UsageProjectionBase } from "./usage-projecti
 import { formatDuration } from "./display.ts";
 import { failureMessage, notificationText } from "./message-text.ts";
 
-/** Usage configuration fields the shared controller relies on. */
 interface UsageControllerConfigFields {
   readonly refreshIntervalMs: number;
   readonly showOnlyOnSubscriptionModels: boolean;
 }
 
-/** Resolved subscription-usage settings. Each provider owns its schema, defaults, and clamping. */
 export interface SubscriptionUsageConfig extends UsageControllerConfigFields {
   readonly showResetTimes: boolean;
 }
 
-/** Minimal resolved-config shape required by the shared controller. */
 export type UsageControllerConfig = ScopedConfigMetadata & {
   readonly usage: UsageControllerConfigFields;
 };
 
-/** Core services every provider usage stack depends on. */
 type UsageProviderRequirements = Path.Path | JsonDocumentStore | JsonHttpClient;
 
-/** Provider fetch result. `patch` carries provider identity fields into the projection. */
 export type UsageFetchOutcome<Snapshot, Patch> =
   | { readonly _tag: "Missing" }
   | { readonly _tag: "Failure"; readonly message: string; readonly patch?: Patch }
   | { readonly _tag: "Success"; readonly snapshot: Snapshot; readonly patch: Patch };
 
-/** Best-effort UI probe: skip only when the host explicitly reports no UI at all. */
 const hostHasUi = (ctx: ExtensionContext): boolean =>
   invokeHostCallback(() => ctx.hasUI !== false, true);
 
@@ -65,7 +58,6 @@ type RefreshValue<Snapshot, Patch> =
       readonly fetchedAt: number;
     });
 
-/** Scoped configuration store operations used by the shared controller. */
 type UsageControllerStore<Resolved extends ScopedConfigMetadata, E> = PreferredScopeStore<
   Resolved,
   E
@@ -80,46 +72,35 @@ export interface UsageRefreshControllerOptions<
   EI,
   R,
 > {
-  /** Span prefix, e.g. "pi-better-openai.usage" (refresh span becomes `${spanPrefix}.refresh`). */
   readonly spanPrefix: string;
-  /** Human-readable label used in recovery log messages, e.g. "Better OpenAI". */
   readonly logLabel: string;
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly cwd: string;
   readonly projection: MutableRef.MutableRef<P>;
   readonly onChange: () => void;
-  /** Revoked synchronously by the originating session before reset and disposal. */
   readonly canPublish?: (() => boolean) | undefined;
   readonly startPolling?: boolean | undefined;
-  /** Presentation owner controls automatic requests; explicit notified requests still fetch. */
   readonly backgroundEnabled?: (() => boolean) | undefined;
   readonly projectTrusted?: boolean | undefined;
-  /** Provider initial projection (shared fields plus provider identity fields). */
   readonly initialProjection: () => P;
-  /** Status text published when the current model is not an eligible subscription model. */
   readonly hiddenStatusText: string;
   readonly missingCredentialsMessage: string;
-  /** Identity fields cleared when credentials go missing (e.g. authFound/teamId). */
   readonly clearAuthPatch: Partial<P>;
   readonly store: UsageControllerStore<Resolved, E>;
   readonly decodeSettingUpdate: (
     id: string,
     value: string,
   ) => Effect.Effect<(document: JsonObject) => JsonObject, EI>;
-  /** Whether usage applies to the current model under the resolved configuration. */
   readonly eligibility: (
     ctx: ExtensionContext,
     cfg: Resolved,
   ) => Effect.Effect<boolean, never, UsageProviderRequirements | R>;
-  /** Applies context eligibility (and provider clearing rules) to the projection. */
   readonly synchronizeState?: (
     current: P,
     ctx: ExtensionContext,
     clearUsage: boolean,
   ) => Effect.Effect<P, never, UsageProviderRequirements | R>;
-  /** Optional extra refresh-key segment (e.g. a per-model usage scope). */
   readonly refreshKeyScope?: ((ctx: ExtensionContext) => string) | undefined;
-  /** Fetches credentials and usage; infrastructure failures must be mapped to outcomes. */
   readonly fetchOutcome: (args: {
     readonly ctx: ExtensionContext;
   }) => Effect.Effect<
@@ -129,7 +110,6 @@ export interface UsageRefreshControllerOptions<
   >;
   readonly formatStatusLine: (snapshot: Snapshot, cfg: Resolved, fetchedAt: number) => string;
   readonly formatStatusText: (snapshot: Snapshot, fetchedAt: number) => string;
-  /** Provider-specific services pinned onto effects that escape the layer scope. */
   readonly dependencies: Context.Context<R>;
 }
 
@@ -145,10 +125,8 @@ interface UsageRefreshController<
   readonly contextChanged: (clearUsage?: boolean) => Effect.Effect<void>;
   readonly updateSetting: (id: string, value: string) => Effect.Effect<void, E | EI>;
   readonly agentDir: string;
-  /** Extension seams for provider-specific config mutations sharing the same serialization. */
   readonly getState: Effect.Effect<P>;
   readonly updateState: (f: (current: P) => P) => Effect.Effect<P>;
-  /** Installs a committed config, clearing usage and waking polling. */
   readonly installConfig: (config: Resolved) => Effect.Effect<void>;
   readonly withSettingsPermit: <A, E2, R2>(
     effect: Effect.Effect<A, E2, R2>,
@@ -158,11 +136,6 @@ interface UsageRefreshController<
   ) => Effect.Effect<A, E2>;
 }
 
-/**
- * Builds the standard provider usage controller: interval/coalesced refresh with stale-commit
- * suppression, Disabled/Hidden/Missing/Failure/Success projection commits, and the
- * semaphore-serialized setting-update flow against the package's scoped config store.
- */
 export const makeUsageRefreshController = <
   P extends UsageProjectionBase<Resolved, Snapshot>,
   Resolved extends UsageControllerConfig,
@@ -176,8 +149,6 @@ export const makeUsageRefreshController = <
   Effect.gen(function* () {
     const { context, cwd, projection, onChange, logLabel, store } = options;
     const ambientDependencies = yield* Effect.context<UsageProviderRequirements>();
-    // Capture only these shared services, never the whole ambient context. Context.merge keeps
-    // the second context on key collisions, so provider dependencies cannot replace them.
     const sharedDependencies = ambientDependencies.pipe(
       Context.pick(Path.Path, JsonDocumentStore, JsonHttpClient, Tracer.Tracer),
     );
@@ -190,13 +161,11 @@ export const makeUsageRefreshController = <
     const authPath = path.join(agentDir, "auth.json");
     const projectTrusted = options.projectTrusted === true;
     const config = yield* store.resolveConfig(cwd, agentDir, projectTrusted);
-    // The overridden fields all belong to UsageProjectionBase, so the merge stays within P.
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const mergeState = (
       current: P,
       base: Partial<UsageProjectionBase<Resolved, Snapshot>>,
       patch?: Partial<P>,
-    ): P => ({ ...current, ...base, ...patch }) as P;
+    ): P => ({ ...current, ...base, ...patch });
     const state = yield* makeFrozenProjection<P, P>(
       mergeState(options.initialProjection(), { config, authPath }),
       (current) => current,
@@ -212,7 +181,6 @@ export const makeUsageRefreshController = <
           return Effect.succeed([next, next] as const);
         })
         .pipe(Effect.orDie);
-    // Best-effort host UI adapter: a failing host callback is logged, never propagated.
     const notifyHost = (operation: string, action: () => void) =>
       Effect.try(() => {
         if (options.canPublish?.() !== false) action();
@@ -389,18 +357,15 @@ export const makeUsageRefreshController = <
     return controller;
   });
 
-/** Provider-owned fields of the shared usage debug report. */
 interface UsageDebugReport {
   readonly currentModel: string;
   readonly requiresSubscriptionModel: boolean;
-  /** Provider identity line; the value is masked before rendering. */
   readonly identityLabel: string;
   readonly identityValue: string | undefined;
   readonly refreshIntervalMs: number;
   readonly endpoint: string;
 }
 
-/** Renders the standard provider usage debug report from projection-owned data. */
 export function formatUsageDebugReport(
   state: UsageProjectionBase<unknown, unknown>,
   report: UsageDebugReport,
@@ -420,12 +385,6 @@ export function formatUsageDebugReport(
   ].join("\n");
 }
 
-/**
- * Runs one provider diagnostic effect with a bounded 10-second deadline (the shared provider
- * convention) and maps both failures and timeouts onto a sanitized string, so callers only
- * branch on `Result<A, string>`: `Failure` messages are diagnostics, `Success` carries the
- * provider value. A timeout, or a failure without a message, reports `timeoutMessage`.
- */
 export const timedDiagnosticResult = <A, E extends { readonly message?: string | undefined }, R>(
   effect: Effect.Effect<A, E, R>,
   timeoutMessage: string,

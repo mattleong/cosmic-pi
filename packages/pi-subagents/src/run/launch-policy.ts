@@ -2,7 +2,6 @@ import type { RunRecord } from "./internal.ts";
 import type { StartSubagentRequest } from "./model.ts";
 import { invalidRequest } from "./errors.ts";
 
-/** Caller holds the registry lock. Provenance is internal, never taken from request arguments. */
 export const scriptOriginForStart = (
   records: ReadonlyMap<string, RunRecord>,
   request: StartSubagentRequest,

@@ -10,7 +10,6 @@ import {
 } from "../src/coordination/refresh-coordinator.ts";
 import { interruptingScheduler } from "../testing.ts";
 
-/** Records every request and blocks only the first run until released. */
 const gated = () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
@@ -30,8 +29,6 @@ const gated = () =>
 describe("RefreshCoordinator", () => {
   it.effect("remains reusable across every scheduler interruption point in admission", () =>
     Effect.gen(function* () {
-      // Sweep public scheduler checkpoints, including registration before owner work.
-      // Reuse is checked by a completion probe rather than a TestClock timeout.
       for (let interruptAt = 1; interruptAt <= 100; interruptAt++) {
         const coordinator = yield* makeRefreshCoordinator();
         let checkpoints = 0;
@@ -117,8 +114,6 @@ describe("RefreshCoordinator", () => {
       const queued = yield* coordinator.run({ force: true }, operation).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* Deferred.succeed(releaseFirst, undefined);
-      // Block until the owner has left the first operation and entered the follow-up:
-      // a request offered from here used to resolve without ever running.
       yield* Deferred.await(followUpStarted);
       const late = yield* coordinator.run({ notify: true }, operation).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
@@ -126,8 +121,6 @@ describe("RefreshCoordinator", () => {
       yield* Fiber.join(owner);
       yield* Fiber.join(queued);
       yield* Fiber.join(late);
-      // The follow-up ({force}) is already dequeued and executing here, so the late
-      // request merges against an empty queue and drains afterwards.
       expect(requests).toEqual([
         {},
         { force: true, notify: false },

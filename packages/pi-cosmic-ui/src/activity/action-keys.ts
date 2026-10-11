@@ -2,10 +2,8 @@ import type { ActivityRow } from "./model.ts";
 
 type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
 
-/** Number keys reach any action; a page holds nine and `a` turns to the next. */
 export const ACTIVITY_ACTION_PAGE_SIZE = 9;
 
-/** Direct keys for common producer action ids, in the order each key prefers them. */
 const ACTIVITY_ACTION_KEYS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ["x", ["stop", "skip"]],
   ["i", ["interrupt"]],
@@ -15,14 +13,12 @@ const ACTIVITY_ACTION_KEYS: ReadonlyArray<readonly [string, ReadonlyArray<string
   ["c", ["clear"]],
 ];
 
-/** Every letter and number the manager reserves from keybindings: views, actions and pages. */
 export const activityShortcuts: ReadonlySet<string> = new Set([
   ..."arwzft",
   ...ACTIVITY_ACTION_KEYS.map(([key]) => key),
   ..."123456789",
 ]);
 
-/** The action a direct key invokes: the first one, in the key's preference order, offered. */
 export const activityActionForKey = (
   actions: ReadonlyArray<ActivityAction>,
   key: string,
@@ -31,27 +27,18 @@ export const activityActionForKey = (
     .flatMap((id) => actions.filter((action) => action.id === id))
     .at(0);
 
-/** The number of action pages a row needs. */
 export const activityActionPages = (actions: ReadonlyArray<ActivityAction> | undefined): number =>
   Math.max(1, Math.ceil((actions?.length ?? 0) / ACTIVITY_ACTION_PAGE_SIZE));
 
 export interface ActivityActionHints {
-  /** What the default footer shows: a single direct key, then the number keys it leaves. */
   readonly primary: string | undefined;
-  /** Every action key, for the full help. */
   readonly all: string | undefined;
-  /** The bare keys, for the narrowest help. */
   readonly keys: ReadonlyArray<string>;
 }
 
 const join = (parts: ReadonlyArray<string | undefined>) =>
   parts.filter((part): part is string => Boolean(part)).join(" · ") || undefined;
 
-/**
- * Footer hints for a selected row's actions on the shown action page. A row with one direct-key
- * action shows that key, so the common stop or skip needs no help screen; number keys cover the
- * page's actions, and `a` appears only when there are more actions than one page holds.
- */
 export function activityActionHints(
   row: ActivityRow | undefined,
   page: number,
@@ -67,7 +54,6 @@ export function activityActionHints(
     Math.min(Math.max(0, page), activityActionPages(actions) - 1) * ACTIVITY_ACTION_PAGE_SIZE;
   const shown = actions.slice(start, start + ACTIVITY_ACTION_PAGE_SIZE);
   const only = shown.length === 1 ? shown[0] : undefined;
-  // One action with a direct key needs no number key beside it.
   const numberKeys =
     shown.length === 0 || (actions.length === 1 && keyed.length > 0)
       ? undefined

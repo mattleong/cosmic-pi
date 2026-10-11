@@ -76,13 +76,11 @@ describe("background task compact semantics", () => {
       "list",
     );
     expect(summary?.outcome).toBe("error");
-    // The first counter counts every state; later ones are shorter fallbacks for narrow rows.
     for (const count of ["2 failed", "1 stopping"]) expect(summary?.counters?.[0]).toContain(count);
     expect(summary?.counters?.at(-1)).toMatch(/^3 tasks$/u);
     expect(project({ action: "list", tasks: [] }, "list")?.counters).toEqual(["0 tasks"]);
     expect(severities(summary, "error")).toEqual(["one:exit-code", "two:exit-code"]);
     expect(severities(summary, "warning")).toEqual(["three:cleanup-unconfirmed", "three:log-loss"]);
-    // Failures lead, whatever the tasks' order.
     expect(summary?.issues?.[0]?.severity).toBe("error");
   });
 
@@ -103,14 +101,12 @@ describe("background task compact semantics", () => {
     const messages = summary?.issues?.map((issue) => issue.message) ?? [];
     expect(messages).toHaveLength(5);
     const labelled = (pattern: RegExp) => messages.filter((message) => pattern.test(message));
-    // An unnamed task goes by its command.
     expect(labelled(/^test: /u)).toHaveLength(1);
     expect(labelled(/^worker \(1\): /u)).toHaveLength(1);
     expect(labelled(/^worker \(2\): /u)).toHaveLength(1);
     expect(labelled(/^builder: /u)).toHaveLength(1);
     expect(messages.join("\n")).not.toMatch(/task-[a-e]/u);
     for (const message of messages) expect(message.length).toBeLessThan(120);
-    // The unprefixed message and agent detail are unchanged by aggregation, with no task ID.
     const single = project({ action: "status", snapshot: { ...snapshot, state: "stopping" } });
     const worker = summary?.issues?.find((issue) => issue.message.startsWith("worker (1)"));
     expect(worker?.message).toContain(single?.issues?.[0]?.message);
@@ -123,7 +119,6 @@ describe("background task compact semantics", () => {
       snapshot: { ...snapshot, state: "failed", error: "Custom failure. Inspect state." },
     });
     expect(single?.outcome).toBe("error");
-    // Trailing guidance is agent detail: the message keeps the failure, the detail the full text.
     expect(single?.issues).toEqual([
       expect.objectContaining({ severity: "error", message: "Custom failure" }),
     ]);
@@ -155,7 +150,6 @@ describe("background task compact semantics", () => {
       expect(summary?.action).toBe("status");
       expect(summary?.subject).not.toContain("task-1");
       expect(summary?.outcome).toBeUndefined();
-      // A wait says what it awaits, which the arguments do name.
       const waiting = projectBackgroundTaskCompactSummary({
         phase,
         args: { action: "wait", id: "task-1", until: "output", contains: "ready in" },
@@ -167,7 +161,6 @@ describe("background task compact semantics", () => {
     }
     const final = project({ action: "status", snapshot });
     expect(final?.action).toBe("status");
-    // An unnamed task goes by its command, the same collapsed and expanded.
     expect(final?.subject).toBe(snapshot.command);
     expect(final?.compactSubject).toBeUndefined();
     expect(final?.outcome).toBe("success");
@@ -207,8 +200,7 @@ describe("background task compact semantics", () => {
 
   it("labels an unknown action by its own text, never an inherited object property", () => {
     for (const action of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
-      // SAFETY: Persisted or foreign arguments can carry actions outside the declared union.
-      expect(backgroundTaskActionLabel(action as BackgroundTaskToolInput["action"])).toBe(action);
+      expect(backgroundTaskActionLabel(action)).toBe(action);
     }
   });
 
@@ -276,7 +268,6 @@ describe("background task compact semantics", () => {
     expect(result?.subject).toBe("server");
     expect(result?.compactSubject).toBeUndefined();
     expect(result?.metadata).toEqual([taskStateLabel("stopped")]);
-    // The stop's own signal is routine, not a cause.
     expect(result?.issues).toEqual([]);
   });
 
@@ -324,7 +315,6 @@ describe("background task compact semantics", () => {
             droppedBytes: 3,
           },
         ),
-        // The default maxWaitSeconds cap the service applied to the request below.
         appliedWaitSeconds: 30,
       },
       "wait",
@@ -335,18 +325,15 @@ describe("background task compact semantics", () => {
     expect(result?.outcome).toBe("warning");
     expect(result?.metadata).toHaveLength(1);
     expect(result?.metadata?.[0]).toContain(taskStateLabel("running"));
-    // One loss line, with where retained output resumes for the agent.
     expect(result?.issues?.filter((issue) => issue.code === "task-1:log-loss")).toHaveLength(1);
     expect(find(result, "task-1:log-loss")?.message).toContain("3 bytes");
     expect(find(result, "task-1:log-loss")?.detail).toContain("cursor 4");
     const timeout = find(result, "task-1:wait-timeout");
     expect(timeout?.severity).toBe("warning");
-    // A capped wait reports how long it lasted, not the time it requested.
     expect(timeout?.message).toContain(formatDuration(30_000));
     expect(timeout?.message).not.toContain(formatDuration(90_000));
     expect(find(result, "task-1:runtime-timeout")).toBeUndefined();
 
-    // Details without the applied wait never fall back to the requested time.
     const older = project(wait("timeout"), "wait", "settled", false, {
       until: "exit",
       waitSeconds: 90,
@@ -371,7 +358,6 @@ describe("background task compact semantics", () => {
       const status = project({ action: "status", snapshot: matchedSnapshot });
       expect(summary?.outcome).toBe("success");
       expect(summary?.metadata).toHaveLength(1);
-      // The match is reported beside the task's state, not in place of it.
       expect(summary?.metadata?.[0]).not.toBe(status?.metadata?.[0]);
       expect(summary?.metadata?.[0]).toContain(status?.metadata?.[0]);
       expect(project(wait("matched", matchedSnapshot, { id: "other" }), "wait")).toBeUndefined();
@@ -385,7 +371,6 @@ describe("background task compact semantics", () => {
     );
     expect(result?.outcome).toBe("warning");
     expect(severities(result, "warning")).toEqual(["task-1:log-loss", "task-1:slice-truncated"]);
-    // Recovery rides on the warnings' details rather than repeating them as info lines.
     expect(severities(result, "info")).toEqual([]);
     const lossDetail = find(result, "task-1:log-loss")?.detail;
     expect(lossDetail).toContain("cursor 4");
@@ -417,7 +402,6 @@ describe("background task compact semantics", () => {
     expect(result?.outcome).toBe(outcome);
     if (outcome === "error") {
       expect(severities(result, "error")).toHaveLength(1);
-      // Where the failure details are is agent recovery on the error itself.
       expect(result?.issues?.[0]?.detail).toMatch(/status/u);
     }
     if (state === "stopping")
@@ -440,7 +424,6 @@ describe("background task compact semantics", () => {
   });
 
   it("says why a task failed from its cause span or its exit status", () => {
-    // The cause lives in the result text; details only record where.
     const message = (fields: Partial<BackgroundTaskSnapshot>, cause?: string) => {
       const line = `task-1 failed — test${cause ? `\n  cause: ${cause}` : ""}`;
       const start = line.indexOf("cause: ") + "cause: ".length;
@@ -466,7 +449,6 @@ describe("background task compact semantics", () => {
     expect(message({ exitCode: 137 })).toMatch(/code 137: killed/u);
     expect(message({ exitCode: null, signal: "SIGSEGV" })).toMatch(/SIGSEGV: crashed/u);
     expect(message({}, "fatal: no such ref")).toMatch(/: fatal: no such ref$/u);
-    // Results without spans, or with spans the text does not hold, keep the bare exit status.
     expect(message({ exitCode: 1 })).toMatch(/code 1$/u);
     expect(
       projectBackgroundTaskCompactSummary({

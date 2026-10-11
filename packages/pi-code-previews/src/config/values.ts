@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { decodeTolerantFields, type TolerantFieldDiagnostic } from "pi-cosmic-core";
 import { ALL_CODE_PREVIEW_TOOLS, parseCodePreviewTools } from "../tools/names";
 import {
+  CODE_PREVIEW_SETTING_KEYS,
   CodePreviewSettingsSchema,
   type CodePreviewEditableSettingId,
   type CodePreviewSettings,
@@ -48,27 +49,23 @@ export function normalizeSettingsWithDiagnostics<DataInput>(
   return { settings: next, diagnostics: decoded.diagnostics };
 }
 
-function parseAndApplyUiSetting<K extends keyof CodePreviewSettings>(
-  settings: CodePreviewSettings,
-  key: K,
+type SettingKey = keyof CodePreviewSettings;
+type SettingCandidate = CodePreviewSettings[SettingKey] | string | undefined;
+
+function uiSettingCandidate(
+  key: SettingKey,
+  currentValue: CodePreviewSettings[SettingKey],
   value: string,
-): void {
-  const currentValue = settings[key];
-  let candidate: unknown = value;
+): SettingCandidate {
   if (key === "tools") {
     const tools = parseCodePreviewTools(value);
-    candidate = tools ? [...tools] : undefined;
-  } else if (key === "editCollapsedLines") {
-    candidate = value === "all" ? value : Number(value);
-  } else if (Predicate.isBoolean(currentValue)) {
-    candidate = value === "on" ? true : value === "off" ? false : undefined;
-  } else if (Predicate.isNumber(currentValue)) {
-    candidate = Number(value);
+    return tools ? [...tools] : undefined;
   }
-  const decoded = Schema.decodeUnknownOption(CodePreviewSettingsSchema.fields[key])(candidate);
-  if (Option.isSome(decoded))
-    // SAFETY: The selected authoritative field schema corresponds to the requested settings key.
-    settings[key] = decoded.value as CodePreviewSettings[K];
+  if (key === "editCollapsedLines") return value === "all" ? value : Number(value);
+  if (Predicate.isBoolean(currentValue))
+    return value === "on" ? true : value === "off" ? false : undefined;
+  if (Predicate.isNumber(currentValue)) return Number(value);
+  return value;
 }
 
 export function updateSetting(
@@ -76,11 +73,13 @@ export function updateSetting(
   id: string,
   value: string,
 ): CodePreviewSettings {
-  const next = cloneCodePreviewSettings(current);
-  if (Object.hasOwn(CodePreviewSettingsSchema.fields, id)) {
-    // SAFETY: The own-property check narrows id to a field in the authoritative settings schema.
-    const key = id as keyof CodePreviewSettings;
-    parseAndApplyUiSetting(next, key, value);
-  }
-  return next;
+  const key = CODE_PREVIEW_SETTING_KEYS.find((candidate) => candidate === id);
+  if (!key) return cloneCodePreviewSettings(current);
+  const decoded = Schema.decodeOption(CodePreviewSettingsSchema)({
+    ...current,
+    [key]: uiSettingCandidate(key, current[key], value),
+  });
+  return Option.isSome(decoded)
+    ? { ...decoded.value, tools: [...decoded.value.tools] }
+    : cloneCodePreviewSettings(current);
 }

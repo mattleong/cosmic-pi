@@ -28,7 +28,6 @@ type ChangedLineRangePair = {
   ranges: ConfidentWordChangeRanges;
 };
 
-/** Pairs one run of changed rows; pair indexes are relative to the run. */
 export function analyzeChangedLineBlock(
   block: readonly (ParsedDiffLine | null)[],
   wordEmphasis: DiffWordEmphasis,
@@ -63,7 +62,6 @@ export function analyzeChangedLineBlock(
   return { removed, added, pairs, ranges };
 }
 
-/** Line pairs confident enough to emphasize, indexed across the whole diff. */
 export function* emphasizedChangedPairs(
   lines: readonly (ParsedDiffLine | null)[],
   wordEmphasis: DiffWordEmphasis,

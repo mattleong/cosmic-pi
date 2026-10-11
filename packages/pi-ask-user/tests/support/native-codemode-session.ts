@@ -1,14 +1,9 @@
-// Public SDK host boundary: real agent loop, tool dispatch and native QuickJS; no inference/UI.
 import * as Effect from "effect/Effect";
 import { fauxCodemodeSession } from "pi-cosmic-core/testing/sdk";
 import type { AskUserService } from "../../src/questionnaire/service.ts";
 import { registerAskUserTool } from "../../src/tools/ask-user.ts";
 import { registerAsyncAskUserTools } from "../../src/tools/ask-user-async.ts";
 
-/**
- * Registers the actual owned definitions with service callbacks, not the application mode gates.
- * Print-mode test sessions must never prompt a real user or change production UI/exposure rules.
- */
 export const nativeCodemodeSession = (service: Effect.Success<typeof AskUserService>) =>
   Effect.gen(function* () {
     const runTool = Effect.runPromiseWith(yield* Effect.context<never>());

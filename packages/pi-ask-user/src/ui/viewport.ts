@@ -1,10 +1,8 @@
 import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
-/** Internal row annotation, removed before handing lines to Pi. */
 export const SELECTION_MARKER = "\x1b_ask-user-selection\x07";
 
-/** An outer viewport for components, including Editor, without a height setter. */
 export class DialogViewport {
   private offset = 0;
   private height = 24;
@@ -57,8 +55,6 @@ export class DialogViewport {
       const clean = line.replaceAll(SELECTION_MARKER, "");
       const bounded = clipToWidth(clean, width, "");
       const marker = clean.indexOf(CURSOR_MARKER);
-      // Editor's minimum padding can exceed a one-column allocation. Shift its
-      // cursor cell into view rather than dropping the IME anchor at that width.
       return marker >= 0 && !bounded.includes(CURSOR_MARKER)
         ? CURSOR_MARKER + clipToWidth(clean.slice(marker + CURSOR_MARKER.length), width, "")
         : bounded;

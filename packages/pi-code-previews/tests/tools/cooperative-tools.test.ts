@@ -28,7 +28,6 @@ type ReadRenderCall = NonNullable<ReadDefinition["renderCall"]>;
 type ReadRenderResult = NonNullable<ReadDefinition["renderResult"]>;
 type ReadResult = Parameters<ReadRenderResult>[0];
 
-/** Defaults without timing plus each test's overrides, so no test inherits another's settings. */
 const settings = (overrides: Partial<CodePreviewSettings> = {}) =>
   setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: false, ...overrides });
 
@@ -105,7 +104,6 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
   assert.equal(wrapped.execute, execute);
   assert.equal(wrapped.parameters, parameters);
   assert.equal(wrapped.prepareArguments, prepareArguments);
-  // Model-facing prompt metadata is optional on the definition, so TypeScript cannot prove it kept.
   assert.equal(wrapped.promptGuidelines, promptGuidelines);
   assert.equal(wrapped.constrainedSampling, constrainedSampling);
   assert.equal(wrapped.description, tool.description);
@@ -186,8 +184,7 @@ test("border shell keeps independent last components for call and result slots",
 test("fallback result rendering sanitizes terminal controls", () => {
   const base = createReadToolDefinition("/project");
   const { renderCall: _renderCall, renderResult: _renderResult, ...withoutRenderers } = base;
-  // SAFETY: The omitted optional renderers leave a valid Pi read definition for fallback testing.
-  const tool = withoutRenderers as ReadDefinition;
+  const tool: ReadDefinition = withoutRenderers;
   const wrapped = withCodePreviewShell(tool, { mode: "off" });
   const args: ReadToolInput = { path: "README.md" };
   const component = wrapped.renderResult?.(
@@ -313,18 +310,14 @@ test("preview timing toggles preserve producer caches and mouse actions", () => 
       {
         ...createReadToolDefinition("/project"),
         renderCall: ((_args, _theme, ctx) => {
-          // SAFETY: The producer owns this slot and only returns Text components.
-          const text = (ctx.lastComponent as Text | undefined) ?? callText;
-          text.setText("call action");
-          assert.equal(text, callText);
-          return text;
+          assert.equal(ctx.lastComponent ?? callText, callText);
+          callText.setText("call action");
+          return callText;
         }) satisfies ReadRenderCall,
         renderResult: ((_value, _options, _theme, ctx) => {
-          // SAFETY: The producer owns this slot and only returns Text components.
-          const text = (ctx.lastComponent as Text | undefined) ?? resultText;
-          text.setText("result action\nsecond row");
-          assert.equal(text, resultText);
-          return text;
+          assert.equal(ctx.lastComponent ?? resultText, resultText);
+          resultText.setText("result action\nsecond row");
+          return resultText;
         }) satisfies ReadRenderResult,
       },
       { mode },

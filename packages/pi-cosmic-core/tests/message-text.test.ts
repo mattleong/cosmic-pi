@@ -26,7 +26,6 @@ test("first-line messages drop error-class wrappers and trailing agent advice", 
     ["SchemaError(Expected no excess property", "Expected no excess property"],
     ["Found 2 matches in a.ts. Please provide more context.", "Found 2 matches in a.ts"],
     ["Guidance was accepted. Do not resend it.", "Guidance was accepted"],
-    // Informative later sentences and one-hump bracketed content are kept.
     [
       "Protocol 21 is unsupported. Fell back to local/pi.",
       "Protocol 21 is unsupported. Fell back to local/pi",
@@ -72,7 +71,6 @@ test("failure messages name common service and network failures from the first l
     ["prompt is too long: 210000 tokens > 200000 maximum", /context/u],
   ] as const)
     expect(failureMessage(text, "fallback")).toMatch(pattern);
-  // Numbers in prose and failures below the first line are not status codes.
   expect(failureMessage("Offset 401 is beyond end of file", "fallback")).toBe(
     "Offset 401 is beyond end of file",
   );

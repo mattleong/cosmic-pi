@@ -2,7 +2,6 @@ import type { BuiltinCompactTool } from "./builtin-subject";
 import type { CompactIssue } from "./compact-issues";
 import { firstLineMessage } from "pi-cosmic-core";
 
-// The raw error line, with its code and path, stays in the expanded result.
 const filesystemFailures = [
   ["ENOENT: no such file or directory, ", "File not found"],
   ["EACCES: permission denied, ", "Permission denied"],
@@ -10,13 +9,11 @@ const filesystemFailures = [
   ["Path not found: ", "Path not found"],
   ["Not a directory: ", "The target is not a folder"],
 ] as const;
-// Pi's edit reports a failed access check as `Could not edit file: <path>. Error code: <code>.`
 const EDIT_ACCESS = /^Could not edit file: .+\. Error code: (E[A-Z]+)\.$/u;
 
 const oldText = (index: string | undefined) =>
   index === undefined ? "oldText" : `edits[${index}].oldText`;
 
-/** Edit refusals carry a technical cause and the agent's recovery as expanded detail. */
 const editFailures: ReadonlyArray<{
   readonly pattern: RegExp;
   readonly code: string;
@@ -54,7 +51,6 @@ const editFailures: ReadonlyArray<{
     detail: (match) => `${oldText(match[1])} is empty.\nProvide the exact text to replace.`,
   },
   {
-    // A single edit's refusal adds a sentence about likely causes.
     pattern:
       /^No changes made to .+\. The replacements? produced identical content\.(?: This might indicate .+)?$/u,
     code: "edit-unchanged",

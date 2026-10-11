@@ -1,4 +1,3 @@
-// Pi command and custom-UI handlers are Promise-shaped host boundaries.
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Result from "effect/Result";
@@ -27,22 +26,17 @@ import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 import { BackgroundTaskNotFoundError } from "../task/errors.ts";
 
 export interface TaskManagerActions {
-  /** False only before unified-view admission; rejection never falls back to a second surface. */
   readonly openActivity?: (signal?: AbortSignal) => Promise<boolean>;
   readonly stop: (id: string) => Promise<void>;
   readonly clear: () => Promise<void>;
 }
 
 export interface TaskSettingsActions {
-  /** Capture the originating activation when a command is invoked, not when registered. */
-  readonly captureAuthority?: () => () => boolean;
-  /** The settings this session started with, once it has started. */
+  readonly captureAuthority: () => () => boolean;
   readonly config: () => BackgroundTaskConfig | undefined;
-  /** The values one scope's file sets itself. */
   readonly read: (
     location: BackgroundTaskSettingsLocation,
   ) => Promise<Partial<BackgroundTaskConfig>>;
-  /** Stores one value in a scope's file; undefined removes the scope's own value. */
   readonly write: (
     location: BackgroundTaskSettingsLocation,
     id: keyof BackgroundTaskConfig,
@@ -86,8 +80,6 @@ function openTaskManager(
     placement: "screen",
     isCurrent,
     create: ({ tui, theme, keybindings, getHeight, finish }) => {
-      // The bridge outlives a replaced session, so its manager closes rather than showing the
-      // replacement's tasks or accepting actions it can no longer perform.
       const revoked = () => {
         if (isCurrent()) return false;
         finish(undefined);
@@ -114,7 +106,6 @@ function openTaskManager(
             });
         },
       });
-      // Deactivation clears the bridge, which closes a revoked manager right away.
       const unsubscribe = bridge.subscribe(() => {
         if (revoked()) return;
         manager.invalidate();
@@ -139,7 +130,6 @@ function openTaskManager(
   });
 }
 
-/** `/tasks` opens the task manager; `/tasks settings` changes the settings. */
 export function registerTasksCommand(
   pi: ExtensionAPI,
   bridge: BackgroundTaskProjectionBridge,
@@ -150,7 +140,7 @@ export function registerTasksCommand(
     description: "Open the background task manager, or change its settings",
     bare: {
       handler: (_args, ctx) => {
-        const isCurrent = actions.captureAuthority?.() ?? (() => true);
+        const isCurrent = actions.captureAuthority();
         return ctx.mode === "tui" && actions.openActivity
           ? actions
               .openActivity(ctx.signal)
@@ -170,14 +160,11 @@ const SCOPES = [
 ] as const;
 type TaskSettingsScope = (typeof SCOPES)[number]["name"];
 
-/** A scope that sets no value of its own takes the global one, or the default. */
 const INHERIT = "inherit";
-/** A setting's value in this session; a configured value such as shellPath can carry controls. */
 const sessionValue = (config: BackgroundTaskConfig, id: keyof BackgroundTaskConfig) =>
   sanitizeTerminalLine(String(config[id] ?? ""));
 const UNTRUSTED = "Trust this project before changing its background task settings";
 
-/** One scope's own values, or why its file couldn't be read. */
 type ScopeFile =
   | { readonly scope: TaskSettingsScope; readonly own: Partial<BackgroundTaskConfig> }
   | { readonly scope: TaskSettingsScope; readonly problem: string };
@@ -187,7 +174,6 @@ const scopeOf = (scope: string | undefined): TaskSettingsScope =>
 const rowKey = (scope: TaskSettingsScope, id: string) => `${scope}:${id}`;
 const scopeLabel = (scope: TaskSettingsScope) => (scope === "project" ? "Project" : "Global");
 
-/** Without values the row can't be changed, so the picker never writes over a broken file. */
 const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): SettingItem => ({
   id: rowKey(scope, "file"),
   label: `${scopeLabel(scope)} · Settings file`,
@@ -195,7 +181,6 @@ const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): Setting
   currentValue: "unavailable",
 });
 
-/** `/tasks settings` through the shared settings shell; changes apply after /reload. */
 export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionSubcommand {
   return withInvocationAuthority(actions.captureAuthority, (isCurrent) =>
     createTaskSettingsSubcommand(actions, isCurrent),
@@ -207,7 +192,6 @@ function createTaskSettingsSubcommand(
   isCurrent: () => boolean,
 ): ExtensionSubcommand {
   const descriptor = (id: string) => BACKGROUND_TASK_SETTINGS.find((entry) => entry.id === id);
-  // Each scope's own value as last read or written, so an edited row shows what its file holds.
   const known = new Map<string, string>();
 
   const pickerItems = (config: BackgroundTaskConfig, files: ReadonlyArray<ScopeFile>) => {
@@ -286,7 +270,6 @@ function createTaskSettingsSubcommand(
           }),
       );
     },
-    // A scope's own value, since the session keeps its settings until /reload.
     displayValue: (_ctx, id, scope) => known.get(rowKey(scopeOf(scope), id)),
     afterApply: (ctx) =>
       notifyAtHostBoundary(ctx, "Background task settings apply after /reload", "info"),
@@ -296,7 +279,6 @@ function createTaskSettingsSubcommand(
       const scopes: readonly TaskSettingsScope[] = isProjectTrusted(ctx)
         ? ["global", "project"]
         : ["global"];
-      // A broken file closes only its own scope; an unavailable runtime closes the picker.
       const readScope = (scope: TaskSettingsScope): Promise<ScopeFile> =>
         actions.read({ cwd: ctx.cwd, scope }).then(
           (own) => ({ scope, own }),

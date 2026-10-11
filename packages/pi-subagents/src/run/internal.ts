@@ -29,30 +29,17 @@ import { snapshotView } from "./state.ts";
 import type { RunWarningSlots } from "./warnings.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 
-/** Runs an effect while holding a service semaphore, such as the run lock or completion gate. */
 export type WithRunLock = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 
-/**
- * Service-owned primitives shared by run modules. Cross-module operations arrive as their
- * producer objects or members typed from them; only launch receives the registry mutably.
- */
 export interface RunContext {
-  /** Service scope for owner-scoped commits and background workers. */
   readonly ownerScope: Scope.Scope;
-  /**
-   * The shared lock guarding every RunRecord mutation; `*Locked` operations require it. Every
-   * release rechecks start admission, so writers queued behind a cleared claim or finished
-   * cleanup retry even when nothing is published.
-   */
   readonly withLock: WithRunLock;
   readonly publish: Effect.Effect<void>;
   readonly records: ReadonlyMap<string, RunRecord>;
-  /** One session-owned cross-process writer pool per canonical cwd digest. */
   readonly writerPools: Map<string, WriterPoolEntry>;
   readonly writerLeases: WriterLeaseContract;
   readonly requireRecord: (id: string) => Effect.Effect<RunRecord, SubagentNotFoundError>;
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
-  /** Service-owned assignment-attempt token allocation, invoked under the service lock. */
   readonly allocateAssignmentAttemptToken: () => string;
 }
 
@@ -61,7 +48,6 @@ export interface PendingInitializationSettlement {
   readonly error?: string | undefined;
 }
 
-/** Stopped-by-parent, stopping, or terminal records ignore further child events. */
 export const isInactiveRunRecord = (record: RunRecord): boolean =>
   record.stoppedByParent ||
   record.view.state === "stopping" ||
@@ -91,36 +77,22 @@ interface BackendReportWatermark {
   readonly deliveryId: string;
 }
 
-/**
- * Trusted owner admission for one launch, never derived from tool arguments. Launch runs
- * `checkLocked` before every admission attempt and `admittedLocked` before the record
- * becomes visible, so root delivery can never select the owned generation.
- */
 export interface RunOwnership {
-  /** Identity reserved earlier by the owner, so its placeholder keeps one stable id. */
   readonly runId?: string | undefined;
   readonly checkLocked: Effect.Effect<void, InvalidSubagentRequestError>;
   readonly admittedLocked: (record: RunRecord) => void;
 }
 
-/** Exclusive owner of a run's first completion generation. */
 interface RunOwnerClaim {
   readonly ownerId: string;
   readonly claimToken: string;
   readonly generation: number;
-  /** Root lifecycle guards apply until the owner closes or hands the run back. */
   live: boolean;
 }
 
 export interface RunRecord {
-  /** Immutable inherited admission policy; never published or supplied by tool arguments. */
   readonly scriptOrigin: boolean;
-  /** Set once at admission by a trusted owner. */
   owner?: RunOwnerClaim | undefined;
-  /**
-   * An owned run's launch prompt without its owner's workflow step and result contract; the
-   * launch switches to it once the owner relinquishes the run to the root.
-   */
   readonly releasedSystemPrompt?: string | undefined;
   view: SubagentRunView;
   scope: Scope.Closeable;
@@ -132,33 +104,21 @@ export interface RunRecord {
     | { readonly scope: Scope.Closeable; readonly settled: Deferred.Deferred<void> }
     | undefined;
   readonly activeTools: Map<string, string>;
-  /** Runtime-native activity remains internal to this Pi run node. */
   readonly nativeAgents: Set<string>;
-  /** Resolves only after backend/process/writer cleanup is confirmed or quarantined. */
   cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">;
-  /** Authoritative cleanup fact used by failed-start recovery and retry admission. */
   cleanupDisposition: "pending" | "confirmed" | "quarantined";
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
   retryClaim?: { readonly token: string } | undefined;
   pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
   latestAssistantText?: string | undefined;
-  /** First accepted contract result of an assignment, as canonical JSON. */
   structuredResult?: { readonly assignmentEpoch: number; readonly json: string } | undefined;
   pauseRequested: boolean;
   pausedAssignmentEpoch?: number | undefined;
   stoppedByParent: boolean;
   cleanupPending: boolean;
   runStateReclaimState: "pending" | "running" | "reclaimed";
-  /**
-   * Exclusive start-admission eviction claim. Set under the service lock while
-   * one start reclaims this terminal record's private state; the record stays
-   * registered until the claiming start revalidates and deletes it atomically.
-   * The claim also reserves the prospective process slot (and writer digest,
-   * when present) while reclamation runs outside the lock.
-   */
   evictionClaim?:
     | {
-        /** The parent whose direct-child slot the claim reserves; none for a workflow start. */
         readonly parentRunId?: string | undefined;
         readonly writerCwdDigest?: string | undefined;
         readonly writeClaims?: ReadonlyArray<string> | undefined;
@@ -177,18 +137,14 @@ export interface RunRecord {
   completionGeneration: number;
   warningSlots: RunWarningSlots;
   readonly completionGenerations: Map<number, CompletionGenerationRecord>;
-  /** One exclusive capability token may own a generation at a time. */
   readonly completionClaims: Map<number, string>;
   assignment: AssignmentState;
-  /** Monotonic allocator; rolled-back attempts are never reused. */
   nextAssignmentEpoch: number;
   lastBackendReport?: BackendReportWatermark | undefined;
   steeringDeliveryOwner?: { readonly epoch: number; readonly sequence: number } | undefined;
-  /** Primary failure survives later generic process-exit evidence. */
   backendFailure?: SubagentError | undefined;
 }
 
-/** Ends every tool and runtime-native agent of the current assignment; caller holds the lock. */
 export const clearRunActivity = (record: RunRecord): void => {
   record.activeTools.clear();
   record.nativeAgents.clear();
@@ -199,7 +155,6 @@ export const clearRunActivity = (record: RunRecord): void => {
     };
 };
 
-/** Commits a pause of the current assignment and returns its snapshot; caller holds the lock. */
 export const commitRunPauseLocked = (record: RunRecord, now: number): SubagentRunView => {
   record.pauseRequested = false;
   record.pausedAssignmentEpoch = record.assignment.epoch;
@@ -214,7 +169,6 @@ export const commitRunPauseLocked = (record: RunRecord, now: number): SubagentRu
   return snapshotView(record.view);
 };
 
-/** Wakes initialization waiters and takes the settlement deferred until startup committed. */
 export const completeRunInitialization = (
   record: RunRecord,
 ): PendingInitializationSettlement | undefined => {
@@ -227,7 +181,6 @@ export const completeRunInitialization = (
   return pending;
 };
 
-/** Commits backend startup state for launch and resume; caller holds the service lock. */
 export const commitRunInitialization = (record: RunRecord, state: BackendStartupState) => {
   const pending = completeRunInitialization(record);
   record.resumeToken = state.resumeToken;
@@ -241,7 +194,6 @@ export const commitRunInitialization = (record: RunRecord, state: BackendStartup
   return pending;
 };
 
-/** Root operations that would detach a live owner's result fail with one recoverable code. */
 export const workflowOwnedRunError = (
   record: RunRecord,
   operation: string,

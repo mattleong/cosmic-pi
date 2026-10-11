@@ -62,7 +62,6 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
     make: (options: OpenAICompactionServiceOptions) =>
       Effect.gen(function* () {
         const client = yield* OpenAICompactionClient;
-        // Each observation reads, recomputes, and stores omissions under the ref's lock.
         const observedOmissions = yield* SynchronizedRef.make<readonly string[]>([]);
         const readContext = Effect.fn("OpenAICompaction.readContext")((willRetry: boolean) =>
           SynchronizedRef.modifyEffect(observedOmissions, (observed) =>
@@ -101,8 +100,6 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
           if (!config?.compaction.enabled) return undefined;
           const current = yield* readContext(event.willRetry);
           if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
-          // Keep only the last branch entry. Pi persists the full branch for navigation;
-          // retaining older compactions would replay their system snapshots after the new one.
           const anchor = current.branch.at(-1);
           if (!anchor || anchor.type === "compaction") return undefined;
           const firstKeptEntryId = anchor.id;
@@ -111,18 +108,12 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             try: () => ({
               input: projectOpenAIResponseInput(model, current.contextEntries),
               covered: projectOpenAIResponseInput(model, current.restored?.coveredEntries ?? []),
-              // Native buildContextEntries omits retained system messages. The new
-              // compaction's folded system snapshot supplies the leading instructions.
-              retained: projectOpenAIResponseInput(
-                model,
-                anchor.type === "message" && anchor.message.role === "system" ? [] : [anchor],
-              ),
             }),
             catch: () =>
               compactionError("projection", "Unable to project the OpenAI compaction input."),
           });
           const rawInput = projected.input;
-          if (!rawInput || !projected.retained)
+          if (!rawInput)
             return yield* compactionError(
               "projection",
               "Unable to project the OpenAI compaction input.",
@@ -165,16 +156,13 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             api: "openai-responses",
             model: model.id,
             output: result.output,
-            rawInputCount: projected.retained.length,
             omittedEntryIds: current.omittedEntryIds,
             createdAt: now,
-            tokensBefore: Math.max(0, Math.floor(event.preparation.tokensBefore)),
-            usage: result.usage,
           };
           return {
             summary: OPENAI_COMPACTION_SUMMARY,
             firstKeptEntryId,
-            tokensBefore: checkpoint.tokensBefore,
+            tokensBefore: Math.max(0, Math.floor(event.preparation.tokensBefore)),
             usage,
             details: { type: OPENAI_COMPACTION_DETAILS_TYPE, checkpoint },
           } satisfies CompactionResult;

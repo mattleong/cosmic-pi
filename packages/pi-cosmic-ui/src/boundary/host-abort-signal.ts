@@ -6,7 +6,6 @@ export interface HostAbortSignalSnapshot {
   readonly release: () => void;
 }
 
-/** Owns a native abort forwarder so capture-to-registration races cannot lose a host abort. */
 export function snapshotHostAbortSignal(
   read: () => AbortSignal | undefined,
 ): HostAbortSignalSnapshot | undefined {

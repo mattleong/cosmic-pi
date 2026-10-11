@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import type {
+  FullScreenAction,
   FullScreenKeymapOptions,
   FullScreenSelectionKeybindingId,
 } from "../manager/keymap.ts";
@@ -47,9 +48,7 @@ export interface ActivityComponentOptions {
   readonly theme: Pick<Theme, "fg" | "bold"> & Partial<Pick<Theme, "bg">>;
   readonly height: () => number;
   readonly now?: () => number;
-  /** Closes the manager; an action request is invoked after closing (handoff actions). */
   readonly close: (action?: ActivityActionRequest) => void;
-  /** Invokes a `handoff: false` action in place; without it, every action closes the manager. */
   readonly invoke?: (action: ActivityActionRequest) => void;
   readonly requestRender: () => void;
   readonly loadDetail?: (request: ActivityDetailRequest, deliver: (text: string) => void) => void;
@@ -69,7 +68,6 @@ interface VisibleCache extends TreeCache {
 const sameSet = (left: ReadonlySet<string>, right: ReadonlySet<string>) =>
   left.size === right.size && [...left].every((value) => right.has(value));
 type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
-/** Producer UI takes over unless the producer declares the action opens none. */
 const handsOff = (action: ActivityAction) => action.handoff !== false;
 const sameAction = (left: ActivityAction, right: ActivityAction) =>
   left.id === right.id &&
@@ -77,7 +75,13 @@ const sameAction = (left: ActivityAction, right: ActivityAction) =>
   left.confirmation === right.confirmation &&
   handsOff(left) === handsOff(right);
 
-/** Shared state is presentation only; source actions and fetching stay at the host boundary. */
+interface PendingConfirmation {
+  readonly request: ActivityActionRequest;
+  readonly action: ActivityAction;
+  readonly key: string | undefined;
+}
+const NUMBERED_ACTION = /^[1-9]$/;
+
 export class ActivityComponent {
   readonly shell: ListDetailShell;
   readonly presentation: ActivityPresentation;
@@ -87,10 +91,6 @@ export class ActivityComponent {
   private cancellationPending = false;
   private closed = false;
   private preserveDetailPosition = false;
-  /**
-   * A newly selected item's detail opens at its first lines, which producers write most
-   * important first, once its loaded text has rendered there; the slice then stays anchored.
-   */
   private openAtTop = false;
   private anchored = false;
   private follow = false;
@@ -100,17 +100,7 @@ export class ActivityComponent {
   private requested: ActivityDetailRequest | undefined;
   private displayed: { readonly row: ActivityRow; readonly actionPage: number } | undefined;
   private loaded: { readonly request: ActivityDetailRequest; readonly text: string } | undefined;
-  /**
-   * An action waiting for confirmation, and the direct key that asked for it, which confirms it
-   * too; a number key doesn't, so a double press can't confirm by accident.
-   */
-  private confirmation:
-    | {
-        readonly request: ActivityActionRequest;
-        readonly action: ActivityAction;
-        readonly key: string | undefined;
-      }
-    | undefined;
+  private confirmation: PendingConfirmation | undefined;
   private fullTree: TreeCache | undefined;
   private visibleTree: VisibleCache | undefined;
   private readonly options: ActivityComponentOptions;
@@ -120,7 +110,6 @@ export class ActivityComponent {
     this.shell = this.presentation.shell;
     if (options.initialSection) this.presentation.focus = undefined;
   }
-  /** Every row expanded; rebuilt only when the published rows change. */
   private allEntries() {
     const rows = this.options.snapshot();
     if (this.fullTree?.rows === rows) return this.fullTree.entries;
@@ -130,7 +119,6 @@ export class ActivityComponent {
     this.fullTree = { rows, entries };
     return entries;
   }
-  /** The visible tree; rebuilt when rows or presentation state change. */
   private entries() {
     const prefs = this.presentation;
     const rows = this.options.snapshot();
@@ -192,7 +180,6 @@ export class ActivityComponent {
     let entries = this.entries();
     const id = this.shell.state.selectedId;
     if (id && !entries.some((entry) => entry.id === id)) {
-      // A selected source settling must stay selected when its branch moves into history.
       for (const ancestor of groupedActivityPath(this.allEntries(), id))
         if (ancestor.history) this.presentation.expandedHistory.add(ancestor.id);
       entries = this.entries();
@@ -233,11 +220,6 @@ export class ActivityComponent {
     this.cancelDetails();
     this.options.close(request);
   }
-  /**
-   * Producer UI takes over for handoff actions; others run while the manager stays open. Unrelated
-   * source updates must not void a choice, so an action the source still offers unchanged targets
-   * its current revision; anything else keeps the displayed revision and fails as stale.
-   */
   private dispatch(displayed: ActivityActionRequest, action: ActivityAction): void {
     const row = this.options.snapshot().find((candidate) => candidate.key === displayed.key);
     const request =
@@ -275,12 +257,10 @@ export class ActivityComponent {
         return;
       this.loaded = { request, text: text.slice(0, ACTIVITY_LIMITS.detail) };
       this.preserveDetailPosition = preservePosition;
-      // A refresh keeps the reader's place instead of returning to the top.
       if (preservePosition) this.openAtTop = false;
       this.options.requestRender();
     });
   }
-  /** Host calls this on source publication. Follow is opt-in; rendering never fetches. */
   update(): void {
     if (this.closed) return;
     const { selected } = this.selected();
@@ -300,144 +280,169 @@ export class ActivityComponent {
   handleInput(data: string): void {
     if (this.closed) return;
     if (this.confirmation) {
-      const result = this.shell.keymap.resolve(data, {
-        mode: "confirmation",
-        matchesKeybinding: this.options.matchesKeybinding,
-        reservedKeys: activityShortcuts,
-      });
-      if (
-        (result?._tag === "Action" && result.action === "confirm") ||
-        (result?._tag === "Shortcut" &&
-          this.confirmation.key !== undefined &&
-          result.key === this.confirmation.key)
-      ) {
-        const { request, action } = this.confirmation;
-        this.confirmation = undefined;
-        this.dispatch(request, action);
-      } else if (
-        result?._tag === "Action" &&
-        (result.action === "cancel" || result.action === "quit")
-      )
-        this.confirmation = undefined;
-      this.options.requestRender();
+      this.handleConfirmationInput(data, this.confirmation);
       return;
     }
     const { entries, selected } = this.selected();
     this.flushCancellation();
     const row = source(selected);
-    if (this.shell.state.pane === "list" && selected) {
-      const back = matchesKey(data, "h") || matchesKey(data, Key.left);
-      const forward = matchesKey(data, "l") || matchesKey(data, Key.right);
-      if ((back && selected.expanded) || (forward && selected.children && !selected.expanded)) {
-        if (back) {
-          this.presentation.collapsed.add(selected.id);
-          this.presentation.expandedHistory.delete(selected.id);
-        } else {
-          this.presentation.collapsed.delete(selected.id);
-          this.presentation.expandedHistory.add(selected.id);
-        }
-        this.shell.resetDetailScroll();
-        this.options.requestRender();
-        return;
-      }
-      if (back && selected.parentId && entries.some((entry) => entry.id === selected.parentId)) {
-        this.shell.select(
-          entries.findIndex((entry) => entry.id === selected.parentId),
-          entries.map((entry) => entry.id),
-        );
-        this.selected();
-        this.flushCancellation();
-        this.options.requestRender();
-        return;
-      }
-    }
+    if (
+      this.shell.state.pane === "list" &&
+      selected &&
+      this.handleTreeInput(data, entries, selected)
+    )
+      return;
     const result = this.shell.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding: this.options.matchesKeybinding,
       reservedKeys: activityShortcuts,
     });
     if (!result) return;
-    if (result._tag === "Shortcut") {
-      if (result.key === "w") {
-        const waiting = needsYou(this.options.snapshot());
-        const urgent =
-          waiting[(waiting.findIndex((item) => item.key === row?.key) + 1) % waiting.length];
-        if (urgent) this.reveal(urgent.key);
-      } else if (result.key === "a")
-        this.actionPage = (this.actionPage + 1) % activityActionPages(row?.actions);
-      else if (result.key === "r" && row) this.loadDetails(row, !this.follow);
-      else if (result.key === "t" && row) this.technical = !this.technical;
-      else if (result.key === "f" && row && !row.retained) {
-        this.follow = !this.follow;
-        if (this.follow && this.shell.state.pane === "detail") this.loadDetails(row);
-        else if (!this.follow) this.cancelDetails();
-      } else if (result.key === "z")
-        this.presentation.focus = this.presentation.focus ? undefined : selected?.id;
-      else if (row && !row.retained) {
-        const shown = this.displayed;
-        const action =
-          shown?.row.key === row.key && shown.row.generation === row.generation
-            ? /^[1-9]$/.test(result.key)
-              ? shown.row.actions?.[
-                  shown.actionPage * ACTIVITY_ACTION_PAGE_SIZE + Number(result.key) - 1
-                ]
-              : activityActionForKey(shown.row.actions ?? [], result.key)
-            : undefined;
-        if (action && shown) {
-          const request = {
-            key: shown.row.key,
-            generation: shown.row.generation,
-            revision: shown.row.revision,
-            actionId: action.id,
-          };
-          if (handsOff(action) || !this.options.invoke) this.cancelDetails();
-          if (action.confirmation !== undefined)
-            this.confirmation = {
-              request,
-              action,
-              key: /^[1-9]$/.test(result.key) ? undefined : result.key,
-            };
-          else this.dispatch(request, action);
-        }
-      }
-    } else if (result.action === "confirm" && selected) {
-      this.shell.enterPane();
-      if (this.shell.state.pane === "detail" && row) this.loadDetails(row);
-    } else {
-      if (result.action === "help") this.alternateHelp = !this.alternateHelp;
-      const motion = listDetailMotionFromAction(result.action);
-      if (motion) {
-        const wasDetail = this.shell.state.pane === "detail";
-        const changed = this.shell.applyMotion(motion, {
-          rowCount: entries.length,
-          hasSelection: !!selected,
-        });
-        if (changed._tag === "Close") this.close();
-        else if (changed._tag === "Update") {
-          if (changed.movedSelection)
-            this.shell.select(
-              changed.state.selected,
-              entries.map((entry) => entry.id),
-            );
-          if (changed.scrolledDetail) this.keepDetailPlace();
-          if (changed.scrolledDetail && this.shell.state.detailScroll > 0 && this.follow) {
-            this.follow = false;
-            this.cancelDetails();
-          }
-          if (!wasDetail && changed.state.pane === "detail" && row) this.loadDetails(row);
-        }
-      }
-    }
+    if (result._tag === "Shortcut") this.handleShortcut(result.key, selected, row);
+    else if (result.action === "confirm" && selected) this.enterSelection(row);
+    else this.handleNavigation(result.action, entries, selected, row);
     this.selected();
     this.flushCancellation();
     this.options.requestRender();
   }
-  /** The reader moved the detail, so it stays where they put it. */
+  private handleConfirmationInput(data: string, confirmation: PendingConfirmation): void {
+    const result = this.shell.keymap.resolve(data, {
+      mode: "confirmation",
+      matchesKeybinding: this.options.matchesKeybinding,
+      reservedKeys: activityShortcuts,
+    });
+    if (
+      (result?._tag === "Action" && result.action === "confirm") ||
+      (result?._tag === "Shortcut" &&
+        confirmation.key !== undefined &&
+        result.key === confirmation.key)
+    ) {
+      this.confirmation = undefined;
+      this.dispatch(confirmation.request, confirmation.action);
+    } else if (
+      result?._tag === "Action" &&
+      (result.action === "cancel" || result.action === "quit")
+    )
+      this.confirmation = undefined;
+    this.options.requestRender();
+  }
+  private handleTreeInput(
+    data: string,
+    entries: readonly GroupedActivityRow[],
+    selected: GroupedActivityRow,
+  ): boolean {
+    const back = matchesKey(data, "h") || matchesKey(data, Key.left);
+    const forward = matchesKey(data, "l") || matchesKey(data, Key.right);
+    if ((back && selected.expanded) || (forward && selected.children && !selected.expanded)) {
+      this.setExpanded(selected.id, !back);
+      this.shell.resetDetailScroll();
+      this.options.requestRender();
+      return true;
+    }
+    if (!back || !selected.parentId || !entries.some((entry) => entry.id === selected.parentId))
+      return false;
+    this.shell.select(
+      entries.findIndex((entry) => entry.id === selected.parentId),
+      entries.map((entry) => entry.id),
+    );
+    this.selected();
+    this.flushCancellation();
+    this.options.requestRender();
+    return true;
+  }
+  private setExpanded(id: string, expanded: boolean): void {
+    if (expanded) {
+      this.presentation.collapsed.delete(id);
+      this.presentation.expandedHistory.add(id);
+    } else {
+      this.presentation.collapsed.add(id);
+      this.presentation.expandedHistory.delete(id);
+    }
+  }
+  private handleShortcut(
+    key: string,
+    selected: GroupedActivityRow | undefined,
+    row: ActivityRow | undefined,
+  ): void {
+    if (key === "w") this.revealNextWaiting(row);
+    else if (key === "a")
+      this.actionPage = (this.actionPage + 1) % activityActionPages(row?.actions);
+    else if (key === "r" && row) this.loadDetails(row, !this.follow);
+    else if (key === "t" && row) this.technical = !this.technical;
+    else if (key === "f" && row && !row.retained) this.toggleFollow(row);
+    else if (key === "z")
+      this.presentation.focus = this.presentation.focus ? undefined : selected?.id;
+    else if (row && !row.retained) this.invokeShortcutAction(key, row);
+  }
+  private revealNextWaiting(row: ActivityRow | undefined): void {
+    const waiting = needsYou(this.options.snapshot());
+    const urgent =
+      waiting[(waiting.findIndex((item) => item.key === row?.key) + 1) % waiting.length];
+    if (urgent) this.reveal(urgent.key);
+  }
+  private toggleFollow(row: ActivityRow): void {
+    this.follow = !this.follow;
+    if (this.follow && this.shell.state.pane === "detail") this.loadDetails(row);
+    else if (!this.follow) this.cancelDetails();
+  }
+  private invokeShortcutAction(key: string, row: ActivityRow): void {
+    const shown = this.displayed;
+    if (!shown || shown.row.key !== row.key || shown.row.generation !== row.generation) return;
+    const numbered = NUMBERED_ACTION.test(key);
+    const action = numbered
+      ? shown.row.actions?.[shown.actionPage * ACTIVITY_ACTION_PAGE_SIZE + Number(key) - 1]
+      : activityActionForKey(shown.row.actions ?? [], key);
+    if (!action) return;
+    const request = {
+      key: shown.row.key,
+      generation: shown.row.generation,
+      revision: shown.row.revision,
+      actionId: action.id,
+    };
+    if (handsOff(action) || !this.options.invoke) this.cancelDetails();
+    if (action.confirmation !== undefined)
+      this.confirmation = { request, action, key: numbered ? undefined : key };
+    else this.dispatch(request, action);
+  }
+  private enterSelection(row: ActivityRow | undefined): void {
+    this.shell.enterPane();
+    if (this.shell.state.pane === "detail" && row) this.loadDetails(row);
+  }
+  private handleNavigation(
+    action: FullScreenAction,
+    entries: readonly GroupedActivityRow[],
+    selected: GroupedActivityRow | undefined,
+    row: ActivityRow | undefined,
+  ): void {
+    if (action === "help") this.alternateHelp = !this.alternateHelp;
+    const motion = listDetailMotionFromAction(action);
+    if (!motion) return;
+    const wasDetail = this.shell.state.pane === "detail";
+    const changed = this.shell.applyMotion(motion, {
+      rowCount: entries.length,
+      hasSelection: !!selected,
+    });
+    if (changed._tag === "Close") {
+      this.close();
+      return;
+    }
+    if (changed._tag !== "Update") return;
+    if (changed.movedSelection)
+      this.shell.select(
+        changed.state.selected,
+        entries.map((entry) => entry.id),
+      );
+    if (changed.scrolledDetail) this.keepDetailPlace();
+    if (changed.scrolledDetail && this.shell.state.detailScroll > 0 && this.follow) {
+      this.follow = false;
+      this.cancelDetails();
+    }
+    if (!wasDetail && changed.state.pane === "detail" && row) this.loadDetails(row);
+  }
   private keepDetailPlace(): void {
     this.openAtTop = false;
     this.anchored = true;
   }
-  /** Where the detail window places its slice this frame. */
   private detailPosition(): DetailWindowPosition {
     if (this.follow) return true;
     if (this.openAtTop) return "top";
@@ -472,7 +477,6 @@ export class ActivityComponent {
       width,
     );
     if (this.options.height() > 3) this.preserveDetailPosition = false;
-    // The selected item's loaded text has now opened at its top.
     if (
       detailPosition === "top" &&
       row &&

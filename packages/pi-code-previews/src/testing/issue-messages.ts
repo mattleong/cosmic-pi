@@ -1,11 +1,5 @@
-/**
- * Style properties every collapsed issue message must satisfy. Checks properties, not copy:
- * producers keep their own wording, and this guards against machine text reaching people.
- */
 interface IssueMessageStyleOptions {
-  /** Internal identifiers that must never appear, such as run or result IDs. */
   readonly forbidden?: readonly string[];
-  /** Longest acceptable message. Pass-through content may use its own bound. */
   readonly maxLength?: number;
 }
 
@@ -26,7 +20,6 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/(?<!\.)\.$/u, "ends with a period"],
 ];
 
-/** The ways `message` breaks the shared issue style; empty when it conforms. */
 export function issueMessageStyleProblems(
   message: string,
   options: IssueMessageStyleOptions = {},

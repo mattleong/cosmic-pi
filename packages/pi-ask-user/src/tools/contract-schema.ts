@@ -1,4 +1,3 @@
-/** Native codemode's success-only contract; persisted display details remain unchanged. */
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core";
@@ -17,7 +16,6 @@ const text = (maximum: number) =>
 const RequestId = text(100);
 const WorkDescription = text(MAX_WORK_DESCRIPTION_LENGTH).check(Schema.isPattern(/\S/));
 
-/** Exact public metadata only; no drafts, prompts, ownership, or host capabilities. */
 const AsyncSnapshotSchema = Schema.Struct({
   requestId: RequestId,
   deliveryId: text(120),
@@ -33,7 +31,6 @@ const AsyncSnapshotSchema = Schema.Struct({
   outcome: Schema.optionalKey(QuestionnaireOutcomeSchema),
 });
 
-// Reuse both outcome variants without weakening cancelled's empty answers or submitted bounds.
 export const AskUserContractSchema = Schema.Union([
   Schema.Struct({
     ...envelope,
@@ -77,7 +74,6 @@ const encodeContract = Schema.encodeExit(Schema.toCodecJson(QuestionnaireContrac
   onExcessProperty: "error",
 });
 
-/** No normalization or redaction: decision strings must survive this boundary losslessly. */
 export const encodeQuestionnaireContract = (
   contract: QuestionnaireContract,
 ): Schema.Json | undefined => {

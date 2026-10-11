@@ -54,7 +54,6 @@ describe("session capability queries", () => {
   });
 
   it("contains a throwing or rejecting responder", () => {
-    // An uncontained rejection would fail the run as an unhandled rejection.
     for (const respond of [
       () => {
         throw new Error("hostile respond");

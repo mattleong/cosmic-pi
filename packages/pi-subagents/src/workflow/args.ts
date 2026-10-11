@@ -19,22 +19,13 @@ import {
 } from "./errors.ts";
 import { WORKFLOW_ARGS_MAX_CHARS } from "./model.ts";
 
-/** The args summary saved-workflow listings and refusals show. */
 export const WORKFLOW_ARGS_SUMMARY_MAX_CHARS = 200;
-/** Problems one refusal names; the rest are counted. */
 const ARGS_PROBLEMS_SHOWN = 8;
 const ARGS_PATH_MAX_CHARS = 120;
 const ARGS_PROBLEM_MAX_CHARS = 200;
 
-/**
- * A script's `meta.args` compiled. The schema is the JSON Schema subset `agent()` schemas accept,
- * at any root, since args may be any JSON value: unlike a result schema, it never becomes tool
- * parameters, so a non-object root is validated as written instead of being wrapped.
- */
 export interface WorkflowArgsContract {
-  /** A compact form of the schema, such as `{ target: string, depth?: integer }`. */
   readonly summary: string;
-  /** The ways `args` (null when omitted) doesn't match the schema; empty when it does. */
   readonly check: (args: Schema.Json) => Effect.Effect<ReadonlyArray<WorkflowArgsProblem>>;
 }
 
@@ -44,13 +35,11 @@ const decodeArray = Schema.decodeUnknownOption(Schema.Array(Schema.Json));
 const decodeStrings = Schema.decodeUnknownOption(Schema.Array(Schema.String));
 const encodeJson = Schema.encodeOption(Schema.fromJsonString(Schema.Json));
 
-/** A property name as a summary or path shows it: bare when it is an identifier. */
 const keyText = (key: string): string => (IDENTIFIER.test(key) ? key : canonicalJsonText(key));
 
 const segmentKey = (segment: PropertyKey | { readonly key: PropertyKey }): PropertyKey =>
   Predicate.isObject(segment) ? segment.key : segment;
 
-/** Where a problem is, from the args root: `args`, `args.target`, `args.files[0]["a b"]`. */
 const pathText = (path: ReadonlyArray<PropertyKey>): string =>
   path.reduce<string>((text, key) => {
     if (Predicate.isNumber(key)) return `${text}[${key}]`;
@@ -58,7 +47,6 @@ const pathText = (path: ReadonlyArray<PropertyKey>): string =>
     return IDENTIFIER.test(name) ? `${text}.${name}` : `${text}[${canonicalJsonText(name)}]`;
   }, "args");
 
-/** The schema node the value at `path` is checked against; undefined past a combinator. */
 const nodeAt = (root: JsonRecord, path: ReadonlyArray<PropertyKey>): JsonRecord | undefined =>
   path.reduce<JsonRecord | undefined>((node, key) => {
     if (node === undefined) return undefined;
@@ -74,16 +62,11 @@ const declaredTypes = (node: JsonRecord): ReadonlyArray<string> =>
     ? [node.type]
     : Option.getOrElse(decodeStrings(node.type), (): ReadonlyArray<string> => []);
 
-/** Whether a node admits integers but not other numbers, which the root checks as numbers. */
 const declaresInteger = (node: JsonRecord | undefined): boolean => {
   const types = node === undefined ? [] : declaredTypes(node);
   return types.includes("integer") && !types.includes("number");
 };
 
-/**
- * What the schema wanted, in the words a refusal uses. The root checks integers as numbers that
- * are multiples of 1, so a non-number where the schema declares `integer` names an integer.
- */
 const problemText = (message: string, integer: boolean): string => {
   if (message === "Missing key") return "required but missing";
   if (message === "Expected no excess property") return "not allowed by the schema";
@@ -119,10 +102,6 @@ const describesKeys = (node: JsonRecord): boolean =>
 const describesItems = (node: JsonRecord): boolean =>
   node.items !== undefined || node.prefixItems !== undefined;
 
-/**
- * `{ name: T, optional?: T, [key: string]: T }`, with required names the schema doesn't describe
- * as `any`, `{}` for a closed empty object, or plain `object`.
- */
 const objectSummary = (node: JsonRecord): string => {
   const properties = Option.getOrElse(decodeJsonRecord(node.properties), (): JsonRecord => ({}));
   const required = new Set(Option.getOrElse(decodeStrings(node.required), () => []));
@@ -140,7 +119,6 @@ const objectSummary = (node: JsonRecord): string => {
   return node.additionalProperties === false ? "{}" : "object";
 };
 
-/** `T[]`, a tuple `[A, B]`, or plain `array`. */
 const arraySummary = (node: JsonRecord): string => {
   const tuple = decodeArray(node.prefixItems);
   if (Option.isSome(tuple)) return `[${tuple.value.map(summarize).join(", ")}]`;
@@ -153,14 +131,12 @@ const typeSummary = (node: JsonRecord, type: string): string => {
   return type;
 };
 
-/** The values a node lists itself: its constant or enum members. */
 const listedValues = (node: JsonRecord): string | undefined => {
   if (node.const !== undefined) return canonicalJsonText(node.const);
   const members = decodeArray(node.enum);
   return Option.isSome(members) ? union(members.value.map(canonicalJsonText)) : undefined;
 };
 
-/** What a node's own `type`, keys and items say, without its branches. */
 const ownSummary = (node: JsonRecord): string | undefined => {
   const types = declaredTypes(node);
   if (types.length > 0) return union(types.map((type) => typeSummary(node, type)));
@@ -169,21 +145,12 @@ const ownSummary = (node: JsonRecord): string | undefined => {
   return undefined;
 };
 
-/**
- * The node's `anyOf` or `oneOf` branches as a union, unless one says nothing the summary can show,
- * such as a branch that only lists required keys: the union is then no narrower than the node.
- */
 const branchSummary = (node: JsonRecord): string | undefined => {
   const branches = Option.getOrElse(decodeArray(node.anyOf ?? node.oneOf), () => []);
   const members = branches.map(summarize);
   return members.length === 0 || members.includes("any") ? undefined : union(members);
 };
 
-/**
- * A compact, TypeScript-like reading of a schema node; `any` where it says nothing checkable. A
- * node's own keys or items win over its branches, which typically only refine them; branches
- * stand in for a node that names at most a type.
- */
 function summarize(schema: Schema.Json): string {
   const record = decodeJsonRecord(schema);
   if (Option.isNone(record)) return schema === false ? "never" : "any";
@@ -195,11 +162,9 @@ function summarize(schema: Schema.Json): string {
   return branchSummary(node) ?? own ?? "any";
 }
 
-/** The schema's summary, bounded for listings and refusals. */
 export const workflowArgsSummary = (schema: Schema.Json): string =>
   clipText(summarize(schema), WORKFLOW_ARGS_SUMMARY_MAX_CHARS);
 
-/** Compiles `meta.args`; an unusable schema fails with why. */
 export const compileWorkflowArgs = (
   schema: Schema.Json,
 ): Effect.Effect<WorkflowArgsContract, InvalidJsonSchemaError> =>
@@ -218,7 +183,6 @@ export const compileWorkflowArgs = (
     } satisfies WorkflowArgsContract;
   });
 
-/** Why args don't match workflow `name`'s schema, naming the first problems and the args it expects. */
 const mismatchText = (
   name: string,
   problems: ReadonlyArray<WorkflowArgsProblem>,
@@ -234,10 +198,6 @@ const mismatchText = (
   ].join("\n");
 };
 
-/**
- * Checks args against a script's `meta.args`, if it declares one, for a start or a nested
- * `workflow()` call; a mismatch fails with the first problems and the args the workflow expects.
- */
 export const requireWorkflowArgs = (
   contract: WorkflowArgsContract | undefined,
   name: string,
@@ -254,7 +214,6 @@ export const requireWorkflowArgs = (
       );
   });
 
-/** Checks a start's args: their size as JSON, then the script's `meta.args` schema. */
 export const requireStartArgs = (
   contract: WorkflowArgsContract | undefined,
   name: string,

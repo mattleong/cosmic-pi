@@ -1,4 +1,3 @@
-// Private loopback supervisor RPC transport and agent-directory state live at this boundary.
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
 import { makeTokenVerifier, synchronousRandomHex } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
@@ -41,14 +40,11 @@ import {
 } from "./harness-shared.ts";
 import type { ResultContract } from "../domain/result-contract.ts";
 import { makeSupervisorRpcServerProtocol } from "./supervisor-rpc-protocol.ts";
+import { channelError, SupervisorChannelError } from "./supervisor-channel-errors.ts";
 import {
-  channelError,
   makeSupervisorChannelSession,
-  SupervisorChannelError,
   type SupervisorChannelControls,
 } from "./supervisor-channel-session.ts";
-
-export { SupervisorChannelError } from "./supervisor-channel-session.ts";
 
 const { join } = nodePath;
 
@@ -97,7 +93,6 @@ export interface SupervisorChannelContract {
 
 export interface SupervisorChannelOpenRequest {
   readonly runId: string;
-  /** Reports must be one JSON value this contract accepts; others are rejected with issues. */
   readonly resultContract?: ResultContract | undefined;
 }
 
@@ -106,7 +101,6 @@ export interface SupervisorChannelLayerOptions {
   readonly beforeAcquireComplete?:
     | ((metadata: SupervisorConnectionMetadata) => Promise<void>)
     | undefined;
-  /** Test seam for proving the private config commit masks interruption until settlement. */
   readonly beforeConfigCommit?:
     | ((metadata: SupervisorConnectionMetadata) => Promise<void>)
     | undefined;
@@ -163,10 +157,8 @@ interface PreparedStateDirectory {
 }
 
 interface StagedNodeChannelAcquisition {
-  /** Set once this acquisition created the state directory. */
   ownedState: PreparedStateDirectory | undefined;
   internalScope: Scope.Closeable | undefined;
-  /** Set once every resource is acquired; it then owns their whole release. */
   close: Effect.Effect<void, SupervisorChannelError> | undefined;
 }
 
@@ -355,8 +347,6 @@ const acquireNodeChannelEffect = (
           events,
           resultContract,
         });
-        // Runs exactly once and uninterruptibly: from partial cleanup below, or from the owning
-        // scope's release, so session shutdown is never separated from the resources.
         const close = Effect.gen(function* () {
           yield* session.shutdown;
           yield* Scope.close(internalScope, Exit.void);
@@ -408,8 +398,6 @@ const acquireNodeChannelEffect = (
           try: () => writePrivateConfig(prepared.connectionConfigPath, config),
           catch: configWriteError,
         });
-        // Deliver interruption only after the config writer has settled, while acquisition still
-        // owns failure cleanup for the listener, token document, and private state directory.
         yield* restore(Effect.void);
         const beforeAcquireComplete = options.beforeAcquireComplete;
         if (beforeAcquireComplete)

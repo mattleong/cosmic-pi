@@ -1,13 +1,15 @@
-import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import { opaqueFixture } from "pi-cosmic-core/testing";
 import { createInputDock, inputDockVisible } from "../src/boundary/host-input-dock.ts";
 import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
 
 const harness = () => {
   const host = fakeCustomSurfaceHost();
-  const tui: TUI = opaqueFixture(host.tui);
-  return { tui, ui: host.ctx.ui, widgets: host.widgets, overlay: () => host.showUnrelated() };
+  return {
+    tui: host.tui,
+    ui: host.ctx.ui,
+    widgets: host.widgets,
+    overlay: () => host.showUnrelated(),
+  };
 };
 const component = () => ({
   focused: false,

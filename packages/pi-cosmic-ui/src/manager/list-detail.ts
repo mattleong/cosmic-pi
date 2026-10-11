@@ -1,11 +1,3 @@
-/**
- * Pure, closed list/detail primitives shared by full-screen extension managers
- * (`/subagents`, `/tasks`): index clamping, the shared modeless motion reducer, bounded
- * detail windows with the standardized position label, pane geometry, row windowing, width
- * padding, and reserved-shortcut confirmation resolution. The module has no
- * domain imports and takes no host callbacks; callers own row rendering, actions, prompts,
- * and follow policy.
- */
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { ManagerLayoutTier } from "./chrome.ts";
 import {
@@ -24,7 +16,6 @@ import { clipToWidth } from "./chrome.ts";
 
 export type ListDetailPane = "list" | "detail";
 
-/** Clips and space-pads one row to an exact display width. */
 export const padListDetailRow = (text: string, width: number): string => {
   const clipped = clipToWidth(text, Math.max(0, width), "");
   return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
@@ -33,7 +24,6 @@ export const padListDetailRow = (text: string, width: number): string => {
 export interface ListSelectionChange {
   readonly selected: number;
   readonly selectedId: string | undefined;
-  /** True when the selected row identity changed; callers reset row-scoped state on it. */
   readonly changed: boolean;
 }
 
@@ -42,7 +32,6 @@ export const clampListIndex = (index: number, count: number): number =>
 
 export type ListDetailMotion = ListMotion | "cancel" | "quit" | "back" | "forward";
 
-/** Maps resolved keymap actions onto the closed shared motion vocabulary. */
 export const listDetailMotionFromAction = (
   action: FullScreenAction,
 ): ListDetailMotion | undefined =>
@@ -56,7 +45,6 @@ export const listDetailMotionFromAction = (
 
 export interface ListDetailMotionState {
   readonly pane: ListDetailPane;
-  /** Narrow-layout expanded inspector flag. */
   readonly details: boolean;
   readonly selected: number;
   readonly detailScroll: number;
@@ -78,23 +66,15 @@ type ListDetailMotionResult =
       readonly _tag: "Update";
       readonly state: ListDetailMotionState;
       readonly resetChord: boolean;
-      /** Detail scroll changed; callers apply follow policy from the new scroll. */
       readonly scrolledDetail: boolean;
-      /** List selection moved; callers run their selection side effects. */
       readonly movedSelection: boolean;
     };
 
-/**
- * Shared modeless motion reducer for list/detail managers. Esc semantics are standardized:
- * in the detail pane it returns to the list; on the list it closes. `q` always closes.
- * Enter/confirm stays caller-owned because open/toggle policy is layout- and domain-specific.
- */
 export const listDetailMotion = (
   state: ListDetailMotionState,
   motion: ListDetailMotion,
   context: ListDetailMotionContext,
 ): ListDetailMotionResult => {
-  // Motions target the detail pane when it is focused or the narrow inspector is expanded.
   const browsingDetail = state.pane === "detail" || (context.layout === "narrow" && state.details);
   const update = (
     next: Partial<ListDetailMotionState>,
@@ -156,20 +136,8 @@ interface DetailWindow {
     | undefined;
 }
 
-/**
- * Where a detail window places its slice: `true` pins it to the newest lines; `false` records an
- * explicit unfollow, so the viewed slice stays anchored even from the bottom (scroll 0) as new
- * lines arrive; `"top"` shows the first lines, for text written most important first;
- * `undefined` means the caller has no policy and scroll 0 keeps tracking the newest lines.
- */
 export type DetailWindowPosition = boolean | "top" | undefined;
 
-/**
- * Computes the bottom-anchored detail window: reserves one position row on overflow (only
- * when more than one row exists — a one-row window always shows content and omits the
- * position label), keeps the viewed slice stable while new lines arrive above the fold, and
- * clamps the scroll. `follow` places the slice; see {@link DetailWindowPosition}.
- */
 export const computeDetailWindow = (options: {
   readonly lines: ReadonlyArray<string>;
   readonly height: number;
@@ -208,7 +176,6 @@ export const computeDetailWindow = (options: {
   };
 };
 
-/** Standardized detail position/help copy shared by manager detail panes. */
 export const detailWindowPositionLabel = (
   overflow: NonNullable<DetailWindow["overflow"]>,
 ): string => ` ${overflow.start}–${overflow.end} of ${overflow.total} · C-u/d half-page `;
@@ -219,7 +186,6 @@ interface ListDetailPaneGeometry {
   readonly detailWidth: number;
 }
 
-/** Wide-layout split with one divider column; the list minimum and ratio stay caller-owned. */
 export const wideListDetailGeometry = (
   width: number,
   minListWidth: number,
@@ -230,17 +196,14 @@ export const wideListDetailGeometry = (
   return { inner, listWidth, detailWidth: inner - listWidth - 1 };
 };
 
-/** Stacked-layout list height: heading row plus rows, capped at 40% of the body. */
 export const stackedListHeight = (height: number, rowCount: number): number =>
   Math.max(3, Math.min(rowCount + 1, Math.floor(height * 0.4)));
 
-/** Centers the selection inside a bounded row window; returns the first visible index. */
 export const listWindowStart = (count: number, selected: number, limit: number): number => {
   const size = Math.max(1, limit);
   return Math.max(0, Math.min(Math.max(0, count - size), selected - Math.floor(size / 2)));
 };
 
-/** True when a reserved-shortcut confirmation was re-pressed (never Esc/other dismissals). */
 export const confirmedReservedShortcut = (
   resolution: FullScreenResolution | undefined,
   data: string,

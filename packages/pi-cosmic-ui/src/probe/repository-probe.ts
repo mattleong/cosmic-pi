@@ -3,7 +3,6 @@ import * as Option from "effect/Option";
 import { applyGitNumstat, parseGitStatus } from "../footer/git.ts";
 import type { PiExecContract } from "../boundary/host-exec.ts";
 
-/** Git and pull-request probes; `isCurrent` is rechecked after every process yield. */
 export const makeRepositoryProbe = (exec: PiExecContract) => ({
   git: Effect.fn("RepositoryProbe.git")(function* (cwd: string, isCurrent: () => boolean) {
     const status = yield* exec.exec(

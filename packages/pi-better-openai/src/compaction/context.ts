@@ -13,7 +13,6 @@ import { decodeOpenAICompactionDetails } from "./protocol.ts";
 
 export const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
-// The round trip drops undefined fields the way the SDK serializes them; Equal ignores key order.
 const asJson = <Value>(value: Value) => decodeJson(encodeJson(value));
 
 export function hasExactPrefix(actual: readonly unknown[], expected: readonly unknown[]): boolean {
@@ -23,7 +22,6 @@ export function hasExactPrefix(actual: readonly unknown[], expected: readonly un
   );
 }
 
-/** The latest compaction when it is an owned checkpoint; a later Pi compaction supersedes it. */
 export function latestOwnedCheckpoint(branch: readonly SessionEntry[]) {
   const entry = branch.findLast((item): item is CompactionEntry => item.type === "compaction");
   const details = entry && decodeOpenAICompactionDetails(entry.details);
@@ -38,7 +36,6 @@ export function isRetryOmittable(entry: SessionEntry): boolean {
   );
 }
 
-/** Omission metadata never authorizes dropping users, tools, systems, or successful responses. */
 export function retryOmissions(
   branch: readonly SessionEntry[],
   observed: readonly string[] = [],
@@ -63,7 +60,6 @@ export function retryOmissions(
     .map((entry) => entry.id);
 }
 
-/** Materialize Pi's edited contributions without changing persisted entries or their IDs. */
 export function projectContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
   return buildSessionProjection([...branch]).entries.flatMap(
     ({ sourceEntry, messages }): SessionEntry[] => {
@@ -73,14 +69,12 @@ export function projectContextEntries(branch: readonly SessionEntry[]): SessionE
         const message = messages[0];
         return message?.role === "custom" ? [{ ...sourceEntry, content: message.content }] : [];
       }
-      // Retained older compactions are raw anchors, not additional summaries/snapshots.
       if (sourceEntry.type === "compaction" && !messages.length) return [];
       return [sourceEntry];
     },
   );
 }
 
-/** Restore conversation without replaying superseded system snapshots or ordinary summaries. */
 export function reconstructOpenAIContext(
   branch: readonly SessionEntry[],
   observedOmissions: readonly string[] = [],
@@ -93,7 +87,6 @@ export function reconstructOpenAIContext(
     branch.some((entry, index) => entry.parentId !== (branch[index - 1]?.id ?? null))
   )
     throw new Error("Unable to reconstruct a complete session branch.");
-  // Preserve every parent anchor. These inert clones never enter the persisted transcript.
   const unwrapped: SessionEntry[] = branch.map((entry) =>
     entry.type === "compaction" && decodeOpenAICompactionDetails(entry.details)
       ? {
@@ -126,8 +119,6 @@ export function reconstructOpenAIContext(
     }
     return [entry];
   });
-  // Old v1 snapshots may already contain replayed obsolete snapshots, or be absent.
-  // Fold the original prompt updates with Pi's public reducer instead of trusting them.
   const systemMessage = getCurrentSystemMessage(
     buildSessionProjection(unwrapped.slice(0, checkpointIndex + 1)).messages,
   );
@@ -162,7 +153,6 @@ export function repairOpenAIContext(
   const visibleIds = new Set(
     nativeEntries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id),
   );
-  // A tree restore can legitimately put an old failed response back in native context.
   const omitted = new Set(
     retryOmissions(branch, observedOmissions).filter((id) => !visibleIds.has(id)),
   );

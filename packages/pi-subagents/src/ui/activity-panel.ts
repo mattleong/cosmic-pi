@@ -52,7 +52,6 @@ const PANEL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
 
 export interface SubagentActivityPanelProjection {
   readonly rows: ReadonlyArray<FleetTreeRow>;
-  /** Runs that keep the panel visible. Ancestor-only context is excluded. */
   readonly trackedRuns: ReadonlyArray<SubagentRunView>;
   readonly trackedRunIds: ReadonlySet<string>;
   readonly awaitedRunIds: ReadonlySet<string>;
@@ -127,7 +126,6 @@ interface HeaderPart {
 }
 
 interface OptionalHeaderPart extends HeaderPart {
-  /** Lower values survive longer when the header must shed detail. */
   readonly priority: number;
 }
 
@@ -139,7 +137,6 @@ const renderHeaderParts = (parts: ReadonlyArray<HeaderPart>, theme: Theme): stri
   return parts.map((part) => theme.fg(part.color, part.text)).join(separator);
 };
 
-/** Sheds the latest of the lowest-priority parts until the header fits; `false` parts are absent. */
 const fitPanelHeader = (
   parts: ReadonlyArray<OptionalHeaderPart | false>,
   width: number,
@@ -226,7 +223,6 @@ const renderRunRoute = (
     : `${theme.fg("muted", profile)} ${theme.fg("toolOutput", `${hostRuntime} ${model}`)}`;
 };
 
-/** One run's row; a name in `duplicates` also shows the run's short id. */
 const renderActivityRow = (
   row: FleetTreeRow,
   panel: SubagentActivityPanelProjection,
@@ -251,7 +247,6 @@ const renderActivityRow = (
     : "";
   const identity = `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}`;
   const route = renderRunRoute(run, theme, tier === "wide" ? "full" : "model", ancestorOnly);
-  // Narrower tiers already show the model route, so only the wide tier has a shorter one.
   const compactRoute =
     tier === "wide" ? renderRunRoute(run, theme, "compact", ancestorOnly) : route;
   const activity = ancestorOnly ? "" : runActivity(run);

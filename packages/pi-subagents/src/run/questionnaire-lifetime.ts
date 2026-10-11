@@ -11,9 +11,7 @@ const expired = () =>
     "The questionnaire's owning Pi assignment is no longer active.",
   );
 
-/** Synchronous registry transitions; no read-modify-write crosses an Effect yield. */
 export const makeQuestionnaireLifetimes = (isClosed: () => boolean) => {
-  // Weak record ownership bounds retention to the coordinator's own retained run history.
   const seen = new WeakMap<RunRecord, { epoch: number; ids: Set<string> }>();
   const entries = new Map<
     string,
@@ -31,7 +29,6 @@ export const makeQuestionnaireLifetimes = (isClosed: () => boolean) => {
       { discard: true },
     ),
   );
-  // Called outside the service lock before process release. Unlike publication, cleanup joins.
   const drain = (record: RunRecord) =>
     Effect.suspend(() =>
       Effect.forEach(
@@ -48,7 +45,6 @@ export const makeQuestionnaireLifetimes = (isClosed: () => boolean) => {
     requestId: string,
     execute: (owner: QuestionnaireOwner) => Effect.Effect<A, SubagentError, R>,
   ): Effect.Effect<A, SubagentError, R> => {
-    // Capture authenticated assignment at dispatch, not after the execution fiber starts.
     const owner = { runId: record.view.id, assignmentEpoch: record.assignment.epoch, requestId };
     return Effect.gen(function* () {
       const current = () =>

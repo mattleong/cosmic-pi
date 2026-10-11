@@ -6,7 +6,6 @@ import { referencedAliasName, type FunctionNode } from "../shared/ast.ts";
 
 import { lexicalTypeParameterNames } from "../shared/lexical-type-parameters.ts";
 
-/** Ban function contracts that return unknown instead of a parsed domain type. */
 export const noUnknownReturnsRule = defineRule({
   meta: {
     type: "problem",
@@ -64,7 +63,7 @@ export const noUnknownReturnsRule = defineRule({
       if (
         !resolvesToUnknown(
           annotation.typeAnnotation,
-          lexicalTypeParameterNames(node, context.sourceCode.visitorKeys),
+          lexicalTypeParameterNames(node, context.sourceCode),
         )
       ) {
         return;

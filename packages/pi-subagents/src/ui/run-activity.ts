@@ -43,26 +43,17 @@ import {
   workflowActivityDetail,
 } from "./workflow-activity-detail.ts";
 
-// Pure projection of runs and workflows into Activity items, details and action policy; the host
-// adapter registers the provider and dispatches actions.
-
 export const SUBAGENT_ACTIVITY_PROVIDER = "pi-subagents";
 
-/** The workflow views Activity was last published, the only ones the host holds revisions for. */
 export interface WorkflowActivitySnapshot {
   readonly runs: ReadonlyArray<WorkflowRunView>;
 }
 
 export const EMPTY_WORKFLOWS: WorkflowActivitySnapshot = Object.freeze({ runs: [] });
 
-/**
- * Workflows that still own their members. A workflow releases its members before its view
- * finishes, so a finished or evicted workflow owns none.
- */
 export const liveWorkflowIds = (snapshot: WorkflowActivitySnapshot): ReadonlySet<string> =>
   new Set(snapshot.runs.filter((run) => !isWorkflowRunFinished(run.state)).map((run) => run.id));
 
-/** Whether a running workflow, not the root, still receives this run's results. */
 export const isOwnedByLiveWorkflow = (run: SubagentRunView, live: ReadonlySet<string>): boolean =>
   run.workflow !== undefined && live.has(run.workflow.workflowId);
 
@@ -78,10 +69,8 @@ const RUN_STATUS = {
   stopped: "cancelled",
 } satisfies Readonly<Record<SubagentRunState, ActivityItem["status"]>>;
 
-/** A run's Activity status, and what it waits for when a person or the parent must act. */
 function activityAttention(run: SubagentRunView) {
   if (run.writeAdmissionPaused) {
-    // An older question does not make active claim containment ready for parent recovery.
     const blockedReason = run.writeViolationOffender
       ? isParentActionRequiredRun({ ...run, question: undefined })
         ? "file-access-review"
@@ -96,10 +85,6 @@ function activityAttention(run: SubagentRunView) {
   return { status: RUN_STATUS[run.state] } as const;
 }
 
-/**
- * A member whose agent() call failed, such as a run whose structured result wasn't valid JSON,
- * shows as failed, as its phase counts it, unless its run still needs attention.
- */
 function memberAttention(run: SubagentRunView, call: WorkflowAgentView | undefined) {
   const attention = activityAttention(run);
   return call?.state === "failed" &&
@@ -108,7 +93,6 @@ function memberAttention(run: SubagentRunView, call: WorkflowAgentView | undefin
     : attention;
 }
 
-/** An action that hands off to its own input. */
 const handoff = (id: string, label: string) => ({ id, label, handoff: true as const });
 
 const MESSAGE_ACTIONS = {
@@ -116,13 +100,6 @@ const MESSAGE_ACTIONS = {
   guidance: handoff("message", "Message"),
 } satisfies Readonly<Record<RunMessageMode, ReturnType<typeof handoff>>>;
 
-/**
- * The actions a run offers; `owned`: a running workflow still owns it. Unlike the fleet, Activity
- * offers stop to a stopping run, which joins its cleanup; paused file access withholds resume and
- * messages; and a reply needs its question. A paused owned run continues its owned assignment, but
- * a completed one stays with its workflow until the workflow ends, because the root refuses a
- * resume whose result only the root would receive.
- */
 export function runActions(run: SubagentRunView, title: string, owned: boolean) {
   const mode = run.writeAdmissionPaused ? undefined : runMessageMode(run);
   return [
@@ -154,15 +131,9 @@ export function runActions(run: SubagentRunView, title: string, owned: boolean) 
   ];
 }
 
-/** What an action applies to beyond the published fields: the assignment and its question. */
 const runIdentity = (run: SubagentRunView): string =>
   JSON.stringify([run.reportGeneration, run.sessionId ?? null, run.question?.requestId ?? null]);
 
-/**
- * A run's summary, beside the state Activity draws itself: why a member's agent() call ended
- * without a result, or why the run failed, so a failure reads at a glance; otherwise what it is
- * doing, when it says.
- */
 const runSummary = (
   run: SubagentRunView,
   call: WorkflowAgentView | undefined,
@@ -179,11 +150,6 @@ const runSummary = (
     : {};
 };
 
-/**
- * A member nests under its workflow while the workflow runs, and its finished runs stay there as
- * history, even after the workflow leaves the snapshot. A run working again after its workflow
- * ended belongs to the root, so it is published as a root run.
- */
 const workflowPlacement = (run: SubagentRunView, owned: boolean) =>
   run.workflow !== undefined &&
   (run.parentRunId ?? "root") === "root" &&
@@ -198,7 +164,6 @@ export function subagentActivityItems(
 ): readonly ActivityItem[] {
   const awaited = new Set(presentation.awaits.flatMap((lease) => lease.runIds));
   const rows = projectFleetTree(projection.runs, "root").rows;
-  // Placeholders fill the slots runs leave.
   const workflows = workflowActivityItems({
     runs: workflowSnapshot.runs,
     visibleRunIds: new Set(rows.map(({ run }) => run.id)),
@@ -244,7 +209,6 @@ export function subagentActivityItems(
   return Object.freeze([...workflows, ...runs].slice(0, ACTIVITY_LIMITS.items));
 }
 
-/** Detail for a workflow, or for an agent of one that has no subagent run to show. */
 const workflowDetail = (
   workflows: WorkflowActivitySnapshot,
   id: string,

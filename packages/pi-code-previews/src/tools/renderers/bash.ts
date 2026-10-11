@@ -29,9 +29,11 @@ function shouldHideBashResult<ArgsInput>(args: ArgsInput): boolean {
 export function bashPreviewRenderers(): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
-      const command = Predicate.isString(args.command) ? args.command : "";
-      const timeout = Predicate.isNumber(args.timeout)
-        ? theme.fg("muted", ` (timeout ${args.timeout}s)`)
+      const commandArg = getObjectValue(args, "command");
+      const timeoutArg = getObjectValue(args, "timeout");
+      const command = Predicate.isString(commandArg) ? commandArg : "";
+      const timeout = Predicate.isNumber(timeoutArg)
+        ? theme.fg("muted", ` (timeout ${timeoutArg}s)`)
         : "";
       const highlighted = renderHighlightedText(
         command || "…",
@@ -39,7 +41,6 @@ export function bashPreviewRenderers(): PreviewRenderers {
         theme,
         renderContext.invalidate,
       ).join("\n");
-      // Risky commands and secrets are flagged under the heading, even before execution.
       const heading = new Container();
       heading.addChild(
         new Text(`${renderCodePreviewToolTitle("bash", theme)} ${highlighted}${timeout}`, 0, 0),
@@ -55,7 +56,6 @@ export function bashPreviewRenderers(): PreviewRenderers {
         return renderHiddenPreviewExpandHint(renderContext.state, theme, "output");
       const output = trimSingleTrailingNewline(getTextContent(result.content));
       const lines = output ? output.split("\n") : [];
-      // The shell's issue line states a failed command's closing status; show only its output.
       const { lines: rawLines, notice } = splitShellNotice(
         renderContext.isError ? withoutShellStatus(lines) : lines,
       );

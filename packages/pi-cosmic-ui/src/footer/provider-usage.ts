@@ -26,7 +26,6 @@ function resetDisplay(segment: string, body: string | undefined): string {
 function providerEntries(body: string): ProviderEntry[] {
   const entries: ProviderEntry[] = [];
   const byLabel = new Map<string, WindowEntry>();
-  // Windows and resets merge by case-insensitive label, keeping the first-seen label and order.
   const windowFor = (label: string): WindowEntry => {
     const key = label.toLowerCase();
     const existing = byLabel.get(key);
@@ -103,7 +102,6 @@ function wrappedEntry(
   return lines;
 }
 
-/** Render provider windows as paired, independently wrapped rows. */
 export function renderProviderUsageLines(
   providerName: string,
   text: string,

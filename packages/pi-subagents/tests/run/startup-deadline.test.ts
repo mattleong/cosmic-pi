@@ -56,7 +56,6 @@ describe("local Pi startup deadline", () => {
         yield* yieldUntil(() => fake.controls[0]?.sent("get_state") === true);
         const child = fake.controls[0]!;
         child.gateRelease(release);
-        // Unrelated replies cannot establish readiness for this request.
         child.offer({ type: "response", id: "unrelated", command: "get_state", success: true });
         yield* TestClock.adjust("31 seconds");
         expect(settled).toBe(false);

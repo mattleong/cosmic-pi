@@ -110,9 +110,8 @@ describe("forked Pi transcript", () => {
         const leafId = parent.appendLabelChange(retainedId, "parent bookmark");
         const entries = parent.getBranch().map((entry) => {
           if (entry.type !== "compaction") return entry;
-          const legacyCompaction = { ...entry };
-          delete legacyCompaction.systemMessage;
-          return legacyCompaction;
+          const { systemMessage: _systemMessage, ...compactionWithoutSystemMessage } = entry;
+          return compactionWithoutSystemMessage;
         });
         const hookEntry = {
           type: "message",
@@ -127,7 +126,6 @@ describe("forked Pi transcript", () => {
             timestamp: 2,
           },
         };
-        // Insert a legacy role in the retained branch to prove native migration runs.
         const fixtureEntries = [
           entries[0],
           hookEntry,

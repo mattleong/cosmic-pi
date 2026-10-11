@@ -5,7 +5,6 @@ const MAX_NEAR_MATCHES = 6;
 export interface PiCatalogModel {
   readonly provider: string;
   readonly id: string;
-  /** Authenticated host-reported effort capability when the host provides one. */
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
 }
 
@@ -32,13 +31,6 @@ const nearMatchesFor = (
     .slice(0, MAX_NEAR_MATCHES);
 };
 
-/**
- * Deterministic Pi model resolution for configured profile candidates.
- *
- * Exact canonical `provider/model` values win; a bare model ID resolves only when it matches
- * exactly one provider. Ambiguity and unknown selectors return structured candidates instead of
- * arbitrarily selecting a provider.
- */
 export const resolvePiModelSelector = (
   selector: string,
   available: ReadonlyArray<PiCatalogModel>,

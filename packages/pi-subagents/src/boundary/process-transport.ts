@@ -1,4 +1,3 @@
-// Private JSONL process ownership shared by Pi RPC and the native Claude/Codex CLI adapters.
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -24,23 +23,19 @@ export interface ProcessExit {
   readonly stderr: string;
 }
 
-/** Process exit is published only through `awaitExit`, never on the event queue. */
 export type ProcessWireEvent<Message> =
   | Message
   | { readonly type: "protocol_error"; readonly message: string };
 
-/** The owned process surface the local Pi, Claude, and Codex adapters consume. */
 export interface ProcessTransportHandle<Message, Frame> {
   readonly pid: number;
   readonly events: Queue.Dequeue<ProcessWireEvent<Message>, Cause.Done>;
-  /** Release byte-weighted transport backlog ownership after one event is processed. */
   readonly acknowledge: (event: ProcessWireEvent<Message>) => void;
   readonly awaitExit: Effect.Effect<ProcessExit, SubagentProcessError>;
   readonly send: (frame: Frame) => Effect.Effect<void, SubagentProcessError>;
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
 }
 
-// Frames are locally constructed protocol values, each serialized as one JSONL line.
 const encodeFrame = <Frame>(frame: Frame): string => `${JSON.stringify(frame)}\n`;
 
 const cleanupUnconfirmed = () =>
@@ -50,7 +45,6 @@ const cleanupUnconfirmed = () =>
     "cleanup_unconfirmed",
   );
 
-/** Owned process operations, injectable without replacing Node or provider modules. */
 export interface ProcessTransportRuntime {
   readonly spawn: (...args: Parameters<typeof nodeSpawn>) => NodeChildProcess;
   readonly terminate: typeof terminateProcessTree;
@@ -73,17 +67,12 @@ interface ProcessTransportOptions<Message, Frame, Attachment> {
   readonly requestAbort?: (
     send: (frame: Frame) => Effect.Effect<void, SubagentProcessError>,
   ) => Effect.Effect<void>;
-  /** Attach extra channels before waiting for spawn; `detach` removes only these listeners. */
   readonly attach: (
     child: NodeChildProcess,
     offer: (event: ProcessWireEvent<Message>) => void,
   ) => Attachment;
 }
 
-/**
- * Spawns one owned process in the caller's scope. Spawn through release-finalizer registration
- * stays masked, so scope closure always releases a process that exists.
- */
 export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(function* <
   Message extends object,
   Frame,
@@ -95,12 +84,9 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
   const events = yield* Queue.dropping<ProcessWireEvent<Message>, Cause.Done>(EVENT_CAPACITY);
   const ready = yield* Deferred.make<void, SubagentProcessError>();
   const exited = yield* Deferred.make<ProcessExit>();
-  // Synchronous stream callbacks fork forced termination into this scope rather than a daemon.
   const runFork = yield* FiberSet.makeRuntime();
   const { platform, label, error: processError } = options;
   const stderr: Buffer[] = [];
-  // Queued events stay weighted by their line bytes until the consumer acknowledges them; the
-  // count-bounded queue remains the final item guard.
   const weights = new WeakMap<ProcessWireEvent<Message>, number>();
   let queuedBytes = 0;
   let stderrBytes = 0;
@@ -117,8 +103,6 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         try: () => options.spawn(runtime.spawn),
         catch: (error) => processError("spawn", error),
       });
-      // Scope closure joins rather than interrupts an in-flight forced termination, so a Windows
-      // taskkill /T /F always finishes walking the tree within its own deadline.
       const force = () => {
         runFork(
           Effect.uninterruptible(runtime.terminate(child, "force", { platform })).pipe(
@@ -317,11 +301,9 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
             return;
           }
           yield* Effect.sleep("100 millis");
-          // POSIX descendants remain owned after the detached group leader exits.
           return yield* terminate("force");
         }
         const forceAttempt = yield* Effect.exit(terminate("force"));
-        // Wait even when the forced terminate failed, so a late exit is still observed.
         const forcedExit = yield* waitForExit;
         if (Exit.isFailure(forceAttempt) || !forcedExit) return yield* cleanupUnconfirmed();
       });

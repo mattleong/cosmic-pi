@@ -72,63 +72,36 @@ export interface WorkflowStartRequest {
   readonly source: WorkflowSourceRequest;
   readonly args: Schema.Json;
   readonly resumeFromRunId?: string | undefined;
-  /** A hard ceiling on the output tokens the run's live agents produce. */
   readonly budget?: number | undefined;
 }
 
 export type WorkflowStartError = WorkflowScriptError | WorkflowSourceError | WorkflowRequestError;
 
-/**
- * What status knows about a run: its view while this activation holds it, or else a read-only
- * summary from the run's files, such as for a run of an earlier Pi process of this session.
- */
 export type WorkflowStatus =
   | WorkflowViewStatus
   | { readonly kind: "recorded"; readonly run: WorkflowRecordedRun };
 
-/** What the main agent's own status call gets: the status, or a repeat's short answer. */
 export type WorkflowToolStatus = WorkflowStatus | WorkflowUnchangedStatus;
 
 export interface WorkflowServiceContract {
-  /** Validates the source and starts the run in the background; returns its first view. */
   readonly start: (
     request: WorkflowStartRequest,
     host: WorkflowHost,
   ) => Effect.Effect<WorkflowRunView, WorkflowStartError>;
-  /**
-   * Stops the script and returns once its agents are stopped; finished runs are unchanged. A
-   * stop the main agent requested sends no notification, since its result carries the state,
-   * unless the call ends before returning it.
-   */
   readonly stop: (
     runId: string,
     origin?: WorkflowStopOrigin,
   ) => Effect.Effect<WorkflowRunView, WorkflowNotFoundError>;
   readonly status: (runId: string) => Effect.Effect<WorkflowStatus, WorkflowNotFoundError>;
-  /**
-   * Status for the main agent's subagent_workflow call: a live run with nothing material changed
-   * since that agent's previous call, within a minute, comes back unchanged instead, so polling
-   * gets a short answer (see `status-repeat.ts`). Other callers use `status`.
-   */
   readonly toolStatus: (runId: string) => Effect.Effect<WorkflowToolStatus, WorkflowNotFoundError>;
   readonly list: Effect.Effect<ReadonlyArray<WorkflowRunView>>;
-  /**
-   * Resolves a queued or running workflow agent to null, by its subagent run id, or skips a planned
-   * one no call has claimed, whose claiming call then resolves null without starting anything.
-   */
   readonly skip: (agentRunId: string) => Effect.Effect<void, WorkflowNotFoundError>;
 }
 
 interface WorkflowServiceOptions {
-  /** Synchronous host bridge for Activity; stages every change and gets coalesced publishes. */
   readonly activity?: WorkflowActivitySink | undefined;
   readonly notify?: WorkflowNotify | undefined;
-  /** Agents one run executes at once; defaults from the CPU count (`workflowConcurrency`). */
   readonly concurrency?: number | undefined;
-  /**
-   * The Pi session id run records are written under and must name to be resumed, announced or
-   * described after a restart; without one, runs keep no record.
-   */
   readonly sessionKey?: string | undefined;
   readonly observer?: WorkflowRunObserver | undefined;
 }
@@ -142,9 +115,6 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
     1,
     options.concurrency ?? workflowConcurrency(nodeAvailableParallelism()),
   );
-  // Finalizers run in reverse: Activity publishes and the closed flag first, then deliveries,
-  // and last run fibers, whose own finalizers stop their agents while the subagent service is
-  // still open. Keep this order.
   const fibers = yield* FiberMap.make<string>();
   const delivery = yield* makeWorkflowDelivery(options.notify);
   const runs = yield* makeWorkflowRuns(options.activity);
@@ -157,16 +127,10 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
   const sources = makeWorkflowSources({ store, journal, recovery, subagents, runs });
   const members = makeWorkflowMembers({ runs, subagents, journal, store, sources });
   const repeats = makeWorkflowStatusRepeats();
-  // Clock-derived, so run ids stay unique across reloads that share a session's journals, and
-  // random, so Pi processes that start in the same millisecond don't share run directories.
   const activatedAt = (yield* Clock.currentTimeMillis).toString(36);
   const namespace = `${activatedAt}${yield* Effect.sync(() => synchronousRandomHex(3))}`;
   let nextRunOrdinal = 1;
 
-  /**
-   * The result as the finished run's notification carries it; a value that doesn't fit is
-   * clipped and saved in full.
-   */
   const boundedResult = (value: Schema.Json, run: WorkflowRunView, save: boolean) =>
     Effect.gen(function* () {
       const text = workflowValueText(value);
@@ -180,34 +144,26 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       return { ...fitted, ...(path !== undefined && { path }) } satisfies WorkflowResult;
     });
 
-  /** Tells the observer about a run; a failing host callback can't affect the run. */
   const observe = (tell: (observer: WorkflowRunObserver) => void) =>
     Effect.sync(() => {
       const observer = options.observer;
       if (observer) invokeHostCallback(() => tell(observer), undefined);
     });
 
-  /** Closes a run once Pi accepted its report or notice, or when it needs none. */
   const closeRun = (id: string, handoff: WorkflowRunHandoff) =>
     observe((observer) => observer.closed(id, handoff)).pipe(
       Effect.andThen(journal.finish(id)),
       Effect.andThen(records.notified(id)),
     );
 
-  /** Runs once the script's scope has closed, so every agent call has already settled. */
   const finish = (id: string, exit: Exit.Exit<WorkflowSandboxOutcome>) =>
     Effect.gen(function* () {
-      // Ordered: the owner closes before the outcome is recorded, and the run record and
-      // notification come last, once the view holds the final state.
       yield* subagents.closeOwner(id);
       runs.controls.delete(id);
-      // Teardown interrupts runs and leaves them open, in memory and in their records, so the
-      // next activation of this session reports them; a torn-down session gets no notification.
       const tornDown = yield* delivery.closed;
       const conclusion = concludeWorkflow(exit);
       const at = yield* Clock.currentTimeMillis;
       const current = yield* runs.find(id);
-      // The result gets the room the notification's other sections leave.
       const result =
         conclusion.value === undefined || !current
           ? undefined
@@ -219,23 +175,16 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       const finished = yield* runs.update(id, (run) =>
         finishWorkflowRun(run, conclusion, result, at),
       );
-      // Once the view is final, a later status call can't note the run as live again.
       repeats.forget(id);
       yield* runs.mutate(retainWorkflowRuns);
       if (finished) yield* records.end(finished, tornDown);
       if (tornDown) return;
-      // A teardown before Pi accepts the report then says how the run ended.
       if (finished && isWorkflowRunFinished(finished.state))
         yield* journal.noteEnded(id, finished.state);
       const notification = finished && workflowNotification(finished);
       yield* delivery.report(notification, closeRun(id, notificationHandoff(notification)));
     });
 
-  /**
-   * Keeps a live run's directory recent, every minute, for other Pi processes' pruning and as the
-   * heartbeat that tells them the run's process still runs it. Timers don't advance while the
-   * machine sleeps, so a short period marks the directory again soon after it wakes.
-   */
   const keepRunFilesRecent = (setup: WorkflowRunSetup) =>
     setup.files === undefined
       ? Effect.void
@@ -248,11 +197,6 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
             Effect.asVoid,
           );
 
-  /**
-   * The script's outcome, unless the host failed the run, such as for a call past its agent
-   * limit, and nobody asked it to stop: then the run fails with the host's failure whatever the
-   * aborted script returned, so a script that catches every error still ends there.
-   */
   const hostOutcome = (
     control: WorkflowRunControl,
     outcome: WorkflowSandboxOutcome,
@@ -264,7 +208,6 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       return { _tag: "Failed", kind: "script", failure, output: outcome.output };
     });
 
-  /** The run's record is written before its script starts, so a crash after that is announced. */
   const runFiber = (setup: WorkflowRunSetup, created: WorkflowRunView) =>
     Effect.scoped(
       records.create(created, setup.files).pipe(
@@ -286,10 +229,6 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       ),
     ).pipe(Effect.onExit((exit) => finish(setup.id, exit)));
 
-  /**
-   * Saves the run's script in its private directory; a failure becomes the warning the run logs
-   * instead of failing the start.
-   */
   const saveRunFiles = (id: string, source: string) =>
     runs.list.pipe(
       Effect.flatMap((views) =>
@@ -332,7 +271,6 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
     );
     const saved = yield* saveRunFiles(id, script.source);
     const files = Result.getOrUndefined(saved);
-    // Registration is atomic: an open owner always has a run fiber that will close it.
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
         yield* journal.open(id, script.meta.name, { source, scriptPath: files?.script });
@@ -394,19 +332,13 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
     );
   });
 
-  /** Waits until the run's fiber, and so every agent, has ended. */
   const awaitStopped = (id: string) =>
     Effect.gen(function* () {
       const fiber = yield* FiberMap.get(fibers, id);
-      // The aborted script's scope closes, and so every agent stops, before the fiber ends.
       if (Option.isSome(fiber)) yield* Fiber.await(fiber.value);
       return yield* runs.require(id);
     });
 
-  /**
-   * The main agent's stop call ended before returning the final state, so the run reports like
-   * any other stop: the notification carries the state and worktrees without starting a turn.
-   */
   const releaseToolStop = (id: string) =>
     Effect.gen(function* () {
       const released = yield* runs.modify(id, (run) =>
@@ -415,23 +347,16 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
           : ([undefined, run] as const),
       );
       if (!released || !isWorkflowRunFinished(released.state) || (yield* delivery.closed)) return;
-      // The run settled first, and its finish sent nothing for the tool's stop.
       const notification = workflowNotification({ ...released, stoppedBy: undefined });
       if (notification) yield* delivery.send(notification);
     });
 
   const stop: WorkflowServiceContract["stop"] = (id, origin = "user") =>
-    // Marking the run, signalling its script and recording who asked happen together; only the
-    // wait is interruptible.
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const current = yield* runs.require(id);
         if (isWorkflowRunFinished(current.state)) return current;
-        // A teardown before the run settles then reports it without a restart hint.
         yield* journal.noteStop(id);
-        // The call that starts the stop says who asked for it, in the view and the record, and
-        // only its tool stop is released when it ends early. Later calls just wait, but once that
-        // tool stop was released, nobody holds the stop and the record takes their origin.
         const claim = yield* runs.modify(id, (run) => {
           if (run.state === "running")
             return ["starts", { ...run, state: "stopping", stoppedBy: origin }] as const;
@@ -474,7 +399,6 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
     );
   };
 
-  /** A run memory holds is closed instead when another Pi process of the session announced it. */
   const announceRemembered = (interrupted: WorkflowInterruptedRun) =>
     recovery
       .noticeAccepted(interrupted.runId)
@@ -484,12 +408,7 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
         ),
       );
 
-  // Runs this session's earlier activation left running were torn down without a word; tell
-  // the main agent once, so it doesn't keep waiting for their results. Each stays open until its
-  // notice is accepted. They are read before this activation opens runs of its own.
   const remembered = yield* journal.interruptedRuns;
-  // Then runs an earlier Pi process of this session left unfinished are found in their files.
-  // Memory reports the runs it holds, and the files are read off the start path.
   yield* Effect.forEach(remembered, announceRemembered, { discard: true }).pipe(
     Effect.andThen(recovery.interrupted(journal.has)),
     Effect.flatMap((owed) => Effect.forEach(owed, announce, { discard: true })),
@@ -506,7 +425,6 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
   });
 });
 
-/** Session-scoped dynamic workflow runs. Depends on SubagentService, so it closes first. */
 export class WorkflowService extends Context.Service<WorkflowService, WorkflowServiceContract>()(
   "pi-subagents/workflow/service/WorkflowService",
 ) {

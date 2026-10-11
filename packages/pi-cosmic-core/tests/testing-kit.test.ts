@@ -42,7 +42,6 @@ it.live("records IPC messages from spawn and removes the temporary directory wit
           timeout: "10 seconds",
         });
         yield* child.exited;
-        // Both messages arrived before these waits began.
         yield* child.wait("attempting");
         yield* child.wait("finished");
         yield* killChild(child.child);

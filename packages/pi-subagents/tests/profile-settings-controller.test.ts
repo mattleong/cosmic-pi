@@ -1,3 +1,4 @@
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
@@ -5,10 +6,10 @@ import { describe, expect, vi } from "vitest";
 import {
   deferredPromise,
   extensionContextFixture,
-  opaqueFixture,
   plainTheme,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
+import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import {
   fleetManagerActionsFixture,
   makeProfileSettingsInspection,
@@ -34,7 +35,6 @@ import { effectTest, step } from "./support/effect-test.ts";
 
 type DisposableComponent = Component & { readonly dispose?: (() => void) | undefined };
 
-/** Global and Project documents with a shared `common` set and a default set each. */
 const inspection = (globalDefault = "global"): ProfileSettingsInspection => {
   const document = (defaultProfileSet: string, own: string) => ({
     version: 6,
@@ -103,9 +103,14 @@ const setup = (
     rows: 30,
   });
   const managerActions = actions(options.value ?? inspection());
-  // These command tests never open the fleet manager, so the bridge is never read.
-  registerSubagentManagerCommand(pi, opaqueFixture({}), managerActions);
-  const ui = { notify: vi.fn(), custom: vi.fn(custom) };
+  registerSubagentManagerCommand(pi, makeSubagentProjectionBridge(), managerActions);
+  let customImplementation: ExtensionUIContext["custom"] = custom;
+  let customCalls = 0;
+  const countedCustom: ExtensionUIContext["custom"] = (factory, customOptions) => {
+    customCalls += 1;
+    return customImplementation(factory, customOptions);
+  };
+  const ui = { notify: vi.fn(), custom: countedCustom };
   const ctx = extensionContextFixture({
     cwd: "/repo",
     signal: undefined,
@@ -124,6 +129,10 @@ const setup = (
     ctx,
     overlays,
     ui,
+    customCalls: () => customCalls,
+    useCustom: (implementation: ExtensionUIContext["custom"]) => {
+      customImplementation = implementation;
+    },
     managerActions,
     setProjectTrusted: (trusted: boolean) => {
       projectTrusted = trusted;
@@ -157,7 +166,7 @@ const closeDashboard = function* (fixture: ReturnType<typeof setup>, running: Pr
   yield* step(settleHostPromises);
   press(fixture, "\u001b", "\u001b", "\u001b", "\u001b");
   yield* step(() => running);
-  expect(fixture.ui.custom).toHaveBeenCalledTimes(1);
+  expect(fixture.customCalls()).toBe(1);
 };
 const saveSnapshot = function* (fixture: ReturnType<typeof setup>) {
   press(fixture, "s");
@@ -174,7 +183,6 @@ const useSelectedSet = function* (fixture: ReturnType<typeof setup>, beforeConfi
   yield* step(settleHostPromises);
 };
 const makeDefault = (fixture: ReturnType<typeof setup>) => press(fixture, "k", "?", "\r");
-/** Settings and dashboard work belong to this activation until the test replaces it. */
 const replaceableActivation = (fixture: ReturnType<typeof setup>) => {
   const activation = new AbortController();
   const runs = vi.fn();
@@ -187,7 +195,6 @@ const replaceableActivation = (fixture: ReturnType<typeof setup>) => {
   });
   return { replace: () => activation.abort(), runs };
 };
-/** Runs a side effect as the next profile inspection starts. */
 const onNextInspection = (fixture: ReturnType<typeof setup>, sideEffect: () => void) => {
   const inspect = vi.mocked(fixture.managerActions.inspectProfiles);
   const configured = inspect.getMockImplementation()!;
@@ -223,7 +230,7 @@ describe("profile settings controller", () => {
           fixture.command?.("profiles worker", { ...fixture.ctx, mode, hasUI: false }) ??
           Promise.resolve(),
       );
-      expect(fixture.ui.custom).not.toHaveBeenCalled();
+      expect(fixture.customCalls()).toBe(0);
       expect(fixture.managerActions.inspectProfiles).not.toHaveBeenCalled();
     });
   }
@@ -248,10 +255,10 @@ describe("profile settings controller", () => {
     function* () {
       const fixture = setup();
       const host = fakeCustomSurfaceHost({ theme: plainTheme, columns: 120, rows: 30 });
-      fixture.ui.custom.mockImplementation(host.ctx.ui.custom);
+      fixture.useCustom(host.ctx.ui.custom);
       const activation = replaceableActivation(fixture);
       const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
-      yield* step(() => vi.waitFor(() => expect(fixture.ui.custom).toHaveBeenCalledOnce()));
+      yield* step(() => vi.waitFor(() => expect(fixture.customCalls()).toBe(1)));
       const questionnaire = { render: () => ["questionnaire"], invalidate() {} };
       host.showUnrelated(questionnaire);
       activation.replace();
@@ -302,7 +309,6 @@ describe("profile settings controller", () => {
         yield* step(() => running);
         expect(fixture.overlays).toEqual([]);
         expect(activation.runs).not.toHaveBeenCalled();
-        // A replaced session's stale context cannot report its own replacement.
         expect(fixture.ui.notify).not.toHaveBeenCalled();
       },
     );
@@ -836,15 +842,13 @@ describe("root /subagents fleet actions", () => {
   const topLevel = (overrides: Partial<SubagentRunView> = {}) =>
     view({ id: "child", name: "child", parentRunId: "root", depth: 1, ...overrides });
 
-  /** Opens the registered root fleet over a fixed projection and the supplied manager actions. */
-  const openFleet = (run: SubagentRunView, overrides: Partial<FleetManagerActions>) =>
-    openRegisteredFleet((pi) =>
-      registerSubagentManagerCommand(
-        pi,
-        opaqueFixture({ get: () => projectionOf([run]), subscribe: () => () => undefined }),
-        fleetManagerActionsFixture(overrides),
-      ),
+  const openFleet = (run: SubagentRunView, overrides: Partial<FleetManagerActions>) => {
+    const bridge = makeSubagentProjectionBridge();
+    bridge.publish(projectionOf([run]));
+    return openRegisteredFleet((pi) =>
+      registerSubagentManagerCommand(pi, bridge, fleetManagerActionsFixture(overrides)),
     );
+  };
 
   const sendOutcomes: ReadonlyArray<
     readonly [string, () => Promise<FleetMessageDelivery>, FleetNoticeKind]

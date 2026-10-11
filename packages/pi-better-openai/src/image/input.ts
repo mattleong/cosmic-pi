@@ -7,7 +7,6 @@ import { MAX_IMAGE_INPUTS, fail, failWith, type ImageInput } from "./types.ts";
 
 const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_INPUT_BYTES = 50 * 1024 * 1024;
-// A Map, so a decoded format can never match an inherited object key.
 const INPUT_MIME_TYPES: ReadonlyMap<string, string> = new Map([
   ["png", "image/png"],
   ["jpeg", "image/jpeg"],

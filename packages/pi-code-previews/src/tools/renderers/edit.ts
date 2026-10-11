@@ -29,7 +29,6 @@ import { stateHeading } from "./shared/state-heading";
 import { countLabel } from "pi-cosmic-core";
 import { previewIssuesSlot } from "../../preview/preview-issues";
 
-/** Collapsed proposals show this many edit blocks; expansion shows every block. */
 const COLLAPSED_EDIT_BLOCKS = 3;
 
 type ProposedDiff =
@@ -39,12 +38,10 @@ type ProposedDiff =
 export function editPreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
-      // Closures keep only these, never the context: its lastComponent links every prior call.
       const { state, expanded, invalidate } = renderContext;
       const path = getPathArg(args);
       const operations = getEditPreviewOperations(args);
       const operationsSource = editOperationsSource(operations);
-      // New arguments drop the old summary; the proposal's cache key already covers them.
       if (state.editArgsPath !== path || state.editArgsExactSource !== operationsSource) {
         state.editArgsPath = path;
         state.editArgsExactSource = operationsSource;
@@ -54,7 +51,6 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
       const title = `${renderCodePreviewToolTitle("edit", theme)} ${renderDisplayPath(path, cwd, theme)}`;
       const separator = diffSummarySeparator(theme);
       const preview = new Container();
-      // The result sets the summary after the call is built, before the row is drawn.
       preview.addChild(
         stateHeading(() => {
           const summary = state.editSummaryText;
@@ -99,7 +95,6 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
           render,
           invalidate,
         );
-      // The proposal stays until the applied diff replaces it.
       preview.addChild(unlessResultDiffShown(state, proposal));
       return preview;
     },
@@ -132,16 +127,13 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
           );
       renderContext.state.editSummaryText = formatEditSummary(summary, limit, theme);
       if (hidePreview) {
-        // A call with a hidden proposal already offers expansion.
         const callHint =
           renderContext.argsComplete && getEditPreviewOperations(renderContext.args).length > 0;
         return callHint
           ? new Container()
           : renderHiddenPreviewExpandHint(renderContext.state, theme, "diff");
       }
-      // Expansion keeps the exact proposed edits above the applied diff.
       setResultDiffShown(renderContext.state, !expanded);
-      // A deferred render keeps only this, never the context and its prior components.
       const { invalidate } = renderContext;
       const render = () =>
         new FullWidthDiffText(
@@ -176,7 +168,6 @@ function editOperationsSource(operations: EditPreviewOperation[]): string {
   return JSON.stringify(operations.map(({ oldText, newText }) => [oldText, newText]));
 }
 
-/** Proposed diffs per operation, kept across expansion toggles for the same arguments. */
 function proposedDiffs(state: RendererState, source: string): Array<ProposedDiff | undefined> {
   const cached = state.editProposedDiffs;
   if (cached?.source === source && Array.isArray(cached.diffs)) return cached.diffs;
@@ -185,7 +176,6 @@ function proposedDiffs(state: RendererState, source: string): Array<ProposedDiff
   return diffs;
 }
 
-/** Computed only when displayed; the write diff guard bounds each block's work. */
 function proposeDiff({ oldText, newText }: EditPreviewOperation): ProposedDiff {
   const guard = getWriteDiffGuard(oldText, newText);
   if (guard) return { kind: "skipped", guard };
@@ -204,13 +194,11 @@ function renderEditCallPreview(
   const lang = pathPreviewLanguage(path);
   const shown = expanded ? operations.length : Math.min(operations.length, COLLAPSED_EDIT_BLOCKS);
   const collapsedLines = codePreviewSettings.editCollapsedLines;
-  // Shown blocks share the collapsed line budget, each keeping at least eight lines.
   const blockLimit =
     operations.length > 1 && collapsedLines !== "all"
       ? Math.max(8, Math.floor(collapsedLines / shown))
       : collapsedLines;
   const sections: string[] = [];
-  // Totals cover the whole edit only when every block was diffed.
   let complete = shown === operations.length;
   let additions = 0;
   let removals = 0;

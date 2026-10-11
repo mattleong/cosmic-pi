@@ -6,7 +6,6 @@ import {
   type Model,
 } from "@earendil-works/pi-ai";
 import { createGrammarToolInputProperties } from "#pi-ai-constrained-sampling";
-// Keep Pi's jiti root alias from treating this deep export as a child of compat.js.
 import { convertResponsesMessages } from "#pi-ai-openai-responses-shared";
 import {
   convertToLlm,
@@ -40,7 +39,6 @@ export function isEligibleOpenAICompactionModel(
   return model?.provider === "openai" && model.api === "openai-responses";
 }
 
-/** Find a matching checkpoint on the active branch. A later Pi compaction supersedes it. */
 export function findActiveOpenAICompactionCheckpoint(
   branch: readonly SessionEntry[],
   model: Model<Api>,
@@ -54,7 +52,6 @@ export function findActiveOpenAICompactionCheckpoint(
     : undefined;
 }
 
-/** Project persisted Pi entries with the same OpenAI Responses converter used by pi-ai. */
 export function projectOpenAIResponseInput(
   model: Model<"openai-responses">,
   entries: readonly SessionEntry[],
@@ -85,12 +82,10 @@ export function projectOpenAIResponseInput(
       supportsOpenAIGrammarTools: model.compat?.supportsOpenAIGrammarTools ?? false,
     },
   });
-  // The native SDK serializes optional undefined fields away before sending.
   const input = decodeUnknownOrUndefined(InputJsonSchema, encodeJson(converted));
   return input?.slice(leadingInstructionCount(input));
 }
 
-/** Apply an extension checkpoint to the already-built provider payload. */
 export function injectOpenAICompactionCheckpoint<PayloadInput>(
   payload: PayloadInput,
   checkpoint: OpenAICompactionCheckpoint,

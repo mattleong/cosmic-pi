@@ -45,7 +45,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
   makeUsageSettingDescriptors<ResolvedConfig>(
     "Only show usage when the current OpenAI model uses subscription/OAuth auth.",
   );
-export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
+const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "image.enabled",
     label: "Image tool",
@@ -58,7 +58,6 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
     id: "image.defaultModel",
     label: "Image model",
     currentValue: (cfg) => cfg.image.defaultModel,
-    values: ["gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5"],
     description: "Model to use for image generation when the current model isn't OpenAI Codex.",
     decoder: NonBlankStringSchema,
   },
@@ -87,6 +86,14 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
     decoder: FiniteNumberFromJsonSchema,
   },
 ];
+export const imageSettingDescriptors = (
+  modelIds: readonly string[],
+): readonly SettingsOptionDescriptor<ResolvedConfig>[] =>
+  modelIds.length === 0
+    ? IMAGE_SETTING_DESCRIPTORS
+    : IMAGE_SETTING_DESCRIPTORS.map((descriptor) =>
+        descriptor.id === "image.defaultModel" ? { ...descriptor, values: modelIds } : descriptor,
+      );
 export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   ...FAST_SETTING_DESCRIPTORS,
   ...COMPACTION_SETTING_DESCRIPTORS,

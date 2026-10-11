@@ -2,7 +2,6 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { codePreviewSettings } from "../../../config/state";
 import { getShikiStatus } from "../../../syntax/render";
 
-/** Exact dependencies: source components, settings, theme and highlighter status. */
 export function previewCacheKey(
   source: readonly string[],
   path: string,

@@ -1,8 +1,3 @@
-/**
- * Pure composition of the shared `ctx.ui.custom` settings surface: header chrome +
- * `SettingsList` + modeless Vim adapter + focus/render bridge. `boundary/host-settings-command.ts`
- * opens it and guards every host callback threaded through here.
- */
 import {
   Container,
   SettingsList,
@@ -24,7 +19,6 @@ import {
 
 type SettingsListTheme = ConstructorParameters<typeof SettingsList>[2];
 
-/** Public SettingsList callbacks only; focus and navigation remain owned by Pi. */
 export const managerSettingsTheme = (theme: Theme): SettingsListTheme => ({
   label: (text, selected) => (selected ? focusedField(theme, text) : theme.fg("text", text)),
   value: (text, selected) =>
@@ -35,11 +29,9 @@ export const managerSettingsTheme = (theme: Theme): SettingsListTheme => ({
 });
 
 export type SettingsSurfaceItem = SettingItem & {
-  /** "group" marks navigation/summary rows whose submenu completions never reach `onChange`. */
   readonly kind?: "setting" | "group";
 };
 
-/** Wraps a SettingsList change callback so group/navigation rows never reach it. */
 export const withoutGroupRowChanges = (
   items: readonly SettingsSurfaceItem[],
   onChange: (id: string, value: string) => void,
@@ -122,17 +114,14 @@ export const createSettingsGroupSubmenu = (options: SettingsGroupSubmenuOptions)
   new SettingsGroupSubmenu(options);
 
 interface SettingsListSurfaceOptions {
-  /** Rendered above the list (title, config path, …). */
   readonly header: Component;
   readonly items: SettingsSurfaceItem[];
   readonly height: number;
   readonly listTheme: SettingsListTheme;
-  /** Value-change callback for setting rows; group rows are filtered out by the surface. */
   readonly onChange: (id: string, value: string, list: SettingsList) => void;
   readonly onCancel: () => void;
   readonly matchesKeybinding: FullScreenKeymapOptions["matchesKeybinding"];
   readonly requestRender: () => void;
-  /** Dim styling for the shared modeless hint line. */
   readonly dim: (text: string) => string;
   readonly bridge: SettingsSurfaceBridgeOptions;
 }

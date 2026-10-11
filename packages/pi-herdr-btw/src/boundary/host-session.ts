@@ -1,4 +1,3 @@
-// Pi session and inherited Herdr process state are captured at the host boundary.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { captureSessionHost } from "pi-cosmic-core";
 
@@ -10,7 +9,6 @@ export interface HerdrBtwSessionInput {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
 }
 
-/** Session input plus the start signal; undefined means the host session is unavailable. */
 export const captureHerdrBtwSession = (ctx: ExtensionContext) => {
   const host = captureSessionHost(ctx);
   if (host._tag === "Unavailable") return undefined;

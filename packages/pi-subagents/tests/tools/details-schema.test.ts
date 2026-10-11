@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  makeCompactToolDetails,
-  makeAwaitDetails,
-  projectSubagentRunCard,
-} from "../../src/tools/details.ts";
+import { makeCompactToolDetails, makeAwaitDetails } from "../../src/tools/details.ts";
+import { projectSubagentRunCard } from "../../src/tools/details-projection.ts";
 import { STEERING_DELIVERY_STATES } from "../../src/run/model.ts";
 import {
   decodeCompactToolDetails,
@@ -19,7 +16,6 @@ const pendingFailure = {
   message: "Guidance may have been sent; acknowledgement is pending. Do not resend.",
   pendingDelivery: true as const,
 };
-/** Historical and generic uncertain failures carry the same code without the typed flag. */
 const unflaggedFailure = {
   id: pendingFailure.id,
   code: pendingFailure.code,
@@ -41,7 +37,6 @@ describe("subagent detail evidence", () => {
     });
     expect(decodeCompactToolDetails(pending)).toEqual(pending);
     expect(actionFailuresOf(pending)).toEqual([expect.objectContaining({ pendingDelivery: true })]);
-    // Pending-only and pending-plus-confirmed results are not Pi tool errors.
     expect(marksSubagentToolError(pending)).toBe(false);
     const unflagged = makeCompactToolDetails({
       action: "send",
@@ -85,7 +80,6 @@ describe("subagent detail evidence", () => {
       ["send", wrongCode, "unconfirmed"],
       ["send", definite, "failed"],
     ] as const) {
-      // Structurally valid flags decode, so receipts keep their error semantics.
       const forged = decodeCompactToolDetails({ ...base, action, actionFailures: [failure] });
       expect(forged).toBeDefined();
       const decoded = actionFailuresOf(forged)?.[0];

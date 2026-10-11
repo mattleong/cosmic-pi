@@ -14,7 +14,6 @@ type MetricPart = { readonly text: string; readonly kind: MetricPartKind };
 
 const CACHE_IDS: readonly string[] = ["metrics.cacheRead", "metrics.cacheWrite"];
 
-/** Groups cache read before write; the caller has already dropped entries with empty text. */
 function metricCacheGroup(
   entries: readonly CosmicFooterTextContribution[],
   compact: boolean,
@@ -27,7 +26,6 @@ function metricCacheGroup(
   return `${theme.fg("syntaxType", "⇄")} ${values.join(theme.fg("dim", " / "))}`;
 }
 
-/** Expects the non-empty, left-aligned, non-cost entries that renderMetricsLines passes. */
 function metricParts(
   entries: readonly CosmicFooterTextContribution[],
   compact: boolean,
@@ -79,8 +77,6 @@ function wrapMetricParts(
       previous = part;
       continue;
     }
-    // An empty first row can be reserved for cost. Move a complete counter to the next
-    // full-width row rather than clipping it against that reservation.
     if (current || available < width) rows.push(current);
     available = width;
     const wrapped = wrapTextWithAnsi(part.text, width);
@@ -92,7 +88,6 @@ function wrapMetricParts(
   return rows;
 }
 
-/** Render metric contributions without dropping counters when the footer becomes narrow. */
 export function renderMetricsLines(
   contributions: readonly CosmicFooterTextContribution[],
   width: number,

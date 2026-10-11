@@ -5,16 +5,11 @@ import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 
 export type RunWarningSource = "child" | "system";
 
-/** Latest warning from each source; full warning history remains in bounded session events. */
 export interface RunWarningSlots {
   readonly child?: string | undefined;
   readonly system?: string | undefined;
 }
 
-/**
- * Records `warning` in its source slot and returns the projected warning fields plus a `notice`
- * appended to `sessionEvents`. Callers sanitize `warning` and hold the service lock.
- */
 export const recordRunWarning = (
   record: RunRecord,
   sessionEvents: SubagentRunView["sessionEvents"],

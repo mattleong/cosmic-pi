@@ -11,11 +11,9 @@ export interface BackendSelection {
 }
 
 export interface SubagentBackendRegistryContract {
-  /** Resolve capability before a run scope or process is owned. Resolution never performs spawn fallback. */
   readonly resolve: (
     selection: BackendSelection,
   ) => Effect.Effect<BackendDriver, InvalidSubagentRequestError>;
-  /** Resolve and perform bounded readiness checks without acquiring run/spawn ownership. */
   readonly preflight: (
     selection: BackendSelection,
     request: BackendPreflightRequest,

@@ -7,7 +7,6 @@ import { prepareSettingUpdate } from "../src/config/options.ts";
 import { DEFAULT_IMAGE_CONFIG } from "../src/config/schema.ts";
 import { configPaths, resolveConfig, writeConfig } from "../src/config/store.ts";
 
-/** A scoped temporary project root with its agent directory and both config paths. */
 const configRoot = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "pi-better-openai-config-" });
@@ -59,27 +58,18 @@ layer(nodePlatformLayer)("config helpers", (it) => {
   );
 
   it.effect.each([
-    [
-      "project desiredActive",
-      { desiredActive: false, active: true },
-      { desiredActive: true, active: true },
-      false,
-    ],
-    ["project legacy active", { active: true }, { desiredActive: false }, true],
-    ["global desiredActive", undefined, { desiredActive: false, active: true }, false],
-    ["global legacy active", undefined, { active: true }, true],
+    ["project", { desiredActive: false }, { desiredActive: true }, false],
+    ["global", undefined, { desiredActive: true }, true],
     ["default", undefined, undefined, false],
-  ] as const)(
-    "resolves desired fast state with legacy precedence from %s",
-    ([, project, global, expected]) =>
-      Effect.gen(function* () {
-        const { root, agent, paths } = yield* configRoot;
-        if (project) yield* writeConfig(paths.project, project);
-        if (global) yield* writeConfig(paths.global, global);
+  ] as const)("resolves desired fast state from %s config", ([, project, global, expected]) =>
+    Effect.gen(function* () {
+      const { root, agent, paths } = yield* configRoot;
+      if (project) yield* writeConfig(paths.project, project);
+      if (global) yield* writeConfig(paths.global, global);
 
-        const resolved = yield* resolveConfig(root, agent, true);
-        expect(resolved.desiredActive).toBe(expected);
-      }),
+      const resolved = yield* resolveConfig(root, agent, true);
+      expect(resolved.desiredActive).toBe(expected);
+    }),
   );
 
   it.effect("accepts raw image model and enum setting values", () =>

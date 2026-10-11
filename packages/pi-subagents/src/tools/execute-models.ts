@@ -1,4 +1,3 @@
-// The subagent_models action: static profile-route discovery and its tool result.
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -38,8 +37,6 @@ const formatProfileDiscovery = (
     ]),
   ].join("\n");
 
-/** The subagent_models action owner: static profile-route discovery, its formatted
- * text, and the compact details projection. */
 export const executeModelsAction = (
   input: SubagentModelsInput,
   pi: ExtensionAPI,

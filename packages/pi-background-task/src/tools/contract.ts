@@ -1,11 +1,3 @@
-/**
- * Pure projections from task-service domain facts to the version-1 `background_task` contract.
- * Inputs are service snapshots with their domain-only failure cause, log slices, and wait
- * results, never persisted details or formatted text. Every field is picked explicitly, so the
- * command, cwd, pid, waiter marks, and log events cannot reach a contract, and free-form metadata
- * passes the core terminal and diagnostic redaction helpers. Task IDs are primary identity and
- * pass through unchanged.
- */
 import {
   sanitizeDiagnosticError,
   sanitizeTerminalLine,
@@ -41,19 +33,13 @@ const envelope = {
   tool: BACKGROUND_TASK_TOOL_NAME,
 } as const;
 
-/** Redacted, single-line, bounded metadata; blank or control-only text is absent. */
 const metadata = (value: string | undefined, maximum: number): string | undefined => {
   const line = value === undefined ? "" : sanitizeTerminalLine(value);
   return line ? sanitizeDiagnosticError(line, { maximumLength: maximum }) : undefined;
 };
 
-/**
- * The task state is terminal. Never proof that the process tree exited, was cleaned up, or
- * succeeded: failed, stopped, and timed-out tasks are finished too.
- */
 const isFinished = (state: BackgroundTaskState): boolean => !isActiveTaskState(state);
 
-/** One task's contract metadata, including the failure cause that persisted details omit. */
 const projectTaskContract = (task: BackgroundTaskStatus): BackgroundTaskContractTask => {
   const name = metadata(task.name, BOUNDS.maxNameChars);
   const signal = metadata(task.signal, BOUNDS.maxSignalChars);
@@ -89,19 +75,11 @@ export const tasksActionContract = (
   tasks: tasks.map(projectTaskContract),
 });
 
-/**
- * Sanitized combined stdout and stderr in retained order. A stderr chunk starts with `[stderr] `,
- * the convention the result text also uses. Terminal controls are removed; credentials are not.
- */
 export const combinedLogOutput = (events: ReadonlyArray<BackgroundLogEvent>): string =>
   stripTerminalControls(
     events.map((event) => `${event.stream === "stderr" ? "[stderr] " : ""}${event.text}`).join(""),
   );
 
-/**
- * Logs carry the newest bytes of `output`, independent of the result text's bounds. Clipping is
- * not paging: `nextCursor` stays the latest assigned cursor, so clipped bytes are not re-read.
- */
 export const logsContract = (
   slice: BackgroundLogSlice,
   output: string,

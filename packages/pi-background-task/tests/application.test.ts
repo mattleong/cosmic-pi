@@ -1,20 +1,22 @@
-// Promise assertions characterize the Pi lifecycle boundary.
 import {
   createEventBus,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
   type ExtensionToolContext,
+  type TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Schema from "effect/Schema";
 import {
   deferredPromise,
   extensionContextFixture,
+  piKeybindingsFixture,
   macrotask,
-  opaqueFixture,
   recordingExtensionHost,
+  type DefaultedEventName,
 } from "pi-cosmic-core/testing";
 import {
   makeSessionCapabilityProtocol,
@@ -32,6 +34,7 @@ import {
 import type { BackgroundTaskProjectionBridge } from "../src/boundary/host-ui.ts";
 import { registerTasksCommand, type TaskCommandActions } from "../src/settings/controller.ts";
 import type { BackgroundTaskState, BackgroundTaskView } from "../src/task/model.ts";
+import { BackgroundTaskDetailsSchema } from "../src/task/schema.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
 const context = (cwd: string) =>
@@ -43,25 +46,42 @@ const context = (cwd: string) =>
     mode: "rpc",
   });
 
+const decodeDetails = Schema.decodeUnknownSync(BackgroundTaskDetailsSchema);
+
+const turnEnd: TurnEndEvent = {
+  type: "turn_end",
+  turnIndex: 0,
+  message: { role: "user", content: "", timestamp: 0 },
+  toolResults: [],
+  messageEntryId: "entry-1",
+  toolResultEntryIds: [],
+  entries: [],
+  continue: false,
+  context: {
+    contextEntries: [],
+    contextMessages: [],
+    llmMessages: [],
+    pendingMessages: [],
+    canContinue: false,
+  },
+  outcome: "completed",
+};
+
 const harness = (
   loadSettings: BackgroundTaskApplicationBoundaries["loadSettings"],
   events: ExtensionAPI["events"] = createEventBus(),
 ) => {
-  // History replay stays live: one public source owns the command anchor and the tool.
   const host = recordingExtensionHost({}, { events });
   registerBackgroundTaskApplication(host.pi, { loadSettings });
   return {
     tools: host.registrations,
-    /** Executes the current `background_task` registration, as Pi does for the agent. */
     execute: (input: BackgroundTaskToolInput, ctx: ExtensionToolContext) => {
       const tool = host.registrations.findLast(({ name }) => name === "background_task");
       if (!tool) return Promise.reject(new Error("background_task was not registered"));
       return tool.execute("call", input, new AbortController().signal, undefined, ctx);
     },
-    emit: (
-      name: "session_start" | "session_tree" | "turn_end" | "session_shutdown",
-      ctx: ExtensionContext,
-    ) => host.emit(name, ctx),
+    emit: (name: DefaultedEventName, ctx: ExtensionContext) => host.emit(name, ctx),
+    turnEnd: (ctx: ExtensionContext) => host.emit("turn_end", ctx, turnEnd),
     runCommand: (args: string, ctx: ExtensionCommandContext) => {
       const command = host.commands.get("tasks");
       if (!command) return Promise.reject(new Error("task command was not registered"));
@@ -91,7 +111,7 @@ function tasksCommandHarness(
 ) {
   const host = fakeCustomSurfaceHost({
     rows: 8,
-    keybindings: opaqueFixture({ matches: () => false }),
+    keybindings: piKeybindingsFixture({ matches: () => false }),
   });
   const notify = vi.fn();
   const ui = { notify, custom: host.ctx.ui.custom };
@@ -105,19 +125,24 @@ function tasksCommandHarness(
   });
   const extension = recordingExtensionHost();
   const listeners = new Set<() => void>();
-  const bridge: BackgroundTaskProjectionBridge = opaqueFixture({
+  const bridge: BackgroundTaskProjectionBridge = {
     get: () => ({ tasks: [managerTask(state)] }),
+    publish: () => undefined,
     subscribe: (listener: () => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-  });
+    setContext: () => undefined,
+    setFooterEnabled: () => undefined,
+    clear: () => undefined,
+  };
   registerTasksCommand(extension.pi, bridge, {
     stop: () => Promise.resolve(),
     clear: () => Promise.resolve(),
     config: () => undefined,
     read: () => Promise.resolve({}),
     write: () => Promise.resolve(),
+    captureAuthority: () => () => true,
     ...actions,
   });
   const run = (args: string) =>
@@ -127,7 +152,6 @@ function tasksCommandHarness(
     notify,
     run,
     host,
-    /** Notifies open managers, as a publish or a deactivation's clear does. */
     publish: () => {
       for (const listener of listeners) listener();
     },
@@ -168,14 +192,20 @@ describe("background-task Pi lifecycle", () => {
             if (query?.sessionId === "view-session")
               query.respond({ version: 1, sessionId: "view-session", hostToken: {}, open });
           });
-        const custom = vi.fn(() => Promise.resolve(undefined));
+        const surface = fakeCustomSurfaceHost({
+          rows: 8,
+          keybindings: piKeybindingsFixture({ matches: () => false }),
+        });
+        const ui = { notify: vi.fn(), custom: surface.ctx.ui.custom };
+        const custom = vi.spyOn(ui, "custom");
+        const standalone = outcome === "absent" || outcome === "unavailable";
         const ctx = extensionContextFixture({
           cwd: process.cwd(),
           signal: undefined,
           hasUI: true,
           mode: "tui",
           isProjectTrusted: () => false,
-          ui: { notify: vi.fn(), custom },
+          ui,
           sessionManager: { getSessionId: () => "view-session", getSessionFile: () => undefined },
         });
         const h = harness(() => Promise.resolve(), events);
@@ -186,13 +216,16 @@ describe("background-task Pi lifecycle", () => {
           yield* Effect.promise(() => h.emit("session_tree", ctx));
           pending.resolve(false);
         }
+        if (standalone) {
+          yield* Effect.promise(() => vi.waitFor(() => expect(custom).toHaveBeenCalled()));
+          surface.mount();
+          surface.overlays.at(-1)?.handleInput?.("\x1b");
+        }
         if (outcome === "rejected" || outcome === "replaced")
           yield* Effect.promise(() => expect(opened).rejects.toThrow());
         else yield* Effect.promise(() => opened);
         if (outcome !== "absent") expect(open).toHaveBeenCalledWith("tasks", undefined);
-        expect(custom).toHaveBeenCalledTimes(
-          outcome === "absent" || outcome === "unavailable" ? 1 : 0,
-        );
+        expect(custom).toHaveBeenCalledTimes(standalone ? 1 : 0);
         yield* Effect.promise(() => h.emit("session_shutdown", ctx));
       }),
     );
@@ -214,7 +247,6 @@ describe("background-task Pi lifecycle", () => {
       settings.resolve();
       yield* Effect.promise(() => Promise.all([firstStart, secondStart]));
       expect(app.tools.map((tool) => tool.name)).toEqual(["background_task"]);
-      // The superseded first start never reaches the settings boundary.
       expect(loads).toEqual([[`${process.cwd()}/second`, false]]);
       yield* Effect.promise(() => app.emit("session_shutdown", secondContext));
     }),
@@ -294,15 +326,17 @@ describe("background-task Pi lifecycle", () => {
       const settings = deferredPromise();
       const setStatus = vi.fn();
       const app = harness(() => settings.promise);
-      const ctx: ExtensionContext = {
-        ...context(process.cwd()),
+      const ctx = extensionContextFixture({
+        cwd: process.cwd(),
+        signal: undefined,
+        isProjectTrusted: () => false,
         hasUI: true,
         mode: "tui",
-        ui: opaqueFixture({ setStatus }),
-      };
+        ui: { setStatus },
+      });
 
       const starting = app.emit("session_start", ctx);
-      yield* Effect.promise(() => app.emit("turn_end", ctx));
+      yield* Effect.promise(() => app.turnEnd(ctx));
       expect(setStatus).not.toHaveBeenCalled();
 
       settings.resolve();
@@ -329,9 +363,6 @@ describe("background-task Pi lifecycle", () => {
         if (!tool) throw new Error("background tool registration was not captured");
 
         const replacing = app.emit(event, ctx);
-        // The replacement loader has signalled entry and stays blocked: the prior runtime is
-        // already deactivated and the next one is not yet active, so the activation-1 tool
-        // must fail typed instead of reaching the unactivated replacement runtime.
         yield* Effect.promise(() => entered.promise);
         const staleCall = () =>
           tool.execute(
@@ -347,7 +378,6 @@ describe("background-task Pi lifecycle", () => {
 
         replacement.resolve();
         yield* Effect.promise(() => replacing);
-        // Tool activation still happens once settings resolve for the replacement generation.
         expect(app.tools.map((tool) => tool.name)).toEqual(["background_task", "background_task"]);
         yield* Effect.promise(() =>
           expect(staleCall()).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
@@ -380,17 +410,19 @@ describe("background-task Pi lifecycle", () => {
     Effect.gen(function* () {
       const activity = fakeActivityHost("tree-session");
       const app = harness(() => Promise.resolve(), activity.events);
-      const ctx = {
-        ...context(process.cwd()),
-        sessionManager: opaqueFixture({
+      const ctx = extensionContextFixture({
+        cwd: process.cwd(),
+        signal: undefined,
+        isProjectTrusted: () => false,
+        hasUI: false,
+        mode: "rpc",
+        sessionManager: {
           getSessionId: () => "tree-session",
           getSessionFile: () => undefined,
-        }),
-      };
+        },
+      });
       yield* Effect.gen(function* () {
         yield* Effect.promise(() => app.emit("session_start", ctx));
-        // Navigation keeps the same session identity. Repeat to prove that each branch gets
-        // a usable fresh registry, rather than only disposing the initial runtime.
         for (let navigation = 0; navigation < 2; navigation += 1) {
           const execute = (input: BackgroundTaskToolInput) => app.execute(input, ctx);
           const started = yield* Effect.promise(() =>
@@ -402,9 +434,9 @@ describe("background-task Pi lifecycle", () => {
                 `console.log('ready:'+process.pid+':'+child.pid+':end'); setInterval(()=>{},1000)"`,
             }),
           );
-          if (started.details.action !== "start")
-            throw new Error("start returned the wrong action");
-          const taskId = started.details.snapshot.id;
+          const startedDetails = decodeDetails(started.details);
+          if (startedDetails.action !== "start") throw new Error("start returned the wrong action");
+          const taskId = startedDetails.snapshot.id;
           const ready = yield* Effect.promise(() =>
             execute({
               action: "wait",
@@ -414,21 +446,20 @@ describe("background-task Pi lifecycle", () => {
               waitSeconds: 5,
             }),
           );
-          if (ready.details.action !== "wait") throw new Error("wait returned the wrong action");
-          expect(ready.details.wait.outcome).toBe("matched");
+          const readyDetails = decodeDetails(ready.details);
+          if (readyDetails.action !== "wait") throw new Error("wait returned the wrong action");
+          expect(readyDetails.wait.outcome).toBe("matched");
           const logs = yield* Effect.promise(() => execute({ action: "logs", id: taskId }));
           const output = logs.content.map((part) => (part.type === "text" ? part.text : ""));
           const match = /ready:(\d+):(\d+):end/.exec(output.join(""));
           const nodePid = Number(match?.[1]);
           const descendantPid = Number(match?.[2]);
-          const shellPid = ready.details.wait.snapshot.pid;
+          const shellPid = readyDetails.wait.snapshot.pid;
           if (
             !shellPid ||
             ![nodePid, descendantPid].every((pid) => Number.isSafeInteger(pid) && pid > 0)
           )
             throw new Error("running task did not report valid process ids");
-          // Independent test ownership prevents a failed cleanup regression from leaking a
-          // process after the application has already replaced its old registry.
           const pids = yield* Effect.acquireRelease(
             Effect.succeed([...new Set([shellPid, nodePid, descendantPid])]),
             (captured) =>
@@ -444,7 +475,6 @@ describe("background-task Pi lifecycle", () => {
 
           yield* Effect.promise(() => app.emit("session_tree", ctx));
 
-          // Leader exit is joined, but descendant reaping can follow the process-group sweep.
           for (let attempt = 0; attempt < 100; attempt += 1) {
             if (pids.every((pid) => signalProcess(pid, 0) === "absent")) break;
             yield* Effect.sleep("10 millis");
@@ -487,7 +517,6 @@ describe("/tasks command", () => {
     return Effect.gen(function* () {
       yield* Effect.promise(() => command.run("status"));
       expect(command.custom).not.toHaveBeenCalled();
-      // The usage line names the settings subcommand.
       expect(command.notify).toHaveBeenCalledWith(expect.stringContaining("settings"), "warning");
     });
   });
@@ -527,7 +556,7 @@ describe("/tasks action feedback", () => {
         const old = command.open();
         old.surface.render(120);
         old.surface.handleInput?.(key);
-        generation++; // Same task ID in a replacement registry must not inherit confirmation.
+        generation++;
         old.surface.handleInput?.(key);
         expect(mutate).not.toHaveBeenCalled();
         expect(old.isOpen()).toBe(false);
@@ -559,7 +588,6 @@ describe("/tasks action feedback", () => {
       manager.surface.render(120);
       command.publish();
       expect(manager.isOpen()).toBe(true);
-      // The bridge outlives the session; its next update must not show the replacement's tasks.
       generation++;
       command.publish();
       expect(manager.isOpen()).toBe(false);

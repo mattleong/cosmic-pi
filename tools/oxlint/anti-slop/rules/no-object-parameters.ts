@@ -14,7 +14,6 @@ function parameterName(parameter: Parameter, sourceCode: SourceCode): string {
 		: sourceCode.getText(parameter).replace(/\s*:\s*object\s*$/u, "");
 }
 
-/** Ban the broad object type on function inputs, including local aliases to object. */
 export const noObjectParametersRule = defineRule({
 	meta: {
 		type: "problem",
@@ -64,7 +63,7 @@ export const noObjectParametersRule = defineRule({
 		const checkParameters = (node: FunctionNode) => {
 			const shadowedAliases = lexicalTypeParameterNames(
 				node,
-				context.sourceCode.visitorKeys,
+				context.sourceCode,
 			);
 			for (const parameter of node.params) {
 				const annotation = parameterAnnotation(parameter);

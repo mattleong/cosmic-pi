@@ -22,16 +22,17 @@
     }
   ],
   "rules": {
-    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-comments": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-eager-effect-finalizer-condition": "error",
     "anti-slop/no-escaping-render-context": "error",
     "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-legacy-names": "error",
     "anti-slop/no-lossy-expanded-arguments": "error",
+    "anti-slop/no-manual-abort-listener": "error",
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-object-parameters": "error",
-    "anti-slop/no-reflect-apply": "error",
-    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-raw-host-notify": "error",
     "anti-slop/no-runtime-typeof": "error",
     "anti-slop/no-runtime-type-only-tests": "error",
     "anti-slop/no-shape-in-symbol-names": "error",
@@ -39,8 +40,21 @@
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-unsafe-dictionary-type": "error",
-    "anti-slop/no-widen-then-assert": "error",
-    "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "anti-slop/require-code-preview-shell": "error",
+    "eslint/complexity": ["error", 20],
+    "eslint/no-restricted-properties": [
+      "error",
+      {
+        "object": "Reflect",
+        "property": "get",
+        "message": "Use typed property access, or parse dynamic input into a named domain type first."
+      },
+      {
+        "object": "Reflect",
+        "property": "apply",
+        "message": "Call the function directly with typed arguments."
+      }
+    ],
     "eslint/no-restricted-imports": [
       "error",
       {
@@ -52,19 +66,60 @@
           }
         ]
       }
-    ]
+    ],
+    "typescript/consistent-type-assertions": ["error", { "assertionStyle": "never" }],
+    "typescript/no-explicit-any": "error"
   },
   "overrides": [
     {
-      "files": ["packages/pi-subagents/src/**/*.ts"],
+      "files": ["packages/*/src/**/*.ts"],
       "rules": {
-        "eslint/complexity": ["error", 20]
+        "eslint/max-lines": ["error", { "max": 600, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["**/src/**/*.ts"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@earendil-works/pi-tui",
+                "importNames": ["truncateToWidth"],
+                "message": "Use clipToWidth from pi-cosmic-ui/manager so clipped text ends in \"\u2026\" everywhere."
+              },
+              {
+                "name": "pi-cosmic-core",
+                "importNames": ["stripAnsi"],
+                "message": "stripAnsi removes only CSI sequences, so OSC and other terminal controls survive. Use stripTerminalControls or sanitizeTerminalLine from pi-cosmic-core, or escapeControlChars from pi-code-previews to keep controls visible."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/pi-cosmic-core/src/testing/pi-keybindings.ts"],
+      "rules": {
+        "typescript/consistent-type-assertions": ["error", { "assertionStyle": "as" }]
       }
     },
     {
       "files": ["**/packages/pi-cosmic-ui/src/manager/chrome.ts"],
       "rules": {
-        "eslint/no-restricted-imports": "error"
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "pi-cosmic-core",
+                "importNames": ["stripAnsi"],
+                "message": "stripAnsi removes only CSI sequences, so OSC and other terminal controls survive. Use stripTerminalControls or sanitizeTerminalLine from pi-cosmic-core, or escapeControlChars from pi-code-previews to keep controls visible."
+              }
+            ]
+          }
+        ]
       }
     }
   ]

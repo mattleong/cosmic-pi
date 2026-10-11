@@ -43,7 +43,6 @@ const notFound = () =>
       "That questionnaire is no longer available. Use status without a requestId to list retained requests; it may have expired or belonged to an earlier session or branch.",
   });
 
-/** Private controller under AskUserService's Layer scope, sharing its dialog permit. */
 export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(function* (
   host: AskUserHost,
   queue: QuestionnaireQueue,
@@ -70,7 +69,6 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
     Ref.update(state, (entries) =>
       entries.map((entry) => (entry.snapshot.requestId === id ? f(entry) : entry)),
     );
-  /** Merges a change into one request's snapshot; undefined leaves the entry unchanged. */
   const patch = (
     id: string,
     change: (entry: Entry) => Partial<AsyncQuestionnaireSnapshot> | undefined,
@@ -80,7 +78,6 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
       return next ? { ...entry, snapshot: { ...entry.snapshot, ...next } } : entry;
     });
 
-  // Retries re-pend only below three attempts, so a claim never sees an exhausted request.
   const deliver = (id: string): Effect.Effect<void> =>
     Effect.gen(function* () {
       if (!delivery || (yield* Ref.get(closed))) return;
@@ -130,7 +127,6 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
       const show = Effect.gen(function* () {
         yield* patch(id, () => ({ presentation: "opening" }));
         yield* activity.presenting(id);
-        // Mounting, hiding and resuming move a pending request between open and hidden.
         const visibility = yield* Queue.unbounded<"open" | "hidden">();
         yield* Effect.forkChild(
           Queue.take(visibility).pipe(
@@ -266,7 +262,6 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
           );
           if (claimed === "busy") {
             if (!cancel) return yield* asyncBusy();
-            // A live await owns delivery, but cannot prevent presenter cancellation.
             const entry = yield* get(id);
             yield* Deferred.succeed(entry.cancel, undefined);
             yield* restore(Deferred.await(entry.completed));
@@ -286,7 +281,6 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
       ).pipe(
         Effect.onExit((exit) =>
           Effect.gen(function* () {
-            // A success reporting `waiter` publishes it; an unowned busy claim releases nothing.
             const release = (acknowledge: boolean) =>
               update(id, (current) => {
                 if (current.waiter !== owner) return current;
@@ -295,17 +289,11 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
                   ? { ...rest, snapshot: { ...rest.snapshot, delivery: "waiter" } }
                   : rest;
               });
-            // Ref.update is the acknowledgement linearization point: publication
-            // and claim release are one synchronous transition. Re-enable
-            // interruption for that transition so a pending interrupt cannot
-            // publish a stale Success captured before masked cleanup yielded.
             const completion = Exit.isFailure(exit)
               ? exit
               : yield* Effect.exit(
                   Effect.interruptible(release(exit.value.requests[0]?.delivery === "waiter")),
                 );
-            // If interruption won, only release our still-owned claim. If the
-            // commit won, ownership is gone and later cancellation cannot undo it.
             if (Exit.isFailure(completion)) yield* release(false);
             if (!(yield* Ref.get(closed))) yield* Effect.forkIn(deliver(id), scope);
           }),

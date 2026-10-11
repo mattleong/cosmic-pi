@@ -1,4 +1,3 @@
-// Node O_NOFOLLOW and inode checks have no equivalent in Effect FileSystem.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -89,7 +88,6 @@ const readContainedRegularFile = (paths: Path.Path) =>
           if (!visible.isFile() || visible.dev !== opened.dev || visible.ino !== opened.ino)
             return yield* failRead();
 
-          // Allocate from the inspected size, never from a file that can keep growing.
           const bytes = yield* Effect.try({
             try: () => new Uint8Array(Number(opened.size)),
             catch: safeFileError("read", READ_FAILURE),
@@ -107,7 +105,6 @@ const readContainedRegularFile = (paths: Path.Path) =>
             if (bytesRead === 0) return yield* failRead();
             offset += bytesRead;
           }
-          // A fixed one-byte EOF probe detects growth without extending the result buffer.
           const extra = yield* readStep(() =>
             handle.read({ buffer: new Uint8Array(1), position: bytes.byteLength }),
           );
@@ -124,7 +121,6 @@ const readContainedRegularFile = (paths: Path.Path) =>
     );
   });
 
-/** Node-specific stable file acquisition for security-sensitive image inputs. */
 export class SafeFile extends Context.Service<SafeFile, SafeFileContract>()(
   "pi-cosmic-core/platform/safe-file/SafeFile",
 ) {

@@ -14,6 +14,7 @@ import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import { SENT_UUID_LIMIT } from "../src/backend/local-claude-correlation.ts";
 import {
   decodeClaudeProtocolEvent,
+  type ClaudeControlRequestFrame,
   type ClaudeInboundFrame,
   type ClaudeUserFrame,
 } from "../src/backend/local-claude-protocol.ts";
@@ -57,10 +58,6 @@ type ReplayScenario =
   | "accepted-report-cost-only"
   | "accepted-report-close";
 
-/**
- * Claude 2.1.28x replays a task notification drained into a running turn with
- * a fresh UUID and its derived unqualified origin; the other forms are near misses.
- */
 type TaskNotificationReplay =
   | "labelled"
   | "unlabelled"
@@ -77,7 +74,6 @@ interface ReplayHarness {
   readonly supervisors: SupervisorChannelContract;
   readonly guidanceSent: Effect.Effect<void>;
   readonly replayGuidance: Effect.Effect<void>;
-  /** Offers a Claude-owned replay; passing a previous UUID repeats that replay. */
   readonly taskNotification: (form: TaskNotificationReplay, uuid?: string) => Effect.Effect<string>;
   readonly assignmentResult: Effect.Effect<void>;
   readonly rejectReplay: (
@@ -127,47 +123,172 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
         message: frame.message,
       });
     };
+    const answerControlRequest = (outbound: ClaudeControlRequestFrame) => {
+      if (outbound.request.subtype === "initialize") {
+        offerChild({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: outbound.request_id,
+            response: { models: [{ value: scenario, resolvedModel: scenario }] },
+          },
+        });
+        return;
+      }
+      if (outbound.request.subtype === "mcp_status") {
+        offerChild({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: outbound.request_id,
+            response: {
+              mcpServers: [
+                {
+                  name: SUPERVISOR_MCP_REGISTRATION,
+                  status: "connected",
+                  tools: SUPERVISOR_MCP_TOOL_NAMES.map((name) => ({ name })),
+                },
+              ],
+            },
+          },
+        });
+        return;
+      }
+      offerChild({
+        type: "control_response",
+        response: { subtype: "success", request_id: outbound.request_id },
+      });
+    };
+    const offerScenarioFrames = (outbound: ClaudeUserFrame) => {
+      if (scenario === "forwarded-user")
+        offerChild({
+          type: "user",
+          uuid: "forwarded-user-uuid",
+          parent_tool_use_id: "native-agent-tool-use",
+          isSynthetic: true,
+          origin: { kind: "unclassified" },
+          session_id: "claude-replay-session",
+          message: { role: "user", content: "Forwarded native-agent text." },
+        });
+      if (scenario === "uuidless-task-notification") {
+        offerChild({
+          type: "user",
+          isSynthetic: true,
+          origin: { kind: "task-notification" },
+          session_id: "claude-replay-session",
+          message: { role: "user", content: "A background task completed." },
+        });
+        offerChild({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          session_id: "claude-replay-session",
+          origin: { kind: "task-notification" },
+        });
+      }
+      if (scenario === "cross-session-task-notification")
+        offerChild({
+          type: "user",
+          uuid: "cross-session-uuid",
+          isSynthetic: true,
+          origin: { kind: "task-notification", subkind: "peer-send-message" },
+          session_id: "claude-replay-session",
+          message: { role: "user", content: "Message from another session." },
+        });
+      if (scenario === "nonsynthetic-task-notification")
+        offerChild({
+          type: "user",
+          uuid: "nonsynthetic-notification-uuid",
+          isSynthetic: false,
+          origin: { kind: "task-notification" },
+          session_id: "claude-replay-session",
+          message: { role: "user", content: "Untrusted task-shaped input." },
+        });
+      if (scenario === "accepted-report-foreign-replay" && acceptedReport)
+        Queue.offerUnsafe(supervisorEvents, { type: "report", ...acceptedReport });
+      if (scenario === "foreign-replay" || scenario === "accepted-report-foreign-replay")
+        offerChild({
+          type: "user",
+          uuid: "foreign-replay-uuid",
+          isReplay: true,
+          session_id: "claude-replay-session",
+          message: { role: "user", content: "Foreign injected input." },
+        });
+      if (
+        scenario === "queued-task-notification" ||
+        scenario === "queued-task-notification-duplicate" ||
+        scenario === "queued-task-notification-cross-session" ||
+        scenario === "tagged-task-notification-nonreplay" ||
+        scenario === "tagged-task-notification-channel"
+      ) {
+        const notification: ClaudeInboundFrame = {
+          type: "user",
+          uuid: "claude-queued-notification-uuid",
+          ...(scenario !== "tagged-task-notification-nonreplay" && { isReplay: true }),
+          session_id:
+            scenario === "queued-task-notification-cross-session"
+              ? "different-claude-session"
+              : "claude-replay-session",
+          ...(scenario === "tagged-task-notification-channel" && {
+            origin: { kind: "channel" },
+          }),
+          message: {
+            role: "user",
+            content:
+              "<task-notification><task-id>native-task</task-id><status>completed</status><summary>Native task completed.</summary></task-notification>",
+          },
+        };
+        offerChild(notification);
+        if (scenario === "queued-task-notification-duplicate") offerChild(notification);
+      }
+      if (scenario === "same-content-foreign-replay")
+        offerChild({
+          type: "user",
+          uuid: "same-content-foreign-uuid",
+          isReplay: true,
+          session_id: "claude-replay-session",
+          message: outbound.message,
+        });
+      if (scenario === "known-replay-cross-session")
+        offerChild({
+          type: "user",
+          uuid: outbound.uuid,
+          isReplay: true,
+          session_id: "different-claude-session",
+          message: outbound.message,
+        });
+    };
+    const offerTurnResult = (outbound: ClaudeUserFrame) => {
+      const result: ClaudeInboundFrame = {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "claude-replay-session",
+        user_message_uuid: outbound.uuid,
+        ...(scenario !== "accepted-report-cost-only" && {
+          usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
+        }),
+        total_cost_usd: 0.001,
+      };
+      if (
+        (scenario === "accepted-report-result" || scenario === "accepted-report-cost-only") &&
+        acceptedReport
+      ) {
+        pendingResult = result;
+        Queue.offerUnsafe(supervisorEvents, { type: "report", ...acceptedReport });
+        Queue.offerUnsafe(supervisorEvents, {
+          type: "supervisor_contact",
+          assignmentEpoch: 12,
+          requestId: "after-report",
+          kind: "progress",
+          message: "Native finalization pending",
+        });
+      } else offerChild(result);
+    };
     const send = (outbound: LocalCliOutboundFrame) =>
       Effect.sync(() => {
         if (!("type" in outbound)) return;
-        if (outbound.type === "control_request") {
-          if (outbound.request.subtype === "initialize") {
-            offerChild({
-              type: "control_response",
-              response: {
-                subtype: "success",
-                request_id: outbound.request_id,
-                response: { models: [{ value: scenario, resolvedModel: scenario }] },
-              },
-            });
-            return;
-          }
-          if (outbound.request.subtype === "mcp_status") {
-            offerChild({
-              type: "control_response",
-              response: {
-                subtype: "success",
-                request_id: outbound.request_id,
-                response: {
-                  mcpServers: [
-                    {
-                      name: SUPERVISOR_MCP_REGISTRATION,
-                      status: "connected",
-                      tools: SUPERVISOR_MCP_TOOL_NAMES.map((name) => ({ name })),
-                    },
-                  ],
-                },
-              },
-            });
-            return;
-          }
-          offerChild({
-            type: "control_response",
-            response: { subtype: "success", request_id: outbound.request_id },
-          });
-          return;
-        }
-
+        if (outbound.type === "control_request") return answerControlRequest(outbound);
         if (outbound.type !== "user") return;
         if (outbound.message.content === "Delayed guidance") {
           pendingGuidance = outbound;
@@ -200,131 +321,9 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           assignmentUuid = outbound.uuid;
           return;
         }
-        if (scenario === "forwarded-user")
-          offerChild({
-            type: "user",
-            uuid: "forwarded-user-uuid",
-            parent_tool_use_id: "native-agent-tool-use",
-            isSynthetic: true,
-            origin: { kind: "unclassified" },
-            session_id: "claude-replay-session",
-            message: { role: "user", content: "Forwarded native-agent text." },
-          });
-        if (scenario === "uuidless-task-notification") {
-          offerChild({
-            type: "user",
-            isSynthetic: true,
-            origin: { kind: "task-notification" },
-            session_id: "claude-replay-session",
-            message: { role: "user", content: "A background task completed." },
-          });
-          offerChild({
-            type: "result",
-            subtype: "success",
-            is_error: false,
-            session_id: "claude-replay-session",
-            origin: { kind: "task-notification" },
-          });
-        }
-        if (scenario === "cross-session-task-notification")
-          offerChild({
-            type: "user",
-            uuid: "cross-session-uuid",
-            isSynthetic: true,
-            origin: { kind: "task-notification", subkind: "peer-send-message" },
-            session_id: "claude-replay-session",
-            message: { role: "user", content: "Message from another session." },
-          });
-        if (scenario === "nonsynthetic-task-notification")
-          offerChild({
-            type: "user",
-            uuid: "nonsynthetic-notification-uuid",
-            isSynthetic: false,
-            origin: { kind: "task-notification" },
-            session_id: "claude-replay-session",
-            message: { role: "user", content: "Untrusted task-shaped input." },
-          });
-        if (scenario === "accepted-report-foreign-replay" && acceptedReport)
-          Queue.offerUnsafe(supervisorEvents, { type: "report", ...acceptedReport });
-        if (scenario === "foreign-replay" || scenario === "accepted-report-foreign-replay")
-          offerChild({
-            type: "user",
-            uuid: "foreign-replay-uuid",
-            isReplay: true,
-            session_id: "claude-replay-session",
-            message: { role: "user", content: "Foreign injected input." },
-          });
-        if (
-          scenario === "queued-task-notification" ||
-          scenario === "queued-task-notification-duplicate" ||
-          scenario === "queued-task-notification-cross-session" ||
-          scenario === "tagged-task-notification-nonreplay" ||
-          scenario === "tagged-task-notification-channel"
-        ) {
-          const notification: ClaudeInboundFrame = {
-            type: "user",
-            uuid: "claude-queued-notification-uuid",
-            ...(scenario !== "tagged-task-notification-nonreplay" && { isReplay: true }),
-            session_id:
-              scenario === "queued-task-notification-cross-session"
-                ? "different-claude-session"
-                : "claude-replay-session",
-            ...(scenario === "tagged-task-notification-channel" && {
-              origin: { kind: "channel" },
-            }),
-            message: {
-              role: "user",
-              content:
-                "<task-notification><task-id>native-task</task-id><status>completed</status><summary>Native task completed.</summary></task-notification>",
-            },
-          };
-          offerChild(notification);
-          if (scenario === "queued-task-notification-duplicate") offerChild(notification);
-        }
-        if (scenario === "same-content-foreign-replay")
-          offerChild({
-            type: "user",
-            uuid: "same-content-foreign-uuid",
-            isReplay: true,
-            session_id: "claude-replay-session",
-            message: outbound.message,
-          });
-        if (scenario === "known-replay-cross-session")
-          offerChild({
-            type: "user",
-            uuid: outbound.uuid,
-            isReplay: true,
-            session_id: "different-claude-session",
-            message: outbound.message,
-          });
+        offerScenarioFrames(outbound);
         if (scenario === "accepted-report-close") return;
-        const result: ClaudeInboundFrame = {
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          session_id: "claude-replay-session",
-          user_message_uuid: outbound.uuid,
-          ...(scenario !== "accepted-report-cost-only" && {
-            usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
-          }),
-          total_cost_usd: 0.001,
-        };
-        if (
-          (scenario === "accepted-report-result" || scenario === "accepted-report-cost-only") &&
-          acceptedReport
-        ) {
-          pendingResult = result;
-          Queue.offerUnsafe(supervisorEvents, { type: "report", ...acceptedReport });
-          // Observing this progress proves the adapter has consumed the earlier
-          // report event before the test releases native final telemetry.
-          Queue.offerUnsafe(supervisorEvents, {
-            type: "supervisor_contact",
-            assignmentEpoch: 12,
-            requestId: "after-report",
-            kind: "progress",
-            message: "Native finalization pending",
-          });
-        } else offerChild(result);
+        offerTurnResult(outbound);
       });
 
     const child: LocalCliHandle = {
@@ -516,7 +515,6 @@ const withStartedBackend = <A, E>(
 
 const take = (backend: BackendHandle) => takeBackendEvent(backend, { acknowledge: true });
 
-/** A started backend whose assignment confirmation and first assistant message are drained. */
 const withRunningBackend = <A, E>(
   scenario: ReplayScenario,
   epoch: number,
@@ -533,7 +531,6 @@ const withRunningBackend = <A, E>(
     }),
   );
 
-/** Steers with guidance the fixture holds back; returns the caller once delivery is pending. */
 const sendDelayedGuidance = (backend: BackendHandle, harness: ReplayHarness) =>
   Effect.gen(function* () {
     const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
@@ -592,7 +589,6 @@ describe("local Claude steering acknowledgement lifecycle", () => {
         Effect.gen(function* () {
           const caller = yield* sendDelayedGuidance(backend, harness);
           yield* TestClock.adjust("11 seconds");
-          // Typed pending evidence reaches the caller only while the backend still tracks guidance.
           expect(yield* Effect.flip(Fiber.join(caller))).toMatchObject({
             operation: "steer",
             code: "steer_outcome_uncertain",
@@ -655,7 +651,6 @@ describe("local Claude steering acknowledgement lifecycle", () => {
           yield* yieldUntil(() => harness.terminations() > 0);
           const exit = yield* backend.awaitExit;
           expect(exit.failure).toMatchObject({ code: "steer_outcome_uncertain" });
-          // Watchdog closure is terminal uncertainty, never pending delivery.
           expect(exit.failure).not.toMatchObject({ pendingDelivery: true });
           expect(exit.failure?.message).toContain('"terminationReason":"steering-watchdog"');
           expect(exit.failure?.message).toContain('"activeToolCategory":"shell"');
@@ -861,7 +856,6 @@ describe("local Claude replay classification", () => {
               text: "Accepted report text",
             });
             yield* close;
-            // Transport recovery must not duplicate the report already forwarded.
             expect(yield* Stream.runCollect(Stream.fromQueue(backend.events))).toEqual([]);
           }),
         );
@@ -944,7 +938,6 @@ describe("local Claude task-notification replays", () => {
           yield* harness.taskNotification("labelled");
           expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         }
-        // The assignment's own result still correlates to the adapter-sent input.
         yield* harness.assignmentResult;
         expect(yield* take(backend)).toMatchObject({
           type: "assistant_message",

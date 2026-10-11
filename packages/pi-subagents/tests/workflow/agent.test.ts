@@ -93,7 +93,6 @@ const harness = (
   return { call, recorded };
 };
 
-/** A writer conflict that clears once the root writer is released. */
 const rootWriterConflict = new SubagentWriterConflictError({
   activeId: "agent-r1-0",
   activeName: "root writer",
@@ -101,7 +100,6 @@ const rootWriterConflict = new SubagentWriterConflictError({
   transient: true,
 });
 
-/** The resume journal entry of an earlier `prompt` call, which spent 7 output tokens. */
 const entry = (
   prompt: string,
   options: WorkflowAgentOptions,
@@ -145,7 +143,6 @@ describe("workflow agent call", () => {
         replay: makeWorkflowReplay([cached]),
         nextCall: unexpected,
       });
-      // A reused result costs nothing in this run.
       expect(yield* call(["task", { label: "any label" }])).toEqual({
         result: "cached",
         outputTokens: 0,
@@ -169,7 +166,6 @@ describe("workflow agent call", () => {
           result: "All good.",
           outputTokens: 11,
         });
-        // A resume names a reused worktree, and its results line, by the journaled label.
         expect(recorded.journal).toEqual([
           expect.objectContaining({
             result: "All good.",
@@ -206,14 +202,12 @@ describe("workflow agent call", () => {
             : Effect.sync(() => void started.push(request.task)).pipe(Effect.as(admitted(owner))),
         waitForAdmissionChange: () => Deferred.await(released),
       });
-      // One permit: a queued writer that kept it would block the reader until it ran.
       const writer = yield* call(["migrate", { profile: "worker" }]).pipe(Effect.forkChild);
       yield* yieldUntil(() => started.includes("migrate-refused"));
       const reader = yield* call(["review", {}]).pipe(Effect.forkChild);
       yield* yieldUntil(() => reader.pollUnsafe() !== undefined);
       expect(yield* Fiber.join(reader)).toEqual({ result: "Done.", outputTokens: 11 });
       expect(writer.pollUnsafe()).toBeUndefined();
-      // The wait names the writer it is queued behind.
       expect(recorded.logs.some((line) => line.includes("agent-r1-0"))).toBe(true);
       yield* Deferred.succeed(released, undefined);
       expect(yield* Fiber.join(writer)).toEqual({ result: "Done.", outputTokens: 11 });
@@ -241,7 +235,6 @@ describe("workflow agent call", () => {
         state: "failed",
         reason: "couldn't start: no route",
       });
-      // The run has one slot, so the next call runs only if the failed launch released it.
       expect(yield* call(["routable", {}])).toEqual({ result: "Done.", outputTokens: 11 });
     }),
   );
@@ -282,8 +275,6 @@ describe("workflow agent call", () => {
       );
       expect(yield* call(["fix", worktreeWriter])).toEqual({ result: "Fixed.", outputTokens: 0 });
       expect(reused).toEqual([undefined]);
-      // Like the results file, the journal leaves the integrated worktree out, so neither a
-      // later resume nor a teardown notice treats it as an unreviewed proposal.
       const { workspaceId: _integrated, ...journaled } = integrated;
       expect(recorded.journal).toEqual([journaled]);
     }),
@@ -298,7 +289,6 @@ describe("workflow agent call", () => {
         { replay: makeWorkflowReplay([taken]), nextCall: unexpected },
         undefined,
         {
-          // The worktree's binding is read under the workspace lock, which can be held.
           workspaceBindingStatus: () =>
             Deferred.succeed(reading, undefined).pipe(
               Effect.andThen(Deferred.await(read)),
@@ -382,7 +372,6 @@ describe("workflow agent call", () => {
                   : undefined,
               ),
           });
-          // The writer starts nothing, so it neither reuses its result nor makes later calls live.
           expect(yield* call(["implement the fix", { ...writer, label: "implementer" }])).toEqual({
             result: null,
             outputTokens: 0,
@@ -406,7 +395,6 @@ describe("workflow agent call", () => {
             entry("fix it", worktreeWriter, "Fixed.", "workspace-9"),
             entry("run the tests", {}, "Tests passed."),
           ]);
-        // A worktree that was discarded, and a changed worktree writer, each rerun the writer.
         for (const prompt of ["fix it", "fix it differently"]) {
           const { call } = harness({ replay: replay() }, completed("Fixed again."), {
             workspaceBindingStatus: () => Effect.succeed("closed"),
@@ -427,8 +415,6 @@ describe("workflow agent call", () => {
       "runs later calls live once a writer without isolation can't reuse its worktree",
       () =>
         Effect.gen(function* () {
-          // The writer got its worktree from the session's writer mode, which may now be
-          // shared-checkout, so its rerun can edit the checkout the later reader reads.
           const replay = makeWorkflowReplay([
             entry("implement the fix", writer, "Implemented.", "workspace-9"),
             entry("run the tests", {}, "Tests failed."),
@@ -460,7 +446,6 @@ describe("workflow agent call", () => {
             replay: makeWorkflowReplay(earlier),
             host: {
               ...host,
-              // The writer's validation takes a while, as a large schema's would.
               checkAgent: (options) =>
                 options.profile === "worker"
                   ? Deferred.await(checked).pipe(Effect.andThen(host.checkAgent(options)))
@@ -509,7 +494,6 @@ describe("workflow agent call", () => {
             ),
         },
       );
-      // One run slot: the second call waits for it while the first runs.
       const first = yield* call(["first", {}]).pipe(Effect.forkChild);
       yield* yieldUntil(() => awaited === 1);
       const second = yield* call(["second", {}]).pipe(Effect.forkChild);
@@ -531,7 +515,6 @@ describe("workflow agent call", () => {
         projection: Effect.sync(() => projection),
         queuedWriterConflict: () => Effect.sync(() => (blocked ? rootWriterConflict : undefined)),
         waitForAdmissionChange: () => Deferred.await(released),
-        // Only the pause publishes a newer projection.
         waitForRevision: (after) =>
           after < projection.revision
             ? Effect.void
@@ -544,7 +527,6 @@ describe("workflow agent call", () => {
       expect(recorded.updates.at(-1)).toEqual({
         waiting: { kind: "writer", runId: "agent-r1-0", name: "root writer", paused: false },
       });
-      // The user pauses the writer, which then never clears by itself.
       projection = { revision: 1, runs: [view({ id: "agent-r1-0", state: "paused" })] };
       yield* Deferred.succeed(paused, undefined);
       yield* yieldUntil(() => recorded.updates.length > 1);

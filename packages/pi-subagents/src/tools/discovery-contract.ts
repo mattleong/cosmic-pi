@@ -1,4 +1,3 @@
-/** Report-free discovery and rename contracts projected from authoritative domain values. */
 import { MAX_PROFILE_MODEL_SELECTOR_CHARS, type ProfileId } from "../profiles/model.ts";
 import type { SubagentRunView } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
@@ -20,7 +19,6 @@ import type { SubagentProfileView } from "./model.ts";
 
 export const listContract = (runs: ReadonlyArray<SubagentRunView>): SubagentListContract => ({
   ...envelope(SUBAGENT_TOOL_NAME.list),
-  // The shared pure traversal orders the full input; display bounds belong to its other callers.
   runs: projectRunCardTree(runs).map(({ run }) => ({
     ...withheldTarget(run),
     parentRunId: run.parentRunId ?? "root",
@@ -28,7 +26,6 @@ export const listContract = (runs: ReadonlyArray<SubagentRunView>): SubagentList
   })),
 });
 
-/** Uses the returned run, not the requested name; rename never reads or delivers reports. */
 export const renameContract = (outcome: LifecycleContractOutcome): SubagentRenameContract => ({
   ...envelope(SUBAGENT_TOOL_NAME.rename),
   requestedRunId: outcome.runId,

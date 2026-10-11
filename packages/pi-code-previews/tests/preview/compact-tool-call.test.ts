@@ -186,7 +186,6 @@ test("collapsed cards show the heading, then attention issues, then the call tre
   assert.ok(at("CHILD_GREP") > at("CHILD_READ"));
   assert.equal(rows.length, 4);
   assert.doesNotMatch(rows.join("\n"), /HIDDEN_/u);
-  // A failed child does not change its parent's heading status.
   const parent = rows[0]!;
   const alone = renderCompactToolCall(
     {

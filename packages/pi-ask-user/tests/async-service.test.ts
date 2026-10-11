@@ -34,7 +34,6 @@ const outcome: AskUserOutcome = {
   answers: [{ key: "library", kind: "choices", values: ["a"], labels: ["A"] }],
 };
 
-// Acquisition stays at each caller's original boundary; the caller owns its scope.
 const acquireService = (...args: Parameters<typeof AskUserService.layer>) =>
   Effect.gen(function* () {
     const context = yield* Layer.buildWithScope(AskUserService.layer(...args), yield* Effect.scope);
@@ -126,7 +125,6 @@ it.effect("reports a pending questionnaire hidden until the user resumes it", ()
     const service = yield* acquireService(host, f.delivery);
     const { requestId } = yield* service.startAsync(request);
     const signals = yield* Deferred.await(visibility);
-    // The presenter applies each signal on its next turn.
     const statusAfter = (signal: "open" | "hidden") =>
       Queue.offer(signals, signal).pipe(
         Effect.andThen(Effect.yieldNow),
@@ -359,7 +357,6 @@ for (const deliveryMode of ["absent", "failing"] as const) {
         yield* service.startAsync(request);
         const missing = yield* Effect.flip(control(service, "status", oldest));
         expect(missing).toMatchObject({ reason: "not-found" });
-        // The transcript's issue line is the error's first sentence, in plain words.
         expect(
           issueMessageStyleProblems(failureMessage(missing.message, ""), { forbidden: [oldest] }),
         ).toEqual([]);
@@ -406,8 +403,6 @@ it.effect("retention evicts old terminal requests, never repeats IDs, and stays 
     expect(yield* Effect.flip(control(service, "status", ids[0]!))).toMatchObject({
       reason: "not-found",
     });
-    // Claim the oldest retained result during new admission, forcing scheduler handoffs
-    // between Effect operations in the competing transitions.
     const results = yield* Effect.all(
       [
         Effect.exit(service.startAsync(request)),
@@ -550,6 +545,124 @@ it.effect("queued admission is bounded and shutdown never mounts waiting request
   }),
 );
 
+type AcknowledgementPrior = "none" | "pending" | "failed";
+
+interface AcknowledgementScenario {
+  readonly prior: AcknowledgementPrior;
+  readonly budget: number;
+  readonly interruptSuccessor: boolean;
+}
+
+type AsyncService = Effect.Success<ReturnType<typeof acquireService>>;
+type AwaitResult = ReturnType<AsyncService["controlAsync"]>;
+type RequestStatus = ReturnType<typeof control>;
+type Fixture = Effect.Success<typeof fixture>;
+type PausedScheduler = ReturnType<typeof pausedScheduler>;
+
+const unacknowledgedDelivery = (prior: AcknowledgementPrior) =>
+  prior === "pending" ? "sent" : prior;
+
+const stepTimes = (paused: PausedScheduler, count: number) => {
+  for (let i = 0; i < count; i++) paused.step();
+};
+
+const settleAnswer = (f: Fixture, prior: AcknowledgementPrior) =>
+  prior === "none"
+    ? Deferred.fail(f.answer, new AskUserHostError({ operation: "open", message: "Unavailable" }))
+    : Deferred.succeed(f.answer, outcome);
+
+const priorDelivery = (f: Fixture, prior: AcknowledgementPrior) =>
+  Ref.make(0).pipe(
+    Effect.map(
+      (attempts) => (snapshot: AsyncQuestionnaireSnapshot) =>
+        Effect.gen(function* () {
+          if (prior === "failed" && (yield* Ref.updateAndGet(attempts, (n) => n + 1)) === 1)
+            return yield* new AskUserHostError({ operation: "deliver", message: "Failed" });
+          yield* f.delivery(snapshot);
+        }),
+    ),
+  );
+
+const forkPausedAwait = (awaitResult: AwaitResult, budget: number) =>
+  Effect.gen(function* () {
+    const paused = pausedScheduler();
+    const fiber = yield* Effect.forkChild(
+      awaitResult.pipe(
+        Effect.provideService(Scheduler.MaxOpsBeforeYield, budget),
+        Effect.provideService(Scheduler.Scheduler, paused.scheduler),
+      ),
+      { startImmediately: true },
+    );
+    return { paused, fiber };
+  });
+
+const secondAcknowledgement = (
+  awaitResult: AwaitResult,
+  status: RequestStatus,
+  scenario: AcknowledgementScenario,
+  checkpoint: number,
+) =>
+  Effect.gen(function* () {
+    if (!scenario.interruptSuccessor) {
+      const result = (yield* awaitResult).requests[0]!;
+      if (scenario.prior !== "none") expect(result.outcome).toEqual(outcome);
+      return result.delivery === "waiter";
+    }
+    const successor = yield* forkPausedAwait(awaitResult, scenario.budget);
+    stepTimes(successor.paused, checkpoint);
+    const published = (yield* status)!.delivery === "waiter";
+    successor.fiber.interruptUnsafe();
+    stepTimes(successor.paused, 100);
+    yield* Fiber.await(successor.fiber);
+    return published;
+  });
+
+const acknowledgementAttempt = (
+  f: Fixture,
+  scenario: AcknowledgementScenario,
+  checkpoint: number,
+) =>
+  Effect.gen(function* () {
+    const { prior } = scenario;
+    const delivery = yield* priorDelivery(f, prior);
+    yield* Deferred.succeed(f.mount, undefined);
+    const service = yield* acquireService(f.host, delivery);
+    const receipt = yield* service.startAsync(request);
+    const awaitResult = service.controlAsync({ action: "await", requestId: receipt.requestId });
+    const status = control(service, "status", receipt.requestId);
+    if (prior === "failed") {
+      yield* settleAnswer(f, prior);
+      yield* Effect.yieldNow;
+    }
+    const first = yield* forkPausedAwait(awaitResult, scenario.budget);
+    if (prior !== "failed") {
+      stepTimes(first.paused, 20);
+      if (checkpoint === -1) first.fiber.interruptUnsafe();
+      yield* settleAnswer(f, prior);
+      yield* Effect.yieldNow;
+    }
+    stepTimes(first.paused, checkpoint);
+    const published = (yield* status)!.delivery === "waiter";
+    first.fiber.interruptUnsafe();
+    if (!published) {
+      stepTimes(first.paused, 100);
+      expect((yield* status)?.delivery).toBe(unacknowledgedDelivery(prior));
+    }
+    const secondPublished = yield* secondAcknowledgement(awaitResult, status, scenario, checkpoint);
+    stepTimes(first.paused, 100);
+    yield* Fiber.await(first.fiber);
+    yield* Effect.yieldNow;
+    const acknowledged = published || secondPublished;
+    expect((yield* status)?.delivery).toBe(acknowledged ? "waiter" : unacknowledgedDelivery(prior));
+    if (prior === "failed") {
+      yield* TestClock.adjust("1 second");
+      stepTimes(first.paused, 100);
+      expect((yield* status)?.delivery).toBe(acknowledged ? "waiter" : "sent");
+    }
+    if (prior === "none" || published) expect(yield* Ref.get(f.messages)).toEqual([]);
+    return published;
+  }).pipe(Effect.scoped);
+
 for (const prior of ["none", "pending", "failed"] as const) {
   for (const budget of [8, 16]) {
     for (const interruptSuccessor of [false, true]) {
@@ -559,93 +672,15 @@ for (const prior of ["none", "pending", "failed"] as const) {
           Effect.gen(function* () {
             let beforeCommit = false;
             let afterCommit = false;
-            // Stop at each scheduler chunk through preparation and finalization.
             for (let checkpoint = -1; checkpoint < 24; checkpoint++) {
               const f = yield* fixture;
-              const attempts = yield* Ref.make(0);
-              const delivery = (snapshot: AsyncQuestionnaireSnapshot) =>
-                Effect.gen(function* () {
-                  if (prior === "failed" && (yield* Ref.updateAndGet(attempts, (n) => n + 1)) === 1)
-                    return yield* new AskUserHostError({ operation: "deliver", message: "Failed" });
-                  yield* f.delivery(snapshot);
-                });
-              yield* Deferred.succeed(f.mount, undefined);
-              yield* Effect.gen(function* () {
-                const service = yield* acquireService(f.host, delivery);
-                const receipt = yield* service.startAsync(request);
-                const awaitResult = service.controlAsync({
-                  action: "await",
-                  requestId: receipt.requestId,
-                });
-                const status = control(service, "status", receipt.requestId);
-                if (prior === "failed") {
-                  yield* Deferred.succeed(f.answer, outcome);
-                  yield* Effect.yieldNow;
-                }
-                const paused = pausedScheduler();
-                const first = yield* Effect.forkChild(
-                  awaitResult.pipe(
-                    Effect.provideService(Scheduler.MaxOpsBeforeYield, budget),
-                    Effect.provideService(Scheduler.Scheduler, paused.scheduler),
-                  ),
-                  { startImmediately: true },
-                );
-                if (prior !== "failed") {
-                  for (let i = 0; i < 20; i++) paused.step();
-                  if (checkpoint === -1) first.interruptUnsafe();
-                  if (prior === "none")
-                    yield* Deferred.fail(
-                      f.answer,
-                      new AskUserHostError({ operation: "open", message: "Unavailable" }),
-                    );
-                  else yield* Deferred.succeed(f.answer, outcome);
-                  yield* Effect.yieldNow;
-                }
-                for (let i = 0; i < checkpoint; i++) paused.step();
-                const published = (yield* status)!.delivery === "waiter";
-                beforeCommit ||= !published;
-                afterCommit ||= published;
-                first.interruptUnsafe();
-                // A published acknowledgement also proves claim release. Run B
-                // while A's post-release cleanup is still paused where possible.
-                if (!published) {
-                  for (let i = 0; i < 100; i++) paused.step();
-                  expect((yield* status)?.delivery).toBe(prior === "pending" ? "sent" : prior);
-                }
-                let secondPublished = false;
-                if (interruptSuccessor) {
-                  const successor = pausedScheduler();
-                  const second = yield* Effect.forkChild(
-                    awaitResult.pipe(
-                      Effect.provideService(Scheduler.MaxOpsBeforeYield, budget),
-                      Effect.provideService(Scheduler.Scheduler, successor.scheduler),
-                    ),
-                    { startImmediately: true },
-                  );
-                  for (let i = 0; i < checkpoint; i++) successor.step();
-                  secondPublished = (yield* status)!.delivery === "waiter";
-                  second.interruptUnsafe();
-                  for (let i = 0; i < 100; i++) successor.step();
-                  yield* Fiber.await(second);
-                } else {
-                  const result = (yield* awaitResult).requests[0]!;
-                  secondPublished = result.delivery === "waiter";
-                  if (prior !== "none") expect(result.outcome).toEqual(outcome);
-                }
-                for (let i = 0; i < 100; i++) paused.step();
-                yield* Fiber.await(first);
-                yield* Effect.yieldNow;
-                const acknowledged = published || secondPublished;
-                const expected = acknowledged ? "waiter" : prior === "pending" ? "sent" : prior;
-                expect((yield* status)?.delivery).toBe(expected);
-                if (prior === "failed") {
-                  yield* TestClock.adjust("1 second");
-                  for (let i = 0; i < 100; i++) paused.step();
-                  expect((yield* status)?.delivery).toBe(acknowledged ? "waiter" : "sent");
-                }
-                // An acknowledgement is final: later cancellation never redelivers it.
-                if (prior === "none" || published) expect(yield* Ref.get(f.messages)).toEqual([]);
-              }).pipe(Effect.scoped);
+              const published = yield* acknowledgementAttempt(
+                f,
+                { prior, budget, interruptSuccessor },
+                checkpoint,
+              );
+              beforeCommit ||= !published;
+              afterCommit ||= published;
             }
             expect(beforeCommit).toBe(true);
             expect(afterCommit).toBe(true);

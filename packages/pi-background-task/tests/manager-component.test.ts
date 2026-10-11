@@ -1,10 +1,5 @@
-// Behavior-first component tests for the /tasks manager: two-press stop, stale-selection
-// safety, sticky unfollow, inspector navigation, and selection reconciliation.
-// Assertions use transitions, callbacks, and coarse content markers — never exact
-// copy, colors, or layout.
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "@effect/vitest";
-import { plainTheme } from "pi-cosmic-core/testing";
+import { plainTheme, themeFixture } from "pi-cosmic-core/testing";
 import type { BackgroundTaskView, BackgroundLogEvent } from "../src/task/model.ts";
 import { TaskManagerComponent } from "../src/ui/manager.ts";
 
@@ -104,11 +99,9 @@ describe("/tasks stop confirmation", () => {
     const before = component.render(120);
     component.handleInput("x");
 
-    // Only the confirmation prompt changes, and it names the task without its raw controls.
     const rendered = component.render(120);
     const prompt = rendered.filter((line) => !before.includes(line));
     expect(prompt.some((line) => line.includes("bad identity"))).toBe(true);
-    // The list row and detail pane show the same identity and must stay sanitized too.
     expect(rendered.join("\n")).not.toContain("\x1b[31m");
   });
 
@@ -146,11 +139,9 @@ describe("/tasks theme invalidation", () => {
     const oldStyle = vi.fn((text: string) => `old-style${text}`);
     const newStyle = vi.fn((text: string) => `new-style${text}`);
     let errorStyle = oldStyle;
-    // SAFETY: This fixture supplies the theme methods used by the manager.
-    const mutableTheme = {
-      bold: plainTheme.bold,
-      fg: (color: string, text: string) => (color === "error" ? errorStyle(text) : text),
-    } as Theme;
+    const mutableTheme = themeFixture({
+      fg: (color, text) => (color === "error" ? errorStyle(text) : text),
+    });
     const logs = Object.freeze(
       logEvents(1).map((event) => ({ ...event, stream: "stderr" as const })),
     );

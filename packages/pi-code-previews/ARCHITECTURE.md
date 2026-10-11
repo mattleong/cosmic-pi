@@ -104,7 +104,10 @@ persistence. Health is an owned overlay, so closing cannot pop an unrelated stac
 - `preview/` owns shell composition, separate original/content-only slot caches, frame/timing,
   children, expanded sections and safe fallback. Expanded content retains complete input/output.
   Slot failures restore raw output without replaying failed renderers. Native renderers read the
-  animation frame through a safe scalar projection, not mutable timing state.
+  animation frame through a safe scalar projection, not mutable timing state. Shell-private
+  border, issue-frame, timing-handle and preview-cache state lives in WeakMaps keyed by the
+  host's renderer `state` object; only the timing start/end and animation-frame fields stay on
+  that object, written and read through checked accessors.
 - Native codemode evidence inspects only the latest 256 own data-property call slots, validates
   neighbors independently and reports missing coverage. Subjects use observed bounded arguments
   and unambiguous MCP aliases. `tools/native-mcp-identity.ts` also owns the argument-only

@@ -1,13 +1,12 @@
-// Promise-shaped child Pi host boundary tests.
 import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
 import { queryQuestionnaireRelay } from "pi-ask-user/protocol";
-import {
-  createEventBus,
-  type ExtensionHandler,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import { createEventBus, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { deferredPromise, extensionContextFixture } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  extensionContextFixture,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, vi } from "vitest";
 import type { LocalPiContact, LocalPiParentControl } from "../src/backend/local-pi-protocol.ts";
 import {
@@ -18,13 +17,11 @@ import { ParentContactError, type LocalPiChildIpcHandlers } from "../src/boundar
 import { SUBAGENT_TOOL_NAME, SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 import { statusContract } from "../src/tools/contract.ts";
 import { view } from "./fixtures/run-view.ts";
-import { extensionApiFixture } from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
 import { pickQuestionnaire } from "./support/questionnaire.ts";
 
-type Handler = ExtensionHandler<any, any>;
-type CapturedTool = ToolDefinition<any, any, any>;
+type CapturedTool = ToolDefinition;
 type CapturedToolInput = Parameters<CapturedTool["execute"]>[1];
 
 interface ListenerRecord {
@@ -39,7 +36,6 @@ interface HarnessOptions {
 }
 
 const makeHarness = (options: HarnessOptions = {}) => {
-  const handlers = new Map<string, Handler>();
   const events = createEventBus();
   const tools: CapturedTool[] = [];
   const contacts: LocalPiContact[] = [];
@@ -62,26 +58,28 @@ const makeHarness = (options: HarnessOptions = {}) => {
       };
     },
   };
-  const pi = extensionApiFixture({
-    events,
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(() => false),
-    registerProvider: vi.fn(),
-    registerCommand: vi.fn(),
-    registerTool: vi.fn((tool: CapturedTool) => {
-      registration += 1;
-      tools.push(tool);
-      active = [...new Set([...active, tool.name])];
-      if (registration === options.throwAtRegistration) throw new Error("registration failed");
-    }),
-    on: vi.fn((name: string, handler: Handler) => handlers.set(name, handler)),
-    getActiveTools: vi.fn(() => [...active]),
-    setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
-      active = [...names];
-    }),
-    sendMessage,
-  });
-  registerSubagentChildBridge(pi, {
+  const host = recordingExtensionHost(
+    {},
+    {
+      events,
+      registerFlag: vi.fn(),
+      getFlag: vi.fn(() => false),
+      registerProvider: vi.fn(),
+      registerCommand: vi.fn(),
+      registerTool: (tool) => {
+        registration += 1;
+        tools.push(defineTool(tool));
+        active = [...new Set([...active, tool.name])];
+        if (registration === options.throwAtRegistration) throw new Error("registration failed");
+      },
+      getActiveTools: vi.fn(() => [...active]),
+      setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
+        active = [...names];
+      }),
+      sendMessage,
+    },
+  );
+  registerSubagentChildBridge(host.pi, {
     loadSettings: options.loadSettings ?? (() => Promise.resolve()),
     openIpc: () => ipc,
   });
@@ -94,10 +92,8 @@ const makeHarness = (options: HarnessOptions = {}) => {
       hasUI: false,
       mode: "rpc" as const,
     });
-  const start = (cwd?: string) =>
-    Promise.resolve(handlers.get("session_start")?.({}, context(cwd)));
-  const shutdown = () =>
-    Promise.resolve(handlers.get("session_shutdown")?.({}, context())).then(() => undefined);
+  const start = (cwd?: string) => host.emit("session_start", context(cwd));
+  const shutdown = () => host.emit("session_shutdown", context());
   const latestTool = (name: string): CapturedTool => {
     const tool = tools.findLast((candidate) => candidate.name === name);
     if (!tool) throw new Error(`Missing tool ${name}`);
@@ -108,7 +104,6 @@ const makeHarness = (options: HarnessOptions = {}) => {
     if (!listener) throw new Error("Missing active IPC listener");
     return listener;
   };
-  /** Waits until the latest contact of one type exists and matches the expected fields. */
   const awaitContact = <Type extends LocalPiContact["type"]>(
     type: Type,
     match: Partial<Extract<LocalPiContact, { readonly type: Type }>> = {},
@@ -120,7 +115,6 @@ const makeHarness = (options: HarnessOptions = {}) => {
         return contact!;
       }),
     );
-  /** Asks the parent a blocking question through the current contact_parent tool. */
   const ask = (signal?: AbortSignal) =>
     execute(latestTool("contact_parent"), { kind: "question", message: "Need input" }, signal);
   return {
@@ -347,7 +341,6 @@ describe("local Pi child bridge", () => {
       const text = result.content
         .flatMap((part) => (part.type === "text" ? [part.text] : []))
         .join("\n");
-      // The agent learns that root cleanup is unconfirmed, not complete.
       expect(text).toContain("Root completion-claim cleanup is unconfirmed");
       expect(text).not.toContain("Wait cleanup is complete");
       yield* harness.awaitContact("proxy_cancel", { requestId: request.requestId });

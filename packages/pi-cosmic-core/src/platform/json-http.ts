@@ -12,9 +12,7 @@ export interface JsonHttpRequest<S extends Schema.ConstraintDecoder<unknown, unk
   readonly url: string;
   readonly method?: "GET" | "POST";
   readonly headers?: Readonly<Record<string, string>>;
-  /** The provider-local decoder for successful response bodies. */
   readonly responseSchema: S;
-  /** Optional hard cap applied before buffering the response body. */
   readonly maxResponseBytes?: number;
 }
 
@@ -33,11 +31,9 @@ type JsonHttpResponse<A> = JsonHttpAcceptedResponse<A> | JsonHttpRejectedRespons
 
 export type IsAny<A> = 0 extends 1 & A ? true : false;
 
-/** A response decoder whose decoded type is concrete rather than `any` or `unknown`. */
 export type JsonHttpResponseSchema<A, R> =
   IsAny<A> extends true ? never : unknown extends A ? never : Schema.ConstraintDecoder<A, R>;
 
-/** A request whose decoded response type is concrete rather than `any` or `unknown`. */
 type JsonHttpRequestInput<A, R> = JsonHttpRequest<JsonHttpResponseSchema<A, R>>;
 
 export interface JsonHttpClientContract {
@@ -64,13 +60,11 @@ export const responseDecodeError = jsonHttpError(
 );
 const responseTooLarge = jsonHttpError("response", "HTTP response exceeded its byte limit.");
 
-/** One client transport; `jsonBody` is the already schema-encoded JSON request body. */
 type JsonHttpExecute = <A, R>(
   input: JsonHttpRequestInput<A, R>,
   jsonBody?: Schema.Json,
 ) => Effect.Effect<JsonHttpResponse<A>, JsonHttpError, R>;
 
-/** Builds the live and test clients over one transport, schema-encoding JSON bodies once. */
 export const makeJsonHttpClient = (execute: JsonHttpExecute): JsonHttpClientContract => ({
   request: (input) => execute(input),
   requestJson: (input, bodySchema, body) =>
@@ -106,8 +100,6 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
           }),
         );
         const maximumBytes = input.maxResponseBytes;
-        // One text read and one JSON decode for every request, so a malformed body is a
-        // decode failure whether or not it is bounded.
         const text = yield* maximumBytes === undefined
           ? response.text.pipe(Effect.mapError(responseReadError))
           : Number.isSafeInteger(maximumBytes) && maximumBytes > 0

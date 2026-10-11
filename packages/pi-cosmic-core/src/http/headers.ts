@@ -1,4 +1,3 @@
-/** Merge headers case-insensitively; later values replace earlier ones and null deletes. */
 export function mergeHeaders(
   ...sources: ReadonlyArray<Readonly<Record<string, string | null>> | undefined>
 ): Record<string, string> {

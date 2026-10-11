@@ -1,6 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, invokeHostCallback, type JsonObject } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 import {
   MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate,
@@ -12,6 +12,7 @@ import {
   PROFILE_CANDIDATE_WRITE_INTENTS,
   PROFILE_IDS,
   profileCandidateValidationIssues,
+  type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
   type ProfileCandidate,
   type ProfileId,
@@ -20,9 +21,6 @@ import {
 
 export const SUBAGENT_CONFIG_BASENAME = "pi-subagents.json";
 export const SUBAGENT_CONFIG_VERSION = 6;
-export const PREVIOUS_SUBAGENT_CONFIG_VERSION = 5;
-export const LEGACY_SUBAGENT_CONFIG_VERSION = 4;
-export const MIGRATED_PROFILE_SET_NAME = "default";
 export const MAX_PROFILE_SETS = 32;
 
 export const WRITER_WORKSPACE_MODES = ["worktree", "shared-checkout"] as const;
@@ -30,18 +28,12 @@ export type WriterWorkspaceMode = (typeof WRITER_WORKSPACE_MODES)[number];
 export const DEFAULT_WRITER_WORKSPACE_MODE: WriterWorkspaceMode = "shared-checkout";
 export const WriterWorkspaceModeSchema = Schema.Literals(WRITER_WORKSPACE_MODES);
 
-/**
- * Version-6 feature switches are optional root booleans that Project overrides over Global; an
- * absent declaration inherits, and a session may override both. `ultracode` opts the session
- * into dynamic workflows, so it is off by default.
- */
 export const SUBAGENT_FEATURE_TOGGLES = ["ultracode"] as const;
 export type SubagentFeatureToggle = (typeof SUBAGENT_FEATURE_TOGGLES)[number];
 export type SubagentFeatureToggles = Readonly<Record<SubagentFeatureToggle, boolean>>;
 export const DEFAULT_SUBAGENT_FEATURE_TOGGLES: SubagentFeatureToggles = Object.freeze({
   ultracode: false,
 });
-/** Where a switch's effective value comes from. */
 export type SubagentFeatureSource = "default" | "global" | "project" | "session";
 export const isSubagentFeatureToggle = <Value>(
   value: Value,
@@ -53,7 +45,6 @@ export const MAX_DIRECT_CHILDREN = 32;
 export const MIN_SUBAGENT_DEPTH = 0;
 export const MAX_SUBAGENT_DEPTH = 8;
 
-/** At most 64 characters: an alphanumeric at each end around up to 62 name characters. */
 const PROFILE_SET_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._ -]{0,62}[A-Za-z0-9])?$/u;
 
 export const isProfileSetName = (value: string): boolean => PROFILE_SET_NAME_PATTERN.test(value);
@@ -77,15 +68,10 @@ export interface SubagentConfigFile {
 }
 
 export interface DecodedSubagentConfig {
-  /** Scope-normalized view. Versions 4 and 5 expose their legacy `profiles` as set `default`. */
   readonly file: SubagentConfigFile;
-  /** Redacted structural paths only; values and set names are never retained. */
   readonly diagnostics: ReadonlyArray<string>;
-  /** Invalid routes keyed by a validated, bounded profile-set name. */
   readonly invalidProfileSetRoutes: Readonly<Record<string, ReadonlyArray<ProfileId>>>;
-  /** Structurally invalid sets whose validated names may still be repaired or deleted by the UI. */
   readonly invalidProfileSets: ReadonlyArray<string>;
-  /** The declared default is malformed, missing, or points at an invalid set. */
   readonly invalidDefaultProfileSet: boolean;
   readonly unsupportedVersion: boolean;
 }
@@ -111,17 +97,17 @@ export const DEFAULT_SUBAGENT_NESTING_POLICY: SubagentNestingPolicy = Object.fre
 
 const NESTING_KEYS = new Set(["maxDirectChildren", "maxDepth"]);
 
-/** Revoked proxies throw from the Array check itself. */
-const decodedRecord = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined =>
-  invokeHostCallback(
-    // SAFETY: This is a shallow hostile-input view used only for guarded field reads; every field
-    // is decoded into its concrete domain type before it can enter SubagentConfigFile.
-    () => (Predicate.isObject(value) ? (value as ValueInput & Readonly<JsonObject>) : undefined),
-    undefined,
-  );
+const decodedRecord = <ValueInput>(value: ValueInput) =>
+  invokeHostCallback(() => (Predicate.isObject(value) ? value : undefined), undefined);
 
-const ownKeysAre = (record: Readonly<JsonObject>, allowed: ReadonlySet<string>): boolean =>
+const ownKeysAre = <Fields extends object>(record: Fields, allowed: ReadonlySet<string>): boolean =>
   invokeHostCallback(() => Object.keys(record).every((key) => allowed.has(key)), false);
+
+const nullPrototypeRecord = <Value>() => {
+  const record: Record<string, Value> = {};
+  Object.setPrototypeOf(record, null);
+  return record;
+};
 
 export const decodeSubagentNesting = <ValueInput>(
   value: ValueInput,
@@ -143,14 +129,15 @@ const CandidateContractSchema = Schema.Struct({
   closeOnReport: Schema.optional(Schema.Literal(true)),
 });
 
-const readField = (
-  record: Readonly<JsonObject>,
+const readField = <Fields extends object>(
+  record: Fields,
   key: string,
   path: string,
   diagnostics: string[],
 ) => {
   try {
-    if (!Object.hasOwn(record, key)) return { present: false as const };
+    if (!Predicate.isObject(record) || !Object.hasOwn(record, key))
+      return { present: false as const };
     return { present: true as const, value: record[key] };
   } catch {
     diagnostics.push(path);
@@ -163,7 +150,6 @@ type OwnDataProperty =
   | { readonly valid: true; readonly present: true; readonly value: unknown }
   | { readonly valid: false };
 
-/** Descriptor-safe own read: accessors and throwing hostile objects are invalid, never invoked. */
 export const ownDataProperty = <ValueInput>(value: ValueInput, key: string): OwnDataProperty =>
   invokeHostCallback(
     (): OwnDataProperty => {
@@ -177,10 +163,6 @@ export const ownDataProperty = <ValueInput>(value: ValueInput, key: string): Own
     { valid: false },
   );
 
-/**
- * Snapshots an ordinary dense array of at most `maxLength` own data elements without consulting
- * an iterator or invoking an accessor; any other value, including an extra own key, is rejected.
- */
 export const ownDenseArray = <ValueInput>(
   value: ValueInput,
   maxLength: number,
@@ -207,43 +189,43 @@ export const ownDenseArray = <ValueInput>(
     return elements;
   }, undefined);
 
-/** Descriptor-safe reads for every candidate field; the legacy fastMode value keeps its key.
- * Required base fields must be present own values; optional fields must never be accessors. */
-const candidateFields = (record: Readonly<JsonObject>, fastModeKey: string) => {
+const CANDIDATE_KEYS: ReadonlyArray<string> = [...PROFILE_CANDIDATE_BASE_KEYS, "openaiFastMode"];
+const CANDIDATE_KEY_SET = new Set(CANDIDATE_KEYS);
+const OPTIONAL_CANDIDATE_KEYS = new Set(["closeOnReport", "openaiFastMode"]);
+
+const candidateFields = <Fields extends object>(record: Fields) => {
   const values: Array<readonly [string, unknown]> = [];
   let decodable = true;
-  for (const key of [...PROFILE_CANDIDATE_BASE_KEYS, fastModeKey]) {
+  for (const key of CANDIDATE_KEYS) {
     const field = ownDataProperty(record, key);
-    const required = key !== "closeOnReport" && key !== fastModeKey;
-    if (!field.valid || (required && !field.present)) decodable = false;
-    else if (field.present)
-      values.push([key === fastModeKey ? "openaiFastMode" : key, field.value]);
+    if (!field.valid || (!OPTIONAL_CANDIDATE_KEYS.has(key) && !field.present)) decodable = false;
+    else if (field.present) values.push([key, field.value]);
   }
   return { decodable, values };
 };
 
-export const isLegacyConfigVersion = <Version>(version: Version): version is Version & (4 | 5) =>
-  version === LEGACY_SUBAGENT_CONFIG_VERSION || version === PREVIOUS_SUBAGENT_CONFIG_VERSION;
-
-export const decodeProfileCandidate = <ValueInput>(
+export const decodeDeclaredProfileCandidate = <ValueInput>(
   value: ValueInput,
-  version = SUBAGENT_CONFIG_VERSION,
-): ProfileCandidate | undefined => {
+): DeclaredProfileCandidate | undefined => {
   const record = decodedRecord(value);
-  const fastModeKey = isLegacyConfigVersion(version) ? "fastMode" : "openaiFastMode";
-  if (!record || !ownKeysAre(record, new Set([...PROFILE_CANDIDATE_BASE_KEYS, fastModeKey])))
-    return undefined;
-  const { decodable, values } = candidateFields(record, fastModeKey);
+  if (!record || !ownKeysAre(record, CANDIDATE_KEY_SET)) return undefined;
+  const { decodable, values } = candidateFields(record);
   const decoded = decodable
     ? decodeUnknownOrUndefined(CandidateContractSchema, Object.fromEntries(values))
     : undefined;
-  const candidate = decoded && normalizeProfileCandidate(decoded);
-  return candidate && profileCandidateValidationIssues(candidate).length === 0
-    ? candidate
+  return decoded &&
+    profileCandidateValidationIssues(normalizeProfileCandidate(decoded)).length === 0
+    ? decoded
     : undefined;
 };
 
-/** Descriptor-safe decode of a runtime `{ candidates }` route; zero candidates means disabled. */
+export const decodeProfileCandidate = <ValueInput>(
+  value: ValueInput,
+): ProfileCandidate | undefined => {
+  const declared = decodeDeclaredProfileCandidate(value);
+  return declared && normalizeProfileCandidate(declared);
+};
+
 export const decodeProfileRoute = <ValueInput>(value: ValueInput): ProfileRoute | undefined =>
   invokeHostCallback(() => {
     if (!Predicate.isObject(value)) return undefined;
@@ -259,15 +241,13 @@ export const decodeProfileRoute = <ValueInput>(value: ValueInput): ProfileRoute 
 
 const decodeRoute = <ValueInput>(
   value: ValueInput,
-  version: number,
   path: string,
   diagnostics: string[],
 ): DeclaredProfileRoute | undefined => {
   if (value === "disabled") return "disabled";
-  // NaN marks a hostile proxy that throws from the Array check or the length read.
   const length = invokeHostCallback(() => (Array.isArray(value) ? value.length : -1), Number.NaN);
   if (length === -1) {
-    const candidate = decodeProfileCandidate(value, version);
+    const candidate = decodeProfileCandidate(value);
     if (!candidate) diagnostics.push(path);
     return candidate;
   }
@@ -279,7 +259,7 @@ const decodeRoute = <ValueInput>(
   }
   const candidates = Array.from({ length }, (_, index) => {
     const candidate = invokeHostCallback(
-      () => (Array.isArray(value) ? decodeProfileCandidate(value[index], version) : undefined),
+      () => (Array.isArray(value) ? decodeProfileCandidate(value[index]) : undefined),
       undefined,
     );
     if (!candidate) diagnostics.push(`${path}[${index}]`);
@@ -295,7 +275,6 @@ interface DecodedProfiles {
 
 const decodeProfiles = <ValueInput>(
   value: ValueInput,
-  version: number,
   path: string,
   diagnostics: string[],
 ): DecodedProfiles | undefined => {
@@ -310,7 +289,7 @@ const decodeProfiles = <ValueInput>(
     const routePath = `${path}.${id}`;
     const field = readField(decodedProfiles, id, routePath, diagnostics);
     if (!field.present) continue;
-    const route = decodeRoute(field.value, version, routePath, diagnostics);
+    const route = decodeRoute(field.value, routePath, diagnostics);
     if (route === undefined) invalidRoutes.push(id);
     else profiles[id] = route;
   }
@@ -325,11 +304,9 @@ interface DecodedBody {
   readonly file: SubagentConfigFile;
   readonly invalidProfileSetRoutes: Readonly<Record<string, ReadonlyArray<ProfileId>>>;
   readonly invalidProfileSets: ReadonlyArray<string>;
-  /** The declared default name itself is malformed. */
   readonly invalidDefaultProfileSet: boolean;
 }
 
-// Shared by every decode without a body, so nothing may mutate it.
 const EMPTY_BODY: DecodedBody = Object.freeze({
   file: Object.freeze({}),
   invalidProfileSetRoutes: Object.freeze({}),
@@ -352,8 +329,7 @@ const decodeProfileSets = <ValueInput>(
     );
     return { sets: {}, invalidProfileSetRoutes: {}, invalidProfileSets: [] };
   }
-  // SAFETY: These null-prototype maps are populated only with validated set names below.
-  const sets = Object.create(null) as Record<string, SubagentProfileSet>;
+  const sets = nullPrototypeRecord<SubagentProfileSet>();
   const invalidProfileSetRoutes: Record<string, ReadonlyArray<ProfileId>> = {};
   const invalidProfileSets: string[] = [];
   names.forEach((name, index) => {
@@ -373,7 +349,7 @@ const decodeProfileSets = <ValueInput>(
     const profilesField = readField(setRecord, "profiles", profilesPath, diagnostics);
     if (!profilesField.present) diagnostics.push(profilesPath);
     const decoded = profilesField.present
-      ? decodeProfiles(profilesField.value, SUBAGENT_CONFIG_VERSION, profilesPath, diagnostics)
+      ? decodeProfiles(profilesField.value, profilesPath, diagnostics)
       : undefined;
     if (!decoded) {
       invalidProfileSets.push(name);
@@ -385,33 +361,19 @@ const decodeProfileSets = <ValueInput>(
   return { sets, invalidProfileSetRoutes, invalidProfileSets };
 };
 
-const ConfigVersionSchema = Schema.Literals([
-  LEGACY_SUBAGENT_CONFIG_VERSION,
-  PREVIOUS_SUBAGENT_CONFIG_VERSION,
-  SUBAGENT_CONFIG_VERSION,
+export const isSupportedConfigVersion = Schema.is(Schema.Literal(SUBAGENT_CONFIG_VERSION));
+
+const ROOT_KEYS = new Set([
+  "version",
+  "defaultProfileSet",
+  "profileSets",
+  "nesting",
+  "writerWorkspaceMode",
+  ...SUBAGENT_FEATURE_TOGGLES,
 ]);
-export const isSupportedConfigVersion = Schema.is(ConfigVersionSchema);
 
-/** Allowed root keys per declared version; unsupported versions use the current key set. */
-const ROOT_KEYS_BY_VERSION = {
-  [LEGACY_SUBAGENT_CONFIG_VERSION]: ["version", "profiles"],
-  [PREVIOUS_SUBAGENT_CONFIG_VERSION]: ["version", "profiles", "nesting"],
-  [SUBAGENT_CONFIG_VERSION]: [
-    "version",
-    "defaultProfileSet",
-    "profileSets",
-    "nesting",
-    "writerWorkspaceMode",
-    ...SUBAGENT_FEATURE_TOGGLES,
-    // Retired and ignored; preserve compatibility with saved v6 files.
-    "automaticProfileRouting",
-    "scriptedWorkflows",
-  ],
-} as const;
-
-/** Reads one optional root field, recording its path when it is present but undecodable. */
-const readRootField = <S extends Schema.Constraint>(
-  rawRoot: Readonly<JsonObject>,
+const readRootField = <S extends Schema.Constraint, Fields extends object>(
+  rawRoot: Fields,
   key: string,
   scope: string,
   diagnostics: string[],
@@ -425,9 +387,8 @@ const readRootField = <S extends Schema.Constraint>(
   return undefined;
 };
 
-/** Current-version body decode: file fields plus null-prototype invalid-set bookkeeping. */
-const decodeCurrentBody = (
-  rawRoot: Readonly<JsonObject>,
+const decodeCurrentBody = <Fields extends object>(
+  rawRoot: Fields,
   scope: string,
   diagnostics: string[],
 ): DecodedBody => {
@@ -468,33 +429,6 @@ const decodeCurrentBody = (
   };
 };
 
-/**
- * Version-4/5 body decode: a present root `profiles` is the synthetic default set `default`, so a
- * malformed container fails that default closed exactly like a structurally invalid v6 set.
- */
-const decodeLegacyBody = (
-  rawRoot: Readonly<JsonObject>,
-  scope: string,
-  version: 4 | 5,
-  diagnostics: string[],
-): DecodedBody => {
-  const field = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
-  if (!field.present) return EMPTY_BODY;
-  const decoded = decodeProfiles(field.value, version, `${scope}.profiles`, diagnostics);
-  const name = MIGRATED_PROFILE_SET_NAME;
-  return {
-    file: {
-      defaultProfileSet: name,
-      ...(decoded && { profileSets: { [name]: { profiles: decoded.profiles } } }),
-    },
-    invalidProfileSetRoutes:
-      decoded && decoded.invalidRoutes.length > 0 ? { [name]: decoded.invalidRoutes } : {},
-    invalidProfileSets: decoded ? [] : [name],
-    invalidDefaultProfileSet: false,
-  };
-};
-
-/** Strict version-4/5/6 unknown-boundary decode for one global or project document. */
 export function decodeSubagentConfig<InputInput>(
   input: InputInput,
   scope = "config",
@@ -505,26 +439,18 @@ export function decodeSubagentConfig<InputInput>(
   if (!decodedRoot) diagnostics.push(scope);
   const rawVersion = readField(rawRoot, "version", `${scope}.version`, diagnostics).value;
   const version = isSupportedConfigVersion(rawVersion) ? rawVersion : undefined;
-  if (!ownKeysAre(rawRoot, new Set(ROOT_KEYS_BY_VERSION[version ?? SUBAGENT_CONFIG_VERSION])))
-    diagnostics.push(`${scope}.<unknown>`);
+  if (!ownKeysAre(rawRoot, ROOT_KEYS)) diagnostics.push(`${scope}.<unknown>`);
 
-  const body = isLegacyConfigVersion(version)
-    ? decodeLegacyBody(rawRoot, scope, version, diagnostics)
-    : version === SUBAGENT_CONFIG_VERSION
-      ? decodeCurrentBody(rawRoot, scope, diagnostics)
-      : EMPTY_BODY;
+  const body = version === undefined ? EMPTY_BODY : decodeCurrentBody(rawRoot, scope, diagnostics);
   let file: SubagentConfigFile = { ...(version !== undefined && { version }), ...body.file };
   const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
-  const supportsNesting =
-    version === PREVIOUS_SUBAGENT_CONFIG_VERSION || version === SUBAGENT_CONFIG_VERSION;
-  if (supportsNesting && nestingField.present) {
+  if (version !== undefined && nestingField.present) {
     const nesting = decodeSubagentNesting(nestingField.value);
     if (nesting === undefined) diagnostics.push(`${scope}.nesting`);
     else file = { ...file, nesting };
   }
 
   const defaultName = file.defaultProfileSet;
-  // Invalid sets are never decoded into `file.profileSets`, so this also covers them.
   const missingDefault =
     defaultName !== undefined &&
     !(file.profileSets && Object.hasOwn(file.profileSets, defaultName));
@@ -535,11 +461,10 @@ export function decodeSubagentConfig<InputInput>(
   return {
     file,
     diagnostics: [...new Set(diagnostics)],
-    // SAFETY: This null-prototype map is populated only by bounded profile decoders.
     invalidProfileSetRoutes: Object.assign(
-      Object.create(null),
+      nullPrototypeRecord<ReadonlyArray<ProfileId>>(),
       body.invalidProfileSetRoutes,
-    ) as Record<string, ReadonlyArray<ProfileId>>,
+    ),
     invalidProfileSets: body.invalidProfileSets,
     invalidDefaultProfileSet: body.invalidDefaultProfileSet || missingDefault,
     unsupportedVersion,

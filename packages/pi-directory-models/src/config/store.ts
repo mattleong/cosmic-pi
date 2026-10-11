@@ -14,7 +14,6 @@ export interface DirectoryIdentity {
   readonly preferencePath: string;
 }
 
-/** Callers only branch on store failure itself, so the error carries no payload. */
 export class DirectoryModelStoreError extends Schema.TaggedError<DirectoryModelStoreError>()(
   "DirectoryModelStoreError",
   {},

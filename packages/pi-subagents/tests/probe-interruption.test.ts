@@ -1,4 +1,3 @@
-// Private process-boundary integration tests intentionally use Node process probes.
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -23,7 +22,6 @@ const executableFixture = Effect.gen(function* () {
   return { directory, executable, pidPath: join(directory, "probe.pid") };
 });
 
-/** Interrupts a probe once its fixture publishes a pid, then requires that process to be gone. */
 const expectInterruptKills = <A, E>(fiber: Fiber.Fiber<A, E>, pidPath: string) =>
   Effect.gen(function* () {
     const pid = yield* waitForPid(pidPath);
@@ -38,9 +36,7 @@ afterEach(() => {
   for (const pid of ownedPids) {
     try {
       process.kill(pid, "SIGKILL");
-    } catch {
-      // The tested finalizer already released it.
-    }
+    } catch {}
   }
   ownedPids.clear();
 });

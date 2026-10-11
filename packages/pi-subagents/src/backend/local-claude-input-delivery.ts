@@ -10,13 +10,9 @@ import type { SteeringDeliveryState } from "../run/model.ts";
 import { claudeUserFrame } from "./local-claude-protocol.ts";
 
 const CALLER_WAIT = "10 seconds";
-// Fail closed if a start's replay never arrives, but allow for slow starts under load, such as a
-// workflow launching many Claude agents at once.
 const START_REPLAY_DEADLINE = "60 seconds";
-// Absolute from native-send ownership, never extended by inbound activity.
 const STEERING_ACK_WATCHDOG = "5 minutes";
 
-/** Digest identity is diagnostic evidence only; it never authorizes a replay. */
 export const userContentDigest = (text: string): string => sha256Text(text);
 
 export interface PendingUserReplay {
@@ -28,7 +24,6 @@ export interface PendingUserReplay {
   readonly emitRunStarted: boolean;
   readonly resultKind: "initialization" | "assignment" | undefined;
   readonly acknowledgement: Deferred.Deferred<void, SubagentError>;
-  /** Start of backend delivery ownership, not proof of native write completion. */
   ownedAtMillis?: number | undefined;
 }
 
@@ -41,7 +36,6 @@ interface InputDeliveryObservers {
     input: PendingUserReplay,
     state: SteeringDeliveryState,
   ) => Effect.Effect<void>;
-  /** Queries exact-epoch supervisor ownership and forwards through the existing report owner. */
   readonly preserveReport?: (epoch: number) => Effect.Effect<boolean>;
   readonly diagnose?: (
     input: PendingUserReplay,
@@ -51,7 +45,6 @@ interface InputDeliveryObservers {
   readonly onFailure?: (error: SubagentProcessError) => Effect.Effect<void>;
 }
 
-/** Owns outbound UUIDs through native replay, independently of control callers. */
 export const makeLocalClaudeInputDelivery = (
   child: Pick<LocalCliProcessHandle, "send" | "terminate">,
   scope: Scope.Scope,
@@ -83,18 +76,14 @@ export const makeLocalClaudeInputDelivery = (
     reason: ClaudeInputTerminationReason,
   ) =>
     Effect.gen(function* () {
-      // Close admission and latch the primary cause before any diagnostic/termination yield.
       failure ??= error;
       transportClosed = failure;
       failure = yield* observers.diagnose?.(input, failure, reason) ?? Effect.succeed(failure);
-      // Queue backpressure cannot postpone termination after the failure latch. The exit
-      // path carries the same typed cause even if event shutdown wins publication.
       yield* Effect.all(
         [
           publish(input, "unresolved").pipe(
             Effect.andThen(observers.onFailure?.(failure) ?? Effect.void),
           ),
-          // A termination request is not cleanup proof. Scope release owns that evidence.
           child.terminate("force").pipe(Effect.ignore),
         ],
         { concurrency: "unbounded", discard: true },
@@ -113,7 +102,6 @@ export const makeLocalClaudeInputDelivery = (
       const input = pending;
       if (!input || input.operation !== "steer" || input.epoch !== epoch || failure)
         return Effect.succeed(false);
-      // Report acceptance proves assignment completion, not incorporation of the guidance.
       transportClosed = processError(
         "steer",
         "steer_outcome_uncertain",
@@ -188,7 +176,6 @@ export const makeLocalClaudeInputDelivery = (
                   !stillOwned() ||
                   (operation === "steer" &&
                     (yield* observers.preserveReport?.(epoch) ?? Effect.succeed(false))) ||
-                  // The exact owner may have changed while report evidence was queried.
                   !stillOwned()
                 )
                   return yield* Deferred.await(input.acknowledgement);
@@ -223,7 +210,6 @@ export const makeLocalClaudeInputDelivery = (
           Effect.ensuring(Effect.sync(() => clear(input))),
           Effect.interruptible,
         );
-        // Preparation remains caller-owned; send and acknowledgement transfer together.
         return restore(recordOutbound(operation, epoch, shouldQuery)).pipe(
           Effect.andThen(
             Effect.suspend(() =>

@@ -1,12 +1,9 @@
-import * as Deferred from "effect/Deferred";
-import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { makeLocalCliEventIngress } from "./local-cli-events.ts";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { safeTextPrefix } from "pi-cosmic-core";
 import {
   type ChildProcessHandle,
   type ChildProcessContract,
@@ -18,29 +15,18 @@ import {
   SubagentProcessError,
   type SubagentError,
 } from "../run/errors.ts";
-import { PI_SUBAGENT_CAPABILITIES, emptyUsage } from "../run/model.ts";
+import { PI_SUBAGENT_CAPABILITIES } from "../run/model.ts";
 import { makeLocalPiUsage } from "./local-pi-usage.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
+import { decodeRpcEnvelope, decodeRpcStateData, rpcStateModelId } from "./local-pi-protocol.ts";
 import {
-  assistantText,
-  decodeAssistantMessage,
-  decodeRpcEnvelope,
-  decodeRpcStateData,
-  MAX_STRUCTURED_RESULT_REJECTION_CHARS,
-  rpcStateModelId,
-  type LocalPiParentControl,
-  type RpcChildEnvelope,
-  type RpcCommand,
-  type RpcResponse,
-} from "./local-pi-protocol.ts";
-import {
-  MAX_ERROR_CHARS,
-  MAX_FINAL_TEXT_CHARS,
-  sanitizeStreamDiagnostic,
-  sanitizeDiagnosticText,
-  sanitizeOutputText,
-} from "../run/state.ts";
-import { correlatedRequest, protocolError } from "./driver-shared.ts";
+  normalizeParentContact,
+  normalizeRpcEvent,
+  parentContactAckOutcome,
+} from "./local-pi-events.ts";
+import { makeLocalPiRpc } from "./local-pi-rpc.ts";
+import { MAX_ERROR_CHARS, sanitizeStreamDiagnostic } from "../run/state.ts";
+import { protocolError } from "./driver-shared.ts";
 import {
   toBackendExit,
   type BackendAssistantTerminal,
@@ -50,90 +36,7 @@ import {
   type BackendResumeToken,
 } from "./model.ts";
 
-const RPC_TIMEOUT = "10 seconds";
-// Process spawn precedes Pi model/resource loading and extension startup.
 const STARTUP_RPC_TIMEOUT = "30 seconds";
-
-const RPC_OUTCOME_CODES = new Map<RpcCommand["type"], string>([
-  ["steer", "guidance_outcome_uncertain"],
-  ["abort", "interrupt_outcome_uncertain"],
-  ["set_session_name", "rename_outcome_uncertain"],
-]);
-const rpcOutcomeCode = (command: RpcCommand["type"]): string =>
-  RPC_OUTCOME_CODES.get(command) ?? `${command}_outcome_uncertain`;
-
-const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): SubagentError =>
-  error._tag === "SubagentProcessError" && error.code === "transport_outcome_uncertain"
-    ? new SubagentProcessError({
-        operation: `execute ${command.type} in`,
-        code: rpcOutcomeCode(command.type),
-        message:
-          command.type === "clear_queue"
-            ? `${error.message} Queue clearing could not be confirmed; abort was not sent. Inspect subagent status before retrying interrupt.`
-            : `${error.message} Inspect subagent status before retrying ${command.type}.`,
-      })
-    : error;
-
-const normalizeRpcEvent = (
-  envelope: RpcChildEnvelope,
-  assignmentEpoch: number,
-): Effect.Effect<BackendEvent | undefined, Schema.SchemaError> => {
-  switch (envelope.type) {
-    case "agent_start":
-      return Effect.succeed<BackendEvent>({ type: "run_started", assignmentEpoch });
-    case "agent_settled":
-      return Effect.succeed<BackendEvent>({ type: "run_settled", assignmentEpoch });
-    case "message_update":
-      return Effect.succeed(
-        envelope.assistantMessageEvent.type === "text_delta" && envelope.assistantMessageEvent.delta
-          ? ({ type: "activity", assignmentEpoch } as const)
-          : undefined,
-      );
-    case "message_end":
-      return decodeAssistantMessage(envelope.message).pipe(
-        Effect.map((message): BackendEvent | undefined => {
-          if (!message) return undefined;
-          const text = sanitizeOutputText(assistantText(message), MAX_FINAL_TEXT_CHARS);
-          return {
-            type: "assistant_message",
-            assignmentEpoch,
-            ...(text && { text }),
-            usage: emptyUsage(),
-            terminal: {
-              stopReason: message.stopReason,
-              text,
-              ...(message.errorMessage && {
-                errorMessage: sanitizeDiagnosticText(message.errorMessage, MAX_ERROR_CHARS),
-              }),
-            },
-          };
-        }),
-      );
-    case "tool_execution_start":
-      return Effect.succeed<BackendEvent>({
-        type: "tool_started",
-        assignmentEpoch,
-        toolCallId: envelope.toolCallId,
-        toolName: envelope.toolName,
-        args: envelope.args,
-      });
-    case "tool_execution_end":
-      return Effect.succeed<BackendEvent>({
-        type: "tool_finished",
-        assignmentEpoch,
-        toolCallId: envelope.toolCallId,
-        toolName: envelope.toolName,
-        isError: envelope.isError,
-      });
-    case "extension_error":
-      return Effect.succeed<BackendEvent>({
-        type: "warning",
-        message: envelope.error,
-      });
-    default:
-      return Effect.undefined;
-  }
-};
 
 const LocalPiResumeToken = Schema.Struct({
   type: Schema.Literal("local-pi-session-file"),
@@ -150,20 +53,18 @@ const decodeLocalPiResumeToken = (token: BackendResumeToken) =>
     Effect.mapError(() => protocolError("Local Pi received an invalid backend resume token.")),
   );
 
-interface PendingRpcResponse {
-  readonly command: string;
-  readonly deferred: Deferred.Deferred<RpcResponse, SubagentError>;
-}
-
 const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   child: ChildProcessHandle,
 ) {
   const turnControl = yield* Semaphore.make(1);
   const withTurnControl = turnControl.withPermits(1);
-  const responses = new Map<string, PendingRpcResponse>();
-  const ipcAcks = new Map<string, Deferred.Deferred<void, SubagentError>>();
-  let nextRpcId = 1;
-  let nextIpcAckId = 1;
+  const {
+    rpc,
+    ipcAck,
+    resolveIpcAck,
+    resolveResponse,
+    cancel: cancelPending,
+  } = makeLocalPiRpc(child);
   let assignmentEpoch = 0;
   let latestTerminal: BackendAssistantTerminal | undefined;
   let transportFailure: SubagentError | undefined;
@@ -172,14 +73,6 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     child.acknowledge,
     "local-Pi",
   );
-
-  const cancelPending = (error: SubagentError) => {
-    for (const response of responses.values())
-      Deferred.doneUnsafe(response.deferred, Effect.fail(error));
-    responses.clear();
-    for (const deferred of ipcAcks.values()) Deferred.doneUnsafe(deferred, Effect.fail(error));
-    ipcAcks.clear();
-  };
 
   const awaitExit = child.awaitExit.pipe(
     Effect.map((exit) => {
@@ -199,77 +92,6 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       }),
     ),
   );
-
-  const rpc = <A extends RpcCommand>(
-    command: A,
-    timeout: Duration.Input = RPC_TIMEOUT,
-  ): Effect.Effect<RpcResponse, SubagentError> =>
-    correlatedRequest<string, RpcResponse>({
-      timeout,
-      register: (deferred) => {
-        const id = `backend-rpc-${nextRpcId++}`;
-        responses.set(id, { command: command.type, deferred });
-        return {
-          frame: id,
-          unregister: Effect.sync(() => {
-            responses.delete(id);
-          }),
-        };
-      },
-      send: (id) =>
-        child
-          .send({ ...command, id })
-          .pipe(Effect.mapError((error) => mapTransportUncertainty(command, error))),
-      timeoutError: () =>
-        new SubagentProcessError({
-          operation: "await RPC response from",
-          code: rpcOutcomeCode(command.type),
-          message:
-            command.type === "clear_queue"
-              ? "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent. Inspect subagent status before retrying interrupt."
-              : `Subagent did not answer ${command.type}; the command may already have applied. Inspect subagent status before retrying.`,
-        }),
-      awaitEarlyResponse: true,
-    }).pipe(
-      Effect.filterOrFail(
-        (response) => response.success,
-        (response) =>
-          new SubagentProcessError({
-            operation: `execute ${command.type} in`,
-            message: sanitizeDiagnosticText(
-              command.type === "clear_queue"
-                ? `${response.error ?? "Subagent RPC command clear_queue failed."} Abort was not sent.`
-                : (response.error ?? `Subagent RPC command ${command.type} failed.`),
-              MAX_ERROR_CHARS,
-            ),
-          }),
-      ),
-    );
-
-  const ipcAck = (
-    idPrefix: string,
-    makeControl: (id: string) => LocalPiParentControl,
-    timeoutError: () => SubagentError,
-  ): Effect.Effect<void, SubagentError> =>
-    correlatedRequest({
-      timeout: RPC_TIMEOUT,
-      register: (deferred) => {
-        const id = `${idPrefix}-${nextIpcAckId++}`;
-        ipcAcks.set(id, deferred);
-        return {
-          frame: id,
-          unregister: Effect.sync(() => {
-            if (ipcAcks.get(id) === deferred) ipcAcks.delete(id);
-          }),
-        };
-      },
-      send: (id) =>
-        child
-          .sendContactControl(makeControl(id))
-          .pipe(Effect.catchIf(isOutcomeUncertain, () => Effect.void)),
-      timeoutError,
-      awaitEarlyResponse: true,
-    });
 
   const usageRequests = yield* Queue.dropping<void>(1);
   const accountUsage = makeLocalPiUsage();
@@ -322,95 +144,16 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
         contact.type === "proxy_notification_ack" ||
         contact.type === "turn_input_barrier_ack"
       ) {
-        const deferred = ipcAcks.get(contact.requestId);
-        if (deferred)
-          Deferred.doneUnsafe(
-            deferred,
-            contact.type === "turn_input_barrier_ack" || contact.ok
-              ? Effect.void
-              : Effect.fail(
-                  new SubagentProcessError(
-                    contact.type === "parent_reply_ack"
-                      ? {
-                          operation: "deliver parent reply to",
-                          code: "question_ownership_mismatch",
-                          message:
-                            "Subagent no longer owns the parent question, so the reply was not applied.",
-                        }
-                      : {
-                          operation: "deliver descendant notification to",
-                          code: "transport_not_sent",
-                          message:
-                            "Subagent rejected a descendant notification before queueing it.",
-                        },
-                  ),
-                ),
-          );
+        resolveIpcAck(contact.requestId, parentContactAckOutcome(contact));
         return release(event);
       }
-      const normalized: BackendEvent = (() => {
-        switch (contact.type) {
-          case "contact_parent":
-            return {
-              type: "supervisor_contact",
-              assignmentEpoch,
-              requestId: contact.requestId,
-              kind: contact.kind,
-              message: contact.message,
-            };
-          case "contact_cancel":
-            return {
-              type: "supervisor_question_cancelled",
-              assignmentEpoch,
-              requestId: contact.requestId,
-            };
-          case "proxy_request":
-            return {
-              type: "proxy_request",
-              requestId: contact.requestId,
-              tool: contact.tool,
-              argumentsJson: contact.argumentsJson,
-              respond: (ok, payloadJson) =>
-                child.sendContactControl({
-                  channel: "pi-subagents",
-                  type: "proxy_response",
-                  requestId: contact.requestId,
-                  ok,
-                  payloadJson,
-                }),
-            };
-          case "proxy_cancel":
-            return { type: "proxy_cancel", requestId: contact.requestId };
-          case "structured_result":
-            return {
-              type: "structured_result",
-              assignmentEpoch,
-              valueJson: contact.valueJson,
-              respond: (ok, message) =>
-                child.sendContactControl({
-                  channel: "pi-subagents",
-                  type: "structured_result_ack",
-                  requestId: contact.requestId,
-                  ok,
-                  ...(message !== undefined && {
-                    message: safeTextPrefix(message, MAX_STRUCTURED_RESULT_REJECTION_CHARS),
-                  }),
-                }),
-            };
-        }
-      })();
-      return offer(normalized, event);
+      return offer(normalizeParentContact(contact, assignmentEpoch, child), event);
     }
     return decodeRpcEnvelope(event.value).pipe(
       Effect.flatMap((envelope) => {
         if (envelope.type === "response") {
-          const pending = envelope.id ? responses.get(envelope.id) : undefined;
-          if (!pending) return release(event);
-          if (pending.command !== envelope.command) {
-            const error = protocolError(
-              `Subagent RPC response command did not match ${pending.command}.`,
-            );
-            Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
+          const resolution = resolveResponse(envelope);
+          if (resolution === "mismatched")
             return offer(
               {
                 type: "protocol_error",
@@ -418,8 +161,6 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
               },
               event,
             );
-          }
-          Deferred.doneUnsafe(pending.deferred, Effect.succeed(envelope));
           return release(event);
         }
         if (envelope.type === "extension_ui_request")
@@ -435,7 +176,6 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
           ["turn_end", "compaction_end", "entry_appended"].includes(envelope.eventType)
         )
           requestUsage();
-        // A new attempt invalidates earlier success, including retries and queued continuations.
         if (
           envelope.type === "agent_start" ||
           (envelope.type === "message_start" && envelope.message.role === "assistant")
@@ -470,9 +210,6 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
 
   yield* Stream.fromQueue(child.events).pipe(
     Stream.runForEach(consumeChildEvent),
-    // Natural transport closure has an exit receipt. Reject RPC with that cause before the
-    // fallback finalizer can erase it. Keep the wait interruptible: scope teardown need not
-    // imply process exit, and must still cancel pending requests without waiting for one.
     Effect.andThen(awaitExit),
     Effect.tap((exit) =>
       Effect.sync(() => {

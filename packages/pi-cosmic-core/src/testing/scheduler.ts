@@ -1,6 +1,5 @@
 import * as Scheduler from "effect/Scheduler";
 
-/** Holds every scheduled task until a test steps it or resumes normal mixed scheduling. */
 export const pausedScheduler = () => {
   const tasks: Array<{ task: () => void; priority: number }> = [];
   const dispatcher = new Scheduler.MixedScheduler().makeDispatcher();
@@ -28,7 +27,6 @@ export const pausedScheduler = () => {
   };
 };
 
-/** Mixed scheduling that interrupts the yielding fiber at each checkpoint `shouldInterrupt` selects. */
 export const interruptingScheduler = (shouldInterrupt: () => boolean): Scheduler.Scheduler => {
   const scheduler = new Scheduler.MixedScheduler();
   return {

@@ -1,4 +1,3 @@
-// Security adapter coverage intentionally uses real Node filesystem primitives.
 import * as NodePath from "@effect/platform-node/NodePath";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -20,7 +19,6 @@ const fixtureRoot = temporaryDirectory("cosmic-safe-file-").pipe(
   Effect.flatMap((directory) => Effect.promise(() => realpath(directory))),
 );
 
-// Keep real inode/containment checks while controlling the acquired handle's reads.
 const openedFile = (content = "safe") =>
   Effect.gen(function* () {
     const root = yield* fixtureRoot;
@@ -89,7 +87,7 @@ for (const change of ["growth", "shrink", "growth after EOF", "read failure"])
         expect(String(result.failure)).not.toContain(root);
       }
       expect(largestBuffer).toBe(4);
-      expect(transferred).toBeLessThanOrEqual(5); // Inspected size plus the fixed EOF probe.
+      expect(transferred).toBeLessThanOrEqual(5);
       expect(handle.fd).toBe(-1);
     }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
   );

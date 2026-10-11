@@ -1,7 +1,5 @@
-// Node stream/StringDecoder ownership is intentionally isolated at this boundary.
 import { StringDecoder } from "node:string_decoder";
 
-/** Only the native event subscription contract is needed; this parser does not control flow. */
 export interface BoundedLineInput {
   on(event: "data", listener: (value: Buffer | string) => void): void;
   once(event: "end" | "close", listener: () => void): void;
@@ -18,12 +16,6 @@ export interface BoundedLineParserOptions {
   readonly onOverflow: () => void;
 }
 
-/**
- * Attach one bounded UTF-8 line room to a Node readable stream.
- *
- * Both a single unterminated frame and aggregate chunks queued during a re-entrant data callback
- * are bounded. The decoder tail and a final unterminated frame are flushed on end/close.
- */
 export function attachBoundedLineParser(
   stream: BoundedLineInput,
   options: BoundedLineParserOptions,

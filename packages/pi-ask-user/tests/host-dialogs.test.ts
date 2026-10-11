@@ -1,6 +1,6 @@
 import { cancelled, defaultQuestion, submitted } from "./support/questionnaire.ts";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deferredPromise, opaqueFixture } from "pi-cosmic-core/testing";
+import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { deferredPromise, extensionContextFixture } from "pi-cosmic-core/testing";
 import { eventually, makeTuiHost } from "./support/host.ts";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -10,7 +10,7 @@ import { failureMessage } from "pi-cosmic-core";
 import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
 import type { AskUserHostError } from "../src/questionnaire/errors.ts";
 import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
-import type { AskUserAnswer, AskUserOutcome } from "../src/questionnaire/model.ts";
+import type { AskUserAnswer } from "../src/questionnaire/model.ts";
 import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schema.ts";
 
 const request = {
@@ -41,14 +41,13 @@ const run = (
     options?.signal ? { signal: options.signal } : undefined,
   );
 
-// Native RPC dialogs; members a test does not script are inert.
-const rpc = <Ui extends object>(
-  ui: Ui,
+const rpc = (
+  ui: Partial<ExtensionUIContext>,
   selectedRequest: AskUserRequest = request,
   options?: Parameters<typeof run>[2],
 ) =>
   run(
-    opaqueFixture({
+    extensionContextFixture({
       mode: "rpc",
       hasUI: true,
       ui: { select: vi.fn(), input: vi.fn(), notify: vi.fn(), ...ui },
@@ -98,10 +97,10 @@ describe("RPC questionnaire boundary", () => {
   it("aborts a pending native text input without publishing drafts", () => {
     const entered = deferredPromise<AbortSignal>();
     const input = (_title: string, _placeholder: string, options: { signal: AbortSignal }) => {
-      const answer = deferredPromise<string | undefined>();
-      options.signal.addEventListener("abort", () => answer.resolve(undefined), { once: true });
       entered.resolve(options.signal);
-      return answer.promise;
+      return Effect.runPromiseExit(Effect.never, { signal: options.signal }).then(
+        (): string | undefined => undefined,
+      );
     };
     const select = vi.fn();
     const controller = new AbortController();
@@ -272,19 +271,6 @@ describe("RPC questionnaire boundary", () => {
   );
 });
 
-// Opens and mounts the real dialog, then lets the test decide how the custom Promise settles.
-const mountOnCustom = (
-  host: ReturnType<typeof makeTuiHost>,
-  settle: (completed: Promise<AskUserOutcome>) => Promise<AskUserOutcome>,
-) => {
-  const open = host.ui.custom.getMockImplementation()!;
-  host.ui.custom.mockImplementation((factory, options) => {
-    const completed = open(factory, options);
-    host.mount!();
-    return settle(completed);
-  });
-};
-
 describe("TUI questionnaire boundary", () => {
   effectIt.effect("stops an interrupted lazy open before settings or UI mutation", () =>
     Effect.gen(function* () {
@@ -292,17 +278,14 @@ describe("TUI questionnaire boundary", () => {
       const bridge = makeAskUserDialogBridge();
       const resume = vi.fn();
       bridge.activate(resume);
-      const {
-        ctx,
-        ui: { custom },
-      } = makeTuiHost();
+      const host = makeTuiHost();
       const controller = new AbortController();
 
-      const opening = run(ctx, request, { bridge, signal: controller.signal });
+      const opening = run(host.ctx, request, { bridge, signal: controller.signal });
       controller.abort();
       yield* Effect.promise(() => expect(opening).rejects.toBeDefined());
 
-      expect(custom).not.toHaveBeenCalled();
+      expect(host.customCalls).toBe(0);
       expect(bridge.resume()).toBe(true);
       expect(resume).toHaveBeenCalledOnce();
     }),
@@ -312,7 +295,7 @@ describe("TUI questionnaire boundary", () => {
     Effect.gen(function* () {
       const bridge = makeAskUserDialogBridge();
       const host = makeTuiHost();
-      mountOnCustom(host, (completed) => {
+      host.settleOnOpen((completed) => {
         host.component!.handleInput?.("1");
         host.component!.handleInput?.("\r");
         return completed;
@@ -334,19 +317,16 @@ describe("TUI questionnaire boundary", () => {
       const bridge = makeAskUserDialogBridge();
       const resume = vi.fn();
       bridge.activate(resume);
-      const {
-        ctx,
-        ui: { custom },
-      } = makeTuiHost();
-      custom.mockRejectedValue(new Error("custom unavailable"));
+      const host = makeTuiHost();
+      host.failOpen(new Error("custom unavailable"));
 
       yield* Effect.promise(() =>
-        expect(run(ctx, request, { bridge })).rejects.toMatchObject({
+        expect(run(host.ctx, request, { bridge })).rejects.toMatchObject({
           _tag: "AskUserHostError",
           operation: "render",
         }),
       );
-      expect(custom).toHaveBeenCalledOnce();
+      expect(host.customCalls).toBe(1);
       expect(bridge.resume()).toBe(true);
       expect(resume).toHaveBeenCalledOnce();
     }),
@@ -360,14 +340,14 @@ describe("TUI questionnaire boundary", () => {
       const bridge = makeAskUserDialogBridge();
       const host = makeTuiHost();
       const replacementResume = vi.fn();
-      mountOnCustom(host, () => {
+      host.settleOnOpen(() => {
         if (replacement) bridge.activate(replacementResume);
-        return deferredPromise<AskUserOutcome>().promise;
+        return deferredPromise<never>().promise;
       });
       const controller = new AbortController();
       const opening = run(host.ctx, request, { bridge, signal: controller.signal });
 
-      yield* eventually(() => expect(host.ui.custom).toHaveBeenCalledOnce());
+      yield* eventually(() => expect(host.customCalls).toBe(1));
       controller.abort();
       yield* Effect.promise(() => expect(opening).rejects.toBeDefined());
 

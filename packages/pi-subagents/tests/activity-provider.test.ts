@@ -12,7 +12,6 @@ import { view } from "./fixtures/run-view.ts";
 
 const question = { requestId: "q", message: "Question" };
 
-/** A registered provider over `runs` whose input dialog waits until the test answers it. */
 const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () => true) => {
   const transport = fakeActivityHost();
   const bridge = makeSubagentProjectionBridge();
@@ -34,7 +33,6 @@ const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () =
   const item = subagentActivityItems(bridge.get(), bridge.getActivityPresentation()).find(
     (candidate) => candidate.id === "selected",
   )!;
-  /** Invokes `action` on the selected run's row as Activity showed it before any change. */
   const invoke = (action: string, signal: AbortSignal) =>
     transport.capability()!.invoke!(item.id, action, item.revision, signal);
   return { transport, bridge, pending, admitted, act, dispose, invoke };
@@ -48,7 +46,6 @@ describe("subagent activity provider", () => {
       );
     expect(actions({ state: "completed" })).toEqual(expect.arrayContaining(["resume", "rename"]));
     expect(actions({ state: "waiting_for_parent", question })).toContain("reply");
-    // A reply needs its question; stop stays available while a run is already stopping.
     expect(actions({ state: "waiting_for_parent" })).not.toContain("reply");
     expect(actions({ state: "stopping" })).toContain("stop");
     for (const steeringDelivery of ["pending", "unresolved"] as const) {
@@ -245,7 +242,6 @@ describe("subagent activity provider", () => {
         writeViolationOffender: true,
         capabilities: ["resume"],
       }),
-      // Default capabilities include resume, which write admission must still suppress.
       view({ id: "admission-paused", state: "paused", writeAdmissionPaused: true }),
       view({ id: "stopping", state: "stopping" }),
     ];
@@ -355,7 +351,6 @@ describe("subagent activity provider", () => {
         .filter((item) => item.awaited)
         .map((item) => item.id),
     ).toEqual(["run"]);
-    // Only the item whose await marker changed gets a new revision.
     expect(revisions()).toEqual([run, expect.not.stringMatching(`^${child}$`), other]);
     stopAwait();
     expect(items().some((item) => item.awaited)).toBe(false);
@@ -378,7 +373,6 @@ describe("subagent activity provider", () => {
         isCurrent: () => current,
         act,
       });
-      // publish follows register, so capture the capability through a fresh discovery handshake.
       transport.events.emit(ACTIVITY_HOST, {
         version: 1,
         sessionId: "session",

@@ -13,7 +13,6 @@ import { changedRangesWithConfidence } from "../../src/diff/word/emphasis";
 
 beforeEach(() => applyPresentationSettings({}));
 
-/** Rendered emphasis spans per line, with the limit covering every diff line. */
 const emphasisSpans = (diff: string) =>
   renderSyntaxHighlightedDiff(diff, undefined, plainTheme, diff.split("\n").length)
     .split("\n")
@@ -57,7 +56,6 @@ test("parseDiffLine accepts standard body lines but not file headers", () => {
 });
 
 test("parseDiffLine keeps a row's number when its content holds a lone line separator", () => {
-  // Rows are split on "\n" only, so a carriage return or Unicode separator is content.
   for (const separator of ["\r", "\u2028", "\u2029"])
     assert.deepEqual(parseDiffLine(` 12 prog${separator}done`), {
       kind: " ",
@@ -73,7 +71,6 @@ test("Pi's skipped-context marker parses as a gap, not a context row", () => {
   const gaps = lines.filter((line) => line.trim() === "...");
   assert.ok(gaps.length > 0);
   for (const gap of gaps) assert.equal(parseDiffLine(gap), null);
-  // The numbered rows around the gap still parse.
   assert.ok(lines.filter((line) => line.trim() !== "...").every((line) => parseDiffLine(line)));
 });
 

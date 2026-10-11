@@ -50,7 +50,6 @@ const snapshot = (...runs: ReadonlyArray<WorkflowRunView>): WorkflowActivitySnap
   runs,
 });
 
-/** Activity items for subagent `runs` beside `workflows`. */
 const itemsOf = (
   runs: ReadonlyArray<SubagentRunView>,
   ...workflows: ReadonlyArray<WorkflowRunView>
@@ -58,7 +57,6 @@ const itemsOf = (
 
 const items = (...workflows: ReadonlyArray<WorkflowRunView>) => itemsOf([], ...workflows);
 
-/** The detail of an item that has no subagent run behind it. */
 const detailOf = (id: string, ...workflows: ReadonlyArray<WorkflowRunView>) =>
   subagentActivityDetail({ revision: 1, runs: [] }, id, snapshot(...workflows));
 
@@ -72,13 +70,11 @@ const byId = (items: ReadonlyArray<ActivityItem>) =>
 
 const isSnapshot = Schema.is(ActivitySnapshotSchema);
 
-/** The items the host was last published, as it holds them. */
 const hostItems = (transport: ReturnType<typeof fakeActivityHost>): ReadonlyArray<ActivityItem> => {
   const published = transport.get()?.items;
   return isSnapshot(published) ? published : [];
 };
 
-/** A registered provider over subagent `runs` and a workflow source, recording workflow actions. */
 const registeredWorkflows = (
   runs: ReadonlyArray<SubagentRunView> = [],
   subagents: Pick<Parameters<typeof registerSubagentActivity>[0], "act" | "input"> = {
@@ -124,7 +120,6 @@ describe("workflow activity", () => {
     });
     const parent = WORKFLOW_PARENT;
     expect(found.get("agent-r1-1")).toMatchObject({ kind: "agent", parent, phase: "Find" });
-    // Skipping resolves the agent() call to null, so it asks first.
     expect(found.get("agent-r1-2")).toMatchObject({
       kind: "agent",
       status: "pending",
@@ -142,10 +137,8 @@ describe("workflow activity", () => {
       itemsOf([completed, paused], ...workflows)
         .filter((item) => item.actions?.some((action) => action.id === "resume"))
         .map((item) => item.id);
-    // A running or stopping workflow still receives the completed member's result.
     expect(resumable(workflow())).toEqual(["agent-r1-2"]);
     expect(resumable(workflow({ state: "stopping" }))).toEqual(["agent-r1-2"]);
-    // Once the workflow ends, or leaves the snapshot, its members are the root's.
     expect(resumable(workflow({ state: "completed", endedAt: 9 }))).toEqual([
       "agent-r1-1",
       "agent-r1-2",
@@ -167,10 +160,8 @@ describe("workflow activity", () => {
     const member = { parent: "workflow:wf-a-1", phase: "Find" };
     const root = { parent: undefined, phase: undefined };
     expect(placement("running", workflow())).toEqual(member);
-    // Finished members stay under their finished workflow as history, even once it leaves.
     expect(placement("completed", finished)).toEqual(member);
     expect(placement("completed")).toEqual(member);
-    // A resumed former member is the root's; it no longer reopens the workflow.
     for (const state of ["running", "waiting_for_parent", "paused", "stopping"] as const) {
       expect(placement(state, finished)).toEqual(root);
       expect(placement(state)).toEqual(root);
@@ -280,7 +271,6 @@ describe("workflow activity", () => {
           ],
         }),
       )[0]?.phases;
-    // Every Find call was reused, so Find is finished work rather than an empty, passed phase.
     expect(resumed("running")).toEqual([
       { title: "Find", work: { items: 20, finished: 20, stopped: 0, failed: 0, skipped: 0 } },
       { title: "Verify", work: { items: 2, finished: 1, stopped: 0, failed: 0, skipped: 0 } },
@@ -302,7 +292,6 @@ describe("workflow activity", () => {
     });
     workflows.publish([running]);
     const shown = byId(hostItems(transport));
-    // A member streams, a sibling starts, launches and another workflow publish meanwhile.
     bridge.publish({
       revision: 2,
       runs: [{ ...member, progress: "Reading files", lastActivityAt: 5 }, view({ id: "other" })],
@@ -359,7 +348,6 @@ describe("workflow activity", () => {
       const rows = published.filter((item) => item.planned === true);
       expect(rows.map((item) => item.id)).toEqual(["agent-r1-p1", "agent-r1-p2"]);
       for (const row of rows) {
-        // Never under way and never counted as phase work.
         expect(row).toMatchObject({
           kind: "agent",
           status,
@@ -367,7 +355,6 @@ describe("workflow activity", () => {
           parent: WORKFLOW_PARENT,
         });
         expect(row.startedAt).toBeUndefined();
-        // The script can still call a pending one, so it can be skipped, after confirmation.
         expect(row.actions ?? []).toEqual(
           status === "pending"
             ? [
@@ -401,7 +388,6 @@ describe("workflow activity", () => {
       }),
     );
     expect(byId(planned).get("agent-r1-p1")?.planned).toBe(true);
-    // The same row moves from planned to queued work that can be skipped.
     expect(byId(claimed).get("agent-r1-p1")).toMatchObject({
       status: "pending",
       actions: [expect.objectContaining({ id: "skip" })],
@@ -409,7 +395,6 @@ describe("workflow activity", () => {
     expect(byId(claimed).get("agent-r1-p1")?.planned).toBeUndefined();
     expect(claimed.filter((item) => item.id === "agent-r1-p1")).toHaveLength(1);
     expect(claimed[0]?.phases?.[1]).toMatchObject({ planned: 1, work: { items: 1 } });
-    // A running claimed agent is shown by its own run; the planned id never repeats.
     const running = itemsOf([owned("agent-r1-p2", "Verify")], workflow({ planned: [plan(2)] }));
     expect(running.filter((item) => item.id === "agent-r1-p2")).toHaveLength(1);
   });
@@ -434,7 +419,6 @@ describe("workflow activity", () => {
     expect(many.length).toBeLessThanOrEqual(512);
     expect(isSnapshot(many)).toBe(true);
     expect(many.filter((item) => item.kind === "workflow")).toHaveLength(12);
-    // Queued work the script already asked for takes slots before planned rows do.
     const placeholders = many.filter((item) => item.status === "pending" && !item.planned);
     expect(placeholders.length).toBe(Math.min(12 * 64, 512 - 12));
   });
@@ -452,7 +436,6 @@ describe("workflow activity", () => {
     const [run] = published;
     const phased = (run?.phases ?? []).reduce((sum, phase) => sum + (phase.planned ?? 0), 0);
     expect(phased).toBeLessThan(planned.length);
-    // Every planned agent is counted once: by its shown phase, or by the workflow.
     expect(phased + (run?.unphasedPlanned ?? 0)).toBe(planned.length);
     expect(items(workflow({ planned: [plan(1)] }))[0]?.unphasedPlanned).toBeUndefined();
   });
@@ -475,7 +458,6 @@ describe("workflow activity", () => {
         }),
       );
       expect(isSnapshot(published)).toBe(true);
-      // Its row is skipped work with the reason, no longer planned and no longer skippable.
       const row = byId(published).get("agent-r1-p1");
       expect(row).toMatchObject({
         status: "cancelled",
@@ -486,13 +468,10 @@ describe("workflow activity", () => {
       expect(row?.planned).toBeUndefined();
       expect(row?.actions ?? []).toEqual([]);
       expect(row?.summary).toBeTruthy();
-      // It never started, so until a call claims it, it is neither work nor planned in its phase.
       expect(published[0]?.phases?.[1]).toMatchObject({ work: { items: 0 }, planned: 1 });
     }
-    // The detail says it was skipped, apart from a planned agent that can still run.
     const detail = (id: string) => detailOf(id, workflow({ planned: [skipped, plan(2)] }));
     expect(detail("agent-r1-p1")).not.toBe(detail("agent-r1-p2"));
-    // Its claiming call keeps the row id, as skipped work too.
     const claimed = items(
       workflow({
         agents: [
@@ -548,7 +527,6 @@ describe("workflow activity", () => {
   it("explains a planned agent in the detail pane until its call claims it", () => {
     const detail = (run: WorkflowRunView) => detailOf("agent-r1-p1", run);
     const live = workflow({ planned: [plan(1, { profile: "reviewer" })] });
-    // Its row places it in its phase with its profile; the detail says whether it can still run.
     expect(byId(items(live)).get("agent-r1-p1")).toMatchObject({
       phase: "Verify",
       profile: "reviewer",
@@ -571,14 +549,11 @@ describe("workflow activity", () => {
     const invoke = transport.capability()!.invoke!;
     yield* step(() => invoke(shown.id, "skip", shown.revision, signal));
     expect(actWorkflow.mock.calls).toEqual([["skip", "agent-r1-p1", signal]]);
-    // Once its call claims it, the planned row's revision is gone, so a skip offered on it is
-    // refused instead of reaching the service.
     workflows.publish([
       workflow({ agents: [agent({ runId: "agent-r1-p1", label: "verify:1", phase: "Verify" })] }),
     ]);
     expect(byId(hostItems(transport)).get(shown.id)?.revision).not.toBe(shown.revision);
     yield* step(() => expect(invoke(shown.id, "skip", shown.revision, signal)).rejects.toThrow());
-    // And a skipped one offers no skip at all.
     workflows.publish([workflow({ planned: [plan(1, { skippedAt: 3 })] })]);
     const skipped = byId(hostItems(transport)).get("agent-r1-p1")!;
     yield* step(() =>
@@ -641,14 +616,11 @@ describe("workflow activity", () => {
           parent,
         });
         expect(found.get("agent-r1-2")?.summary).toContain("skipped by the user");
-        // Failures come first, so a cap or the host's history retention drops them last.
         const order = published.map((item) => item.id);
         expect(order.indexOf("agent-r1-1")).toBeLessThan(order.indexOf("agent-r1-2"));
-        // A member that failed after starting keeps its own run's row, with a short reason.
         expect(published.filter((item) => item.id === "agent-r1-3")).toHaveLength(1);
         expect(found.get("agent-r1-3")).toMatchObject({ status: "failed" });
         expect(found.get("agent-r1-3")?.summary).toContain("Run failed.");
-        // Every failed call counts, started or not, so the phase stays failed without rows.
         expect(published[0]?.phases?.[0]).toMatchObject({
           title: "Find",
           work: { items: 3, finished: 3, stopped: 0, failed: 2, skipped: 1 },
@@ -697,7 +669,6 @@ describe("workflow activity", () => {
       expect(rows.filter((item) => item.status === "failed").map((item) => item.id)).toEqual(
         failed.toReversed(),
       );
-      // The oldest skipped calls are the ones dropped.
       const shown = new Set(rows.map((item) => item.id));
       const skippedShown = settled.filter(
         (entry) => entry.state === "skipped" && shown.has(entry.runId),
@@ -738,7 +709,6 @@ describe("workflow activity", () => {
       });
       const completed = view({ ...owned("agent-r1-4"), state: "completed", endedAt: 8 });
       const published = itemsOf([completed], workflow({ agents: [contract] }));
-      // The row agrees with its phase, and the widget keeps it while the workflow runs.
       const row = byId(published).get("agent-r1-4");
       expect(row).toMatchObject({ status: "failed" });
       expect(row?.summary).toContain("wasn't valid JSON");
@@ -784,7 +754,6 @@ describe("workflow activity", () => {
         const shown = byId(hostItems(transport));
         const row = shown.get("workflow:wf-a-1")!;
         const placeholder = shown.get("agent-r1-1")!;
-        // The log line changes the workflow's row, but its publish is still held back.
         yield* runs.recordEvent("wf-a-1", { type: "log", message: "line 2" });
         expect(byId(hostItems(transport)).get(row.id)?.revision).toBe(row.revision);
         const signal = new AbortController().signal;
@@ -854,7 +823,6 @@ describe("workflow activity", () => {
     const detail =
       subagentActivityDetail({ revision: 1, runs: [member] }, "agent-r1-3", workflows, 90_000) ??
       "";
-    // Activity shows its state, profile, workflow, phase and summary beside the detail.
     for (const fact of [
       "The finding holds",
       "Verify the finding in src/auth.ts",
@@ -863,13 +831,11 @@ describe("workflow activity", () => {
       "/project",
     ])
       expect(detail).toContain(fact);
-    // The row draws the failed state itself, so its summary is the reason alone.
     const row = byId(itemsOf([member], ...workflows.runs));
     expect(row.get("agent-r1-3")).toMatchObject({
       status: "failed",
       summary: "The structured result wasn't valid JSON.",
     });
-    // What the agent found comes before the technical facts.
     expect(detail.indexOf("The finding holds")).toBeLessThan(detail.indexOf("agent-r1-3"));
     expect(detail.indexOf("The finding holds")).toBeLessThan(detail.indexOf("/project"));
   });

@@ -69,7 +69,6 @@ export const normalizeWriteClaims = (
       "too_many_write_claims",
       `A writer may claim at most ${MAX_WRITE_CLAIMS} files.`,
     );
-  // Keyed case-insensitively, keeping each path's first spelling in input order.
   const claims = new Map<string, string>();
   for (const input of inputs) {
     const normalized = normalizeWriteClaim(input);

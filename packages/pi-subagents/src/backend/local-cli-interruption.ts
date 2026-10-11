@@ -9,10 +9,6 @@ import type { LocalCliRawEventOwnership } from "./local-cli-events.ts";
 
 const INTERRUPT_TIMEOUT = "10 seconds";
 
-/**
- * Classifies whether an interrupted native control call must retain its correlated lifecycle.
- * Typed uncertainty and interruption keep ownership; success and definite failure release it.
- */
 export const classifyLocalCliInterruptOwnership = <A>(
   exit: Exit.Exit<A, SubagentError>,
 ): "release" | "retain" => {
@@ -28,24 +24,13 @@ export const classifyLocalCliInterruptOwnership = <A>(
     : "release";
 };
 
-/** One exactly owned native interrupt: a correlated response plus native terminal evidence. */
 export interface LocalCliInterrupt {
   readonly epoch: number;
   readonly terminal: Deferred.Deferred<void, SubagentError>;
-  /** The adapter's complete native terminal evidence arrived. */
   settled: boolean;
-  /**
-   * Set when the public interrupt call ended with an uncertain outcome. The lifecycle then
-   * remains exactly owned: late terminal evidence settles the assignment through
-   * `run_settled` instead of failing the run.
-   */
   abandoned: boolean;
 }
 
-/**
- * Shared Claude/Codex interrupt ownership: one lifecycle at a time awaits its correlated
- * response and native terminal evidence. Each adapter decides which evidence completes it.
- */
 export const makeLocalCliInterrupts = <Interrupt extends LocalCliInterrupt>(
   runtime: "Claude" | "Codex",
   events: Pick<LocalCliRawEventOwnership, "offer" | "release">,
@@ -60,7 +45,6 @@ export const makeLocalCliInterrupts = <Interrupt extends LocalCliInterrupt>(
     get current() {
       return current;
     },
-    /** Records complete terminal evidence; an abandoned lifecycle settles as a pause. */
     complete: (interrupt: Interrupt, raw: LocalCliWireEvent): Effect.Effect<void> =>
       Effect.suspend(() => {
         interrupt.settled = true;
@@ -68,20 +52,16 @@ export const makeLocalCliInterrupts = <Interrupt extends LocalCliInterrupt>(
         Deferred.doneUnsafe(interrupt.terminal, Effect.void);
         return events.release(raw);
       }),
-    /** Transport closure is a safe boundary for clearing interrupt ownership. */
     cancel: (error: SubagentError): void => {
       if (!current) return;
       Deferred.doneUnsafe(current.terminal, Effect.fail(error));
       current = undefined;
     },
     run: (options: {
-      /** An adapter reason not to send, checked inside admission before the lifecycle check. */
       readonly blocked?: () => SubagentError | undefined;
       readonly make: (base: LocalCliInterrupt) => Interrupt;
-      /** Sends the native interrupt and awaits its correlated response. */
       readonly respond: (interrupt: Interrupt) => Effect.Effect<unknown, SubagentError>;
       readonly timeoutMessage: string;
-      /** Drops adapter correlation state before ownership is classified. */
       readonly onRelease?: (interrupt: Interrupt) => void;
     }): Effect.Effect<void, SubagentError> =>
       Effect.acquireUseRelease(
@@ -129,15 +109,11 @@ export const makeLocalCliInterrupts = <Interrupt extends LocalCliInterrupt>(
             if (!interrupt) return Effect.void;
             options.onRelease?.(interrupt);
             if (current !== interrupt) return Effect.void;
-            // An uncertain or cancelled interrupt retains exact lifecycle ownership; definite
-            // success or rejection releases it immediately.
             if (classifyLocalCliInterruptOwnership(exit) === "release") {
               current = undefined;
               return Effect.void;
             }
             interrupt.abandoned = true;
-            // Terminal evidence may already be complete while only the correlated response is
-            // missing. Settle now, or no later native event would resolve the pending pause.
             return interrupt.settled ? settle(interrupt) : Effect.void;
           }),
       ),

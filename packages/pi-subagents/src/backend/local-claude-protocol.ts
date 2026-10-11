@@ -99,7 +99,6 @@ const Result = Schema.Struct({
   errors: Schema.optional(Schema.Array(Text)),
   stop_reason: Schema.optional(Schema.Union([Schema.Null, Name])),
   session_id: Schema.optional(Id),
-  /** UUID of the user message whose query produced this result, when reported. */
   user_message_uuid: Schema.optional(Id),
   origin: Schema.optional(MessageOrigin),
   usage: Schema.optional(Usage),
@@ -179,7 +178,6 @@ export type ClaudeProtocolEvent =
         readonly name: string;
         readonly input: unknown;
       }>;
-      /** As-reported cumulative usage for this native message; the adapter deduplicates. */
       readonly usage: SubagentUsage;
     }
   | { readonly type: "activity" }
@@ -192,9 +190,7 @@ export type ClaudeProtocolEvent =
       readonly userMessageUuid?: string | undefined;
       readonly originKind?: string | undefined;
       readonly originSubkind?: string | undefined;
-      /** As-reported cumulative usage for the whole query, when present. */
       readonly usage?: SubagentUsage | undefined;
-      /** Known cumulative client-side cost estimate in USD, when present. */
       readonly totalCostUsd?: number | undefined;
       readonly diagnostic?: string | undefined;
     }
@@ -212,7 +208,6 @@ const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
     ? content
     : content.flatMap((part) => decodeUnknownOrUndefined(TextPart, part)?.text ?? []).join("\n");
 
-/** Chosen total-token definition: input + output + cache-read + cache-write. */
 const usageFromNative = (usage: Schema.Schema.Type<typeof Usage> | undefined): SubagentUsage => {
   const input = usage?.input_tokens ?? 0;
   const output = usage?.output_tokens ?? 0;

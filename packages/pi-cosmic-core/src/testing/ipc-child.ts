@@ -10,7 +10,6 @@ import {
 type IpcChildProcess = ReturnType<typeof nodeSpawn>;
 type IpcMessage = Parameters<IpcChildProcess["send"]>[0];
 
-/** A real temporary directory removed when the scope closes; fixture I/O failure is a defect. */
 export const temporaryDirectory = (prefix: string) =>
   Effect.acquireRelease(
     Effect.promise(() => nodeFsPromises.mkdtemp(nodePath.join(nodeTemporaryRoot(), prefix))),
@@ -29,24 +28,15 @@ const exitOf = (child: IpcChildProcess) =>
     return Effect.sync(() => child.off("exit", exited));
   });
 
-/** Sends SIGKILL and waits for exit; an already-exited child settles at once. */
 export const killChild = (child: IpcChildProcess) =>
   Effect.sync(() => child.kill("SIGKILL")).pipe(Effect.andThen(exitOf(child)));
 
 interface IpcChildOptions {
-  /** Bounds each `wait` and `exited`. */
   readonly timeout: Duration.Input;
 }
 
-/** Stderr kept for failure reports; older output is dropped so a chatty child never blocks. */
 const STDERR_TAIL = 4_096;
 
-/**
- * Runs a TypeScript fixture through `jiti/register` (resolved from the working directory)
- * with an IPC channel. Every message is recorded from spawn, and stderr is drained into a
- * bounded tail. A wait that times out fails with what the child did send, its exit status and
- * stderr, so a slow or stuck fixture explains itself. Scope closure kills the child.
- */
 export const spawnIpcChild = (
   script: string,
   args: ReadonlyArray<string>,
@@ -73,7 +63,6 @@ export const spawnIpcChild = (
             ...(stderr.trim() === "" ? [] : [`Stderr (tail):\n${stderr.trim()}`]),
           ].join("\n"),
         );
-      /** Settles once `expected` has arrived, including before the call. */
       const wait = (expected: string) =>
         Effect.callback<void>((resume) => {
           if (messages.includes(expected)) {

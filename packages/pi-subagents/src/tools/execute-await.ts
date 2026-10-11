@@ -16,9 +16,6 @@ import { formatAwaitProgress } from "./render-await.ts";
 import { cancelledAwaitContract } from "./contract.ts";
 import { encodeSubagentContract } from "./contract-schema.ts";
 
-/** Observe the actual Effect exit, not a later signal state or a squashed error string.
- * The tiny mask installs the observer even for an already-aborted host call. Owned
- * work stays interruptible; the Promise boundary translates only after finalizers join. */
 export const observeAwaitInterruption = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   onInterruption?: () => void,
@@ -35,7 +32,6 @@ export const observeAwaitInterruption = <A, E, R>(
       )
     : effect;
 
-/** Call-local bounded cancellation evidence, never a second completion owner. */
 export function makeAwaitExecution(
   ids: ReadonlyArray<string>,
   until: SubagentAwaitUntil,
@@ -138,8 +134,6 @@ export function makeAwaitExecution(
       interrupted = true;
     },
     wasInterrupted: () => interrupted,
-    // Consumption can commit before a late abort drops the successful result. Until a fresh
-    // observation, cancellation cannot promise these reports remain unconsumed.
     markDeliveryAttempt: (ids: ReadonlyArray<string>) => {
       for (const id of ids) deliveryAttemptedIds.add(id);
     },

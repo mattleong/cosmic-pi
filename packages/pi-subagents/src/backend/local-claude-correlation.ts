@@ -1,17 +1,8 @@
-/**
- * Pure UUID/result correlation bookkeeping for the local Claude adapter. The
- * driver owns interrupt lifecycles, control responses, assignment epochs, and
- * initialization; separate delivery and usage owners handle report buffering
- * and cumulative accounting. This module tracks sent inputs and the native
- * result each owns.
- */
 import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
 import type { UsageComponents } from "./local-claude-usage.ts";
 
-/** Bound shared by the confirmed-UUID window and the result-expectation FIFO. */
 export const SENT_UUID_LIMIT = 64;
 
-/** Re-inserts a key as the newest entry, evicting the oldest entries beyond `limit`. */
 export const rememberBounded = <Key, Value>(
   map: Map<Key, Value>,
   key: Key,
@@ -34,17 +25,11 @@ interface ClaudeSentUserIdentity {
   readonly kind: ClaudeSentUserKind;
 }
 
-/** Claude-owned replay origins that own one synthetic subturn/result. */
 const INTERNAL_REPLAY_ORIGINS: ReadonlySet<string> = new Set([
   "task-notification",
   "auto-continuation",
 ]);
 
-/**
- * Subkinds identify externally delivered task notifications such as peer
- * messages and scheduled triggers. Only an unqualified internal origin may
- * join the active assignment.
- */
 export const isInternalReplayOrigin = (
   originKind: string | undefined,
   originSubkind: string | undefined,
@@ -58,19 +43,8 @@ const hasTaskNotificationEnvelope = (text: string): boolean => {
   );
 };
 
-/**
- * `labelled`: current Claude derives the unqualified `task-notification`
- * origin only for its own queued task-notification commands, so adapter input
- * can never carry it. `unlabelled`: Claude 2.1.259 omitted the origin.
- */
 type ClaudeTaskNotificationReplay = "labelled" | "unlabelled";
 
-/**
- * Claude replays a non-meta task notification that it drains from its command
- * queue into a running turn, or folds into a merged turn, with `isReplay`, a
- * fresh UUID, and no synthetic flag. The complete fixed envelope is protocol
- * evidence, not content identity: its UUID still cannot confirm adapter input.
- */
 export const claudeTaskNotificationReplay = (
   event: Extract<ClaudeProtocolEvent, { readonly type: "user" }>,
 ): ClaudeTaskNotificationReplay | undefined => {
@@ -192,7 +166,6 @@ export interface ClaudeUserDiagnosticContext {
   readonly traceEnabled: boolean;
 }
 
-/** Fixed-field diagnostics that never retain message text or correlation IDs. */
 export const uncorrelatedClaudeUserMessage = (
   event: ClaudeUserProtocolEvent,
   nativeSessionId: string | undefined,
@@ -221,12 +194,10 @@ export const uncorrelatedClaudeUserMessage = (
     `trace=${context.traceEnabled ? "enabled" : "disabled"}]`,
   ].join("; ");
 
-/** Correlates a native result to the exact user input that started its query. */
 export interface ResultExpectation {
   readonly uuid: string;
   readonly kind: "initialization" | "assignment" | "synthetic";
   readonly epoch: number;
-  /** Global emitted-usage watermark when this exact native query was registered. */
   readonly usageBaseline: UsageComponents;
 }
 
@@ -234,7 +205,6 @@ export const makeClaudeResultCorrelation = () => {
   const sentUserUuids = new Map<string, ClaudeSentUserIdentity | undefined>();
   const internalReplayUuids = new Map<string, true>();
   const resultExpectations = new Map<string, ResultExpectation>();
-  /** FIFO used only when the current protocol legitimately omits user_message_uuid. */
   const resultOrder: ResultExpectation[] = [];
 
   const matchSentContent = (contentDigest: string): ClaudeSentContentMatch => {
@@ -254,20 +224,12 @@ export const makeClaudeResultCorrelation = () => {
     resultExpectations.set(owned.uuid, owned);
     resultOrder.push(owned);
     while (resultOrder.length > SENT_UUID_LIMIT) {
-      // A replayed notification that Claude drained into a running turn owns no
-      // result, so synthetic expectations go first and never evict adapter input.
       const synthetic = resultOrder.findIndex((candidate) => candidate.kind === "synthetic");
       const [evicted] = resultOrder.splice(Math.max(0, synthetic), 1);
       if (evicted) resultExpectations.delete(evicted.uuid);
     }
   };
 
-  /**
-   * Takes the expectation for a native result: the exact `user_message_uuid`
-   * when reported; otherwise the oldest synthetic expectation for a
-   * Claude-owned internal replay origin, or the issue-order FIFO head for a
-   * pinned protocol frame that legitimately omits the UUID.
-   */
   const take = (
     userMessageUuid: string | undefined,
     originKind: string | undefined,
@@ -298,11 +260,9 @@ export const makeClaudeResultCorrelation = () => {
   };
 
   return {
-    /** Records a confirmed outbound UUID, evicting the oldest beyond the bound. */
     rememberSentUuid: (uuid: string, identity?: ClaudeSentUserIdentity) =>
       rememberBounded(sentUserUuids, uuid, identity, SENT_UUID_LIMIT),
     hasSentUuid: (uuid: string) => sentUserUuids.has(uuid),
-    /** Records a Claude-owned internal replay UUID without treating it as adapter-sent. */
     rememberInternalReplayUuid: (uuid: string) =>
       rememberBounded(internalReplayUuids, uuid, true, SENT_UUID_LIMIT),
     hasInternalReplayUuid: (uuid: string) => internalReplayUuids.has(uuid),

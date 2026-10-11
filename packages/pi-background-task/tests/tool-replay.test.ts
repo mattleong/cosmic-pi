@@ -1,4 +1,3 @@
-// Pi rebuilds history before session_start; those same rows adopt the first activation.
 import { createEventBus, initTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -15,6 +14,7 @@ import {
   deferredPromise,
   extensionContextFixture,
   recordingExtensionHost,
+  type DefaultedEventName,
 } from "pi-cosmic-core/testing";
 import { afterEach, beforeAll, vi } from "vitest";
 import { registerBackgroundTaskApplication } from "../src/application.ts";
@@ -55,13 +55,11 @@ const context = (signal?: AbortSignal) =>
     mode: "rpc",
   });
 
-/** Trusted settings load in startup, before activation wraps the tool. */
 const loads = (settings: Partial<CodePreviewSettings>) => () => {
   applyPresentationSettings(settings);
   return Promise.resolve();
 };
 
-/** Actual factory callbacks over public metadata naming one source for command and tool. */
 const host = (load: () => Promise<void>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -77,12 +75,11 @@ const host = (load: () => Promise<void>) =>
     return {
       registered: host.tools,
       row,
-      emit: (name: string, ctx: ExtensionContext) => host.emit(name, ctx),
+      emit: (name: DefaultedEventName, ctx: ExtensionContext) => host.emit(name, ctx),
     };
   });
 
 layer(nodeFilePlatformLayer)("background task history replay", (it) => {
-  // Code Previews proves every appearance; this proves the task tool adopts one.
   it.effect("history from before startup adopts the registered tool", () =>
     Effect.gen(function* () {
       const h = yield* host(
@@ -97,7 +94,6 @@ layer(nodeFilePlatformLayer)("background task history replay", (it) => {
       yield* Effect.promise(() => h.emit("session_start", context()));
       expect([...h.registered.keys()]).toEqual(["background_task"]);
       expect(drawToolRow(row)).not.toBe(cold);
-      // A row resolved after startup draws the registered tool's ordinary presentation.
       expect(toolRowFrames(row)).toEqual(toolRowFrames(h.row()));
       const expanded = drawToolRow(row, true);
       for (const line of text.split("\n")) expect(expanded).toContain(line);
@@ -121,13 +117,11 @@ layer(nodeFilePlatformLayer)("background task history replay", (it) => {
         if (failure === "aborted")
           yield* Effect.promise(() => h.emit("session_start", context(AbortSignal.abort())));
         else {
-          // Tree navigation interrupts the first startup while trusted settings still load.
           const first = h.emit("session_start", context());
           yield* Effect.promise(() => entered.promise);
           yield* Effect.promise(() => h.emit("session_tree", context()));
           yield* Effect.promise(() => first);
         }
-        // Later activations register normally but cannot publish into closed history.
         yield* Effect.promise(() => h.emit("session_tree", context()));
         yield* Effect.promise(() => h.emit("session_start", context()));
         expect(h.registered.has("background_task")).toBe(true);

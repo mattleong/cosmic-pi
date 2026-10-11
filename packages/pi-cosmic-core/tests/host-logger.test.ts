@@ -1,4 +1,3 @@
-// Host log sink coverage intentionally uses real Node filesystem primitives.
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -12,7 +11,6 @@ const { mkdir, readFile, writeFile } = nodeFsPromises;
 const { join } = nodePath;
 const logDirectory = temporaryDirectory("cosmic-host-log-");
 
-/** Emits one record through the `pi-test` layer and closes the scope so the batch flushes. */
 const logThrough = (agentDirectory: () => string, message: string) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -24,7 +22,6 @@ const logThrough = (agentDirectory: () => string, message: string) =>
     }),
   );
 
-/** A temporary agent directory whose existing `pi-test` host log holds `contents`. */
 const existingLog = (contents: string) =>
   Effect.gen(function* () {
     const directory = yield* logDirectory;
@@ -81,7 +78,6 @@ it.live("absorbs an unresolvable agent directory instead of failing the layer", 
     );
 
     expect(exit._tag).toBe("Success");
-    // The span-event logger survives so tracing is unaffected by a missing file sink.
     if (exit._tag === "Success") expect(exit.value).toContain(Logger.tracerLogger);
   }),
 );
@@ -89,7 +85,6 @@ it.live("absorbs an unresolvable agent directory instead of failing the layer", 
 it.live("absorbs an uncreatable log directory and writes nothing", () =>
   Effect.gen(function* () {
     const directory = yield* logDirectory;
-    // A regular file at `logs` makes the recursive directory creation fail.
     const blocked = join(directory, "logs");
     yield* Effect.promise(() => writeFile(blocked, ""));
 
@@ -97,7 +92,6 @@ it.live("absorbs an uncreatable log directory and writes nothing", () =>
 
     expect(exit._tag).toBe("Success");
     if (exit._tag === "Success") expect(exit.value).toContain(Logger.tracerLogger);
-    // Proves the sink really was unavailable rather than quietly succeeding elsewhere.
     expect(yield* Effect.promise(() => readFile(blocked, "utf8"))).toBe("");
   }),
 );

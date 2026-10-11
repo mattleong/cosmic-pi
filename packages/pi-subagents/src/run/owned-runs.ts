@@ -19,7 +19,6 @@ import {
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { WorkspaceBindingStatus } from "./workspace-binding.ts";
 
-/** Exclusive capability for one owned run's first completion generation. */
 export interface OwnedRunHandle {
   readonly runId: string;
   readonly ownerId: string;
@@ -27,7 +26,6 @@ export interface OwnedRunHandle {
   readonly claimToken: string;
 }
 
-/** What an owned run used by the time it settled: its usage and the tool calls it started. */
 interface OwnedRunSpend {
   readonly usage: SubagentUsage;
   readonly toolUses: number;
@@ -48,71 +46,34 @@ export type OwnedRunOutcome = OwnedRunSpend &
 
 export interface OwnedRunStart {
   readonly ownerId: string;
-  /** An id from `reserveRunId`, so a queued placeholder keeps its identity once admitted. */
   readonly runId?: string | undefined;
 }
 
-/**
- * In-process owners, such as workflow runs, whose subagents report to the owner instead of the
- * root conversation. Every method is trusted and never reachable from tool or proxy schemas.
- */
 export interface OwnedRunCoordinatorContract {
-  /** Allocates a run id before admission; an unused reservation holds no state. */
   readonly reserveRunId: Effect.Effect<string>;
   readonly openOwner: (ownerId: string) => Effect.Effect<void>;
-  /**
-   * Admits a root-visible run whose first report belongs to the owner. A run whose request names
-   * its `workflow` takes none of the root's direct-child slots while the owner holds it, since the
-   * workflow bounds its own concurrency; any other owned run counts as an ordinary root child.
-   * A failed or interrupted start never leaves an admitted run running or its report claimed.
-   * The claim is bound to the caller's scope: closing it before the outcome is consumed or handed
-   * back stops a live run and releases its report as `closeOwner` does.
-   */
   readonly startOwned: (
     request: StartSubagentRequest,
     owner: OwnedRunStart,
   ) => Effect.Effect<OwnedRunHandle, SubagentError, Scope.Scope>;
-  /**
-   * Waits through parent questions and pauses until the owned generation settles, then consumes
-   * it in the same locked step. Interruption stops the run and releases its report.
-   */
   readonly awaitOwned: (
     handle: OwnedRunHandle,
   ) => Effect.Effect<OwnedRunOutcome, InvalidSubagentRequestError | SubagentRuntimeClosedError>;
-  /**
-   * Revokes admission, stops the owner's live runs, and releases their reports: an unread
-   * completed writer report goes to the root, everything else is consumed.
-   */
   readonly closeOwner: (ownerId: string) => Effect.Effect<void>;
-  /** Waits for a projection revision newer than `after`. */
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
-  /**
-   * Advances only when a writer slot, claim, cleanup, reservation or unavailable writer pool that
-   * can refuse a writer start is released. Read it before a start that may be refused for a
-   * transient writer conflict.
-   */
   readonly admissionRevision: Effect.Effect<number>;
-  /** Waits until the admission revision passes `after`. */
   readonly waitForAdmissionChange: (
     after: number,
   ) => Effect.Effect<void, SubagentRuntimeClosedError>;
-  /**
-   * The writer a queued shared-checkout writer still conflicts with in a way that clears by
-   * itself, checked under the run lock without validation, backend resolution or preflight;
-   * undefined when none does. Read the admission revision before checking.
-   */
   readonly queuedWriterConflict: (
     request: StartSubagentRequest,
   ) => Effect.Effect<SubagentWriterConflictError | undefined>;
-  /** What this session's coordinator knows of a writer workspace, read under the run lock. */
   readonly workspaceBindingStatus: (workspaceId: string) => Effect.Effect<WorkspaceBindingStatus>;
 }
 
 export interface RunOwnedRunsDependencies extends RunContext {
   readonly allocateClaimToken: () => string;
-  /** Whether `id` came from this service's run-id allocator; caller holds the lock. */
   readonly isAllocatedRunId: (id: string) => boolean;
-  /** Current projection revision; read under the lock so no publication is missed. */
   readonly currentRevision: () => number;
   readonly waitForRevision: OwnedRunCoordinatorContract["waitForRevision"];
   readonly delivery: Pick<RunNotificationDelivery, "wakeCompletionLocked">;
@@ -132,11 +93,6 @@ type AwaitStep = { readonly outcome: OwnedRunOutcome } | { readonly revision: nu
 
 const STOPPED_REASON = "Stopped before reporting.";
 
-/**
- * Owns the owner registry and owned-generation claims. Admission claims generation 1 before
- * the record is registered, so root delivery never selects it; release decides whether the
- * report is consumed or handed back to root delivery.
- */
 export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
   const {
     records,
@@ -165,7 +121,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
         );
     });
 
-  /** The record whose exact generation this handle still owns; caller holds the lock. */
   const ownedRecordLocked = (handle: OwnedRunHandle): RunRecord | undefined => {
     const record = records.get(handle.runId);
     return record?.owner?.claimToken === handle.claimToken &&
@@ -179,10 +134,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
     record.completionClaims.delete(handle.generation);
   };
 
-  /**
-   * The root owns the run from now on: root guards lift, and a later resume runs it as an
-   * ordinary root child, without the owner's workflow step or result contract.
-   */
   const relinquishLocked = (record: RunRecord): void => {
     if (!record.owner?.live) return;
     record.owner.live = false;
@@ -195,7 +146,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
     };
   };
 
-  /** Whether someone stopped the owned run; caller holds the lock. */
   const stoppedLocked = (handle: OwnedRunHandle): boolean => {
     const record = ownedRecordLocked(handle);
     return (
@@ -206,14 +156,9 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
     );
   };
 
-  /** A run that can still settle; dropping its claim would send that report to the root. */
   const isLive = (record: RunRecord): boolean =>
     !record.stoppedByParent && !isTerminalRunState(record.view.state);
 
-  /**
-   * Caller holds the lock. A live run, or a completed writer's unread report, goes back to the
-   * root, never silently dropped; anything else is consumed.
-   */
   const releaseLocked = (handle: OwnedRunHandle): void => {
     const record = ownedRecordLocked(handle);
     if (!record) return;
@@ -226,7 +171,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
     relinquishLocked(record);
   };
 
-  /** Stops a live run, then releases its report; an unread writer report goes to the root. */
   const retire = (handle: OwnedRunHandle) =>
     stop(handle.runId).pipe(
       Effect.catch((error) =>
@@ -266,11 +210,8 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
         admitted = { runId: record.view.id, ownerId: owner.ownerId, generation, claimToken };
       },
     };
-    // Only the launch is interruptible; the scope finalizer is installed before the handle
-    // returns, so no interruption point separates admission from cleanup ownership.
     return Effect.uninterruptibleMask((restore) =>
       restore(start(request, ownership)).pipe(
-        // A run stopped while it started still settles as stopped, so its owner awaits it.
         Effect.catchIf(
           () => admitted !== undefined,
           (error) =>
@@ -293,7 +234,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
     );
   };
 
-  /** Caller holds the lock; consumes a settled generation and returns its outcome. */
   const awaitStepLocked = (handle: OwnedRunHandle) =>
     Effect.suspend((): Effect.Effect<AwaitStep, InvalidSubagentRequestError> => {
       const record = ownedRecordLocked(handle);
@@ -340,7 +280,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
 
   const awaitOwned: OwnedRunCoordinatorContract["awaitOwned"] = (handle) =>
     Effect.uninterruptibleMask((restore) => {
-      // Only the revision wait is interruptible, so a consumed outcome is always returned.
       const loop = (): Effect.Effect<
         OwnedRunOutcome,
         InvalidSubagentRequestError | SubagentRuntimeClosedError
@@ -371,7 +310,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
             });
           }),
         );
-        // Owned runs are disjoint root-child subtrees; each stop closes its own subtree leaf-first.
         yield* Effect.forEach(handles, retire, { concurrency: "unbounded", discard: true });
         yield* withLock(
           Effect.sync(() => {

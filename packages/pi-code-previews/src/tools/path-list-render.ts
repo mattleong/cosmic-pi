@@ -6,9 +6,7 @@ import { isToolOutputNoticeLine } from "../shared/helpers";
 import type { PathIconMode } from "../config/schema";
 
 interface PathListRenderer {
-  /** All lines in display order, with each folder's paths together when drawn as a tree. */
   readonly lines: string[];
-  /** Renders consecutive display-order lines; folders already drawn are not repeated. */
   readonly renderChunk: (lines: string[]) => string[];
 }
 
@@ -42,11 +40,6 @@ function treePathParts(path: string) {
   };
 }
 
-/**
- * A tree draws each path under the folder drawn last, so paths are grouped under their folders
- * at every depth. Folders and files keep the order they were first seen; grouped input such as
- * sorted output keeps its order. Other lines follow the paths.
- */
 function groupPathsByFolder(lines: readonly string[]): string[] {
   const firstSeen = new Map<string, number>();
   const entries = lines.map((line, index) => {
@@ -69,7 +62,6 @@ function groupPathsByFolder(lines: readonly string[]): string[] {
         const order = (left.key[depth] ?? 0) - (right.key[depth] ?? 0);
         if (order !== 0) return order;
       }
-      // A folder's own line precedes its contents.
       return left.key.length - right.key.length || left.index - right.index;
     })
     .map((entry) => entry.line);
@@ -87,7 +79,6 @@ function renderTreePath(
   for (const [index, part] of parts.entries()) {
     key = key ? `${key}/${part}` : part;
     const isDirectory = isDir || index < parts.length - 1;
-    // A folder is drawn once, above the first of its paths.
     if (isDirectory && seenDirs.has(key)) continue;
     if (isDirectory) seenDirs.add(key);
     const name = escapeControlChars(part);
@@ -97,7 +88,6 @@ function renderTreePath(
   return rendered;
 }
 
-/** The dimmed indentation and, when icons are on, the entry's icon before its label. */
 function entryPrefix(
   name: string,
   isDirectory: boolean,

@@ -2,6 +2,7 @@ import {
   defineTool,
   type ExtensionAPI,
   type ExtensionContext,
+  type MessageRenderer,
 } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -29,47 +30,52 @@ import { imageResultText } from "./result-text.ts";
 import { OpenAIImageService } from "./service.ts";
 import { sessionNotStarted } from "../usage/controller.ts";
 import { IMAGE_OUTPUT_SCHEMA, imageDetails, imageToolResult } from "./tool-result.ts";
-import { TOOL_PARAMS, type CodexImageDetails, type ToolParams } from "./types.ts";
+import { TOOL_PARAMS, type ToolParams } from "./types.ts";
 
 export const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_MESSAGE = "openai-image";
 
-/** Records the working directory that image messages display saved paths against. */
 export type NoteImageCwd = (source: { readonly cwd: string }) => void;
 
-/**
- * Registers the `/openai image` message renderer once, at factory time: Pi draws history before
- * session_start. Presentation policy is read per render. Returns the display-cwd updater.
- */
-export function registerOpenAIImageMessageRenderer(pi: ExtensionAPI): NoteImageCwd {
-  // Messages carry no working directory; saved paths display relative to the latest one seen.
+export interface OpenAIImageMessageRenderer {
+  readonly render: MessageRenderer;
+  readonly noteCwd: NoteImageCwd;
+}
+
+export function createOpenAIImageMessageRenderer(): OpenAIImageMessageRenderer {
   let cwd = "";
-  pi.registerMessageRenderer<CodexImageDetails>(OPENAI_IMAGE_MESSAGE, (message, options, theme) =>
-    renderImageMessage(
-      message,
-      {
-        expanded: options.expanded,
-        compact: captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
-        cwd,
-      },
-      theme,
-    ),
-  );
-  return (source) => {
-    cwd = invokeHostCallback(() => source.cwd, cwd);
+  return {
+    render: (message, options, theme) =>
+      renderImageMessage(
+        message,
+        {
+          expanded: options.expanded,
+          compact: captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
+          cwd,
+        },
+        theme,
+      ),
+    noteCwd: (source) => {
+      cwd = invokeHostCallback(() => source.cwd, cwd);
+    },
   };
 }
 
+export function registerOpenAIImageMessageRenderer(
+  pi: ExtensionAPI,
+  renderer: OpenAIImageMessageRenderer = createOpenAIImageMessageRenderer(),
+): NoteImageCwd {
+  pi.registerMessageRenderer(OPENAI_IMAGE_MESSAGE, renderer.render);
+  return renderer.noteCwd;
+}
+
 export interface OpenAIImageRegistrationOptions {
-  /** The factory-time message renderer's cwd updater; only current calls reach it. */
   readonly noteCwd: NoteImageCwd;
   readonly scheduleAnimation?: CompactAnimationScheduler | undefined;
   readonly isCurrent?: () => boolean;
-  /** Wraps the tool after trusted preview settings load, e.g. a cold-history replay shell. */
   readonly shell?: typeof withCodePreviewShell;
 }
 
-/** Registers the image tool, and adds or replaces `/openai image`. */
 export function registerOpenAIImage(
   pi: ExtensionAPI,
   command: ExtensionCommand,
@@ -90,7 +96,6 @@ export function registerOpenAIImage(
     arguments: "<prompt>",
     description: "Generate an image with OpenAI Codex image generation",
     handler: (args, ctx) => {
-      // A retained command closure belongs to its registration's session, not the live slot.
       if (!isCurrent()) return Promise.resolve();
       const prompt = args.trim();
       if (!prompt) {
@@ -119,7 +124,6 @@ export function registerOpenAIImage(
           const image = result.value;
           return Promise.resolve()
             .then(() => {
-              // Promise delivery has a separate microtask: recheck immediately beside send.
               if (!canDeliver()) return;
               pi.sendMessage({
                 customType: OPENAI_IMAGE_MESSAGE,
@@ -163,7 +167,6 @@ export function registerOpenAIImage(
       noteCwd(ctx);
       const projectionText = `Requesting OpenAI image_generation via ${ctx.model?.id ?? "configured model"}…`;
       onUpdate?.({ content: [{ type: "text", text: projectionText }], details: undefined });
-      // Progress is a host callback: recheck authority before the context write.
       if (!isCurrent()) return retired();
       updateContext(ctx);
       return run(generateEffect(params), signal).then(imageToolResult);
@@ -173,7 +176,6 @@ export function registerOpenAIImage(
     shell(tool, {
       compactSummary: imageCompactSummary,
       expandedContent: {
-        // The compact heading shows the action; its subject may be clipped, so the prompt stays.
         renderCall: (args, theme) =>
           renderImageRequest(args, theme, { prompt: false, action: true }),
         renderResult: renderImageContent,

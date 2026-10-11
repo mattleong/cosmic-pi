@@ -32,7 +32,6 @@ interface SharedSelectorOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
 }
 
-/** The host plumbing every shared selector page takes from the editor that opens it. */
 export const selectHost = ({
   theme,
   getHeight,
@@ -47,7 +46,6 @@ export const selectHost = ({
   keybindingLabel,
 });
 
-/** One selector row, searchable by its value, label, and description unless told otherwise. */
 export const selectChoice = <A>(
   value: string,
   label: string,

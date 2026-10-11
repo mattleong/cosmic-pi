@@ -1,4 +1,3 @@
-// Activation-lifecycle scenarios shared by the root application and child bridge registration paths.
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import * as subagentTools from "../../src/tools/subagent.ts";
@@ -6,7 +5,6 @@ import { effectTest, step } from "./effect-test.ts";
 
 type LoadSettings = (cwd: string, projectTrusted: boolean, signal?: AbortSignal) => Promise<void>;
 
-/** One registered Pi activation path, observed only through its host-facing effects. */
 export interface ActivationPath {
   readonly start: () => PromiseLike<void>;
   readonly shutdown: () => PromiseLike<void>;

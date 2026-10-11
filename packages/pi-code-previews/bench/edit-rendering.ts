@@ -1,4 +1,3 @@
-// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
 import type {
   AgentToolResult,
   EditToolDetails,
@@ -23,8 +22,6 @@ const {
   setCodePreviewSettings,
 } = await import("../src/config/state");
 const { createBuiltinPreviewRenderers } = await import("../src/tools/renderers/registration");
-// A no-op session scheduler, as live sessions always pass one. Older runs rendered without a
-// scheduler, so their shell and timing-only numbers are not strictly comparable with these.
 const createEditPreviewTool = (cwd: string) =>
   createBuiltinPreviewRenderers("edit", {
     cwd,
@@ -46,7 +43,6 @@ type ToolResult = AgentToolResult<EditToolDetails | undefined>;
 const previousSettings = { ...codePreviewSettings };
 const previousPerformance = codePreviewPerformanceConfig;
 const theme = benchTheme();
-// The retained self shell also draws native-like preview backgrounds.
 theme.bg = (key, text) => `${theme.getBgAnsi(key)}${text}\x1b[49m`;
 
 setCodePreviewSettings({
@@ -59,7 +55,6 @@ setCodePreviewSettings({
   tools: ["edit"],
   wordEmphasis: "smart",
 });
-// Render synchronously so each sample measures the whole preview.
 setCodePreviewPerformanceConfig({ ...codePreviewPerformanceConfig, asyncRenderChars: 100_000_000 });
 const stopShiki = await startBenchmarkShikiSession(codePreviewSettings.shikiTheme);
 

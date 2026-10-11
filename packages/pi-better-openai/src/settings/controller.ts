@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import {
   invokeBestEffort,
+  invokeHostCallback,
   redactDiagnosticValue,
   formatDuration,
   type ExtensionCommand,
@@ -24,7 +25,7 @@ import { safeHostSignal } from "../boundary/host-ui.ts";
 import {
   COMPACTION_SETTING_DESCRIPTORS,
   FAST_SETTING_DESCRIPTORS,
-  IMAGE_SETTING_DESCRIPTORS,
+  imageSettingDescriptors,
   SETTINGS_OPTION_DESCRIPTORS,
   USAGE_SETTING_DESCRIPTORS,
 } from "../config/options.ts";
@@ -33,7 +34,6 @@ import { settingsSummary, type FastSnapshot } from "../fast/controller.ts";
 import { FastModeService } from "../fast/service.ts";
 import { OpenAIUsageService } from "../usage/controller.ts";
 
-/** Adds `/openai settings` through the shared settings shell; the picker stays here. */
 export function registerSettingsController(
   command: ExtensionCommand,
   options: {
@@ -43,7 +43,7 @@ export function registerSettingsController(
     formatDebugStatus(ctx: ExtensionContext): string;
     fastProjection: MutableRef.MutableRef<FastSnapshot>;
     resetFastRoutingTransport(ctx: ExtensionContext): void;
-    captureAuthority?: () => () => boolean;
+    captureAuthority: () => () => boolean;
     run<A, E>(
       effect: Effect.Effect<A, E, OpenAIUsageService | FastModeService>,
       signal?: AbortSignal,
@@ -109,8 +109,20 @@ export function registerSettingsController(
             let redactedConfig = initialRedactedConfig;
             const initialConfig = session.config();
             if (!initialConfig) return { _tag: "Blocked" } as const;
-            // One snapshot per picker session, refreshed after each write.
             let cfg = initialConfig;
+            const imageDescriptors = imageSettingDescriptors(
+              invokeHostCallback(
+                () => [
+                  ...new Set(
+                    ctx.modelRegistry
+                      .getAll()
+                      .filter((model) => model.provider === "openai-codex")
+                      .map((model) => model.id),
+                  ),
+                ],
+                [],
+              ),
+            );
             return openSettingsList(
               ctx,
               ({ tui, theme }) => {
@@ -196,7 +208,7 @@ export function registerSettingsController(
                     label: "Image tool",
                     description: "Configure OpenAI image generation defaults.",
                     submenuTitle: "Image tool settings",
-                    items: () => settingsItemsFromDescriptors(IMAGE_SETTING_DESCRIPTORS, cfg),
+                    items: () => settingsItemsFromDescriptors(imageDescriptors, cfg),
                     summary: () =>
                       cfg.image.enabled
                         ? `enabled · ${cfg.image.defaultModel} · ${cfg.image.defaultSave}/${cfg.image.outputFormat}`

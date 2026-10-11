@@ -1,5 +1,3 @@
-// Registered nested /subagents actions over the real root executor and proxy codec. Assertions
-// observe the fleet's settled outcome kind and proxied calls, never presentation details.
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { describe, expect } from "vitest";
@@ -25,7 +23,7 @@ import {
   encodeSubagentProxyPayload,
 } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
-import { extensionApiFixture } from "./fixtures/pi-host.ts";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { openRegisteredFleet } from "./fixtures/profile-settings-inspection.ts";
 import { effectTest } from "./support/effect-test.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
@@ -56,11 +54,9 @@ type RootResponder = (input: SubagentToolInput) => Promise<AgentToolResult<unkno
 
 interface ProxyFleetOptions {
   readonly service?: Partial<SubagentServiceContract>;
-  /** Replaces the root response for protocol-drift cases the real executor cannot produce. */
   readonly respond?: RootResponder;
 }
 
-/** Opens the registered nested manager whose proxy reaches the real root action executor. */
 const openProxyFleet = function* (
   getRuns: () => ReadonlyArray<SubagentRunView>,
   options: ProxyFleetOptions = {},
@@ -87,7 +83,6 @@ const openProxyFleet = function* (
         Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
       ),
     ).then((result) => {
-      // The private proxy transports JSON; decode it exactly as nested Pi does.
       const decoded = decodeSubagentProxyResult(encodeSubagentProxyPayload(result) ?? "");
       if (!decoded) throw new Error("Root proxy result failed to round-trip.");
       return decoded;
@@ -134,7 +129,6 @@ describe("nested /subagents proxied actions", () => {
       sendGuidance(fixture);
       expect(yield* fixture.settled()).toBe("warning");
 
-      // The refreshed card carries pending delivery: guidance and interruption stay closed.
       expect(fixture.fleet.render(160).join("\n")).toContain(
         steeringDeliveryEvidence.pending.message,
       );
@@ -142,7 +136,6 @@ describe("nested /subagents proxied actions", () => {
       expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.send)).toHaveLength(1);
       expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.lifecycle)).toHaveLength(0);
 
-      // Stop remains available; the normal subtree stop receipt is the selected run's view.
       fixture.press("x", "x");
       expect(yield* fixture.settled()).toBe("success");
       expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.lifecycle)).toHaveLength(1);

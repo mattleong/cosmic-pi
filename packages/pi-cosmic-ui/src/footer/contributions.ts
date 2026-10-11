@@ -78,7 +78,6 @@ export function tone(
   return theme.fg(contributionColor(contribution), text);
 }
 
-/** A contribution without an `order` follows ordered ones; every footer ordering pass shares it. */
 export const DEFAULT_CONTRIBUTION_ORDER = 500;
 
 export function ranked(

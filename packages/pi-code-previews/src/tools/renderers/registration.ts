@@ -26,7 +26,6 @@ const RENDERER_FACTORIES = {
   ls: (cwd) => pathListPreviewRenderers("ls", cwd),
 } satisfies Record<(typeof CORE_CODE_PREVIEW_TOOLS)[number], (cwd: string) => PreviewRenderers>;
 
-/** Construct presentation only; lifecycle owns public source admission and routing. */
 export function createBuiltinPreviewRenderers(
   name: (typeof CORE_CODE_PREVIEW_TOOLS)[number],
   session: CodePreviewRendererPresentation,
@@ -39,7 +38,6 @@ export function createBuiltinPreviewRenderers(
   });
 }
 
-/** Write alone needs an execution hook to capture before-state under Pi's mutation queue. */
 export function registerWritePreviewTool(
   pi: ExtensionAPI,
   cwd: string,
@@ -56,7 +54,6 @@ export function registerWritePreviewTool(
       setCodePreviewToolStatus("write", { state: "unavailable" });
       return;
     }
-    // The same admission as rendering: exact builtin write, or a hook this extension owns.
     if (!admitsPreviewSource("write", host, options.ownedTools ?? new Set())) {
       setCodePreviewToolStatus("write", { state: "skipped-conflict", owner: existing.sourceInfo });
       return;
@@ -67,7 +64,6 @@ export function registerWritePreviewTool(
     }
     const active = pi.getActiveTools().includes("write");
     const definition = createWritePreviewTool(cwd);
-    // Capture attempted ownership before mutation: refresh can throw after Pi stores the hook.
     options.ownedTools?.add("write");
     pi.registerTool({ ...definition, defaultActive: active });
     options.installedTools?.add("write");

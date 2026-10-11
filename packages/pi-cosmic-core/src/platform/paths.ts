@@ -1,15 +1,11 @@
-// Pure synchronous path predicates; the Effect Path service adds no value here.
 import { nodeDisplayHomeDirectory, nodePath } from "./node-builtins.ts";
 
-/** Minimal path-module surface; satisfied by node:path and @effect/platform Path.Path. */
 interface PathContainmentAdapter {
   relative(root: string, candidate: string): string;
   isAbsolute(value: string): boolean;
   readonly sep: string;
 }
 
-/** Strict containment: candidate must be inside root, not root itself. Unlike prefix matching
- * this is correct on Windows and for sibling roots. */
 export const isStrictlyInsidePathWith = (
   adapter: PathContainmentAdapter,
   root: string,
@@ -27,7 +23,6 @@ export const isStrictlyInsidePathWith = (
 export const isStrictlyInsidePath = (root: string, candidate: string): boolean =>
   isStrictlyInsidePathWith(nodePath, root, candidate);
 
-/** Home-directory-aware display shortening; leaves the path untouched when it is not under home. */
 export function abbreviateHomePath(path: string, home?: string): string {
   if (!home) return path;
   if (path === home) return "~";
@@ -36,10 +31,6 @@ export function abbreviateHomePath(path: string, home?: string): string {
   return path.startsWith(prefix) ? `~/${path.slice(prefix.length)}` : path;
 }
 
-/**
- * A path as users read it: relative to `cwd` when inside it ("src/a.ts", or "." for `cwd`
- * itself), else under the home directory ("~/notes/a.md"), else unchanged.
- */
 export function formatDisplayPath(
   path: string,
   cwd: string,

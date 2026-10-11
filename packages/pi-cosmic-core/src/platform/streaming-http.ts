@@ -16,9 +16,7 @@ export interface StreamingHttpRequest {
 
 export interface StreamingHttpResponse {
   readonly status: number;
-  /** Raw response bytes for provider streaming protocol parsers. */
   readonly rawBody: Stream.Stream<Uint8Array, StreamingHttpError>;
-  /** Consume and release otherwise-unused raw response bytes. */
   readonly discardRawBody: Effect.Effect<void, StreamingHttpError>;
 }
 
@@ -40,7 +38,6 @@ interface StreamingHttpClientContract {
 const streamingHttpError = (operation: StreamingHttpError["operation"], message: string) => () =>
   new StreamingHttpError({ operation, message });
 
-/** Schema-encodes a JSON request body once for the live and test streaming transports. */
 export const withStreamingJsonBody =
   (
     execute: (

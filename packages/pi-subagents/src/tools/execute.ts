@@ -1,4 +1,3 @@
-// Pi tool execution is a Promise-shaped host boundary.
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -59,7 +58,6 @@ import {
 export interface SubagentToolRuntime {
   readonly scheduleAnimation?: CompactAnimationScheduler | undefined;
   readonly environment: SubagentSessionEnvironment;
-  /** Private nested-Pi transport. Public/root registrations leave this absent. */
   readonly proxyCall?:
     | ((
         input: SubagentToolInput,
@@ -75,10 +73,6 @@ export interface SubagentToolRuntime {
   ) => Promise<A>;
 }
 
-/**
- * Partitions typed failures and runs in target order; defects and interruption propagate.
- * Only steering sends preserve the backend's typed pending-delivery flag.
- */
 const forEachOutcome = <R>(
   ids: ReadonlyArray<string>,
   operation: (id: string) => Effect.Effect<SubagentRunView, SubagentError, R>,
@@ -190,8 +184,6 @@ export const executeSubagentActionEffect = (
         : scripted
           ? service.startScriptSessionOwned(request)
           : service.startSessionOwned(request);
-    // Construct the complete result inside the claim scope. A formatting or details
-    // defect leaves the report available to the notification outbox.
     const completeObservations = (
       observations: ReadonlyArray<SubagentRunObservation>,
       sections: ReadonlyArray<string>,
@@ -234,7 +226,6 @@ export const executeSubagentActionEffect = (
           ...(contract && { contract }),
         };
         const result = yield* Effect.sync(() => present(outcome));
-        // Claims list text never carries reports, so it leaves them for the notification outbox.
         const receipts =
           input.tool === SUBAGENT_TOOL_NAME.claims
             ? []
@@ -295,7 +286,6 @@ export const executeSubagentActionEffect = (
       case SUBAGENT_TOOL_NAME.await: {
         const ids = yield* requiredTargetIds(action, input.args.runIds);
         yield* authorize(ids);
-        // The tool discriminator above always constructs this call's await state.
         const state = awaitState!;
         return yield* service
           .withAwaitTerminalObservations(
@@ -337,7 +327,6 @@ export const executeSubagentActionEffect = (
             contract: lifecycleContract(args.action, result.outcomes),
           });
         if (args.action === "retry") {
-          // Retry ignores a message; only interrupt, stop, and resume reject one.
           const ids = yield* requiredTargetIds(action, args.runIds);
           const profileService = yield* SubagentProfileService;
           const policySnapshot = yield* profileService.capture;
@@ -396,7 +385,6 @@ export const executeSubagentActionEffect = (
         const result = yield* forEachOutcome([id], (runId) =>
           service.rename(runId, input.args.name.trim()),
         );
-        // One validated target produces exactly one settled domain outcome.
         return present({ ...result, contract: renameContract(result.outcomes[0]!) });
       }
       case SUBAGENT_TOOL_NAME.claims: {
@@ -455,9 +443,7 @@ export const executeSubagentAction = (
       );
   return executing.catch((error) => {
     if (!awaitState?.wasInterrupted()) throw error;
-    // The runtime Promise settles only after the interrupted operation releases its claims.
     const result = awaitState.cancelled(runtime.proxyCall !== undefined);
-    // Progress cannot replace the persisted result.
     invokeHostCallback(() => onUpdate?.(result), undefined);
     return result;
   });

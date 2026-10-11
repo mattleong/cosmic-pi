@@ -19,7 +19,6 @@ export const textResult = <Details = undefined>(
   details?: Details,
 ): AgentToolResult<Details | undefined> => ({ content: [{ type: "text", text }], details });
 
-/** Turns off every builtin preview body so collapsed rows show only compact summaries. */
 export const previewBodiesDisabled = {
   readContentPreview: false,
   writeContentPreview: false,
@@ -29,7 +28,6 @@ export const previewBodiesDisabled = {
   lsResultPreview: false,
 } satisfies Partial<CodePreviewSettings>;
 
-/** Renderer whose `factory` failure throws on construction and `draw` failure throws while drawing. */
 export function failingRenderer(failure: string, lines: string[] = []): () => Component {
   return () => {
     if (failure === "factory") throw new Error("renderer construction failed");
@@ -43,7 +41,6 @@ export function failingRenderer(failure: string, lines: string[] = []): () => Co
   };
 }
 
-/** Renders compact children with production defaults unless an option overrides them. */
 export function compactChildren(
   entries: readonly CompactChild[],
   width = 80,
@@ -64,7 +61,6 @@ export function compactChildren(
   });
 }
 
-/** Builtin presentation as the resolver builds it for a /project session, never animated. */
 export const builtinRenderers = (name: BuiltinCompactTool, selfShell = false) =>
   createBuiltinPreviewRenderers(name, {
     cwd: "/project",

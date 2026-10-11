@@ -11,31 +11,21 @@ export class CrossProcessLockError extends Schema.TaggedError<CrossProcessLockEr
   "CrossProcessLockError",
   {
     reason: Schema.Literals(["unavailable", "recovery-required"]),
-    /** For recovery-required at admission: the directory that needs manual recovery. */
     slot: Schema.optionalKey(Schema.String),
   },
 ) {}
 
-/** Native completion callbacks are capabilities of this exact owner, not lock paths. */
 export interface CrossProcessLease {
-  /** Persist before entering an irreversible native operation. Throws on lost ownership. */
   readonly mutationStarted: () => void;
-  /** Invoke only once the actual native Promise settles, never on abort/timeout. */
   readonly mutationSettled: () => void;
-  /** Retains pending mutation evidence; late settlement releases this exact owner. */
   readonly release: () => void;
 }
 export interface CrossProcessLockContract {
-  /**
-   * One synchronous admission attempt with no polling. A dead quiescent owner is retired and
-   * retried once, so `undefined` means a live owner holds the slot. The caller owns release.
-   */
   readonly tryAcquire: (
     namespace: string,
   ) => Effect.Effect<CrossProcessLease | undefined, CrossProcessLockError>;
 }
 interface CrossProcessLockOptions {
-  /** The caller's private root (mode 0700, same uid); exclusion covers only callers sharing it. */
   readonly directory: string;
 }
 
@@ -53,7 +43,6 @@ const recovery = (slot?: string) =>
   new CrossProcessLockError({ reason: "recovery-required", ...(slot !== undefined && { slot }) });
 const code = (...expected: string[]) =>
   Schema.is(Schema.Struct({ code: Schema.Literals(expected) }));
-/** `slot` names the directory an admission-time recovery error is about. */
 const uid = (slot?: string) => {
   if (!process.getuid) throw recovery(slot);
   return process.getuid();
@@ -106,7 +95,6 @@ const writeOwner = (directory: string, owner: Owner) => {
   syncDirectory(directory);
 };
 const dead = (pid: number) => signalProcess(pid, 0) === "absent";
-/** Nonempty token tombstones must remain: they prevent stale reclaimers moving a successor. */
 const retire = (directory: string, owner: Owner, root: string) => {
   const current = readOwner(directory);
   if (current.token !== owner.token || current.phase !== "quiescent") throw recovery();
@@ -114,7 +102,6 @@ const retire = (directory: string, owner: Owner, root: string) => {
   syncDirectory(root);
 };
 
-/** Only normal-release evidence created by this exact live owner can be removed. */
 const cleanReleased = (directory: string, owner: Owner) => {
   try {
     const current = readOwner(directory);
@@ -124,16 +111,9 @@ const cleanReleased = (directory: string, owner: Owner) => {
     if (names.length !== 1 || names[0] !== "owner.json") return;
     fs.unlinkSync(path.join(directory, "owner.json"));
     fs.rmdirSync(directory);
-  } catch {
-    // A partial cleanup is retained for offline inspection. Never retry via the public slot.
-  }
+  } catch {}
 };
 
-/**
- * Synchronous, bounded filesystem commits keep ownership handoff free of cancellation gaps.
- * With `retryAfterRetire`, one attempt follows retiring a dead quiescent owner, so
- * `undefined` then means another owner holds the slot.
- */
 export const acquireNativeLock = (
   namespace: string,
   options: CrossProcessLockOptions,
@@ -152,7 +132,6 @@ export const acquireNativeLock = (
     previous = readOwner(directory);
   } catch (error) {
     if (!code("ENOENT")(error)) throw recovery(directory);
-    // Only absence is available. An existing directory with no owner is corrupt, not stale.
     try {
       fs.lstatSync(directory);
       throw recovery(directory);
@@ -162,7 +141,6 @@ export const acquireNativeLock = (
   }
   if (previous) {
     if (!dead(previous.pid)) return undefined;
-    // PID death proves the JS owner stopped, not that a native service finished a mutation.
     if (previous.phase === "native-pending") throw recovery(directory);
     try {
       retire(directory, previous, root);
@@ -174,8 +152,6 @@ export const acquireNativeLock = (
   const owner: Owner = { version: 1, token: randomToken(), pid: process.pid, phase: "quiescent" };
   const candidate = path.join(root, `.candidate-${owner.token}`);
   fs.mkdirSync(candidate, { mode: 0o700 });
-  // Build and fsync complete nonempty evidence before making the reservation visible.
-  // A crash here leaves only an unreferenced candidate, never an empty public slot.
   writeOwner(candidate, owner);
   try {
     fs.renameSync(candidate, directory);
@@ -188,8 +164,6 @@ export const acquireNativeLock = (
   try {
     syncDirectory(root);
   } catch (error) {
-    // No native work was admitted. Do not strand a live-PID owner when publication
-    // succeeded but its durability check failed before handing the lease to Effect.
     try {
       retire(directory, owner, root);
     } catch {
@@ -217,11 +191,7 @@ export const acquireNativeLock = (
     if (released || pending || uncertain) return;
     check();
     const destination = `${directory}.released-${owner.token}`;
-    // A dead reclaimer observes PID death BEFORE its final exact-token check.
-    // It cannot pass that check for this live owner. Old reclaimers targeting a
-    // predecessor remain fenced by that predecessor's permanent nonempty retired path.
     uncertainOnFailure(() => fs.renameSync(directory, destination));
-    // Relinquishment is final even if durability or owned cleanup fails afterward.
     released = true;
     syncDirectory(root);
     cleanReleased(destination, owner);
@@ -249,7 +219,6 @@ const failure = (cause: unknown) =>
     ? cause
     : new CrossProcessLockError({ reason: "unavailable" });
 
-/** Opt-in same-host coordination. No stale-time or heartbeat stealing. */
 export class CrossProcessLock extends Context.Service<CrossProcessLock, CrossProcessLockContract>()(
   "pi-cosmic-core/platform/cross-process-lock/CrossProcessLock",
 ) {

@@ -10,10 +10,6 @@ import type { RendererState } from "./types";
 
 const BEFORE_SNAPSHOT = "codePreviewWriteBeforeSnapshot";
 
-/**
- * The before-write snapshot a finished write compares against. The first lookup stays in row
- * state, so every later redraw presents the same evidence.
- */
 export function writeBeforeSnapshot<Details>(
   state: RendererState,
   toolCallId: string | undefined,
@@ -26,15 +22,12 @@ export function writeBeforeSnapshot<Details>(
 }
 
 type WriteDiffPlan =
-  /** Only a measured size overrun earns a note; the "Diff unavailable" issue explains the rest. */
   | { readonly kind: "skipped"; readonly reason: string; readonly measured: boolean }
-  /** No previous content, or no written content, to compare. */
   | { readonly kind: "unknown" }
   | { readonly kind: "unchanged" }
   | { readonly kind: "guarded"; readonly guard: "size" | "complexity" }
   | { readonly kind: "diff"; readonly previous: string; readonly content: string };
 
-/** How a finished write presents its change, for both the preview and the expanded content. */
 export function writeDiffPlan<Before, Content>(before: Before, content: Content): WriteDiffPlan {
   if (!Predicate.isString(content)) return { kind: "unknown" };
   const reason = getWriteDiffSkipReason(before, content);

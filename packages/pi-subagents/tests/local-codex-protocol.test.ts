@@ -65,7 +65,6 @@ describe("local Codex protocol", () => {
           kind: tool,
           state,
         });
-      // The receiverless row also covers nullable model metadata and an empty state record.
       const receiverless = {
         tool: "spawnAgent",
         status: "completed",

@@ -16,9 +16,7 @@ it.effect("contains rejected and synchronously throwing host prerequisites", () 
       calls += 1;
       throw new Error("sensitive synchronous failure");
     });
-    // Deliberately hostile PromiseLike fixture; a Proxy keeps the object non-thenable at rest.
-    // SAFETY: The Proxy handler below supplies the `then` member this assertion promises.
-    const hostileThenable = new Proxy({} as PromiseLike<void>, {
+    const hostileThenable = new Proxy(Promise.resolve(), {
       get: (_target, property) =>
         property === "then"
           ? () => {
@@ -47,7 +45,6 @@ it.effect("waits for a successful host startup prerequisite", () =>
 it.effect("detaches a non-cancellable Promise when startup is interrupted", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
-    // A non-cancellable host Promise that only settles after the interruption assertion.
     const lateSettlement = deferredPromise();
     let cancellationSignal: AbortSignal | undefined;
     const bootstrap = yield* bestEffortHostBootstrap("preview-settings", (signal) => {

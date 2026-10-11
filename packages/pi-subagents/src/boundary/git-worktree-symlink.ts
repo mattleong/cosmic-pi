@@ -3,7 +3,6 @@ import { excludedWorkspacePath, safeWorkspacePath } from "../workspace/policy.ts
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import { checkDirectory, workspaceFailure, workspaceIO } from "./git-worktree-process.ts";
 
-/** Read only the link text. Its target must be a separately captured regular file. */
 export const readWorkspaceSymlink = (
   root: string,
   relative: string,
@@ -24,7 +23,6 @@ export const readWorkspaceSymlink = (
     if (
       !target ||
       path.isAbsolute(target) ||
-      // Do not erase unchecked ancestors such as node_modules/.. before validation.
       target !== path.posix.relative(path.posix.dirname(relative), resolved) ||
       /[\\\p{Cc}:]/u.test(target) ||
       !safeWorkspacePath(resolved) ||
@@ -36,7 +34,6 @@ export const readWorkspaceSymlink = (
         "Workspace links must point to an included regular file inside the repository.",
       );
     yield* checkDirectory(path.dirname(path.join(root, resolved)));
-    // lstat never follows the leaf. Chains, cycles, directories and dangling links fail closed.
     const destination = yield* workspaceIO("symlink", () => fs.lstat(path.join(root, resolved)));
     if (!destination.isFile() || destination.nlink !== 1)
       return yield* workspaceFailure(

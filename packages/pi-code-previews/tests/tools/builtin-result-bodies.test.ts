@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import {
-  applyPresentationSettings,
-  createToolPresentationHarness,
-  type ToolPresentationHarness,
-} from "../../testing";
+import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
 import { builtinRenderers, stripAnsi } from "../support/render";
 
@@ -27,7 +23,7 @@ function harness(name: BuiltinCompactTool, style: Style) {
 function render(
   name: BuiltinCompactTool,
   style: Style,
-  args: Parameters<ToolPresentationHarness["call"]>[0],
+  args: Parameters<ReturnType<typeof harness>["call"]>[0],
   value: AgentToolResult<unknown>,
   expanded: boolean,
 ): string {
@@ -41,7 +37,6 @@ const count = (text: string, phrase: string) => text.split(phrase).length - 1;
 const contentLines = (format: (index: number) => string) =>
   Array.from({ length: 20 }, (_, index) => format(index + 1)).join("\n");
 
-// Each output has 20 content lines; the blank separator and notice would make 22.
 const notices = [
   {
     name: "grep",
@@ -84,7 +79,6 @@ describe("agent notices in builtin output", () => {
         const collapsed = render(fixture.name, style, fixture.args, value, false);
         expect(collapsed).not.toContain("limit=40");
         expect(collapsed).not.toContain("of 50");
-        // The notice and its separator are not output lines.
         expect(collapsed).not.toMatch(/\b22\b/u);
         const expanded = render(fixture.name, style, fixture.args, value, true);
         expect(count(expanded, fixture.notice)).toBe(1);
@@ -94,7 +88,6 @@ describe("agent notices in builtin output", () => {
   }
 
   test("bash separates only Pi's own truncation notice, including after a failure", () => {
-    // Ordinary bracketed command output remains output.
     const printed = { content: [{ type: "text" as const, text: "start\n\n[done]" }], details: {} };
     expect(render("bash", "preview", { command: "./run" }, printed, false)).toContain("[done]");
     const notice = "Showing lines 31-50 of 50. Full output: /tmp/pi-bash-output.log";
@@ -145,7 +138,6 @@ describe("read results", () => {
   });
 
   test("plain text drops CRLF carriage returns as highlighting does, keeping lone ones", () => {
-    // Without a highlighter, file content renders as plain text.
     const value = {
       content: [{ type: "text" as const, text: "first\r\nsecond\r\nlone\rreturn" }],
       details: {},

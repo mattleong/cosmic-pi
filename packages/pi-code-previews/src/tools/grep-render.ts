@@ -13,7 +13,6 @@ type ParsedGrepOutputLine = {
   kind: "match" | "context";
 };
 
-/** Grep output grouped under file headings; literal searches highlight their matches. */
 export function renderGrepOutputLines<Args>(
   output: string,
   theme: Theme,
@@ -22,7 +21,6 @@ export function renderGrepOutputLines<Args>(
   syntaxHighlight = true,
 ): string[] {
   const pattern = getObjectValue(args, "pattern");
-  // Match the original text: lowercasing can change its length and shift every later offset.
   const search =
     Predicate.isString(pattern) && pattern && getObjectValue(args, "literal") === true
       ? new RegExp(
@@ -38,7 +36,6 @@ export function renderGrepOutputLines<Args>(
       rendered.push("");
       continue;
     }
-    // A bracketed path such as `[slug]/page.tsx` still forms a row; only other lines are notices.
     const parsed = parseGrepOutputLine(rawLine);
     if (!parsed) {
       const color = isToolOutputNoticeLine(rawLine) ? "warning" : "toolOutput";
@@ -55,10 +52,6 @@ export function renderGrepOutputLines<Args>(
   return rendered;
 }
 
-/**
- * Pi writes `path:N: text` for matches and `path-N- text` for context. The earliest separator
- * wins, so separators quoted inside the line text never extend the path or change its kind.
- */
 const GREP_OUTPUT_LINE = /^(.+?)(?::(\d+):|-(\d+)-)\s(.*)$/s;
 
 export function parseGrepOutputLine(line: string): ParsedGrepOutputLine | undefined {
@@ -91,7 +84,6 @@ function renderGrepParsedLine(
   if (matchRanges.length > 0)
     highlighted = injectVisibleRanges(highlighted, matchRanges, {
       open: "\x1b[48;2;90;74;28m",
-      // A theme without ANSI accessors closes the highlight with the default background.
       close: invokeHostCallback(() => theme.getBgAnsi("toolSuccessBg"), "") || "\x1b[49m",
       reopenAfterSgr: (sequence) => sequence === "\x1b[39m",
     });

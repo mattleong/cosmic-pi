@@ -1,3 +1,4 @@
+import type { CustomEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -40,14 +41,26 @@ type ThrowingOperation =
   | "append"
   | "appendAfterMutation";
 
+interface OwnerState {
+  readonly sessionId: string;
+  readonly sessionPath: string | undefined;
+}
+
 interface MutableOwner {
-  readonly sessionId?: string | undefined;
+  readonly sessionId?: string;
   readonly sessionPath?: string | undefined;
 }
 
+const sessionEntry = (entry: CustomEntryFixture, index: number): CustomEntry => ({
+  ...entry,
+  id: `entry-${index + 1}`,
+  parentId: null,
+  timestamp: "2026-01-01T00:00:00.000Z",
+});
+
 const harness = (initialThrow?: ThrowingOperation) => {
   const entries: CustomEntryFixture[] = [];
-  let currentOwner: MutableOwner = { ...OWNER };
+  let currentOwner: OwnerState = { ...OWNER };
   let currentProbe: SessionHeaderProbe = { _tag: "valid", header: { id: OWNER.sessionId } };
   let throwing = initialThrow;
   const getSessionId = vi.fn(() => {
@@ -63,11 +76,11 @@ const harness = (initialThrow?: ThrowingOperation) => {
     expect(path).toBe(OWNER.sessionPath);
     return currentProbe;
   });
-  const getEntries = vi.fn(() => {
+  const getEntries = vi.fn((): SessionEntry[] => {
     if (throwing === "entries") throw new Error("entries-secret");
-    return entries;
+    return entries.map(sessionEntry);
   });
-  const appendEntry = vi.fn((customType: string, data: HerdrBtwLink) => {
+  const appendEntry = vi.fn(<Data>(customType: string, data?: Data) => {
     if (throwing === "append") throw new Error("append-secret");
     entries.push({ type: "custom", customType, data });
     if (throwing === "appendAfterMutation") throw new Error("append-secret");
@@ -116,7 +129,7 @@ describe("host reusable-link store", () => {
   it.each<[string, (h: Harness) => void]>([
     ["a replaced owner ID", (h) => h.setOwner({ sessionId: "replacement-session" })],
     ["a replaced owner path", (h) => h.setOwner({ sessionPath: "/sessions/replacement.jsonl" })],
-    ["a missing owner ID", (h) => h.setOwner({ sessionId: undefined })],
+    ["an empty owner ID", (h) => h.setOwner({ sessionId: "" })],
     ["a missing owner path", (h) => h.setOwner({ sessionPath: undefined })],
     ["a missing parent header", (h) => h.setProbe({ _tag: "invalid" })],
     [

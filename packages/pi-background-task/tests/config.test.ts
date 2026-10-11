@@ -1,4 +1,3 @@
-// Deterministic config-store suite: each test is a Layer entry point for the store runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -47,7 +46,6 @@ describe("background task config store", () => {
     });
     return Effect.gen(function* () {
       const config = yield* BackgroundTaskConfigStore;
-      // The untrusted project overlay never applies, and its document is never touched.
       expect(config.enabled).toBe(true);
       expect(config.showFooterStatus).toBe(DEFAULT_BACKGROUND_TASK_CONFIG.showFooterStatus);
       expect(config.stopGraceMs).toBe(1_000);

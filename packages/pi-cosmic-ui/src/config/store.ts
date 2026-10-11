@@ -60,11 +60,6 @@ const resolveDocuments = (
   };
 };
 
-/**
- * The shared scoped store is instantiated without a default document, so resolution never
- * writes: an absent scope stays absent and the resolved config falls back to package defaults.
- * Untrusted projects still perform zero project-document I/O.
- */
 const store = makeScopedConfigStore({
   error: CosmicUiConfigError,
   label: "Cosmic UI",
@@ -78,16 +73,10 @@ const store = makeScopedConfigStore({
 export const { configPaths, resolveConfig } = store;
 
 export type CosmicUiConfigAfterCommit = (config: ResolvedCosmicUiConfig) => Effect.Effect<void>;
-/** The footer settings a settings change writes; visibility goes through `setFooterVisibility`. */
 export type FooterPatch = Partial<Pick<ResolvedCosmicUiConfig["footer"], "enabled" | "density">>;
 
 const noAfterCommit: CosmicUiConfigAfterCommit = () => Effect.void;
 
-/**
- * Selects the live scope at the start of each atomic document mutation. The projection callback is
- * part of the document store's uninterruptible commit region, so persistence and publication cannot
- * be separated by fiber interruption.
- */
 const modifyFooterConfig = Effect.fn("pi-cosmic-ui.config.modify-footer")(function* (
   cwd: string,
   agentDir: string,
@@ -148,7 +137,6 @@ export const setFooterVisibility = Effect.fn("pi-cosmic-ui.config.set-visibility
   );
 });
 
-/** The single Cosmic UI configuration persistence door. */
 export class CosmicUiConfigStore extends Context.Service<CosmicUiConfigStore>()(
   "pi-cosmic-ui/config/store/CosmicUiConfigStore",
   {

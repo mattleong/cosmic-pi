@@ -26,7 +26,6 @@ import {
   type WorkspaceReviewOptions,
 } from "./workspace-review.ts";
 
-/** Why the writer workspace mode cannot change right now. */
 export type WriterWorkspaceBlockCode =
   | "writers-active"
   | "records-unavailable"
@@ -34,7 +33,6 @@ export type WriterWorkspaceBlockCode =
 
 interface WorkspaceBlock {
   readonly code: WriterWorkspaceBlockCode;
-  /** Agent-facing explanation, which may name workspaces and paths. */
   readonly reason: string;
 }
 
@@ -66,13 +64,6 @@ export interface WorkspaceCoordinatorContract {
     workspaceId: string,
     callerRunId?: string,
   ) => Effect.Effect<void, SubagentError>;
-  /**
-   * Discards a settled writer's workspace only when it holds no work: no change against its
-   * baseline, no other file in its tree, and no other run working inside it. Waits a while for
-   * the writer's process cleanup first. True once discarded; false, keeping the workspace, when
-   * it holds work or once `abandon` completes or the caller is interrupted before the check
-   * starts. A discard failing after the check fails with `workspace_discard_incomplete`.
-   */
   readonly workspaceDiscardUnchanged: (
     workspaceId: string,
     abandon: Deferred.Deferred<void>,
@@ -90,12 +81,6 @@ export interface WorkspaceCoordinatorContract {
   ) => Effect.Effect<void, SubagentError | E, R>;
 }
 
-/**
- * Owns writer workspaces for one session: mode admission, listing, and composition of launch
- * (`workspace-launch.ts`), review, preparation and discard (`workspace-review.ts`), and
- * integration (`workspace-integration.ts`).
- * Artifacts deliberately outlive terminal-history entries and backend scopes.
- */
 export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies) {
   const context = makeWorkspaceControlContext(dependencies);
   const { engine, ownerId, records, writerPools, withLock, isClosed, state, ownerFor } = context;
@@ -104,14 +89,12 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
     Effect.gen(function* () {
       const entries = listing.records;
       const owned = (record: WorkspaceRecord) => record.handle.ownerId.startsWith(`${ownerId}/`);
-      // Resolve aliases only when inspecting foreign artifacts, never during reader startup.
       const source =
         sourceCwd !== undefined && entries.some((record) => !owned(record))
           ? (yield* writerLeases.canonicalize(sourceCwd).pipe(Effect.mapError(mapWorkspaceError)))
               .path
           : undefined;
       return {
-        // Unknown source identity cannot justify hiding an artifact from the root.
         unavailable: listing.unavailable,
         records: entries.filter(
           (record) =>
@@ -138,14 +121,12 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
           code: "writers-active",
           reason: "Writers, admission reservations, or quarantined writer ownership remain.",
         };
-      // A root operation is using the engine; listing here would hold the run lock behind it.
       const busy = [...state.bindings.values()].find((binding) => binding.busy !== undefined);
       if (busy)
         return {
           code: "unresolved-workspace",
           reason: `Workspace ${busy.handle.workspaceId} has an operation in progress. Retry once it finishes.`,
         };
-      // Unknown previous-session artifacts are not evidence of process death. Never silently adopt them.
       const listing: WorkspaceListing = engine
         ? yield* engine.listAll.pipe(Effect.mapError(mapWorkspaceError))
         : { records: [], unavailable: [] };
@@ -184,8 +165,6 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
           return yield* invalid("workspace_runtime_closed", "The subagent session is closed.");
         const block = yield* workspaceBlock();
         if (block) return yield* invalid("workspace_mode_busy", block.reason);
-        // Admission stays locked through the durable preference commit and mode publication.
-        // Cancellation cannot split persisted and current-session mode after the save commits.
         yield* Effect.uninterruptible(
           persist.pipe(
             Effect.andThen(
@@ -197,7 +176,6 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
         );
       }),
     );
-  /** What the engine record becomes once a pending reopen runs: the stale review is gone. */
   const currentRecord = (record: WorkspaceRecord): WorkspaceRecord =>
     state.bindings.get(record.handle.workspaceId)?.reopenPending &&
     (record.status === "frozen" || record.status === "prepared")

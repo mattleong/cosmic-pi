@@ -1,11 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import {
-  freezeSnapshot,
-  hasObjectRuntimeType,
-  type JsonObject,
-  type JsonValue,
-} from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   MAX_PROFILE_CANDIDATES,
@@ -57,7 +52,6 @@ export const MAX_CURRENT_TOOL_CHARS = 256;
 export const MAX_PROGRESS_CHARS = 512;
 export const MAX_WARNING_CHARS = 512;
 
-/** Text of 1 to `maximum` characters. */
 export const NonEmptyText = (maximum: number) =>
   Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
 const nonNegativeNumber = Schema.Number.check(
@@ -71,7 +65,6 @@ const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =
 
 const MAX_WORKSPACE_WARNINGS = 3;
 const MAX_WORKSPACE_WARNING_DETAIL_CHARS = 4_096;
-/** A problem an operation left for the parent, already worded by its producer. */
 const WorkspaceWarningSchema = Schema.Struct({
   code: NonEmptyText(MAX_FAILURE_CODE_CHARS),
   message: NonEmptyText(MAX_WARNING_CHARS),
@@ -79,7 +72,6 @@ const WorkspaceWarningSchema = Schema.Struct({
 });
 export type WorkspaceWarning = typeof WorkspaceWarningSchema.Type;
 
-/** Workspace history keeps receipt metadata only, never immutable patch bodies. */
 export const WorkspaceToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
   action: Schema.Literal("workspace"),
@@ -90,15 +82,12 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   offset: Schema.optionalKey(nonNegativeInteger),
   totalChars: Schema.optionalKey(nonNegativeInteger),
   nextOffset: Schema.optionalKey(nonNegativeInteger),
-  /** Total entries, including artifacts whose records are unavailable. */
   workspaceCount: Schema.optionalKey(nonNegativeInteger),
   unavailableCount: Schema.optionalKey(nonNegativeInteger),
   listedCount: Schema.optionalKey(nonNegativeInteger),
   preparedCwd: Schema.optionalKey(NonEmptyText(1_024)),
   successorRunId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
-  /** Problems a committed integration left behind, such as a kept worker tree. */
   warnings: Schema.optionalKey(boundedArray(WorkspaceWarningSchema, MAX_WORKSPACE_WARNINGS)),
-  /** Producer-computed UTF-16 span of list metadata or the immutable diff, never parsed. */
   displayContent: Schema.optionalKey(
     Schema.Struct({
       offset: nonNegativeInteger,
@@ -321,17 +310,12 @@ export const SubagentProfileRouteCardSchema = Schema.Struct({
   candidates: boundedArray(ProfileCandidateCardSchema, MAX_PROFILE_CANDIDATES),
 });
 
-/** The only typed backend failure code that can carry pending guidance delivery. */
 export const PENDING_DELIVERY_FAILURE_CODE = "steer_outcome_uncertain";
 
 export const CompactToolActionFailureSchema = Schema.Struct({
   id: NonEmptyText(MAX_ACTION_FAILURE_ID_CHARS),
   code: Schema.optionalKey(NonEmptyText(MAX_ACTION_FAILURE_CODE_CHARS)),
   message: NonEmptyText(MAX_ACTION_FAILURE_MESSAGE_CHARS),
-  /**
-   * Additive version-2 backend evidence. Structural only: `actionFailureDisposition` decides
-   * whether it means pending delivery, so a wrong action/code keeps its error semantics.
-   */
   pendingDelivery: Schema.optionalKey(Schema.Literal(true)),
 });
 
@@ -425,28 +409,21 @@ const RUN_ACTION_KEYS = new Set(Object.keys(RunActionDetailsSchema.fields));
 const KNOWN_ROOT_KEYS = new Set([...START_KEYS, ...AWAIT_KEYS, ...MODELS_KEYS, ...RUN_ACTION_KEYS]);
 const RUN_ACTION_SET: ReadonlySet<string> = new Set(RUN_DETAILS_ACTIONS);
 
-const recordOf = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
-  if (!hasObjectRuntimeType(value) || value === null || Array.isArray(value)) return undefined;
-  // SAFETY: This shallow hostile-input view reads only known fields. The selected details schema
-  // decodes every field before it enters a persisted details type.
-  return value as ValueInput & Readonly<JsonObject>;
-};
-const hasOwn = (record: Readonly<JsonObject>, key: string): boolean => Object.hasOwn(record, key);
-const readKnown = (record: Readonly<JsonObject>, key: string): JsonValue | undefined => record[key];
-
-const rootKeysAllowed = (record: Readonly<JsonObject>, allowed: ReadonlySet<string>): boolean => {
-  for (const key of KNOWN_ROOT_KEYS) if (!allowed.has(key) && hasOwn(record, key)) return false;
+const rootKeysAllowed = <Container>(record: Container, allowed: ReadonlySet<string>): boolean => {
+  if (!Predicate.isObject(record)) return true;
+  for (const key of KNOWN_ROOT_KEYS)
+    if (!allowed.has(key) && Object.hasOwn(record, key)) return false;
   return true;
 };
 
-const preflightArray = (
-  record: Readonly<JsonObject>,
+const preflightArray = <Container>(
+  record: Container,
   key: string,
   maximum: number,
-  visit?: (entry: JsonValue) => boolean,
+  visit?: <Entry>(entry: Entry) => boolean,
 ): boolean => {
-  if (!hasOwn(record, key)) return true;
-  const value = readKnown(record, key);
+  if (!Predicate.isObject(record) || !Object.hasOwn(record, key)) return true;
+  const value = record[key];
   if (!Array.isArray(value)) return true;
   const length = value.length;
   if (length > maximum) return false;
@@ -454,46 +431,37 @@ const preflightArray = (
   for (let index = 0; index < length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (!descriptor || !("value" in descriptor)) continue;
-    // SAFETY: The descriptor value is used only for another guarded preflight. Schema performs the
-    // authoritative child decode after every known array length has passed its bound.
-    const entry = descriptor.value as JsonValue;
-    if (!visit(entry)) return false;
+    if (!visit(descriptor.value)) return false;
   }
   return true;
 };
 
-const preflightCard = <ValueInput>(value: ValueInput): boolean => {
-  const card = recordOf(value);
-  if (!card) return true;
+const preflightCard = <ValueInput>(card: ValueInput): boolean => {
+  if (!Predicate.isObject(card)) return true;
   if (!preflightArray(card, "capabilities", PI_SUBAGENT_CAPABILITIES.length)) return false;
   if (!preflightArray(card, "writeClaims", MAX_WRITE_CLAIMS)) return false;
-  if (hasOwn(card, "writeAudit")) {
-    const audit = recordOf(readKnown(card, "writeAudit"));
+  if (Object.hasOwn(card, "writeAudit")) {
+    const audit = card.writeAudit;
     if (
-      audit &&
+      Predicate.isObject(audit) &&
       (!preflightArray(audit, "observedFileWrites", MAX_OBSERVED_WRITE_PATHS) ||
         !preflightArray(audit, "violations", MAX_WRITE_CLAIM_VIOLATIONS))
     )
       return false;
   }
-  if (!hasOwn(card, "selection")) return true;
-  const selection = recordOf(readKnown(card, "selection"));
-  return !selection || preflightArray(selection, "skippedCandidates", MAX_CARD_SKIPS);
+  if (!Object.hasOwn(card, "selection")) return true;
+  const selection = card.selection;
+  return (
+    !Predicate.isObject(selection) || preflightArray(selection, "skippedCandidates", MAX_CARD_SKIPS)
+  );
 };
 
-const preflightProfile = <ValueInput>(value: ValueInput): boolean => {
-  const profile = recordOf(value);
-  return !profile || preflightArray(profile, "candidates", MAX_PROFILE_CANDIDATES);
-};
+const preflightProfile = <ValueInput>(profile: ValueInput): boolean =>
+  !Predicate.isObject(profile) || preflightArray(profile, "candidates", MAX_PROFILE_CANDIDATES);
 
-/**
- * Checks every bounded known array before Schema traverses it. Each array length is read before
- * any of its elements, and unknown object keys are never read.
- */
-const preflight = <ValueInput>(value: ValueInput): boolean => {
-  const record = recordOf(value);
-  if (!record) return true;
-  const action = readKnown(record, "action");
+const preflight = <ValueInput>(record: ValueInput): boolean => {
+  if (!Predicate.isObject(record)) return true;
+  const action = record.action;
   if (action === "start")
     return (
       rootKeysAllowed(record, START_KEYS) &&
@@ -576,7 +544,6 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
   if (failures.length !== relationships.failedIndexes.size) return false;
   let previousFailureIndex = -1;
   for (const failure of failures) {
-    // Strictly increasing indexes also reject duplicates.
     if (!relationships.failedIndexes.has(failure.index) || failure.index <= previousFailureIndex)
       return false;
     previousFailureIndex = failure.index;
@@ -595,7 +562,6 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
 
 const validRunCardRelationships = (card: SubagentRunCard): boolean =>
   card.writeViolationOffender !== true ||
-  // Offender identity is authoritative; bounded audit evidence may be absent.
   (card.writeIntent === "writer" && card.writeAdmissionPaused === true);
 
 const validReportOmission = (details: {
@@ -642,7 +608,6 @@ const safeDecode = <S extends Schema.ConstraintDecoder<unknown>, ValueInput>(
   }
 };
 
-/** Safe current-version decoder for start and await renderer details. */
 export const decodeStartAwaitCardDetails = <ValueInput>(
   value: ValueInput,
 ): SubagentStartAwaitCardDetails | undefined =>
@@ -652,7 +617,6 @@ export const decodeStartAwaitCardDetails = <ValueInput>(
       : validAwaitRelationships(details),
   );
 
-/** Safe current-version decoder for all non-start tool details. */
 export const decodeCompactToolDetails = <ValueInput>(
   value: ValueInput,
 ): CompactSubagentToolDetails | undefined =>

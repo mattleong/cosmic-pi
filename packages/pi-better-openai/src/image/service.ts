@@ -16,7 +16,7 @@ import {
 } from "pi-cosmic-core";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
-import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../config/schema.ts";
+import { DEFAULT_IMAGE_CONFIG, type ImageSaveMode, type ResolvedConfig } from "../config/schema.ts";
 import type { OpenAIProjection } from "../usage/projection.ts";
 import { makeImageInputReader } from "./input.ts";
 import { imageOutputMetadata, makeImageOutput } from "./output.ts";
@@ -46,6 +46,45 @@ const resolveModel = (
     : cfg.image.defaultModel;
 };
 
+interface SaveLocations {
+  readonly cwd: string;
+  readonly agentDir: string;
+  readonly custom: string | undefined;
+  readonly home: string | undefined;
+}
+
+interface SaveTarget {
+  readonly directory: string;
+  readonly root: string | undefined;
+}
+
+const resolveCustomDirectory = (path: Path.Path, { cwd, custom, home }: SaveLocations) => {
+  if (!custom) return undefined;
+  if (custom === "~") return home;
+  if (custom.startsWith("~/")) return home ? path.resolve(home, custom.slice(2)) : undefined;
+  return path.resolve(cwd, custom);
+};
+
+const resolveSaveTarget = (
+  path: Path.Path,
+  save: ImageSaveMode,
+  locations: SaveLocations,
+): SaveTarget | undefined => {
+  if (save === "none") return undefined;
+  if (save === "project")
+    return {
+      directory: path.join(locations.cwd, CONFIG_DIR_NAME, "generated-images"),
+      root: locations.cwd,
+    };
+  if (save === "global")
+    return {
+      directory: path.join(locations.agentDir, "generated-images"),
+      root: locations.agentDir,
+    };
+  const directory = resolveCustomDirectory(path, locations);
+  return directory === undefined ? undefined : { directory, root: undefined };
+};
+
 interface OpenAIImageServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly projection: MutableRef.MutableRef<OpenAIProjection>;
@@ -72,7 +111,6 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           ctx: ExtensionContext,
           cfg: ResolvedConfig | undefined,
         ) {
-          // Pi's parameter schema forbids additional properties; decoding enforces the same policy.
           const params = decodeUnknownOrUndefined(ToolParamsSchema, rawParams, {
             onExcessProperty: "error",
           });
@@ -93,25 +131,13 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           const outputFormat = params.outputFormat ?? cfg.image.outputFormat;
           const save = params.save ?? cfg.image.defaultSave;
           const output = imageOutputMetadata(outputFormat);
-          const customDirectory =
-            params.saveDir?.trim() || Option.getOrUndefined(customSaveDir)?.trim();
-          const resolveCustomDirectory = (directory: string | undefined) => {
-            if (!directory) return undefined;
-            const home = Option.getOrUndefined(homeDirectory);
-            if (directory === "~") return home;
-            if (directory.startsWith("~/"))
-              return home ? path.resolve(home, directory.slice(2)) : undefined;
-            return path.resolve(cwd, directory);
-          };
-          const saveDir =
-            save === "none"
-              ? undefined
-              : save === "project"
-                ? path.join(cwd, CONFIG_DIR_NAME, "generated-images")
-                : save === "global"
-                  ? path.join(agentDir, "generated-images")
-                  : resolveCustomDirectory(customDirectory);
-          if (save === "custom" && !saveDir)
+          const saveTarget = resolveSaveTarget(path, save, {
+            cwd,
+            agentDir,
+            custom: params.saveDir?.trim() || Option.getOrUndefined(customSaveDir)?.trim(),
+            home: Option.getOrUndefined(homeDirectory),
+          });
+          if (save === "custom" && !saveTarget)
             return yield* fail("save", "save=custom requires saveDir or PI_IMAGE_SAVE_DIR.");
           const credentials = yield* getCodexCredentials(ctx);
           if (!credentials)
@@ -158,10 +184,10 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           const validated = yield* validatedGeneratedImage(parsed, outputFormat).pipe(
             Effect.withSpan("pi-better-openai.image.convert"),
           );
-          const savedPath = saveDir
+          const savedPath = saveTarget
             ? yield* persistImage(
-                saveDir,
-                save === "project" ? cwd : save === "global" ? agentDir : undefined,
+                saveTarget.directory,
+                saveTarget.root,
                 validated.bytes,
                 outputFormat,
                 validated.id,

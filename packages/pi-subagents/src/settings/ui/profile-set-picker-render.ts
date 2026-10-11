@@ -33,7 +33,6 @@ export interface ProfileSetPickerRenderState {
   readonly message?: { readonly kind: "info" | "warning" | "error"; readonly text: string };
 }
 
-/** Library shortcuts: search, More, and Use. */
 export const PROFILE_SET_SHORTCUTS: ReadonlySet<string> = new Set(["/", "a", "u"]);
 
 const footer = (

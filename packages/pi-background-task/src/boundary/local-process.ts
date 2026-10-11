@@ -1,8 +1,3 @@
-// Long-lived shell output is decoded into a byte-bounded queue here. Effect owns spawn,
-// streams, forced cleanup, and scope lifetime; immediate graceful signal dispatch, the
-// POSIX post-leader process-group sweep (deferred through a graceful stop's grace
-// window), and Windows taskkill while the leader lives run through core's process-tree
-// helpers under this boundary's graceful/force policy.
 import { StringDecoder } from "node:string_decoder";
 import {
   effectProcessExit,
@@ -85,7 +80,6 @@ export interface LocalProcessContract {
   ) => Effect.Effect<LocalProcessHandle, LocalProcessError, Scope.Scope>;
 }
 
-/** Redacted boundary failures: never the command, its output, or the underlying error text. */
 const PROCESS_FAILURES = {
   cwd: { operation: "inspect working directory", message: "Couldn't find the working directory" },
   spawn: { operation: "spawn", message: "Couldn't start the process" },
@@ -115,9 +109,6 @@ export function makeBackgroundProcessEnvironment(
         !BLOCKED_ENVIRONMENT_KEYS.has(platform === "win32" ? key.toUpperCase() : key),
     ),
   );
-  // Background stdout/stderr are pipes, so compatible CLIs otherwise suppress useful color.
-  // Explicit FORCE_COLOR and the cross-ecosystem NO_COLOR convention always win. Windows
-  // environment keys are case-insensitive even though the reconstructed plain object is not.
   const hasKey = (name: string): boolean =>
     platform === "win32"
       ? Object.keys(environment).some((key) => key.toUpperCase() === name)
@@ -126,32 +117,22 @@ export function makeBackgroundProcessEnvironment(
   return environment;
 }
 
-/** One platform's process-tree policy: stop requests and the sweep after the leader exits. */
 interface ProcessTreeTermination {
-  /** Graceful starts a stop; the caller escalates to force when its grace period ends. */
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, LocalProcessError>;
-  /** Runs once in the exit observer, after the leader's exit and before `awaitExit` settles. */
   readonly settleExit: Effect.Effect<void>;
 }
 
-// Exit and termination can race; final settlement is observed separately.
 const dispatchGracefulTermination = (pid: number) => {
   if (signalProcessGroup(pid, "SIGTERM") !== "present") signalProcess(pid, "SIGTERM");
 };
 
-/** Immediate graceful dispatch is owned by the process scope, not its stop waiter. */
 export const makeWindowsTreeTermination = (
   pid: number,
   spawnTaskkill?: ProcessTreeTerminatorSpawn,
 ) =>
   Effect.gen(function* () {
     const ownerScope = yield* Effect.scope;
-    // Windows may reuse an exited leader's PID, so once its exit is recorded taskkill is
-    // skipped, and a taskkill racing that exit counts its nonzero result as settled. The
-    // upstream spawner is outside this guard: after a nonzero exit its exit listener and
-    // scope finalizer still run their own taskkill on the exited PID.
     let exited = false;
-    // Every core terminator failure maps to the same redacted boundary error.
     const taskkill = (mode: "graceful" | "force") =>
       terminateWindowsProcessTree({ pid, mode, spawnTaskkill, targetExited: () => exited }).pipe(
         Effect.mapError(() => processError("terminate")),
@@ -159,8 +140,6 @@ export const makeWindowsTreeTermination = (
     let gracefulFiber: Fiber.Fiber<void> | undefined;
     let dispatched = false;
     const forceLock = yield* Semaphore.make(1);
-    // Once force owns the permit, join graceful cleanup and the bounded force attempt.
-    // The mask can delay cancellation by at most the helper's two-second deadline.
     const force = forceLock.withPermits(1)(
       Effect.suspend(() => {
         dispatched = true;
@@ -183,21 +162,17 @@ export const makeWindowsTreeTermination = (
                 );
               }),
             ),
-      // An exited PID no longer identifies the tree, so there is nothing safe to sweep.
       settleExit: Effect.sync(() => {
         exited = true;
       }),
     } satisfies ProcessTreeTermination;
   });
 
-// A group-free normal exit is the common case, so the sweep result is ignored.
 const terminateLingeringGroup = (pid: number) =>
   Effect.sync(() => void signalProcessGroup(pid, "SIGKILL"));
 
-/** True once the group is confirmed gone; polls while any member may still exit. */
 const awaitGroupExit = (pid: number) =>
   Effect.sync(() => signalProcessGroup(pid, 0)).pipe(
-    // Darwin can report EPERM while an exiting group is being reaped.
     Effect.repeat({
       schedule: Schedule.spaced(GROUP_EXIT_POLL),
       while: (group) => group === "present" || group === "permission",
@@ -205,7 +180,6 @@ const awaitGroupExit = (pid: number) =>
     Effect.map((group) => group === "absent"),
   );
 
-/** The Effect child-process handle members the POSIX policy uses. */
 interface GroupLeader {
   readonly isRunning: Effect.Effect<boolean, PlatformError.PlatformError>;
   readonly kill: (options: {
@@ -241,8 +215,6 @@ const makePosixGroupTermination = (pid: number, child: GroupLeader) =>
               gracefulStop = true;
               dispatchGracefulTermination(pid);
             }),
-      // Outside a stop, descendants die with their leader. A graceful stop gives the whole
-      // group its grace window: wait until the group is gone or force ends the window.
       settleExit: Effect.suspend(() =>
         gracefulStop
           ? Effect.raceFirst(
@@ -296,8 +268,6 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     killSignal: "SIGTERM",
     forceKillAfter: 1_000,
   });
-  // Node throws synchronously, before any child exists, for arguments it refuses (a NUL
-  // character) and some spawn errnos; Effect surfaces that throw as a defect.
   const child = yield* spawner.spawn(command).pipe(
     Effect.mapError(() => processError("spawn")),
     Effect.catchDefect(() => Effect.fail(processError("spawn"))),
@@ -315,8 +285,6 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     totalDroppedBytes += utf8ByteLength(original) - tailBytes;
     if (!tail) return;
 
-    // Make room by bytes and count. Eviction also restores any dropped-byte delta carried
-    // only by the removed event so a later event reports it.
     while (Queue.isFullUnsafe(outputQueue) || queuedBytes + tailBytes > ingressBufferBytes) {
       const evicted = Queue.takeUnsafe(outputQueue);
       if (evicted?._tag !== "Success") break;
@@ -408,7 +376,6 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
 export class LocalProcess extends Context.Service<LocalProcess, LocalProcessContract>()(
   "pi-background-task/boundary/local-process/LocalProcess",
 ) {
-  /** Node process spawning; `fileSystem` inspects each working directory first. */
   static readonly layerWith = (fileSystem: Layer.Layer<FileSystem.FileSystem>) =>
     Layer.effect(
       this,
@@ -416,7 +383,6 @@ export class LocalProcess extends Context.Service<LocalProcess, LocalProcessCont
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const fs = yield* FileSystem.FileSystem;
         return LocalProcess.of({
-          // Inspection owns no resource. Do not mask a noncooperative filesystem call.
           spawn: (request) =>
             verifyCwd(fs, request.cwd).pipe(
               Effect.andThen(

@@ -8,17 +8,14 @@ import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-r
 import { nativeCodemodeCallSubject } from "../../src/tools/native-codemode-subject";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 
-/** Pi's argument receipt for a nested call: its JSON, cut to 197 code units and `...` past 200. */
 export const nativeReceipt = (args: Schema.JsonObject): string => {
   const json = JSON.stringify(args);
   return json.length > 200 ? `${json.slice(0, 197)}...` : json;
 };
 
-/** The row target native codemode derives from a call's receipt, or from no receipt at all. */
 export const codemodeSubject = (name: string, args?: Schema.JsonObject) =>
   nativeCodemodeCallSubject(name, args && nativeArgumentPreview(nativeReceipt(args)), "/project");
 
-/** One native call record, with any status: a successful read of /project/a.ts unless overridden. */
 export const nativeCall = (
   overrides: Partial<Omit<NativeCodemodeCall, "status">> & { readonly status?: string } = {},
 ) => ({
@@ -29,7 +26,6 @@ export const nativeCall = (
   ...overrides,
 });
 
-/** A finished script: Pi's status header, then the script's output parts. */
 export const scriptResult = <Details>(
   state: string,
   details: Details,
@@ -39,7 +35,6 @@ export const scriptResult = <Details>(
   details,
 });
 
-/** The settled projection the renderer computes; only `isError` of the context is read. */
 export const settledSummary = (
   result: AgentToolResult<unknown>,
   { code = "", isError = false }: { readonly code?: string; readonly isError?: boolean } = {},
@@ -51,6 +46,5 @@ export const settledSummary = (
     context: renderContextFixture({ isError }),
   });
 
-/** Native codemode presentation for /project, animated only by the given scheduler. */
 export const codemodeRenderers = (scheduleAnimation: CompactAnimationScheduler = () => undefined) =>
   createNativeCodemodeRenderers("/project", { scheduleAnimation });

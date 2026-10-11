@@ -3,27 +3,18 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 
 const ESCAPE_CODE = 0x1b;
 
-/** C0/C1 controls render as symbols: ESC and CR keep distinct ones; tab and newline stay. */
 export function escapeControlChars(text: string): string {
   return text.replace(/\p{Cc}/gu, (char) =>
     char === "\t" || char === "\n" ? char : char === "\x1b" ? "␛" : char === "\r" ? "␍" : "�",
   );
 }
 
-/**
- * One line of file text for plain display. A CRLF ending's carriage return is dropped, as Shiki
- * and Pi drop it, so plain and highlighted previews match; a carriage return elsewhere is shown.
- */
 export function escapeLineControlChars(line: string): string {
   return escapeControlChars(line.endsWith("\r") ? line.slice(0, -1) : line);
 }
 
 const PRINTABLE_ASCII_RE = /^[ -~]*$/;
 
-/**
- * Matches one strict SGR sequence (`ESC [` digits/semicolons `m`) starting at
- * `index`, returning the full sequence text or undefined.
- */
 export function matchSgrSequence(text: string, index: number): string | undefined {
   if (text.charCodeAt(index) !== ESCAPE_CODE || text[index + 1] !== "[") return undefined;
   for (let end = index + 2; end < text.length; end++) {
@@ -34,7 +25,6 @@ export function matchSgrSequence(text: string, index: number): string | undefine
   return undefined;
 }
 
-/** Replaces every SGR sequence found by `match` (strict by default) via `replace(sequence, parameters)`. */
 export function replaceSgrSequences(
   text: string,
   replace: (sequence: string, parameters: string) => string,
@@ -54,7 +44,6 @@ export function replaceSgrSequences(
   return out;
 }
 
-/** True when the row is printable ASCII, tabs, and strict SGR sequences only. */
 function isTruncationSafe(row: string): boolean {
   for (let index = 0; index < row.length; ) {
     const code = row.charCodeAt(index);
@@ -144,7 +133,6 @@ export function wrapAnsiToWidth(
       continue;
     }
 
-    // An unrecognized ESC belongs to this inert span; searching past it guarantees progress.
     const nextAnsi = text.indexOf("\x1b", index + 1);
     const plainEnd = nextAnsi >= 0 ? nextAnsi : text.length;
     const plain = escapeControlChars(text.slice(index, plainEnd));
@@ -156,8 +144,6 @@ export function wrapAnsiToWidth(
       for (const { segment } of segmenter.segment(plain)) {
         const segmentWidth = visibleWidth(segment);
         if (rowWidth > 0 && rowWidth + segmentWidth > width && !pushRow()) return rows;
-        // A continuation prefix can leave fewer cells than the next grapheme needs.
-        // Drop the prefix for that row rather than truncating the grapheme away.
         if (rowWidth > 0 && rowWidth + segmentWidth > width) {
           row = state;
           rowWidth = 0;
@@ -195,7 +181,6 @@ function truncateLastRow(rows: string[], width: number): string[] {
   return rows;
 }
 
-/** Attribute groups the wrap state tracks: a set-code predicate and the code that resets it. */
 const ANSI_STATE_GROUPS: Array<{ isSet: (parameters: string) => boolean; reset: string }> = [
   { isSet: (parameters) => parameters.startsWith("38;") && parameters.length > 3, reset: "39" },
   { isSet: (parameters) => parameters.startsWith("48;") && parameters.length > 3, reset: "49" },
@@ -205,7 +190,6 @@ const ANSI_STATE_GROUPS: Array<{ isSet: (parameters: string) => boolean; reset: 
   { isSet: (parameters) => parameters === "4", reset: "24" },
 ];
 
-/** Replaces the matched groups' set-codes; reset codes are never kept, so only set-codes are dropped. */
 function updateAnsiState(current: string, sequence: string): string {
   const parameters = sequence.slice(2, -1);
   if (parameters === "0") return "";

@@ -33,10 +33,6 @@ const requestedName = (agent: SubagentStartSpec, index: number): string =>
 const requestedProfile = (agent: SubagentStartSpec): string =>
   sanitizeTerminalLine(agent.profile?.trim() || "generalist");
 
-/**
- * Static request projection: collapsed stays compact; expanded alone reveals bounded tasks.
- * Preview style's issue lines sit directly under the heading, above the tasks.
- */
 export const renderSubagentStartCall = (
   agents: ReadonlyArray<SubagentStartSpec>,
   theme: Theme,
@@ -90,7 +86,6 @@ const receiptPresentation = (entry: SubagentStartEntry) => {
 };
 
 interface ReceiptRowOptions {
-  /** Expanded rows show run IDs and cleanup state; collapsed rows only tell names apart. */
   readonly expanded: boolean;
   readonly sharedNames: ReadonlySet<string>;
   readonly failure?: SubagentStartFailure | undefined;
@@ -136,7 +131,6 @@ const receiptRow = (
   return lines.map((line) => clipToWidth(line, safeWidth));
 };
 
-/** Routine launch counts as muted text; failures are the shell's issue lines. */
 const receiptCounters = (
   entries: ReadonlyArray<SubagentStartEntry>,
   partial: boolean,
@@ -165,7 +159,6 @@ const receiptCounters = (
   );
 };
 
-/** One failed launch's evidence and the agent's next step, under its own label. */
 const launchFailureSection = (
   entry: SubagentStartEntry,
   failure: SubagentStartFailure,
@@ -194,7 +187,6 @@ const launchFailureSection = (
     ),
   );
 
-/** Collapsed receipts list this many launches; the call's affordance reveals the rest. */
 const COLLAPSED_ROWS = 6;
 
 export const renderStartReceiptComponent = (

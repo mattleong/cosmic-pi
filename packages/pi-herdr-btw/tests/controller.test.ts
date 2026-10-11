@@ -49,7 +49,6 @@ describe("herdr-btw command controller", () => {
         expect(openNew).toHaveBeenCalledWith("start fresh");
         expect(open).toHaveBeenCalledOnce();
 
-        // Only the exact word starts a fresh session; other prompts go to the linked one.
         yield* settle(() => h.invoke("newer ideas"));
         expect(open).toHaveBeenLastCalledWith("newer ideas");
         expect(openNew).toHaveBeenCalledOnce();

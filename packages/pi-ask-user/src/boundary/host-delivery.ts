@@ -16,7 +16,6 @@ const Receipt = Schema.Struct({ version: Schema.Literal(1), ...Metadata.fields }
 
 export const createQuestionnaireGeneration = (): string => synchronousRandomUuid();
 
-/** A queued message cannot establish its own provenance after branch replacement. */
 export const captureHistoricalDeliveries = (ctx: ExtensionContext): ReadonlySet<string> => {
   try {
     const ids = new Set<string>();
@@ -50,7 +49,6 @@ export const makeAsyncDelivery =
     Effect.try({
       try: () => {
         if (!isCurrent()) throw new Error("Revoked");
-        // No yield between recording the originating branch and queuing its message.
         pi.appendEntry(ASYNC_RECEIPT_TYPE, {
           version: 1,
           generation,

@@ -98,7 +98,6 @@ describe("workflow script parsing", () => {
     const [, excerpt, caret] = message.split("\n");
     expect(excerpt?.length).toBeLessThan(110);
     expect(caret?.trim()).toBe("^");
-    // The caret sits under the token the parser stopped at.
     const at = caret!.indexOf("^");
     expect(excerpt!.slice(at, at + 1)).toBe(";");
   });

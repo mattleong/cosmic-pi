@@ -7,15 +7,10 @@ import { WORKFLOW_SCRIPT_MAX_CHARS } from "../workflow/script.ts";
 import type { WorkflowStartRequest } from "../workflow/service.ts";
 import type { WorkflowSourceRequest } from "../workflow/source.ts";
 
-/** Root-only, active only under Ultracode; never part of the child proxy catalog. */
 export const WORKFLOW_TOOL_NAME = "subagent_workflow";
 export const WORKFLOW_TOOL_ACTIONS = ["start", "status", "stop", "list"] as const;
 export type WorkflowToolAction = (typeof WORKFLOW_TOOL_ACTIONS)[number];
 
-/**
- * The action a call asks for. Like Claude Code's Workflow tool, a call that names a script, a
- * saved workflow or a script file without an action starts it.
- */
 export const workflowToolAction = (args: {
   readonly action?: WorkflowToolAction | undefined;
   readonly script?: string | undefined;
@@ -31,8 +26,6 @@ const RUN_ID_MAX_CHARS = 128;
 const PATH_MAX_CHARS = 4_096;
 const BUDGET_MAX = Number.MAX_SAFE_INTEGER;
 
-// Pi drops arguments for tools whose root is a union, so actions share one object and
-// per-action rules are checked at runtime.
 export const WorkflowToolParameters = Type.Object(
   {
     action: Type.Optional(
@@ -89,7 +82,6 @@ export const WorkflowToolParameters = Type.Object(
 );
 
 const StartInputSchema = Schema.Struct({
-  // Like Claude Code's Workflow tool, a start may leave the action out.
   action: Schema.optional(Schema.Literal("start")),
   script: Schema.optional(NonEmptyText(WORKFLOW_SCRIPT_MAX_CHARS)),
   name: Schema.optional(NonEmptyText(64)),
@@ -134,7 +126,6 @@ const startSource = (
   return { kind: "file", path: input.scriptPath ?? "" };
 };
 
-/** Checks the fields each action accepts; Pi has already applied the parameter schema. */
 export const decodeWorkflowToolRequest = <Input>(
   input: Input,
 ): WorkflowToolRequest | WorkflowToolInputError => {
@@ -178,27 +169,20 @@ const WorkflowRunSummarySchema = Schema.Struct({
   queued: Count,
   running: Count,
   failed: Count,
-  // Results from before stopped agents were counted apart from skipped ones carry none.
   stopped: Schema.optional(Count),
   skipped: Count,
   reused: Count,
   startedAt: Schema.Finite,
   endedAt: Schema.optional(Schema.Finite),
   failure: Schema.optional(Label),
-  /** Set when an uncaught budget error failed the run: the output tokens it spent of its budget. */
   budgetFailure: Schema.optional(Schema.Struct({ spent: Tokens, total: Tokens })),
 });
 export type WorkflowRunSummary = typeof WorkflowRunSummarySchema.Type;
 
-/** Small, versioned rendering facts; the text content is the agent's record. */
 export const WorkflowToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
   action: Schema.Literals(WORKFLOW_TOOL_ACTIONS),
   run: Schema.optional(WorkflowRunSummarySchema),
-  /**
-   * Set on a status repeated within a minute while nothing material changed, whose text is one
-   * line of counts and a reminder not to poll instead of the full status.
-   */
   unchanged: Schema.optional(Schema.Boolean),
   saved: Schema.optional(Count),
   diagnostics: Schema.optional(Count),

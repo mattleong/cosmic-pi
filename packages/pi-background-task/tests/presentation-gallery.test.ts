@@ -24,7 +24,6 @@ import {
   taskWait,
 } from "./support/task-service-double.ts";
 
-/** A gallery task: the neutral fixture defaults, with output through cursor 12. */
 const task = (fields: Parameters<typeof taskStatus>[0]) => taskStatus({ logCursor: 12, ...fields });
 const failed = task({
   id: "task-1",
@@ -148,7 +147,6 @@ const service: Partial<BackgroundTaskServiceContract> = {
   },
 };
 
-/** The service's start: the requested task, now running. */
 const started =
   (id: string, pid: number): BackgroundTaskServiceContract["start"] =>
   (request) =>
@@ -166,9 +164,7 @@ const started =
 interface Scenario {
   readonly title: string;
   readonly input: BackgroundTaskToolInput;
-  /** The service calls this scenario reaches, over the shared stub. */
   readonly service?: Partial<BackgroundTaskServiceContract>;
-  /** An unsettled call: nothing executes and no result has arrived. */
   readonly phase?: "pending" | "running";
 }
 
@@ -347,14 +343,12 @@ const scenarios: ReadonlyArray<Scenario> = [
   },
 ];
 
-/** A scenario as the tool call shows it: settled through the shared executor, or still open. */
 const settle = (scenario: Scenario): Effect.Effect<GalleryScenario> => {
   const call = { title: scenario.title, args: scenario.input };
   if (scenario.phase) return Effect.succeed({ ...call, phase: scenario.phase });
   return executeBackgroundTaskCommand(scenario.input, "/project").pipe(
     provideTaskService(taskServiceDouble({ ...service, ...scenario.service })),
     Effect.match({
-      // Pi turns a rejected execution into an error result carrying only the message.
       onFailure: (error) => ({
         ...call,
         isError: true,
@@ -371,7 +365,6 @@ const settle = (scenario: Scenario): Effect.Effect<GalleryScenario> => {
   );
 };
 
-/** A scenario that needs what the registered definition adds beyond the shared executor. */
 interface RegisteredScenario {
   readonly title: string;
   readonly input: BackgroundTaskToolInput;
@@ -380,8 +373,6 @@ interface RegisteredScenario {
 
 const registeredScenarios: ReadonlyArray<RegisteredScenario> = [
   {
-    // A fact outside the script contract's bounds: the task started, so the model keeps its
-    // receipt, marked as an error, and scripts receive no structured result.
     title: "started task whose structured result could not be built",
     input: { action: "start", command: "pnpm docs:dev", name: "docs" },
     service: {
@@ -391,7 +382,6 @@ const registeredScenarios: ReadonlyArray<RegisteredScenario> = [
   },
 ];
 
-/** Settles a scenario through the registered definition's own execute, over its service. */
 const settleRegistered = (scenario: RegisteredScenario): Effect.Effect<GalleryScenario> => {
   const tool = captureRegistrations((pi) =>
     registerBackgroundTaskTool(pi, {

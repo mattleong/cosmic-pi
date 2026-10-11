@@ -3,11 +3,6 @@ import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { SUBAGENT_TOOL_NAMES, type SubagentToolName } from "../run/tool-policy.ts";
 import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../tools/outcome.ts";
 
-/**
- * Pi marks resolved execute results as successful; receipts preserve their full evidence. Typed
- * pending guidance delivery is not an error, but any other target-operation failure in the same
- * result still marks the call.
- */
 export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
   let activation: symbol | undefined;
   const receipts = new Map<
@@ -20,8 +15,6 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
     receipts.clear();
     calls.clear();
   };
-  // Start preserves an empty parent ID even when Pi omits it from the later tool_call.
-  // Both observations must agree before granting model origin; script evidence stays sticky.
   pi.on("tool_execution_start", (event) => {
     if (!activation || !ownedNames.has(event.toolName)) return;
     const known = calls.get(event.toolCallId);
@@ -29,7 +22,6 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
     if (event.parentToolCallId !== undefined) calls.set(event.toolCallId, "script");
     else if (known === undefined) calls.set(event.toolCallId, "pending");
   });
-  // Only native host provenance identifies origin; arguments and ID spelling do not.
   pi.on("tool_call", (event) => {
     if (!activation || !ownedNames.has(event.toolName)) return;
     const known = calls.get(event.toolCallId);
@@ -44,13 +36,11 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
   const apply = (event: ToolResultEvent): { readonly isError: true } | undefined => {
     calls.delete(event.toolCallId);
     const receipt = receipts.get(event.toolCallId);
-    // Exact identity survives content middleware, but never blesses foreign/replaced details.
     if (!receipt || event.toolName !== receipt.tool || event.details !== receipt.details) return;
     receipts.delete(event.toolCallId);
     return { isError: true };
   };
   pi.on("tool_result", apply);
-  // Native nested calls always emit end, even when abort or another hook skips tool_result.
   pi.on("tool_execution_end", (event) => {
     calls.delete(event.toolCallId);
   });
@@ -77,7 +67,6 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
       if (owner !== activation || callId.length > 1_024) return;
       const decoded = decodeSubagentOutcomeDetails(action, details);
       if (!decoded || !marksSubagentToolError(decoded)) return;
-      // Bound the original identity too: decoders intentionally ignore unknown fields.
       try {
         if (JSON.stringify(details).length > MAX_TOOL_OUTPUT_CHARS) return;
       } catch {

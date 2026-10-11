@@ -9,7 +9,6 @@ import { makePiManagedRuntime } from "pi-cosmic-core";
 import {
   extensionApiFixture,
   extensionContextFixture,
-  opaqueFixture,
   plainTheme,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
@@ -106,7 +105,6 @@ for (const style of ["preview", "compact"] as const)
   for (const mode of ["on", "off", "border"] as const) {
     it(`a real retained host row adopts first-ready ${style}/${mode} with complete call and result`, () => {
       const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] });
-      // Exactly one resolver evaluation: this is Pi's replay construction boundary.
       const renderers = resolver("bash", () => downstream);
       assert.equal(renderers?.renderShell, "self");
       const row = hostRow(renderers);
@@ -124,12 +122,21 @@ for (const style of ["preview", "compact"] as const)
         if (expanded || style === "preview") assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
         assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
       }
-      // Mouse-driven host expansion still reaches the retained facade.
       row.setExpanded(false);
       row.render(80);
-      const mouse = row.handleMouse(
-        opaqueFixture({ type: "click", button: "left", x: 2, y: 1, width: 80, height: 20 }),
-      );
+      const mouse = row.handleMouse({
+        type: "click",
+        button: "left",
+        x: 2,
+        y: 1,
+        screenX: 2,
+        screenY: 1,
+        width: 80,
+        height: 20,
+        shift: false,
+        alt: false,
+        ctrl: false,
+      });
       assert.equal(mouse?.handled, true);
       assert.match(row.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
       owner.retire();
@@ -239,7 +246,6 @@ it("cold and declined rows preserve independent downstream caches and live panel
   const row = hostRow(resolver("bash", () => panels));
   row.invalidate();
   assert.match(row.render(80).join("\n"), /CALL SAW OUTPUT/);
-  // Disabled preview selection must not erase the downstream renderer's live state.
   owner.publish("/project", new Set(), scheduler);
   row.setExpanded(true);
   assert.match(row.render(80).join("\n"), /CALL SAW OUTPUT/);
@@ -310,7 +316,7 @@ effectIt.effect(
         isProjectTrusted: () => true,
         ui: { notify() {} },
       });
-      const dispatch = (name: string) => host.emit(name, context);
+      const dispatch = (name: "session_start" | "session_shutdown") => host.emit(name, context);
       const row = hostRow(resolvers[0]!("bash", () => downstream));
       const starting = dispatch("session_start");
       yield* Deferred.await(entered);

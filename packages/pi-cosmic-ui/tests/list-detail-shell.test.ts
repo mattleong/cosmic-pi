@@ -15,7 +15,6 @@ const lines = (count: number): string[] =>
   Array.from({ length: count }, (_, index) => `L${index + 1}`);
 const ids = (count: number): string[] =>
   Array.from({ length: count }, (_, index) => `row-${index}`);
-/** A wide shell with the detail pane focused on the first row. */
 const detailShell = (rows = ["a"]): ListDetailShell => {
   const shell = new ListDetailShell();
   shell.syncLayout(120);
@@ -195,7 +194,6 @@ describe("ListDetailShell detail window", () => {
     expect(window.visible[0]).toBe("L1");
     window = shell.detailWindow(lines(25), 6, false);
     expect(window.visible[0]).toBe("L1");
-    // A short text that fits shows whole either way.
     expect(new ListDetailShell().detailWindow(lines(3), 6, "top").visible).toEqual(lines(3));
   });
 

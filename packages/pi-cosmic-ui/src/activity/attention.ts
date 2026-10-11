@@ -2,7 +2,6 @@ import { managerActivityLabel } from "../manager/chrome.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 import type { ActivityItem } from "./protocol.ts";
 
-/** Roles and reasons come from producers, never from provider identity or display text. */
 export function activityAttention(item: ActivityItem): "user" | "parent" | "blocked" | undefined {
   if (item.status === "needs-input") return item.inputTarget;
   return item.status === "blocked" ? "blocked" : undefined;
@@ -18,23 +17,16 @@ const blockedLabels = {
   "write-containment": "pausing writes for safety",
 } as const;
 
-/** Declared work that has not been requested; it is not queued and may never run. */
 export const activityPlanned = (item: Pick<ActivityItem, "planned">): boolean =>
   item.planned === true;
 
-/** Work that has not started yet, such as a workflow agent waiting for a slot. */
 export const activityQueued = (item: ActivityItem): boolean =>
   !activityPlanned(item) &&
   item.status === "pending" &&
   item.startedAt === undefined &&
   (item.kind === "agent" || item.kind === "command");
 
-/**
- * The shared state word; questionnaires are queued and cancelled, work starts and is stopped, or
- * is skipped before it starts.
- */
 export function activityStatus(item: ActivityItem): string {
-  // A planned item that ended never ran; its producer no longer intends to start it.
   if (activityPlanned(item)) return isFinished(item) ? "not run" : "planned";
   if (item.status === "needs-input")
     return item.inputTarget === "user" ? "waiting for you" : "waiting for parent";
@@ -70,7 +62,6 @@ export function activityAttentionCounts(item: ActivityItem): ActivityAttentionCo
   };
 }
 
-/** Adds `right` to `left`, or subtracts it with a `sign` of -1. */
 export const addAttention = (
   left: ActivityAttentionCounts,
   right: ActivityAttentionCounts,
@@ -90,10 +81,6 @@ export const activityAttentionLabels = (counts: ActivityAttentionCounts): string
     counts.failed ? `${counts.failed} failed` : "",
   ].filter(Boolean);
 
-/**
- * Short attention notices for branch rows and section headers: who must act ("needs you" for
- * human input, "waiting" for a parent agent's answer), then blocked and failed work.
- */
 export const compactNotices = (attention: ActivityAttentionCounts): string[] => [
   ...(attention.user ? [`${attention.user} ${attention.user === 1 ? "needs" : "need"} you`] : []),
   ...(attention.parent ? [`${attention.parent} waiting`] : []),

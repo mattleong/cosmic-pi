@@ -1,5 +1,3 @@
-// Fault injection stays at owned Node/process-tree boundaries; no provider executable runs.
-import { EventEmitter } from "node:events";
 import type { NodeChildProcess } from "./support/node-builtins.ts";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
@@ -22,7 +20,6 @@ import {
 } from "../src/boundary/process-transport.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 
-// Before release, only forced termination from stream callbacks reaches `terminate`.
 const boundary = {
   spawn: vi.fn<ProcessTransportRuntime["spawn"]>(),
   terminate: vi.fn<ProcessTransportRuntime["terminate"]>(),
@@ -37,32 +34,30 @@ const nativeRequest = {
 const acquireNative = () => acquireLocalCliTransport(nativeRequest, boundary);
 const notification = { method: "initialized" as const };
 
-class TransportPipe extends EventEmitter {
-  destroyed = false;
-  destroy(): void {
-    if (this.destroyed) return;
-    this.destroyed = true;
-    this.emit("close");
-  }
-}
+const { ChildProcess: NodeChildProcessClass } = process.getBuiltinModule("node:child_process");
+const { PassThrough, Writable } = process.getBuiltinModule("node:stream");
 
 const fixture = () => {
-  // SAFETY: The fixture implements the exact event/write/destroy contract of the owned adapter.
-  const child = new EventEmitter() as NodeChildProcess;
-  const stdout = new TransportPipe();
-  const stderr = new TransportPipe();
+  const child: NodeChildProcess = new NodeChildProcessClass();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
   const writes: string[] = [];
   let stalled = false;
   let completeWrite: ((error?: Error | null) => void) | undefined;
-  const stdin = Object.assign(new TransportPipe(), {
-    write(chunk: string, callback: (error?: Error | null) => void) {
+  const stdin = new Writable({
+    decodeStrings: false,
+    write(chunk: string, _encoding, callback) {
       writes.push(chunk);
       if (stalled) completeWrite = callback;
       else callback();
-      return !stalled;
     },
   });
-  Object.assign(child, { pid: 4242, stdin, stdout, stderr });
+  Object.defineProperties(child, {
+    pid: { value: 4242 },
+    stdin: { value: stdin },
+    stdout: { value: stdout },
+    stderr: { value: stderr },
+  });
   const finish = () => {
     child.emit("close", 0, null);
   };
@@ -82,8 +77,6 @@ const fixture = () => {
   };
 };
 
-// Layer startup performs real filesystem I/O. Scheduler yields cannot bound when
-// that I/O completes; wait for the fixture's listener registration instead.
 const spawnListenerReady = (child: NodeChildProcess) =>
   Effect.callback<void>((resume) => {
     const ready = () => {
@@ -91,8 +84,6 @@ const spawnListenerReady = (child: NodeChildProcess) =>
       resume(Effect.void);
     };
     const registered = (event: string | symbol) => {
-      // Node emits newListener before installing it. Effect may resume synchronously,
-      // so defer until registration completes before the fixture emits spawn.
       if (event === "spawn") queueMicrotask(ready);
     };
     child.on("newListener", registered);
@@ -116,7 +107,6 @@ const finishTimed = <A, E>(effect: Effect.Effect<A, E>) =>
     return yield* Fiber.join(fiber);
   });
 const closeScope = (scope: Scope.Closeable) => finishTimed(Scope.close(scope, Exit.void));
-/** Spawns a native transport in its own scope; `release` closes that scope. */
 const openNative = (f: ReturnType<typeof fixture>) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
@@ -237,7 +227,6 @@ describe("shared process transport", () => {
       expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
       expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force", { platform: "linux" });
       yield* release;
-      // Native release has no cooperative protocol abort.
       expect(f.writes).toEqual([]);
     }),
   );
@@ -377,7 +366,6 @@ describe("Pi transport policy", () => {
           service.spawn(backendLaunch()).pipe(Effect.provideService(Scope.Scope, scope)),
         );
         yield* spawnListenerReady(f.child);
-        // Child extension registration can report before Node's spawn readiness continuation runs.
         f.child.emit("message", {
           channel: "pi-subagents",
           type: "contact_parent",

@@ -1,7 +1,3 @@
-/**
- * Questionnaire tool bodies. The shared shell draws outcomes and issue lines; these pieces draw
- * only content: headings, answers, routine state, and labeled agent-facing text.
- */
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { expandedArguments, expandedSection, previewIssuesSlot } from "pi-code-previews";
@@ -16,29 +12,21 @@ import {
 } from "pi-cosmic-ui/tool";
 import type { ReplayedAnswer } from "./tool-render-projection.ts";
 
-/** Pi's renderer context, without copying its runtime definition. */
 export type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 
-/** Nothing to add: the heading and the shell's issue lines already say it. */
 export const emptyBody = (): Component => new Container();
 
-/** Components one after another. */
 export function stacked(parts: readonly Component[]): Component {
   const body = new Container();
   for (const part of parts) body.addChild(part);
   return body;
 }
 
-/**
- * The user's cancellation, worded as the shell words an aborted call. The shell states only
- * cancellations Pi reports as errors; the body states the ones the questionnaire returned.
- */
 export const cancelledLine = (theme: Pick<Theme, "fg">): Component =>
   new Text(toolStatusLine(theme, "stopped", "Cancelled"), 0, 0);
 
 const sentenceCase = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** Routine state in muted text: the first wording that fits the width. */
 export const mutedState = (alternatives: readonly string[], theme: Pick<Theme, "fg">): Component =>
   composeToolComponent((width) => {
     const text =
@@ -67,10 +55,6 @@ const answerEntries = (
 const indentLines = (text: string, indent: string): string =>
   text.replace(/\r?\n/gu, `\n${indent}`);
 
-/**
- * Each answer under its question title, with its note indented beneath it. Collapsed, each keeps
- * to one line and an expansion hint says when text was cut; expanded shows them whole.
- */
 export function answersBody(
   answers: readonly ReplayedAnswer[],
   titles: ReadonlyMap<string, string>,
@@ -107,7 +91,6 @@ export function answersBody(
   });
 }
 
-/** Agent-facing text under its label. Request IDs and agent procedures stay in here. */
 const rawResultSection = (theme: Theme, text: string, isError: boolean): Component =>
   expandedSection(
     theme,
@@ -115,7 +98,6 @@ const rawResultSection = (theme: Theme, text: string, isError: boolean): Compone
     new Text(theme.fg(isError ? "error" : "toolOutput", text), 0, 0),
   );
 
-/** A call's heading; expanded, the shell's issue lines and then the full arguments follow. */
 export function callBody<Args>(
   header: ToolHeader,
   args: Args,
@@ -127,7 +109,6 @@ export function callBody<Args>(
   return stacked([heading, previewIssuesSlot(context), expandedArguments(theme, args)]);
 }
 
-/** Expanded results: the agent-facing text, or the answers when a replay has no text. */
 export function expandedResult(
   raw: string,
   isError: boolean,

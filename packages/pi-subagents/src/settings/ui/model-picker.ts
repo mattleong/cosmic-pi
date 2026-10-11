@@ -19,17 +19,14 @@ import { profileRouteOptionLabel } from "../profile-route-editor.ts";
 import { runWithLabel } from "./profile-workspace-model.ts";
 import { selectHost } from "./profile-workspace-selectors.ts";
 
-/** A shared picker row plus the capabilities its selection applies to the candidate. */
 export interface ProfileModelOption extends ModelPickerModel {
   readonly selector: string;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable: boolean;
 }
 
-// Parent, native, and unavailable rows have explicit labels; only the selector identifies them.
 const pseudoModel = (selector: string) => ({ provider: "profile", id: selector, selector });
 
-/** Authenticated canonical Pi models, plus local Pi's special parent selector. */
 export function createPiModelOptions(input: {
   readonly models: ReadonlyArray<ProjectedPiModel>;
   readonly parentModel?: ProjectedPiModel | undefined;
@@ -87,7 +84,6 @@ export const createNativeModelOptions = (
       };
     });
 
-/** Keeps a configured model that the list does not offer as its first, non-selectable row. */
 export const retainUnavailableCurrent = (
   current: string,
   options: ReadonlyArray<ProfileModelOption>,
@@ -102,7 +98,6 @@ export const retainUnavailableCurrent = (
           available: false,
           unavailableReason:
             "Configured model is unavailable; choose another model or cancel to keep it",
-          // Explicitly false, so the fast-mode picker never falls back to the global check.
           fastModeAvailable: false,
         },
         ...options,
@@ -126,7 +121,6 @@ export interface ProfileModelPickerPageOptions extends SearchableSelectHostOptio
   readonly cancel: () => void;
 }
 
-/** Full-page searchable model dropdown used inside the profile workspace. */
 export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOptions) => {
   const { context, initialSelection, scopedChoices, targetLabel } = options;
   const optionLabel = profileRouteOptionLabel(context.candidateIndex);
@@ -137,7 +131,6 @@ export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOption
     subtitle: `${targetLabel} · ${runWithLabel(context)}`,
     scopedModels: scopedChoices ?? [],
     allModels: options.choices,
-    // Pi rows mark "(current)" from this; the Pi loader sets no defaultSelector, so it is the model.
     current: initialSelection,
     initialSearchMode: true,
     initialScope: scopedChoices?.some((option) => option.selector === initialSelection)

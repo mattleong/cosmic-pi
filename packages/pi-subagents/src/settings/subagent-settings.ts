@@ -1,7 +1,3 @@
-/**
- * `/subagents settings` through the shared settings shell: the writer workspace, and feature
- * switches and nesting limits for the session, global, or trusted-project scope.
- */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Result from "effect/Result";
@@ -9,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { failureMessage, isProjectTrusted, type ExtensionSubcommand } from "pi-cosmic-core";
 import {
   settingsSubcommand,
+  withInvocationAuthority,
   type SettingsSession,
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import {
@@ -84,7 +81,6 @@ const SCOPES = [
 
 const UNTRUSTED = "Trust this project before changing its subagent settings";
 
-/** The coordinator's reasons name workspaces and paths for the agent; people get the gist. */
 const WORKSPACE_BLOCKS = {
   "writers-active": "Can't change the writer workspace while writer subagents are active",
   "records-unavailable": "Can't change the writer workspace: its recovery records can't be read",
@@ -100,14 +96,12 @@ const settingScope = (scope: string | undefined): ProfileSettingsScope =>
 const editableScopes = (trusted: boolean): readonly ProfileSettingsScope[] =>
   trusted ? ["session", "global", "project"] : ["session", "global"];
 
-/** The limits a scope sets itself, or undefined when it inherits them. */
 const scopeNesting = (
   inspection: ProfileSettingsInspection,
   scope: ProfileSettingsScope,
 ): SubagentNestingPolicy | undefined =>
   scope === "session" ? inspection.session.nesting : inspection[scope]?.file.nesting;
 
-/** What a scope without its own limits inherits: the next scope's, as its rows describe. */
 const inheritedNesting = (
   inspection: ProfileSettingsInspection,
   scope: ProfileSettingsScope,
@@ -136,10 +130,20 @@ const saveFailure =
     );
 
 export function subagentSettingsSubcommand(actions: FleetManagerActions): ExtensionSubcommand {
-  /**
-   * Runs only while this session is current: a replaced or stopped session must not change its
-   * successor, and says nothing once it has been replaced.
-   */
+  const captureAuthority = (): (() => boolean) => {
+    if (!actions.isAvailable()) return () => !actions.isAvailable();
+    const owner = actions.captureModelRefresh();
+    return () => owner.isCurrent() && actions.isAvailable();
+  };
+  return withInvocationAuthority(captureAuthority, (isCurrent) =>
+    subagentSettingsCommand(actions, isCurrent),
+  );
+}
+
+function subagentSettingsCommand(
+  actions: FleetManagerActions,
+  isCurrent: () => boolean,
+): ExtensionSubcommand {
   const current = (
     run: (isCurrent: () => boolean) => Promise<SettingsResult>,
   ): Promise<SettingsResult> => {
@@ -151,11 +155,6 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
     );
   };
 
-  /**
-   * Writes one scope's payload against the state it inspected: the session's revision, or the
-   * document a saved scope holds. The shell refuses an untrusted Project before applying; trust
-   * is rechecked right before a project write, since it may change while inspecting.
-   */
   const saveToScope = <Payload extends object>(
     ctx: ExtensionCommandContext,
     scope: ProfileSettingsScope,
@@ -254,7 +253,6 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
 
   const statusText = (ctx: ExtensionCommandContext): Promise<string> => {
     if (!actions.isAvailable()) return Promise.reject(new Error("Subagents are not active"));
-    // One trust read decides both what is inspected and which scopes are reported.
     const trusted = isProjectTrusted(ctx);
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
@@ -278,8 +276,6 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
     );
   };
 
-  // SettingsList shows a cycled value before it is saved, so a failed or stale apply restores
-  // the row's last committed value.
   const committed = new Map<string, string>();
   const rowId = (id: string, scope: string | undefined) =>
     id === WORKSPACE ? id : `${settingScope(scope)}:${id}`;
@@ -335,6 +331,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
 
   return settingsSubcommand<undefined>({
     root: "subagents",
+    isCurrent,
     description: "Configure the writer workspace, subagent features, and nesting limits",
     title: "Subagents",
     descriptors: [

@@ -1,12 +1,6 @@
-/**
- * One slash command per extension: `/<name>` with subcommands that autocomplete, such as
- * `/openai usage` or `/subagents settings`. Routing and completion are pure; registration is
- * the only host call.
- */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { notifyAtHostBoundary } from "./host-session.ts";
 
-/** One autocomplete choice; `value` replaces the whole argument text. */
 interface CommandCompletion {
   readonly value: string;
   readonly label: string;
@@ -16,33 +10,24 @@ interface CommandCompletion {
 export interface ExtensionSubcommand {
   readonly name: string;
   readonly description: string;
-  /** What follows the name in the overview, such as `<prompt>`. */
   readonly arguments?: string | undefined;
-  /** Completes the text after `<name> `; values are relative to that text. */
   readonly complete?: ((prefix: string) => ReadonlyArray<CommandCompletion> | null) | undefined;
   readonly handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
 }
 
 interface ExtensionCommandBare {
   readonly handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
-  /** Also receives arguments that name no subcommand, such as a prompt. */
   readonly text?: boolean | undefined;
 }
 
 interface ExtensionCommandOptions {
-  /** The command name without its slash, such as `openai`. */
   readonly name: string;
   readonly description: string;
-  /** Runs for a bare `/<name>`; without it, a bare command lists the subcommands. */
   readonly bare?: ExtensionCommandBare | undefined;
   readonly subcommands?: ReadonlyArray<ExtensionSubcommand> | undefined;
 }
 
 export interface ExtensionCommand {
-  /**
-   * Adds a subcommand, or replaces the one with its name in place, so a subcommand that needs
-   * a session can arrive when the session starts.
-   */
   readonly add: (subcommand: ExtensionSubcommand) => void;
 }
 
@@ -52,7 +37,6 @@ type ExtensionCommandRoute =
   | { readonly _tag: "Overview" }
   | { readonly _tag: "Unknown"; readonly name: string };
 
-/** Which part of the command handles `args`. Subcommand names match exactly. */
 export const routeExtensionCommand = (
   args: string,
   subcommands: ReadonlyArray<ExtensionSubcommand>,
@@ -66,10 +50,6 @@ export const routeExtensionCommand = (
   return bare?.text ? { _tag: "Bare", args: trimmed } : { _tag: "Unknown", name: head };
 };
 
-/**
- * Completes subcommand names, then hands the rest to the named subcommand. Returns `null`,
- * never an empty array, when nothing matches, as Pi expects.
- */
 export const completeExtensionCommand = (
   prefix: string,
   subcommands: ReadonlyArray<ExtensionSubcommand>,
@@ -90,7 +70,6 @@ export const completeExtensionCommand = (
   return inner.map((choice) => ({ ...choice, value: `${head} ${choice.value}` }));
 };
 
-/** The bare-command overview: each subcommand with its arguments and description. */
 const extensionCommandOverview = (
   name: string,
   description: string,
@@ -104,7 +83,6 @@ const extensionCommandOverview = (
     ),
   ].join("\n");
 
-/** The usage line for arguments that name no subcommand; brackets mark an optional one. */
 const extensionCommandUsage = (
   name: string,
   subcommands: ReadonlyArray<ExtensionSubcommand>,
@@ -114,7 +92,6 @@ const extensionCommandUsage = (
   return `Usage: /${name} ${bare ? `[${names}]` : `<${names}>`}`;
 };
 
-/** Runs a handler now, so it can open a view synchronously, and rejects when it throws. */
 const settle = (run: () => Promise<void> | void): Promise<void> => {
   try {
     return Promise.resolve(run());
@@ -123,7 +100,6 @@ const settle = (run: () => Promise<void> | void): Promise<void> => {
   }
 };
 
-/** Registers `/<name>` and returns the handle that adds its subcommands. */
 export function registerExtensionCommand(
   pi: Pick<ExtensionAPI, "registerCommand">,
   options: ExtensionCommandOptions,

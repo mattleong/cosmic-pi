@@ -64,16 +64,11 @@ const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => 
   }
 };
 
-/** The contract value accepted for this assignment; it completes the assignment once settled. */
 const acceptedResult = (record: RunRecord, assignmentEpoch: number): string | undefined =>
   record.structuredResult?.assignmentEpoch === assignmentEpoch
     ? record.structuredResult.json
     : undefined;
 
-/**
- * How a settled assignment proceeds; caller holds the run lock. A pause committed for the
- * assignment ignores the settlement unless a result was already accepted, which outlives the pause.
- */
 const settledAssignmentLocked = (
   record: RunRecord,
   assignmentEpoch: number,
@@ -95,7 +90,6 @@ const settledAssignmentLocked = (
   return "running";
 };
 
-/** Text a settled assignment wrote: its report, or a contract result written as JSON text. */
 const settledText = (record: RunRecord, terminal?: BackendAssistantTerminal) =>
   Effect.gen(function* () {
     const text =
@@ -124,7 +118,6 @@ const settledFailureMessage = (
   return `${reason} Work and writes may already exist; inspect them before an explicit retry.`;
 };
 
-/** A backend report as the run's final text; a contract run's report must be its JSON result. */
 const reportFinalText = (record: RunRecord, text: string) => {
   const contract = record.launch.resultContract;
   if (!contract)
@@ -171,13 +164,6 @@ const viewForSettlement = (
   ...(error !== undefined && { error }),
 });
 
-/**
- * Owns event-driven view mutation, pause commits, terminal settlement, backend
- * report validation, and assignment activation replay.
- * `settle` performs one locked transaction covering completion insertion and
- * wakeup, question invalidation, warning folding, pause completion, projection,
- * deferred initialization, and idempotence. Peer notification stays outside.
- */
 export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   const { ownerScope, withLock, publish, delivery, closeRecordScope, sendPeerNotices } =
     dependencies;
@@ -209,12 +195,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         return snapshotView(record.view);
       }),
     );
-  /**
-   * Merges exact-epoch usage that a backend reported only at its final native
-   * result, after an accepted report already settled the run. Only the completed
-   * outcome of the same assignment may absorb it; stopped, failed, and parent-stopped records
-   * ignore late assistant usage.
-   */
   const mergeLateUsage = (record: RunRecord, assignmentEpoch: number, usage: SubagentUsage) =>
     withLock(
       Effect.gen(function* () {
@@ -227,8 +207,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         yield* mergeUsageLocked(record, usage);
       }),
     );
-  // Native session stats describe process/run work, including idle cache warming.
-  // Assignment changes do not reset run totals. Check process ownership under the mutation lock.
   const mergeProcessUsage = (
     record: RunRecord,
     source: BackendHandle | undefined,
@@ -249,7 +227,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       }),
     );
 
-  /** Commits a requested pause at settlement, unless the assignment already returned its result. */
   const pauseFromEvent = (record: RunRecord, now: number, assignmentEpoch: number) =>
     withLock(
       Effect.gen(function* () {
@@ -573,15 +550,12 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         if (yield* pauseFromEvent(record, now, assignmentEpoch)) return;
       }
       if (record.stoppedByParent) return;
-      // Settled text is decoded only when no value was accepted; it could not replace one.
       const written =
         acceptedResult(record, assignmentEpoch) === undefined
           ? yield* settledText(record, terminal)
           : { text: undefined, problem: undefined };
       const outcome = yield* withLock(
         Effect.sync(() => {
-          // An accepted contract result completes the run even after tool use, a later turn, or
-          // a pause that raced its settlement.
           const finalText = acceptedResult(record, assignmentEpoch) ?? written.text;
           if (!finalText) return "failed";
           if (
@@ -601,14 +575,10 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     });
 
   return {
-    /** Locked epoch/phase-guarded view mutation for assignment-scoped events. */
     mutateEventView,
-    /** Locked exact-epoch usage merge for results arriving after report settlement. */
     mergeLateUsage,
     mergeProcessUsage,
-    /** One locked idempotent terminal transaction plus post-commit peer notification. */
     settle,
-    /** Marks cleanup, cancels pending responses, force-terminates, then settles failed. */
     failRun,
     activateAssignmentLocked,
     replayAssignmentActivation,

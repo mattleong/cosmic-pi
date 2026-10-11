@@ -20,7 +20,6 @@ const Stats = Schema.Struct({
   cost: Cost,
 });
 
-/** A process-lifetime high-water mark, seeded before sending any child work. */
 export const makeLocalPiUsage = () => {
   let previous: SubagentUsage | undefined;
   const account = <ValueInput>(value: ValueInput): SubagentUsage | undefined => {
@@ -41,7 +40,6 @@ export const makeLocalPiUsage = () => {
       cost: cost - (previous.cost ?? 0),
     };
     const components = Object.values(delta);
-    // Any regressing component leaves the high-water mark unchanged.
     if (components.some((component) => component < 0)) return undefined;
     previous = next;
     return components.some((component) => component > 0) ? delta : undefined;

@@ -5,7 +5,6 @@ import {
 } from "../run/model.ts";
 import type { WorkflowAgentSpend } from "./model.ts";
 
-/** Each run's direct children in the projection, by parent run id. */
 const childrenByParent = (
   projection: SubagentProjection,
 ): ReadonlyMap<string, ReadonlyArray<SubagentRunView>> => {
@@ -20,7 +19,6 @@ const childrenByParent = (
   return children;
 };
 
-/** The subagents `runId` started itself, and theirs, at every depth. */
 const descendantsOf = (
   children: ReadonlyMap<string, ReadonlyArray<SubagentRunView>>,
   runId: string,
@@ -37,15 +35,9 @@ const descendantsOf = (
   return found;
 };
 
-/**
- * What the subagents of running workflow agents use: the ones each agent started itself, and
- * theirs, at every depth. The projection drops an ended subagent's record once enough runs have
- * ended, so each one's latest spend is kept until its agent settles.
- */
 export const makeWorkflowDelegation = () => {
   const seen = new Map<string, Map<string, WorkflowAgentSpend>>();
 
-  /** Notes what the subagents of each agent in `agentIds` have used so far. */
   const observe = (projection: SubagentProjection, agentIds: Iterable<string>): void => {
     let children: ReadonlyMap<string, ReadonlyArray<SubagentRunView>> | undefined;
     for (const agentId of agentIds) {
@@ -53,21 +45,18 @@ export const makeWorkflowDelegation = () => {
       const descendants = descendantsOf(children, agentId);
       if (descendants.length === 0) continue;
       const spends = seen.get(agentId) ?? new Map<string, WorkflowAgentSpend>();
-      // A record still shown is the subagent's latest; one dropped keeps its last spend.
       for (const run of descendants)
         spends.set(run.id, { usage: run.usage, toolUses: run.toolUses ?? 0 });
       seen.set(agentId, spends);
     }
   };
 
-  /** Output tokens the agent's subagents had used when last observed. */
   const output = (agentId: string): number => {
     let total = 0;
     for (const spend of seen.get(agentId)?.values() ?? []) total += spend.usage.output;
     return total;
   };
 
-  /** What each of the agent's subagents used, observed once more, and forgets them. */
   const settle = (
     projection: SubagentProjection,
     agentId: string,

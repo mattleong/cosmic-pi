@@ -1,4 +1,3 @@
-// Actual Pi agent loop and native QuickJS, with owned service boundaries only.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -30,7 +29,6 @@ const output = (text: string) => {
 };
 const print = (expression: string) => `text('WORKFLOW_RESULT ' + JSON.stringify(${expression}));`;
 
-/** Live time is intentional: each test drives the actual native QuickJS worker, not an LLM. */
 const nativeTest = <A, E>(
   name: string,
   body: () => Effect.Effect<A, E, Scope.Scope | Layer.Success<typeof nodeFilePlatformLayer>>,

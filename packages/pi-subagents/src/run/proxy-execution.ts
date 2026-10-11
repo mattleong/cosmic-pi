@@ -13,7 +13,6 @@ import { isActiveRunState } from "./model.ts";
 
 interface RunProxyExecutionDependencies {
   readonly ownerScope: Scope.Scope;
-  /** Acquired by the service before its leaf-first shutdown finalizer. */
   readonly executions: FiberMap.FiberMap<string, void, never>;
   readonly executeProxy?: (
     callerRunId: string,
@@ -26,7 +25,6 @@ interface RunProxyExecutionDependencies {
   ) => Effect.Effect<BackendProxyResult, SubagentError>;
 }
 
-/** Authenticated dispatch and keyed execution; the service owns map and questionnaire lifetimes. */
 export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencies) {
   const { ownerScope, executions, executeProxy, executeQuestionnaire } = dependencies;
   return (
@@ -35,7 +33,6 @@ export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencie
   ): Effect.Effect<void> => {
     const key = `${record.view.id}:${event.requestId}`;
     if (event.type === "proxy_cancel")
-      // Cancellation never waits on the interrupted execution's finalizers in the event loop.
       return FiberMap.remove(executions, key).pipe(
         Effect.forkIn(ownerScope, { startImmediately: true }),
         Effect.asVoid,
@@ -89,7 +86,6 @@ export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencie
       }),
       Effect.ignore,
     );
-    // rc.112 forks immediately and removes settled executions. Never replace an active key.
     return FiberMap.run(executions, key, execute, { onlyIfMissing: true }).pipe(Effect.asVoid);
   };
 }

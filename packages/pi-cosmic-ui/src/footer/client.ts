@@ -15,9 +15,7 @@ import {
 } from "../protocol/protocol.ts";
 
 interface CosmicFooterClient {
-  /** Whether a compatible Cosmic UI host answered the latest query. */
   readonly installed: boolean;
-  /** Whether that host currently owns the custom-footer slot. */
   readonly active: boolean;
   readonly isVisible: (id: string) => boolean;
   readonly query: () => boolean;
@@ -29,12 +27,10 @@ interface CosmicFooterClient {
 
 const noop = () => undefined;
 
-/** Plain-data event-bus client. No Effect value or runtime crosses this boundary. */
 export function createCosmicFooterClient(
   events: ExtensionAPI["events"] | undefined,
   owner: string,
 ): CosmicFooterClient {
-  /** The latest valid host state; undefined until a compatible host answers. */
   let host: CosmicUiHostState | undefined;
   const emit = (
     name: string,
@@ -94,7 +90,6 @@ interface HostStateWatch {
   readonly stop: () => void;
 }
 
-/** Idempotent host-state subscription; `start` while already watching is a no-op. */
 export function makeHostStateWatch(
   client: Pick<CosmicFooterClient, "onHostStateChange">,
   listener: (state: CosmicUiHostState) => void,

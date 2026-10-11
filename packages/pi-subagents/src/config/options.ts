@@ -25,13 +25,10 @@ export type ResolvedProfileSetSelection =
   | {
       readonly scope: "global" | "project";
       readonly name?: string | undefined;
-      /** Retained only for a fail-closed loaded default whose name or target is invalid. */
       readonly invalid?: boolean | undefined;
     };
 
-/** Every feature switch resolved to a required boolean; `/reload` picks up saved changes. */
 export interface ResolvedSubagentConfig extends SubagentFeatureToggles {
-  /** Which scope set each switch's value; a session override reports `session`. */
   readonly featureSources: Readonly<Record<SubagentFeatureToggle, SubagentFeatureSource>>;
   readonly globalConfigPath: string;
   readonly projectConfigPath: string;
@@ -59,7 +56,6 @@ export type ResolvedNamedProfileSetStatus =
   | "missing"
   | "structurally-invalid";
 
-/** One resolved route layer: every profile's route and the layer that supplied it. */
 type ResolvedProfileLayer = Pick<ResolvedSubagentConfig, "profiles" | "profileSources">;
 
 export interface ResolvedNamedProfileSet extends ResolvedProfileLayer {
@@ -83,7 +79,6 @@ interface ResolvedNamedProfileLayer {
   readonly status: ResolvedNamedProfileSetStatus;
 }
 
-// Layers share route objects; every public result is cloned and frozen once by freezeSnapshot.
 const BUILTIN_PROFILE_LAYER: ResolvedProfileLayer = {
   profiles: BUILTIN_PROFILE_ROUTES,
   profileSources: mapProfileIds(() => "builtin"),
@@ -140,7 +135,6 @@ const resolveProfileSetLayer = (
   return resolveNamedProfileLayer(decoded, scope, defaultName, lower).layer;
 };
 
-/** Resolves one saved set without changing either document's selected default. */
 export function resolveNamedProfileSet(
   input: ResolveNamedProfileSetInput,
 ): ResolvedNamedProfileSet {
@@ -163,7 +157,6 @@ export function resolveNamedProfileSet(
   });
 }
 
-/** The scope's declared default selection, including a fail-closed invalid default. */
 const declaredSelection = (
   scope: NamedProfileSetScope,
   decoded: DecodedSubagentConfig | undefined,
@@ -177,12 +170,10 @@ const declaredSelection = (
   };
 };
 
-/** Project routes in its selected set replace the selected global-set route; missing routes inherit. */
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
   const global = resolveProfileSetLayer(input.global, "global", BUILTIN_PROFILE_LAYER);
   const effective = project ? resolveProfileSetLayer(project, "project", global) : global;
-  // A trusted Project declaration wins over Global; with neither, a switch keeps its default.
   const ultracode = project?.file.ultracode ?? input.global.file.ultracode;
   return freezeSnapshot({
     ultracode: ultracode ?? DEFAULT_SUBAGENT_FEATURE_TOGGLES.ultracode,

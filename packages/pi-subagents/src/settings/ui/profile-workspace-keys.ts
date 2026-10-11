@@ -3,7 +3,6 @@ import { configuredKeyLabels } from "pi-cosmic-ui/manager/key-labels";
 import { FULL_SCREEN_NAVIGATION_SHORTCUTS } from "pi-cosmic-ui/manager/keymap";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 
-/** Screen-owned shortcuts precede configured navigation in FullScreenKeymap. */
 export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set([
   "/",
   "s",
@@ -20,7 +19,6 @@ export const isWorkspaceNavigationKey = (data: string): boolean =>
     matchesKey(data, key),
   );
 
-/** Configured bindings never claim raw arrows or Tab, which always navigate. */
 export const withoutNavigationKeys =
   (
     matches: SearchableSelectHostOptions["matchesKeybinding"],

@@ -26,7 +26,6 @@ import {
   withStreamingJsonBody,
 } from "../platform/streaming-http.ts";
 
-/** Clone-on-read, clone-on-write view of the stored documents. */
 interface InMemoryDocumentMap {
   readonly size: number;
   readonly get: (path: string) => JsonObject | undefined;
@@ -36,11 +35,9 @@ interface InMemoryDocumentMap {
 }
 
 export interface InMemoryDocuments {
-  /** Mutable handle for simulating external document changes in tests. */
   readonly documents: InMemoryDocumentMap;
   readonly service: JsonDocumentStoreContract;
   readonly layer: Layer.Layer<JsonDocumentStore>;
-  /** `operation:path` for each executed public store call, e.g. to prove absent project I/O. */
   readonly operations: readonly string[];
   readonly injectBeforeNextUpdate: (update: (current: JsonObject) => JsonObject) => void;
   readonly blockNextUpdateBeforeCommit: (
@@ -78,7 +75,6 @@ const documentView = (stored: Map<string, JsonObject>): InMemoryDocumentMap => (
   values: () => Array.from(stored.values(), cloneInitialDocument).values(),
 });
 
-// Match the live store's serialized representation.
 const cloneDocument = (operation: string, path: string, document: JsonObject) =>
   Schema.encodeUnknownEffect(JsonObjectFromString)(document).pipe(
     Effect.flatMap((source) => Schema.decodeEffect(JsonObjectFromString)(source)),
@@ -197,7 +193,6 @@ type JsonHttpTestRequest = Omit<
   JsonHttpRequest<Schema.ConstraintDecoder<unknown, unknown>>,
   "responseSchema"
 > & {
-  readonly responseSchema: Schema.Constraint;
   readonly encodedJsonBody?: Schema.Json;
 };
 
@@ -209,10 +204,9 @@ export const jsonHttpTestLayer = (
     JsonHttpClient.of(
       makeJsonHttpClient((input, encodedJsonBody) =>
         Effect.gen(function* () {
-          const requestInput =
+          const requestInput: JsonHttpTestRequest =
             encodedJsonBody === undefined ? input : { ...input, encodedJsonBody };
-          // SAFETY: The typed owner constructs the request on this test-only boundary.
-          const response = yield* handle(requestInput as JsonHttpTestRequest);
+          const response = yield* handle(requestInput);
           if (response.status < 200 || response.status >= 300)
             return { _tag: "Rejected", status: response.status } as const;
           const rawBody =
@@ -266,7 +260,6 @@ interface LifecycleProbe {
   readonly layer: Layer.Layer<never>;
 }
 
-/** Counts acquisition/finalization without exposing a Ref or requiring a test framework. */
 export function makeLifecycleProbe(
   acquiredEvent = "acquired",
   releasedEvent = "released",
@@ -325,7 +318,6 @@ export function makeCapturedTracer(): CapturedTracer {
   return { spans, layer: Layer.succeed(Tracer.Tracer, tracer) };
 }
 
-/** Stable serialization for secret-absence assertions; excludes timing and runtime span objects. */
 export const capturedTelemetrySnapshot = (capture: {
   readonly entries?: readonly unknown[];
   readonly spans?: readonly Tracer.NativeSpan[];

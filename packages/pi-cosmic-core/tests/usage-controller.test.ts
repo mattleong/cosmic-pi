@@ -104,7 +104,6 @@ const nextConfig: UsageControllerConfig = {
   usage: { ...config.usage, refreshIntervalMs: 30_000 },
 };
 
-/** A settings store whose uninterruptible commit installs `nextConfig`, then runs `beforeHook`. */
 const committingSettings = (beforeHook: Effect.Effect<void> = Effect.void) => {
   let durable = config;
   let mutations = 0;
@@ -157,7 +156,6 @@ it.effect(
         dependencies: Context.make(JsonHttpClient, conflictingHttp),
       }).pipe(provideBuiltLayer(testLayer));
 
-      // The construction Layer is closed here. The escaped effect uses its captured services.
       yield* h.controller.refresh({ force: true });
 
       expect(h.observedTrust()).toBe(false);
@@ -179,7 +177,6 @@ it.effect("composes the default synchronizeState from eligibility and hiddenStat
       eligibility: () => Effect.succeed(false),
       dependencies: Context.empty(),
     });
-    // Construction-time synchronize(true) applied the default synchronizeState path.
     expect(MutableRef.get(h.projection)).toMatchObject({
       config,
       authPath: "/agent/auth.json",
@@ -292,7 +289,6 @@ for (const invalidation of ["context", "settings"] as const) {
         for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
         if (invalidation === "settings") expect(settings.mutations()).toBe(1);
         expect(yield* Deferred.isDone(invalidated)).toBe(false);
-        // The engine gate is still held: consumer state must not clear ahead of it.
         expect(MutableRef.get(h.projection).snapshot).toBe(7);
         const interruption =
           invalidation === "settings"
@@ -306,7 +302,6 @@ for (const invalidation of ["context", "settings"] as const) {
         expect((yield* h.controller.getState).snapshot).toBeUndefined();
         if (invalidation === "settings")
           expect(MutableRef.get(h.projection).config?.usage.refreshIntervalMs).toBe(30_000);
-        // The interrupted durable commit and invalidation leave refresh reusable.
         yield* h.controller.refresh({ force: true });
         expect(MutableRef.get(h.projection).snapshot).toBe(2);
       } finally {

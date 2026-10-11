@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -7,7 +6,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { MAX_COMPLETION_DELIVERY_BATCH } from "../../src/run/limits.ts";
 import { processError } from "../../src/run/errors.ts";
 import { MAX_ERROR_CHARS } from "../../src/run/state.ts";
-import { makeTestSettlement, partialRecord, runningAssignment } from "./fixtures/run-context.ts";
+import { makeTestSettlement, runningAssignment, runRecordFixture } from "./fixtures/run-context.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
 import { emptyUsage } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
@@ -33,7 +32,6 @@ const resumableBackend = () =>
     capabilities: ["steer", "interrupt", "resume", "rename-display"],
   });
 
-/** Pauses a close-on-report run, then forks a gated resume whose start fails as uncertain. */
 const pausedUncertainResume = (
   service: SubagentServiceContract,
   backend: ReturnType<typeof fakeNativeReportBackendLayer>,
@@ -207,8 +205,7 @@ describe("primary failure privacy", () => {
     "retains typed initialization cause privately but only queues bounded redacted settlement",
     () =>
       Effect.gen(function* () {
-        // Deferred initialization failure writes cleanup, failure, and pending-settlement facts.
-        const record = partialRecord({
+        const record = yield* runRecordFixture({
           view: view({ state: "starting" }),
           stoppedByParent: false,
           initializationPending: true,
@@ -591,7 +588,6 @@ describe("SubagentService", () => {
                 else {
                   control.offer({ type: "protocol_error", message: "Assignment failed." });
                   yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-                  // The fixture does not emit process exit on terminate. Join cleanup explicitly.
                   yield* service.stop(run.id);
                 }
                 yield* yieldUntil(() => control.released() === 1);
@@ -675,14 +671,12 @@ describe("SubagentService", () => {
   it.effect("rejects conflicting report sequences without poisoning a valid later delivery", () =>
     Effect.gen(function* () {
       const first = { assignmentEpoch: 1, sequence: 1, deliveryId: "first" };
-      // Rejection and issuing-phase buffering read no result contract and settle nothing.
-      const record = partialRecord({
+      const record = yield* runRecordFixture({
         view: view({ state: "running" }),
         stoppedByParent: false,
         warningSlots: {},
         assignment: runningAssignment(2),
         lastBackendReport: first,
-        launch: {},
       });
       const settlement = yield* makeTestSettlement();
       yield* settlement.acceptBackendReport(record, {

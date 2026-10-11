@@ -7,10 +7,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 
-/** Pi's Promise-only operation callbacks borrow this invocation's services and scope.
- * Joining the scoped worker without an abort signal keeps Pi's queue held until
- * an admitted masked filesystem operation has actually settled.
- */
 export const executeNativeWrite = <E, R>(
   toolCallId: string,
   path: string,
@@ -24,7 +20,6 @@ export const executeNativeWrite = <E, R>(
       signal: AbortSignal,
     ) => Effect.Effect<void, E, R>;
   },
-  /** Receives what Pi's write rejected with, including an operation's own typed error. */
   onError: (cause: unknown) => E,
   ctx?: ExtensionToolContext,
 ) =>

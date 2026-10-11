@@ -102,7 +102,6 @@ test("receipt and query inspection reject inherited data, accessors, and throwin
   const subject = nativeToolSearchSubject({ query: "query\u001b[2J\n" + "padding ".repeat(1000) });
   assert.ok(subject.length <= 160);
   for (const control of ["\u001b", "\n", "\r"]) assert.equal(subject.includes(control), false);
-  // A query with nothing visible, as while arguments stream, leaves the heading empty.
   for (const query of ["", " \t", "\u0007", "\u001b[2J"])
     assert.equal(nativeToolSearchSubject({ query }), "");
 });

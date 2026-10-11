@@ -1,6 +1,5 @@
 const ALIGNMENT_SCORE_EPSILON = 1e-9;
 
-/** Pair weight, or `-Infinity` for a pair that may not align. DP cells stay finite and >= 0. */
 type PairScoreAt = (beforeIndex: number, afterIndex: number) => number;
 
 function sameAlignmentScore(a: number, b: number): boolean {
@@ -48,7 +47,6 @@ export function prefixAlignedPairs(
   afterLength: number,
   scoreAt: PairScoreAt,
 ): Array<[number, number]> {
-  // Reversing both axes preserves the prefix walk's end-first tie-breaking.
   return suffixAlignedPairs(beforeLength, afterLength, (i, j) =>
     scoreAt(beforeLength - 1 - i, afterLength - 1 - j),
   )

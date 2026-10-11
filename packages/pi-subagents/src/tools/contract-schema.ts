@@ -1,8 +1,3 @@
-/**
- * Version-1 machine-readable orchestration contracts for scripts. These are separate from the
- * persisted/display details: they carry only domain facts, never formatted text, and decode
- * strictly so an unexpected key is a mismatch rather than silently ignored metadata.
- */
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
 import { PROFILE_CANDIDATE_WRITE_INTENTS, PROFILE_IDS } from "../profiles/model.ts";
@@ -27,7 +22,6 @@ import { AWAIT_UNTIL, type SubagentLifecycleInput } from "./schema.ts";
 
 export const SUBAGENT_CONTRACT_ID = "pi-subagents/orchestration";
 export const SUBAGENT_CONTRACT_VERSION = 1;
-/** A fully rendered report always fits one bounded tool output, so delivery never truncates. */
 export const MAX_CONTRACT_REPORT_CHARS = MAX_TOOL_OUTPUT_CHARS;
 export const MAX_CONTRACT_MESSAGE_CHARS = 1_024;
 export const MAX_CONTRACT_ERROR_CHARS = 2_048;
@@ -61,22 +55,17 @@ const envelope = <Tool extends string>(tool: Tool) => ({
   tool: Schema.Literal(tool),
 });
 
-/** Report dispositions that never carry text. Every omission is named; none is silent. */
 const WITHHELD_REPORT_STATUSES = [
-  /** Finished but not delivered by this call; the report stays unconsumed for later delivery. */
   "deferred",
-  /** Another operation owns this generation. */
   "claimed",
   "already_delivered",
   "missing",
   "not_finished",
-  /** No report facts were observed (for example, a lifecycle receipt). */
   "unknown",
 ] as const;
 
 const WithheldReportSchema = Schema.Struct({ status: Schema.Literals(WITHHELD_REPORT_STATUSES) });
 const ReportSchema = Schema.Union([
-  /** `delivered` consumes this call's owned receipt; `read_back` is opt-in and consumes nothing. */
   Schema.Struct({
     status: Schema.Literals(["delivered", "read_back"]),
     text: NonEmptyText(MAX_CONTRACT_REPORT_CHARS),
@@ -84,7 +73,6 @@ const ReportSchema = Schema.Union([
   WithheldReportSchema,
 ]);
 
-/** Mirrors `runAttention`; the projection's assignment keeps both in step. */
 const AttentionSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literals(["containment", "admission-paused", "question-unavailable"]),
@@ -114,7 +102,6 @@ const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
     name: NameSchema,
     profile: Schema.optionalKey(ProfileSchema),
     state: StateSchema,
-    /** The current assignment has settled; backend resources may still be closing. */
     finished: Schema.Boolean,
     reportGeneration: count,
     writeIntent: WriteIntentSchema,
@@ -125,7 +112,6 @@ const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
     successorRunId: Schema.optionalKey(RunIdSchema),
     parentActionRequired: Schema.Boolean,
     attention: Schema.optionalKey(AttentionSchema),
-    /** Authoritative failed-start recovery only; never inferred from run-view hints. */
     retry: Schema.optionalKey(Schema.Struct(RecoveryFields)),
     warnings: Schema.Array(
       Schema.Struct({
@@ -144,7 +130,6 @@ const RunTargetsSchema = Schema.Array(RunTargetSchema).check(Schema.isMaxLength(
 const StartContractSchema = Schema.Struct({
   ...envelope(SUBAGENT_TOOL_NAME.start),
   outcome: Schema.Literals(["started", "partial", "failed"]),
-  /** Request-ordered launches, one per requested agent. */
   launches: Schema.Array(
     Schema.Union([
       Schema.Struct({
@@ -162,7 +147,6 @@ const StartContractSchema = Schema.Struct({
         name: Schema.optionalKey(NameSchema),
         profile: Schema.optionalKey(ProfileSchema),
         failure: FailureSchema,
-        /** Settled cleanup and retry facts when launch admission had already created a run. */
         admittedRun: Schema.optionalKey(Schema.Struct({ runId: RunIdSchema, ...RecoveryFields })),
       }),
     ]),
@@ -180,7 +164,6 @@ const AwaitContractSchema = Schema.Union([
     outcome: Schema.Literals(["finished", "attention"]),
     targets: RunTargetsSchema,
   }),
-  /** Cancellation never carries or consumes report text. */
   Schema.Struct({
     ...awaitFields,
     outcome: Schema.Literal("cancelled"),
@@ -200,7 +183,6 @@ const LifecycleContractSchema = Schema.Struct({
   ...envelope(SUBAGENT_TOOL_NAME.lifecycle),
   action: Schema.Literals(LIFECYCLE_ACTIONS),
   outcome: Schema.Literals(["succeeded", "partial", "failed"]),
-  /** Request-ordered. A retry's requested predecessor and new successor stay separate IDs. */
   results: Schema.Array(
     Schema.Union([
       Schema.Struct({
@@ -219,7 +201,6 @@ const LifecycleContractSchema = Schema.Struct({
 
 const ListContractSchema = Schema.Struct({
   ...envelope(SUBAGENT_TOOL_NAME.list),
-  /** Complete visible registry, not the bounded targeted-action or display-card set. */
   runs: Schema.Array(
     Schema.Struct({
       ...WithheldRunTargetSchema.fields,
@@ -249,7 +230,6 @@ const RenameContractSchema = Schema.Union([
   }),
 ]);
 
-/** The one contract catalog, keyed by exact public tool name. */
 export const CONTRACT_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.start]: StartContractSchema,
   [SUBAGENT_TOOL_NAME.await]: AwaitContractSchema,
@@ -283,7 +263,6 @@ export type ContractLifecycleAction = SubagentLifecycleContract["action"];
 
 const STRICT_PARSE_OPTIONS = { errors: "first", onExcessProperty: "error" } as const;
 
-/** JSON encoding validates producers before completion receipts can be consumed. */
 export const SubagentContractSchema = Schema.Union([
   StartContractSchema,
   AwaitContractSchema,
@@ -301,7 +280,6 @@ export const encodeSubagentContract = Schema.encodeSync(
 export const isSubagentContractTool = (tool: string): tool is SubagentContractTool =>
   Object.hasOwn(CONTRACT_SCHEMAS, tool);
 
-/** Strict decode of one tool's contract; any mismatch, excess key, or hostile value is undefined. */
 export const decodeSubagentContract = <Tool extends SubagentContractTool, ValueInput>(
   tool: Tool,
   value: ValueInput,

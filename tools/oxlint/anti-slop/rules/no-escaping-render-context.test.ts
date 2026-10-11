@@ -20,7 +20,6 @@ const invalidRenderer = (code: string) => ({ filename: rendererFile, code, error
 
 tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, {
   valid: [
-    // Current edit/write patterns capture fields before constructing retained callbacks.
     validRenderer(`${headingImport}
       const tool = { renderCall(args, theme, renderContext) {
         const { state, expanded, invalidate } = renderContext;
@@ -40,7 +39,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
         const { state, executionStarted, isPartial } = context;
         return composeToolComponent(() => executionStarted && isPartial ? [state.subject] : []);
       } };`,
-    // Reading a property as an argument does not itself retain the context.
     validRenderer(`${cacheImport}
       const tool = { renderCall(args, theme, context) {
         return cachedDeferredPreview(context.state, 'call', [], 100, 'Loading', theme,
@@ -53,7 +51,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
         const expanded = alias.expanded;
         return stateHeading(() => expanded ? retainedState.full : retainedState.short);
       } };`),
-    // Immediate callbacks, including the current background-task result renderer, are safe.
     `import * as Option from 'effect/Option';
       const tool = { renderResult(result, options, theme, context) {
         const details = result.pipe(Option.filter(decoded => decoded.action === context.args.action));
@@ -88,7 +85,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
       const tool = { renderCall(args, theme, context) {
         return cachedPreview(context.state, 'call', [], () => new Text(context.args.text));
       } };`),
-    // Scope identity, not the name 'context', identifies retained renderer input.
     `${componentImport}
       function helper(context) { return composeToolComponent(() => [context.value]); }`,
     `${componentImport}
@@ -115,7 +111,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
         draw = () => [];
         return composeToolComponent(draw);
       } };`,
-    // Same-file helpers that receive the context keep only what they read.
     `${componentImport}
       function heading(theme, state) { return composeToolComponent(() => [state.summary]); }
       const tool = { renderCall(args, theme, context) { return heading(theme, context.state); } };`,
@@ -125,13 +120,11 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
         return composeToolComponent(() => [state.summary]);
       }
       const tool = { renderCall(args, theme, context) { return heading(theme, context); } };`,
-    // A detached copy does not carry the original's lastComponent chain.
     `${componentImport}
       const tool = { renderCall(args, theme, context) {
         const detached = { ...context, lastComponent: undefined };
         return composeToolComponent(() => [detached.state.summary]);
       } };`,
-    // Unknown or shadowed helper contracts are deliberately not inferred by name.
     `const stateHeading = callback => callback();
       const tool = { renderCall(args, theme, context) {
         return stateHeading(() => context.state.summary);
@@ -172,12 +165,10 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
     } };`,
   ],
   invalid: [
-    // The state-heading contract must never regress to retaining context instead of state.
     invalidRenderer(`${headingImport}
       const tool = { renderCall(args, theme, renderContext) {
         return stateHeading(() => renderContext.state.editSummaryText);
       } };`),
-    // Historical 4bc5d923 write proposal: the deferred outer callback retains the nested reads.
     invalidRenderer(`${cacheImport}
       import { unlessResultDiffShown } from './shared/result-diff';
       const tool = { renderCall(args, theme, renderContext) {
@@ -190,7 +181,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
         );
         return unlessResultDiffShown(renderContext.state, preview);
       } };`),
-    // Historical 6801323c background-task heading retained state and flags through context.
     {
       code: `${componentImport}
         const tool = { renderCall(args, theme, context) {
@@ -201,7 +191,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
         } };`,
       errors: [error],
     },
-    // Historical deferred result callbacks were separately declared, not inline arguments.
     invalidRenderer(`${cacheImport}
       const tool = { renderResult(result, { expanded }, theme, renderContext) {
         const render = () => renderDiff(result, expanded, theme, renderContext.invalidate);
@@ -281,7 +270,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
       const tool = { renderCall(args, theme, context) {
         return unlessResultDiffShown(context.state, () => new Text(context.args.text));
       } };`),
-    // Returned component render methods run later even without a retained-helper call.
     {
       code: `const tool = { renderCall(args, theme, context) {
         return { render(width) { return [context.args.text]; }, invalidate() {} };
@@ -309,7 +297,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
       } };`,
       errors: [error],
     },
-    // Immediate construction is not an exemption for the returned component's later methods.
     {
       filename: nativeFile,
       code: `${safeContentImport}
@@ -343,7 +330,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
       } };`,
       errors: [error],
     },
-    // A same-file helper given the whole context is checked like the renderer itself.
     {
       code: `${componentImport}
         function heading(theme, context) {
@@ -365,7 +351,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
         } };`,
       errors: [error],
     },
-    // Closures share their scope, so an escaping component keeps every capture made there.
     {
       name: "historical web-access compose: a failure callback shared the component's scope",
       code: `const tool = { renderCall(args, theme, context) {
@@ -377,7 +362,6 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
   ],
 });
 
-// createOnce state must not carry admitted helpers, renderer bindings, or components into another file.
 tester.run("anti-slop/no-escaping-render-context-file-reset", noEscapingRenderContextRule, {
   valid: [
     validRenderer(`const stateHeading = callback => new Text(callback());
@@ -389,7 +373,6 @@ tester.run("anti-slop/no-escaping-render-context-file-reset", noEscapingRenderCo
   invalid: [],
 });
 
-// Linting each definition verifies the table, and a moved or deleted definition fails here.
 const packages = fileURLToPath(new URL("../../../../packages/", import.meta.url));
 const stale = { messageId: "staleHelper" };
 tester.run("anti-slop/no-escaping-render-context-helper-table", noEscapingRenderContextRule, {

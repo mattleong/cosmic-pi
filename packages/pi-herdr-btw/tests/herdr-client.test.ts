@@ -98,8 +98,6 @@ it.effect("isolates credentials and hostile arguments while bounding requests", 
     expect(started).toMatchObject({ name: "btw-agent", agent: "pi" });
     yield* client.promptSideSessionPi("btw-agent", hostilePrompt);
     yield* client.focusSideSessionPi("btw-agent");
-    // Read-only requests take their own bounds; the fake answers no inspection payloads, so only
-    // the requests themselves reach the isolation checks below.
     for (const inspect of [
       client.inspectProtocol(),
       client.inspectPiIntegration(),
@@ -124,7 +122,6 @@ it.effect("isolates credentials and hostile arguments while bounding requests", 
     expect(prompt.args.filter((arg) => arg === hostilePrompt)).toHaveLength(1);
 
     for (const request of captured) {
-      // Direct executable plus argument arrays keep hostile input out of a shell.
       expect(request.executable).toBe("herdr");
       expect(request.args).not.toContain("-c");
       expect(request.environment).toMatchObject({

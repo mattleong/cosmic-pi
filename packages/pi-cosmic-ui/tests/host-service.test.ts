@@ -7,11 +7,13 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as Scheduler from "effect/Scheduler";
+import * as Schema from "effect/Schema";
 import * as core from "pi-cosmic-core";
 import { vi } from "vitest";
 import * as TestClock from "effect/testing/TestClock";
 import {
   AgentDirectory,
+  decodeUnknownOrUndefined,
   JsonDocumentStore,
   provideBuiltLayer,
   type JsonDocumentStoreContract,
@@ -29,6 +31,11 @@ import { abortablePendingExec, execOk, execResult, type ExecResult } from "./sup
 import { CosmicUiConfigStore } from "../src/config/store.ts";
 import { CosmicUiService, makeProjection, resetProjection } from "../src/protocol/service.ts";
 import { makePiExec } from "../src/boundary/host-exec.ts";
+
+const SavedFooter = Schema.Struct({
+  hidden: Schema.optional(Schema.Array(Schema.String)),
+  density: Schema.optional(Schema.String),
+});
 
 const context = (cwd = "/project"): ExtensionContext =>
   extensionContextFixture({ cwd, mode: "tui", sessionManager: { getCwd: () => cwd } });
@@ -270,7 +277,6 @@ describe("Cosmic UI host service", () => {
         makeRefresh({
           ...options,
           commit: (value) => {
-            // Record the owned engine's actual commit admission, after its final key comparison.
             if (armed) validated = true;
             return options.commit(value);
           },
@@ -347,8 +353,7 @@ describe("Cosmic UI host service", () => {
         "metrics",
         "session",
       ]);
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const saved = documents.get(configPath)?.footer as { hidden?: string[] } | undefined;
+      const saved = decodeUnknownOrUndefined(SavedFooter, documents.get(configPath)?.footer);
       expect([...(saved?.hidden ?? [])].sort()).toEqual(["metrics", "session"]);
     }).pipe(provideBuiltLayer(layer));
   });
@@ -384,8 +389,10 @@ describe("Cosmic UI host service", () => {
           .updateFooterConfig({ density: "compact" })
           .pipe(Effect.forkScoped);
         yield* Deferred.await(commitStarted);
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-        const saved = memory.documents.get(configPath)?.footer as { density?: string } | undefined;
+        const saved = decodeUnknownOrUndefined(
+          SavedFooter,
+          memory.documents.get(configPath)?.footer,
+        );
         expect(saved?.density).toBe("compact");
         expect(MutableRef.get(projection).config?.footer.density).toBe("comfortable");
 

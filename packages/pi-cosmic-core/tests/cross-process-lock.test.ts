@@ -10,8 +10,6 @@ import {
 } from "../src/platform/node-builtins.ts";
 import { killChild, spawnIpcChild, temporaryDirectory } from "../src/testing/ipc-child.ts";
 
-// Child processes load TypeScript through Jiti; on a loaded CI runner their startup alone can
-// exceed Vitest's 5 s default. Each wait below stays bounded by `spawn`'s own timeout.
 vi.setConfig({ testTimeout: 30_000 });
 
 const root = temporaryDirectory("cosmic-lock-test-");
@@ -64,7 +62,6 @@ it.live("does not equate owner death with native service settlement", () =>
     yield* killChild(first.child);
     const failure = yield* Effect.flip(tryAcquire(directory));
     expect(failure).toMatchObject({ reason: "recovery-required" });
-    // The error names the slot to recover: the directory holding the dead owner's evidence.
     expect(failure.slot?.startsWith(directory)).toBe(true);
     const evidence = yield* Effect.promise(() =>
       fs.readFile(path.join(failure.slot ?? "", "owner.json"), "utf8"),
@@ -185,8 +182,6 @@ it.live(
       const spy = vi.spyOn(nodeLockFs, "renameSync").mockImplementation((from, to) => {
         if (!paused && String(to).includes(".retired-")) {
           paused = true;
-          // The first reclaimer has passed its final token check. A second reclaims
-          // that exact dead owner and retains the barrier before successors cycle.
           expect(acquireNativeLock("fixture", { directory })).toBeUndefined();
           for (let index = 0; index < 5; index++)
             acquireNativeLock("fixture", { directory })!.release();

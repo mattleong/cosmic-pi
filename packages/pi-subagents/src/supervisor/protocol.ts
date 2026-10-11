@@ -58,7 +58,6 @@ export const SupervisorAssignmentEpochSchema = Schema.Number.check(
   Schema.isInt(),
   Schema.isGreaterThan(0),
 );
-/** Bounded text with at least one non-whitespace character. */
 const nonblankText = (maximum: number) =>
   Schema.String.check(
     Schema.isMinLength(1),
@@ -66,7 +65,6 @@ const nonblankText = (maximum: number) =>
     Schema.isPattern(NONBLANK_PATTERN),
   );
 export const SupervisorMessageSchema = nonblankText(MAX_SUPERVISOR_MCP_MESSAGE_CHARS);
-/** How a child tool returns its parent's reply, for every child transport. */
 export const PARENT_REPLY_PREFIX = "Parent reply: ";
 
 export const SupervisorReplySchema = Schema.String.check(

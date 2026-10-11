@@ -21,10 +21,8 @@ export const SUBAGENT_TOOL_NAME = Object.freeze({
 export const SUBAGENT_TOOL_NAMES = Object.freeze(Object.values(SUBAGENT_TOOL_NAME));
 export type SubagentToolName = (typeof SUBAGENT_TOOL_NAMES)[number];
 
-/** Private local Pi child tool for a run with a result contract; never inherited from the root. */
 export const SUBAGENT_RESULT_TOOL_NAME = "subagent_result";
 
-/** External competing orchestrators stay disabled, independent of the installed backend adapters. */
 export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT = [
   "herdr_agent_start",
   "herdr_agent_list",
@@ -58,13 +56,6 @@ const isCliRepresentableToolName = (name: string): boolean =>
   !name.includes(",") &&
   !hasControlCharacter(name);
 
-/**
- * Capture ordinary root-session tools in active order. Raw coordinator implementations are not
- * inherited: packaged child integrations explicitly register and activate authenticated proxies.
- * Prefix filtering also keeps future tools from known competing coordinator families out of a
- * child even before they are added to the process-level hard-exclusion list. The exact snapshot
- * must survive Pi's comma-delimited CLI parser without normalization or name injection.
- */
 export const piRootActiveToolSnapshot = (
   rootActiveTools: ReadonlyArray<string>,
 ): Effect.Effect<ReadonlyArray<string>, InvalidSubagentRequestError> => {
@@ -87,7 +78,6 @@ export const piRootActiveToolSnapshot = (
   return Effect.succeed(Object.freeze(inherited));
 };
 
-/** Shared bound/emptiness policy for every parent-authored message that reaches a child. */
 export const validateParentMessage = (
   message: string,
   emptyMessage: string,
@@ -104,7 +94,6 @@ export const validateParentMessage = (
   return Effect.succeed(normalized);
 };
 
-/** How the run returns its result: a validated value for contract runs, else a prose report. */
 const completionInstruction = (request: StartSubagentRequest): string => {
   if (!request.resultContract)
     return "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.";

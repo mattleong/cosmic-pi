@@ -16,7 +16,6 @@ const CHANGED_LINE_PAIR_AMBIGUITY_RATIO = 0.92;
 const HIGH_CONFIDENCE_CROSSING_PAIR_MARGIN = 0.12;
 const HIGH_CONFIDENCE_CROSSING_PAIR_RATIO = 0.85;
 
-/** The best score either line of a pair reaches with another partner not yet used. */
 export type CompetingChangedLineScoreAt = (
   removedPosition: number,
   addedPosition: number,

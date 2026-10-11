@@ -26,7 +26,6 @@ const snapshot = {
   delivery: "sent",
   outcome,
 };
-// The agent-facing text names the request; the transcript shows it only under its label.
 const agentText = `Request ${snapshot.requestId} · delivery ${snapshot.deliveryId}\nComplete agent guidance remains available.`;
 const message = {
   details: { ...snapshot, generation: "generation-private-id" },
@@ -46,7 +45,6 @@ describe("async questionnaire replay rendering", () => {
           expect(text.includes("Complete agent guidance")).toBe(expanded);
           expect(text).not.toContain("Scenic");
         } else if (input === withoutText) {
-          // A replay without text shows its answers and notes whole.
           expect(text.includes("Scenic")).toBe(expanded);
           expect(text.includes("Avoid tolls")).toBe(expanded);
         } else {
@@ -84,12 +82,10 @@ describe("async questionnaire replay rendering", () => {
       const lines = rendered.split("\n");
       for (const value of ["Scenic", "Tomorrow morning", "Text answer"])
         expect(rendered).toContain(value);
-      // Notes sit beneath their own answer.
       const scenic = lines.findIndex((line) => line.includes("Scenic"));
       expect(lines[scenic + 1]).toMatch(/.*Avoid tolls/);
       const text = lines.findIndex((line) => line.includes("Text answer"));
       expect(lines.slice(text + 1).join("\n")).toMatch(/.*Text context/m);
-      // Multi-line text keeps one line and an expansion hint until expanded.
       expect(rendered).not.toContain("with another line");
       expect(rendered).toMatch(/expand/);
       expect(rendered).not.toContain(snapshot.requestId);
@@ -111,16 +107,16 @@ describe("async questionnaire replay rendering", () => {
     expect(result(unlabeled, true)).toContain("with another line");
   });
 
-  it("expands legacy IDs and work fields without accepting malformed work", () => {
+  it("expands out-of-contract IDs and work fields without accepting malformed work", () => {
     for (const id of ["", "x".repeat(257)]) {
-      const legacy = {
+      const nonconforming = {
         ...snapshot,
         requestId: id,
         deliveryId: id,
         independentWork: "Inspect first",
         blockedWork: "Wait for decision",
       };
-      for (const details of [legacy, { requests: [legacy] }]) {
+      for (const details of [nonconforming, { requests: [nonconforming] }]) {
         expect(result(details, true)).toContain("Avoid tolls");
         const content = output(
           renderAsyncContent(
@@ -270,7 +266,6 @@ describe("async questionnaire replay rendering", () => {
     expect(listed).toMatch(/1 waiting/);
     expect(listed).toMatch(/1 answered/);
     expect(result({ requests: [] })).not.toBe("");
-    // A returned cancellation is stated once, as cancelled; failures are the shell's issue lines.
     const cancelledResult = { ...snapshot, status: "cancelled", outcome: { outcome: "cancelled" } };
     expect(result(cancelledResult, false, agentText)).toMatch(/cancelled/i);
     const failed = { ...snapshot, status: "failed", outcome: undefined };

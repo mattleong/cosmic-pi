@@ -82,7 +82,6 @@ describe("background task activity provider", () => {
   });
 
   it("keeps every active task in a snapshot within the protocol limit", () => {
-    // Retained finished tasks plus running ones can exceed one snapshot; listed oldest first.
     const finished = Array.from({ length: 540 }, (_, index) => ({
       ...task,
       id: `finished-${index}`,
@@ -107,7 +106,6 @@ describe("background task activity provider", () => {
       stop: () => Promise.resolve(),
       clear: () => Promise.resolve(),
     });
-    // The host rejects an oversized snapshot outright, which would hide every row.
     const published = Schema.decodeUnknownSync(ActivitySnapshotSchema)(transport.get()?.items);
     expect(published).toHaveLength(ACTIVITY_LIMITS.items);
     const ids = new Set(published.map((item) => item.id));

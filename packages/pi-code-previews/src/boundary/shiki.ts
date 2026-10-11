@@ -3,9 +3,29 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
-import { createHighlighter } from "shiki";
+import {
+  bundledLanguages,
+  createHighlighter,
+  type BundledLanguage,
+  type SpecialLanguage,
+} from "shiki";
 
 export type ShikiHighlighter = Awaited<ReturnType<typeof createHighlighter>>;
+
+const SPECIAL_LANGUAGES = [
+  "text",
+  "plaintext",
+  "txt",
+  "plain",
+  "ansi",
+] as const satisfies readonly SpecialLanguage[];
+
+export function isShikiLanguage(language: string): language is BundledLanguage | SpecialLanguage {
+  return (
+    Object.hasOwn(bundledLanguages, language) ||
+    SPECIAL_LANGUAGES.some((special) => special === language)
+  );
+}
 
 export class ShikiBoundaryError extends Schema.TaggedError<ShikiBoundaryError>()(
   "ShikiBoundaryError",
@@ -34,7 +54,6 @@ function highlighterUseState(highlighter: ShikiHighlighter): HighlighterUseState
   return created;
 }
 
-/** Third-party disposal must never defect a replacement, cancellation, or scope finalizer. */
 export function disposeShikiHighlighterSafely(highlighter: ShikiHighlighter): boolean {
   try {
     highlighter.dispose();
@@ -75,7 +94,6 @@ export function disposeShikiHighlighter(
 ): Effect.Effect<void> {
   if (!highlighter) return Effect.void;
   return Effect.gen(function* () {
-    // Disposal may be deferred to a Shiki Promise continuation, outside this fiber.
     const services = yield* Effect.context<never>();
     const state = highlighterUseState(highlighter);
     state.reportDisposalFailure = () =>
@@ -91,7 +109,6 @@ export interface ShikiAdapterContract {
     theme: string,
     languages: readonly string[],
   ) => Effect.Effect<ShikiHighlighter, ShikiBoundaryError>;
-  /** Custom adapters must stop using the highlighter when this Effect terminates. */
   readonly loadLanguage: (
     highlighter: ShikiHighlighter,
     language: string,
@@ -108,7 +125,6 @@ export class ShikiAdapter extends Context.Service<ShikiAdapter, ShikiAdapterCont
   static readonly layer = Layer.succeed(this, this.live);
 }
 
-/** Interruptible adapter that disposes a highlighter which resolves after cancellation. */
 function createShikiHighlighter(
   theme: string,
   languages: readonly string[],
@@ -127,8 +143,7 @@ function createShikiHighlighter(
         );
     };
     try {
-      // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
-      void createHighlighter({ themes: [theme], langs: [...languages] as never[] })
+      void createHighlighter({ themes: [theme], langs: [...languages] })
         .then((highlighter) => {
           if (cancelled) disposeShikiHighlighterSafely(highlighter);
           else resume(Effect.succeed(highlighter));
@@ -147,9 +162,6 @@ function loadShikiLanguage(
   highlighter: ShikiHighlighter,
   language: string,
 ): Effect.Effect<void, ShikiBoundaryError> {
-  // Shiki's Promise has no cancellation API. Interruption therefore releases the Effect caller
-  // immediately while this adapter retains a lease; disposal is quarantined until that Promise
-  // settles. Test adapters are expected to stop using the highlighter when their Effect ends.
   return Effect.callback<void, ShikiBoundaryError>((resume) => {
     const failure = () =>
       Effect.fail(
@@ -158,7 +170,7 @@ function loadShikiLanguage(
           message: "Unable to load syntax language.",
         }),
       );
-    if (!beginHighlighterLoad(highlighter)) {
+    if (!isShikiLanguage(language) || !beginHighlighterLoad(highlighter)) {
       resume(failure());
       return Effect.void;
     }
@@ -170,8 +182,7 @@ function loadShikiLanguage(
       endHighlighterLoad(highlighter);
     };
     try {
-      // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
-      void Promise.resolve(highlighter.loadLanguage(language as never))
+      void Promise.resolve(highlighter.loadLanguage(language))
         .then(
           () => {
             settle();

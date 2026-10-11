@@ -12,12 +12,6 @@ import { invokeHostCallback } from "pi-cosmic-core";
 import { createInputDock } from "./host-input-dock.ts";
 import { createScreenViewport } from "./host-viewport.ts";
 
-/**
- * - `screen`: a viewport-sized overlay with live bounds.
- * - `dock`: the above-editor input dock with a keyboard-only overlay.
- * - `inline`: the editor slot; closes directly, with no overlay guard.
- * - `overlay`: a plain component-sized overlay.
- */
 type OwnedSurfacePlacement = "screen" | "dock" | "inline" | "overlay";
 
 export type OwnedSurfaceComponent = Component & Partial<Focusable> & { dispose?(): void };
@@ -26,27 +20,18 @@ export interface OwnedSurfaceHost<A> {
   readonly tui: TUI;
   readonly theme: Theme;
   readonly keybindings: KeybindingsManager;
-  /** The placement's allocated height. */
   readonly getHeight: () => number;
-  /** Requests completion; the first request wins and a stale owner closes instead. */
   readonly finish: (value: A) => void;
 }
 
 export interface OwnedSurfaceOptions<A> {
   readonly placement: OwnedSurfacePlacement;
-  /** The result of any close that no `finish` requested. */
   readonly closedValue: A;
-  /** Checked when the factory runs, on mount, and on each `finish`. */
   readonly isCurrent?: () => boolean;
-  /** Runs in the same synchronous frame as `ctx.ui.custom`. False blocks the opening;
-   * a returned release runs once when the surface closes, after Pi's `done`. */
   readonly admit?: () => false | (() => void);
   readonly create: (host: OwnedSurfaceHost<A>) => OwnedSurfaceComponent;
-  /** The mounted handle (dock-wrapped for `dock`); skipped once a finish or close came first. */
   readonly onMounted?: (handle: OverlayHandle) => void;
-  /** Runs once as closing begins, before Pi's `done`. Revoke callback authority only. */
   readonly onClose?: () => void;
-  /** Receives the external close synchronously, before `ctx.ui.custom`. */
   readonly onControl?: (close: () => void) => void;
 }
 
@@ -60,7 +45,6 @@ export class OwnedSurfaceError extends Schema.TaggedError<OwnedSurfaceError>()(
   { reason: Schema.Literals(["blocked", "failed"]) },
 ) {}
 
-/** Fail-closed check for an interactive TUI that supports custom surfaces. */
 export const hasCustomSurface = (ctx: Pick<ExtensionContext, "mode" | "ui">): boolean =>
   invokeHostCallback(() => ctx.mode === "tui" && Predicate.isFunction(ctx.ui.custom), false);
 
@@ -68,12 +52,6 @@ const inert = (): OwnedSurfaceComponent => ({ render: () => [], invalidate() {} 
 const attempt = (callback: (() => void) | undefined) =>
   invokeHostCallback(() => callback?.(), undefined);
 
-/**
- * Owns one `ctx.ui.custom` opening. Pinned Pi closes an overlay by popping the top of the
- * global stack, so an overlay closes by hiding its own handle, showing an inert
- * non-capturing guard, calling `done`, then hiding the guard. `settle` runs exactly once,
- * after the surface has closed. The returned `close` is synchronous and idempotent.
- */
 function mountOwnedSurface<A>(
   ctx: { readonly ui: ExtensionUIContext },
   options: OwnedSurfaceOptions<A>,
@@ -109,12 +87,10 @@ function mountOwnedSurface<A>(
     const tui = hostTui;
     const handle = owned;
     if (doneInvoked || !requested || !done) return;
-    // Overlay placements wait for their mounted handle; inline never receives one.
     if (placement !== "inline" && (!tui || !handle)) return;
     doneInvoked = true;
     revoke();
     const { value } = requested;
-    // Inline closes the editor slot directly; a throwing `done` leaves Pi's Promise in charge.
     if (!tui || !handle) return attempt(() => done(value));
     try {
       handle.hide();
@@ -125,7 +101,6 @@ function mountOwnedSurface<A>(
         guard.hide();
       }
     } catch (cause) {
-      // Pi's Promise may stay pending; never retry an unguarded global pop.
       complete({ _tag: "Failed", cause });
     }
   };
@@ -170,7 +145,6 @@ function mountOwnedSurface<A>(
   };
   const onHandle = (handle: OverlayHandle) => {
     owned = dock ? dock.handle(handle) : handle;
-    // Every close records a request, so a request covers a close before mount.
     if (requested) return tryDone();
     if (!current()) return close();
     options.onMounted?.(owned);
@@ -210,7 +184,6 @@ function mountOwnedSurface<A>(
   return close;
 }
 
-/** Effect door: interruption closes the surface; blocked and failed openings are typed. */
 export const openOwnedSurface = <A>(
   ctx: { readonly ui: ExtensionUIContext },
   options: OwnedSurfaceOptions<A>,
@@ -228,7 +201,6 @@ export const openOwnedSurface = <A>(
     return Effect.sync(close);
   });
 
-/** Promise door for Promise-shaped commands; callers map `Blocked` and `Failed` explicitly. */
 export const openOwnedSurfacePromise = <A>(
   ctx: { readonly ui: ExtensionUIContext },
   options: OwnedSurfaceOptions<A>,
@@ -239,7 +211,6 @@ export const openOwnedSurfacePromise = <A>(
     }),
   );
 
-/** A command's view: settles once closed and, as Pi's own custom Promise does, rejects a failed opening. */
 export const openCommandSurface = (
   ctx: { readonly ui: ExtensionUIContext },
   options: Omit<OwnedSurfaceOptions<undefined>, "closedValue">,

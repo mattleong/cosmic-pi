@@ -42,7 +42,6 @@ const tool = (placeUnderHeading = false, compactSummary = summary) => {
   );
 };
 
-/** Which of the markers each rendered line carries, in order; icons and styling are ignored. */
 const order = (rendered: readonly string[]) =>
   rendered.flatMap((line) =>
     ["HEADING", "CALL-CONTENT", "PROBLEM", "DETAIL", "RISKY", "BODY"].filter((marker) =>
@@ -123,7 +122,6 @@ test("animation ticks reuse the issues while the result's evidence is unchanged"
   harness.result(textResult("failed"), { isError: true });
   harness.render(80);
   const before = provided;
-  // Like Pi, each invalidation rebuilds both slots around a fresh result envelope.
   harness.invalidate();
   harness.invalidate();
   expect(order(harness.render(80))).toEqual(["HEADING", "CALL-CONTENT", "PROBLEM", "BODY"]);

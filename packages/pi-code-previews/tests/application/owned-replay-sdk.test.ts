@@ -1,4 +1,3 @@
-// Public Pi reload boundary: reconstruct the actual retained host row before session_start.
 import assert from "node:assert/strict";
 import { initTheme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -6,7 +5,6 @@ import { beforeAll, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { opaqueFixture } from "pi-cosmic-core/testing";
 import { registerCodePreviewReplay } from "../../index";
 import {
   CodePreviewPresentationOwner,
@@ -29,11 +27,11 @@ for (const foreign of [false, true])
         const settings = quietSettings();
         const models = yield* offlineModels(directory);
         let executions = 0;
-        const tool: ToolDefinition<any, any, any> = {
+        const tool: ToolDefinition = {
           name: "owned_replay",
           label: "Owned replay",
           description: "SDK fixture",
-          parameters: opaqueFixture({ type: "object", properties: {} }),
+          parameters: { type: "object", properties: {} },
           exposure: "model-only",
           execute: () => {
             executions += 1;
@@ -104,7 +102,6 @@ for (const foreign of [false, true])
           ],
         });
         const session = yield* scopedSession({ cwd: directory, models, settings, loader });
-        // Startup wraps owned tools in this appearance; the session scope restores the defaults.
         setPlainPreviewSettings({ toolCallCollapsedStyle: "compact" });
         const historyRow = () => {
           const renderers = session.extensionRunner.resolveToolRenderers(tool.name, () =>
@@ -118,7 +115,6 @@ for (const foreign of [false, true])
             },
           });
         };
-        // New/resumed sessions also render before bindExtensions starts their runtime.
         let retained = historyRow();
         assert.ok(!retained.render(160).join("\n").includes("OWNED_SUMMARY"));
         const errors: string[] = [];

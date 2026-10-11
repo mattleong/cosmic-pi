@@ -62,7 +62,7 @@ describe("fixed-target profile workspace", () => {
       initialField: "context",
     });
     h.component.handleInput("h");
-    h.component.handleInput("j"); // Save follows generalist in the profile pane.
+    h.component.handleInput("j");
     expect(h.component.getPosition()).toMatchObject({
       initialSaveFocused: true,
       initialProfile: "generalist",
@@ -281,7 +281,7 @@ describe("fixed-target profile workspace", () => {
     h.component.handleInput("G");
     h.component.handleInput("k");
     expect(h.component.getPosition().initialField).toBe("add");
-    h.component.handleInput("a"); // A profile control must not manage the last candidate.
+    h.component.handleInput("a");
     expect(h.component.hasOverlay).toBe(false);
     h.component.handleInput("\r");
     yield* step(settleTurn);

@@ -16,7 +16,9 @@ import {
   type BackgroundTaskSnapshot,
   type BackgroundTaskStatus,
   type BackgroundTaskStatusWait,
+  type ReadBackgroundLogs,
   type StartBackgroundTask,
+  type WaitForBackgroundTask,
 } from "../task/model.ts";
 import type { BackgroundTaskDetailsSchema } from "../task/schema.ts";
 import { BackgroundTaskService } from "../task/service.ts";
@@ -33,11 +35,6 @@ import type { BackgroundTaskToolInput } from "./schema.ts";
 
 export type BackgroundTaskToolDetails = typeof BackgroundTaskDetailsSchema.Type;
 
-/**
- * The model-facing text, persisted details, and version-1 machine-readable contract. All three
- * projections come from the same original domain facts; the contract never reads the text or
- * details.
- */
 export interface BackgroundTaskContractResult {
   readonly text: string;
   readonly details: BackgroundTaskToolDetails;
@@ -56,10 +53,6 @@ const required = (
 const MAX_TASK_LINE_CHARS = 8_192;
 const ERROR_PREFIX = "\n  error: ";
 
-/**
- * The agent's line for one task: identity, state, exit code and signal, then the command, with
- * any reported error on its own line beneath.
- */
 const formatBackgroundTask = (task: BackgroundTaskSnapshot): string => {
   const exit = task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`;
   const signal = task.signal ? ` signal=${task.signal}` : "";
@@ -76,14 +69,12 @@ const formatBackgroundTask = (task: BackgroundTaskSnapshot): string => {
 const boundedText = (text: string, maxBytes: number): string =>
   truncateHead(text, { maxLines: DEFAULT_MAX_LINES, maxBytes }).content;
 
-/** A failed task's cause as it appears in the composed text, before truncation. */
 interface CauseText {
   readonly id: string;
   readonly start: number;
   readonly end: number;
   readonly cause: string;
 }
-/** Composed result text and where each failed task's cause sits in it. */
 interface TaskText {
   readonly text: string;
   readonly causes: ReadonlyArray<CauseText>;
@@ -91,13 +82,11 @@ interface TaskText {
 
 const CAUSE_PREFIX = "\n  cause: ";
 
-/** The persisted snapshot. The in-memory cause travels only in the result text. */
 const detailsSnapshot = ({
   failureCause: _cause,
   ...snapshot
 }: BackgroundTaskStatus): BackgroundTaskSnapshot => snapshot;
 
-/** `line`, then the task's cause beneath it when the task failed. */
 const withCause = (line: string, task: BackgroundTaskStatus): TaskText => {
   if (!task.failureCause) return { text: line, causes: [] };
   const cause = sanitizeTerminalLine(task.failureCause);
@@ -108,7 +97,6 @@ const withCause = (line: string, task: BackgroundTaskStatus): TaskText => {
   };
 };
 
-/** Spans for the causes the final, possibly truncated, text still holds whole. */
 const causeSpans = (text: string, causes: ReadonlyArray<CauseText>) => {
   const kept = causes
     .filter((span) => text.slice(span.start, span.end) === span.cause)
@@ -156,13 +144,7 @@ const formatWait = (result: BackgroundTaskStatusWait): string => {
 
 const NO_NEW_OUTPUT = "(no new output)";
 
-/**
- * `content` is the slice's sanitized combined output, shared with its contract. The output is cut
- * once, from its oldest end, within what the metadata lines leave of the text's bounds, so the
- * newest lines survive and the truncation fields describe exactly what the text holds.
- */
 const formatLogs = (slice: BackgroundLogSlice, content: string, maxBytes: number) => {
-  // `backgroundLogLines` reads this layout back: one metadata line, then the gap line, if any.
   const metadata = `[${slice.id} state=${slice.state} cursor=${slice.nextCursor} earliest=${slice.earliestAvailableCursor}]\n`;
   const gap = slice.droppedBytes > 0 ? `[${discardedOutputText(slice.droppedBytes)}]\n` : "";
   const header = `${metadata}${gap}`;
@@ -174,13 +156,11 @@ const formatLogs = (slice: BackgroundLogSlice, content: string, maxBytes: number
   });
   return {
     text: headerBytes > maxBytes ? boundedText(header, maxBytes) : `${header}${whole.content}`,
-    // Five explicit fields: persisted details never store the truncated log text a second time.
     truncation: whole.truncated
       ? {
           truncated: true,
           outputBytes: whole.outputBytes,
           totalBytes: whole.totalBytes,
-          // A tail cut to nothing holds no line, not one empty partial line.
           outputLines: whole.content ? whole.outputLines : 0,
           totalLines: whole.totalLines,
         }
@@ -188,10 +168,6 @@ const formatLogs = (slice: BackgroundLogSlice, content: string, maxBytes: number
   };
 };
 
-/**
- * The log lines of a `logs` result's text, without the metadata and discarded-output lines this
- * module writes before them. Empty when the slice had no new output.
- */
 export const backgroundLogLines = (
   text: string,
   logs: Pick<BackgroundLogMetadata, "droppedBytes">,
@@ -209,7 +185,6 @@ const reply = (
   contract: BackgroundTaskContract,
 ): BackgroundTaskContractResult => ({ text, details, contract });
 
-/** One task's result: its line (with any cause) bounded, and the details pointing at the cause. */
 const taskReply = (
   line: string,
   task: BackgroundTaskStatus,
@@ -226,10 +201,35 @@ const taskReply = (
   );
 };
 
-/**
- * The `background_task` action executor. Text is bounded by Pi's default output size; tests pass
- * a smaller `maxTextBytes` to exercise the same cuts.
- */
+const logsRequest = (input: BackgroundTaskToolInput) =>
+  Effect.map(
+    required(input.id, "id", input.action),
+    (id): ReadBackgroundLogs => ({
+      id,
+      ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
+      ...(input.tailLines !== undefined && { tailLines: input.tailLines }),
+      ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
+    }),
+  );
+
+const waitRequest = (input: BackgroundTaskToolInput) =>
+  Effect.gen(function* () {
+    const until = input.until;
+    if (until === undefined) {
+      return yield* new InvalidBackgroundCommandError({
+        message: "The wait action requires until.",
+      });
+    }
+    const request: WaitForBackgroundTask = {
+      id: yield* required(input.id, "id", input.action),
+      until,
+      ...(input.contains !== undefined && { contains: input.contains }),
+      ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
+      ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
+    };
+    return request;
+  });
+
 export const executeBackgroundTaskCommand = (
   input: BackgroundTaskToolInput,
   sessionCwd: string,
@@ -280,12 +280,7 @@ export const executeBackgroundTaskCommand = (
         );
       }
       case "logs": {
-        const slice = yield* service.logs({
-          id: yield* required(input.id, "id", input.action),
-          ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
-          ...(input.tailLines !== undefined && { tailLines: input.tailLines }),
-          ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
-        });
+        const slice = yield* service.logs(yield* logsRequest(input));
         const output = combinedLogOutput(slice.events);
         const { events: _events, ...logs } = slice;
         const { text, truncation } = formatLogs(slice, output, maxTextBytes);
@@ -296,18 +291,7 @@ export const executeBackgroundTaskCommand = (
         );
       }
       case "wait": {
-        if (input.until === undefined) {
-          return yield* new InvalidBackgroundCommandError({
-            message: "The wait action requires until.",
-          });
-        }
-        const wait = yield* service.wait({
-          id: yield* required(input.id, "id", input.action),
-          until: input.until,
-          ...(input.contains !== undefined && { contains: input.contains }),
-          ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
-          ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
-        });
+        const wait = yield* service.wait(yield* waitRequest(input));
         const { appliedWaitSeconds, ...member } = wait;
         return taskReply(
           formatWait(wait),

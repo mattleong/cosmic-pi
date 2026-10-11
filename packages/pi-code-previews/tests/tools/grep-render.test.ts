@@ -3,7 +3,6 @@ import { test } from "vitest";
 import { parseGrepOutputLine, renderGrepOutputLines } from "../../src/tools/grep-render";
 import { plainTheme } from "../support/render";
 
-// Separators quoted inside the line text never extend the path or change the row's kind.
 test.each([
   ["src/foo-1-bar.ts:42: const x = 1;", "src/foo-1-bar.ts", "42", "const x = 1;", "match"],
   ["src/foo-1-bar.ts-43- return x;", "src/foo-1-bar.ts", "43", "return x;", "context"],
@@ -45,6 +44,5 @@ test("case-insensitive matches highlight their own text after length-changing le
     undefined,
     false,
   );
-  // Plain styling leaves the match highlight as the row's only escape sequences.
   assert.equal(row.split("\u001b[")[1]?.replace(/^[\d;]*m/u, ""), "FOO");
 });

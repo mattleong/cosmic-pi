@@ -21,7 +21,6 @@ interface ListDetailShellState extends ListDetailMotionState {
   readonly layout: ManagerLayoutTier;
 }
 
-/** Generic list/detail state. Callers retain input resolution, policy, rendering, and copy. */
 export class ListDetailShell {
   readonly keymap = new FullScreenKeymap();
   private current: Types.Mutable<ListDetailShellState> = {
@@ -41,7 +40,6 @@ export class ListDetailShell {
     return this.current;
   }
 
-  /** Moves the selection to a clamped index over the current row identities. */
   select(index: number, ids: ReadonlyArray<string>): ListSelectionChange {
     const selected = clampListIndex(index, ids.length);
     const selectedId = ids[selected];
@@ -52,7 +50,6 @@ export class ListDetailShell {
     return { selected, selectedId, changed };
   }
 
-  /** Re-finds the selected row after a projection update, keeping the index when it vanished. */
   reconcile(ids: ReadonlyArray<string>): ListSelectionChange {
     const { selected, selectedId } = this.current;
     const existing = selectedId === undefined ? -1 : ids.indexOf(selectedId);
@@ -76,7 +73,6 @@ export class ListDetailShell {
     this.keymap.resetChord();
   }
 
-  /** Caller-owned Enter policy decides when to invoke this transition. */
   enterPane(): void {
     const details = this.current.layout === "narrow" ? !this.current.details : this.current.details;
     this.current.pane = this.current.layout === "narrow" && !details ? "list" : "detail";
@@ -142,7 +138,6 @@ export interface ListDetailFrame {
   readonly pane?: (pane: ListDetailPane, text: string) => string;
 }
 
-/** Derive from the current pane each render; omitted focus preserves neutral single-pane frames. */
 export const listDetailFrame = (
   theme: Pick<Theme, "fg">,
   focusedPane?: ListDetailPane,
@@ -152,7 +147,6 @@ export const listDetailFrame = (
   pane: (pane, text) => theme.fg(focusedPane === pane ? "borderAccent" : "borderMuted", text),
 });
 
-/** Caller-sanitized heading with a stable marker gutter as focus moves between panes. */
 export const listDetailHeading = (
   theme: Pick<Theme, "fg" | "bold">,
   text: string,
@@ -166,7 +160,6 @@ export interface ListDetailField {
   readonly tone?: Parameters<Theme["fg"]>[0];
 }
 
-/** Align a group of caller-sanitized fields. Callers retain wrapping and disclosure policy. */
 export const detailFieldRows = (
   theme: Pick<Theme, "fg">,
   fields: ReadonlyArray<ListDetailField>,
@@ -238,7 +231,6 @@ export const framedStackedRows = (
   ];
 };
 
-/** Composes fixed-height top/body/bottom rows. Callers supply already themed content. */
 export const framedScreen = (
   frame: ListDetailFrame,
   options: {

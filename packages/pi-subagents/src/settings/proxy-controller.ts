@@ -20,10 +20,8 @@ export type SubagentProxyCall = (
   signal?: AbortSignal,
 ) => Promise<AgentToolResult<unknown>>;
 
-/** The single-target actions the nested fleet owns; each names its expected details action. */
 type ProxyFleetAction = "stop" | "interrupt" | "resume" | "send" | "reply" | "rename";
 
-/** `pending` is send-only native delivery that is neither delivered nor failed. */
 type ProxyActionOutcome = "accepted" | "pending";
 
 const UNCONFIRMED_ACTION =
@@ -34,11 +32,6 @@ const decodeRunActionDetails = <ValueInput>(action: ProxyFleetAction, value: Val
   return details && "runCount" in details ? details : undefined;
 };
 
-/**
- * Classifies one proxied single-target action from its decoded details alone. Only the expected
- * action with exactly the target's own card and no failure is accepted. Missing, malformed,
- * mismatched, or contradictory evidence is never success, and nothing here resends the action.
- */
 const classifyProxyActionResult = (
   action: ProxyFleetAction,
   targetId: string,
@@ -166,7 +159,6 @@ export const registerSubagentProxyManagerCommand = (
         void pending.then(clear, clear);
         return pending;
       };
-      /** A refresh admitted after the action settled, so an older in-flight list cannot win. */
       const refreshAfterAction = (): Promise<void> => {
         const prior = refreshInFlight;
         const next = () => refresh();
@@ -189,13 +181,10 @@ export const registerSubagentProxyManagerCommand = (
                 () => undefined,
               );
             });
-            // The action's own classified outcome wins: a later refresh failure never turns
-            // accepted work into a failure (inviting duplicate work), nor hides a real failure.
             const afterRefresh = <A>(outcome: () => Promise<A>): Promise<A> =>
               (closed ? Promise.resolve() : refreshAfterAction().catch(() => undefined))
                 .then(outcome)
                 .finally(() => tui.requestRender());
-            // Exactly one proxied call per user action; unconfirmed outcomes are never resent.
             const action = (
               expected: ProxyFleetAction,
               targetId: string,

@@ -1,12 +1,7 @@
-/**
- * Preview-style call and result bodies for the root subagent tools. The shared shell draws the
- * issue lines from each tool's compact summary; these bodies show routine counts, rows, and
- * content, with agent-facing evidence only once expanded and under a label.
- */
 import * as Schema from "effect/Schema";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
-import { expandedSection, getTextContent } from "pi-code-previews";
+import { escapeControlChars, expandedSection, getTextContent } from "pi-code-previews";
 import {
   decodeUnknownOrUndefined,
   stripTerminalControls as sanitizeTerminalText,
@@ -42,7 +37,6 @@ import { renderStartReceiptComponent } from "./render-start.ts";
 
 type ToolTextContent = ReadonlyArray<{ readonly type: string; readonly text?: string }>;
 
-/** The tool's own words for what it returned, under a label, for expanded views. */
 const rawResultSection = (content: ToolTextContent, theme: Theme, label = "Raw result") => {
   const text = boundToolOutput(sanitizeTerminalText(getTextContent(content)));
   return text
@@ -59,7 +53,6 @@ const InputEvidenceSchema = Schema.Struct({
   paths: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
-/** Unique input evidence not carried by the semantic heading or result cards. */
 export const renderSubagentInputContent = <ValueInput>(
   args: ValueInput,
   theme: Theme,
@@ -67,10 +60,9 @@ export const renderSubagentInputContent = <ValueInput>(
   const input = decodeUnknownOrUndefined(InputEvidenceSchema, args);
   if (!input) return new Text("", 0, 0);
   const lines = [input.message, input.name, ...(input.paths ?? [])].filter(Boolean);
-  return new Text(theme.fg("toolOutput", sanitizeTerminalText(lines.join("\n"))), 0, 0);
+  return new Text(theme.fg("toolOutput", escapeControlChars(lines.join("\n"))), 0, 0);
 };
 
-/** An await's targets, and its hierarchy, which always names them. */
 const awaitScope = (details: SubagentAwaitDetails) => {
   const awaitedRunIds = new Set(details.awaitedRunIds ?? details.cards.map((card) => card.id));
   return {
@@ -81,7 +73,6 @@ const awaitScope = (details: SubagentAwaitDetails) => {
 
 interface SubagentResultRenderOptions {
   readonly panelOwnsLiveHierarchy?: boolean | undefined;
-  /** Pi flagged the result as an error; its text is then the shell's issue line. */
   readonly isError?: boolean | undefined;
 }
 
@@ -131,10 +122,8 @@ const renderCompactDetails = (
   return rawResultSection(content, theme) ?? rendered;
 };
 
-/** Lines a collapsed text result shows before its expansion affordance. */
 const COLLAPSED_TEXT_LINES = 11;
 
-/** Results without typed details: a running line until text arrives, then the text's body. */
 const renderTextFallback = (
   content: ToolTextContent,
   isPartial: boolean,
@@ -147,11 +136,9 @@ const renderTextFallback = (
   return textResultBody(theme, text, { expanded, isError }, COLLAPSED_TEXT_LINES);
 };
 
-/** A strict receipt: its display span is trusted only when nothing unknown rides along. */
 const decodeWorkspaceDisplay = <Details>(details: Details) =>
   decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, details, { onExcessProperty: "error" });
 
-/** The workspace's own display span (list records or the diff page), when it is intact. */
 const workspaceDisplayText = (
   receipt: WorkspaceToolDetails,
   content: ToolTextContent,
@@ -177,7 +164,6 @@ const workspaceDisplayText = (
     .join("\n");
 };
 
-/** Compact expansion: the receipt's display span, or the labelled raw result. */
 const renderWorkspaceContent = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   theme: Theme,
@@ -185,11 +171,10 @@ const renderWorkspaceContent = (
   const receipt = decodeWorkspaceDisplay(result.details);
   if (!receipt) return undefined;
   const text = workspaceDisplayText(receipt, result.content);
-  if (text !== undefined) return new Text(theme.fg("toolOutput", sanitizeTerminalText(text)), 0, 0);
+  if (text !== undefined) return new Text(theme.fg("toolOutput", escapeControlChars(text)), 0, 0);
   return rawResultSection(result.content, theme) ?? renderComponent(() => []);
 };
 
-/** Preview style: one short line collapsed; the tool's full text only once expanded. */
 const renderWorkspacePreview = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   expanded: boolean,
@@ -225,7 +210,6 @@ const renderWorkspacePreview = (
   });
 };
 
-/** Compact expansion supplies evidence only. The shell owns headings and attention. */
 export const renderSubagentExpandedContent = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   isPartial: boolean,
@@ -238,7 +222,6 @@ export const renderSubagentExpandedContent = (
   if (details && isPartial && options.panelOwnsLiveHierarchy) return renderComponent(() => []);
   if (details?.action === "start")
     return renderStartReceiptComponent(details, true, theme, isPartial, true);
-  // Start/await receipts never share an action with the others, so one of them decodes at most.
   const compact = details ? undefined : decodeCompactToolDetails(result.details);
   if (compact?.action === "models") return renderProfileRoutesComponent(compact, true, theme, true);
   const projection = details ?? compact;

@@ -36,7 +36,6 @@ const decodeConfig = (value: JsonObject): Partial<BackgroundTaskConfig> =>
     { path: "config" },
   ).value;
 
-// No default document, so resolution never writes; untrusted projects are never probed.
 const store = makeScopedConfigStore({
   error: BackgroundTaskConfigError,
   label: "Background Tasks",
@@ -50,22 +49,15 @@ const store = makeScopedConfigStore({
   }),
 });
 
-/** Where one setting is stored: the global file, or a trusted project's file. */
 export interface BackgroundTaskSettingsLocation {
   readonly cwd: string;
   readonly scope: "global" | "project";
 }
 
 export interface BackgroundTaskSettingsFilesContract {
-  /** The values one scope's file sets itself; empty when the file sets none. */
   readonly read: (
     location: BackgroundTaskSettingsLocation,
   ) => Effect.Effect<Partial<BackgroundTaskConfig>, BackgroundTaskConfigError>;
-  /**
-   * Writes one setting into the global or trusted-project document, or removes the scope's own
-   * value when `value` is undefined. The running session keeps the settings it started with;
-   * the change applies after /reload.
-   */
   readonly write: (
     location: BackgroundTaskSettingsLocation,
     id: keyof BackgroundTaskConfig,
@@ -73,7 +65,6 @@ export interface BackgroundTaskSettingsFilesContract {
   ) => Effect.Effect<void, BackgroundTaskConfigError>;
 }
 
-/** The settings files `/tasks settings` reads and edits, one scope at a time. */
 export class BackgroundTaskSettingsFiles extends Context.Service<
   BackgroundTaskSettingsFiles,
   BackgroundTaskSettingsFilesContract

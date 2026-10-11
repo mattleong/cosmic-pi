@@ -1,4 +1,3 @@
-// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
 import { FullWidthDiffText } from "../src/diff/full-width-text";
 import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { startBenchmarkShikiSession } from "./shiki-session";

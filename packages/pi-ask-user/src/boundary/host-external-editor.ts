@@ -1,4 +1,3 @@
-// External editor integration is a narrow Node/Pi host boundary.
 import { SettingsManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import * as Cause from "effect/Cause";

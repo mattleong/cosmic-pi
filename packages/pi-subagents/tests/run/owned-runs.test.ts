@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Deferred from "effect/Deferred";
@@ -44,7 +43,6 @@ const parentContactBackend = (options: { readonly resumable?: boolean } = {}) =>
     ...options,
   });
 
-/** A service whose backend holds the first start prompt until `startGate` completes. */
 const promptGatedFixture = () => {
   const startGate = Deferred.makeUnsafe<void>();
   const fixture = nativeReportServiceFixture(
@@ -53,7 +51,6 @@ const promptGatedFixture = () => {
   return { ...fixture, startGate };
 };
 
-/** Forks an owned start under a reserved id, returning once its first prompt is in flight. */
 const startAtPrompt = (
   service: SubagentServiceContract,
   backend: ReturnType<typeof fakeNativeReportBackendLayer>,
@@ -85,7 +82,6 @@ const questions = (notifications: ReadonlyArray<SubagentNotification>) =>
       notification.type === "question",
   );
 
-/** Lets every delivery worker run past its retry delay. */
 const drainDelivery = TestClock.adjust("5 seconds");
 
 describe("owned subagent runs", () => {
@@ -123,7 +119,6 @@ describe("owned subagent runs", () => {
       yield* service.openOwner(OWNER);
       const handle = yield* service.startOwned(ownedRequest(), owner);
       const control = backend.controls[0]!;
-      // Handing back a structured result isn't counted as a tool use.
       for (const [toolCallId, toolName] of [
         ["result-1", "subagent_result"],
         ["read-1", "read"],
@@ -222,7 +217,6 @@ describe("owned subagent runs", () => {
       yield* service.openOwner(OWNER);
       for (let index = 0; index < 3; index++)
         yield* service.startOwned(ownedRequest({ nestingPolicy }), owner);
-      // The main agent's own starts still have every slot, and only they fill it.
       yield* service.start(nativeReportRequest({ name: "main-1", nestingPolicy }));
       yield* service.start(nativeReportRequest({ name: "main-2", nestingPolicy }));
       const full = yield* service
@@ -282,7 +276,6 @@ describe("owned subagent runs", () => {
       backend.controls[0]!.report(handle.runId, 1, "result", "Checked.");
       expect(yield* service.awaitOwned(handle)).toMatchObject({ kind: "completed" });
       yield* service.closeOwner(OWNER);
-      // Handed back, it is an ordinary root child, so resuming it needs a free root slot.
       const refused = yield* service.resume(handle.runId, "Continue.").pipe(Effect.flip);
       expect(errorCode(refused)).toBe("direct_child_capacity");
       yield* service.stop(main.id);
@@ -412,7 +405,6 @@ describe("owned subagent runs", () => {
     const { backend, projections, notifications, layer, startGate } = promptGatedFixture();
     return withService(layer, function* (service) {
       const { runId, starting } = yield* startAtPrompt(service, backend);
-      // Request interruption while the prompt is in flight, then let the backend accept it.
       starting.interruptUnsafe();
       yield* Deferred.succeed(startGate, undefined);
       expect(Exit.hasInterrupts(yield* Fiber.await(starting))).toBe(true);
@@ -456,7 +448,6 @@ describe("owned subagent runs", () => {
       yield* yieldUntil(() => latestRun(projections, handle.runId)?.usage.output === 15);
       backend.controls[0]!.report(handle.runId, 1, "done", "Done.");
       yield* yieldUntil(() => stateOf(projections, handle.runId) === "completed");
-      // Progress and settlement leave the writer's hold in place until backend cleanup ends it.
       expect(yield* service.admissionRevision).toBe(before);
       expect(waiting.pollUnsafe()).toBeUndefined();
       yield* Deferred.succeed(releaseGate, undefined);

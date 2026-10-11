@@ -5,13 +5,14 @@ import {
   createToolPresentationHarness,
   probeAnimationOwnership,
 } from "pi-code-previews/testing";
-import { opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
+import { plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { imageRecordSummary } from "../src/image/compact-summary.ts";
 import { renderImageContent } from "../src/image/presentation.ts";
 import { imageResultText } from "../src/image/result-text.ts";
 import {
   countImages,
+  imageMessage,
   pngPart as image,
   registerImagePresentation,
   textPart as text,
@@ -104,7 +105,6 @@ describe("registered image presentation", () => {
           harness.result(result, { expanded, isError: true });
           const rendered = harness.render().join("\n");
           expect(rendered).toContain(cause);
-          // The raw text appears once, under its own label, never copied into issue detail.
           expect(occurrences(rendered, recovery)).toBe(expanded ? 1 : 0);
           if (!expanded) continue;
           expect(rendered).toContain("PROMPT_EVIDENCE");
@@ -201,7 +201,7 @@ describe("registered image presentation", () => {
       ];
       for (const expanded of [false, true, false]) {
         const component = message(
-          opaqueFixture({ customType: "openai-image", details: { invalid: true }, content }),
+          imageMessage(content, { invalid: true }),
           { expanded, outputPad: 0 },
           theme,
         )!;
@@ -226,7 +226,11 @@ describe("registered image presentation", () => {
         expect(issues.length).toBeGreaterThan(0);
         const before = structuredClone(record);
         for (const expanded of [false, true, false]) {
-          const rendered = message(opaqueFixture(record), { expanded, outputPad: 0 }, theme)!
+          const rendered = message(
+            imageMessage(record.content, record.details),
+            { expanded, outputPad: 0 },
+            theme,
+          )!
             .render(200)
             .join("\n");
           expect(rendered.includes("PROVIDER_RECOVERY_COMMAND")).toBe(expanded);
@@ -252,33 +256,24 @@ describe("registered image presentation", () => {
     expect(harness.render().join("\n")).toContain(details.revisedPrompt);
   });
 
-  it.each(styles)(
-    "keeps exactly one custom-message Image for current and legacy %s messages",
-    (style) => {
-      const { message } = register(style);
-      for (const status of ["completed", "cancelled"]) {
-        const record = { ...details, status };
-        for (const legacy of [false, true]) {
-          for (const expanded of [false, true, false]) {
-            const component = message(
-              opaqueFixture({
-                customType: "openai-image",
-                content: legacy ? "" : [image],
-                details: legacy ? { ...record, data: image.data } : record,
-              }),
-              { expanded, outputPad: 0 },
-              theme,
-            )!;
-            expect(countImages(component)).toBe(1);
-            const rendered = component.render(160).join("\n");
-            expect(rendered.includes(details.revisedPrompt)).toBe(expanded);
-            if (expanded) {
-              expect(rendered).toContain("PROMPT_END");
-              expect(rendered).toContain(details.savedPath);
-            }
-          }
+  it.each(styles)("keeps exactly one custom-message Image for %s messages", (style) => {
+    const { message } = register(style);
+    for (const status of ["completed", "cancelled"]) {
+      const record = { ...details, status };
+      for (const expanded of [false, true, false]) {
+        const component = message(
+          imageMessage([image], record),
+          { expanded, outputPad: 0 },
+          theme,
+        )!;
+        expect(countImages(component)).toBe(1);
+        const rendered = component.render(160).join("\n");
+        expect(rendered.includes(details.revisedPrompt)).toBe(expanded);
+        if (expanded) {
+          expect(rendered).toContain("PROMPT_END");
+          expect(rendered).toContain(details.savedPath);
         }
       }
-    },
-  );
+    }
+  });
 });

@@ -26,15 +26,9 @@ const invalid = (code: string, message: string) =>
     `${message} Earlier work and writes may already exist; inspect them before authorizing replacement work.`,
   );
 
-/** Configured route candidates after the selected one. */
 export const remainingRouteCandidates = (continuation: ProfileRouteContinuation): number =>
   Math.max(0, continuation.candidates.length - continuation.selectedCandidateIndex - 1);
 
-/**
- * Projects only settled run facts. Error codes are deliberately excluded: the
- * admitted record, complete scope cleanup barrier, and frozen route are the
- * authorities for whether a caller may continue.
- */
 export const failedStartRecoveryForRecord = (record: RunRecord): FailedStartRecovery => {
   const continuation = record.routeContinuation;
   const remainingCandidateCount = continuation ? remainingRouteCandidates(continuation) : 0;
@@ -68,7 +62,6 @@ export const failedStartRecoveryForRecord = (record: RunRecord): FailedStartReco
   });
 };
 
-/** Owns exclusive failed-run continuation claims and route-exhaustion publication. */
 export function makeRunRetry(
   dependencies: RunContext & { readonly allocateClaimToken: () => string },
 ) {
@@ -152,7 +145,6 @@ export function makeRunRetry(
         } satisfies SubagentRetryClaim;
       }),
     ).pipe(
-      // A claim waits outside the lock for pending cleanup, then retries from the start.
       Effect.filterOrElse(
         (result): result is SubagentRetryClaim => !("waitForCleanup" in result),
         ({ waitForCleanup }) =>
@@ -179,7 +171,6 @@ export function makeRunRetry(
       }),
     );
 
-  /** Consumes a live retry claim and publishes the run's exhausted or blocked route. */
   const finishRetryClaim = (id: string, claimToken: string, outcome: "exhausted" | "blocked") =>
     withLock(
       Effect.gen(function* () {

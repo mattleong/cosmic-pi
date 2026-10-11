@@ -3,11 +3,14 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
-import type { BackendHandle } from "../../src/backend/model.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { emptyUsage } from "../../src/run/model.ts";
-import { makeTestSettlement, partialRecord } from "./fixtures/run-context.ts";
+import {
+  backendHandleFixture,
+  makeTestSettlement,
+  runRecordFixture,
+} from "./fixtures/run-context.ts";
 import {
   fakeNativeReportBackendLayer,
   nativeReportRequest,
@@ -18,11 +21,9 @@ import {
 it.effect("process usage rechecks handle ownership inside the mutation lock", () =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
-    // SAFETY: This test compares handle identity only and never invokes a backend method.
-    const original = { pid: 1 } as BackendHandle;
-    // SAFETY: This test compares handle identity only and never invokes a backend method.
-    const replacement = { pid: 2 } as BackendHandle;
-    const record = partialRecord({
+    const original = yield* backendHandleFixture({ pid: 1 });
+    const replacement = yield* backendHandleFixture({ pid: 2 });
+    const record = yield* runRecordFixture({
       process: original,
       stoppedByParent: false,
       view: view({ state: "running", usage: emptyUsage() }),

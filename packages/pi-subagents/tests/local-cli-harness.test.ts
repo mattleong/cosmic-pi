@@ -1,4 +1,3 @@
-// Private harness lifecycle tests intentionally exercise real filesystem and process ownership.
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";

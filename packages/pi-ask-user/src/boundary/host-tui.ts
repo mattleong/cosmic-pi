@@ -12,27 +12,17 @@ import { captureExternalEditorCommand, editWithExternalEditor } from "./host-ext
 import type { AskUserPromptGate } from "./host-prompt.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
-/**
- * Lazily loads and opens the questionnaire dialog on the dock with host-owned hide/resume.
- * Admission rechecks the prompt gate in the same synchronous call as `custom`; its release frees
- * the gate, then the dialog's bridge token. Closing revokes hide/resume and external-editor
- * authority before Pi's `done`. A queued opener first awaits the public prompt gate and retries a
- * blocked admission.
- * Every failure becomes one redacted render error.
- */
 export const makeAskUserTuiHost =
   (ctx: ExtensionContext, bridge: AskUserDialogBridge, gate?: AskUserPromptGate): AskUserHost =>
   (request, presence, queued) =>
     Effect.tryPromise(() => import("../ui/dialog.ts")).pipe(
       Effect.flatMap(({ AskUserDialog }) => {
-        // One opening attempt; a blocked admission builds a fresh one.
         const open = Effect.suspend(() => {
           const authority = new AbortController();
           const editors = new Set<Promise<void>>();
           let live = true;
           let handle: OverlayHandle | undefined;
           let token: number | undefined;
-          // Mounting and resuming report `open`; collapsing reports `hidden`.
           const report = (visibility: "open" | "hidden") => {
             if (!presence) return;
             if (visibility === "open") Deferred.doneUnsafe(presence.opened, Effect.void);
@@ -74,8 +64,6 @@ export const makeAskUserTuiHost =
                 editExternally: (value) => {
                   if (authority.signal.aborted) return Promise.resolve(undefined);
                   const editing = editWithExternalEditor(tui, command, value, authority.signal);
-                  // Settlement includes the owned process, temporary files, and TUI restoration.
-                  // Retain only nonrejecting joins; dialog consumers still receive live failures.
                   const settled = editing.then(
                     () => undefined,
                     () => undefined,
@@ -101,15 +89,12 @@ export const makeAskUserTuiHost =
               if (token !== undefined) bridge.markOpened(token);
               report("open");
             },
-            // Ordered finalization joins only admitted, owned editor cleanup, never
-            // the arbitrary custom Promise. Closing revoked later admissions first.
           }).pipe(Effect.ensuring(Effect.promise(() => Promise.all(editors))));
         });
         const retrying: Effect.Effect<AskUserOutcome, OwnedSurfaceError> = (
           gate?.awaitOpen ?? Effect.void
         ).pipe(
           Effect.andThen(open),
-          // Only a closed prompt gate blocks admission, so a retry first waits for it to reopen.
           Effect.catchIf(
             (error) => error.reason === "blocked",
             () => retrying,

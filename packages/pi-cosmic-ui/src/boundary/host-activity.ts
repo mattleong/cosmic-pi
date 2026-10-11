@@ -30,7 +30,6 @@ import type { ActivitySection } from "../activity/view-protocol.ts";
 import { installActivityView, type ActivityHostRun } from "./host-activity-view.ts";
 import { inputDockVisible } from "./host-input-dock.ts";
 
-/** Activity rows kept while an input dock needs the shared above-editor space. */
 const COMPACT_WIDGET_ROWS = 3;
 
 const isDiscovery = Schema.is(
@@ -41,7 +40,6 @@ const MANAGER_TITLES = {
   subagents: "Subagents",
   tasks: "Background tasks",
 } satisfies Record<ActivitySection, string>;
-/** Host callbacks are best effort. */
 const safe = (run: () => void): void => invokeHostCallback(run, undefined);
 const neutral = () => ({ render: () => [], invalidate() {} });
 interface Binding {
@@ -62,7 +60,6 @@ interface Binding {
   manager: object | undefined;
 }
 export interface ActivityHost {
-  /** Hooks that bind one session's activity service to this host until it releases them. */
   readonly serviceOptions: () => Required<ActivityServiceOptions>;
   readonly activate: (ctx: ExtensionContext, service: ActivityServiceContract) => void;
   readonly deactivate: () => void;
@@ -72,7 +69,6 @@ export interface ActivityHost {
   ) => Effect.Effect<boolean, ActivityError>;
 }
 
-/** Pi callback/Promise and Effect submission boundary. The session service owns binding release. */
 export function makeActivityHost(
   pi: ExtensionAPI,
   submit: (effect: Effect.Effect<void, ActivityError>, signal?: AbortSignal) => void,
@@ -156,7 +152,6 @@ export function makeActivityHost(
       binding.sessionId = ctx.sessionManager.getSessionId();
       binding.active = true;
       const isCurrent = () => binding.active && current === binding;
-      // Each envelope is decoded once into a detached copy; malformed ones never reach the service.
       const accept: Parameters<ActivityEvents["on"]>[1] = (data) =>
         safe(() => {
           if (!isCurrent() || !binding.installed) return;
@@ -354,7 +349,6 @@ export function makeActivityHost(
             }),
           ),
         );
-        // Handoff actions open producer UI, so they run only after the manager has closed.
         if (action && binding.active && current === binding)
           yield* invokeOrWarn(binding.service, action, ctx);
         return true;

@@ -10,11 +10,9 @@ type RuntimeTypeName =
   | "symbol"
   | "function";
 
-/** Matches JavaScript's `typeof value === "object"`, including `null` and excluding functions. */
 export const hasObjectRuntimeType = <Value>(value: Value): value is Value & (object | null) =>
   value === null || Predicate.isObjectOrArray(value);
 
-/** A non-throwing replacement for JavaScript's runtime `typeof` operator. */
 export const runtimeTypeName = <Value>(value: Value): RuntimeTypeName => {
   if (Predicate.isUndefined(value)) return "undefined";
   if (Predicate.isBoolean(value)) return "boolean";

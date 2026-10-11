@@ -43,7 +43,6 @@ export function createSimpleDiff(before: string, after: string): string {
     }
 
     firstChangeLine ??= newLine;
-    // One replacement can arrive as adjacent removed and added chunks; pair them line by line.
     const removed: DiffLine[] = [];
     const added: DiffLine[] = [];
     let next: typeof change | undefined = change;
@@ -61,13 +60,11 @@ export function createSimpleDiff(before: string, after: string): string {
   return lines.length ? `@@ ${firstChangeLine} @@\n${lines.join("\n")}` : "";
 }
 
-/** Rows of a diff between two snippets, without a hunk header: their file position is unknown. */
 export function createSnippetDiff(before: string, after: string): string {
   const diff = createSimpleDiff(before, after);
   return diff.slice(diff.indexOf("\n") + 1);
 }
 
-/** Lines as Pi's read numbers them: only "\n" ends a line, and "\r\n" is one ending. */
 function splitDiffLines(value: string): DiffLine[] {
   const lines: DiffLine[] = [];
   let start = 0;
@@ -87,7 +84,6 @@ function splitDiffLines(value: string): DiffLine[] {
   return lines;
 }
 
-/** A pair that differs only in its line ending shows the endings, so the change is visible. */
 function displayText(line: DiffLine, counterpart: DiffLine | undefined): string {
   if (counterpart?.text !== line.text || counterpart.ending === line.ending) return line.text;
   return line.text + ENDING_SYMBOLS[line.ending];

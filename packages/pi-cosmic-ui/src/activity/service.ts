@@ -62,7 +62,6 @@ interface ActivityViewSnapshot {
 }
 export interface ActivityServiceOptions {
   readonly publish: (rows: readonly ActivityRow[], starting: number) => void;
-  /** Runs after each committed change; may request followed details. */
   readonly changed?: () => void;
   readonly tick?: (now: number) => void;
   readonly connect?: (service: ActivityServiceContract) => () => void;
@@ -70,9 +69,7 @@ export interface ActivityServiceOptions {
 const invalid = () => new ActivityError({ reason: "invalid" });
 const stale = () => new ActivityError({ reason: "stale" });
 const failed = () => new ActivityError({ reason: "failed" });
-/** Keeps a typed failure, such as a stale recheck, and contains anything else. */
 const asActivityError = (cause: unknown) => (cause instanceof ActivityError ? cause : failed());
-/** Host and producer callbacks are best effort: a throw is contained and ignored. */
 const bestEffort = (run: () => void) => Effect.try({ try: run, catch: failed }).pipe(Effect.ignore);
 const cleanDetail = (text: string) =>
   sanitizeDiagnosticContent(
@@ -81,12 +78,10 @@ const cleanDetail = (text: string) =>
   );
 type Acknowledgement = readonly [Provider, boolean];
 const uniqueIds = (ids: readonly string[]) => new Set(ids).size === ids.length;
-/** Stopped, failed and skipped work are disjoint parts of the finished work. */
 const consistentWork = ({ work }: ActivityPhase) =>
   !work ||
   (work.finished <= work.items &&
     work.stopped + (work.failed ?? 0) + (work.skipped ?? 0) <= work.finished);
-/** Workflow phases describe the workflow row; attention rolls up from its members only. */
 const consistentWorkflow = (item: ActivityItem) => {
   if (item.kind !== "workflow")
     return item.phases === undefined && item.unphasedPlanned === undefined;
@@ -99,22 +94,16 @@ const consistentWorkflow = (item: ActivityItem) => {
     item.status !== "blocked"
   );
 };
-/**
- * Planned work is never a workflow and never under way. Only planned work its owner may still
- * start offers actions, such as skipping it; once it never will, it offers none.
- */
 const consistentPlan = (item: ActivityItem) =>
   item.planned !== true ||
   (item.kind !== "workflow" &&
     (item.status === "pending" || (item.status === "cancelled" && !item.actions?.length)));
-/** Only cancelled work, never planned, a workflow or a question, is skipped. */
 const consistentSkip = (item: ActivityItem) =>
   item.skipped !== true ||
   (item.status === "cancelled" &&
     item.planned !== true &&
     item.kind !== "workflow" &&
     item.kind !== "question");
-/** Runs on cleaned items so titles that collide after sanitizing are rejected too. */
 const consistentSnapshot = (items: readonly ActivityItem[]) =>
   uniqueIds(items.map((item) => item.id)) &&
   items.every(
@@ -124,10 +113,91 @@ const consistentSnapshot = (items: readonly ActivityItem[]) =>
       consistentPlan(item) &&
       consistentSkip(item),
   );
-/** Work waiting to start; planned items are declarations, not launches. */
+type Transition = readonly [readonly Acknowledgement[], State];
+type ProviderIdentity = Omit<Provider, "items" | "starting">;
+interface DecodedSnapshot {
+  readonly items: readonly ActivityItem[];
+  readonly starting: number;
+}
+const withoutProviderRows = (rows: readonly ActivityRow[], providerId: string) =>
+  rows.filter((row) => row.providerId !== providerId);
+const revokeProvider = (
+  old: State,
+  event: ActivityEnvelope,
+  current: Provider | undefined,
+): Transition => {
+  const providers = new Map(old.providers);
+  providers.delete(event.providerId);
+  return [
+    current ? [[current, false]] : [],
+    {
+      ...old,
+      providers,
+      retired: new Set(old.retired).add(event.token),
+      rows: withoutProviderRows(old.rows, event.providerId),
+    },
+  ];
+};
+const decodeSnapshot = (event: ActivityEnvelope): DecodedSnapshot | undefined => {
+  const decoded = decodeUnknownOrUndefined(ActivitySnapshotSchema, event.items);
+  const starting = decodeUnknownOrUndefined(
+    ActivityStartingSchema,
+    event.starting === undefined ? 0 : event.starting,
+  );
+  if (decoded === undefined || starting === undefined) return undefined;
+  const items = decoded.map((item) => detachActivityItem(item, cleanDetail));
+  return consistentSnapshot(items) ? { items, starting } : undefined;
+};
+const registeredProvider = (old: State, event: ActivityEnvelope): ProviderIdentity | undefined => {
+  const { invoke, acknowledge, getDetail } = event;
+  if (!invoke || !acknowledge || old.providers.size >= 32 || old.serial >= 4096) return undefined;
+  return {
+    token: event.token,
+    generation: old.serial + 1,
+    invoke,
+    acknowledge,
+    ...(getDetail && { getDetail }),
+  };
+};
+const publishSnapshot = (
+  old: State,
+  event: ActivityEnvelope,
+  current: Provider | undefined,
+  snapshot: DecodedSnapshot,
+): Transition | undefined => {
+  const isNew = current?.token !== event.token;
+  const identity = isNew ? registeredProvider(old, event) : current;
+  if (!identity) return undefined;
+  const items: readonly ActivityRow[] = snapshot.items.map((item) => ({
+    ...item,
+    actions: item.actions ?? [],
+    key: activityKey(event.providerId, item.id),
+    providerId: event.providerId,
+    generation: identity.generation,
+  }));
+  const provider: Provider = { ...identity, items, starting: snapshot.starting };
+  const providers = new Map(old.providers).set(event.providerId, provider);
+  const retired = new Set(old.retired);
+  const acknowledgements: Acknowledgement[] = [];
+  if (isNew && current) {
+    retired.add(current.token);
+    acknowledgements.push([current, false]);
+  }
+  acknowledgements.push([provider, true]);
+  const live = [...providers.values()].flatMap((entry) => entry.items);
+  return [
+    acknowledgements,
+    {
+      ...old,
+      serial: Math.max(old.serial, identity.generation),
+      providers,
+      retired,
+      rows: retainActivity(old.rows, live),
+    },
+  ];
+};
 const startingWork = (item: ActivityItem) =>
   item.kind === "agent" && item.status === "pending" && item.planned !== true;
-/** The current provider's row a request names, at its exact generation and revision. */
 const currentRow = (rows: readonly ActivityRow[], request: ActivityDetailRequest) =>
   rows.find(
     (row) =>
@@ -153,7 +223,6 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
       (view) => options.publish(view.rows, view.starting),
     ).pipe(Effect.mapError(failed));
     const changed = bestEffort(() => options.changed?.());
-    /** An invalid snapshot withdraws its provider's rows, starting count and availability. */
     const withdraw = (event: ActivityEnvelope) =>
       state
         .transition((old) => {
@@ -167,11 +236,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
           });
           return Effect.succeed([
             provider.acknowledge,
-            {
-              ...old,
-              providers,
-              rows: old.rows.filter((row) => row.providerId !== event.providerId),
-            },
+            { ...old, providers, rows: withoutProviderRows(old.rows, event.providerId) },
           ] as const);
         })
         .pipe(
@@ -186,89 +251,19 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
         const notices = yield* state
           .transition<readonly Acknowledgement[], ActivityError, never>((old) =>
             Effect.gen(function* () {
-              const unchanged = [[], old] as const;
+              const unchanged: Transition = [[], old];
               if (old.closed || old.retired.has(event.token)) return unchanged;
               const current = old.providers.get(event.providerId);
               if (event.operation !== "register" && current?.token !== event.token)
                 return unchanged;
-              if (event.operation === "revoke") {
-                const providers = new Map(old.providers);
-                providers.delete(event.providerId);
-                const retired = new Set(old.retired).add(event.token);
-                const acknowledgements: Acknowledgement[] = current ? [[current, false]] : [];
-                return [
-                  acknowledgements,
-                  {
-                    ...old,
-                    providers,
-                    retired,
-                    rows: old.rows.filter((row) => row.providerId !== event.providerId),
-                  },
-                ] as const;
-              }
-              // Lock waiting stays interruptible; core owns only the narrow projection commit.
-              // Hostile proxies and throwing getters are invalid like any other malformed input.
-              const decoded = decodeUnknownOrUndefined(ActivitySnapshotSchema, event.items);
-              const starting = decodeUnknownOrUndefined(
-                ActivityStartingSchema,
-                event.starting === undefined ? 0 : event.starting,
-              );
-              if (decoded === undefined || starting === undefined) return yield* invalid();
-              const cleaned = decoded.map((item) => detachActivityItem(item, cleanDetail));
-              if (!consistentSnapshot(cleaned)) return yield* invalid();
-              // Only a registration reaches here with a new token.
-              const isNew = current?.token !== event.token;
-              if (
-                isNew &&
-                (!event.invoke ||
-                  !event.acknowledge ||
-                  old.providers.size >= 32 ||
-                  old.serial >= 4096)
-              )
-                return unchanged;
-              const generation = isNew ? old.serial + 1 : current!.generation;
-              const items: readonly ActivityRow[] = cleaned.map((item) => ({
-                ...item,
-                actions: item.actions ?? [],
-                key: activityKey(event.providerId, item.id),
-                providerId: event.providerId,
-                generation,
-              }));
-              const provider: Provider = isNew
-                ? {
-                    token: event.token,
-                    generation,
-                    items,
-                    starting,
-                    invoke: event.invoke!,
-                    acknowledge: event.acknowledge!,
-                    ...(event.getDetail && { getDetail: event.getDetail }),
-                  }
-                : { ...current!, items, starting };
-              const providers = new Map(old.providers).set(event.providerId, provider);
-              const retired = new Set(old.retired);
-              const acknowledgements: Acknowledgement[] = [];
-              if (isNew && current) {
-                retired.add(current.token);
-                acknowledgements.push([current, false]);
-              }
-              acknowledgements.push([provider, true]);
-              const live = [...providers.values()].flatMap((entry) => entry.items);
-              return [
-                acknowledgements,
-                {
-                  ...old,
-                  serial: Math.max(old.serial, generation),
-                  providers,
-                  retired,
-                  rows: retainActivity(old.rows, live),
-                },
-              ] as const;
+              if (event.operation === "revoke") return revokeProvider(old, event, current);
+              const snapshot = decodeSnapshot(event);
+              if (!snapshot) return yield* invalid();
+              return publishSnapshot(old, event, current, snapshot) ?? unchanged;
             }),
           )
           .pipe(Effect.mapError(asActivityError));
         for (const [provider, available] of notices) {
-          // A provider replaced meanwhile is never told it is available.
           if (available && (yield* state.getState).providers.get(event.providerId) !== provider)
             continue;
           yield* bestEffort(() => provider.acknowledge(available));
@@ -280,7 +275,6 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
           Effect.tapError((error) => (error.reason === "invalid" ? withdraw(event) : Effect.void)),
         ),
     );
-    /** Rechecks the frozen current projection immediately before a captured capability runs. */
     const checkedRow = (request: ActivityDetailRequest): ActivityRow => {
       const row = currentRow(state.getSnapshot().rows, request);
       if (!row) throw stale();
@@ -314,7 +308,6 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
         },
         catch: asActivityError,
       });
-      // Producers are untrusted, so their detail may not be text at all.
       if (!Predicate.isString(text)) return yield* invalid();
       return yield* Effect.try({
         try: () => {

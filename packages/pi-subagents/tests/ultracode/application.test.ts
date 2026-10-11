@@ -1,52 +1,31 @@
-// Promise assertions and Pi host callbacks are test-runner boundaries.
-import type {
-  ExtensionCommandContext,
-  ExtensionContext,
-  ExtensionHandler,
-} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { temporaryDirectory } from "pi-cosmic-core/testing";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
+import {
+  extensionApiFixture,
+  recordingExtensionHost,
+  temporaryDirectory,
+  type DefaultedEventName,
+  type ExtensionEventNamed,
+} from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../../src/application/register.ts";
-import { extensionApiFixture, sessionContextFixture } from "../fixtures/pi-host.ts";
+import { beforeAgentStartEvent, sessionContextFixture } from "../fixtures/pi-host.ts";
 import { effectTest, settle, step } from "../support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "../support/node-builtins.ts";
 
-type Handler = ExtensionHandler<any, any>;
-type Command = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
-type RegisteredTool = {
-  readonly name: string;
-  readonly defaultActive?: boolean;
-  readonly execute: (
-    toolCallId: string,
-    params: Readonly<Record<string, string>>,
-    signal: AbortSignal | undefined,
-    onUpdate: undefined,
-    ctx: ExtensionContext,
-  ) => Promise<{ readonly details?: { readonly run?: { readonly id: string } } }>;
-};
-type SentMessage = { readonly customType: string };
-/** The system-prompt options a `before_agent_start` event carries. */
-interface PromptOptions {
-  readonly promptGuidelines: string[];
-  readonly sections: Record<string, string>;
-}
-/** A field of a Pi lifecycle event this test emits. */
-type HostEventField = string | PromptOptions;
+const decodeRunId = Schema.decodeUnknownOption(
+  Schema.Struct({ details: Schema.Struct({ run: Schema.Struct({ id: Schema.String }) }) }),
+);
 
 const WORKFLOW = "subagent_workflow";
-/** Another extension's tool, which ultracode must never remove. */
 const FOREIGN = "mcp__docs__search";
 const SCRIPT = `export const meta = { name: "noop", description: "Return a value" };\nreturn 1;`;
 const SAVED = `export const meta = { name: "review", description: "Review the diff" };\nreturn 1;`;
 
 let nextSession = 1;
 
-/**
- * One Pi session over real Subagents instances: `reload` replaces the instance as Pi does, while
- * the active tools, session id and directories carry over. Workflow notifications reach Pi only
- * while `accepting` is set. The test's scope quits the session and removes its directories.
- */
 const sessionFixture = (
   options: { readonly projectConfig?: object; readonly trusted?: boolean } = {},
 ) =>
@@ -71,10 +50,8 @@ const sessionFixture = (
     let active: ReadonlyArray<string> = ["read", FOREIGN];
     let accepting = true;
     let idle = true;
-    let handlers = new Map<string, Handler>();
-    let commands = new Map<string, Command>();
-    let tools = new Map<string, RegisteredTool>();
-    const sent: SentMessage[] = [];
+    let host = recordingExtensionHost();
+    const sent: string[] = [];
     const userMessages: string[] = [];
     const notify = vi.fn();
     const sessionId = `ultracode-session-${process.pid}-${nextSession++}`;
@@ -89,43 +66,39 @@ const sessionFixture = (
       sessionId,
     );
     const register = () => {
-      handlers = new Map();
-      commands = new Map();
-      tools = new Map();
+      host = recordingExtensionHost();
+      const recorded = host.pi;
       const pi = extensionApiFixture({
-        on: vi.fn((name: string, handler: Handler) => {
-          handlers.set(name, handler);
-        }),
-        registerCommand: vi.fn((name: string, definition: { readonly handler: Command }) => {
-          commands.set(name, definition.handler);
-        }),
-        registerTool: vi.fn((tool: RegisteredTool) => {
-          tools.set(tool.name, tool);
+        ...recorded,
+        registerTool: (tool) => {
+          recorded.registerTool(tool);
           if (tool.defaultActive !== false) active = [...new Set([...active, tool.name])];
-        }),
-        getActiveTools: vi.fn(() => [...active]),
-        setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
+        },
+        getActiveTools: () => [...active],
+        setActiveTools: (names) => {
           active = [...names];
-        }),
-        sendMessage: vi.fn((message: SentMessage) => {
+        },
+        sendMessage: (message) => {
           if (message.customType === "pi-subagents-workflow" && !accepting)
             throw new Error("Pi is busy");
-          sent.push(message);
-        }),
-        sendUserMessage: vi.fn((message: string) => {
-          userMessages.push(message);
-        }),
+          sent.push(message.customType);
+        },
+        sendUserMessage: (message) => {
+          if (Predicate.isString(message)) userMessages.push(message);
+        },
       });
       registerSubagentApplication(pi, {
         getAgentDirectory: () => agentDirectory,
         loadSettings: () => Promise.resolve(),
       });
     };
-    const emit = (name: string, event: Readonly<Record<string, HostEventField>> = {}) =>
-      settle(() => handlers.get(name)?.({ type: name, ...event }, ctx));
+    const emit = <Name extends DefaultedEventName>(name: Name, event?: ExtensionEventNamed<Name>) =>
+      settle(() => host.emit(name, ctx, event));
     register();
-    yield* Effect.addFinalizer(() => emit("session_shutdown", { reason: "quit" }));
-    yield* emit("session_start", { reason: "startup" });
+    yield* Effect.addFinalizer(() =>
+      emit("session_shutdown", { type: "session_shutdown", reason: "quit" }),
+    );
+    yield* emit("session_start", { type: "session_start", reason: "startup" });
     return {
       ctx,
       notify,
@@ -141,26 +114,33 @@ const sessionFixture = (
         idle = value;
       },
       command: (name: string, args: string) =>
-        step(() => commands.get(name)?.(args, ctx) ?? Promise.resolve()),
-      /**
-       * Starts an agent run from `prompt`, by default the latest request Pi was sent, and returns
-       * the ultracode section of its system prompt.
-       */
+        step(() => host.commands.get(name)?.handler(args, ctx) ?? Promise.resolve()),
       promptRun: function* (prompt = userMessages.at(-1) ?? "") {
         const sections: Record<string, string> = {};
-        yield* emit("before_agent_start", {
-          prompt,
-          systemPromptOptions: { promptGuidelines: [], sections },
-        });
+        yield* settle(() =>
+          host.emit("before_agent_start", ctx, beforeAgentStartEvent(prompt, { sections })),
+        );
         return sections["subagents_ultracode"];
       },
       startWorkflow: () =>
-        step(() =>
-          tools
-            .get(WORKFLOW)!
-            .execute("call-1", { action: "start", script: SCRIPT }, undefined, undefined, ctx),
-        ).pipe(Effect.map((result) => result.details?.run?.id ?? "")),
-      /** Waits until Pi accepted the run's notification or notice and its record says so. */
+        step(() => {
+          const tool = host.tools.get(WORKFLOW);
+          if (!tool) throw new Error(`Missing tool ${WORKFLOW}`);
+          return tool.execute(
+            "call-1",
+            { action: "start", script: SCRIPT },
+            undefined,
+            undefined,
+            ctx,
+          );
+        }).pipe(
+          Effect.map((result) =>
+            Option.match(decodeRunId(result), {
+              onNone: () => "",
+              onSome: (decoded) => decoded.details.run.id,
+            }),
+          ),
+        ),
       runClosed: (runId: string) =>
         step(() =>
           vi.waitFor(
@@ -175,9 +155,9 @@ const sessionFixture = (
           ),
         ),
       reload: function* () {
-        yield* emit("session_shutdown", { reason: "reload" });
+        yield* emit("session_shutdown", { type: "session_shutdown", reason: "reload" });
         register();
-        yield* emit("session_start", { reason: "reload" });
+        yield* emit("session_start", { type: "session_start", reason: "reload" });
       },
     };
   });
@@ -195,13 +175,11 @@ describe("ultracode opt-in", () => {
     yield* session.command("ultracode", "on");
     expect(session.workflowActive()).toBe(true);
     expect(yield* session.promptRun()).toBeDefined();
-    // The session's own value outlives tree navigation and reload.
     yield* session.emit("session_tree");
     expect(session.workflowActive()).toBe(true);
     yield* session.reload();
     expect(session.workflowActive()).toBe(true);
 
-    // Right after the reload the tool leaves when the next agent run starts.
     yield* session.command("ultracode", "off");
     expect(yield* session.promptRun()).toBeUndefined();
     expect(session.workflowActive()).toBe(false);
@@ -264,7 +242,6 @@ describe("one-off /ultracode requests", () => {
     expect(session.userMessages[0]?.startsWith("review the parser")).toBe(true);
     expect(session.userMessages[0]).toContain("budget: 500000");
     expect(session.workflowActive()).toBe(true);
-    // Text after on or off is a task too, not the session switch.
     yield* session.command("ultracode", "on the parser");
     expect(session.userMessages[1]?.startsWith("on the parser")).toBe(true);
     yield* session.command("ultracode", "+500k");
@@ -282,14 +259,11 @@ describe("one-off /ultracode requests", () => {
       const runId = yield* session.startWorkflow();
       expect(runId).not.toBe("");
       yield* session.emit("agent_settled");
-      // Pi hasn't accepted the run's notification, so the run still needs the main agent.
       expect(session.workflowActive()).toBe(true);
 
       session.setAccepting(true);
       yield* session.runClosed(runId);
-      expect(session.sent).toEqual([
-        expect.objectContaining({ customType: "pi-subagents-workflow" }),
-      ]);
+      expect(session.sent).toEqual(["pi-subagents-workflow"]);
       expect(session.workflowActive()).toBe(true);
       yield* session.emit("agent_settled");
       expect(session.workflowActive()).toBe(false);
@@ -306,12 +280,9 @@ describe("one-off /ultracode requests", () => {
     yield* session.emit("agent_settled");
 
     yield* session.reload();
-    // The reload interrupted delivery; the new instance's notice reaches Pi once it accepts.
     session.setAccepting(true);
     yield* session.runClosed(runId);
-    expect(session.sent).toEqual([
-      expect.objectContaining({ customType: "pi-subagents-workflow" }),
-    ]);
+    expect(session.sent).toEqual(["pi-subagents-workflow"]);
     expect(session.workflowActive()).toBe(true);
     expect(yield* session.promptRun("resume it")).toBeDefined();
     yield* session.emit("agent_settled");

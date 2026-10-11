@@ -1,4 +1,3 @@
-// Shared Pi-child host policy for ephemeral credentials and OpenAI priority requests.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
@@ -8,7 +7,6 @@ interface RuntimeApiCredentials {
   readonly provider?: string | undefined;
 }
 
-/** Reads and scrubs one-shot runtime API credentials at the caller-selected lifecycle point. */
 export const consumeRuntimeApiCredentials = (
   environment: NodeJS.ProcessEnv,
 ): RuntimeApiCredentials => {
@@ -19,11 +17,9 @@ export const consumeRuntimeApiCredentials = (
   return { apiKey, provider };
 };
 
-/** Registers the private priority tier hook, narrowed to eligible active OpenAI models. */
 export const registerChildPiFastModeHook = (pi: ExtensionAPI, isEnabled: () => boolean): void => {
   pi.on("before_provider_request", (event, ctx) => {
     if (
-      // Pi applies CLI flags after extension factories finish. Read at request time.
       !isEnabled() ||
       !ctx.model ||
       !supportsFastModel(ctx.model.provider, ctx.model.id) ||

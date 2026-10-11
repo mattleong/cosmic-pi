@@ -12,7 +12,6 @@ import {
 } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 
-/** Core lock evidence never names another session's run, so the owner stays anonymous. */
 const mapWriterLeaseConflict = ({ message }: WriterLeaseConflictError) =>
   new SubagentWriterConflictError({
     activeId: "unknown-cross-process-writer",
@@ -20,10 +19,6 @@ const mapWriterLeaseConflict = ({ message }: WriterLeaseConflictError) =>
     message,
   });
 
-/**
- * Durably prepares and token-confirms the writer lease before any driver spawn. Claims
- * preparation and installs settlement cleanup before restoring interruption.
- */
 export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
   const prepareWriterLeaseForSpawn = (record: RunRecord): Effect.Effect<void, SubagentError> => {
     const canonicalCwd = record.canonicalWriterCwd;
@@ -45,8 +40,6 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
     const attachedLocked = () =>
       record.writerPool === pool && pool.members.has(record.view.id) && !record.stoppedByParent;
     const stillAttached = withLock(Effect.sync(attachedLocked));
-    // The preparing state owns the shared latch. Keep that claim masked until
-    // ensuring is installed, even if the lock yields while returning ownership.
     return Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const role = yield* withLock(
@@ -83,8 +76,6 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
 
         let handedOff = false;
         const prepareOwner = Effect.gen(function* () {
-          // acquireRelease masks the lease handoff to its finalizer; acquire keeps
-          // only its pre-ownership checks interruptible.
           const lease = yield* Effect.acquireRelease(
             writerLeases.acquire({ cwd: canonicalCwd, runId: record.view.id }).pipe(
               Effect.mapError((error) =>

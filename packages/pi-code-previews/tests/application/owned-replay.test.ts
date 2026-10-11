@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { beforeAll, expect, it } from "vitest";
-import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { registerCodePreviewReplay } from "../../index";
 import {
   createToolPresentationHarness,
@@ -53,11 +53,11 @@ const fixture = () => {
     getCommands: () => commands,
   });
   const replay = registerCodePreviewReplay(pi, { command: "owner", tools: ["owned"] });
-  const tool: ToolDefinition<any, any, any> = {
+  const tool: ToolDefinition = {
     name: "owned",
     label: "Owned",
     description: "fixture",
-    parameters: opaqueFixture({ type: "object" }),
+    parameters: { type: "object" },
     execute: () => {
       throw new Error("Replay must never execute");
     },
@@ -165,6 +165,16 @@ for (const failure of [
     h.replay.retire();
   });
 
+it("cold rows show raw arguments without live terminal controls", () => {
+  const h = fixture();
+  const row = createToolPresentationHarness(h.resolve()!);
+  row.call({ value: "VISIBLE\u009b2JREST" });
+  const text = row.render().join("\n");
+  expect(text).not.toContain("\u009b");
+  expect(text).toContain("REST");
+  h.replay.retire();
+});
+
 it("never replaces downstream renderers and falls through after the first startup", () => {
   const h = fixture();
   const downstream: ToolRenderers = { renderCall: () => new Text("FOREIGN", 0, 0) };
@@ -210,7 +220,7 @@ for (const close of ["finishStartup", "retire"] as const)
     expect(h.resolve()).toBeUndefined();
   });
 
-it("hosts without renderer resolvers still wrap normal definitions", () => {
+it("an inert renderer registry still wraps normal definitions", () => {
   const replay = registerCodePreviewReplay(extensionApiFixture({}), {
     command: "owner",
     tools: ["owned"],

@@ -1,4 +1,3 @@
-// Pi registry and native model discovery are Promise-shaped settings boundaries.
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import * as Effect from "effect/Effect";
@@ -84,7 +83,6 @@ const projectRegistry = (
   }
 };
 
-/** Replace-only in-memory catalog. Readers capture one immutable generation per action. */
 export class ProfileModelCatalog {
   private snapshot: ProfileModelCatalogSnapshot;
   private readonly registry: ProfileModelRegistry;
@@ -100,10 +98,6 @@ export class ProfileModelCatalog {
     return this.snapshot;
   }
 
-  /**
-   * Each dashboard refreshes its own catalog once. Interruption aborts the registry signal and
-   * ends the fiber before any result is published.
-   */
   refresh(): Effect.Effect<ProfileModelCatalogRefresh> {
     return Effect.tryPromise({
       try: (signal) => this.registry.refresh({ signal }),
@@ -148,21 +142,17 @@ export interface CandidateModelPickerInput {
     runtime: LocalCliRuntime,
     signal?: AbortSignal,
   ) => Promise<ReadonlyArray<NativeRuntimeModel>>;
-  /** One immutable Pi catalog generation captured by the picker action. */
   readonly piCatalog: ProfileModelCatalogSnapshot;
   readonly parentSelector?: string | undefined;
   readonly signal?: AbortSignal | undefined;
-  /** A runtime switch: the candidate's model belongs to its previous runtime and is not offered. */
   readonly modelPending?: boolean | undefined;
 }
 
-/** Keeps the configured model selectable when the live catalog omits it or cannot load. */
 const configuredNativeModel = (runtime: LocalCliRuntime, current: string): NativeRuntimeModel => ({
   selector: current,
   label: current,
   description: "Current model",
   supportedEfforts: runtimeEfforts(runtime),
-  // Fast mode for Codex is live catalog data. Fallback selectors never infer a tier.
   supportedServiceTiers: [],
   isDefault: false,
 });
@@ -229,7 +219,6 @@ type PiModelOptionsInput = Pick<
   "candidate" | "piCatalog" | "parentSelector"
 >;
 
-/** Pi options for a candidate, from the full catalog unless a narrower model list is given. */
 const piModelOptions = (
   { candidate, piCatalog, parentSelector }: PiModelOptionsInput,
   models = piCatalog.piModels,
@@ -240,7 +229,6 @@ const piModelOptions = (
     currentSelector: candidate.model,
   });
 
-/** The efforts a Pi candidate's model offers, gated exactly as its picker gates them. */
 export const supportedPiEfforts = (
   input: PiModelOptionsInput,
 ): ReadonlyArray<SubagentEffort> | undefined =>
@@ -249,13 +237,11 @@ export const supportedPiEfforts = (
         ?.supportedEfforts
     : undefined;
 
-/** Loads runtime-specific choices for the workspace's full-page searchable model picker. */
 export function loadCandidateModelPicker(
   input: CandidateModelPickerInput,
 ): Promise<CandidateModelPickerData> {
   const candidate = input.candidate;
   if (candidate.runtime !== "pi") return loadNativeModels(input, candidate.runtime);
-  // The root registry already reflects project trust.
   const snapshot = input.piCatalog;
   const optionsFor = (models: ReadonlyArray<ProjectedPiModel>) =>
     retainUnavailableCurrent(candidate.model, piModelOptions(input, models));

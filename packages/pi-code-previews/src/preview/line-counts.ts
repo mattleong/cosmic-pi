@@ -1,6 +1,5 @@
 import { forEachRawTextLine } from "../shared/text-lines";
 
-/** Lines as Pi's read counts them: only "\n" ends a line, so a lone "\r" is content. */
 export function countContentLines(content: string): number {
   if (!content) return 0;
   let newlines = 0;

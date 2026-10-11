@@ -47,7 +47,6 @@ const action = (row: ActivityRow): ActivityActionRequest => ({
   revision: row.revision,
   actionId: "stop",
 });
-/** A service whose publications, acknowledgements and clock-driven widget renders are recorded. */
 const recordingService = (connect?: ActivityServiceOptions["connect"]) =>
   Effect.gen(function* () {
     let rows: readonly ActivityRow[] = [];
@@ -64,7 +63,6 @@ const recordingService = (connect?: ActivityServiceOptions["connect"]) =>
       },
       ...(connect && { connect }),
     });
-    /** A new registration of `items` whose availability is recorded. */
     const register = (
       items: ActivityEnvelope["items"],
       overrides: Partial<ActivityEnvelope> = {},
@@ -76,10 +74,6 @@ const recordingService = (connect?: ActivityServiceOptions["connect"]) =>
       },
       ...overrides,
     });
-    /**
-     * Restores `event` before each invalid snapshot, which must withdraw its rows, starting count
-     * and availability together.
-     */
     const rejectsEach = (
       event: ActivityEnvelope,
       snapshots: ReadonlyArray<ActivityEnvelope["items"]>,
@@ -127,9 +121,9 @@ describe("activity service", () => {
           blockedReason: undefined,
         }));
         yield* service.receive({ ...event, operation: "publish", items: pending });
-        expect(starting()).toBe(2); // Lease counts are requested work, not additional pending rows.
+        expect(starting()).toBe(2);
         yield* service.receive({ ...event, operation: "publish", items: pending, starting: 0 });
-        expect(starting()).toBe(3); // Resume/start rows still count without a start-tool lease.
+        expect(starting()).toBe(3);
         for (const invalid of [-1, 1.5, Infinity, 16385, "2", null]) {
           yield* service.receive({ ...event, operation: "publish", items: pending });
           yield* Effect.flip(
@@ -191,15 +185,12 @@ describe("activity service", () => {
         [{ ...workflow, status: "needs-input", inputTarget: "user" }],
         [{ ...workflow, status: "blocked" }],
       ]);
-      // Members are placed leniently: retained history can outlive a workflow's phase list.
       yield* service.receive({ ...event, items: [workflow, { ...member, phase: "Elsewhere" }] });
       expect(available()).toBe(true);
       expect(rows()).toHaveLength(2);
-      // Failed work is part of the finished work, apart from stopped work.
       const failing = { title: "Find", work: { items: 3, finished: 2, stopped: 1, failed: 1 } };
       yield* service.receive({ ...event, items: [{ ...workflow, phases: [failing] }, member] });
       expect(rows()[0]?.phases).toEqual([failing]);
-      // A workflow keeps its producer's count of planned members outside its phases.
       yield* service.receive({ ...event, items: [{ ...workflow, unphasedPlanned: 3 }, member] });
       expect(rows()[0]?.unphasedPlanned).toBe(3);
       yield* service.invoke({ ...action(rows()[1]!), actionId: "skip" });
@@ -228,15 +219,12 @@ describe("activity service", () => {
       yield* service.receive(event);
       expect(available()).toBe(true);
       expect(rows().map((row) => row.id)).toEqual(["planned"]);
-      // Declared work isn't a launch, so it neither shows the startup spinner nor counts.
       expect(starting()).toBe(0);
-      // Planned work its owner may still start can offer actions, such as skipping it.
       yield* service.receive({ ...event, operation: "publish", items: [skippable] });
       expect(starting()).toBe(0);
       const offered = rows()[0]!;
       yield* service.invoke({ ...action(offered), actionId: "skip" });
       expect(invoked).toEqual(["skip"]);
-      // A revision the producer has since replaced is refused before reaching it.
       yield* service.receive({
         ...event,
         operation: "publish",
@@ -277,7 +265,6 @@ describe("activity service", () => {
           [{ ...skipped, planned: true }],
           [{ ...skipped, kind: "question" }],
           [{ ...skipped, kind: "workflow", phases: [] }],
-          // A phase's skipped work is part of its finished work, apart from stopped and failed.
           [
             {
               id: "workflow",

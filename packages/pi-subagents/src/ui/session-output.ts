@@ -40,7 +40,6 @@ import {
 interface SessionOutputRenderOptions {
   readonly now?: number;
   readonly showTechnicalDetails?: boolean;
-  /** Whether the fleet detail pane owns focus; it accents the heading. */
   readonly detailFocused?: boolean;
 }
 
@@ -52,7 +51,6 @@ type ActivityItem =
 
 const HANGING_PADDING = 2;
 
-/** Padded text whose wrapped rows hang under the first row's body, past its prefix. */
 const hangingText = (prefix: string, text: string): Component =>
   composeToolComponent((width) => {
     const safeWidth = Math.max(1, width);
@@ -66,7 +64,6 @@ const hangingText = (prefix: string, text: string): Component =>
     return rows.map((row, index) => `${margin}${index === 0 ? shownPrefix : continuation}${row}`);
   });
 
-/** A titled or standalone block, a blank line below what precedes it. */
 const addBlock = (container: Container, text: string): void => {
   container.addChild(new Spacer(1));
   container.addChild(new Text(text, 0, 0));
@@ -85,7 +82,6 @@ const activityItems = (
   for (const event of events) {
     if (event.type === "assistant") continue;
     if (event.type === "notice") {
-      // Progress notices render as the live progress field instead.
       if (event.kind !== "progress") {
         items.push({ type: "notice", event });
         openGroup = undefined;
@@ -111,7 +107,6 @@ function addToolGroup(
 ): void {
   const first = events[0];
   if (!first) return;
-  // A tool's state is also a run state, so it takes that state's glyph and color.
   const glyph = theme.fg(runStateColor(first.state), runStateGlyph(first.state, frame));
   const count = events.length > 1 ? ` ×${events.length}` : "";
   const target =
@@ -159,10 +154,6 @@ const addStyledRow = (
     ),
   );
 
-/**
- * Native guidance delivery only, from the shared tool evidence. Confirmation is never shown as
- * incorporation, and every other state keeps attention because the input may already have arrived.
- */
 const addSteeringDelivery = (container: Container, run: SubagentRunView, theme: Theme): void => {
   if (run.steeringDelivery === undefined) return;
   const style =
@@ -172,13 +163,11 @@ const addSteeringDelivery = (container: Container, run: SubagentRunView, theme: 
   addStyledRow(container, style, steeringDeliveryEvidence[run.steeringDelivery].message, theme);
 };
 
-/** A live state in the word every extension uses for it: "Starting…", "Running…". */
 const liveLabel = (kind: ManagerActivityKind): string => {
   const word = managerActivityLabel(kind);
   return `${word.charAt(0).toUpperCase()}${word.slice(1)}…`;
 };
 
-/** Per-state guidance shown when a run has no activity, notices, or live fields at all. */
 const EMPTY_ACTIVITY_LABELS = {
   starting: liveLabel("pending"),
   running: liveLabel("running"),
@@ -197,7 +186,6 @@ const emptyActivityLabel = (run: SubagentRunView): string =>
       : "Interrupted; stop this run and start a replacement when needed."
     : EMPTY_ACTIVITY_LABELS[run.state];
 
-/** Live run fields rendered in order, each only when no persisted notice already covers it. */
 const addLiveActivity = (
   container: Container,
   run: SubagentRunView,
@@ -225,7 +213,6 @@ const addLiveActivity = (
     container.addChild(new Text(theme.fg("dim", emptyActivityLabel(run)), 2, 0));
 };
 
-/** What a completed run without a report says about it; an available one isn't observed here. */
 const MISSING_REPORT_STATUS = {
   available: "Final report availability unknown in this observation.",
   missing: "No accepted final report for this assignment.",
@@ -247,7 +234,6 @@ const addAssistantConclusion = (container: Container, run: SubagentRunView, them
   if (usage) addBlock(container, theme.fg("dim", usage));
 };
 
-/** One hanging technical-detail row; bodies arrive pre-sanitized where needed. */
 const addDetailLine = (
   container: Container,
   prefix: string,
@@ -319,7 +305,6 @@ export function renderSubagentSessionOutput(
   const container = new Container();
   const name = sanitizeTerminalLine(run.name);
   const active = isActiveRunState(run.state);
-  // A paused run's clock stops at its last activity.
   const end = run.endedAt ?? (active && run.state !== "paused" ? now : run.lastActivityAt);
   const elapsed = formatElapsed(end - run.startedAt);
   const duration =

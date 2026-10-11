@@ -24,7 +24,6 @@ import {
 } from "./row-line.ts";
 import { renderActivityRow, STATUS_DROP, type ActivityStatusPart } from "./row-render.ts";
 
-/** Only a done phase is finished, matching the workflow's finished-phase count. */
 export const phaseLabels = {
   pending: "not started",
   running: "running",
@@ -50,10 +49,6 @@ const phaseGlyph = (state: PhaseState, now: number): string =>
 const parts = (texts: readonly string[], drop?: number): ActivityStatusPart[] =>
   texts.map((text) => (drop === undefined ? { text } : { text, drop }));
 
-/**
- * What a phase row says after its notices. A running phase shows its work; a settled phase shows
- * how long its members took instead of the word "finished", keeping the stopped and skipped words.
- */
 function phaseProgressParts(
   entry: Extract<GroupedActivityRow, { readonly type: "phase" }>,
   width: number,
@@ -72,7 +67,6 @@ function phaseProgressParts(
   const span = workflowMemberSpan(entry.members, now);
   const elapsed =
     span === undefined ? [] : parts([elapsedLabel(span, width < 60)], STATUS_DROP.elapsed);
-  // Failure notices already name a failed phase's state.
   const word =
     state === "stopped" || (state === "done" && span === undefined)
       ? parts([phaseLabels[state]], STATUS_DROP.state)
@@ -87,7 +81,6 @@ function phaseRowLine(
   presentation: "manager" | "widget",
   focusedStyle?: (text: string) => string,
 ): string {
-  // A failed phase always has failure notices: its summary carries the failures it derives from.
   const notices = compactNotices(entry.summary.attention);
   const attention = notices.length > 0;
   return renderActivityRow(
@@ -103,7 +96,6 @@ function phaseRowLine(
       status: [
         ...parts(notices),
         ...phaseProgressParts(entry, width, options.now),
-        // The summary counts planned work even when its rows don't fit or were dropped.
         ...parts(plannedLabels(entry.summary), STATUS_DROP.phases),
       ],
       statusColor: attention ? "warning" : "muted",
@@ -117,7 +109,6 @@ function phaseRowLine(
   );
 }
 
-/** Workflow and phase rows; a workflow row also carries its own provider state and actions. */
 export function workflowRowLine(
   entry: Extract<GroupedActivityRow, { readonly type: "workflow" | "phase" }>,
   width: number,
@@ -130,10 +121,8 @@ export function workflowRowLine(
   const row = entry.row;
   const notices = compactNotices(entry.summary.attention);
   const phases = row.phases?.length ?? 0;
-  // The workflow's own failure keeps its glyph; member attention overlays a live or ended run.
   const overlay = notices.length > 0 && row.status !== "failed";
   const ended = row.status === "failed" || row.status === "cancelled" || row.status === "stopping";
-  // A stopped workflow's own state word already says its unfinished phases stopped.
   const phaseCounts =
     row.status === "cancelled" ? { ...entry.phaseCounts, stopped: 0 } : entry.phaseCounts;
   const mark = activityMark(row, options.now);
@@ -150,7 +139,6 @@ export function workflowRowLine(
       status: [
         ...parts(notices),
         ...(ended ? parts([activityStatus(row)], STATUS_DROP.state) : []),
-        // Phase rows count their own planned work; the workflow counts what no phase shows.
         ...(phases
           ? parts(
               [

@@ -29,10 +29,8 @@ const inOrder = (text: string, phrases: readonly string[]) => {
   const positions = phrases.map((phrase) => text.indexOf(phrase));
   return positions.every((position, index) => position >= (positions[index - 1] ?? 0));
 };
-/** The collapsed heading row of the first rendered state. */
 const heading = (texts: string[]) => texts[0]!.split("\n")[0];
 const textRenderer = (label: string) => () => new Text(label, 0, 0);
-/** The builtin read definition with these original renderers, inside the cooperative shell. */
 const readShell = (
   renderCall: () => Component,
   renderResult: () => Component,
@@ -123,12 +121,10 @@ test.each(modes)("Pi errors reconcile with the provider's classification in %s m
   const success: CompactSummary = { subject: "target", outcome: "success" };
   const reconciled = row(success, true);
   for (const [index, text] of reconciled.entries()) {
-    // The first line explains the error once; the rest stays with the raw error.
     expect(count(text, "FIRST ERROR LINE")).toBe(1);
     expect(text).not.toContain("second error line");
     expect(text.includes("ORIGINAL RESULT")).toBe(index % 2 === 1);
   }
-  // Pi's error flag gives a claimed success the same heading as a classified error.
   expect(heading(reconciled)).toBe(heading(row({ ...success, outcome: "error" }, false)));
   expect(heading(reconciled)).not.toBe(heading(row(success, false)));
 
@@ -160,7 +156,6 @@ test("issue text wraps without clipping at narrow widths in every frame", () => 
     for (const expanded of [false, true]) {
       h.call({ path: "file" }, { expanded });
       h.result(result, { expanded });
-      // Includes the narrowest widths, where the border frame must yield entirely.
       for (const width of [2, 4, 5, 8, 12, 20, 40]) {
         const rows = h.render(width);
         expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
@@ -396,7 +391,6 @@ test.each(["factory", "draw"] as const)(
         expect(h.render().join("\n")).toContain("RAW diagnostics");
         broken = false;
         for (const expanded of [true, false, true]) {
-          // A fresh result envelope is not new host evidence.
           h.call(args, { expanded });
           h.result({ ...result }, { expanded });
           h.invalidate();

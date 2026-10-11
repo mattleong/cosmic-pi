@@ -8,18 +8,9 @@ import { countLabel, formatBytes } from "pi-cosmic-core";
 
 export type BackgroundTaskState = typeof BackgroundTaskStateSchema.Type;
 export type BackgroundTaskSnapshot = typeof BackgroundTaskSnapshotSchema.Type;
-/**
- * The service's in-memory snapshot: the persisted member plus the domain-only `failureCause`,
- * the first line of a failed task's output that names the failure, redacted and bounded. It is
- * never persisted: tool results carry it in their text, and details only point at it.
- */
 export type BackgroundTaskStatus = BackgroundTaskSnapshot & { readonly failureCause?: string };
 export type BackgroundTaskStatusWait = Omit<BackgroundTaskWaitResult, "snapshot"> & {
   readonly snapshot: BackgroundTaskStatus;
-  /**
-   * How long the service let the wait run: the shorter of `waitSeconds` and the `maxWaitSeconds`
-   * setting. A timed-out wait waited this long. Not part of the shared wait member.
-   */
   readonly appliedWaitSeconds: number;
 };
 export type BackgroundLogMetadata = typeof BackgroundLogMetadataSchema.Type;
@@ -33,7 +24,6 @@ export interface BackgroundLogEvent {
   readonly text: string;
   readonly timestamp: number;
   readonly bytes: number;
-  /** True when bytes immediately before this retained chunk were discarded. */
   readonly droppedBefore?: true;
 }
 
@@ -81,7 +71,6 @@ const ACTIVE_TASK_STATES: ReadonlySet<BackgroundTaskState> = new Set([
 export const isActiveTaskState = (state: BackgroundTaskState): boolean =>
   ACTIVE_TASK_STATES.has(state);
 
-/** Single owner of the failed policy: `failed` counts both `failed` and `timed_out` tasks. */
 export const countTaskStates = (tasks: ReadonlyArray<Pick<BackgroundTaskSnapshot, "state">>) => {
   let active = 0;
   let failed = 0;
@@ -92,7 +81,6 @@ export const countTaskStates = (tasks: ReadonlyArray<Pick<BackgroundTaskSnapshot
   return { active, failed };
 };
 
-/** Active tasks first, then most recently started. Shared by snapshot and view ordering. */
 export function sortTasksByActivity<A extends Pick<BackgroundTaskSnapshot, "state" | "startedAt">>(
   tasks: ReadonlyArray<A>,
 ): ReadonlyArray<A> {
@@ -108,6 +96,5 @@ export function footerStatus(projection: BackgroundTaskProjection): string | und
   return `${countLabel(active, "background task")} running`;
 }
 
-/** The one phrasing for output a task's log buffer no longer holds, for agents and people alike. */
 export const discardedOutputText = (bytes: number): string =>
   `${formatBytes(bytes)} of earlier output was discarded`;

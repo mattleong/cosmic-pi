@@ -26,32 +26,24 @@ import type { CodexImageDetails, ToolParams } from "./types.ts";
 
 const TITLE = "OpenAI image";
 
-/** What an image tool result or command message shows beneath its heading. */
 export interface ImageView {
-  /** Validated details; absent for errors and malformed records. */
   readonly record: CodexImageDetails | undefined;
-  /** The attached text exactly as the agent received it. */
   readonly text: string;
-  /** Decoded size of the attached image, when one is attached. */
   readonly imageBytes: number | undefined;
-  /** Saved paths display relative to this directory. */
   readonly cwd: string;
 }
 
 export interface ImageBodyOptions {
   readonly expanded: boolean;
   readonly isError: boolean;
-  /** Under a compact heading, the facts nest like every other expanded section. */
   readonly nested: boolean;
 }
 
-/** The parts of Pi's render context a result body reads. */
 export interface ImageResultContext {
   readonly cwd: string;
   readonly isError: boolean;
 }
 
-/** Decoded size of base64 image data, measured without decoding it. */
 export const base64ByteLength = (data: string): number => {
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((data.length * 3) / 4) - padding);
@@ -67,13 +59,11 @@ export const imageViewOf = <Details>(result: AgentToolResult<Details>, cwd: stri
   };
 };
 
-// Longer prompts keep renderToolHeader's own "[truncated]" cap; narrower rows clip at the width.
 const HEADING_PROMPT_LIMIT = 160;
 
 const promptRoom = (width: number): number =>
   Math.max(1, Math.min(HEADING_PROMPT_LIMIT, width - visibleWidth(TITLE) - 1));
 
-/** "OpenAI image <prompt>" on one row, the prompt clipped to fit. */
 export const renderImageHeading = (prompt: string, theme: Theme, width: number): string =>
   clipToWidth(
     renderToolHeader(
@@ -84,7 +74,6 @@ export const renderImageHeading = (prompt: string, theme: Theme, width: number):
     "",
   );
 
-/** Whether the heading shows the whole prompt exactly at this width. */
 export const headingShowsPrompt = (prompt: string, width: number): boolean =>
   sanitizeTerminalLine(prompt) === prompt && visibleWidth(prompt) <= promptRoom(width);
 
@@ -98,7 +87,6 @@ const OPTION_LABELS: ReadonlyMap<string, string> = new Map([
   ["saveDir", "Save directory"],
 ]);
 
-/** Which arguments the heading above already shows exactly. */
 export interface ImageRequestOptions {
   readonly prompt: boolean;
   readonly action: boolean;
@@ -115,10 +103,6 @@ const optionLines = (args: Partial<ToolParams>, shown: ImageRequestOptions): str
     );
   });
 
-/**
- * The request in full, apart from what the heading already shows exactly: the prompt under its
- * own label, then every other argument. Nothing is clipped.
- */
 export function renderImageRequest(
   args: Partial<ToolParams>,
   theme: Theme,
@@ -141,13 +125,11 @@ export function renderImageRequest(
   return container;
 }
 
-/** Preview heading; the shell's issue lines sit directly beneath it, then the full request. */
 export function renderImageCall<
   Context extends { readonly expanded: boolean; readonly state: object },
 >(args: Partial<ToolParams>, theme: Theme, context: Context): Component {
   const prompt = Predicate.isString(args.prompt) ? args.prompt : "";
   const issues = previewIssuesSlot(context);
-  // The component outlives this call; its context's lastComponent would chain every prior row.
   const { expanded } = context;
   return composeToolComponent((width) => {
     if (width <= 0) return [];
@@ -163,16 +145,65 @@ export function renderImageCall<
   });
 }
 
-/** Raw text worth showing: anything but the text these same details would produce. */
 const rawText = (view: ImageView): string =>
   view.text.trim() && (!view.record || view.text !== imageResultText(view.record)) ? view.text : "";
 
-/**
- * Format and size, the saved file, and once expanded the revised prompt and any raw text the
- * details do not already say. Pi and the message renderer draw the image itself. In preview
- * style a cancellation the call did not report as an error is stated here; the shell states
- * the ones it did, and a compact row shows it in its status.
- */
+const recordFacts = (
+  record: CodexImageDetails,
+  view: ImageView,
+  expanded: boolean,
+  theme: Theme,
+): Component[] => {
+  const models = expanded
+    ? [record.imageModel, `via ${record.model}`].filter(Boolean).join(" ")
+    : record.imageModel;
+  const summary = [
+    record.outputFormat.toUpperCase(),
+    view.imageBytes === undefined ? undefined : formatBytes(view.imageBytes),
+    models,
+  ].filter((fact): fact is string => Boolean(fact));
+  const facts = [new Text(theme.fg("muted", sanitizeTerminalLine(summary.join(" · "))), 0, 0)];
+  if (record.savedPath)
+    facts.push(
+      new Text(
+        `${theme.fg("muted", "Saved to")} ${theme.fg("toolOutput", compactPlainText(formatDisplayPath(record.savedPath, view.cwd)))}`,
+        0,
+        0,
+      ),
+    );
+  return facts;
+};
+
+const expandedDetails = (
+  record: CodexImageDetails | undefined,
+  raw: string,
+  error: boolean,
+  theme: Theme,
+): Component[] => [
+  ...(record?.revisedPrompt
+    ? [
+        expandedSection(
+          theme,
+          "Revised prompt",
+          new Text(theme.fg("toolOutput", compactPlainText(record.revisedPrompt)), 0, 0),
+        ),
+      ]
+    : []),
+  ...(raw
+    ? [
+        expandedSection(
+          theme,
+          error ? "Error" : "Raw result",
+          new Text(theme.fg(error ? "error" : "toolOutput", compactPlainText(raw).trimEnd()), 0, 0),
+        ),
+      ]
+    : []),
+];
+
+const hasHiddenDetails = (record: CodexImageDetails | undefined, raw: string, error: boolean) =>
+  Boolean(record?.revisedPrompt) ||
+  (raw !== "" && !(error && restatesText(raw, imageFailureIssue(raw).message)));
+
 export function renderImageBody(
   view: ImageView,
   options: ImageBodyOptions,
@@ -184,51 +215,13 @@ export function renderImageBody(
   if (options.nested) container.addChild(expandedSection(theme, undefined, facts));
   if (record?.status === "cancelled" && !options.nested && !options.isError)
     container.addChild(new Text(toolStatusLine(theme, "stopped", "Cancelled"), 0, 0));
-  if (record) {
-    const models = options.expanded
-      ? [record.imageModel, `via ${record.model}`].filter(Boolean).join(" ")
-      : record.imageModel;
-    const summary = [
-      record.outputFormat.toUpperCase(),
-      view.imageBytes === undefined ? undefined : formatBytes(view.imageBytes),
-      models,
-    ].filter((fact): fact is string => Boolean(fact));
-    facts.addChild(new Text(theme.fg("muted", sanitizeTerminalLine(summary.join(" · "))), 0, 0));
-    if (record.savedPath)
-      facts.addChild(
-        new Text(
-          `${theme.fg("muted", "Saved to")} ${theme.fg("toolOutput", compactPlainText(formatDisplayPath(record.savedPath, view.cwd)))}`,
-          0,
-          0,
-        ),
-      );
-  }
+  if (record)
+    for (const fact of recordFacts(record, view, options.expanded, theme)) facts.addChild(fact);
   const raw = rawText(view);
   const error = options.isError && !record;
-  if (options.expanded) {
-    if (record?.revisedPrompt)
-      container.addChild(
-        expandedSection(
-          theme,
-          "Revised prompt",
-          new Text(theme.fg("toolOutput", compactPlainText(record.revisedPrompt)), 0, 0),
-        ),
-      );
-    if (raw)
-      container.addChild(
-        expandedSection(
-          theme,
-          error ? "Error" : "Raw result",
-          new Text(theme.fg(error ? "error" : "toolOutput", compactPlainText(raw).trimEnd()), 0, 0),
-        ),
-      );
-    return container;
-  }
-  // An error the issue line already states in full has nothing more to show.
-  const hidden =
-    Boolean(record?.revisedPrompt) ||
-    (raw !== "" && !(error && restatesText(raw, imageFailureIssue(raw).message)));
-  if (hidden)
+  if (options.expanded)
+    for (const detail of expandedDetails(record, raw, error, theme)) container.addChild(detail);
+  else if (hasHiddenDetails(record, raw, error))
     container.addChild(new Text(renderExpansionAffordance("details", false, theme), 0, 0));
   return container;
 }
@@ -249,8 +242,6 @@ const imageResultRenderer =
     );
   };
 
-/** Preview result body: the running line while it runs, then the image facts. */
 export const renderImageResult = imageResultRenderer(false);
 
-/** Compact expansion's unique result content; the compact row already shows progress. */
 export const renderImageContent = imageResultRenderer(true);

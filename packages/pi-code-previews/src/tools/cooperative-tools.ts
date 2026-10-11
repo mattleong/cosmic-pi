@@ -2,7 +2,6 @@ import type {
   AgentToolResult,
   Theme,
   ToolDefinition,
-  ToolRenderers,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
@@ -14,47 +13,23 @@ import { createCodePreviewToolShell } from "../preview/tool-shell";
 import { escapeControlChars } from "../shared/terminal-text";
 import type { CompactAnimationScheduler, CompactSummaryProvider } from "./compact-summary";
 import type {
-  PreviewRenderers,
-  RendererArguments,
+  CodePreviewRenderers,
+  RenderCall,
+  RenderResult,
   ToolRenderContext,
 } from "./renderers/shared/types";
 
-export type AdaptableToolRenderers = {
-  readonly name: string;
-  readonly label?: string;
-  readonly renderShell?: "default" | "self";
-  readonly renderCall?: (...args: any[]) => Component;
-  readonly renderResult?: (...args: any[]) => Component;
-};
-
-export type AdaptableToolDefinition = AdaptableToolRenderers & {
-  readonly label: string;
-  readonly execute: (...args: any[]) => Promise<any>;
-};
-
 export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TState = unknown> {
-  /**
-   * Shell mode to apply. Defaults to the code-preview setting at wrapping time.
-   * The selected mode is captured; later settings reloads do not change the wrapped tool.
-   */
   mode?: ToolCallBackgroundMode;
 
-  /** Optional originating-session style; otherwise captured from settings when wrapped. */
   collapsedStyle?: ToolCallCollapsedStyle;
 
-  /** Keep framing inside the renderer for rows retained before session settings are ready. */
   selfShell?: boolean;
 
-  /**
-   * Leave self-shell tools untouched in preview mode. Defaults to true.
-   * Compact mode always wraps owned tools; expansion restores their original components.
-   */
   preserveSelfShell?: boolean;
 
-  /** Supply semantic compact details. Declining uses a generic row with details on expansion. */
   compactSummary?: CompactSummaryProvider<TArgs, TDetails, TState>;
 
-  /** Unique expanded content only: no heading or shared attention container. */
   expandedContent?: {
     renderCall?: (
       args: Partial<TArgs>,
@@ -69,66 +44,48 @@ export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TS
     ) => Component;
   };
 
-  /** Display measured subsecond durations; the global timing setting still applies. */
   showShortTiming?: boolean;
 
-  /** Keep visible progress animated in preview/expanded views even when timing is disabled. */
   animateProgress?: boolean;
 
-  /** Session-owned scheduler. Independent extension loaders cannot share previews' runtime. */
   scheduleAnimation?: CompactAnimationScheduler | undefined;
 
-  /**
-   * Human tool name for shell headings, such as `mcp`. Presentation only: the registered
-   * `name` Pi and the model use is unchanged. Defaults to the tool's name.
-   */
   displayName?: string | undefined;
 }
 
-/**
- * Decorate a cooperating tool definition with pi-code-previews' tool-call shell.
- *
- * This does not discover or wrap already-registered tools. The caller keeps ownership of the
- * underlying tool definition, including execute(), schemas, prompt metadata, and custom renderers.
- * Load trusted project settings before calling this function because shell mode is captured here.
- */
+type ToolArgs<TParams extends ToolDefinition["parameters"]> = Parameters<
+  ToolDefinition<TParams>["execute"]
+>[1];
+
 export function withCodePreviewShell<
   TParams extends ToolDefinition["parameters"],
   TDetails,
-  TState,
+  TState extends object,
   TTool extends ToolDefinition<TParams, TDetails, TState>,
 >(
   tool: ToolDefinition<TParams, TDetails, TState> & TTool,
-  options: CodePreviewShellOptions<
-    Parameters<TTool["execute"]>[1],
-    Awaited<ReturnType<TTool["execute"]>> extends AgentToolResult<infer TResultDetails>
-      ? TResultDetails
-      : unknown,
-    Parameters<NonNullable<TTool["renderCall"]>>[2]["state"]
-  > = {},
+  options: CodePreviewShellOptions<ToolArgs<TParams>, TDetails, TState> = {},
 ): TTool {
-  const renderers = withCodePreviewRenderers(tool, tool, options);
-  // SAFETY: Rendering changes preserve the definition's schema and execution signature.
-  return renderers === tool ? tool : ({ ...tool, ...renderers } as TTool);
+  const renderers = withCodePreviewRenderers<ToolArgs<TParams>, TDetails, TState>(
+    tool,
+    tool,
+    options,
+  );
+  return renderers === tool ? tool : { ...tool, ...renderers };
 }
 
-/**
- * Compose presentation for Pi's renderer resolver without creating or replacing a tool. Shell mode
- * and collapsed style are captured here; callbacks are invoked unbound.
- */
-export function withCodePreviewRenderers<TArgs = any, TDetails = any, TState = any>(
+export function withCodePreviewRenderers<TArgs, TDetails, TState extends object>(
   identity: { readonly name: string; readonly label?: string },
-  renderers: Pick<AdaptableToolRenderers, "renderShell" | "renderCall" | "renderResult">,
+  renderers: CodePreviewRenderers<TArgs, TDetails, TState>,
   options: CodePreviewShellOptions<TArgs, TDetails, TState> = {},
-): ToolRenderers {
+): CodePreviewRenderers<TArgs, TDetails, TState> {
   if (
     (options.preserveSelfShell ?? true) &&
     renderers.renderShell === "self" &&
     (options.collapsedStyle ?? codePreviewSettings.toolCallCollapsedStyle) !== "compact"
   )
-    // SAFETY: The original callback types are specializations of Pi's rendering contract.
-    return renderers as ToolRenderers;
-  const shell = createCodePreviewToolShell(
+    return renderers;
+  const shell = createCodePreviewToolShell<TArgs, TDetails, TState>(
     options.mode,
     {
       name: options.displayName || identity.name,
@@ -140,22 +97,25 @@ export function withCodePreviewRenderers<TArgs = any, TDetails = any, TState = a
     options.selfShell,
     options.collapsedStyle,
   );
-  const renderCall: PreviewRenderers["renderCall"] =
+  const renderCall: RenderCall<TArgs, TState> =
     renderers.renderCall ??
     ((args, theme, context) => renderFallbackToolCall(identity, theme, args, context.expanded));
-  const renderResult: PreviewRenderers["renderResult"] =
+  const renderResult: RenderResult<TArgs, TDetails, TState> =
     renderers.renderResult ?? renderFallbackToolResult;
   const { renderCall: expandedCall, renderResult: expandedResult } = options.expandedContent ?? {};
   return {
     renderShell: shell.renderShell,
     renderCall(args, theme, context) {
-      const call = (render: PreviewRenderers["renderCall"]) => (current: ToolRenderContext) =>
-        render(args, theme, current);
+      const call =
+        (render: RenderCall<TArgs, TState>) => (current: ToolRenderContext<TState, TArgs>) =>
+          render(args, theme, current);
       return shell.renderCall(context, theme, call(renderCall), expandedCall && call(expandedCall));
     },
     renderResult(result, resultOptions, theme, context) {
-      const call = (render: PreviewRenderers["renderResult"]) => (current: ToolRenderContext) =>
-        render(result, resultOptions, theme, current);
+      const call =
+        (render: RenderResult<TArgs, TDetails, TState>) =>
+        (current: ToolRenderContext<TState, TArgs>) =>
+          render(result, resultOptions, theme, current);
       return shell.renderResult(
         context,
         theme,
@@ -167,10 +127,10 @@ export function withCodePreviewRenderers<TArgs = any, TDetails = any, TState = a
   };
 }
 
-function renderFallbackToolCall(
+function renderFallbackToolCall<TArgs>(
   tool: { readonly name: string; readonly label?: string },
   theme: Theme,
-  args: RendererArguments,
+  args: TArgs,
   expanded: boolean,
 ): Component {
   const lines = [
@@ -180,11 +140,11 @@ function renderFallbackToolCall(
   return new Text(lines.join("\n"), 0, 0);
 }
 
-function renderFallbackToolResult(
-  result: AgentToolResult<unknown>,
+function renderFallbackToolResult<TArgs, TDetails, TState>(
+  result: AgentToolResult<TDetails>,
   options: ToolRenderResultOptions,
   theme: Theme,
-  context: ToolRenderContext<unknown, unknown>,
+  context: ToolRenderContext<TState, TArgs>,
 ): Component {
   const output = getFallbackResultText(result.content, context.showImages);
   if (!output) return new Container();

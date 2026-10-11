@@ -40,7 +40,6 @@ const fixture = <A, E, R>(test: (root: string, registry: string) => Effect.Effec
     yield* io(() => fs.mkdir(registry, { mode: 0o700 }));
     return yield* test(root, registry);
   }).pipe(Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));
-/** Replaces single-record reads for the rest of the test. */
 const mockRecordReads = (read: typeof store.readWorkspaceRecord) =>
   Effect.acquireRelease(
     Effect.sync(() => vi.spyOn(store, "readWorkspaceRecord").mockImplementation(read)),
@@ -73,7 +72,6 @@ it.live(
               fs.writeFile(path.join(directory, "record.json"), content, { mode: 0o600 }),
             );
         }
-        // Sparse oversize file exercises the reader limit without allocating a huge payload.
         for (const ordinal of [7, 8, 9])
           yield* io(() => fs.mkdir(path.join(registry, id(ordinal)), { mode: 0o700 }));
         const oversized = path.join(registry, id(7), "record.json");
@@ -104,7 +102,6 @@ it.live(
             expect(yield* readText(registry, id(index + 2), "record.json")).toBe(content);
         }
         expect(yield* readText(externalRecord)).toBe(externalBytes);
-        // Single-record reads remain strict; a directory-name diagnostic is never a handle.
         for (const artifact of listing.unavailable) {
           expect(
             yield* store.readWorkspaceRecord(registry, artifact.workspaceId).pipe(Effect.flip),

@@ -1,12 +1,9 @@
 import type { OverlayOptions } from "@earendil-works/pi-tui";
 import { screenViewport, type TerminalSize } from "../manager/viewport.ts";
 
-/** One instance per custom UI opening; the owned surface owns its overlay lifecycle. */
 export const createScreenViewport = () => {
   let readTerminal: () => TerminalSize = () => ({ columns: 0, rows: 0 });
   const getSize = () => screenViewport(readTerminal());
-  // Pi (0.86 through 1.0) resolves overlayOptions callbacks only at mount. Its TUI retains this
-  // object and reads these getters on each render; spreading it loses live sizing.
   const overlayOptions: OverlayOptions = {
     get anchor() {
       return getSize().inset ? "center" : "top-left";

@@ -84,7 +84,6 @@ export const makeImageOutput = (dependencies: {
         .pipe(Effect.mapError(failWith("save", "Unable to resolve protected output root.")));
       if (!isInside(protectedBase, requestedDirectory))
         return yield* fail("save", "Image output directory escapes its protected root.");
-      // `exists` is false only for a missing path; other probe failures must stay typed.
       const exists = (candidate: string) =>
         fs
           .exists(candidate)
@@ -203,8 +202,6 @@ export const makeImageOutput = (dependencies: {
                   failWith("save", "Unable to publish generated image without clobbering."),
                 ),
               );
-            // Linking is the commit point. Never remove the destination after this succeeds:
-            // another process may replace it before verification observes the path.
             const published = yield* fs
               .stat(destination)
               .pipe(

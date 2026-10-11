@@ -1,4 +1,3 @@
-// Owned task-service boundary double: explicit overrides, loud defects for every unused method.
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import type {
@@ -16,7 +15,6 @@ import {
 const unexpected = (method: keyof BackgroundTaskServiceContract): Effect.Effect<never> =>
   Effect.die(new Error(`Unexpected BackgroundTaskService.${method} call in test fixture.`));
 
-/** Completes a partial service double; any method a test did not supply is a defect. */
 export const taskServiceDouble = (
   base: Partial<BackgroundTaskServiceContract>,
 ): BackgroundTaskServiceContract => ({
@@ -30,19 +28,16 @@ export const taskServiceDouble = (
   clear: base.clear ?? unexpected("clear"),
 });
 
-/** Supplies what the shared executor reads: the task service and Path. */
 export const provideTaskService =
   (service: BackgroundTaskServiceContract) =>
   <A, E>(effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>) =>
     effect.pipe(Effect.provideService(BackgroundTaskService, service), Effect.provide(Path.layer));
 
-/** A tool runner over `service`, in the shape the application's session runner has. */
 export const taskServiceRunner =
   (service: BackgroundTaskServiceContract) =>
   <A, E>(effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>, signal?: AbortSignal) =>
     Effect.runPromise(provideTaskService(service)(effect), signal ? { signal } : undefined);
 
-/** A service snapshot with neutral defaults; tests state only the fields they exercise. */
 export const taskStatus = (
   task: Pick<BackgroundTaskStatus, "id" | "state"> & Partial<BackgroundTaskStatus>,
 ): BackgroundTaskStatus => ({
@@ -54,7 +49,6 @@ export const taskStatus = (
   ...task,
 });
 
-/** A wait result over `snapshot`, read through its latest cursor unless `fields` say otherwise. */
 export const taskWait = (
   snapshot: BackgroundTaskStatus,
   outcome: BackgroundTaskStatusWait["outcome"],
@@ -70,7 +64,6 @@ export const taskWait = (
   ...fields,
 });
 
-/** A log slice whose lines hold consecutive cursors from `from`; `nextCursor` is the last one. */
 export const taskLogSlice = (
   id: string,
   state: BackgroundTaskState,

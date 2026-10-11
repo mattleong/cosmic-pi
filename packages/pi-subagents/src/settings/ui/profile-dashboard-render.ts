@@ -3,7 +3,6 @@ import { sliceByColumn } from "@earendil-works/pi-tui";
 import { managerTabs } from "pi-cosmic-ui/manager";
 import { framedFill, framedScreen, listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
 
-/** Framed children share the dashboard's outer border; plain dialogs sit inside it. */
 export const profileDashboardChildHeight = (height: number, framed = true): number =>
   Math.max(0, Math.floor(height) - (framed ? 3 : 4));
 
@@ -38,7 +37,6 @@ export function renderProfileDashboard(
   const status = state.blocked
     ? "Close and reopen to continue editing."
     : state.message || (state.busy ? "Saving…" : "");
-  // Strip only the owned child's border cells, preserving styles and cursor markers.
   const child = state.framedChild
     ? state.rows.map((line) => sliceByColumn(line, 1, inner))
     : state.rows;
@@ -58,7 +56,6 @@ export function renderProfileDashboard(
       );
       if (state.framedChild && body.length > 0 && bodyHeight > 2) {
         rows[2] = `${frame.outer("├")}${body[0]}${frame.outer("┤")}`;
-        // The child owns pane-focus styling on its side borders.
         for (let index = 1; index < body.length && index + 2 < bodyHeight; index += 1)
           rows[index + 2] = state.rows[index]!;
       }

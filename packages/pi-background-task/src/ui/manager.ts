@@ -3,7 +3,10 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter, clipToWidth, spinnerFrameAt } from "pi-cosmic-ui/manager";
 import { configuredKeyLabels } from "pi-cosmic-ui/manager/key-labels";
-import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
+import type {
+  FullScreenAction,
+  FullScreenSelectionKeybindingId,
+} from "pi-cosmic-ui/manager/keymap";
 import {
   confirmedReservedShortcut,
   detailWindowPositionLabel,
@@ -53,6 +56,10 @@ export interface TaskManagerOptions {
 
 const TASK_MANAGER_SHORTCUTS = new Set(["c", "f", "t", "x"]);
 
+type PendingTaskAction =
+  | { readonly action: "stop"; readonly id: string }
+  | { readonly action: "clear" };
+
 const duration = (task: BackgroundTaskView, now: number): string =>
   formatElapsed((task.endedAt ?? now) - task.startedAt);
 
@@ -60,11 +67,7 @@ export class TaskManagerComponent implements Component {
   private follow = true;
   private showTechnicalDetails = false;
   private alternateHelp = false;
-  /** Stop and clear wait for their own key again, or Enter. */
-  private pending:
-    | { readonly action: "stop"; readonly id: string }
-    | { readonly action: "clear" }
-    | undefined;
+  private pending: PendingTaskAction | undefined;
   private readonly shell = new ListDetailShell();
   private readonly options: TaskManagerOptions;
 
@@ -107,66 +110,84 @@ export class TaskManagerComponent implements Component {
     const tasks = this.options.getProjection().tasks;
     this.reconcileSelection(tasks);
     const selected = tasks[this.shell.state.selected];
-    const matchesKeybinding = this.options.matchesKeybinding;
-
     if (this.pending) {
-      const pending = this.pending;
-      const key = pending.action === "stop" ? "x" : "c";
-      const resolution = this.shell.keymap.resolve(data, {
-        mode: "confirmation",
-        matchesKeybinding,
-        reservedKeys: new Set([key]),
-      });
-      const hasStableTarget = pending.action === "clear" || selected?.id === pending.id;
-      const confirmed =
-        hasStableTarget &&
-        ((resolution?._tag === "Action" && resolution.action === "confirm") ||
-          confirmedReservedShortcut(resolution, data, key));
-      if (confirmed) {
-        this.pending = undefined;
-        if (pending.action === "clear") this.options.clear();
-        else if (selected) this.options.stop(selected.id);
-      } else if (
-        !hasStableTarget ||
-        (resolution?._tag === "Action" && resolution.action === "cancel")
-      )
-        this.pending = undefined;
+      this.handleConfirmation(data, this.pending, selected);
       this.options.requestRender();
       return;
     }
-
     const resolution = this.shell.keymap.resolve(data, {
       mode: "navigation",
-      matchesKeybinding,
+      matchesKeybinding: this.options.matchesKeybinding,
       reservedKeys: TASK_MANAGER_SHORTCUTS,
     });
     if (!resolution) return;
-    if (resolution._tag === "Shortcut") {
-      if (resolution.key === "t") {
-        this.showTechnicalDetails = !this.showTechnicalDetails;
-        this.shell.resetDetailScroll();
-        this.follow = true;
-      } else if (resolution.key === "f" && selected && isActiveTaskState(selected.state)) {
-        // Unfollow is sticky: the anchored detail window keeps the viewed slice even before
-        // overflow; toggling follow back on returns to the newest lines.
-        this.follow = !this.follow;
-        this.shell.resetDetailScroll();
-      } else if (resolution.key === "x" && selected && isActiveTaskState(selected.state)) {
-        this.pending = { action: "stop", id: selected.id };
-      } else if (resolution.key === "c" && tasks.some((task) => !isActiveTaskState(task.state)))
-        this.pending = { action: "clear" };
-      this.options.requestRender();
+    if (resolution._tag === "Action") {
+      this.handleAction(resolution.action, tasks, selected);
       return;
     }
+    this.handleShortcut(resolution.key, tasks, selected);
+    this.options.requestRender();
+  }
 
-    if (resolution.action === "confirm") {
+  private handleConfirmation(
+    data: string,
+    pending: PendingTaskAction,
+    selected: BackgroundTaskView | undefined,
+  ): void {
+    const key = pending.action === "stop" ? "x" : "c";
+    const resolution = this.shell.keymap.resolve(data, {
+      mode: "confirmation",
+      matchesKeybinding: this.options.matchesKeybinding,
+      reservedKeys: new Set([key]),
+    });
+    const hasStableTarget = pending.action === "clear" || selected?.id === pending.id;
+    const confirmed =
+      hasStableTarget &&
+      ((resolution?._tag === "Action" && resolution.action === "confirm") ||
+        confirmedReservedShortcut(resolution, data, key));
+    if (confirmed) {
+      this.pending = undefined;
+      if (pending.action === "clear") this.options.clear();
+      else if (selected) this.options.stop(selected.id);
+    } else if (
+      !hasStableTarget ||
+      (resolution?._tag === "Action" && resolution.action === "cancel")
+    )
+      this.pending = undefined;
+  }
+
+  private handleShortcut(
+    key: string,
+    tasks: ReadonlyArray<BackgroundTaskView>,
+    selected: BackgroundTaskView | undefined,
+  ): void {
+    const active = selected !== undefined && isActiveTaskState(selected.state);
+    if (key === "t") {
+      this.showTechnicalDetails = !this.showTechnicalDetails;
+      this.shell.resetDetailScroll();
+      this.follow = true;
+    } else if (key === "f" && active) {
+      this.follow = !this.follow;
+      this.shell.resetDetailScroll();
+    } else if (key === "x" && active) {
+      this.pending = { action: "stop", id: selected.id };
+    } else if (key === "c" && tasks.some((task) => !isActiveTaskState(task.state)))
+      this.pending = { action: "clear" };
+  }
+
+  private handleAction(
+    action: FullScreenAction,
+    tasks: ReadonlyArray<BackgroundTaskView>,
+    selected: BackgroundTaskView | undefined,
+  ): void {
+    if (action === "confirm") {
       if (selected)
         this.shell.applyMotion("forward", { rowCount: tasks.length, hasSelection: true });
       this.options.requestRender();
       return;
     }
-    if (resolution.action === "help") this.alternateHelp = !this.alternateHelp;
-    const motion = listDetailMotionFromAction(resolution.action);
+    if (action === "help") this.alternateHelp = !this.alternateHelp;
+    const motion = listDetailMotionFromAction(action);
     if (motion) {
       const result = this.shell.applyMotion(motion, {
         rowCount: tasks.length,
@@ -177,8 +198,6 @@ export class TaskManagerComponent implements Component {
         return;
       }
       if (result._tag === "Update") {
-        // Scrolling away from the newest lines detaches follow; an explicit unfollow stays
-        // sticky, so scrolling back to the bottom never silently re-follows.
         if (result.scrolledDetail && this.shell.state.detailScroll > 0) this.follow = false;
         if (result.movedSelection) this.select(result.state.selected, tasks);
       }
@@ -244,7 +263,6 @@ export class TaskManagerComponent implements Component {
       tasks.some((task) => !isActiveTaskState(task.state)) ? "c Clear finished" : undefined,
     ].filter((item): item is string => item !== undefined);
     const joinedActions = actions.length > 0 ? actions.join(" · ") : undefined;
-    // The expanded ? overlay is the discoverable place for the full motion vocabulary.
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
         [
@@ -292,14 +310,10 @@ export class TaskManagerComponent implements Component {
     tasks: ReadonlyArray<BackgroundTaskView>,
     limit: number,
   ): ReadonlyArray<{ readonly task: BackgroundTaskView; readonly index: number }> {
-    // The rendered window is the authoritative list page size for half/full-page motions,
-    // so stacked layouts page by their actual visible rows rather than the full height.
     const { start, end } = this.shell.visibleWindow(tasks.length, limit);
     return tasks.slice(start, end).map((task, offset) => ({ task, index: start + offset }));
   }
 
-  // Caches fully sanitized, prefixed, themed lines per immutable log snapshot so a render tick
-  // over unchanged events skips reassembly of the whole detail pane.
   private renderedLogLines = new WeakMap<
     ReadonlyArray<BackgroundLogEvent>,
     ReadonlyArray<string>
@@ -424,7 +438,6 @@ export class TaskManagerComponent implements Component {
               this.taskLine(task, index, inner),
             )
           : [this.options.theme.fg("dim", "No background tasks yet")];
-    // Keep the hidden inspector's line count so unfollow stays anchored when reopened.
     return framedFill(this.frame, lines, height, inner, this.shell.state.pane);
   }
 

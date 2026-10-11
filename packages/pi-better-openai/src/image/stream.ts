@@ -22,8 +22,6 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   const pendingEvents: Sse.Event[] = [];
   const parser = Sse.makeParser(
     (event) => {
-      // Retry directives control EventSource reconnection. This one-shot response
-      // has no reconnect transport, so they remain advisory as before.
       if (event._tag === "Event") pendingEvents.push(event);
     },
     { maxEventSize: MAX_SSE_EVENT_CHARS },
@@ -94,9 +92,6 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
         : fail("stream", "Codex image response stream failed."),
     ),
   );
-  // Effect's spec-compliant parser leaves an unterminated final event pending.
-  // The provider and the previous parser accept that response shape, so append
-  // one synthetic separator after the transport reaches EOF.
   if (!completed && !providerFailure && !terminated) yield* feed("\n\n");
   if (completed) return completed;
   if (providerFailure) return yield* providerFailure;

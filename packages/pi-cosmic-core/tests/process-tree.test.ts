@@ -84,7 +84,6 @@ describe("windows process-tree terminator", () => {
     Effect.gen(function* () {
       let exited = false;
       const skipped = fakeProcessTreeTerminator();
-      // Built while the target runs; the exit check happens when the Effect runs.
       const skip = terminate(skipped.spawn, () => exited);
       exited = true;
       yield* skip;
@@ -161,7 +160,6 @@ describe("windows process-tree terminator", () => {
         }),
       );
       yield* TestClock.adjust(5);
-      // Under TestClock a cleanup that awaited taskkill's exit would hang this join forever.
       expect(yield* Fiber.join(fiber).pipe(Effect.flip)).toMatchObject({
         code: "taskkill_timeout",
         message: "The Windows process-tree terminator timed out after 5 ms.",

@@ -32,11 +32,8 @@ import { DialogViewport } from "./viewport.ts";
 import { type DialogInputMode, renderQuestionnaireView } from "./render.ts";
 import { editorTheme } from "./layout.ts";
 
-const CHOICE_SHORTCUTS: readonly KeyId[] = Array.from(
-  { length: MAX_CHOICES },
-  // SAFETY: i + 1 ranges over 1..MAX_CHOICES (4), always a single digit, which is a valid KeyId.
-  (_, i) => String(i + 1) as KeyId,
-);
+const DIGIT_SHORTCUTS: readonly KeyId[] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+const CHOICE_SHORTCUTS = DIGIT_SHORTCUTS.slice(0, MAX_CHOICES);
 
 const DIALOG_SHORTCUTS = new Set(["b", "n"]);
 const TAB_MOVES = new Map<FullScreenAction, -1 | 1>([
@@ -50,11 +47,10 @@ interface AskUserDialogOptions {
   readonly tui: TUI;
   readonly getHeight?: () => number;
   readonly theme: Theme;
-  readonly keybindings: KeybindingsManager;
+  readonly keybindings: Pick<KeybindingsManager, "matches">;
   readonly request: AskUserRequest;
   readonly done: (outcome: AskUserOutcome) => void;
   readonly editExternally: (value: string) => Promise<string | undefined>;
-  /** Hides the docked dialog; the host owns hide/resume. */
   readonly collapse: () => void;
 }
 
@@ -72,6 +68,8 @@ export class AskUserDialog implements Focusable {
   private readonly keymap = new FullScreenKeymap();
   private readonly viewport = new DialogViewport();
   private _focused = false;
+  private readonly matchesKeybinding = (input: string, id: FullScreenSelectionKeybindingId) =>
+    this.options.keybindings.matches(input, id);
 
   constructor({ request, ...options }: AskUserDialogOptions) {
     this.state = createQuestionnaireState(request);
@@ -172,7 +170,6 @@ export class AskUserDialog implements Focusable {
     if (!input) return;
     const checked = validateQuestionnaireInput(value, input.kind);
     if (checked.error !== undefined) {
-      // Pi's Editor clears itself before onSubmit; restore invalid input for editing.
       this.editor.setText(value);
       this.inputError = checked.error;
       this.refresh();
@@ -211,88 +208,93 @@ export class AskUserDialog implements Focusable {
       })
       .finally(() => {
         this.externalEditorBusy = false;
-        // The dialog may have been disposed while the external editor was open.
         invokeHostCallback(() => this.refresh(), undefined);
       });
   }
 
-  handleInput(data: string): void {
-    const matchesKeybinding = (input: string, id: FullScreenSelectionKeybindingId) =>
-      this.options.keybindings.matches(input, id);
+  private onReview(): boolean {
+    return this.state.currentTab === this.state.request.questions.length;
+  }
 
+  handleInput(data: string): void {
     if (this.input) {
-      const resolution = this.keymap.resolve(data, {
-        mode: "text-input",
-        matchesKeybinding,
-      });
-      if (resolution?._tag === "Action" && resolution.action === "cancel") {
-        this.closeInput();
-        return;
-      }
-      if (this.options.keybindings.matches(data, "app.editor.external")) {
-        this.openExternalEditor();
-        return;
-      }
-      this.editor.handleInput(data);
-      this.refresh();
+      this.handleEditorInput(data);
       return;
     }
-
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
-      matchesKeybinding,
+      matchesKeybinding: this.matchesKeybinding,
       reservedKeys: DIALOG_SHORTCUTS,
     });
     if (resolution?._tag === "Shortcut") {
-      if (resolution.key === "b") this.options.collapse();
-      else if (
-        resolution.key === "n" &&
-        this.state.currentTab < this.state.request.questions.length
-      )
-        this.openInput("note");
+      this.handleShortcut(resolution.key);
       return;
     }
-    if (resolution?._tag === "Action") {
-      if (this.viewport.page(resolution.action)) {
-        this.refresh();
-        return;
-      }
-      if (resolution.action === "cancel") {
-        this.options.done(cancelQuestionnaire());
-        return;
-      }
-      const delta = TAB_MOVES.get(resolution.action);
-      if (delta) {
-        this.dispatch({ type: "move-tab", delta });
-        this.refresh();
-        return;
-      }
-      if (resolution.action === "up" || resolution.action === "down") {
-        if (this.state.currentTab === this.state.request.questions.length) {
-          this.dispatch({
-            type: "set-review-cursor",
-            cursor: this.state.reviewCursor === 0 ? 1 : 0,
-          });
-          this.refresh();
-          return;
-        }
-        const draft = this.state.drafts[this.state.currentTab];
-        if (draft) this.setCursor(draft.cursor + (resolution.action === "up" ? -1 : 1));
-        return;
-      }
-      if (resolution.action === "help") {
-        this.alternateHelp = !this.alternateHelp;
-        this.refresh();
-        return;
-      }
-      if (resolution.action === "quit") return;
-    }
+    if (resolution?._tag === "Action" && this.handleAction(resolution.action)) return;
+    if (this.onReview()) this.handleReviewInput(data);
+    else this.handleQuestionInput(data);
+  }
 
-    if (this.state.currentTab === this.state.request.questions.length) {
-      this.handleReviewInput(data);
+  private handleEditorInput(data: string): void {
+    const resolution = this.keymap.resolve(data, {
+      mode: "text-input",
+      matchesKeybinding: this.matchesKeybinding,
+    });
+    if (resolution?._tag === "Action" && resolution.action === "cancel") {
+      this.closeInput();
       return;
     }
-    this.handleQuestionInput(data);
+    if (this.options.keybindings.matches(data, "app.editor.external")) {
+      this.openExternalEditor();
+      return;
+    }
+    this.editor.handleInput(data);
+    this.refresh();
+  }
+
+  private handleShortcut(key: string): void {
+    if (key === "b") this.options.collapse();
+    else if (key === "n" && !this.onReview()) this.openInput("note");
+  }
+
+  private handleAction(action: FullScreenAction): boolean {
+    if (this.viewport.page(action)) {
+      this.refresh();
+      return true;
+    }
+    if (action === "cancel") {
+      this.options.done(cancelQuestionnaire());
+      return true;
+    }
+    const delta = TAB_MOVES.get(action);
+    if (delta) {
+      this.dispatch({ type: "move-tab", delta });
+      this.refresh();
+      return true;
+    }
+    if (action === "up" || action === "down") {
+      this.moveCursor(action === "up" ? -1 : 1);
+      return true;
+    }
+    if (action === "help") {
+      this.alternateHelp = !this.alternateHelp;
+      this.refresh();
+      return true;
+    }
+    return action === "quit";
+  }
+
+  private moveCursor(delta: -1 | 1): void {
+    if (this.onReview()) {
+      this.dispatch({
+        type: "set-review-cursor",
+        cursor: this.state.reviewCursor === 0 ? 1 : 0,
+      });
+      this.refresh();
+      return;
+    }
+    const draft = this.state.drafts[this.state.currentTab];
+    if (draft) this.setCursor(draft.cursor + delta);
   }
 
   private handleReviewInput(data: string): void {

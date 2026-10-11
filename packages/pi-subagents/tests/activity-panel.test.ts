@@ -107,7 +107,6 @@ describe("persistent subagent activity panel", () => {
     const cadence = (runs: ReadonlyArray<SubagentRunView>, live = EMPTY_ACTIVITY_PRESENTATION) =>
       subagentActivityPanelCadence(projectSubagentActivityPanel(projectionOf(runs), live));
 
-    // The base state mapping is covered with subagentUiRefreshCadence; the panel adds paused elapsed.
     expect(cadence([view({ state: "paused" })])).toBe(1_000);
     expect(cadence([], presentation({ starts: [{ requestedCount: 2 }] }))).toBeUndefined();
     expect(

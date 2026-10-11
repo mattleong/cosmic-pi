@@ -19,10 +19,6 @@ const registrations = (repository: string) =>
     ),
   );
 
-/**
- * Caller holds the store lock and has confirmed process cleanup and record ownership.
- * `keepWorker` removes only the test trees, leaving a worker that still holds files.
- */
 export const removeWorkspaceTrees = (
   registry: string,
   record: WorkspaceRecord,
@@ -33,8 +29,6 @@ export const removeWorkspaceTrees = (
     const directory = workspaceDirectory(registry, record.handle.workspaceId);
     const repository = path.join(directory, "repo.git");
     const names = yield* workspaceIO("discard", () => fs.readdir(directory));
-    // Creation removes a fork's seed before the workspace becomes owned, so one that remains
-    // belongs to a failed fork and needs manual recovery.
     if (names.includes("seed"))
       return yield* workspaceFailure(
         "recovery",
@@ -61,7 +55,6 @@ export const removeWorkspaceTrees = (
         "repo.git",
       );
       yield* checkDirectory(seedRepository);
-      // A missing directory with a live registration needs manual inspection. Never prune broadly.
       if ((yield* registrations(seedRepository)).includes(path.join(directory, "seed")))
         return yield* workspaceFailure(
           "recovery",
@@ -115,8 +108,6 @@ export const listWorkspaceRecords = (registry: string) =>
           reason: "recovery-record-unavailable",
         });
     }
-    // A strict record read also checks registry ancestors. Never downgrade a registry
-    // failure discovered during the scan to an individual unavailable artifact.
     const after = yield* inspectRegistry(registry);
     if (!after || before.dev !== after.dev || before.ino !== after.ino)
       return yield* workspaceFailure("registry", "Workspace registry changed during listing.");

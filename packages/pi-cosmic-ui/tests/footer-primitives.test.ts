@@ -3,7 +3,8 @@ import { expect, it } from "vitest";
 import {
   extensionApiFixture,
   extensionContextFixture,
-  opaqueFixture,
+  footerDataFixture,
+  modelFixture,
   plainTheme,
 } from "pi-cosmic-core/testing";
 import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
@@ -19,7 +20,12 @@ const footer = (options: {
   readonly branch?: string;
 }) => {
   const ctx = extensionContextFixture({
-    model: { id: "model", provider: "provider", reasoning: false, contextWindow: 200_000 },
+    model: modelFixture({
+      id: "model",
+      provider: "provider",
+      reasoning: false,
+      contextWindow: 200_000,
+    }),
     modelRegistry: { isUsingOAuth: () => false },
     sessionManager: {
       getCwd: () => "/project",
@@ -31,9 +37,8 @@ const footer = (options: {
   return createFooterComponent({
     pi: extensionApiFixture({ getThinkingLevel: () => "off" }),
     ctx: () => ctx,
-    footerData: opaqueFixture({
+    footerData: footerDataFixture({
       getGitBranch: () => options.branch ?? null,
-      getExtensionStatuses: () => new Map(),
       getAvailableProviderCount: () => 1,
     }),
     theme: plainTheme,
@@ -122,7 +127,6 @@ it("puts configured contributions first, by their last configured position, with
     ...defaults,
     footer: { ...defaults.footer, order: ["branch", "location", "branch"] },
   });
-  // Ordered, then unordered; a repeated id takes its last position, so location leads branch.
   expect(ordered.map((value) => value.id)).toEqual(["location", "branch", "model", "custom"]);
   expect(values).toEqual(originals);
 });

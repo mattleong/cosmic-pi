@@ -1,4 +1,3 @@
-/** Success-only native workflow contracts, independent of persisted presentation details. */
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
 import { WORKFLOW_TOOL_NAME } from "./workflow-schema.ts";
@@ -115,7 +114,6 @@ const liveRun = Schema.Struct({
   reusedWorkspaces: Schema.optionalKey(
     Schema.Array(Schema.Struct({ workspaceId: text, label: text })),
   ),
-  /** Actionable proposals only, as workflowWorkspaces computes them. */
   workspaces: Schema.Array(
     Schema.Struct({
       workspaceId: text,
@@ -129,7 +127,6 @@ const liveRun = Schema.Struct({
   warningCount: Schema.optionalKey(count),
   usage,
   journalPath: Schema.optionalKey(text),
-  /** Bounded domain text, not a parsed or necessarily complete JSON value. */
   result: Schema.optionalKey(
     Schema.Struct({ text, clipped: Schema.Boolean, path: Schema.optionalKey(text) }),
   ),
@@ -148,12 +145,10 @@ const recordedRun = Schema.Struct({
   source,
   scriptPath: Schema.optionalKey(text),
   state: Schema.Literals(["running", "completed", "failed", "stopped", "interrupted"]),
-  /** Another Pi process, not this activation's owner. */
   runningIn: Schema.optionalKey(count),
   stoppedBy: Schema.optionalKey(Schema.Literals(["tool", "user"])),
   startedAt: time,
   endedAt: Schema.optionalKey(time),
-  /** Finished agent results available for reuse; never a terminal boolean. */
   finished: count,
   journalPath: Schema.optionalKey(text),
 });
@@ -208,7 +203,6 @@ const list = Schema.Struct({
       }),
     ),
     diagnostics: Schema.Array(Schema.Struct({ path: text, message: text })),
-    /** Only saved-name enumeration is truncated; this does not describe diagnostics. */
     truncated: Schema.Boolean,
     locations: Schema.Struct({ project: text, projectTrusted: Schema.Boolean, user: text }),
   }),
@@ -235,7 +229,6 @@ export type WorkflowLiveContract = typeof liveRun.Type;
 
 const strict = { errors: "first", onExcessProperty: "error" } as const;
 const encode = Schema.encodeSync(Schema.toCodecJson(WorkflowContractSchema), strict);
-/** Validate first, then detach/freeze every nested field, including saved meta.args. */
 export const encodeWorkflowContract = (value: WorkflowContract): Schema.Json =>
   freezeSnapshot(encode(value));
 export const decodeWorkflowContract = <Input>(value: Input): WorkflowContract | undefined => {

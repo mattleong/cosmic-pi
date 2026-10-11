@@ -67,7 +67,6 @@ describe("security formatting", () => {
     const text = `${"a".repeat(9)}😀b`;
     expect(sanitizeDiagnosticError(text, { maximumLength: 11 })).toBe(`${"a".repeat(9)}…`);
     expect(sanitizeDiagnosticContent(text, { maximumLength: 11 })).toBe(`${"a".repeat(9)}…`);
-    // A limit too small to keep any text still marks the clip.
     expect(sanitizeDiagnosticError("abc", { maximumLength: 0 })).toBe("…");
     expect(sanitizeDiagnosticContent("abc", { maximumLength: -1 })).toBe("…");
   });

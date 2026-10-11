@@ -100,7 +100,6 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           requiredPaths,
         );
       });
-    /** `requireLiveOwner: false` is only for read-only inspection from another session. */
     const checked = (target: WorkspaceTarget, requireLiveOwner = true) =>
       Effect.gen(function* () {
         const record = yield* readWorkspaceRecord(registry, target.workspaceId);
@@ -168,7 +167,6 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           handle,
           status: "creating",
           baseline: "",
-          // The checked predecessor identity is durable before its repository acquires seed.
           predecessorWorkspaceId: predecessor?.handle.workspaceId,
         };
         yield* Effect.gen(function* () {
@@ -211,7 +209,6 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
               );
             yield* git(repository(predecessor), ["worktree", "remove", snapshotRoot]);
           }
-          // A fork's seed holds only captured files; the source's exclusions are its predecessor's.
           record = {
             ...record,
             baseline: baseline.commit,
@@ -226,16 +223,12 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             baseline.commit,
           ]);
           yield* checkDirectory(handle.cwd);
-          // Ownership and the launch's report commit with the active record, so an interruption
-          // that arrives during the commit cannot leave a committed workspace unowned.
           yield* saveWorkspaceRecord(registry, { ...record, status: "active" }, () => {
             owned.add(workspaceId);
             input.onAcquired?.(handle);
           });
           return handle;
         }).pipe(
-          // Expected pre-spawn rejection with confirmed Git cleanup owns no live writer.
-          // Interrupted or uncertain acquisition keeps its creating recovery record.
           Effect.catchIf(
             (error) => !error.cleanupUnconfirmed && !predecessor,
             (error) =>
@@ -388,8 +381,6 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           "integrate",
           "Worker, test tree, source, branch or index changed; review and test again.",
         );
-      // Empty directories are absent from Git trees. Recheck under the
-      // coordinator's source leases before any journal or source publication.
       const required = yield* requiredLeaseDirectories(record);
       if (required.some((directory) => !record.preparation!.leaseDirectories.includes(directory)))
         return yield* workspaceFailure(
@@ -405,14 +396,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         );
       const integrated: WorkspaceRecord = { ...result, status: "integrated" };
       yield* saveWorkspaceRecord(registry, integrated);
-      // The snapshot leaves out ineligible and excluded files. The worker was checked out
-      // from the baseline snapshot, which never holds a path the source left out, so every
-      // such path in the worker was written there by a writer, even where the source has its
-      // own file of that name. It is not integrated work, and removing the worker would
-      // delete its only copy. Ignored files are disposable build output, as for
-      // `git worktree remove`.
       const uncapturedPaths = workerTree.excludedPaths;
-      // The committed record keeps the private commits; the test trees are spent.
       const treeRemovalFailed = target.retainTrees
         ? false
         : yield* removeWorkspaceTrees(registry, integrated, uncapturedPaths.length > 0).pipe(
@@ -479,16 +463,10 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             "Partial publication backups require manual recovery before discard.",
           );
         yield* removeWorkspaceTrees(registry, record);
-        // Retain private commits/registry as recovery evidence; discard removes editable trees.
         yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
         owned.delete(target.workspaceId);
       });
     const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target));
-    /**
-     * Checks and discards under one lock, so nothing can land in the worker between the two.
-     * `confirm` gets the discard of a worker found unchanged, still under that lock, and runs it
-     * or declines it with false.
-     */
     const discardUnchanged = <E, R>(
       target: WorkspaceSettledTarget,
       confirm: (discard: ReturnType<typeof discardInternal>) => Effect.Effect<boolean, E, R>,
@@ -497,7 +475,6 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         Effect.gen(function* () {
           yield* settled(target);
           const record = yield* checked(target);
-          // A frozen, prepared or integrated record was reviewed; it is never discarded here.
           if (record.status !== "active") return false;
           const snapshot = yield* capture(record, worker(record), "verify-worker");
           const baseline = yield* treeOf(repository(record), record.baseline);

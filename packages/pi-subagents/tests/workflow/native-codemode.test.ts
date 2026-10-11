@@ -1,4 +1,3 @@
-// Actual Pi agent loop and native QuickJS; only the owned backend and persistence are fake.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -35,7 +34,6 @@ const runId = (text: string) =>
 const start = (body: string) =>
   `const receipt = await tools.subagent_workflow({action:'start',script:${quote(script(body))}});`;
 
-// Live time is intentional: both the outer script and each workflow have real QuickJS workers.
 const nativeTest = <A, E>(
   name: string,
   body: () => Effect.Effect<A, E, Scope.Scope | Layer.Success<typeof nodeFilePlatformLayer>>,
@@ -60,7 +58,6 @@ describe("native codemode workflow runner", () => {
         expect(listed.isError, listed.text).toBe(false);
         expect(output(listed.text)).toEqual({ action: "list", runs: [], saved: [] });
         h.controller.setEnabled(false);
-        // A real prompt crosses before_agent_start, including Pi's restore-window settlement.
         expect(output((yield* h.run(probe)).text)).toEqual({ rejected: true, discoverable: false });
       }),
     );
@@ -84,7 +81,6 @@ describe("native codemode workflow runner", () => {
           action: "start",
           run: { id, state: "running", source: { kind: "inline" } },
         });
-        // The outer script has finished, while the real owned agent still awaits its report.
         yield* runningTask(h.fixture, "Background receipt task");
         expect((yield* h.workflows.status(id)).run.state).toBe("running");
         const chained = yield* h.run(`

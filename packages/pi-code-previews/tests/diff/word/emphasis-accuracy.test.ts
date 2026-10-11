@@ -1,4 +1,3 @@
-// The labeled corpus evaluation is a Promise-shaped shared testing boundary.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { evaluateWordEmphasisAccuracy } from "../../support/word-emphasis-accuracy";

@@ -43,7 +43,6 @@ const Summary = Schema.Struct({
 
 const isSummary = Schema.is(Summary);
 
-/** Reject malformed provider evidence before it can hide original results. */
 export function isSafeCompactSummary<Value>(value: Value): boolean {
   return invokeHostCallback(() => isSummary(value), false);
 }

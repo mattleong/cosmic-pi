@@ -1,12 +1,6 @@
 import * as Schema from "effect/Schema";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "./bounds.ts";
 
-/*
- * Pure owner of the task contract. Persisted details and the native result contract share these
- * member schemas: their field and literal order drives the declared output schema and compact
- * counter order. Domain-only fields are intersected locally in `model.ts`.
- */
-
 export const BACKGROUND_TASK_ACTIONS = [
   "start",
   "list",
@@ -66,20 +60,12 @@ export const BackgroundTaskWaitResultSchema = Schema.Struct({
   matchCursor: Schema.optionalKey(Schema.Natural),
 });
 
-/**
- * Where a failed task's cause appears in the result text: producer-computed UTF-16 offsets,
- * never parsed. Details stay metadata only; the cause itself lives in the text.
- */
 const CauseSpans = Schema.optionalKey(
   Schema.Array(Schema.Struct({ id: TaskId, start: Schema.Natural, end: Schema.Natural })).check(
     Schema.isMaxLength(BOUNDS.maxSnapshots),
   ),
 );
 
-/**
- * Persisted `background_task` result details: metadata only, never command output. Older `logs`
- * details also carried `events: []` and Pi's full TruncationResult; decoding ignores those extras.
- */
 export const BackgroundTaskDetailsSchema = Schema.Union([
   Schema.Struct({
     action: Schema.Literals(["start", "status", "stop"]),
@@ -107,7 +93,6 @@ export const BackgroundTaskDetailsSchema = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("wait"),
     wait: BackgroundTaskWaitResultSchema,
-    // Beside the shared wait member, which the native contract reuses unchanged.
     appliedWaitSeconds: Schema.optionalKey(
       Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: BOUNDS.maxWaitSeconds })),
     ),

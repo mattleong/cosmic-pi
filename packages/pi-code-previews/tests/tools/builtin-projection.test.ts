@@ -28,6 +28,7 @@ function failed(tool: BuiltinCompactTool, text: string, overrides: Partial<typeo
     result: { content: [{ type: "text", text }], details: overrides.result?.details ?? {} },
   });
 }
+const firstShellIssueMessage = (text: string) => failed("bash", text)?.issues?.[0]?.message;
 
 describe("builtin issue style", () => {
   it("writes every failure and argument warning in the shared style", () => {
@@ -72,7 +73,6 @@ describe("builtin failure classification", () => {
       "SOURCE_SNIPPET\nError: diagnostic\n  at stack\nCommand exited with code 7",
     );
     expect(exit?.outcome).toBe("error");
-    // The first failure line says why; other output and stack frames stay expanded-only.
     expect(exit?.issues).toEqual([
       { severity: "error", code: "shell-exit", message: "Exited with code 7: diagnostic" },
     ]);
@@ -88,31 +88,27 @@ describe("builtin failure classification", () => {
       ["Found 0 errors. Watching for file changes.", undefined],
       ["building…\ndone", undefined],
     ] as const) {
-      const message = failed("bash", `${output}\nCommand exited with code 1`)?.issues?.[0]?.message;
+      const message = firstShellIssueMessage(`${output}\nCommand exited with code 1`);
       expect(message).toBe(cause ? `Exited with code 1: ${cause}` : "Exited with code 1");
     }
-    // Without a failure line, a conventional exit code says what happened; an output line wins.
-    expect(failed("bash", "Command exited with code 127")?.issues?.[0]?.message).toBe(
+    expect(firstShellIssueMessage("Command exited with code 127")).toBe(
       "Exited with code 127: command not found",
     );
+    expect(firstShellIssueMessage("sh: foo: command not found\nCommand exited with code 127")).toBe(
+      "Exited with code 127: command not found",
+    );
+    expect(firstShellIssueMessage("Error: out of heap\nCommand exited with code 137")).toBe(
+      "Exited with code 137: out of heap",
+    );
+    const secret = firstShellIssueMessage("error: token=hunter2secret\nCommand exited with code 1");
+    expect(secret).not.toContain("hunter2secret");
+    expect(secret).toContain("[REDACTED]");
     expect(
-      failed("bash", "sh: foo: command not found\nCommand exited with code 127")?.issues?.[0]
-        ?.message,
-    ).toBe("Exited with code 127: command not found");
-    expect(
-      failed("bash", "Error: out of heap\nCommand exited with code 137")?.issues?.[0]?.message,
-    ).toBe("Exited with code 137: out of heap");
-    const secret = failed("bash", "error: token=hunter2secret\nCommand exited with code 1");
-    expect(secret?.issues?.[0]?.message).not.toContain("hunter2secret");
-    expect(secret?.issues?.[0]?.message).toContain("[REDACTED]");
-    expect(
-      failed("bash", `error: ${"x".repeat(200)}\nCommand exited with code 1`)?.issues?.[0]?.message
-        .length,
+      firstShellIssueMessage(`error: ${"x".repeat(200)}\nCommand exited with code 1`)?.length,
     ).toBeLessThanOrEqual(70);
     expect(failed("bash", "partial output\nCommand timed out after 30 seconds")?.issues).toEqual([
       { severity: "error", code: "shell-timeout", message: "Timed out after 30 seconds" },
     ]);
-    // A status line followed by more text is not the builtin's terminal status.
     const unknown = failed("bash", "Command exited with code 7\nunknown tail");
     expect(unknown?.outcome).toBe("error");
     expect(unknown?.issues?.map(({ code }) => code)).toEqual(["failure"]);
@@ -130,7 +126,6 @@ describe("builtin failure classification", () => {
       expect.objectContaining({ severity: "info", message: footer }),
     );
     expect(JSON.stringify(value)).not.toContain("ordinaryDiagnostic");
-    // Only Pi's footer position is recovery evidence; the same text earlier is just output.
     const printed = failed("bash", `[${footer}]\nlater output\n\nCommand exited with code 7`);
     expect(printed?.issues?.map(({ code }) => code)).toEqual(["shell-exit"]);
   });
@@ -139,7 +134,6 @@ describe("builtin failure classification", () => {
     "%s treats a bare abort as cancellation without an issue",
     (tool) => {
       expect(failed(tool, "Operation aborted")).toMatchObject({ outcome: "cancelled", issues: [] });
-      // More text means the host reported something beyond a plain abort.
       const value = failed(tool, "Operation aborted\nInspect the file before retrying.");
       expect(value?.outcome).toBe("error");
       expect(JSON.stringify(value?.issues)).not.toContain("Inspect the file");

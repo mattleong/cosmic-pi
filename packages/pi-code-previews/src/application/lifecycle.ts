@@ -1,4 +1,3 @@
-/** Effect-managed Pi boundary for code previews. */
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
@@ -74,7 +73,6 @@ export interface CodePreviewExtensionDependencies {
     theme: string,
   ) => Effect.Effect<void, never, CodePreviewSyntaxService>;
   readonly registerCommands: typeof registerCodePreviewsCommand;
-  /** Execution registration is limited to write's real before-write hook. */
   readonly registerRenderers: typeof registerWritePreviewTool;
 }
 
@@ -93,12 +91,10 @@ const defaultDependencies: CodePreviewExtensionDependencies = {
   registerRenderers: registerWritePreviewTool,
 };
 
-/** Pi registration; dependencies are the seam for lifecycle/finalizer tests. */
 export function codePreviewsWithDependencies(
   pi: ExtensionAPI,
   dependencies: CodePreviewExtensionDependencies = defaultDependencies,
 ): Promise<void> {
-  // Pi 1.0.1 added renderer resolvers. Older hosts keep loading and explain why previews are off.
   if (!Predicate.isFunction(pi.registerToolRenderer)) {
     pi.on("session_start", (_event, ctx) =>
       notifyAtHostBoundary(ctx, "Code Previews needs Pi 1.0.1 or later", "warning"),
@@ -107,7 +103,6 @@ export function codePreviewsWithDependencies(
   }
   const ownedTools = new Set<CodePreviewToolName>();
   const installedTools = new Set<CodePreviewToolName>();
-  // Transcript replay may precede session_start. Those rows belong to the first startup only.
   let presentation = new CodePreviewPresentationOwner();
   let started = false;
   pi.registerToolRenderer(createCodePreviewRendererResolver(pi, () => presentation, ownedTools));
@@ -159,9 +154,7 @@ export function codePreviewsWithDependencies(
       };
       input.capability = capability;
       installCodePreviewSessionCapability(capability);
-      // No cold row sees settings or a scheduler until trusted loading and registration succeed.
       input.presentation.publish(input.cwd, getEnabledCodePreviewTools(), scheduler);
-      // A typo must not silently reset settings to their defaults.
       for (const problem of codePreviewSettingsProblems)
         input.warn(describeSettingsProblem(problem, input.cwd));
       if (codePreviewSettings.syntaxHighlighting)
@@ -179,7 +172,6 @@ export function codePreviewsWithDependencies(
       notifyAtHostBoundary(ctx, "Code Previews couldn't start", "warning");
     const capturedHost = captureSessionHost(ctx);
     const projectTrusted = isProjectTrusted(ctx);
-    // Admission queries public metadata synchronously, before any settings I/O.
     if (
       capturedHost["_tag"] === "Unavailable" ||
       !invokeHostCallback(() => capturePreviewHostTools(pi), undefined)

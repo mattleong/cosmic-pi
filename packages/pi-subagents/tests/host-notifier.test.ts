@@ -3,7 +3,7 @@ import {
   makeHostNotifier,
   type SubagentCompletionNotification,
 } from "../src/boundary/host-notifier.ts";
-import { extensionApiFixture } from "./fixtures/pi-host.ts";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 
 const notifier = (sendMessage = vi.fn()) => ({
   sendMessage,
@@ -159,7 +159,6 @@ describe("subagent host notifier", () => {
     expect(delivery?.actionAccepted).toBe(true);
     expect(content()).toContain("wf-r1-1");
     expect(content()).toContain('subagent_reply({ runId: "agent-r1-4", message: "..." })');
-    // Root await rejects owned runs; the workflow resumes on its own after the reply.
     expect(content()).not.toContain("subagent_await");
   });
 

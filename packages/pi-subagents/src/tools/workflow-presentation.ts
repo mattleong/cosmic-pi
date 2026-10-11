@@ -39,12 +39,10 @@ import {
 
 export type WorkflowToolArgs = Static<typeof WorkflowToolParameters>;
 
-/** Shared by the call and result renderers: the result names the run a status call is about. */
 export interface WorkflowRenderState {
   workflowName?: string;
 }
 
-/** The parts of Pi's render context these renderers read. */
 interface WorkflowRenderContext {
   readonly state: WorkflowRenderState;
   readonly expanded: boolean;
@@ -53,7 +51,6 @@ interface WorkflowRenderContext {
 }
 
 const TITLE = "Workflow";
-/** How a status repeated while nothing changed reads in the row and the digest. */
 const UNCHANGED = "unchanged since the last check";
 const PREVIEW_LINES = 8;
 const META_NAME = /\bname\s*:\s*(["'`])([^"'`\n]{1,80})\1/u;
@@ -63,7 +60,6 @@ const detailsOf = (result: AgentToolResult<unknown> | undefined) =>
 
 const baseName = (path: string): string => path.split(/[\\/]/u).filter(Boolean).at(-1) ?? path;
 
-/** A human subject from the arguments alone; a run id is never a subject. */
 const callSubject = (args: Partial<WorkflowToolArgs>): string => {
   const action = workflowToolAction(args);
   if (action === "list") return "saved workflows and runs";
@@ -76,7 +72,6 @@ const callSubject = (args: Partial<WorkflowToolArgs>): string => {
 const subjectOf = (args: Partial<WorkflowToolArgs>, name: string | undefined) =>
   sanitizeTerminalLine(name ?? callSubject(args));
 
-/** Agents by state, in the order and words the workflow's notification row uses. */
 const agentStateParts = (run: WorkflowRunSummary): ReadonlyArray<string> =>
   [
     run.running ? `${run.running} running` : "",
@@ -86,21 +81,15 @@ const agentStateParts = (run: WorkflowRunSummary): ReadonlyArray<string> =>
     run.skipped ? `${run.skipped} skipped` : "",
   ].filter(Boolean);
 
-/** A list's saved workflows and this session's runs, as the row and the digest count them. */
 const listCounter = (details: WorkflowToolDetails): string =>
   `${countLabel(details.saved ?? 0, "saved workflow")} · ${countLabel(details.runs ?? 0, "run")}`;
 
-/** Counter alternatives, longest first: the row shows the first that fits. */
 const runCounters = (run: WorkflowRunSummary): ReadonlyArray<string> => {
   const state = workflowStateLabel(run.state);
   const agents = countLabel(run.agents, "agent");
   return [[state, agents, ...agentStateParts(run)].join(" · "), `${state} · ${agents}`, state];
 };
 
-/**
- * Why a run failed, for people. A spent budget names its counts; the budget error's agent-facing
- * text waits in the detail.
- */
 const failureIssue = (run: WorkflowRunSummary): CompactIssue => {
   const name = sanitizeTerminalLine(run.name);
   return run.budgetFailure
@@ -128,7 +117,6 @@ const settledRun = (
       ...(run.phases > 0 && { counters: [countLabel(run.phases, "phase")] }),
       outcome: "success",
     };
-  // A repeated status with nothing new says so instead of repeating the counts.
   if (details.unchanged === true) {
     const state = workflowStateLabel(run.state);
     return {
@@ -146,7 +134,6 @@ const settledRun = (
   };
 };
 
-/** One semantic row per call; problems arrive as typed issues in the details. */
 export const workflowCompactSummary: CompactSummaryProvider<
   WorkflowToolArgs,
   unknown,
@@ -182,12 +169,10 @@ export const workflowCompactSummary: CompactSummaryProvider<
 };
 
 const scriptLines = (script: string): ReadonlyArray<string> => {
-  // Script strings can carry terminal sequences copied from files; never pass them through.
   const source = stripTerminalControls(script);
   try {
     return highlightCode(source, "javascript");
   } catch {
-    // Pi's highlighter needs an initialized theme; plain text keeps the source readable.
     return source.split("\n");
   }
 };
@@ -208,16 +193,13 @@ const scriptComponent = (script: string, theme: Theme, expanded: boolean): Compo
   );
 };
 
-/** Preview style: the heading plus a bounded script preview, full once expanded. */
 export const renderWorkflowCall = (
   args: Partial<WorkflowToolArgs>,
   theme: Theme,
   context: WorkflowRenderContext,
 ): Component => {
   const container = new Container();
-  // The heading keeps only these, never the context: its lastComponent links prior calls.
   const { state, executionStarted, isPartial, expanded } = context;
-  // Drawn lazily: the result, rendered after the call, names the run a status call is about.
   container.addChild(
     composeToolComponent((width) => {
       const subtitle = [workflowToolAction(args), subjectOf(args, state.workflowName)]
@@ -237,7 +219,6 @@ export const renderWorkflowCall = (
 const resultText = (result: AgentToolResult<unknown>): string =>
   stripTerminalControls(getTextContent(result.content)).replace(/\n+$/u, "");
 
-/** A routine one-line digest of the result; the agent-facing text waits for expansion. */
 const digest = (details: WorkflowToolDetails): string => {
   const run = details.run;
   if (!run) return listCounter(details);
@@ -254,7 +235,6 @@ const digest = (details: WorkflowToolDetails): string => {
     .join(" · ");
 };
 
-/** Preview style: a muted digest collapsed, the full output once expanded. */
 export const renderWorkflowResult = (
   result: AgentToolResult<unknown>,
   options: ToolRenderResultOptions,
@@ -265,7 +245,6 @@ export const renderWorkflowResult = (
   const details = detailsOf(result);
   if (details?.run) context.state.workflowName = details.run.name;
   if (options.expanded) return renderWorkflowOutput(result, theme);
-  // Issues and errors are drawn by the shell; only routine facts belong here.
   if (!details || details.issue) return new Container();
   return new Text(
     `${theme.fg("muted", digest(details))}\n${renderExpansionAffordance("output", false, theme)}`,
@@ -276,7 +255,6 @@ export const renderWorkflowResult = (
 
 const json = (value: WorkflowToolArgs["args"]) => JSON.stringify(value, null, 2) ?? "null";
 
-/** Compact expansion: every argument exactly, the script in full. */
 export const renderWorkflowInput = (args: Partial<WorkflowToolArgs>, theme: Theme): Component => {
   const container = new Container();
   const field = (label: string, value: string | undefined) => {

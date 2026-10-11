@@ -1,4 +1,3 @@
-// Native supervisor tool dispatch over the private Effect RPC client.
 import { synchronousRandomUuid } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -32,13 +31,11 @@ const CONTACTS = {
   warning: { rpc: "SupervisorWarning", text: "Warning recorded in parent-visible run status." },
 } as const;
 
-/** Local channel failure; `SupervisorRpcFailure` remains the server's own typed rejection. */
 export class SupervisorToolFailure extends Schema.TaggedError<SupervisorToolFailure>()(
   "SupervisorToolFailure",
   { code: Schema.String, message: Schema.String },
 ) {}
 
-/** One opened supervisor connection; `closed` completes once it can deliver nothing more. */
 export interface SupervisorToolClient {
   readonly rpc: RpcClient.FromGroup<typeof SupervisorRpcGroup, RpcClientError.RpcClientError>;
   readonly auth: Pick<SupervisorChannelConfig, "version" | "runId" | "token">;
@@ -55,7 +52,6 @@ export interface SupervisorToolResult {
   readonly isError: boolean;
 }
 
-/** Exactly the contract's argument keys, each decoded by the RPC payload schema it fills. */
 type ArgumentFields<Keys extends ReadonlyArray<string>> = Record<Keys[number], Schema.Top>;
 const exactArguments = { onExcessProperty: "error" } as const;
 const decodeMessageArguments = Schema.decodeUnknownOption(
@@ -72,7 +68,6 @@ const decodeReportArguments = Schema.decodeUnknownOption(
   exactArguments,
 );
 
-/** Arguments decode before any RPC call because payload construction throws on invalid input. */
 export const decodeSupervisorToolCall = <ArgumentsInput>(
   name: string,
   args: ArgumentsInput,
@@ -99,11 +94,6 @@ const uncertain = () =>
     message: "Supervisor RPC delivery did not settle within its bound.",
   });
 
-/**
- * Calls the supervisor for one decoded tool. Server rejections pass through; transport failures,
- * the 10 s bounds, and interruption by a closed connection become an uncertain outcome. Only the
- * caller's own interruption stays an interruption, so a cancelled question reaches the server.
- */
 export const runSupervisorTool = (
   client: SupervisorToolClient,
   call: SupervisorToolCall,
@@ -130,7 +120,6 @@ export const runSupervisorTool = (
                 `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
               ),
             ),
-            // An invalid structured result is the model's to fix, so it gets a tool error result.
             Effect.catchIf(
               (error) =>
                 error instanceof SupervisorRpcFailure && error.code === "report_schema_invalid",
@@ -139,7 +128,6 @@ export const runSupervisorTool = (
           );
       }
       case "question":
-        // The reply acknowledgement for this question's epoch outlives caller interruption.
         return yield* Effect.uninterruptibleMask((restore) =>
           restore(
             rpc.SupervisorQuestion({ ...auth, assignmentEpoch, requestId, message: call.message }),

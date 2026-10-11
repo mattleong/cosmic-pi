@@ -9,7 +9,6 @@ const MAX_PROTOCOL_NAME_CHARS = 256;
 const MAX_PROTOCOL_ERROR_CHARS = 64 * 1024;
 const MAX_MESSAGE_DELTA_CHARS = 1024 * 1024;
 const MAX_PROXY_PAYLOAD_CHARS = 2 * 1024 * 1024;
-/** Submitted result arguments; the contract bounds the value itself. */
 export const MAX_STRUCTURED_RESULT_WIRE_CHARS = 64 * 1024;
 export const MAX_STRUCTURED_RESULT_REJECTION_CHARS = 2_048;
 
@@ -27,7 +26,6 @@ const ParentMessageSchema = Schema.String.check(
   Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS),
 );
 
-/** One `pi-subagents` IPC message: the channel and type literals, then its own fields. */
 const piSubagentsMessage = <const Type extends string, const Fields extends Schema.Struct.Fields>(
   type: Type,
   fields: Fields,
@@ -165,10 +163,8 @@ export const decodeLocalPiParentControlOption = Schema.decodeUnknownOption(
   LocalPiParentControlSchema,
 );
 
-/** Names the private result contract file of a launch; the child reads it at session start. */
 export const LOCAL_PI_RESULT_CONTRACT_FLAG = "pi-subagents-result-schema";
 
-/** The private file a launch with a result contract hands its local Pi child. */
 export const LocalPiResultContractDocument = Schema.Struct({
   parameters: Schema.Record(Schema.String, Schema.Json),
   strictSafe: Schema.Boolean,
@@ -198,7 +194,6 @@ export type RpcChildEnvelope =
   | typeof RpcEventSchema.Type
   | { readonly type: "ignored"; readonly eventType: string };
 
-/** Known event types decode strictly; any other typed event is ignored. */
 export function decodeRpcEnvelope<ValueInput>(
   value: ValueInput,
 ): Effect.Effect<RpcChildEnvelope, Schema.SchemaError> {
@@ -242,8 +237,6 @@ const AssistantMessageSchema = Schema.Struct({
   content: Schema.Array(Schema.Unknown),
   stopReason: Schema.optional(Schema.Literals(["stop", "length", "toolUse", "error", "aborted"])),
   errorMessage: Schema.optional(ProtocolErrorSchema),
-  // Usage is decoded independently so malformed accounting cannot discard an
-  // otherwise valid assistant message or fail the run.
   usage: Schema.optional(Schema.Unknown),
 });
 const MessageDiscriminantSchema = Schema.Struct({ role: Schema.optional(Schema.String) });

@@ -27,10 +27,6 @@ export class SubagentWriterConflictError extends Schema.TaggedError<SubagentWrit
     activeId: Schema.String,
     activeName: Schema.String,
     message: Schema.String,
-    /**
-     * True when the conflict clears by itself once one of this session's runs finishes or
-     * releases its claim. Paused, quarantined and cross-process conflicts need someone to act.
-     */
     transient: Schema.optional(Schema.Boolean),
   },
 ) {}
@@ -54,21 +50,18 @@ export class SubagentProcessError extends Schema.TaggedError<SubagentProcessErro
   },
 ) {}
 
-/** Shared `SubagentProcessError` factory for failures with an explicit machine code. */
 export const processError = (
   operation: string,
   code: string,
   message: string,
 ): SubagentProcessError => new SubagentProcessError({ operation, code, message });
 
-/** Shared `InvalidSubagentRequestError` factory for failures with an explicit machine code. */
 export const invalidRequest = (code: string, message: string): InvalidSubagentRequestError =>
   new InvalidSubagentRequestError({ code, message });
 
-/**
- * Shared `SubagentProcessError` factory for caught causes of unknown type; `fallbackMessage` is
- * used only when the cause is neither an `Error` nor a string.
- */
+export const runNotFound = (id: string): SubagentNotFoundError =>
+  new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` });
+
 export const processCauseError = <ErrorInput>(
   operation: string,
   error?: ErrorInput,
@@ -82,22 +75,13 @@ export const processCauseError = <ErrorInput>(
     ...(code && { code }),
   });
 
-/** Machine-actionable failure code: an explicit `code` when present, else the error tag. */
 export const subagentErrorCode = (error: SubagentError): string =>
   ("code" in error && Predicate.isString(error.code) && error.code !== "" && error.code) ||
   error._tag;
 
-/**
- * By convention, `code` values ending in `_outcome_uncertain` mark failures whose side effects may
- * already have applied; callers must not retry or fall through to another candidate.
- */
 export const isOutcomeUncertain = (error: { readonly code?: string | undefined }): boolean =>
   error.code?.endsWith("_outcome_uncertain") === true;
 
-/**
- * By convention, `code` values ending in `_cleanup_unconfirmed` mark failures that left private
- * state possibly present; callers must fail closed instead of attempting another candidate.
- */
 export const isCleanupUnconfirmed = (error: { readonly code?: string | undefined }): boolean =>
   error.code?.endsWith("_cleanup_unconfirmed") === true;
 

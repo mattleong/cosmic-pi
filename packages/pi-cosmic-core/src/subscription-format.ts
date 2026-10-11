@@ -14,7 +14,6 @@ function formatResetCountdown(seconds: number): string {
   return `${secs}s`;
 }
 
-/** The reset instant `seconds` after `now` with its countdown; undefined unless both are finite. */
 function resetAt(seconds: number | null, now: number) {
   if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds) || !Number.isFinite(now))
     return undefined;
@@ -24,7 +23,6 @@ function resetAt(seconds: number | null, now: number) {
     : undefined;
 }
 
-/** Formats a reset with a compact local date/time while retaining its countdown. */
 function formatShortReset(label: string, seconds: number | null, now: number): string | null {
   const at = resetAt(seconds, now);
   if (at === undefined) return null;
@@ -45,17 +43,14 @@ function formatShortReset(label: string, seconds: number | null, now: number): s
   return `${label} ↺ ${at.countdown} - ${date} • ${time}`;
 }
 
-/** Clamp a finite percent into the inclusive 0–100 range. */
 export function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
 }
 
-/** Convert a finite used-percent value into the clamped remaining percent. */
 export function usedToLeftPercent(value: number | null | undefined): number | null {
   return Predicate.isNumber(value) && Number.isFinite(value) ? clampPercent(100 - value) : null;
 }
 
-/** A local date and time of day, such as "Sep 27, 2026, 10:07 AM". */
 export function formatTimestamp(value: number): string {
   return DateTime.formatLocal(DateTime.makeUnsafe(value), {
     dateStyle: "medium",
@@ -63,19 +58,16 @@ export function formatTimestamp(value: number): string {
   });
 }
 
-/** Format an epoch-millis timestamp for diagnostic output, or "never" when absent. */
 export function formatTimestampOrNever(value: number | undefined): string {
   return value === undefined ? "never" : formatTimestamp(value);
 }
 
-/** Format a remaining-percent value for subscription status lines. */
 export function formatPercent(value: number | null): string {
   return Predicate.isNumber(value) && Number.isFinite(value)
     ? `${Math.round(clampPercent(value))}%`
     : "--";
 }
 
-/** Convert a snapshot-relative reset countdown into seconds remaining from `now`. */
 function remainingResetSeconds(
   seconds: number | null,
   capturedAt: number,
@@ -98,10 +90,6 @@ type UsageWindowLine = {
   readonly resetInSeconds: number | null;
 };
 
-/**
- * Shared "Usage: 5h: 80% | 7d: 90% | 5h ↺ …" status-line assembly used by provider footers.
- * A window is shown when either its percent or reset countdown is present.
- */
 export function formatWindowedUsageLine(
   windows: readonly UsageWindowLine[],
   options: { readonly showResetTimes: boolean },
@@ -126,7 +114,6 @@ export function formatWindowedUsageLine(
   return `Usage: ${labels.length ? labels.join(" | ") : "--"}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
 }
 
-/** Compact token counts for footer metrics (1.2k, 15k, 1.5M). */
 export function formatTokens(count: number): string {
   if (count < 1_000) return `${count}`;
   if (count < 10_000) return `${(count / 1_000).toFixed(1)}k`;

@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { makeWorkingRow } from "../src/working/row.ts";
 
-/** A bound working row over a scriptable host context, a manual clock, and a manual ticker pool. */
 function workingHarness() {
   let time = 0;
   let mode: "tui" | "rpc" = "tui";

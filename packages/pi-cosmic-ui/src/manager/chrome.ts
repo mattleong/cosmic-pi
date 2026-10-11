@@ -6,10 +6,8 @@ const STARTING_SPINNER_FRAMES = ["◌", "◔", "◑", "◕"] as const;
 const frameAt = (frames: ReadonlyArray<string>, frame: number, fallback: string): string =>
   frames[Math.abs(Math.floor(frame)) % frames.length] ?? fallback;
 
-/** One spinner speed for every extension; tickers that animate a spinner repaint at this rate. */
 export const SPINNER_FRAME_MS = 160;
 
-/** The spinner frame shown at a clock reading. */
 export const spinnerFrameAt = (now: number): number => Math.floor(now / SPINNER_FRAME_MS);
 
 export const startingSpinnerFrame = (frame: number): string =>
@@ -17,7 +15,6 @@ export const startingSpinnerFrame = (frame: number): string =>
 
 export type ManagerLayoutTier = "narrow" | "stacked" | "wide";
 
-/** Shared responsive manager tiers: narrow below 60, stacked 60–99, wide at 100+ columns. */
 export const managerLayoutTier = (width: number): ManagerLayoutTier =>
   width >= 100 ? "wide" : width >= 60 ? "stacked" : "narrow";
 
@@ -30,14 +27,11 @@ const MANAGER_NOTICE_GLYPHS = {
   error: "✗",
 } satisfies Readonly<Record<ManagerNoticeKind, string>>;
 
-/** Shared status glyph vocabulary for manager notices and feedback lines. */
 export const managerNoticeGlyph = (kind: ManagerNoticeKind): string => MANAGER_NOTICE_GLYPHS[kind];
 
-/** Notice text color: info recedes as muted; the other kinds keep their own token. */
 export const managerNoticeColor = (kind: ManagerNoticeKind) => (kind === "info" ? "muted" : kind);
 
 type ManagerStateGlyphKind = "done" | "failed" | "stopped" | "stopping";
-/** Live states that need someone else before they can continue. */
 type ManagerAttentionKind = "waiting" | "paused";
 export type ManagerActivityKind =
   | "pending"
@@ -53,11 +47,9 @@ const MANAGER_STATE_GLYPHS = {
   stopping: "◒",
 } satisfies Readonly<Record<ManagerStateGlyphKind, string>>;
 
-/** Shared terminal-state glyph pairs for manager rows (`/subagents`, `/tasks`). */
 export const managerStateGlyph = (kind: ManagerStateGlyphKind): string =>
   MANAGER_STATE_GLYPHS[kind];
 
-/** Total semantic activity projection shared by managers and tool renderers. */
 export const managerActivityGlyph = (kind: ManagerActivityKind, frame = 0): string =>
   kind === "pending"
     ? startingSpinnerFrame(frame)
@@ -67,10 +59,6 @@ export const managerActivityGlyph = (kind: ManagerActivityKind, frame = 0): stri
         ? managerNoticeGlyph("warning")
         : managerStateGlyph(kind);
 
-/**
- * Theme-token policy for the shared activity vocabulary. Live work is accent so that green only
- * ever means success; anything waiting on someone is a warning.
- */
 export const managerActivityColor = (kind: ManagerActivityKind): ManagerStatusColor => {
   if (kind === "pending" || kind === "running") return "accent";
   if (kind === "done") return "success";
@@ -90,19 +78,12 @@ const MANAGER_ACTIVITY_LABELS = {
   stopped: "stopped",
 } satisfies Readonly<Record<ManagerActivityKind, string>>;
 
-/**
- * The one word every extension uses for a state. Requests and questionnaires that end early are
- * "cancelled"; running work that someone ends is "stopped", and Activity calls work cancelled
- * before it started "skipped" when its producer says so.
- */
 export const managerActivityLabel = (kind: ManagerActivityKind): string =>
   MANAGER_ACTIVITY_LABELS[kind];
 
-/** Clips to `width` terminal columns, keeping styling, and marks the cut with "…". */
 export const clipToWidth = (text: string, width: number, marker = "…"): string =>
   truncateToWidth(text, width, marker);
 
-/** Keep the active tab visible when the complete strip cannot fit. Labels may contain ANSI. */
 export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: number): string => {
   const full = `  ${tabs.join("  ")}`;
   return visibleWidth(full) <= width
@@ -112,7 +93,6 @@ export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: 
 
 export type ManagerFooterGroup = string | undefined;
 
-/** Selects the first grouped footer variant that fits, then safely clips the narrow fallback. */
 export const renderResponsiveManagerFooter = (
   contentWidth: number,
   variants: ReadonlyArray<ReadonlyArray<ManagerFooterGroup>>,

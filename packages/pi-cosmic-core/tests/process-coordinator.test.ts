@@ -9,7 +9,6 @@ import { withProcessLock } from "../src/platform/process-coordinator.ts";
 
 it.effect("releases the keyed registry reference across interrupted admission and reuse", () =>
   Effect.gen(function* () {
-    // Capture only the owned registry's unique key, leaving real Effect semaphores intact.
     let key = "";
     const observed = new Set<Map<unknown, unknown>>();
     const observedRegistry = () => observed.values().next().value;

@@ -1,8 +1,7 @@
-// The dashboard owns one Pi custom-UI lifetime and its cancellable catalog.
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { invokeHostCallback, isProjectTrusted } from "pi-cosmic-core";
+import { invokeHostCallback, isProjectTrusted, notifyAtHostBoundary } from "pi-cosmic-core";
 import { hasCustomSurface, openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import { SubagentConfigStoreError } from "../config/store.ts";
@@ -37,7 +36,8 @@ export function openProfileDashboard(
 ): Promise<void> {
   if (!ctx.hasUI || !hasCustomSurface(ctx)) {
     if (ctx.hasUI)
-      ctx.ui.notify(
+      notifyAtHostBoundary(
+        ctx,
         "Open Pi in an interactive terminal to change agent profiles with /subagents profiles.",
         "warning",
       );
@@ -62,14 +62,14 @@ export function openProfileDashboard(
           if (!refreshOwner.isCurrent() || modelRefreshController.signal.aborted) return;
           if (result === "updated") requestWorkspaceRender?.();
           if (result === "failed")
-            ctx.ui.notify(
+            notifyAtHostBoundary(
+              ctx,
               "Could not refresh Pi models. Showing the last available list.",
               "warning",
             );
         },
         () => undefined,
       );
-      // Launch resolution uses the same conservative fallback.
       const parentEffort: SubagentEffort = ctx.model
         ? invokeHostCallback(() => decodeSubagentEffort(pi.getThinkingLevel()) ?? "high", "high")
         : "high";
@@ -127,7 +127,11 @@ export function openProfileDashboard(
         const scope = editorTarget.set.scope;
         const projectTrusted = isProjectTrusted(ctx);
         if (scope === "project" && !projectTrusted) {
-          ctx.ui.notify("This project is no longer trusted. Nothing was saved.", "warning");
+          notifyAtHostBoundary(
+            ctx,
+            "This project is no longer trusted. Nothing was saved.",
+            "warning",
+          );
           return refreshInspection();
         }
         const base = {
@@ -222,8 +226,6 @@ export function openProfileDashboard(
                 modelRefreshController.signal,
               ),
           });
-          // The activation runtime interrupts this wait on replacement/shutdown.
-          // Its finalizer closes the owned surface even with no further input.
           void refreshOwner
             .run(
               Effect.callback<never>(() => Effect.sync(() => closeSurface())),
@@ -235,7 +237,8 @@ export function openProfileDashboard(
       })
         .then((outcome) => {
           if (outcome._tag === "Failed")
-            ctx.ui.notify(
+            notifyAtHostBoundary(
+              ctx,
               "Could not open Subagents profile settings. Close and try again.",
               "error",
             );
@@ -243,9 +246,9 @@ export function openProfileDashboard(
         .finally(release);
     },
     (error) => {
-      // A replaced activation's inspection fails with that replacement; its stale ctx stays quiet.
       if (!refreshOwner.isCurrent()) return;
-      ctx.ui.notify(
+      notifyAtHostBoundary(
+        ctx,
         error instanceof Error ? error.message : "Could not inspect profile settings.",
         "error",
       );

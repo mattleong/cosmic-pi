@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import { workflowRunSummary, workflowStatusText } from "../../src/tools/workflow-format.ts";
 import type { WorkflowPlannedAgent, WorkflowRunView } from "../../src/workflow/model.ts";
@@ -83,7 +82,6 @@ describe("claiming planned agents", () => {
     expect(
       workflowAgentFromDraft({ callId: 1, queuedAt: 1, label: "verifier" }, "agent-p-3", claimed),
     ).toMatchObject({ phase: "Verify", state: "queued" });
-    // A reused result claims its entry too, and counts as reused work in the entry's phase.
     const entry = { key: "k", result: "done", outputTokens: 3, chars: 6 };
     const [reusedEntry, reused] = reuseWorkflowResult(run(reviewPlan), entry, {
       label: "security",
@@ -91,7 +89,6 @@ describe("claiming planned agents", () => {
     expect(reusedEntry?.runId).toBe("agent-p-2");
     expect(reused).toMatchObject({ reused: 1, reusedPhases: [{ title: "Review", count: 1 }] });
     expect(reused.planned).toHaveLength(2);
-    // An unlabelled call outside any phase still claims nothing.
     expect(claimWorkflowPlanned(run(reviewPlan), {})[0]).toBeUndefined();
   });
 
@@ -100,7 +97,6 @@ describe("claiming planned agents", () => {
       { ...planned("agent-p-2", "▸ child · Fix", "fixer"), workflow: "child" },
       planned("agent-p-1", "Review", "fixer"),
     ]);
-    // A nested workflow's call takes its own entry, and the run's own call takes the script's.
     const [child] = claimWorkflowPlanned(nested, { label: "fixer", workflow: "child" });
     expect(child?.runId).toBe("agent-p-2");
     const [root] = claimWorkflowPlanned(nested, { label: "fixer" });
@@ -112,16 +108,13 @@ describe("claiming planned agents", () => {
     const [skippedOnce, skipped] = skipWorkflowPlanned(run(reviewPlan), "agent-p-2", 5);
     expect(skippedOnce).toBe(true);
     expect(skipped.planned.map((entry) => entry.skippedAt)).toEqual([undefined, 5, undefined]);
-    // Skipping it again changes nothing; an unknown entry or a finished run is refused.
     expect(skipWorkflowPlanned(skipped, "agent-p-2", 6)).toEqual([true, skipped]);
     expect(skipWorkflowPlanned(skipped, "agent-other", 6)[0]).toBe(false);
     expect(skipWorkflowPlanned({ ...run(reviewPlan), state: "completed" }, "agent-p-2", 6)[0]).toBe(
       false,
     );
-    // Only a call that would claim a skipped entry claims it ahead of queuing.
     const correctness = { phase: "Review", label: "correctness" };
     expect(claimSkippedWorkflowPlanned(skipped, correctness)).toEqual([undefined, skipped]);
-    // Claiming works as before; the claiming call is already skipped, with a reason.
     const [claimed, rest] = claimSkippedWorkflowPlanned(skipped, {
       phase: "Review",
       label: "security",
@@ -143,7 +136,6 @@ describe("claiming planned agents", () => {
 
   it("shows only the profile a claimed call runs with, never the planned one", () => {
     const [byLabel] = claimWorkflowPlanned(run(reviewPlan), { phase: "Review", label: "security" });
-    // The call runs with its own (default) profile, so its row doesn't show the planned one.
     expect(
       workflowAgentFromDraft(
         { callId: 1, queuedAt: 1, label: "security", phase: "Review" },
@@ -223,7 +215,6 @@ describe("narrator line", () => {
 const REVIEW_META = `[{ title: "Review", agents: ["correctness", { label: "security", profile: "reviewer" }] }, { title: "Verify", agents: ["verifier"] }]`;
 const FIX_META = `[{ title: "Fix", agents: ["fixer"] }]`;
 
-/** An inline script whose meta declares `phases`. */
 const withMeta = (phases: string, body: string) => inline(body, "planned", phases);
 
 describe("planned agents in a run", () => {
@@ -248,13 +239,11 @@ describe("planned agents in a run", () => {
       expect(queued.agents[0]).toMatchObject({ runId: security.runId, label: "security" });
       expect(queued.planned.map((entry) => entry.label)).toEqual(["correctness", "verifier"]);
 
-      // The subagent itself starts under the planned id.
       const subagentId = yield* reportTask(fixture, "check security", "No issues.");
       expect(subagentId).toBe(security.runId);
 
       const done = yield* finished(workflows, started.id);
       expect(done.state).toBe("completed");
-      // Entries no call claimed stay as history of what never ran.
       expect(done.planned.map((entry) => entry.label)).toEqual(["correctness", "verifier"]);
     }),
   );
@@ -316,7 +305,6 @@ describe("planned agents in a run", () => {
       const parent = started.planned[0]!;
       const loaded = yield* runWhere(workflows, started.id, (view) => view.agents.length === 1);
       const child = loaded.agents[0]!;
-      // The child's call takes the child's entry, in the child's phase, and leaves the parent's.
       expect(child.runId).not.toBe(parent.runId);
       expect(child.phase).toBe(loaded.phases.at(-1)?.title);
       expect(loaded.planned).toEqual([parent]);

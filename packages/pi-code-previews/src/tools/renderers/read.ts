@@ -19,7 +19,6 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
     renderCall(args, theme) {
       const path = getPathArg(args);
       const lang = pathPreviewLanguage(path);
-      // The same first line Pi reads and the gutter numbers, including for offset 0.
       const range = getReadLineRange(args);
       let text = `${renderCodePreviewToolTitle("read", theme)} ${renderDisplayPath(path, cwd, theme)}`;
       if (range) text += theme.fg("warning", range);
@@ -41,8 +40,6 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
 
       const body = readResultBody(result, renderContext.args);
 
-      // Pi already renders image content parts natively. Avoid emitting terminal image
-      // escape sequences here; show only a compact note beside Pi's image renderer.
       if (body.kind === "image") {
         return new Text(
           theme.fg("dim", escapeControlChars(body.text.replace(/^Read image file/i, "image"))),
@@ -54,7 +51,6 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
       if (!expanded && !codePreviewSettings.readContentPreview)
         return renderHiddenPreviewExpandHint(renderContext.state, theme, "content");
 
-      // The issue line already reports an oversized first line; expansion adds the agent's notes.
       if (body.kind === "oversized")
         return expanded && body.notice ? agentNotesSection(theme, body.notice) : new Container();
 

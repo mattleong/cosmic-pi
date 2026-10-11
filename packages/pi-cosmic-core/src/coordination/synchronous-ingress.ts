@@ -20,16 +20,10 @@ interface SynchronousIngressOptions<A, R> {
 }
 
 export interface SynchronousIngress<A> {
-  /** Synchronous bounded ingress for mandatory host callbacks. */
   readonly offer: (value: A) => SynchronousIngressOfferResult;
-  /** Idempotently rejects new offers, discards buffered work, and interrupts the worker. */
   readonly shutdown: Effect.Effect<void>;
 }
 
-/**
- * Bridges synchronous host callbacks into one scoped Effect worker. The queue is always bounded.
- * Coalescing retains at most one latest overflow value in addition to the bounded queue.
- */
 export const makeSynchronousIngress = <A, R>(
   options: SynchronousIngressOptions<A, R>,
 ): Effect.Effect<SynchronousIngress<A>, SynchronousIngressError, Scope.Scope | R> =>
@@ -47,7 +41,6 @@ export const makeSynchronousIngress = <A, R>(
 
     const handle = (value: A) =>
       Effect.suspend(() => options.handle(value)).pipe(
-        // A defect never terminates the worker; the fixed diagnostic never includes its cause.
         Effect.catchCauseIf(
           (cause) => !Cause.hasInterruptsOnly(cause),
           () =>
@@ -57,10 +50,8 @@ export const makeSynchronousIngress = <A, R>(
         ),
       );
 
-    // This is the adapter's sole synchronous unsafe Queue operation.
     const offerQueue = (value: A) => Queue.offerUnsafe(queue, value);
 
-    /** Rejects synchronous ingress at once and returns the queue shutdown. */
     const close = () => {
       closed = true;
       coalesced = undefined;
@@ -72,7 +63,6 @@ export const makeSynchronousIngress = <A, R>(
         yield* handle(current);
         const overflow = coalesced;
         coalesced = undefined;
-        // The synchronous offer cannot re-enter `offer`; a refused overflow stays coalesced.
         if (overflow !== undefined && !offerQueue(overflow.value)) coalesced = overflow;
       }),
     ).pipe(Effect.ensuring(Effect.suspend(close)));
@@ -92,7 +82,6 @@ export const makeSynchronousIngress = <A, R>(
     };
 
     const awaitShutdown = Fiber.await(fiber).pipe(Effect.asVoid);
-    // Shutdown closes ingress as soon as it starts, before yielding to queue cleanup.
     const shutdown = Effect.uninterruptible(
       Effect.suspend(() =>
         closed ? awaitShutdown : close().pipe(Effect.andThen(Fiber.interrupt(fiber))),

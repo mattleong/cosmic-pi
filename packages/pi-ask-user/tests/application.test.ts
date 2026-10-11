@@ -1,12 +1,24 @@
 import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
 import { eventually, makeTuiHost, waitMounted } from "./support/host.ts";
 import { startExtension, withoutRelayMarker } from "./support/extension.ts";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  CustomEntry,
+  CustomMessageEntry,
+  UIPromptEndEvent,
+  UIPromptStartEvent,
+} from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { deferredPromise, extensionContextFixture, opaqueFixture } from "pi-cosmic-core/testing";
+import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
+import {
+  deferredPromise,
+  extensionContextFixture,
+  type DefaultedEventName,
+  type ExtensionContextOverrides,
+} from "pi-cosmic-core/testing";
 import { afterEach, expect, vi } from "vitest";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
@@ -16,9 +28,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const decodeReceipt = Schema.decodeUnknownSync(Schema.Struct({ requestId: Schema.String }));
+
+const promptStart: UIPromptStartEvent = {
+  type: "ui_prompt_start",
+  reason: "ui_prompt",
+  kind: "select",
+};
+const promptEnd: UIPromptEndEvent = { type: "ui_prompt_end", reason: "ui_prompt", kind: "select" };
+
 const harness = (
   loadPreviewSettings: Parameters<typeof startExtension>[0],
-  overrides: Partial<ExtensionContext> = {},
+  overrides: ExtensionContextOverrides = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -32,24 +53,28 @@ const harness = (
       isProjectTrusted: () => true,
       ...overrides,
     });
-    return { ...extension, ctx, emit: (name: string) => extension.emit(name, ctx) };
+    return {
+      ...extension,
+      ctx,
+      emit: (name: DefaultedEventName) => extension.emit(name, ctx),
+      promptStart: () => extension.emit("ui_prompt_start", ctx, promptStart),
+      promptEnd: () => extension.emit("ui_prompt_end", ctx, promptEnd),
+    };
   });
 
 type Harness = Effect.Success<ReturnType<typeof harness>>;
 
-// Loads previews immediately and supplies the owned TUI host used by async dialogs.
-const tuiHarness = (overrides: Partial<ExtensionContext> = {}) =>
+const tuiHarness = (overrides: ExtensionContextOverrides = {}) =>
   Effect.gen(function* () {
     const ui = makeTuiHost();
     const h = yield* harness(() => Promise.resolve(), {
       mode: "tui",
-      ui: opaqueFixture(ui.ui),
+      ui: ui.ui,
       ...overrides,
     });
     return { h, ui };
   });
 
-// Opens ask_user_async, acknowledges the mount, and returns the acquisition receipt.
 const openMounted = (
   h: Harness,
   ui: ReturnType<typeof makeTuiHost>,
@@ -167,8 +192,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         const signal = new AbortController();
         const receipt = yield* openMounted(h, ui, "call", signal.signal);
         expect(receipt.details).toMatchObject({ status: "pending" });
-        if (!("requestId" in receipt.details)) throw new Error("Missing async receipt");
-        const requestId = receipt.details.requestId;
+        const { requestId } = decodeReceipt(receipt.details);
         signal.abort();
         turn.abort();
         expect(ui.done).not.toHaveBeenCalled();
@@ -198,45 +222,60 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
     "tree replacement preserves already-recorded answers but filters late old steering",
     () =>
       Effect.gen(function* () {
-        const branch: Array<
-          | { type: "custom_message"; customType: string; details: object }
-          | { type: "custom"; customType: string; data: object }
-        > = [];
-        const sessionManager: ExtensionContext["sessionManager"] = opaqueFixture({
-          getBranch: () => branch,
+        const branch: Array<CustomEntry | CustomMessageEntry> = [];
+        const entry = () => ({
+          id: `entry-${branch.length + 1}`,
+          parentId: null,
+          timestamp: "2026-01-01T00:00:00.000Z",
         });
-        const { h, ui } = yield* tuiHarness({ sessionManager });
+        const { h, ui } = yield* tuiHarness({ sessionManager: { getBranch: () => [...branch] } });
         yield* Effect.promise(() => h.emit("session_start"));
         yield* openMounted(h, ui, "open");
         ui.component!.handleInput?.("1");
         ui.component!.handleInput?.("\r");
-        yield* eventually(() => expect(h.pi.sendMessage).toHaveBeenCalledOnce());
-        const sent = h.pi.sendMessage.mock.calls[0]![0];
-        const [customType, data] = h.pi.appendEntry.mock.calls[0]!;
-        branch.push({ type: "custom", customType, data });
-        branch.push({ type: "custom_message", customType: sent.customType, details: sent.details });
+        yield* eventually(() => expect(h.sendMessage).toHaveBeenCalledOnce());
+        const sent = h.sendMessage.mock.calls[0]![0];
+        const sentDetails = Predicate.isObject(sent.details) ? sent.details : {};
+        const [customType, data] = h.appendEntry.mock.calls[0]!;
+        branch.push({ ...entry(), type: "custom", customType, data });
+        branch.push({
+          ...entry(),
+          type: "custom_message",
+          customType: sent.customType,
+          content: sent.content,
+          display: sent.display,
+          details: sentDetails,
+        });
         yield* Effect.promise(() => h.emit("session_tree"));
-        const recorded = { role: "custom", ...sent };
+        const recorded = { role: "custom" as const, ...sent, timestamp: 0 };
         const late = {
-          role: "custom",
-          ...sent,
-          details: { ...sent.details, deliveryId: "late-old-answer" },
+          ...recorded,
+          details: { ...sentDetails, deliveryId: "late-old-answer" },
         };
-        const foreign = { role: "custom", customType: "another-extension", content: "keep" };
+        const foreign = {
+          role: "custom" as const,
+          customType: "another-extension",
+          content: "keep",
+          display: true,
+          timestamp: 0,
+        };
+        const context = { type: "context" as const, messages: [recorded, late, foreign] };
         const result = yield* Effect.promise(() =>
-          Promise.resolve(
-            h.handlers.get("context")![0]!({ messages: [recorded, late, foreign] }, h.ctx),
-          ),
+          Promise.resolve(h.handlers.get("context")![0]!(context, h.ctx)),
         );
         expect(result).toEqual({ messages: [recorded, foreign] });
-        // Pi can persist a revoked queued message after navigation. It is not a receipt.
-        branch.push({ type: "custom_message", customType: late.customType, details: late.details });
-        for (const activation of ["session_tree", "session_start", "session_tree"]) {
+        branch.push({
+          ...entry(),
+          type: "custom_message",
+          customType: late.customType,
+          content: late.content,
+          display: late.display,
+          details: late.details,
+        });
+        for (const activation of ["session_tree", "session_start", "session_tree"] as const) {
           yield* Effect.promise(() => h.emit(activation));
           const again = yield* Effect.promise(() =>
-            Promise.resolve(
-              h.handlers.get("context")![0]!({ messages: [recorded, late, foreign] }, h.ctx),
-            ),
+            Promise.resolve(h.handlers.get("context")![0]!(context, h.ctx)),
           );
           expect(again).toEqual({ messages: [recorded, foreign] });
         }
@@ -248,7 +287,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
     Effect.gen(function* () {
       const { h, ui } = yield* tuiHarness();
       yield* Effect.promise(() => h.emit("session_start"));
-      yield* Effect.promise(() => h.emit("ui_prompt_start"));
+      yield* Effect.promise(() => h.promptStart());
       const start = h.tools.get("ask_user_async")!;
       yield* Effect.promise(() =>
         expect(
@@ -256,7 +295,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         ).rejects.toMatchObject({ reason: "busy" }),
       );
       expect(ui.mount).toBeUndefined();
-      yield* Effect.promise(() => h.emit("ui_prompt_end"));
+      yield* Effect.promise(() => h.promptEnd());
       yield* openMounted(h, ui, "open");
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
@@ -287,7 +326,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         oldComponent.handleInput?.("n");
         oldComponent.handleInput?.("external");
         expect(editorSignal?.aborted).toBe(false);
-        expect(ui.tui.stop).toHaveBeenCalledOnce();
+        expect(ui.tuiControls.stop).toHaveBeenCalledOnce();
         let replaced = false;
         const replacing = h.emit("session_start").then(() => {
           replaced = true;
@@ -295,7 +334,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         yield* eventually(() => expect(editorSignal?.aborted).toBe(true));
         for (let i = 0; i < 30; i++) yield* Effect.yieldNow;
         expect(replaced).toBe(false);
-        expect(ui.tui.start).not.toHaveBeenCalled();
+        expect(ui.tuiControls.start).not.toHaveBeenCalled();
         yield* Effect.promise(() =>
           expect(
             start.execute("stale", asyncRequest, undefined, undefined, h.ctx),
@@ -304,8 +343,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         expect(ui.customCalls).toBe(1);
         terminated.resolve();
         yield* Effect.promise(() => replacing);
-        expect(ui.tui.start).toHaveBeenCalledOnce();
-        // A detached old component cannot admit another editor even after late settlement.
+        expect(ui.tuiControls.start).toHaveBeenCalledOnce();
         yield* Effect.promise(() => Promise.resolve());
         oldComponent.handleInput?.("external");
         expect(edit).toHaveBeenCalledOnce();
@@ -317,7 +355,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         yield* Effect.promise(() => next);
         yield* Effect.promise(() => h.emit("session_shutdown"));
         yield* Effect.promise(() => h.emit("session_shutdown"));
-        expect(ui.tui.start).toHaveBeenCalledOnce();
+        expect(ui.tuiControls.start).toHaveBeenCalledOnce();
         expect(ui.done).toHaveBeenCalledTimes(2);
       }),
     );

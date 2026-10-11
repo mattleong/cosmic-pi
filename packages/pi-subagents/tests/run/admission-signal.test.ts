@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Effect from "effect/Effect";
@@ -25,7 +24,6 @@ const continuation: ProfileRouteContinuation = {
 const writer = (name: string, writes: ReadonlyArray<string>) =>
   request({ name, writeIntent: "writer", writes: [...writes] });
 
-/** Holds `src/a.ts` and `src/b.ts` while waiting on a parent question, so claims can be revoked. */
 const claimHolder = (
   service: SubagentServiceContract,
   fake: ReturnType<typeof localServiceFixture>["fake"],
@@ -52,14 +50,12 @@ describe("admission signal", () => {
   it.effect("wakes and clears a writer queued on a file when the blocker loses its claim", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
-      // Claims can only be revoked while the writer waits on a parent question.
       const holder = yield* claimHolder(service, fake, projections);
       const queued = writer("queued", ["src/b.ts"]);
       const before = yield* service.admissionRevision;
       const refused = yield* service.start(queued).pipe(Effect.flip);
       expect(refused).toMatchObject({ _tag: "SubagentWriterConflictError", transient: true });
       expect(yield* service.queuedWriterConflict(queued)).toMatchObject({ activeId: holder.id });
-      // A worktree writer works in its own cwd, so the source's writers never block it.
       expect(
         yield* service.queuedWriterConflict({ ...queued, writerWorkspaceModeOverride: "worktree" }),
       ).toBeUndefined();
@@ -86,7 +82,6 @@ describe("admission signal", () => {
       fake.controls[0]?.exit(1);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       for (let index = 0; index < 50; index++) yield* Effect.yieldNow;
-      // No publication follows the reservation, so only the lock release can observe it.
       const claim = yield* service.claimRetryContinuation(failed.id);
       const before = yield* service.admissionRevision;
       const refused = yield* service.start(writer("queued", ["src/x.ts"])).pipe(Effect.flip);

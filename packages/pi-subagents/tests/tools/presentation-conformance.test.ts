@@ -24,7 +24,6 @@ import { containedWriter } from "../fixtures/run-view.ts";
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
 );
-/** Root registrations for rendering only; `panel` says whether the live panel is available. */
 function registered(panel = false, runtime: Partial<SubagentToolRuntime> = {}) {
   return captureRegistrations((pi) =>
     registerSubagentTools(pi, {
@@ -81,7 +80,6 @@ it("keeps parent recovery visible when a live panel hides partial hierarchy", ()
     { content: [], details },
     { overrides: () => ({ isPartial: true }) },
   )) {
-    // The question itself is the attention; the reply procedure is agent detail.
     expect(text).toContain("grant the reviewed file");
     expect(text.includes("subagent_reply")).toBe(expanded);
     expect(text.match(/subagent_await/g)?.length).toBeGreaterThan(0);
@@ -216,7 +214,6 @@ it("preserves host-flagged uncertainty, exact input and full output through comp
     result,
     { overrides: () => ({ isError: true }) },
   )) {
-    // Uncertainty is never reported as a failure, and nothing was confirmed sent.
     expect(text).toContain("unconfirmed");
     expect(text).not.toMatch(/\bfail(?:ed|ure)?\b|\bsent\b/i);
     expect(text.includes("claude_steering_outcome_uncertain")).toBe(expanded);
@@ -230,7 +227,6 @@ it("preserves host-flagged uncertainty, exact input and full output through comp
 });
 
 const pendingInput = { runIds: ["confirmed", "pending-target"], message: "exact pending guidance" };
-/** Middleware-added native image; Pi, not the tool renderer, owns its bytes. */
 const pendingImage = {
   type: "image" as const,
   mimeType: "image/png",
@@ -256,10 +252,8 @@ const pendingSend = (extra: ReadonlyArray<typeof definiteFailure> = []) => ({
     ],
   }),
 });
-/** Pending delivery is neither delivered nor failed, so a pending-only receipt never says so. */
 const reportsFailure = /\bfail(?:ed|ure)?\b/i;
 
-/** Renders one state and proves rendering left the result and its native image untouched. */
 function renderUnchanged(
   harness: ToolPresentationHarness,
   result: ReturnType<typeof pendingSend>,
@@ -271,7 +265,6 @@ function renderUnchanged(
   const text = harness.render(160).join("\n");
   expect(result).toEqual(original);
   expect(result.content[1]).toBe(pendingImage);
-  // Renderers never take ownership of native image bytes or inline them as text.
   expect(text).not.toContain(pendingImage.data);
   return text;
 }
@@ -280,7 +273,6 @@ it("expands pending delivery evidence without claiming failure and keeps definit
   const tool = registered().find((entry) => entry.name === "subagent_send")!;
   const harness = createToolPresentationHarness(tool);
   for (const expanded of [false, true, false, true]) {
-    // Host receipts leave a pending-only send unflagged.
     const text = renderUnchanged(harness, pendingSend(), { expanded, isError: false });
     expect(text).toContain("awaiting confirmation");
     expect(text).not.toMatch(reportsFailure);
@@ -311,7 +303,6 @@ it("gives pending delivery only no-resend recovery in the default preview style"
     const pending = renderUnchanged(harness, pendingSend(), { expanded, isError: false });
     expect(pending).toContain("exact pending guidance");
     expect(pending).toContain("awaiting confirmation");
-    // Codes, target IDs, and the agent's recovery are expanded-only evidence.
     expect(pending.includes("steer_outcome_uncertain")).toBe(expanded);
     expect(pending.includes("pending-target")).toBe(expanded);
     expect(/do not resend/i.test(pending)).toBe(expanded);
@@ -366,7 +357,6 @@ it("draws each issue once and keeps IDs and agent procedures out of collapsed pr
         for (const id of [paused.id, failed.id]) expect(text).not.toContain(id);
         expect(text).not.toMatch(/subagent_\w+\(|Next:/u);
       }
-      // No issue line is drawn twice: the shell owns them.
       const issueLines = lines.filter((line) => /^[⚠✗ℹ] /u.test(line));
       expect(new Set(issueLines).size).toBe(issueLines.length);
     }
@@ -415,7 +405,6 @@ it("keeps agent recovery steps out of the collapsed preview style", () => {
       states: [false, true, false],
     })) {
       expect(text).toContain(human);
-      // The procedure is agent detail: present only once expanded.
       expect(/subagent_\w+\(/u.test(text)).toBe(expanded);
     }
   }
@@ -445,7 +434,6 @@ it("retains failures, cancelled waits and uncertain cleanup across expansion tog
       if (expanded) expect(text).toContain(scenario.evidence);
       else {
         expect(text).not.toContain("subagent_status");
-        // An unrecognised worker error explains itself with its first line.
         if (scenario.error) expect(text).toContain(scenario.error);
         if (scenario.cancelled) expect(text).toMatch(/were not stopped/i);
         if (scenario.state === "stopping") expect(text).toMatch(/stopping.*cleanup/i);

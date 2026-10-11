@@ -6,16 +6,8 @@ import type {
   BackgroundTaskState,
 } from "./model.ts";
 
-/** Compact the store once the dead prefix outweighs the live events. */
 const COMPACTION_MIN_DEAD_EVENTS = 32;
 
-/**
- * Retained log events for one task.
- *
- * The service mutates this buffer under its registry semaphore. An offset-backed
- * store makes appends and trims amortized O(1). Consumers retain only cached,
- * detached frozen `events` slices sharing events frozen at creation.
- */
 export class LogBuffer {
   private snapshot: ReadonlyArray<BackgroundLogEvent> | undefined;
   private store: BackgroundLogEvent[] = [];
@@ -83,7 +75,6 @@ export class LogBuffer {
   }
 }
 
-/** Events from `index`, with the first clipped to start at `offset` in its text. */
 function eventsFrom(
   events: ReadonlyArray<BackgroundLogEvent>,
   index: number,
@@ -98,13 +89,11 @@ function eventsFrom(
   ];
 }
 
-/** The last `lineLimit` logical lines of the combined text; lines may span chunks. */
 function tailEvents(
   events: ReadonlyArray<BackgroundLogEvent>,
   lineLimit: number,
 ): ReadonlyArray<BackgroundLogEvent> {
   if (lineLimit <= 0) return [];
-  // A final newline ends the last line rather than starting another.
   let ignoredBreaks = events.at(-1)?.text.endsWith("\n") ? 1 : 0;
   let linesLeft = lineLimit;
   for (let index = events.length - 1; index >= 0; index -= 1) {

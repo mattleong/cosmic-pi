@@ -8,17 +8,33 @@ pass its own rules. Identical scope lookup, parameter annotation unwrapping, fun
 and alias-name lookup mechanics are extracted into `shared/ast.ts`; rule policy stays local. The
 unused upstream helper `isPopulatedObjectExpression` was dropped from `shared/dictionary-types.ts`.
 
-The 12 upstream rule tests are retained, with local baseline coverage added for the three upstream
-rules that had no tests, so Oxlint and `@oxlint/plugins` upgrades can be verified against the
-vendored behavior.
+Upstream files were also edited to satisfy workspace lint policy without changing behavior: all
+comments were removed, functions above the complexity limit were split into helpers, and
+`shared/lexical-type-parameters.ts` finds `infer` declarations through tokens instead of an untyped
+visitor-key walk, so it needs no type assertion.
+
+Upstream rules with a native Oxlint equivalent were removed in favor of the native rule:
+`no-reflect-get` and `no-reflect-apply` became `eslint/no-restricted-properties` entries, and
+Oxlint's `typescript/consistent-type-assertions` with `assertionStyle: "never"` bans every type
+assertion except `as const`. That ban made `no-chained-type-assertions`, `no-widen-then-assert`,
+and `require-safety-comment-for-type-assertion` unreachable, so they were removed too; `no-comments`
+also bans the comment the last one required.
+
+The upstream rule tests are retained, with local baseline coverage added for the upstream rules
+that had no tests, so Oxlint and `@oxlint/plugins` upgrades can be verified against the vendored
+behavior.
 
 Upstream is MIT-licensed; see [LICENSE](./LICENSE).
 
 ## Local regression rules
 
-Four workspace-owned rules supplement the unchanged upstream rules. They run as errors in regular
-`pnpm lint`, use Oxlint's AST and lexical scopes, and deliberately offer no automatic fixes:
+Workspace-owned rules supplement the upstream rules where no native Oxlint rule can express the
+policy. They run as errors in regular `pnpm lint` and
+use Oxlint's AST and lexical scopes. Only `no-comments` offers an automatic fix; the others report
+without fixes because each finding needs an author's decision:
 
+- **`no-comments`** rejects every line, block, and JSDoc comment except a shebang. Names, types,
+  and tests carry intent instead. Its fix deletes the comment and any line it leaves empty.
 - **`no-eager-effect-finalizer-condition`** catches a conditional/logical `Effect.ensuring`
   decision that reads a binding mutated by a callback in its wrapped Effect pipeline. Defer the
   decision with `Effect.suspend`. Immutable decisions and reads inside lazy callbacks are valid.
@@ -30,17 +46,44 @@ Four workspace-owned rules supplement the unchanged upstream rules. They run as 
   whole context passed to same-file helpers, not imported helpers, classes, or wrappers. Its
   helper table lists exact callback positions; linting each definition verifies them, and the
   rule test fails when a definition moves.
-- **`no-lossy-expanded-arguments`** catches imported `stripTerminalControls` applied to serialized
-  renderer arguments reaching a rendering sink. It follows immutable text aliases, one local
-  argument helper, and `invokeHostCallback`. Prefer `expandedArguments` or visible control escaping;
-  ordinary output/log sanitization remains valid.
+- **`no-legacy-names`** rejects identifiers, including properties, type names, and private names,
+  that contain `legacy`, `deprecated`, or a back/backward/backwards-compat word. The workspace keeps
+  no backwards-compatibility paths: delete the old path or rename it for its current role. A bare
+  `compat`, as in `model.compat`, remains valid.
+- **`no-lossy-expanded-arguments`** catches lossy or unescaped text in expanded tool output.
+  Imported `stripTerminalControls` or `stripAnsi` output is reported when it reaches
+  `theme.fg("toolOutput", ...)` anywhere, `theme.fg("error", ...)` inside a `renderCall` or
+  `renderResult`, or, for serialized `renderCall` arguments, a pi-tui `Text` or the renderer's
+  return. Raw `JSON.stringify(args)` of renderer arguments reaching those sinks is also reported,
+  because it keeps C1 controls. Text flows through immutable `const` aliases, conditional branches,
+  templates, concatenation, and theme styling, not through other calls. Arguments resolve through
+  one same-file helper and `invokeHostCallback`; a renderer is a `renderCall`/`renderResult`
+  property or a function bound to one. Prefer `expandedArguments` or `escapeControlChars`. Collapsed
+  summaries, issues, notifications, logs, other colors, and test fakes under `tests/` remain valid.
+- **`no-manual-abort-listener`** rejects `addEventListener("abort", ...)` member calls. Pass the
+  signal to Effect with `runPromise(effect, { signal })`, or use the shared adapter in
+  `pi-cosmic-ui/src/boundary/host-abort-signal.ts`. The rule exempts that adapter and the
+  pi-cosmic-core runtime files that implement signal forwarding; test fakes can wait with
+  `Effect.runPromiseExit(Effect.never, { signal })`.
+- **`no-raw-host-notify`** rejects `<expr>.ui.notify(...)` calls, including optional chains. Route
+  notifications through `notifyAtHostBoundary` from pi-cosmic-core. The rule exempts the core
+  `host-session.ts` and `usage-controller.ts` implementations; reading or replacing a
+  `ui.notify` spy remains valid.
 - **`no-runtime-type-only-tests`** rejects Vitest type assertions, imported from `vitest` or
   `@effect/vitest`, inside runtime test callbacks, and direct import/declaration-spelling
   assertions against statically identified production source reads. Top-level type assertions,
   Vitest `*.test-d.ts` typecheck files, parser/compiler behavior, packaging execution, and runtime
   file-content assertions remain valid. This is not a general test-quality classifier or
   source-architecture scanner.
+- **`require-code-preview-shell`** requires every `<host>.registerTool(definition)` call to receive
+  a definition produced by `withCodePreviewShell` from `pi-code-previews` or by the `shell` of
+  `registerCodePreviewReplay`. It accepts direct calls, `const` aliases, a parameter that defaults
+  to or is typed as `typeof withCodePreviewShell`, a same-file helper that returns a wrapped
+  definition, and an object that spreads one when no later spread or renderer field overrides it.
+  Code Previews' write hook in `src/tools/renderers/registration.ts` and files under `tests/` are
+  exempt.
 
-The local rules share import, alias, and function resolution from `shared/ast.ts`; rule policy
+The local rules share import, alias, and function resolution from `shared/ast.ts`, and the
+boundary rules match their exempt files through `shared/workspace-path.ts`; rule policy
 stays in each rule. Each local rule has regression and false-positive fixtures alongside it. `pnpm test:anti-slop` and
 `pnpm typecheck:anti-slop` cover both upstream and local rules; both also run through validation.

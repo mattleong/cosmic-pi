@@ -1,7 +1,6 @@
 import type { CodePreviewSettings } from "../config/schema";
 import type { CodePreviewToolName } from "./names";
 
-/** A disabled preview setting forces its renderer, which then hides that preview. */
 const PREVIEW_SETTINGS = [
   { setting: "readContentPreview", tool: "read" },
   { setting: "writeContentPreview", tool: "write" },
@@ -25,7 +24,6 @@ export function getEffectiveCodePreviewToolSet(
 ): Set<CodePreviewToolName> {
   const enabled = new Set(configuredTools);
   for (const { setting, tool } of PREVIEW_SETTINGS) if (!settings[setting]) enabled.add(tool);
-  // Bash hides its own result, or a grep, find or ls result whose preview is disabled.
   const shellHidden = PREVIEW_SETTINGS.some(
     (entry) => "commands" in entry && !settings[entry.setting],
   );
@@ -33,7 +31,6 @@ export function getEffectiveCodePreviewToolSet(
   return enabled;
 }
 
-/** Whether bash hides the result of a command whose own builtin preview is disabled. */
 export function shouldHideShellResultByCommand(
   shellCommand: string | undefined,
   settings: PreviewSettings,

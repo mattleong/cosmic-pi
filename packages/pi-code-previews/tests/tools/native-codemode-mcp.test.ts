@@ -39,7 +39,6 @@ test("native MCP registered aliases provide targets without recovering remote id
     assert.equal(projected.label, "mcp");
     assert.equal(projected.action, "call");
     assert.equal(projected.subject, name.slice("mcp__".length).replace("__", " / "));
-    // Input fields cannot override the target assigned by the registered name.
     assert.deepEqual(subject(name, { server: "spoofed", tool: "guessed" }), projected);
   }
   assert.equal(
@@ -132,6 +131,15 @@ test("MCP child delivery stays neutral and original call identity survives expan
   assert.deepEqual(result, before);
 });
 
+function assertUnfinishedCall(status: string): void {
+  const uncertain = summarize(completed([call("mcp__docs__lookup", "{}", status)]));
+  assert.equal(uncertain?.outcome, "uncertain");
+  assert.equal(
+    uncertain?.children?.entries[0]?.status,
+    status === "running" ? "uncertain" : status,
+  );
+}
+
 test("MCP failures, cancellations and unfinished calls retain their existing classifications", () => {
   const diagnostic = "MCP server docs requires sign-in. Run /mcp to sign in.";
   const failed = completed([{ ...call("mcp__docs__lookup", "{}", "error"), error: diagnostic }]);
@@ -148,14 +156,7 @@ test("MCP failures, cancellations and unfinished calls retain their existing cla
     row?.issues?.find((issue) => issue.severity === "error")?.message.includes("Run /mcp"),
     false,
   );
-  for (const status of ["cancelled", "running"]) {
-    const uncertain = summarize(completed([call("mcp__docs__lookup", "{}", status)]));
-    assert.equal(uncertain?.outcome, "uncertain");
-    assert.equal(
-      uncertain?.children?.entries[0]?.status,
-      status === "running" ? "uncertain" : status,
-    );
-  }
+  for (const status of ["cancelled", "running"]) assertUnfinishedCall(status);
 });
 
 for (const style of ["compact", "preview"] as const)

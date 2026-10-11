@@ -15,7 +15,7 @@ The run tree, nesting limits, delivery, and retention are documented in [ARCHITE
 
 ## Configuration details
 
-Layering, defaults, cross-field rules, legacy migration, and nesting precedence are documented in [Version-6 routing and nesting domain](routing.md#version-6-routing-and-nesting-domain). Additional notes:
+Layering, defaults, cross-field rules, the supported version, and nesting precedence are documented in [Version-6 routing and nesting domain](routing.md#version-6-routing-and-nesting-domain). Additional notes:
 
 Each document may contain at most 32 scope-local sets. Names are 1–64 characters, start and end with a letter or number, and may otherwise contain letters, numbers, spaces, `.`, `_`, or `-`. A set always contains `profiles`, which may be empty.
 
@@ -36,8 +36,6 @@ Unknown root keys fail document activation. Diagnostics redact profile-set names
 
 The optional root boolean `ultracode` is described in [Ultracode switch](settings-workspace.md#ultracode-switch). A non-boolean value (including the string `"true"`) stops activation for that document; correct the JSON before reloading.
 
-The legacy version-6 `automaticProfileRouting` and `scriptedWorkflows` keys are accepted but ignored; existing files are not automatically rewritten.
-
 ### Current Session and saved sets
 
 Current Session and the saved-set library are documented in [Settings workspace](settings-workspace.md#current-session). Additional notes:
@@ -48,7 +46,7 @@ Current Session writes no project, global, or Pi session-history data.
 
 The repair rules are documented in [Explicit configuration repair](settings-workspace.md#explicit-configuration-repair). Additional notes:
 
-Existing documents are never rewritten automatically, and no credentials or standalone `pi-herdr-btw` settings are changed. The `host: "herdr"` and `closeOnReport: false` rejections apply to legacy v4/v5 documents as well as v6 and inherited Global routes in partial Project sets.
+Existing documents are never rewritten automatically, and no credentials or standalone `pi-herdr-btw` settings are changed. The `host: "herdr"` and `closeOnReport: false` rejections also apply to inherited Global routes in partial Project sets.
 
 When replacing invalid routes in `/subagents profiles`, review model, effort, context, and write intent; native selectors need not transfer across runtimes. Reload or explicitly apply a valid saved set after persistent repair. There is no automatic local fallback, retention substitute, or credential migration.
 
@@ -113,8 +111,6 @@ Claude Code's zero-inference initialize response resolves aliases at selected st
 Writer identity, the `CrossProcessLock` lease, spawn marking, manual recovery, and pool cleanup are documented in [Writer pools, cooperative claims, and cross-process safety](local-backends.md#writer-pools-cooperative-claims-and-cross-process-safety). Additional notes:
 
 A new pool created for a later respawn performs a fresh acquire and mark. Conflict messages do not name the other session's run, session, or process.
-
-**Upgrading from protocol v2.** Restart every running Pi session after upgrading. Older sessions cannot see v3 locks, so exclusion works only one way while old and new versions run side by side. A leftover `<agent-dir>/subagents/writer-leases-v2/<digest>.lease` slot for the same directory denies writer startup with a message naming its path. Remove it manually only after every older Pi session has exited.
 
 ## See also
 

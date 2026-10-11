@@ -1,4 +1,3 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { expect, it, vi } from "vitest";
@@ -10,7 +9,9 @@ import {
   makeAsyncDelivery,
 } from "../src/boundary/host-delivery.ts";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
-import { opaqueFixture as opaque } from "pi-cosmic-core/testing";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+
+const entry = (id: string) => ({ id, parentId: null, timestamp: "2026-01-01T00:00:00.000Z" });
 
 const message = (generation: string, deliveryId: string) => ({
   role: "custom",
@@ -31,17 +32,21 @@ const snapshot: AsyncQuestionnaireSnapshot = {
 };
 
 it("retains historical answers on the active branch while rejecting late old queued messages", () => {
-  const ctx: ExtensionContext = opaque({
+  const ctx = extensionContextFixture({
     sessionManager: {
       getBranch: () => [
         {
+          ...entry("receipt"),
           type: "custom",
           customType: ASYNC_RECEIPT_TYPE,
           data: { version: 1, generation: "old", deliveryId: "valid" },
         },
         {
+          ...entry("foreign"),
           type: "custom_message",
           customType: "other",
+          content: "",
+          display: false,
           details: { generation: "old", deliveryId: "foreign" },
         },
       ],
@@ -59,7 +64,7 @@ it("retains historical answers on the active branch while rejecting late old que
 });
 
 it("malformed metadata and unavailable historical branch reads fail closed", () => {
-  const ctx: ExtensionContext = opaque({
+  const ctx = extensionContextFixture({
     sessionManager: {
       getBranch: () => {
         throw new Error("unavailable");
@@ -97,7 +102,7 @@ effectIt.effect(
   () =>
     Effect.gen(function* () {
       const sendMessage = vi.fn();
-      const pi: ExtensionAPI = opaque({ sendMessage, appendEntry: vi.fn() });
+      const pi = extensionApiFixture({ sendMessage, appendEntry: vi.fn() });
       let active = true;
       const send = makeAsyncDelivery(pi, "generation", () => active);
       yield* send(snapshot);
@@ -120,18 +125,17 @@ effectIt.effect(
     }),
 );
 
-// A failed provenance append cannot queue a message without its branch receipt.
 effectIt.effect.each(["appendEntry", "sendMessage"] as const)(
   "a throwing %s produces a redacted typed failure",
   (failing) =>
     Effect.gen(function* () {
       const sendMessage = vi.fn();
-      const pi: ExtensionAPI = opaque({
-        appendEntry: vi.fn(),
-        sendMessage,
-        [failing]: () => {
-          throw new Error("secret-raw-error");
-        },
+      const throwing = () => {
+        throw new Error("secret-raw-error");
+      };
+      const pi = extensionApiFixture({
+        appendEntry: failing === "appendEntry" ? throwing : vi.fn(),
+        sendMessage: failing === "sendMessage" ? throwing : sendMessage,
       });
       const error = yield* Effect.flip(makeAsyncDelivery(pi, "generation", () => true)(snapshot));
       expect(error).toMatchObject({ _tag: "AskUserHostError", operation: "deliver" });

@@ -1,4 +1,3 @@
-// Promise-shaped continuations belong to the single dashboard host lifetime.
 import type { FleetManagerActions } from "./controller.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import {
@@ -38,7 +37,6 @@ const invalidSession = (inspection: ProfileSettingsInspection): boolean =>
     ),
   );
 
-/** Each action captures the displayed revision and exact document before any dialog. */
 export function runProfileSetAction(
   host: ProfileSetActionHost,
   action: ProfileSetPickerAction,
@@ -91,7 +89,6 @@ export function runProfileSetAction(
         ? action.scope
         : (action.action === "copy" ? action.source : action.target).scope;
     guard(scope);
-    // Every write expects the displayed document and carries trust as of that write.
     const base = () => profileSetPatchBase(inspection, scope, host.trusted());
     if (action.action === "use-current" || action.action === "make-default") {
       const resolved = resolvedSet(inspection, action.target);

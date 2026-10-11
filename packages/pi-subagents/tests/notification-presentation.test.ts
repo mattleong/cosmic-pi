@@ -1,9 +1,8 @@
 import { applyPresentationSettings, captureRegistrations } from "pi-code-previews/testing";
-import { plainTheme } from "pi-cosmic-core/testing";
+import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { registerSubagentMessageRenderers } from "../src/application/messages.ts";
 import { makeHostNotifier } from "../src/boundary/host-notifier.ts";
-import { extensionApiFixture } from "./fixtures/pi-host.ts";
 
 let restore = () => {};
 afterEach(() => restore());
@@ -48,7 +47,6 @@ test.each(["compact", "preview"] as const)(
         );
         const text = component!.render(180).join("\n");
         expect(text.includes("PRIVATE_RUN_ID")).toBe(expanded);
-        // Collapsed, the row names the subagent in one plain line.
         if (!expanded) expect(text).toContain("Worker");
         expect(
           text.includes(
@@ -87,7 +85,6 @@ test("forwarded and peer notices without a recorded outcome stay neutral", () =>
     )!
       .render(120)
       .join("\n");
-    // Neither a success nor an unconfirmed outcome is claimed for a notice.
     expect(text).not.toMatch(/^[✓?✗⚠]/u);
     expect(text).not.toContain("PRIVATE_RUN_ID");
   }

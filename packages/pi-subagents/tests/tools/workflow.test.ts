@@ -1,4 +1,3 @@
-// Promise assertions are test-runner boundaries.
 import { describe, expect, it } from "@effect/vitest";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
@@ -62,7 +61,6 @@ const registeredTool = (runtime: WorkflowToolRuntime = renderOnly) => {
   return tool!;
 };
 
-/** The live clock moved ahead by `shift.ms`, so a test can jump past a window; sleeps stay live. */
 const shiftedClock = (live: Clock.Clock, shift: { ms: number }): Clock.Clock => {
   const millis = () => live.currentTimeMillisUnsafe() + shift.ms;
   const nanos = () => live.currentTimeNanosUnsafe() + BigInt(shift.ms) * 1_000_000n;
@@ -77,11 +75,6 @@ const shiftedClock = (live: Clock.Clock, shift: { ms: number }): Clock.Clock => 
   };
 };
 
-/**
- * The registered tool over the real workflow and subagent services, with `clock` as the wall
- * clock when given. `startRun` starts an inline script on the service directly, whose agents the
- * harness's host launches, so a test can report them.
- */
 const liveTool = (scripts: Readonly<Record<string, string>> = {}, clock?: Clock.Clock) => {
   const fixture = workflowFixture({ scripts });
   const services = Layer.merge(fixture.layer, fixture.backend.layer);
@@ -101,13 +94,7 @@ const liveTool = (scripts: Readonly<Record<string, string>> = {}, clock?: Clock.
   });
   const ctx = extensionContextFixture({ cwd: "/project", hasUI: false });
   const execute = (args: Partial<WorkflowToolArgs>) =>
-    Effect.promise(
-      () =>
-        // SAFETY: the registered execute returns Pi tool results with this tool's details.
-        tool.execute("call", args, undefined, undefined, ctx) as Promise<
-          AgentToolResult<WorkflowToolDetails> & { readonly isError?: boolean }
-        >,
-    );
+    Effect.promise(() => tool.execute("call", args, undefined, undefined, ctx));
   return {
     execute,
     fixture,
@@ -117,10 +104,10 @@ const liveTool = (scripts: Readonly<Record<string, string>> = {}, clock?: Clock.
   };
 };
 
-const textOf = (result: AgentToolResult<WorkflowToolDetails>) =>
+const textOf = <Details>(result: AgentToolResult<Details>) =>
   result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
 
-const detailsOf = (result: AgentToolResult<WorkflowToolDetails>) => {
+const detailsOf = <Details>(result: AgentToolResult<Details>) => {
   const decoded = decodeWorkflowToolDetails(result.details);
   if (decoded._tag === "None") throw new Error("Expected versioned workflow details");
   return decoded.value;
@@ -138,7 +125,6 @@ describe("subagent_workflow tool", () => {
       const run = detailsOf(started).run!;
       expect(started.isError).toBeUndefined();
       expect(textOf(started)).toContain(run.id);
-      // The start tells the main agent to end its turn and wait for the notification.
       expect(textOf(started)).toContain(WORKFLOW_END_TURN_TEXT);
       let status = yield* execute({ action: "status", runId: run.id });
       for (
@@ -173,7 +159,6 @@ describe("subagent_workflow tool", () => {
 
   it.live("returns plain-sentence issues for calls that can't run", () =>
     Effect.gen(function* () {
-      // The edit loop restarts an inline script's copy, inside its run's directory.
       const copy = (runId: string) => `/agent/subagents/workflow-runs/${runId}/script.js`;
       const { execute, dispose } = liveTool({
         [copy("wf-mgb3k2x-1")]: script("const x = ;\nreturn x;"),
@@ -196,7 +181,6 @@ describe("subagent_workflow tool", () => {
         expect(result.isError).toBe(true);
         const issue = detailsOf(result).issue!;
         expect(issueMessageStyleProblems(issue.message, { forbidden }), issue.message).toEqual([]);
-        // The agent keeps the full explanation.
         expect(textOf(result).length).toBeGreaterThan(issue.message.length);
       }
       yield* dispose;
@@ -205,7 +189,6 @@ describe("subagent_workflow tool", () => {
 });
 
 describe("subagent_workflow status repeats", () => {
-  /** The subagent run ids of a run's agents that are running, which full status rows name. */
   const runningIds = (run: WorkflowRunView) =>
     run.agents.filter((agent) => agent.state === "running").map((agent) => agent.runId);
 
@@ -235,29 +218,24 @@ describe("subagent_workflow status repeats", () => {
         unchanged: true,
         run: { id: first.id, state: "running", running: 2 },
       });
-      // The short answer leaves out the agent rows the full status lists.
       for (const runId of runningIds(both)) expect(textOf(repeated)).not.toContain(runId);
       expect(textOf(repeated).length).toBeLessThan(textOf(full).length);
 
-      // Each run keeps its own last call: another run's first status is full.
       const other = yield* startRun(fanOut(["third"]));
       yield* runMatching(other.id, (run) => countWorkflowRunAgents(run).running === 1);
       expect(yield* unchanged(other.id)).toBe(false);
       expect(yield* unchanged(first.id)).toBe(true);
       expect(yield* unchanged(other.id)).toBe(true);
 
-      // An agent that finishes is a change, after which repeats are short again.
       yield* reportTask(fixture, "first", "first done");
       yield* runMatching(first.id, (run) => countWorkflowRunAgents(run).completed === 1);
       expect(yield* unchanged(first.id)).toBe(false);
       expect(yield* unchanged(first.id)).toBe(true);
 
-      // A call once the window has passed gets the full status.
       shift.ms += WORKFLOW_STATUS_REPEAT_MS + 1_000;
       expect(yield* unchanged(first.id)).toBe(false);
       expect(yield* unchanged(first.id)).toBe(true);
 
-      // A finished run always gets its full status, with its result.
       yield* reportTask(fixture, "second", "second done");
       yield* runMatching(first.id, (run) => run.endedAt !== undefined);
       for (let call = 0; call < 2; call++) {
@@ -267,7 +245,6 @@ describe("subagent_workflow status repeats", () => {
         expect(textOf(ended)).toContain("second done");
       }
 
-      // Stopping a run the main agent started says when to stop one.
       const stopped = yield* execute({ action: "stop", runId: other.id });
       expect(detailsOf(stopped).run?.state).toBe("stopped");
       expect(textOf(stopped)).toContain(WORKFLOW_STOP_GUIDANCE);
@@ -293,7 +270,6 @@ describe("subagent_workflow args schemas", () => {
         const issue = detailsOf(result).issue!;
         expect(issueMessageStyleProblems(issue.message), issue.message).toEqual([]);
         expect(issue.message).toContain(args === undefined ? "args" : "args.target");
-        // The agent gets every problem and the args the workflow expects.
         expect(issue.detail).toContain("target: string");
         expect(textOf(result)).toContain("target: string");
       }
@@ -387,7 +363,7 @@ describe("subagent_workflow presentation", () => {
         state: "failed",
         endedAt: 2,
         budget: { total: 500_000, spent: 512_340, refused: 1 },
-        failure: { name: WORKFLOW_BUDGET_ERROR, message: failure },
+        failure: { kind: "script", name: WORKFLOW_BUDGET_ERROR, message: failure },
       }),
     );
     const args = { action: "status", runId: run.id } as const;
@@ -467,7 +443,6 @@ describe("saved workflow discovery", () => {
   });
 
   it("clips long saved descriptions without splitting a surrogate pair", () => {
-    // The emoji's two UTF-16 units straddle the 199-unit clip point; neither half survives alone.
     const description = `${"x".repeat(198)}\u{1F600}${"y".repeat(20)}`;
     const workflow = { ...saved("long"), meta: { ...saved("long").meta, description } };
     const listed = workflowToolDescription([workflow], memoryLocations);

@@ -27,10 +27,8 @@ import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } f
 import { recordRunWarning } from "./warnings.ts";
 
 export interface RunControlDependencies extends RunContext {
-  /** Service-owned turn-input admission; called only while the service state lock is held. */
   readonly admitTurnInput: (record: RunRecord) => void;
   readonly releaseTurnInput: (record: RunRecord) => Effect.Effect<void>;
-  /** Called only while the service state lock is held. */
   readonly claimTurnInputDrain: (record: RunRecord, drained: Deferred.Deferred<void>) => void;
   readonly processControls: RunProcessControls;
   readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
@@ -206,8 +204,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         claimed.process.controls.reply(claimed.question.requestId, normalized).pipe(
           Effect.mapError((error) => {
             if (error._tag !== "SubagentProcessError") return error;
-            // A pre-send failure proves the reply never reached the transport, so the
-            // question rolls back for an immediate retry instead of surfacing ambiguity.
             if (error.code === "transport_not_sent")
               return processError(
                 "reply",
@@ -234,12 +230,8 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               }),
             ),
           ),
-          // The owner-scoped commit outlives cancellation of the requesting tool.
-          // Roll back only when the transport itself reports a definite failure.
           Effect.tapError((error) => {
             if (error._tag === "SubagentProcessError" && error.code === "reply_outcome_uncertain")
-              // Keep the exact request claim until a distinct question or lifecycle event resolves
-              // the ambiguity, so a duplicate contact cannot invite a second reply.
               return retainControlWarning(claimed.record, error.message);
             const questionClosed =
               error._tag === "SubagentProcessError" &&
@@ -362,7 +354,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               "rename_state_invalid",
               `Subagent ${id} cannot be renamed while stopping.`,
             );
-          // A live backend renames its own session first; any other run renames locally.
           return record.view.state === "running" ||
             record.view.state === "waiting_for_parent" ||
             record.view.state === "paused"
@@ -402,8 +393,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               cleanupRequired: selected.cleanupPending,
               preserveOutcome: true,
             };
-          // Overlapping subtree traversals must join descendant cleanup before
-          // closing an ancestor, even when another stop already claimed it.
           if (selected.view.state === "stopping")
             return { record: selected, cleanupRequired: true as const };
           selected.stoppedByParent = true;

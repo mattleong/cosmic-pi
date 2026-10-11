@@ -11,7 +11,6 @@ import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
 
 interface ClaudeInputFailureSnapshot {
   readonly operation: PendingUserReplay["operation"];
-  /** Elapsed delivery ownership; not proof of when the native write completed. */
   readonly waitElapsedMillis: number;
   readonly lastInbound: ClaudeProtocolEvent["type"] | "protocol-error" | "none";
   readonly lastInboundAgeMillis: number | null;
@@ -37,7 +36,6 @@ const toolCategory = (name: string): ClaudeInputFailureSnapshot["activeToolCateg
   return "other";
 };
 
-/** Metadata-only failure evidence. Never stores a raw frame, input, ID, path, or digest. */
 export const makeLocalClaudeDiagnostics = (activeTools: () => Iterable<string>) => {
   let lastInbound: ClaudeInputFailureSnapshot["lastInbound"] = "none";
   let lastInboundAt: number | undefined;
@@ -47,7 +45,6 @@ export const makeLocalClaudeDiagnostics = (activeTools: () => Iterable<string>) 
       Effect.map((now) => {
         lastInbound = category;
         lastInboundAt = now;
-        // Retain only an ordinary numeric release version, not arbitrary foreign text.
         if (version !== undefined && /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version))
           cliVersion = version;
       }),

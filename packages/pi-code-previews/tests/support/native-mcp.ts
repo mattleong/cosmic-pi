@@ -1,4 +1,3 @@
-/** Owned native-manager boundary fixture; no transport, OAuth, or protocol impersonation. */
 import type {
   ExtensionAPI,
   ExtensionFactory,
@@ -6,9 +5,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { opaqueFixture } from "pi-cosmic-core/testing";
 
-type Definition = ToolDefinition<any, any, any>;
+type Definition = ToolDefinition;
 const Input = Schema.Struct({ mode: Schema.optionalKey(Schema.String) });
 
 export function nativeManagerFixture() {
@@ -21,8 +19,8 @@ export function nativeManagerFixture() {
     name: `mcp__${server}__${tool}`,
     label: `${server}/${tool}`,
     description: "Owned native definition fixture",
-    parameters: opaqueFixture({ type: "object", properties: { mode: { type: "string" } } }),
-    outputSchema: opaqueFixture({ type: "object" }),
+    parameters: { type: "object", properties: { mode: { type: "string" } } },
+    outputSchema: { type: "object" },
     exposure: "direct",
     namespace: { name: `mcp__${server}` },
     annotations: { readOnlyHint: true, openWorldHint: true },

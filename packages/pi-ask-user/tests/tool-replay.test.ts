@@ -1,4 +1,3 @@
-// Pi rebuilds history before session_start; those same rows adopt the first activation.
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -14,6 +13,7 @@ import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-
 import { afterEach, beforeAll, expect, vi } from "vitest";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import { formatAskUserOutcome } from "../src/questionnaire/format.ts";
+import { renderAskUserAsyncMessage } from "../src/tools/ask-user-async.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import { startExtension, withoutRelayMarker, type MessageRenderer } from "./support/extension.ts";
 import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
@@ -105,13 +105,11 @@ const context = (mode: "tui" | "rpc" | "print") =>
     isProjectTrusted: () => false,
   });
 
-/** Trusted settings load in startup, before activation wraps the tools. */
 const loads = (settings: Partial<CodePreviewSettings>) => () => {
   applyPresentationSettings(settings);
   return Promise.resolve();
 };
 
-/** Actual factory callbacks, with rows Pi rebuilds from history through the public resolvers. */
 const host = (load: () => Promise<void>) =>
   Effect.gen(function* () {
     const extension = yield* startExtension(load);
@@ -140,8 +138,8 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
       const h = yield* host(load);
       const ctx = context("tui");
       yield* Effect.addFinalizer(() => Effect.promise(() => h.emit("session_shutdown", ctx)));
-      // Retain the actual factory callback, not a freshly registered tool renderer.
-      const render = h.messageRenderers.get(ASYNC_MESSAGE_TYPE)!;
+      expect(h.messageRenderers.get(ASYNC_MESSAGE_TYPE)).toBe(renderAskUserAsyncMessage);
+      const render = renderAskUserAsyncMessage;
       expect(drawAnswer(render)).not.toContain("Staged rollout");
       expect(drawAnswer(render, answerMessage, true)).toContain("Staged rollout");
       expect(load).not.toHaveBeenCalled();
@@ -160,7 +158,6 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
       expect(drawAnswer(render, answerMessage, true)).toContain("RAW_RECOVERY");
       applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
       expect(drawAnswer(render)).toContain("Staged rollout");
-      // History needs neither the runtime nor delivery authority after shutdown.
       yield* Effect.promise(() => h.emit("session_shutdown", ctx));
       expect(drawAnswer(render)).toContain("Keep release reversible");
     }),
@@ -173,7 +170,8 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
         Effect.gen(function* () {
           applyPresentationSettings({ toolCallCollapsedStyle: style });
           const h = yield* host(() => Promise.resolve());
-          const render = h.messageRenderers.get(ASYNC_MESSAGE_TYPE)!;
+          expect(h.messageRenderers.get(ASYNC_MESSAGE_TYPE)).toBe(renderAskUserAsyncMessage);
+          const render = renderAskUserAsyncMessage;
           for (const content of [
             answerMessage.content,
             [{ type: "text" as const, text: String(answerMessage.content) }],
@@ -231,7 +229,8 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
         const h = yield* host(() => Promise.resolve());
         const ctx = context(mode);
         yield* Effect.addFinalizer(() => Effect.promise(() => h.emit("session_shutdown", ctx)));
-        const render = h.messageRenderers.get(ASYNC_MESSAGE_TYPE)!;
+        expect(h.messageRenderers.get(ASYNC_MESSAGE_TYPE)).toBe(renderAskUserAsyncMessage);
+        const render = renderAskUserAsyncMessage;
         expect(drawAnswer(render)).toContain("Keep release reversible");
         expect([...h.tools.keys()]).toEqual([]);
         yield* Effect.promise(() => h.emit("session_start", ctx));
@@ -240,7 +239,6 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
       }),
     );
 
-  // Code Previews proves every appearance; this proves the questionnaire tools adopt one.
   it.effect("TUI history from before startup adopts each questionnaire tool", () =>
     Effect.gen(function* () {
       const h = yield* host(
@@ -256,7 +254,6 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
       expect(new Set(h.tools.keys())).toEqual(new Set(names));
       rows.forEach(({ name, row }, index) => {
         expect(drawToolRow(row)).not.toBe(cold[index]);
-        // A row resolved after startup draws the registered tool's ordinary presentation.
         expect(toolRowFrames(row)).toEqual(toolRowFrames(h.row(name)));
         const expanded = drawToolRow(row, true);
         for (const line of history[name].text.split("\n")) expect(expanded).toContain(line);
@@ -296,13 +293,11 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
         if (failure === "no UI")
           yield* Effect.promise(() => h.emit("session_start", context("print")));
         else {
-          // Tree navigation interrupts the first startup while trusted settings still load.
           const first = h.emit("session_start", context("tui"));
           yield* Effect.promise(() => entered.promise);
           yield* Effect.promise(() => h.emit("session_tree", context("tui")));
           yield* Effect.promise(() => first);
         }
-        // Later activations register normally but cannot publish into closed history.
         yield* Effect.promise(() => h.emit("session_tree", context("tui")));
         yield* Effect.promise(() => h.emit("session_start", context("tui")));
         expect(h.tools.has("ask_user")).toBe(true);

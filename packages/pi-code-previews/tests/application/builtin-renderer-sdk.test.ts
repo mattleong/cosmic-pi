@@ -1,6 +1,6 @@
-// Public Pi SDK integration boundary; native executions use real local files and shell settings.
 import assert from "node:assert/strict";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { getObjectValue } from "../../src/shared/helpers";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -30,7 +30,7 @@ for (const activeWrite of [false, true])
           shellCommandPrefix: "export PREVIEW_NATIVE_PREFIX=kept;",
           images: { autoResize: false },
         });
-        const registrations: ToolDefinition<any, any, any>[] = [];
+        const registrations: ToolDefinition[] = [];
         const factory = codePreviewsUnderTest(
           directory,
           {
@@ -42,7 +42,7 @@ for (const activeWrite of [false, true])
           {
             api: (pi) => ({
               registerTool(tool) {
-                registrations.push(tool);
+                registrations.push(defineTool(tool));
                 pi.registerTool(tool);
               },
             }),
@@ -137,7 +137,7 @@ for (const activeWrite of [false, true])
           ),
         );
         assert.equal(yield* fs.readFileString(`${directory}/source.txt`), "AFTER");
-        assert.deepEqual(receipt.details.codePreviewBeforeWrite, {
+        assert.deepEqual(getObjectValue(receipt.details, "codePreviewBeforeWrite"), {
           kind: "content",
           byteLength: 19,
         });

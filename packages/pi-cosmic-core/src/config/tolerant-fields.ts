@@ -9,13 +9,11 @@ export interface TolerantFieldDiagnostic {
 }
 
 interface TolerantFieldOptions {
-  /** Prefix used for redacted, structural diagnostics. */
   readonly path?: string;
-  /** Maximum diagnostics retained for one decode. Defaults to 32. */
   readonly maxDiagnostics?: number;
 }
 
-type TolerantFieldSchemas = Readonly<Record<string, Schema.Decoder<any>>>;
+type TolerantFieldSchemas = Readonly<Record<string, Schema.Decoder<unknown>>>;
 
 type TolerantFieldValues<Fields extends TolerantFieldSchemas> = {
   readonly [Key in keyof Fields]?: Schema.Schema.Type<Fields[Key]>;
@@ -26,10 +24,6 @@ interface TolerantFieldResult<Fields extends TolerantFieldSchemas> {
   readonly diagnostics: readonly TolerantFieldDiagnostic[];
 }
 
-/**
- * Decodes each owned field independently. A malformed field is omitted without discarding valid
- * siblings, and diagnostics contain paths only (never values or parse details).
- */
 export const decodeTolerantFields = <Input, const Fields extends TolerantFieldSchemas>(
   input: Input,
   fields: Fields,

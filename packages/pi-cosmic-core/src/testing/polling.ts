@@ -5,7 +5,6 @@ class TestPollingTimeout extends Schema.TaggedError<TestPollingTimeout>()("TestP
   attempts: Schema.Number,
 }) {}
 
-/** Deterministic bounded polling for tests whose scoped worker advances via Effect yields. */
 export const yieldUntil = (
   predicate: () => boolean,
   attempts = 100,

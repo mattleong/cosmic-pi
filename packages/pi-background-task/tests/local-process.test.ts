@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns the local process scope.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -50,7 +49,6 @@ const awaitProcessDeath = (pid: number) =>
     return !processAlive(pid);
   });
 
-/** One bounded force `taskkill` through the boundary's graceful/force owner. */
 const forceTaskkill = (spawn: ProcessTreeTerminatorSpawn) =>
   makeWindowsTreeTermination(42, spawn).pipe(Effect.flatMap((tree) => tree.terminate("force")));
 
@@ -158,7 +156,6 @@ describe("windows tree terminator", () => {
     }).pipe(Effect.scoped),
   );
 
-  // Windows may reuse an exited PID, so its exit sweep and later stops never target it.
   it.effect("never runs taskkill after the leader's exit is recorded", () =>
     Effect.gen(function* () {
       const fake = fakeProcessTreeTerminator();
@@ -178,7 +175,6 @@ describe("windows tree terminator", () => {
         .terminate("force")
         .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* tree.settleExit;
-      // taskkill reports the vanished target as a nonzero exit.
       fake.emit("exit", 128);
       yield* Fiber.join(stopping);
       yield* tree.terminate("force");
@@ -191,7 +187,6 @@ describe("local process boundary", () => {
   it.effect("interrupts a cwd inspection that never settles", () =>
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
-      // A masked inspection would hang this interruption instead of abandoning it.
       const layer = LocalProcess.layerWith(
         FileSystem.layerNoop({
           stat: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
@@ -305,7 +300,6 @@ describe("local process boundary", () => {
   it.live("reports a spawn that Node refuses synchronously as a redacted typed failure", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        // Node throws before any child exists when an argument holds a NUL character.
         for (const [command, overrides] of [
           ["echo api_key=FAKE_SECRET_123\u0000", {}],
           ["echo api_key=FAKE_SECRET_123", { shellPath: "/bin/sh\u0000" }],
@@ -402,7 +396,6 @@ describe("local process boundary", () => {
     }),
   );
 
-  // `; true` keeps the shell as the group leader, so it exits on SIGTERM before its child.
   it.live.skipIf(process.platform === "win32")(
     "a graceful stop keeps the group's grace window after a compound command's leader exits",
     () =>
@@ -436,7 +429,6 @@ describe("local process boundary", () => {
           expect(processAlive(descendant)).toBe(true);
           yield* handle.terminate("force");
           const exit = yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
-          // The leader exited on the graceful signal; only its group waited for force.
           expect(exit).toEqual({ exitCode: null, signal: "SIGTERM" });
           expect(yield* awaitProcessDeath(descendant)).toBe(true);
         }),

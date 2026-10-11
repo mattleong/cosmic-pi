@@ -11,13 +11,11 @@ import {
   type ConfigDocumentErrorFactory,
 } from "./document-ops.ts";
 
-/** Project and global locations of one extension configuration document. */
 interface ScopedDocumentPaths {
   readonly project: string;
   readonly global: string;
 }
 
-/** Scope metadata shared by every resolved scoped configuration. */
 export interface ScopedConfigMetadata {
   readonly configPath: string;
   readonly projectConfigPath: string;
@@ -27,24 +25,13 @@ export interface ScopedConfigMetadata {
 }
 
 export interface ScopedConfigStoreOptions<File, Resolved extends ScopedConfigMetadata, E> {
-  /** The package's tagged configuration error; document failures map onto it. */
   readonly error: ConfigDocumentErrorClass<E>;
-  /** Human-readable label used in error messages and read warnings, e.g. "Better OpenAI". */
   readonly label: string;
-  /** Span prefix for the store's Effect.fn names, e.g. "OpenAIConfig". */
   readonly spanPrefix: string;
-  /** Project-level configuration directory, e.g. the host agent's config dir name. */
   readonly projectConfigDirectory: string;
-  /** Document basename shared by the project and global scopes. */
   readonly basename: string;
-  /** Tolerant wire decode of a raw document into the package's config file shape. */
   readonly decode: (value: JsonObject) => File;
-  /**
-   * Document seeded into the global scope when neither scope exists yet. When omitted,
-   * resolution never writes: both scopes simply resolve as absent with package defaults.
-   */
   readonly defaultDocument?: () => JsonObject;
-  /** Overlays project over global over package defaults into the resolved config. */
   readonly resolve: (
     metadata: ScopedConfigMetadata,
     project: File | undefined,
@@ -53,7 +40,6 @@ export interface ScopedConfigStoreOptions<File, Resolved extends ScopedConfigMet
 }
 
 export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, E> {
-  /** "Unable to <operation> <label> configuration." errors of the store's error class. */
   readonly errorFactory: ConfigDocumentErrorFactory<E>;
   readonly configPaths: (
     cwd: string,
@@ -74,16 +60,6 @@ export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, 
     agentDir: string,
     projectTrusted?: boolean,
   ) => Effect.Effect<Resolved, E, JsonDocumentStore | Path.Path>;
-  /**
-   * Resolves the exact document returned by an atomic commit without post-commit I/O.
-   *
-   * `fallback` is the other scope's raw document captured before the commit (the global
-   * document for a project commit, the project document for a global commit). It affects only
-   * the decoded overlay, never existence metadata. The committed scope becomes present, the
-   * other existence flag is preserved, and project existence selects the preferred path.
-   * The committed scope is the one `current.configPath` names: callers always commit to the
-   * preferred scope.
-   */
   readonly resolveCommittedConfig: (
     current: Resolved,
     committed: JsonObject,
@@ -91,12 +67,6 @@ export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, 
   ) => Resolved;
 }
 
-/**
- * Builds the standard project/global scoped configuration store: path resolution, tolerant reads,
- * atomic writes, and layered resolution that seeds the global document when neither scope exists
- * (only when `defaultDocument` is supplied), warns (rather than fails) on unreadable documents,
- * and overlays project over global.
- */
 export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadata, E>(
   options: ScopedConfigStoreOptions<File, Resolved, E>,
 ): ScopedConfigStore<File, Resolved, E> => {
@@ -151,7 +121,6 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     );
 
   const warning = `Unable to read a ${options.label} configuration document.`;
-  // An existing but unreadable document keeps its scope selection and contributes no values.
   const readIfPresent = (path: string, present: boolean) =>
     present
       ? readConfig(path).pipe(
@@ -165,8 +134,6 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     projectTrusted = false,
   ) {
     const paths = yield* configPaths(cwd, agentDir);
-    // Untrusted projects get no project exists or read call: the path stays inert metadata.
-    // Existence alone decides precedence, so a malformed project document still wins configPath.
     const [projectExists, globalFound] = yield* Effect.all(
       [
         projectTrusted === true ? exists(paths.project) : Effect.succeed(false),
@@ -189,7 +156,6 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
             ),
           )
           .pipe(
-            // A competing document can fail the transaction's read before its callback runs.
             Effect.catchIf(
               (error) => error.operation === "read" || error.operation === "decode",
               () => Effect.logWarning(warning).pipe(Effect.as(false)),
@@ -199,8 +165,6 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
             ),
           ),
       );
-      // A failed read leaves existence to a fresh inspection: a raced document still counts,
-      // but an unreadable location never reports one that was not written.
       globalExists = globalReadable || (yield* exists(paths.global));
     }
     const [project, global] = yield* Effect.all(
@@ -253,19 +217,11 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
   };
 };
 
-/** Store operations used by `commitPreferredScope`. */
 export type PreferredScopeStore<Resolved extends ScopedConfigMetadata, E> = Pick<
   ScopedConfigStore<unknown, Resolved, E>,
   "readRawConfig" | "modifyConfig" | "resolveCommittedConfig"
 >;
 
-/**
- * Atomically commits `change` to the preferred scope of the freshly resolved `current` config and
- * returns the committed resolution. A project commit overlays the global document read beforehand.
- * `afterCommit` runs inside the document store's commit region, so persistence and publication
- * cannot be separated by interruption. With `fallbackWarning`, an unreadable global document logs
- * that warning and overlays nothing instead of failing the commit.
- */
 export const commitPreferredScope = <Resolved extends ScopedConfigMetadata, E, R = never>(
   store: PreferredScopeStore<Resolved, E>,
   current: Resolved,

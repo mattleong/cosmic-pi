@@ -8,7 +8,6 @@ import {
   type QuestionnaireEvents,
 } from "../questionnaire/protocol.ts";
 
-/** A fixed child-launch marker mandates relay; its run ID never authenticates an owner. */
 const hasRelayMarker = (environment: Readonly<NodeJS.ProcessEnv>): boolean =>
   environment.PI_SUBAGENT_CHILD === "1" && !!environment.PI_SUBAGENT_RUN_ID?.trim();
 export const requiresQuestionnaireRelay = (): boolean => hasRelayMarker(process.env);

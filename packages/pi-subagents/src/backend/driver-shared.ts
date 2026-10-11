@@ -8,48 +8,25 @@ import {
   type SubagentProcessError,
 } from "../run/errors.ts";
 
-/**
- * Shared backend protocol failure factory. Each driver keeps its own backend tag and
- * message template; only the error construction is shared.
- */
 export const protocolError = (message: string): SubagentProtocolError =>
   new SubagentProtocolError({ message });
 
-/** Maps a supervisor channel failure to the process error of one backend operation. */
 export const supervisorError =
   (operation: string) =>
   ({ code, message }: { readonly code: string; readonly message: string }): SubagentProcessError =>
     processError(operation, code, message);
 
 interface CorrelatedRequestOptions<Frame, Response> {
-  /** Correlated-response wait bound; timeouts fail with `timeoutError` and never retry. */
   readonly timeout: Duration.Input;
-  /**
-   * Runs inside `Effect.sync` on acquisition: allocates the deferred, registers it in the
-   * backend's response registry keyed by the produced frame identity, and returns the
-   * outbound frame plus the release-time unregister that deletes exactly that entry.
-   */
   readonly register: (deferred: Deferred.Deferred<Response, SubagentError>) => {
     readonly frame: Frame;
     readonly unregister: Effect.Effect<void>;
   };
-  /** Send-side transport uncertainty must already be mapped by the caller. */
   readonly send: (frame: Frame) => Effect.Effect<void, SubagentError>;
-  /** Failure used when the correlated response does not arrive within `timeout`. */
   readonly timeoutError: (frame: Frame) => SubagentError;
-  /**
-   * When set (local-pi), the send+await attempt races a bare deferred await so a response
-   * settled by the event consumer resolves immediately.
-   */
   readonly awaitEarlyResponse?: boolean | undefined;
 }
 
-/**
- * Shared acquire/use/release skeleton for correlated backend requests: register the
- * deferred inside `Effect.sync`, send, await the correlated response under a timeout,
- * and unregister exactly the registered entry on release. A send failure surfaces before
- * the deferred await; the timeout failure never retries.
- */
 export const correlatedRequest = <Frame, Response>(
   options: CorrelatedRequestOptions<Frame, Response>,
 ): Effect.Effect<Response, SubagentError> =>

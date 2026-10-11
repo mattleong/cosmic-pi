@@ -4,9 +4,7 @@ export type ActivityRow = ActivityItem & {
   readonly key: string;
   readonly providerId: string;
   readonly generation: number;
-  /** Historical summary only: the current provider no longer exposes this item. */
   readonly retained?: true;
-  /** Lower bounds, not exact lifetime totals. Repeated snapshots never inflate them. */
   readonly omittedChildren?: number;
 };
 export const isFinished = (item: Pick<ActivityItem, "status">): boolean =>
@@ -16,7 +14,6 @@ const COMPLETED_TOTAL_LIMIT = 1024;
 const HISTORY_ROOT_LIMIT = 100;
 const endedAt = (row: ActivityRow) => row.endedAt ?? row.updatedAt ?? 0;
 
-/** Missing owners and every path entering a cycle become roots. Package-private. */
 export function resolveActivityOwnership(byKey: ReadonlyMap<string, ActivityRow>) {
   const parents = new Map<string, string>();
   const roots = new Map<string, string>();
@@ -42,18 +39,29 @@ export function resolveActivityOwnership(byKey: ReadonlyMap<string, ActivityRow>
   return { parents, roots };
 }
 
-/** Retain completed summaries, but not their expired actions. Never prune live rows or their ancestors. */
-export function retainActivity(
+type Ownership = ReturnType<typeof resolveActivityOwnership>;
+
+interface CompletedCounts {
+  readonly childCounts: Map<string, number>;
+  readonly branchCounts: Map<string, number>;
+  readonly completed: number;
+}
+
+const withRetainedRows = (
   previous: readonly ActivityRow[],
   current: readonly ActivityRow[],
-): readonly ActivityRow[] {
-  const old = new Map(previous.map((row) => [row.key, row]));
+): Map<string, ActivityRow> => {
   const next = new Map(current.map((row) => [row.key, row]));
   for (const row of previous)
     if (!next.has(row.key) && isFinished(row))
       next.set(row.key, { ...row, retained: true, actions: [], awaited: false });
-  const rows = [...next.values()];
-  const { parents, roots } = resolveActivityOwnership(next);
+  return next;
+};
+
+const protectedActivityKeys = (
+  rows: readonly ActivityRow[],
+  parents: ReadonlyMap<string, string>,
+): Set<string> => {
   const protectedKeys = new Set<string>();
   for (const row of rows.filter((value) => !isFinished(value) || value.awaited)) {
     let key: string | undefined = row.key;
@@ -62,9 +70,15 @@ export function retainActivity(
       key = parents.get(key);
     }
   }
+  return protectedKeys;
+};
+
+const keptWithinHistoryLimit = (
+  rows: readonly ActivityRow[],
+  { parents, roots }: Ownership,
+  protectedKeys: ReadonlySet<string>,
+): Set<string> => {
   const history = rows.filter((row) => !parents.has(row.key) && !protectedKeys.has(row.key));
-  // Each publication puts the rows its sources just dropped ahead of older retained rows, so
-  // reversed retained rows go longest-dropped first; rows still published go earliest ended first.
   const evictionOrder = [
     ...history.filter((row) => row.retained).reverse(),
     ...history.filter((row) => !row.retained).sort((left, right) => endedAt(left) - endedAt(right)),
@@ -72,9 +86,17 @@ export function retainActivity(
   const evictedRoots = new Set(
     evictionOrder.slice(0, Math.max(0, history.length - HISTORY_ROOT_LIMIT)).map((row) => row.key),
   );
-  const keep = new Set(
+  return new Set(
     rows.filter((row) => !evictedRoots.has(roots.get(row.key)!)).map((row) => row.key),
   );
+};
+
+const completedCounts = (
+  rows: readonly ActivityRow[],
+  keep: ReadonlySet<string>,
+  { parents, roots }: Ownership,
+  protectedKeys: ReadonlySet<string>,
+): CompletedCounts => {
   const childCounts = new Map<string, number>();
   const branchCounts = new Map<string, number>();
   let completed = 0;
@@ -88,6 +110,20 @@ export function retainActivity(
       branchCounts.set(root, (branchCounts.get(root) ?? 0) + 1);
     }
   }
+  return { childCounts, branchCounts, completed };
+};
+
+const trimCompleted = (
+  rows: readonly ActivityRow[],
+  byKey: ReadonlyMap<string, ActivityRow>,
+  keep: Set<string>,
+  ownership: Ownership,
+  protectedKeys: ReadonlySet<string>,
+): Map<string, number> => {
+  const { parents, roots } = ownership;
+  const counts = completedCounts(rows, keep, ownership, protectedKeys);
+  const { childCounts, branchCounts } = counts;
+  let completed = counts.completed;
   const omitted = new Map<string, number>();
   const queue = rows.filter(
     (row) =>
@@ -96,7 +132,6 @@ export function retainActivity(
       !protectedKeys.has(row.key) &&
       !childCounts.get(row.key),
   );
-  // Work that never ran goes before real results: its producer's planned counts still cover it.
   queue.sort(
     (left, right) =>
       Number(left.planned !== true) - Number(right.planned !== true) ||
@@ -113,16 +148,29 @@ export function retainActivity(
     keep.delete(row.key);
     completed--;
     branchCounts.set(root, (branchCounts.get(root) ?? 1) - 1);
-    // Omissions count finished items; planned work never ran and is counted as planned instead.
     if (row.planned !== true) omitted.set(root, (omitted.get(root) ?? 0) + 1);
     const parent = parents.get(row.key);
     if (parent) {
       childCounts.set(parent, (childCounts.get(parent) ?? 1) - 1);
-      const owner = next.get(parent)!;
+      const owner = byKey.get(parent)!;
       if (!childCounts.get(parent) && isFinished(owner) && !protectedKeys.has(parent))
         queue.push(owner);
     }
   }
+  return omitted;
+};
+
+export function retainActivity(
+  previous: readonly ActivityRow[],
+  current: readonly ActivityRow[],
+): readonly ActivityRow[] {
+  const old = new Map(previous.map((row) => [row.key, row]));
+  const next = withRetainedRows(previous, current);
+  const rows = [...next.values()];
+  const ownership = resolveActivityOwnership(next);
+  const protectedKeys = protectedActivityKeys(rows, ownership.parents);
+  const keep = keptWithinHistoryLimit(rows, ownership, protectedKeys);
+  const omitted = trimCompleted(rows, next, keep, ownership, protectedKeys);
   return rows
     .filter((row) => keep.has(row.key))
     .map((row) => {
@@ -134,7 +182,6 @@ export function retainActivity(
     });
 }
 
-/** A row's ownership path, root first, through the same resolved owners as the tree. */
 export function activityPath(rows: readonly ActivityRow[], key: string): readonly ActivityRow[] {
   const byKey = new Map(rows.map((row) => [row.key, row]));
   const { parents } = resolveActivityOwnership(byKey);

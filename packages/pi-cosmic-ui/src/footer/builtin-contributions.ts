@@ -15,7 +15,6 @@ function basename(path: string): string {
   return normalized.slice(normalized.lastIndexOf("/") + 1) || normalized;
 }
 
-/** Generic defaults for host status entries with no declared placement. */
 const DEFAULT_STATUS_REGION = "details" as const;
 const DEFAULT_STATUS_PRIORITY = 20;
 const DEFAULT_STATUS_ORDER = 1020;
@@ -32,7 +31,6 @@ const THINKING_COLORS: ReadonlyMap<string, CosmicFooterColor> = new Map([
 
 export type FooterStatusPlacements = ReadonlyMap<string, CosmicFooterStatusContribution>;
 
-/** Session values that built-in contributions read at render time. */
 export interface FooterRepositoryProjection {
   readonly totals: FooterTotals;
   readonly gitStatus: FooterGitStatus | undefined;
@@ -40,19 +38,14 @@ export interface FooterRepositoryProjection {
   readonly homeDirectory: string | undefined;
 }
 
-export function builtinContributions(
+const identityContributions = (
   host: FooterHostProjection,
-  { totals, gitStatus, pullRequestNumber, homeDirectory }: FooterRepositoryProjection,
-  statusPlacements: FooterStatusPlacements,
-): CosmicFooterTextContribution[] {
-  const { model, branch, sessionName, subscription } = host;
-  const location = abbreviateHomePath(host.cwd, homeDirectory);
-
-  const thinking = host.thinking;
+  location: string,
+): CosmicFooterTextContribution[] => {
+  const { model, thinking } = host;
   const modelText =
     host.providerCount > 1 && model ? `${model.provider} / ${model.id}` : (model?.id ?? "no-model");
-
-  const result: CosmicFooterTextContribution[] = [
+  return [
     {
       kind: "text",
       id: "model",
@@ -92,113 +85,178 @@ export function builtinContributions(
       kind: "text",
       id: "context",
       region: "metrics",
-      // The component renders context usage; this marker controls visibility and decorations.
       text: "",
       priority: 100,
       order: 0,
     },
   ];
-  if (branch)
-    result.push({
-      kind: "text",
-      id: "branch",
-      region: "identity",
-      text: `⎇ ${branch}`,
-      compactText: `⎇ ${branch}`,
-      tone: "normal",
-      color: "syntaxType",
-      priority: 90,
-      order: 200,
-    });
-  if (branch && pullRequestNumber)
-    result.push({
+};
+
+const branchContributions = (
+  branch: string | null,
+  pullRequestNumber: number | undefined,
+): CosmicFooterTextContribution[] => {
+  if (!branch) return [];
+  const branchEntry: CosmicFooterTextContribution = {
+    kind: "text",
+    id: "branch",
+    region: "identity",
+    text: `⎇ ${branch}`,
+    compactText: `⎇ ${branch}`,
+    tone: "normal",
+    color: "syntaxType",
+    priority: 90,
+    order: 200,
+  };
+  if (!pullRequestNumber) return [branchEntry];
+  return [
+    branchEntry,
+    {
       kind: "text",
       id: "pullRequest",
       region: "identity",
       text: `PR #${pullRequestNumber}`,
       priority: 85,
       order: 250,
-    });
-  if (gitStatus) {
-    const dirty =
-      gitStatus.staged + gitStatus.modified + gitStatus.untracked + gitStatus.conflicts > 0;
-    const gitText = formatGitStatus(gitStatus);
-    if (gitText)
-      result.push({
-        kind: "text",
-        id: "git",
-        region: "identity",
-        text: gitText,
-        tone: gitStatus.conflicts ? "error" : dirty ? "warning" : "success",
-        align: "right",
-        priority: 80,
-        order: 300,
-      });
-    const lineStats: string[] = [];
-    if (gitStatus.linesAdded) lineStats.push(`+${gitStatus.linesAdded}L`);
-    if (gitStatus.linesRemoved) lineStats.push(`-${gitStatus.linesRemoved}L`);
-    if (gitStatus.linesChanged) lineStats.push(`~${gitStatus.linesChanged}L`);
-    if (lineStats.length)
-      result.push({
-        kind: "text",
-        id: "git.lines",
-        region: "identity",
-        text: lineStats.join(" "),
-        align: "right",
-        priority: 75,
-        order: 310,
-      });
-  }
-  if (sessionName)
+    },
+  ];
+};
+
+const gitTone = (gitStatus: FooterGitStatus): CosmicFooterTextContribution["tone"] => {
+  if (gitStatus.conflicts) return "error";
+  const dirty =
+    gitStatus.staged + gitStatus.modified + gitStatus.untracked + gitStatus.conflicts > 0;
+  return dirty ? "warning" : "success";
+};
+
+const GIT_LINE_STATS = [
+  ["linesAdded", "+"],
+  ["linesRemoved", "-"],
+  ["linesChanged", "~"],
+] as const satisfies ReadonlyArray<readonly [keyof FooterGitStatus, string]>;
+
+const gitContributions = (
+  gitStatus: FooterGitStatus | undefined,
+): CosmicFooterTextContribution[] => {
+  if (!gitStatus) return [];
+  const result: CosmicFooterTextContribution[] = [];
+  const gitText = formatGitStatus(gitStatus);
+  if (gitText)
     result.push({
       kind: "text",
-      id: "session",
-      region: "metrics",
-      text: sessionName,
-      tone: "accent",
+      id: "git",
+      region: "identity",
+      text: gitText,
+      tone: gitTone(gitStatus),
+      align: "right",
       priority: 80,
-      order: 100,
+      order: 300,
     });
-  const metric = (id: string, text: string, order: number, align?: "right") =>
+  const lineStats = GIT_LINE_STATS.flatMap(([key, sign]) =>
+    gitStatus[key] ? [`${sign}${gitStatus[key]}L`] : [],
+  );
+  if (lineStats.length)
     result.push({
       kind: "text",
-      id,
-      region: "metrics",
-      text,
-      priority: 90,
-      order,
-      ...(align && { align }),
+      id: "git.lines",
+      region: "identity",
+      text: lineStats.join(" "),
+      align: "right",
+      priority: 75,
+      order: 310,
     });
-  if (totals.input) metric("metrics.input", `↑${formatTokens(totals.input)}`, 200);
-  if (totals.output) metric("metrics.output", `↓${formatTokens(totals.output)}`, 210);
-  if (totals.cacheRead) metric("metrics.cacheRead", `r${formatTokens(totals.cacheRead)}`, 220);
-  if (totals.cacheWrite) metric("metrics.cacheWrite", `w${formatTokens(totals.cacheWrite)}`, 230);
-  if (totals.cost || subscription)
-    metric(
-      "metrics.cost",
-      `${formatCost(totals.cost)}${subscription ? " (sub)" : ""}`,
-      240,
-      "right",
-    );
-  for (const status of host.extensionStatuses) {
-    const placement = statusPlacements.get(status.id);
-    result.push({
-      kind: "text",
-      id: `extension.${status.id}`,
-      region: placement?.region ?? DEFAULT_STATUS_REGION,
-      text: status.text,
-      priority: placement?.priority ?? DEFAULT_STATUS_PRIORITY,
-      order: placement?.order ?? DEFAULT_STATUS_ORDER,
-      ...(placement?.align && { align: placement.align }),
-    });
-  }
   return result;
+};
+
+const sessionContributions = (sessionName: string | undefined): CosmicFooterTextContribution[] =>
+  sessionName
+    ? [
+        {
+          kind: "text",
+          id: "session",
+          region: "metrics",
+          text: sessionName,
+          tone: "accent",
+          priority: 80,
+          order: 100,
+        },
+      ]
+    : [];
+
+const metric = (
+  id: string,
+  text: string,
+  order: number,
+  align?: "right",
+): CosmicFooterTextContribution => ({
+  kind: "text",
+  id,
+  region: "metrics",
+  text,
+  priority: 90,
+  order,
+  ...(align && { align }),
+});
+
+const TOKEN_METRICS = [
+  ["input", "↑", 200],
+  ["output", "↓", 210],
+  ["cacheRead", "r", 220],
+  ["cacheWrite", "w", 230],
+] as const satisfies ReadonlyArray<readonly [keyof FooterTotals, string, number]>;
+
+const metricContributions = (
+  totals: FooterTotals,
+  subscription: boolean,
+): CosmicFooterTextContribution[] => [
+  ...TOKEN_METRICS.flatMap(([key, prefix, order]) =>
+    totals[key] ? [metric(`metrics.${key}`, `${prefix}${formatTokens(totals[key])}`, order)] : [],
+  ),
+  ...(totals.cost || subscription
+    ? [
+        metric(
+          "metrics.cost",
+          `${formatCost(totals.cost)}${subscription ? " (sub)" : ""}`,
+          240,
+          "right",
+        ),
+      ]
+    : []),
+];
+
+const extensionStatusContribution = (
+  status: FooterHostProjection["extensionStatuses"][number],
+  statusPlacements: FooterStatusPlacements,
+): CosmicFooterTextContribution => {
+  const placement = statusPlacements.get(status.id);
+  return {
+    kind: "text",
+    id: `extension.${status.id}`,
+    region: placement?.region ?? DEFAULT_STATUS_REGION,
+    text: status.text,
+    priority: placement?.priority ?? DEFAULT_STATUS_PRIORITY,
+    order: placement?.order ?? DEFAULT_STATUS_ORDER,
+    ...(placement?.align && { align: placement.align }),
+  };
+};
+
+export function builtinContributions(
+  host: FooterHostProjection,
+  { totals, gitStatus, pullRequestNumber, homeDirectory }: FooterRepositoryProjection,
+  statusPlacements: FooterStatusPlacements,
+): CosmicFooterTextContribution[] {
+  return [
+    ...identityContributions(host, abbreviateHomePath(host.cwd, homeDirectory)),
+    ...branchContributions(host.branch, pullRequestNumber),
+    ...gitContributions(gitStatus),
+    ...sessionContributions(host.sessionName),
+    ...metricContributions(totals, host.subscription),
+    ...host.extensionStatuses.map((status) =>
+      extensionStatusContribution(status, statusPlacements),
+    ),
+  ];
 }
 
-/**
- * Folds decorator entries (`decorates`) into their targets by prefixing the
- * decorator's text; decorators without a matching target render standalone.
- */
 export function applyTextDecorations(
   entries: readonly CosmicFooterTextContribution[],
 ): CosmicFooterTextContribution[] {

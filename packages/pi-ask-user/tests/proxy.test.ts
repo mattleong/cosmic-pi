@@ -330,7 +330,6 @@ it.effect(
     }),
 );
 
-/** A root capability whose runs settle only when the test completes them. */
 const registerPendingRuns = () => {
   const bus = createEventBus();
   const runs: {
@@ -357,7 +356,6 @@ it.effect("root capabilities bound live owners and refuse a duplicate live owner
     const { runs, dispose, capability } = registerPendingRuns();
     const signal = yield* Effect.abortSignal;
     const ownerAt = (index: number) => ({ ...owner, requestId: `request-${index}` });
-    /** Admission runs synchronously, so a refused ask must leave `runs` unchanged at once. */
     const refused = (index: number) => {
       const before = runs.length;
       const asking = capability.ask(request, ownerAt(index), signal);

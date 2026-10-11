@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -24,18 +23,15 @@ import {
   awaitRuns,
 } from "./fixtures/service-harness.ts";
 
-/** A native reviewer on its first route candidate. */
 const reviewerNative = () =>
   nativeReportRequest({ profile: "reviewer", routeContinuation: reviewerContinuation(0) });
 
-/** A child fake whose first prompt the backend rejects. */
 const rejectedPrompt = (extra: Parameters<typeof fakeChildLayer>[1] = {}) =>
   fakeChildLayer(Effect.void, {
     initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
     ...extra,
   });
 
-/** Starts a reviewer on its first route candidate, fails its process, and awaits cleanup. */
 const startFailedReviewer = (
   service: SubagentServiceContract,
   fake: ReturnType<typeof fakeChildLayer>,

@@ -24,7 +24,7 @@ beforeEach(() =>
 );
 
 const context = (overrides: Partial<Context> = {}): Context =>
-  renderContextFixture({
+  renderContextFixture<Context["args"]>({
     args: { path: "file.ts" },
     argsComplete: false,
     isPartial: false,
@@ -100,7 +100,6 @@ test("an expanded failed call renderer still shows the exact arguments, inertly"
       },
       { mode, compactSummary: () => ({ subject: "file.ts", outcome: "success" }) },
     );
-    // JSON escapes C0 controls; a C1 introducer would otherwise reach the terminal raw.
     const args = { path: "src/\u009b31mfile.ts", offset: 17, limit: 42 };
     const text = paint(tool, context({ args })).rows.join("\n");
     for (const value of [/31mfile\.ts/u, /offset\D+17/u, /limit\D+42/u])
@@ -260,7 +259,6 @@ test("expanded bodies are built in Pi's call-then-result order across toggles an
         }
       }
     }
-    // Pi mounts the final call before replacing the retained streaming result.
     paint(tool, context({ state, isPartial: true }));
     const finalContext = context({ state, isPartial: false });
     const call = tool.renderCall!(finalContext.args, plainTheme, finalContext);

@@ -48,6 +48,18 @@ function declaredStatement(statement: ESTree.Statement): ESTree.Node | null {
 		: statement;
 }
 
+function declaredName(declaration: ESTree.Node | null): string | null {
+	if (
+		declaration?.type === "TSTypeAliasDeclaration" ||
+		declaration?.type === "TSInterfaceDeclaration" ||
+		declaration?.type === "TSEnumDeclaration"
+	)
+		return declaration.id.name;
+	if (declaration?.type === "ClassDeclaration" || declaration?.type === "FunctionDeclaration")
+		return declaration.id?.name ?? null;
+	return null;
+}
+
 export function createTypeEnvironment(program: ESTree.Program): TypeEnvironment {
 	const aliases = new Map<string, ESTree.TSTypeAliasDeclaration>();
 	const interfaces = new Map<string, ESTree.TSInterfaceDeclaration[]>();
@@ -62,33 +74,16 @@ export function createTypeEnvironment(program: ESTree.Program): TypeEnvironment 
 			continue;
 		}
 
-		if (declaration?.type === "TSTypeAliasDeclaration") {
-			const existing = aliases.get(declaration.id.name);
-			if (existing === undefined) aliases.set(declaration.id.name, declaration);
-			else shadowedBuiltIns.add(declaration.id.name);
-			if (BUILT_INS.has(declaration.id.name)) shadowedBuiltIns.add(declaration.id.name);
-			continue;
-		}
+		const name = declaredName(declaration);
+		if (name !== null && BUILT_INS.has(name)) shadowedBuiltIns.add(name);
 
-		if (declaration?.type === "TSInterfaceDeclaration") {
+		if (declaration?.type === "TSTypeAliasDeclaration") {
+			if (aliases.has(declaration.id.name)) shadowedBuiltIns.add(declaration.id.name);
+			else aliases.set(declaration.id.name, declaration);
+		} else if (declaration?.type === "TSInterfaceDeclaration") {
 			const declarations = interfaces.get(declaration.id.name) ?? [];
 			declarations.push(declaration);
 			interfaces.set(declaration.id.name, declarations);
-			if (BUILT_INS.has(declaration.id.name)) shadowedBuiltIns.add(declaration.id.name);
-			continue;
-		}
-
-		if (declaration?.type === "TSEnumDeclaration") {
-			if (BUILT_INS.has(declaration.id.name)) shadowedBuiltIns.add(declaration.id.name);
-			continue;
-		}
-
-		if (
-			(declaration?.type === "ClassDeclaration" ||
-				declaration?.type === "FunctionDeclaration") &&
-			declaration.id !== null
-		) {
-			if (BUILT_INS.has(declaration.id.name)) shadowedBuiltIns.add(declaration.id.name);
 		}
 	}
 
@@ -215,11 +210,21 @@ function unsafeDirectValue(
 			? unsafeMembers[0]
 			: null;
 	}
-	if (unwrapped.type !== "TSTypeReference") return null;
-	const name = typeReferenceName(unwrapped);
+	return unwrapped.type === "TSTypeReference"
+		? unsafeReferenceValue(unwrapped, environment, substitutions, resolvingAliases)
+		: null;
+}
+
+function unsafeReferenceValue(
+	type: ESTree.TSTypeReference,
+	environment: TypeEnvironment,
+	substitutions: TypeAliasEnvironment,
+	resolvingAliases: ReadonlySet<string>,
+): UnsafeDictionary["unsafeValue"] | null {
+	const name = typeReferenceName(type);
 	if (name === null) return null;
 	if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, environment)) {
-		const wrapped = unwrapped.typeArguments?.params[0];
+		const wrapped = type.typeArguments?.params[0];
 		return wrapped === undefined
 			? null
 			: unsafeDirectValue(wrapped, environment, substitutions, resolvingAliases);
@@ -236,7 +241,7 @@ function unsafeDirectValue(
 	}
 	const alias = environment.aliases.get(name);
 	if (alias === undefined || resolvingAliases.has(name)) return null;
-	const nextSubstitutions = aliasSubstitution(alias, unwrapped, substitutions);
+	const nextSubstitutions = aliasSubstitution(alias, type, substitutions);
 	if (nextSubstitutions === null) return null;
 	const nextResolving = new Set(resolvingAliases);
 	nextResolving.add(name);
@@ -265,8 +270,37 @@ function dictionaryValueTypes(
 			: [{ type: unwrapped.typeAnnotation, substitutions }];
 	}
 
-	if (unwrapped.type !== "TSTypeReference") return [];
-	const name = typeReferenceName(unwrapped);
+	return unwrapped.type === "TSTypeReference"
+		? referenceDictionaryValueTypes(unwrapped, environment, substitutions, resolvingAliases)
+		: [];
+}
+
+function builtInDictionaryValueTypes(
+	name: string,
+	type: ESTree.TSTypeReference,
+	environment: TypeEnvironment,
+	substitutions: TypeAliasEnvironment,
+	resolvingAliases: ReadonlySet<string>,
+): readonly ResolvedType[] | null {
+	if (!isBuiltIn(name, environment)) return null;
+	if (TRANSPARENT_WRAPPERS.has(name) || name === "Pick" || name === "Omit") {
+		const source = type.typeArguments?.params[0];
+		return source === undefined
+			? []
+			: dictionaryValueTypes(source, environment, substitutions, resolvingAliases);
+	}
+	if (name !== "Record") return null;
+	const value = type.typeArguments?.params[1] ?? null;
+	return value === null ? [] : [{ type: value, substitutions }];
+}
+
+function referenceDictionaryValueTypes(
+	type: ESTree.TSTypeReference,
+	environment: TypeEnvironment,
+	substitutions: TypeAliasEnvironment,
+	resolvingAliases: ReadonlySet<string>,
+): readonly ResolvedType[] {
+	const name = typeReferenceName(type);
 	if (name === null) return [];
 
 	const substitution = substitutions.get(name);
@@ -276,28 +310,18 @@ function dictionaryValueTypes(
 			: dictionaryValueTypes(substitution, environment, substitutions, resolvingAliases);
 	}
 
-	if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, environment)) {
-		const wrapped = unwrapped.typeArguments?.params[0];
-		return wrapped === undefined
-			? []
-			: dictionaryValueTypes(wrapped, environment, substitutions, resolvingAliases);
-	}
-
-	if (name === "Record" && isBuiltIn(name, environment)) {
-		const value = unwrapped.typeArguments?.params[1] ?? null;
-		return value === null ? [] : [{ type: value, substitutions }];
-	}
-
-	if ((name === "Pick" || name === "Omit") && isBuiltIn(name, environment)) {
-		const source = unwrapped.typeArguments?.params[0];
-		return source === undefined
-			? []
-			: dictionaryValueTypes(source, environment, substitutions, resolvingAliases);
-	}
+	const builtIn = builtInDictionaryValueTypes(
+		name,
+		type,
+		environment,
+		substitutions,
+		resolvingAliases,
+	);
+	if (builtIn !== null) return builtIn;
 
 	const alias = environment.aliases.get(name);
 	if (alias === undefined || resolvingAliases.has(name)) return [];
-	const nextSubstitutions = aliasSubstitution(alias, unwrapped, substitutions);
+	const nextSubstitutions = aliasSubstitution(alias, type, substitutions);
 	if (nextSubstitutions === null) return [];
 	const nextResolving = new Set(resolvingAliases);
 	nextResolving.add(name);
@@ -352,24 +376,32 @@ export function classifyWideningTarget(
 				: null;
 	}
 	if (unwrapped.type === "TSMappedType") return { kind: "open dictionary" };
-	if (unwrapped.type !== "TSTypeReference") return null;
-	const name = typeReferenceName(unwrapped);
+	return unwrapped.type === "TSTypeReference"
+		? classifyWideningReference(unwrapped, environment)
+		: null;
+}
+
+function classifyWideningReference(
+	type: ESTree.TSTypeReference,
+	environment: TypeEnvironment,
+): WideningTarget | null {
+	const name = typeReferenceName(type);
 	if (name === null) return null;
 	if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, environment)) {
-		const wrapped = unwrapped.typeArguments?.params[0];
+		const wrapped = type.typeArguments?.params[0];
 		return wrapped === undefined ? null : classifyWideningTarget(wrapped, environment);
 	}
 	if (name === "Record" && isBuiltIn(name, environment)) return { kind: "open dictionary" };
 	const alias = environment.aliases.get(name);
 	if (alias === undefined) return null;
 	if ((alias.typeParameters?.params.length ?? 0) > 0) {
-		const substitutions = aliasSubstitution(alias, unwrapped, new Map());
+		const substitutions = aliasSubstitution(alias, type, new Map());
 		return substitutions !== null &&
 			resolvesToDictionary(alias.typeAnnotation, environment, substitutions, new Set([name]))
 			? { kind: "generic container" }
 			: null;
 	}
-	const substitutions = aliasSubstitution(alias, unwrapped, new Map());
+	const substitutions = aliasSubstitution(alias, type, new Map());
 	if (substitutions === null) return null;
 	const resolved = classifyAliasBroadTarget(
 		alias.typeAnnotation,

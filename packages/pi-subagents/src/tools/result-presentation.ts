@@ -1,7 +1,3 @@
-/**
- * Presentation of a local Pi child's private `subagent_result` tool: its compact summary,
- * content-only expansion, and preview-style bodies. The shared shell draws rejection issues.
- */
 import type {
   AgentToolResult,
   Theme,
@@ -23,27 +19,20 @@ import { rejectedCallIssue } from "./compact-action-failures.ts";
 import { errorSection, previewCall, type PreviewRenderContext } from "./render-preview.ts";
 
 export const RESULT_TOOL_LABEL = "Subagent Result";
-/** The child result tool's receipt for a value the parent accepted. */
 export const RESULT_ACCEPTED_TEXT = "Result accepted as your return value. Stop now.";
 const SUBJECT_CHARS = 120;
 
 const decodeJson = Schema.decodeUnknownOption(Schema.Json);
 
-/** The submitted value as one canonical JSON line, when the arguments are JSON. */
 const submittedJson = <Args>(args: Args): string | undefined =>
   Option.getOrUndefined(Option.map(decodeJson(args), canonicalResultJson));
 
-/** The whole value, indented, for expanded views; the heading shows only one bounded line. */
 const submittedValue = <Args>(args: Args, theme: Theme): Component =>
   new Text(theme.fg("toolOutput", escapeControlChars(JSON.stringify(args ?? null, null, 2))), 0, 0);
 
 const rejection = <Details>(result: AgentToolResult<Details>, theme: Theme): Component =>
   errorSection(theme, stripTerminalControls(getTextContent(result.content)));
 
-/**
- * The submitted value heads the row, an exact acceptance receipt is a success, and a rejection
- * explains itself. Any other result declines, so its text stays verbatim.
- */
 export const resultCompactSummary: CompactSummaryProvider<unknown, unknown, unknown> = ({
   args,
   result,
@@ -70,17 +59,14 @@ export const resultCompactSummary: CompactSummaryProvider<unknown, unknown, unkn
     : undefined;
 };
 
-/** The whole submitted value and a rejection's own text; `accepted` is the receipt. */
 export const resultExpandedContent = {
   renderCall: <Args>(args: Args, theme: Theme) => submittedValue(args, theme),
   renderResult: (result, _options, theme, context) =>
     context.isError ? rejection(result, theme) : new Container(),
 } satisfies NonNullable<CodePreviewShellOptions["expandedContent"]>;
 
-/** Preview-style call and result bodies. */
 export const resultToolRenderers = {
   renderCall<Args>(args: Args, theme: Theme, context: PreviewRenderContext): Component {
-    // The heading shows one bounded line; the expanded view shows the whole value.
     return previewCall(
       theme,
       context,
@@ -96,8 +82,7 @@ export const resultToolRenderers = {
   ): Component {
     if (context.isError) return options.expanded ? rejection(result, theme) : new Container();
     const text = getTextContent(result.content);
-    // The receipt tells the agent to stop; collapsed rows leave that to Pi's success background.
     if (!options.expanded && text === RESULT_ACCEPTED_TEXT) return new Container();
-    return new Text(theme.fg("toolOutput", stripTerminalControls(text)), 0, 0);
+    return new Text(theme.fg("toolOutput", escapeControlChars(text)), 0, 0);
   },
 };

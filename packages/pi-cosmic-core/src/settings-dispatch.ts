@@ -1,20 +1,9 @@
-/** Pure slash-command argument dispatch shared by extension settings surfaces. */
-
 interface SettingsDispatchDescriptor {
   readonly id: string;
   readonly values?: ReadonlyArray<string> | undefined;
-  /**
-   * Accepts values beyond `values`, which are then suggestions, such as any in-range integer.
-   * The provider validates the value when it applies it.
-   */
   readonly openValues?: boolean | undefined;
 }
 
-/**
- * The closed result set of a `/…-settings <args>` invocation. Callers own every side effect:
- * opening pickers, printing help or status, applying values, and wording error messages.
- * Every extension's settings command shares one caller, Cosmic UI's settings command shell.
- */
 type SettingsCommandDispatch =
   | { readonly _tag: "OpenInteractive" }
   | { readonly _tag: "Help" }
@@ -35,12 +24,6 @@ type SettingsCommandDispatch =
       readonly allowedValues: ReadonlyArray<string>;
     };
 
-/**
- * Dispatches settings-command arguments against option descriptors. Verbs are exact: empty
- * input opens the interactive surface, `help` and `status` are the only reserved words (no
- * hidden aliases), an optional leading scope token selects one of `scopes`, and finite
- * descriptor values must match exactly unless the descriptor accepts open values.
- */
 export const dispatchSettingsCommand = (
   args: string,
   descriptors: ReadonlyArray<SettingsDispatchDescriptor>,

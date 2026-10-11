@@ -1,4 +1,3 @@
-// Fixed-target Pi editor. State, saves, and cancellable pickers have separate owners.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
 import { pageSteps, type FullScreenResolution } from "pi-cosmic-ui/manager/keymap";
@@ -175,7 +174,6 @@ export class ProfileWorkspaceComponent
     this.renderSoon();
   }
 
-  /** Endpoint jumps set the raw pane index without clearing the message or resetting panes. */
   protected moveToEndpoint(action: "first" | "last"): void {
     const last = action === "last";
     if (this.pane === "profiles") {
@@ -187,7 +185,6 @@ export class ProfileWorkspaceComponent
     if (this.options.target.kind === "session") this.options.saveSession?.();
   }
 
-  /** One Shortcut press; returns whether it fully consumed the input. */
   protected handleShortcutKey(key: string): boolean {
     if (key === "s") {
       this.saveSession();
@@ -206,7 +203,6 @@ export class ProfileWorkspaceComponent
     return false;
   }
 
-  /** Confirmation and busy-mode keys; both modes consume the input unconditionally. */
   protected handleModalInput(data: string): void {
     if (isWorkspaceNavigationKey(data)) return;
     if (this.pendingAction) {
@@ -232,7 +228,6 @@ export class ProfileWorkspaceComponent
 
   handleInput(data: string): void {
     if (this.disposed) return;
-    // Shared selectors treat Right as confirmation; profile edits require Enter.
     if ((this.modelPicker || this.selectPage) && matchesKey(data, "right")) return;
     if (this.modelPicker) {
       this.modelPicker.handleInput(data);
@@ -296,7 +291,6 @@ export class ProfileWorkspaceComponent
     }
   }
 
-  /** Non-movement navigation actions; returns whether the input only needs a re-render. */
   protected handleNavigationAction(action: string): boolean {
     switch (action) {
       case "cancel":
@@ -322,7 +316,7 @@ export class ProfileWorkspaceComponent
       case "pending-first":
         return true;
     }
-    return false; // The dashboard owns next-pane/previous-pane tab switching.
+    return false;
   }
 
   render(width: number): string[] {

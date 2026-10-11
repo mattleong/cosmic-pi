@@ -41,13 +41,9 @@ import { savedWorkflowFiles, type WorkflowListing } from "../workflow/store.ts";
 import type { WorkflowRunSummary } from "./workflow-schema.ts";
 
 const STATUS_LOG_LINES = 20;
-/** Agent rows status lists; the rest are counted by state on one more line. */
 const STATUS_AGENT_ROWS = 24;
-/** Rows each group of agents keeps when it has that many, before earlier groups take the rest. */
 const STATUS_GROUP_MIN_ROWS = 4;
-/** Lines the "Needs you" section lists; the rest are counted. */
 const STATUS_ATTENTION_ROWS = 12;
-/** A null result's reason, or a pending question, as an agent row shows it. */
 const STATUS_REASON_MAX_CHARS = 200;
 const NO_PHASE = "(no phase)";
 
@@ -85,14 +81,9 @@ const phaseList = (run: WorkflowRunView): string => {
     .join(", ")}`;
 };
 
-/**
- * What the main agent does once a run started: end its turn, since the run's notification starts
- * the next one. The start result ends with it.
- */
 export const WORKFLOW_END_TURN_TEXT =
   "It runs in the background. End your turn now, after any unrelated work: the run's notification starts your next turn automatically with its result. Don't call status to wait for it or stop the run to answer sooner.";
 
-/** When to stop a run, which the tool description and the result of a stop both give. */
 export const WORKFLOW_STOP_GUIDANCE =
   "Stop a run only when the user asks or it is clearly broken (a wrong script, a runaway loop), never to answer sooner: its unfinished agents' work is lost, and a resume reruns them at full cost.";
 
@@ -111,10 +102,6 @@ export const workflowStartText = (run: WorkflowRunView): string =>
     .filter(Boolean)
     .join(" ");
 
-/**
- * A repeated status call's answer while nothing material changed: the run's state and counts on
- * one line, then that polling won't bring the result sooner than the run's notification.
- */
 export const workflowUnchangedStatusText = (run: WorkflowRunView, sinceMs: number): string => {
   const phase = run.currentPhase === undefined ? "" : `, phase ${run.currentPhase}`;
   const counts = workflowAgentCountsText(run.agents, run.reused, workflowSkippedPlanned(run));
@@ -132,9 +119,7 @@ const phaseLines = (run: WorkflowRunView): ReadonlyArray<string> => {
   ];
   const planned = workflowPlannedByPhase(run);
   const skipped = workflowSkippedByPhase(run);
-  // A phase whose calls were all reused has finished work but no agent views.
   const reused = workflowReusedByPhase(run);
-  // Planned agents of a finished run were never called.
   const notStarted = isWorkflowRunFinished(run.state) ? "not run" : "planned";
   return titles.map((title) => {
     const members = run.agents.filter((agent) => (agent.phase ?? NO_PHASE) === title);
@@ -154,10 +139,6 @@ const outcomeLines = (run: WorkflowRunView): ReadonlyArray<string> => {
   return [];
 };
 
-/**
- * Rows per group, in priority order: each group with agents keeps up to
- * {@link STATUS_GROUP_MIN_ROWS}, and earlier groups then take what is left of `limit`.
- */
 const allotRows = (sizes: ReadonlyArray<number>, limit: number): ReadonlyArray<number> => {
   const floors = sizes.map((size) => Math.min(size, STATUS_GROUP_MIN_ROWS));
   let left = limit - floors.reduce((total, floor) => total + floor, 0);
@@ -175,20 +156,12 @@ const reasonText = (reason: string | undefined): string =>
 const runningRow = (agent: WorkflowAgentView, now: number): string =>
   `- ${agent.label} · running ${formatDuration(Math.max(0, now - (agent.startedAt ?? agent.queuedAt)))} · ${agent.runId}`;
 
-/** An agent that never started has no subagent, so its row names no run id. */
 const endedRow = (agent: WorkflowAgentView): string =>
   `- ${agent.label} · ${agent.state}${agent.startedAt === undefined ? "" : ` · ${agent.runId}`}${reasonText(agent.reason)}`;
 
 const queuedRow = (agent: WorkflowAgentView): string =>
   `- ${agent.label} · ${workflowWaitingText(agent.waiting)}`;
 
-/**
- * At most {@link STATUS_AGENT_ROWS} agents, so a stuck agent can be named and targeted by its
- * subagent's run id: running agents first, longest running first, then agents that ended without
- * a result, with their reason, newest first, then queued agents with what they wait for, in call
- * order. Only agents that started have a subagent, so only their rows name a run id. One more line
- * counts the rest by state. Undefined when every agent completed, since the agents line counts them.
- */
 const agentsSection = (run: WorkflowRunView, now: number): string | undefined => {
   const running = run.agents
     .filter((agent) => agent.state === "running")
@@ -222,7 +195,6 @@ const agentsSection = (run: WorkflowRunView, now: number): string | undefined =>
   ].join("\n");
 };
 
-/** Guidance for one agent that needs a person, matching what subagent_status recovers it with. */
 const attentionLine = (agent: WorkflowAgentView | undefined, attention: WorkflowAgentAttention) => {
   const subject = `${agent?.label ?? "agent"} (${attention.runId})`;
   const inspect = `subagent_status({ runIds: ["${attention.runId}"] })`;
@@ -245,7 +217,6 @@ const attentionLine = (agent: WorkflowAgentView | undefined, attention: Workflow
   }
 };
 
-/** Queued agents behind each writer the user paused, which never finishes by itself. */
 const pausedWriterLines = (run: WorkflowRunView): ReadonlyArray<string> => {
   const behind = new Map<string, { readonly writer: string; readonly labels: string[] }>();
   for (const agent of run.agents)
@@ -261,10 +232,6 @@ const pausedWriterLines = (run: WorkflowRunView): ReadonlyArray<string> => {
   );
 };
 
-/**
- * What waits on a person: questions, paused or contained agents, and agents queued behind a
- * paused writer, at most {@link STATUS_ATTENTION_ROWS} lines; undefined when nothing does.
- */
 const needsYouSection = (
   run: WorkflowRunView,
   attention: ReadonlyArray<WorkflowAgentAttention>,
@@ -283,11 +250,6 @@ const needsYouSection = (
   ].join("\n");
 };
 
-/**
- * Progress for the main agent: counts, usage, what waits on a person, the agents worth a look,
- * phases, a bounded recent log, worktrees and any outcome. `attention` names the running agents
- * whose subagents need a person.
- */
 export const workflowStatusText = (
   run: WorkflowRunView,
   now: number,
@@ -322,13 +284,11 @@ export const workflowStatusText = (
     .join("\n");
 };
 
-/** A stop's result: the run's final state, and when to stop one, after a stop the main agent made. */
 export const workflowStopText = (run: WorkflowRunView, now: number): string =>
   run.stoppedBy === "tool"
     ? `${workflowStatusText(run, now)}\n${WORKFLOW_STOP_GUIDANCE}`
     : workflowStatusText(run, now);
 
-/** A run only its files describe, in the summary shape status details carry. */
 export const workflowRecordedRunSummary = (run: WorkflowRecordedRun): WorkflowRunSummary => ({
   id: run.id,
   name: run.name,
@@ -355,7 +315,6 @@ const recordedStateLine = (run: WorkflowRecordedRun, now: number): string => {
   return `${subject}: ${run.state}${stoppedBy} after ${span}, ${since} ago.`;
 };
 
-/** How to start the run again, unless it still runs elsewhere or the user stopped it. */
 const recordedResumeLine = (run: WorkflowRecordedRun): string | undefined => {
   if (run.runningIn !== undefined || run.stoppedBy === "user") return undefined;
   const restart = workflowRestart(run.source, run.scriptPath);
@@ -366,10 +325,6 @@ const recordedResumeLine = (run: WorkflowRecordedRun): string | undefined => {
   return `To run it again, ${start} and resumeFromRunId: "${run.id}"; agent() calls that finished with the same prompt and options are reused.`;
 };
 
-/**
- * Status for a run only its files describe, such as one an earlier Pi process ran: its state,
- * when it ended, how many agents finished, and where its script and results journal are.
- */
 export const workflowRecordedStatusText = (run: WorkflowRecordedRun, now: number): string => {
   const restart = workflowRestart(run.source, run.scriptPath);
   return [
@@ -386,7 +341,6 @@ export const workflowRecordedStatusText = (run: WorkflowRecordedRun, now: number
     .join("\n");
 };
 
-/** Saved workflows the agent can start by name, followed by this session's runs. */
 export const workflowListText = (
   listing: WorkflowListing,
   runs: ReadonlyArray<WorkflowRunView>,

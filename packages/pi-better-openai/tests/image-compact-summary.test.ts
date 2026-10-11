@@ -1,5 +1,5 @@
 import { compactIssueSeverity } from "pi-code-previews";
-import { issueMessageStyleProblems } from "pi-code-previews/testing";
+import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
 import { imageCompactSummary } from "../src/image/compact-summary.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
@@ -19,8 +19,7 @@ const record = (status: string): CodexImageDetails => ({
 const input = (status = "completed", expanded = false): Input => ({
   phase: "settled",
   args: { prompt: "An otter", action: "generate" },
-  // SAFETY: The provider reads only isError and expanded from Pi's renderer context.
-  context: { isError: false, expanded } as Input["context"],
+  context: renderContextFixture({ expanded }),
   result: { content: [{ type: "text", text: "Generated image" }, image], details: record(status) },
 });
 const errorInput = <Details>(text: string, details: Details): Input => {
@@ -58,7 +57,6 @@ describe("image compact summary", () => {
     expect(summary?.outcome).toBe(outcome);
     expect(compactIssueSeverity(summary?.issues)).toBe(severity);
     expect(styleProblems(summary)).toEqual([]);
-    // Expanded content states the saved path; issues do not repeat it.
     expect(JSON.stringify(summary?.issues ?? [])).not.toContain("otter-image-1.png");
     expect(call.result).toEqual(before);
     expect(call.result?.content[1]).toBe(image);

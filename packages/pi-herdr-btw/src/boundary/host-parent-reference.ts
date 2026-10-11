@@ -1,4 +1,3 @@
-// Pi registration bridge for Herdr-created child parent references.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   HERDR_BTW_CHILD_SESSION_FLAG,
@@ -17,14 +16,8 @@ import {
   type SessionHeaderProbe,
 } from "./session-file.ts";
 
-/**
- * Registers the fixed parent-marker flags and before-turn prompt hook. The
- * application's generation-checked slot remains the activation owner; activating
- * `undefined` clears the reference.
- */
 export const registerHerdrBtwParentReference = (
   pi: ExtensionAPI,
-  /** Test seams for deterministic header and filesystem-identity probing. */
   {
     probe = probeSessionHeader,
     compareIdentity = compareSessionFileIdentity,
@@ -63,17 +56,13 @@ export const registerHerdrBtwParentReference = (
         ? candidate
         : undefined;
     } catch {
-      // A hostile or shutting-down host deactivates the reference fail-closed.
       return undefined;
     }
   };
 
   pi.on("before_agent_start", (event, ctx) => {
-    // Options may survive repeated hooks: remove only our section before revalidation.
     delete event.systemPromptOptions.sections.herdr_btw_parent_reference;
     if (!activeReference) return undefined;
-    // Revalidate the bounded parent header for every child run. This is an
-    // identity check only; no transcript content is read or imported.
     const current = capture(ctx);
     if (!current || current.id !== activeReference.id || current.path !== activeReference.path) {
       activeReference = undefined;

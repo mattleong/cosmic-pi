@@ -4,28 +4,22 @@ import type { Component, Focusable, OverlayHandle, TUI } from "@earendil-works/p
 
 const INPUT_DOCK_PRESENCE = Symbol.for("@cosmic-pi/pi-cosmic-ui/input-dock-presence/v1");
 
-interface InputDockPresence {
-  [INPUT_DOCK_PRESENCE]?: Set<string>;
-}
-
-// Each extension loads its own copy of this module, so visible docks are shared per process.
-const visibleDocks = (): Set<string> => {
-  // SAFETY: this process-owned symbol slot is the sole property this module adds to globalThis.
-  const state = globalThis as typeof globalThis & InputDockPresence;
-  const current = state[INPUT_DOCK_PRESENCE];
+const visibleDocks = (): Set<unknown> => {
+  const state: object = globalThis;
+  const current = INPUT_DOCK_PRESENCE in state ? state[INPUT_DOCK_PRESENCE] : undefined;
   if (current instanceof Set) return current;
-  const created = new Set<string>();
-  state[INPUT_DOCK_PRESENCE] = created;
+  const created = new Set<unknown>();
+  Object.defineProperty(state, INPUT_DOCK_PRESENCE, {
+    value: created,
+    configurable: true,
+    enumerable: true,
+    writable: true,
+  });
   return created;
 };
 
-/**
- * True while any extension shows an input dock above the editor. In fullscreen, above-editor
- * widgets share one shrinking slot, so other widgets compact to keep the dock fully visible.
- */
 export const inputDockVisible = (): boolean => visibleDocks().size > 0;
 
-/** The drawing widget and keyboard-only overlay of one owned-surface `dock` opening. */
 export const createInputDock = (ui: ExtensionUIContext) => {
   const widgetKey = `cosmic-input-dock-${synchronousRandomUuid()}`;
   let tui: TUI | undefined;
@@ -38,8 +32,6 @@ export const createInputDock = (ui: ExtensionUIContext) => {
     render: (width) => (!disposed && !hidden ? (dialog?.render(width) ?? []) : []),
     invalidate: () => dialog?.invalidate(),
   };
-  // The owned surface closes the keyboard overlay; the caller owns prompt lifecycle.
-  // Only the above-editor widget draws the panel, never the overlay.
   const input: Component & Focusable = {
     get focused() {
       return dialog?.focused ?? false;
@@ -69,7 +61,6 @@ export const createInputDock = (ui: ExtensionUIContext) => {
 
   return {
     input,
-    // Leave room for Pi's editor, footer, and other widgets. Pi owns final dock allocation.
     getHeight: () => Math.max(1, Math.floor((tui?.terminal.rows ?? 0) * 0.6)),
     mount(host: TUI, component: Component & Partial<Focusable>): void {
       if (disposed) return;

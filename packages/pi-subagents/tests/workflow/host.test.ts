@@ -4,7 +4,7 @@ import { SubagentBackendRegistry } from "../../src/backend/service.ts";
 import { makeWorkflowHost } from "../../src/boundary/host-workflow.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
 import type { WorkflowAgentOptions } from "../../src/workflow/options.ts";
-import { extensionApiFixture } from "../fixtures/pi-host.ts";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { context, profileServiceFor, testBackendRegistry } from "../tools/fixtures/tool-harness.ts";
 
 const host = (profiles = profileServiceFor(undefined)) =>

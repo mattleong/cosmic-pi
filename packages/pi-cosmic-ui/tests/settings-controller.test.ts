@@ -21,7 +21,7 @@ function settingsHarness() {
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
   let command: RegisteredCommand["handler"] | undefined;
   let config = makeDefaultResolvedCosmicUiConfig();
-  const updates: Array<Deferred.Deferred<unknown, Error>> = [];
+  const updates: Array<Deferred.Deferred<void, Error>> = [];
   const notify = vi.fn();
   const afterApply = vi.fn();
   let current = true;
@@ -41,14 +41,10 @@ function settingsHarness() {
     updateContext: () => undefined,
     update: afterApply,
     captureAuthority: () => () => current,
-    run: <A, E>(
-      _effect: Effect.Effect<A, E, CosmicUiService>,
-      _signal?: AbortSignal,
-    ): Promise<A> => {
-      const update = Deferred.makeUnsafe<unknown, Error>();
+    run: <E>(_effect: Effect.Effect<void, E, CosmicUiService>, _signal?: AbortSignal) => {
+      const update = Deferred.makeUnsafe<void, Error>();
       updates.push(update);
-      // SAFETY: Each test settles this Deferred with the successful update result type.
-      return Effect.runPromise(Deferred.await(update)) as Promise<A>;
+      return Effect.runPromise(Deferred.await(update));
     },
   });
   const input = (data = "\r") => {
@@ -67,9 +63,7 @@ function settingsHarness() {
       host.mount();
       return opened;
     },
-    // Esc reaches the list as its cancel, which closes the picker.
     close: () => input("\u001b"),
-    /** The rendered rows that mention one setting's label. */
     line: (label: string) =>
       host.editor
         ?.render(100)
@@ -84,7 +78,6 @@ function settingsHarness() {
   };
 }
 
-/** Opens the settings surface around the body, then closes it and awaits the command. */
 const withSettings = <A, E>(body: (h: ReturnType<typeof settingsHarness>) => Effect.Effect<A, E>) =>
   Effect.gen(function* () {
     const h = settingsHarness();
@@ -121,7 +114,6 @@ describe("Cosmic UI settings controller", () => {
     () =>
       withSettings((h) =>
         Effect.gen(function* () {
-          // Search selects the contribution without depending on its position in the menu.
           h.input("/");
           for (const character of "OpenAI usage") h.input(character);
           h.input();

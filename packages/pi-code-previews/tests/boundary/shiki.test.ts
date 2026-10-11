@@ -1,4 +1,3 @@
-// Test assertion boundary.
 import assert from "node:assert/strict";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -8,13 +7,13 @@ import {
   capturedTelemetrySnapshot,
   deferredPromise,
   makeCapturedLogger,
-  opaqueFixture,
 } from "pi-cosmic-core/testing";
 import {
   disposeShikiHighlighter,
   disposeShikiHighlighterSafely,
   ShikiAdapter,
 } from "../../src/boundary/shiki";
+import { shikiHighlighterFixture } from "../support/shiki";
 
 describe("Shiki adapter lifecycle", () => {
   it.effect("defers disposal until a cancelled live language Promise settles", () => {
@@ -22,7 +21,7 @@ describe("Shiki adapter lifecycle", () => {
     let loadStarted = false;
     let disposeAttempts = 0;
     const captured = makeCapturedLogger();
-    const highlighter = opaqueFixture({
+    const highlighter = shikiHighlighterFixture({
       loadLanguage: () => {
         loadStarted = true;
         return pending.promise;
@@ -53,7 +52,7 @@ describe("Shiki adapter lifecycle", () => {
 
   it.effect("late cancellation disposal cannot throw into a Promise continuation", () =>
     Effect.sync(() => {
-      const highlighter = opaqueFixture({
+      const highlighter = shikiHighlighterFixture({
         dispose: () => {
           throw new Error("third-party disposal failed");
         },

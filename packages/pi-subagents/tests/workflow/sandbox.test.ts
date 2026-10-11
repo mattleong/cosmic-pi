@@ -25,7 +25,6 @@ const host = (overrides: Partial<WorkflowSandboxHost<never>> = {}): WorkflowSand
   ...overrides,
 });
 
-/** Runs a script in a scope of its own, against {@link host} with `overrides`. */
 const execute = (
   body: string,
   overrides: Partial<WorkflowSandboxHost<never>> = {},

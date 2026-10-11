@@ -3,16 +3,18 @@ import type {
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import {
   deferredPromise,
   extensionContextFixture,
-  opaqueFixture,
+  piKeybindingsFixture,
   plainTheme,
+  terminalFixture,
+  tuiFixture,
+  type HostTui,
 } from "pi-cosmic-core/testing";
 
-/** One-shot faults: the owned handle's hide, guard creation, `done`, and the guard's hide. */
 type CustomSurfaceFault = "ownedHide" | "guardShow" | "done" | "guardHide";
 
 type Disposable = Component & { dispose?(): void };
@@ -20,12 +22,6 @@ type CustomOptions = Parameters<ExtensionUIContext["custom"]>[1];
 
 const empty = (): Component => ({ render: () => [], invalidate() {} });
 
-/**
- * Models Pi's custom UI host, unchanged from 0.86 through the pinned 1.0. The factory runs synchronously inside `custom`,
- * and a throw rejects its Promise. Mounting (`showOverlay` plus `onHandle`, or the editor
- * slot) waits for `mount()`. `done` pops the top overlay, not its own, then disposes the
- * mounted component. Non-capturing overlays are treated as close guards.
- */
 export function fakeCustomSurfaceHost(
   options: {
     readonly columns?: number;
@@ -38,10 +34,17 @@ export function fakeCustomSurfaceHost(
   const widgets = new Map<string, Component>();
   const faults = new Set<CustomSurfaceFault>();
   const mounts: Array<() => void> = [];
-  const terminal = { columns: options.columns ?? 160, rows: options.rows ?? 50 };
+  const size = { columns: options.columns ?? 160, rows: options.rows ?? 50 };
+  const terminal = terminalFixture({
+    get columns() {
+      return size.columns;
+    },
+    get rows() {
+      return size.rows;
+    },
+  });
   const theme = options.theme ?? plainTheme;
-  const keybindings =
-    options.keybindings ?? opaqueFixture({ matches: () => false, getKeys: () => [] });
+  const keybindings = options.keybindings ?? piKeybindingsFixture();
   let editor: Component | undefined;
   let doneCalls = 0;
   let renders = 0;
@@ -69,21 +72,21 @@ export function fakeCustomSurfaceHost(
       getBounds: () => undefined,
     };
   };
-  const tui = {
+  const tui = tuiFixture({
     terminal,
     requestRender: () => {
       renders += 1;
     },
-    showOverlay: (component: Component, overlay?: OverlayOptions) => {
+    showOverlay: (component, overlay) => {
       if (!overlay?.nonCapturing) return show(component);
       trip("guardShow");
       return show(component, "guardHide");
     },
-  };
+  });
 
   const custom = <T>(
     factory: (
-      tui: TUI,
+      tui: HostTui,
       theme: Theme,
       keybindings: KeybindingsManager,
       done: (result: T) => void,
@@ -106,12 +109,10 @@ export function fakeCustomSurfaceHost(
       completion.resolve(result);
       try {
         mounted?.dispose?.();
-      } catch {
-        // Pi ignores dispose errors.
-      }
+      } catch {}
     };
     try {
-      const created = factory(opaqueFixture(tui), theme, keybindings, done);
+      const created = factory(tui, theme, keybindings, done);
       if (Predicate.isPromiseLike(created))
         throw new Error("The fake host models synchronous factories only.");
       mounts.push(() => {
@@ -124,11 +125,9 @@ export function fakeCustomSurfaceHost(
           }
           const configured = customOptions?.overlayOptions;
           lastOverlayOptions = Predicate.isFunction(configured) ? configured() : configured;
-          // Pi shows the overlay whether or not the caller asked for its handle.
           const handle = show(created, "ownedHide");
           customOptions?.onHandle?.(handle);
         } catch (cause) {
-          // Pi's mount chain rejects the opening unless it already closed.
           if (closed) return;
           if (!overlay) editor = undefined;
           reject(cause);
@@ -144,10 +143,10 @@ export function fakeCustomSurfaceHost(
     custom,
     setWidget: (
       key: string,
-      content: ((tui: TUI, theme: Theme) => Disposable) | readonly string[] | undefined,
+      content: ((tui: HostTui, theme: Theme) => Disposable) | readonly string[] | undefined,
     ) => {
       if (content === undefined) widgets.delete(key);
-      else if (Predicate.isFunction(content)) widgets.set(key, content(opaqueFixture(tui), theme));
+      else if (Predicate.isFunction(content)) widgets.set(key, content(tui, theme));
       else widgets.set(key, { render: () => [...content], invalidate() {} });
     },
   };
@@ -156,14 +155,15 @@ export function fakeCustomSurfaceHost(
     ctx: extensionContextFixture({ mode: "tui" as const, hasUI: true, ui }),
     tui,
     terminal,
-    /** Mounts the oldest pending opening, as Pi does one microtask after its factory. */
+    resize: (columns: number, rows: number) => {
+      size.columns = columns;
+      size.rows = rows;
+    },
     mount: () => mounts.shift()?.(),
-    /** Shows an unrelated overlay, such as a newer questionnaire, above the current stack. */
     showUnrelated: (component: Component = empty()) => show(component),
     fail: (fault: CustomSurfaceFault) => {
       faults.add(fault);
     },
-    /** Visible overlay components, bottom to top. */
     get overlays() {
       return stack.filter((entry) => !entry.hidden).map((entry) => entry.component);
     },
@@ -179,7 +179,6 @@ export function fakeCustomSurfaceHost(
     get renders() {
       return renders;
     },
-    /** The resolved overlay options of the latest mount. */
     get overlayOptions() {
       return lastOverlayOptions;
     },

@@ -29,7 +29,6 @@ type DialogOptions = SearchableSelectHostOptions & {
       }
     | {
         readonly kind: "name";
-        /** Raw ↑/↓ choose Project or Global; Project requires trust. */
         readonly destination: { readonly projectTrusted: boolean };
         readonly close: (value: ProfileSetSaveDestination | undefined) => void;
       }
@@ -103,7 +102,6 @@ export class ProfileDashboardDialog implements Component, Focusable {
     else if (this.options.destination) this.options.close({ scope: this.scope, name });
     else this.options.close(name);
   }
-  /** Raw arrows only: configured printable bindings such as j/k stay in the Input. */
   private toggleDestination(data: string): boolean {
     const destination = this.options.kind === "name" && this.options.destination;
     if (!destination || !(matchesKey(data, Key.up) || matchesKey(data, Key.down))) return false;
@@ -122,7 +120,6 @@ export class ProfileDashboardDialog implements Component, Focusable {
           `Destination: ${this.scope === "project" ? "Project · For this project" : "Global · For all projects"} ${this.options.theme.fg("dim", destination.projectTrusted ? "(↑/↓ change)" : "(Project requires trust)")}`,
         ]
       : [];
-    // Name entry keeps the Input first so its cursor survives small heights, and never scrolls.
     const body =
       this.options.kind === "confirm"
         ? text

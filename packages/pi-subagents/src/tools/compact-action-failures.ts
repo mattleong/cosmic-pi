@@ -1,8 +1,3 @@
-/**
- * Human messages and agent recovery for failed target operations and rejected calls. The
- * service's own text is agent-facing: it names run IDs and tool calls, so it stays in each
- * issue's expanded detail.
- */
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
 import { failureMessage, quoteText } from "pi-cosmic-core";
 import type { CompactToolActionFailure, SubagentRunCard } from "./details-schema.ts";
@@ -14,7 +9,6 @@ import {
   type ActionFailureDisposition,
 } from "./outcome.ts";
 
-/** [lower-cased code substrings, recovery text, optional message-only substrings]. */
 type FailureRecoveryRule = readonly [
   codes: ReadonlyArray<string>,
   recovery: string,
@@ -83,7 +77,6 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     "Inspect the effective route with subagent_models or edit it with /subagents profiles.",
   ],
 ];
-/** Uncertain outcomes never reach retry-shaped rules; these keep their specific no-resend hints. */
 const UNCERTAIN_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   [
     ["retry_cleanup_unconfirmed", "retry_outcome_uncertain"],
@@ -95,7 +88,6 @@ const UNCERTAIN_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   ],
 ];
 
-/** The agent's next step after a failed launch or action, by its code or message. */
 export const failureRecovery = (
   code: string | undefined,
   message: string,
@@ -129,7 +121,6 @@ export const failureRecovery = (
 
 type Phrase = (subject: string) => string;
 
-/** [lower-cased code substrings, message]; the first match wins, so specific codes lead. */
 const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> = [
   [["workflow_owned_run"], (subject) => `${subject} reports to its workflow`],
   [["notfound", "not_found"], () => "A requested subagent was not found"],
@@ -185,10 +176,8 @@ const VERBS = new Map([
   ["question", "ask"],
 ]);
 
-// Service text written for the agent: tool calls, key=value arguments, or run IDs.
 const AGENT_TEXT = /\bsubagent_[a-z_]+\b|\b\w+\(\s*\{|\b\w+=["\w]|\bagent-[\w-]+/u;
 
-/** The first line of service text when people can read it, otherwise undefined. */
 const readableFailure = (text: string, forbidden: readonly string[]): string | undefined => {
   const line = failureMessage(text, "");
   return line && !AGENT_TEXT.test(line) && !forbidden.some((id) => id && line.includes(id))
@@ -207,17 +196,14 @@ const NOUNS = new Map([
   ["claims", "claim change"],
 ]);
 
-/** An outcome that may have applied: never phrased as a failure. */
 const unconfirmedMessage = (action: string, name: string | undefined): string => {
   const noun = NOUNS.get(action) ?? "action";
   return name ? `${name}: the ${noun} couldn't be confirmed` : `The ${noun} couldn't be confirmed`;
 };
 
-/** "Couldn't stop auth-review" or "Couldn't stop the subagent". */
 const couldNot = (action: string, target: string): string =>
   `Couldn't ${VERBS.get(action) ?? action} ${target}`;
 
-/** A definite failure in people's terms: its code's phrase, readable service text, or a fallback. */
 function failedActionMessage(
   action: string,
   failure: Pick<CompactToolActionFailure, "id" | "code" | "message">,
@@ -243,7 +229,6 @@ type ActionFailureIssue = (
   readonly recovery: { readonly message: string; readonly detail: string };
 };
 
-/** Human messages stay short; codes, IDs, and recovery procedures stay expanded-only. */
 const ACTION_FAILURE_ISSUES = {
   pending: (_action, _failure, name) => ({
     code: "delivery-pending",
@@ -273,7 +258,6 @@ const ACTION_FAILURE_ISSUES = {
   }),
 } satisfies Record<ActionFailureDisposition, ActionFailureIssue>;
 
-/** One issue per failed target, plus its expanded-only recovery step. */
 export function actionFailureIssues(
   action: string,
   failures: readonly CompactToolActionFailure[],
@@ -282,10 +266,8 @@ export function actionFailureIssues(
   issues: CompactIssue[],
 ): void {
   for (const failure of failures) {
-    // Failed targets are usually absent from the visible cards; the detail keeps their identity.
     const name = cards.find((card) => card.id === failure.id)?.name.slice(0, 60);
     const disposition = actionFailureDisposition(action, failure);
-    // Pending delivery and unconfirmed outcomes are uncertainty warnings, never failures.
     if (disposition !== "failed") summary.outcome = "uncertain";
     const oneOfMany = failures.length + cards.length > 1;
     const { code, message, recovery } = ACTION_FAILURE_ISSUES[disposition](
@@ -306,13 +288,8 @@ export function actionFailureIssues(
   }
 }
 
-/**
- * A call the tool rejected before returning a receipt. Pi keeps only its text, so the message
- * is that text when people can read it, or what could not be done.
- */
 export function rejectedCallIssue(action: string, text: string, target: string): CompactIssue {
   const readable = readableFailure(text, []);
-  // The full text is detail unless the message already says all of it.
   const detail = readable ? quoteText(text, { failure: true }).detail : text.trim() && text;
   return {
     severity: "error",

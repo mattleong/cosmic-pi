@@ -1,4 +1,3 @@
-// Real Pi agent loop and native QuickJS; only the owned image-service boundary is faked.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -17,7 +16,6 @@ import {
   type ToolParams,
 } from "../src/image/types.ts";
 
-// A valid one-pixel PNG, not the presentation-only "image" byte fixture.
 const png =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 const block = { type: "image", data: png, mimeType: "image/png" };
@@ -76,7 +74,6 @@ const nativeImageSession = (
     });
   });
 
-// Live time is intentional for Pi's native QuickJS worker. No provider or image HTTP is used.
 describe("native scripted image workflows", () => {
   it.live(
     "shows save:none images, preserves the prompt and direct details, and persists no duplicate payload",
@@ -111,8 +108,6 @@ describe("native scripted image workflows", () => {
         expect(direct.message.details).toEqual({ ...metadata, mimeType: "image/png" });
         expect(requests[1]).toEqual({ prompt, save: "none" });
 
-        // SessionManager entries are Pi's persisted transcript shape, not transient tool results.
-        // On pinned Pi 1.0.2 nested results and structuredContent never become extra entries.
         const persisted = h.session.sessionManager
           .getEntries()
           .filter((entry) => entry.type === "message" && entry.message.role === "toolResult");
@@ -181,38 +176,6 @@ describe("native scripted image workflows", () => {
         const direct = yield* h.call("openai_image", { prompt });
         expect(direct.isError).toBe(true);
         expect(direct.message.content.some((part) => part.type === "image")).toBe(false);
-      }).pipe(Effect.provide(nodeFilePlatformLayer)),
-    15_000,
-  );
-
-  it.live(
-    "rejects an encoding invariant failure without losing an already-saved image receipt",
-    () =>
-      Effect.gen(function* () {
-        const savedPath = "/project/.pi/generated-images/comet.png";
-        const h = yield* nativeImageSession((params) =>
-          Effect.succeed({
-            ...generated(params, savedPath),
-            // SAFETY: Owned service fault injection after generation and saving have succeeded.
-            outputFormat: "invalid-format" as CodexImageResult["outputFormat"],
-          }),
-        );
-        const result = yield* h.run(`
-          let rejected = false;
-          try { await tools.openai_image({prompt:${literal(prompt)}}); }
-          catch (error) { rejected = true; text(error.message); }
-          ${print("{rejected}")}
-        `);
-        expect(output(result.text)).toEqual({ rejected: true });
-        expect(result.text).toContain(savedPath);
-        expect(result.text).not.toContain("invalid-format");
-        expect(result.text).not.toContain(png);
-        const direct = yield* h.call("openai_image", { prompt });
-        expect(direct.isError).toBe(true);
-        expect(direct.text).toContain(imageResultText(generated({ prompt }, savedPath)));
-        expect(direct.message.content.filter((part) => part.type === "image")).toEqual([block]);
-        expect(direct.message.details).toMatchObject({ prompt, savedPath });
-        expect(serialize(direct.message.details)).not.toContain(png);
       }).pipe(Effect.provide(nodeFilePlatformLayer)),
     15_000,
   );

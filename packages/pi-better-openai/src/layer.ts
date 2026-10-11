@@ -12,7 +12,6 @@ import { OpenAIUsageService } from "./usage/controller.ts";
 import type { OpenAIProjection } from "./usage/projection.ts";
 import type { FastSnapshot } from "./fast/controller.ts";
 
-/** Plain session values captured by the Pi adapter before runtime construction. */
 export interface OpenAISessionInput {
   readonly ctx: ExtensionContext;
   readonly context: MutableRef.MutableRef<ExtensionContext>;
@@ -28,7 +27,6 @@ export interface OpenAIApplicationLayerOptions {
   readonly onUsageChange: (context: MutableRef.MutableRef<ExtensionContext>) => void;
 }
 
-/** Compose the complete Better OpenAI dependency graph for one Pi session. */
 export const makeOpenAIApplicationLayer = (
   { context, cwd, projectTrusted, publicationOwner }: OpenAISessionInput,
   options: OpenAIApplicationLayerOptions,

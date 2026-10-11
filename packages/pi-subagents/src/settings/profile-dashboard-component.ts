@@ -32,7 +32,6 @@ export interface ProfileDashboardOptions {
   readonly onDispose?: (() => void) | undefined;
 }
 
-/** One host slot owns every editor, library page and transient dialog. */
 export class ProfileDashboardComponent implements Component, Focusable {
   private readonly keymap = new FullScreenKeymap();
   private inspection: ProfileSettingsInspection;
@@ -90,8 +89,6 @@ export class ProfileDashboardComponent implements Component, Focusable {
     this.options.onInspection(inspection);
     this.library.updateInspection(inspection, isProjectTrusted(this.options.ctx));
     this.reconcileTargets();
-    // Owned rename transfers checkpoints before reconciling the vanished old name.
-    // Input stays blocked until that transfer and the final publish finish.
     if (!this.renaming) {
       this.visit.reconcile(inspection);
       for (const editor of this.editors.values()) editor.updateInspection(inspection);
@@ -113,7 +110,6 @@ export class ProfileDashboardComponent implements Component, Focusable {
       this.retire(target);
     }
   }
-  /** Drops a target's cached editor; a saved selection follows it to `replacement` or clears. */
   private retire(target: ProfileWorkspaceTarget, replacement?: ProfileWorkspaceTarget): void {
     const key = keyFor(target);
     this.editors.get(key)?.dispose();
@@ -287,7 +283,6 @@ export class ProfileDashboardComponent implements Component, Focusable {
         },
         renamed: (previous, next, inspection) => {
           this.visit.renameTarget(previous, next, inspection);
-          // Fixed-target editors cannot be retargeted. Preserve their position when replacing the renamed cache entry.
           const position = this.editors.get(keyFor(previous))?.getPosition();
           this.retire(previous, next);
           if (position) this.editor(next, position);
@@ -323,7 +318,6 @@ export class ProfileDashboardComponent implements Component, Focusable {
       });
     this.renderSoon();
   }
-  /** Dialogs, pickers, menus, and in-flight edits own their input. */
   private ownsInput(child: Child): boolean {
     if (child === this.overlay) return true;
     if (child === this.library) return this.library.hasOverlay;
@@ -348,7 +342,6 @@ export class ProfileDashboardComponent implements Component, Focusable {
       return;
     }
     if (action === "next-pane" || action === "previous-pane") this.switchTab();
-    // Saving Current Session is not a library action.
     else if (!(this.tab === "saved" && resolution?._tag === "Shortcut")) child.handleInput?.(data);
     this.focused = this._focused;
     this.renderSoon();

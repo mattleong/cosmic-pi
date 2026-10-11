@@ -14,8 +14,6 @@ export interface CodePreviewSchedulerServiceContract {
 const invokeCodePreviewCallback = (task: () => void): Effect.Effect<void> =>
   Effect.sync(() => invokeHostCallback(task, undefined));
 
-/** Fixed cadence avoids recursive-sleep drift while remaining TestClock driven; the first tick
- * waits one interval because `Effect.schedule` steps the schedule before each run. */
 export const previewScheduleEffect = (interval: number, task: () => void) =>
   invokeCodePreviewCallback(task).pipe(
     Effect.schedule(Schedule.fixed(Duration.millis(interval))),

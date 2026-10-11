@@ -1,6 +1,3 @@
-// Opt-in, metadata-only Claude protocol ledger. It retains no message text,
-// UUIDs, session IDs, paths, tool inputs, or raw foreign frames. The bounded
-// tail is written to private agent state only when the owning scope closes.
 import { sha256Text, synchronousRandomHex } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -18,8 +15,6 @@ const MAX_LEDGER_BYTES = 64 * 1024;
 const MAX_LEDGER_ENTRIES = 512;
 const MAX_RETAINED_LEDGERS = 8;
 const MAX_LINE_BYTES = 2 * 1024;
-// Independently built local-CLI Layers share one debug-retention directory.
-// This process-local lock keeps pruning plus publication one bounded commit.
 const persistenceLock = Semaphore.makeUnsafe(1);
 
 export type LocalClaudeDebugEntry =
@@ -80,8 +75,6 @@ interface LedgerState {
 }
 
 const ledgerHeader = (dropped: number) => `{"kind":"ledger","dropped":${dropped}}\n`;
-// The tail reserves room for the largest header, so publication never drops an uncounted entry;
-// exact drop accounting costs at most 15 bytes of retained capacity.
 const MAX_TAIL_BYTES = MAX_LEDGER_BYTES - Buffer.byteLength(ledgerHeader(Number.MAX_SAFE_INTEGER));
 
 const safeInteger = (value: number): number =>
@@ -179,11 +172,6 @@ const persistLedger = Effect.fn("LocalClaudeDebug.persist")(function* (
   );
 });
 
-/**
- * Allocates a bounded in-memory ledger only under the explicit debug gate. Its
- * finalizer writes a nonempty metadata-only tail to private agent state and
- * retains at most eight owned directories. Diagnostic failure never changes run behavior.
- */
 export const acquireLocalClaudeDebug = Effect.fn("LocalClaudeDebug.acquire")(function* (options: {
   readonly agentDirectory: string;
   readonly environment: NodeJS.ProcessEnv;
@@ -192,7 +180,6 @@ export const acquireLocalClaudeDebug = Effect.fn("LocalClaudeDebug.acquire")(fun
   if (options.environment.PI_SUBAGENTS_CLAUDE_DEBUG !== "1") return undefined;
   const state: LedgerState = { lines: [], bytes: 0, dropped: 0 };
   const runIdentity = sha256Text(options.runId).slice(0, 12);
-  // Appends are synchronous, so the snapshot taken under the retention lock is a whole ledger.
   const record = (entry: LocalClaudeDebugEntry): Effect.Effect<void> =>
     Effect.sync(() => appendBounded(state, encodeEntry(entry))).pipe(Effect.ignoreCause);
   yield* Effect.addFinalizer(() =>

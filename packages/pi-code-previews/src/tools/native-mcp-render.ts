@@ -23,7 +23,12 @@ import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
 import { escapeControlChars } from "../shared/terminal-text";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
-import type { RendererArguments, RendererState, ToolRenderContext } from "./renderers/shared/types";
+import type {
+  RenderCall,
+  RendererState,
+  RenderResult,
+  ToolRenderContext,
+} from "./renderers/shared/types";
 import {
   nativeMcpEvidence,
   nativeMcpHasRecoverableClipping,
@@ -36,15 +41,13 @@ import { nativeMcpHeading } from "./native-mcp-subject";
 import { nativeMcpIdentity } from "./native-mcp-identity";
 import { plainRows, safeContent } from "./native-safe-content";
 
-/** Heading name for every native MCP row. The registered tool name stays unchanged. */
 const DISPLAY_NAME = "mcp";
 const PREVIEW_LINES = 5;
 const ARGUMENT_PREVIEW_CHARS = 1000;
 
-type Context = ToolRenderContext<any, any>;
+type Context = ToolRenderContext<RendererState, unknown>;
 const unstyled: Pick<Theme, "fg"> = { fg: (_color, text) => text };
 
-/** Exact arguments as JSON; empty when there are none. JSON escapes control characters. */
 function argumentsJson<Args>(args: Args, space?: number): string {
   return invokeHostCallback(() => {
     if (!Predicate.isObject(args) || Object.keys(args).length === 0) return "";
@@ -63,7 +66,6 @@ function textBlock(theme: Theme, text: string, color: "toolOutput" | "error" | "
   );
 }
 
-/** Every argument in full, including those the heading already names. */
 function renderArguments<Args>(args: Args, theme: Theme): Component {
   const json = argumentsJson(args, 2);
   if (!json) return new Container();
@@ -73,10 +75,6 @@ function renderArguments<Args>(args: Args, theme: Theme): Component {
   );
 }
 
-/**
- * All native text, including recovery notes and saved-output paths, under one label. Pi draws
- * native images; the shared fallback lists them when they cannot be shown.
- */
 function renderOutput(
   result: AgentToolResult<unknown>,
   _options: ToolRenderResultOptions,
@@ -103,7 +101,6 @@ function renderOutput(
   }, [recovery, raw].filter(Boolean).join("\n"));
 }
 
-/** The latest progress message, or the shared running line, animated by the shell's owner. */
 function renderProgress(
   result: AgentToolResult<unknown>,
   theme: Theme,
@@ -125,10 +122,6 @@ function renderProgress(
   );
 }
 
-/**
- * At most five output rows wrapped at the render width, since MCP results are often one long
- * JSON line, then how many more rows expansion shows.
- */
 function renderOutputPreview(
   result: AgentToolResult<unknown>,
   theme: Theme,
@@ -165,10 +158,6 @@ function renderOutputPreview(
   return safeContent(() => preview(theme), preview(unstyled));
 }
 
-/**
- * Presentation only, for a source `admitsPreviewSource` already admitted. Pi keeps its manager,
- * execution, schemas, exposure and permissions. The owning session supplies the scheduler.
- */
 export function createNativeMcpRenderers(
   name: string,
   tool: Pick<ToolInfo, "namespace"> | undefined,
@@ -176,26 +165,19 @@ export function createNativeMcpRenderers(
   appearance: CodePreviewRendererAppearance,
 ): ToolRenderers {
   const identity = nativeMcpIdentity(name, tool);
-  // Without an exact public remote identity, a collapsed call keeps the entire native call
-  // (including its label and any additional content). next() is only a renderer set, never a
-  // tool definition. Expanded calls show the shared heading and each argument once.
   const nativeCall = identity.kind === "tool" ? downstream?.renderCall : undefined;
-  // The native callback updates its own prior component, never one of ours.
   const nativeComponents = new WeakSet<Component>();
-  // Pi builds the call before its result but draws both afterwards, so the heading reads the
-  // row's latest matching receipt when drawn, naming the server and tool as compact rows do.
   const receipts = new WeakMap<object, NativeMcpEvidence>();
   const recordReceipt = (result: AgentToolResult<unknown>, context: Context): void => {
     const receipt = nativeMcpReceipt(identity, result, context.args);
     if (receipt && Predicate.isObject(context.state)) receipts.set(context.state, receipt);
   };
-  const subtitle = (state: RendererState, args: RendererArguments): string => {
+  const subtitle = <Args>(state: RendererState, args: Args): string => {
     const receipt = Predicate.isObject(state) ? receipts.get(state) : undefined;
     const { action, subject } = nativeMcpHeading(identity, args, receipt);
     return [action, subject].filter(Boolean).join(" ");
   };
-  /** Drawn plain if the host theme fails, so the issue lines placed beneath it stay visible. */
-  const heading = (theme: Theme, state: RendererState, args: RendererArguments): Component => {
+  const heading = <Args>(theme: Theme, state: RendererState, args: Args): Component => {
     const text = new Text("", 0, 0);
     return {
       render(width) {
@@ -212,7 +194,7 @@ export function createNativeMcpRenderers(
       },
     };
   };
-  const renderCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
+  const renderCall: RenderCall<unknown, RendererState> = (args, theme, context) => {
     if (nativeCall && !context.expanded) {
       const lastComponent =
         context.lastComponent && nativeComponents.has(context.lastComponent)
@@ -233,7 +215,6 @@ export function createNativeMcpRenderers(
       .join("\n");
     return safeContent(
       () => {
-        // Style before placing the issue slot: a theme failure must leave shared issues visible.
         const previewLine = preview ? theme.fg("muted", compactPlainText(preview)) : "";
         const body = new Container();
         body.addChild(heading(theme, context.state, context.args));
@@ -249,7 +230,7 @@ export function createNativeMcpRenderers(
       context.expanded ? raw : plainRows(raw, 2),
     );
   };
-  const renderExpandedOutput: NonNullable<ToolRenderers["renderResult"]> = (
+  const renderExpandedOutput: RenderResult<unknown, unknown, RendererState> = (
     result,
     options,
     theme,
@@ -258,7 +239,7 @@ export function createNativeMcpRenderers(
     recordReceipt(result, context);
     return renderOutput(result, options, theme, context);
   };
-  const renderResult: NonNullable<ToolRenderers["renderResult"]> = (
+  const renderResult: RenderResult<unknown, unknown, RendererState> = (
     result,
     options,
     theme,

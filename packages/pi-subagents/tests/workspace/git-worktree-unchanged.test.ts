@@ -11,13 +11,10 @@ const test = workspaceTests([
   [".gitignore", "ignored.ts\n"],
 ]);
 
-/** Runs the discard of a worker found unchanged, as the workspace's coordinator does. */
 const confirmed = (discard: Effect.Effect<void, WorkspaceError>) => discard.pipe(Effect.as(true));
 
-/** What a writer did in its worker tree. */
 type WriterChange = (cwd: string) => Promise<void>;
 
-/** A fresh worker after `change`, which a writer made in its tree. */
 const workerAfter = (root: string, change: WriterChange) =>
   Effect.gen(function* () {
     const service = yield* WorkspaceService;
@@ -26,7 +23,6 @@ const workerAfter = (root: string, change: WriterChange) =>
     return handle;
   });
 
-/** Expects the worker to be kept as it was: an active record and its tree on disk. */
 const expectKept = (handle: WorkspaceHandle) =>
   Effect.gen(function* () {
     const service = yield* WorkspaceService;
@@ -35,7 +31,6 @@ const expectKept = (handle: WorkspaceHandle) =>
   });
 
 test("discards a worker that holds nothing beyond its baseline", function* (service, root) {
-  // An empty directory holds no work: no revision could carry it.
   const handle = yield* workerAfter(root, (cwd) =>
     fs.mkdir(path.join(cwd, "scratch")).then(() => undefined),
   );
@@ -75,7 +70,6 @@ for (const [name, change] of changes)
   });
 
 test("keeps a worker whose check fails", function* (service, root) {
-  // Hardlinks are unsupported, so the snapshot of this worker fails.
   const handle = yield* workerAfter(root, (cwd) =>
     fs.link(path.join(cwd, "other.txt"), path.join(cwd, "src/alias.ts")),
   );

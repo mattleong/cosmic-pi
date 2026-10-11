@@ -1,7 +1,3 @@
-// Native CLI frame limits and immediate parser-overflow termination policy, shared by the local
-// Claude/Codex adapters.
-// process-transport.ts owns shared spawn, bounded queues, writes, and process-tree release.
-// This boundary owns no harness state and never imports the LocalCliProcess service.
 import * as Effect from "effect/Effect";
 import type {
   CodexInitializedNotification,
@@ -37,7 +33,6 @@ export interface LocalCliTransportRequest {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
   readonly cwd: string;
-  /** Package-test seam only. */
   readonly platform?: NodeJS.Platform | undefined;
 }
 
@@ -48,7 +43,6 @@ export const processError = <ErrorInput>(
 ): SubagentProcessError =>
   processCauseError(operation, error, code, `Unable to ${operation} local CLI process.`);
 
-/** The native adapters retain frame limits and immediate parser-overflow termination. */
 export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(function* (
   request: LocalCliTransportRequest,
   runtime?: ProcessTransportRuntime,

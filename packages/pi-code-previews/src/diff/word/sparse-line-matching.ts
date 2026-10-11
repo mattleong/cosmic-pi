@@ -32,10 +32,6 @@ const MIN_SPARSE_RARE_FEATURE_COUNT = 2;
 const MIN_SPARSE_EVIDENCE_MARGIN = 1;
 const MIN_SPARSE_EVIDENCE_RATIO = 0.9;
 
-/**
- * Matches blocks too large for a full score matrix: rare shared features propose candidate
- * pairs, reciprocal-best anchors are accepted, and unanchored lines fall back to their diagonal.
- */
 export function matchChangedLinesSparse(
   similarity: ChangedLineSimilarity,
 ): ChangedLinePositionMatch[] {
@@ -116,7 +112,6 @@ function sparseChangedLineAnchors(
   return pairs;
 }
 
-/** An off-diagonal anchor competes with the diagonal partners of both of its lines. */
 function sparsePositionalCompetingScore(
   { removedPosition, addedPosition }: SparseChangedLinePairCandidate,
   similarity: ChangedLineSimilarity,
@@ -199,7 +194,6 @@ function similarityFeaturePositions(
   return positions;
 }
 
-/** The strongest candidates of each line on one side, keyed by that side's position. */
 function topSparseCandidates(
   candidates: SparseChangedLinePairCandidate[],
   position: (candidate: SparseChangedLinePairCandidate) => number,

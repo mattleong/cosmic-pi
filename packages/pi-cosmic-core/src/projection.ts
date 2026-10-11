@@ -12,11 +12,8 @@ export class ProjectionError extends Schema.TaggedError<ProjectionError>()("Proj
 }) {}
 
 interface FrozenProjection<State, Snapshot> {
-  /** Synchronous renderer boundary. The returned value is deeply frozen plain data. */
   readonly getSnapshot: () => Snapshot;
-  /** Effect-owned authoritative state read; no Ref is exposed. */
   readonly getState: Effect.Effect<State>;
-  /** Serialized transition. Publication happens only after the transition and projection succeed. */
   readonly transition: <A, E, R>(
     update: (state: State) => Effect.Effect<readonly [A, State], E, R>,
   ) => Effect.Effect<A, E | ProjectionError, R>;
@@ -31,91 +28,80 @@ const unsupported = (path: string, kind: string): never => {
 const childPath = (path: string, key: string | number): string =>
   Predicate.isNumber(key) ? `${path}[${key}]` : `${path}.${key}`;
 
-interface ProjectionRecord {
-  [key: string]: ProjectionData;
-}
-type ProjectionData =
-  | undefined
-  | null
-  | string
-  | number
-  | boolean
-  | ReadonlyArray<ProjectionData>
-  | ProjectionRecord;
-
-const cloneAndFreeze = <Value>(
-  value: Value,
-  seen: WeakMap<object, ProjectionData>,
+const checkArray = (
+  value: ReadonlyArray<unknown>,
+  checked: WeakSet<object>,
   activePaths: WeakMap<object, string>,
   path: string,
-): ProjectionData => {
-  if (value === undefined) return undefined;
-  if (value === null) return null;
-  if (Predicate.isString(value) || Predicate.isBoolean(value)) return value;
-  if (Predicate.isNumber(value)) {
-    if (!Number.isFinite(value)) return unsupported(path, "non-finite number");
-    return value;
+): void => {
+  if (Reflect.ownKeys(value).length !== value.length + 1)
+    unsupported(path, "array with extra or symbol-keyed properties");
+  for (let index = 0; index < value.length; index++) {
+    const at = childPath(path, index);
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (!descriptor) unsupported(at, "sparse array entry");
+    else if (!("value" in descriptor) || !descriptor.enumerable)
+      unsupported(at, "non-data array entry");
+    else checkPlainData(descriptor.value, checked, activePaths, at);
   }
-  // Functions, symbols, and bigints are the only kinds left.
-  if (!Predicate.isObjectOrArray(value)) return unsupported(path, runtimeTypeName(value));
+};
 
-  const activePath = activePaths.get(value);
-  if (activePath !== undefined) return unsupported(path, `cyclic reference to ${activePath}`);
-  const prior = seen.get(value);
-  if (prior !== undefined) return prior;
-  activePaths.set(value, path);
-
-  if (Array.isArray(value)) {
-    if (Reflect.ownKeys(value).length !== value.length + 1)
-      return unsupported(path, "array with extra or symbol-keyed properties");
-
-    const clone: ProjectionData[] = [];
-    seen.set(value, clone);
-    for (let index = 0; index < value.length; index++) {
-      const at = childPath(path, index);
-      const descriptor = Object.getOwnPropertyDescriptor(value, index);
-      if (!descriptor) return unsupported(at, "sparse array entry");
-      if (!("value" in descriptor) || !descriptor.enumerable)
-        return unsupported(at, "non-data array entry");
-      clone.push(cloneAndFreeze(descriptor.value, seen, activePaths, at));
-    }
-    activePaths.delete(value);
-    return Object.freeze(clone);
-  }
-
+const checkRecord = <Candidate extends object>(
+  value: Candidate,
+  checked: WeakSet<object>,
+  activePaths: WeakMap<object, string>,
+  path: string,
+): void => {
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null)
-    return unsupported(path, prototype?.constructor?.name ?? "non-plain object");
-
+    unsupported(path, prototype?.constructor?.name ?? "non-plain object");
   const ownKeys = Reflect.ownKeys(value);
   if (!ownKeys.every((key) => Predicate.isString(key)))
     return unsupported(path, "symbol-keyed property");
-
-  const clone: ProjectionRecord = {};
-  seen.set(value, clone);
   for (const key of ownKeys) {
     const at = childPath(path, key);
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor) return unsupported(at, "missing property descriptor");
-    if (!("value" in descriptor)) return unsupported(at, "accessor");
-    if (!descriptor.enumerable) return unsupported(at, "non-enumerable property");
-    Object.defineProperty(clone, key, {
-      value: cloneAndFreeze(descriptor.value, seen, activePaths, at),
-      configurable: true,
-      enumerable: true,
-      writable: true,
-    });
+    if (!descriptor) unsupported(at, "missing property descriptor");
+    else if (!("value" in descriptor)) unsupported(at, "accessor");
+    else if (!descriptor.enumerable) unsupported(at, "non-enumerable property");
+    else checkPlainData(descriptor.value, checked, activePaths, at);
   }
-  activePaths.delete(value);
-  return Object.freeze(clone);
 };
 
-/** Clones and deeply freezes a plain-data snapshot, rejecting non-plain values with typed paths. */
+const checkPlainData = <Value>(
+  value: Value,
+  checked: WeakSet<object>,
+  activePaths: WeakMap<object, string>,
+  path: string,
+): void => {
+  if (value === undefined || value === null) return;
+  if (Predicate.isString(value) || Predicate.isBoolean(value)) return;
+  if (Predicate.isNumber(value)) {
+    if (!Number.isFinite(value)) unsupported(path, "non-finite number");
+    return;
+  }
+  if (!Predicate.isObjectOrArray(value)) return void unsupported(path, runtimeTypeName(value));
+  const activePath = activePaths.get(value);
+  if (activePath !== undefined) unsupported(path, `cyclic reference to ${activePath}`);
+  if (checked.has(value)) return;
+  activePaths.set(value, path);
+  if (Array.isArray(value)) checkArray(value, checked, activePaths, path);
+  else checkRecord(value, checked, activePaths, path);
+  activePaths.delete(value);
+  checked.add(value);
+};
+
+const deepFreeze = <Value>(value: Value): void => {
+  if (!Predicate.isObjectOrArray(value) || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  for (const child of Object.values(value)) deepFreeze(child);
+};
+
 export const freezeSnapshot = <Snapshot>(snapshot: Snapshot): Snapshot => {
-  const cloned = cloneAndFreeze(snapshot, new WeakMap(), new WeakMap(), "$");
-  // SAFETY: cloneAndFreeze structurally validated every value while cloning, so the frozen clone
-  // preserves the caller's plain-data snapshot shape.
-  return cloned as Snapshot;
+  checkPlainData(snapshot, new WeakSet(), new WeakMap(), "$");
+  const clone = structuredClone(snapshot);
+  deepFreeze(clone);
+  return clone;
 };
 
 const projectSnapshot = <State, Snapshot>(
@@ -130,7 +116,6 @@ const projectSnapshot = <State, Snapshot>(
         : projectionError("$", "Unable to publish a plain immutable state snapshot."),
   });
 
-/** Creates one authoritative synchronized state with an immutable synchronous snapshot projection. */
 export const makeFrozenProjection = <State, Snapshot>(
   initialState: State,
   project: (state: State) => Snapshot,
@@ -152,8 +137,6 @@ export const makeFrozenProjection = <State, Snapshot>(
           const current = yield* Ref.get(state);
           const [result, next] = yield* update(current);
           const published = yield* projectSnapshot(next, project);
-          // Preparation and lock waiting remain interruptible. Once publication starts,
-          // include the backing Ref commit in the same protected transaction.
           yield* Effect.uninterruptible(
             Effect.try({
               try: () => {

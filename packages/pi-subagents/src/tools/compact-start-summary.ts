@@ -30,11 +30,9 @@ const launchFailureIssue = (
   detail: `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
 });
 
-/** Launches started so far; a sole named launch needs no count. */
 const startedCounter = (started: number, total: number, subject: string): string =>
   started === 1 && total === 1 && subject.trim() ? "started" : `${started}/${total} started`;
 
-/** Launch receipts own start counters, launch-slot issues, and start outcome. */
 export function summarizeStart(
   details: SubagentStartDetails,
   phase: CompactPhase,
@@ -59,7 +57,6 @@ export function summarizeStart(
     issues.push(launchFailureIssue(failure, label, uncertain));
     const recovery = failure.admittedRun;
     if (!recovery) {
-      // A missing receipt is not proof that the launch had no effects.
       issues.push({
         severity: "warning",
         code: `launch:${failure.index}:recovery-unknown`,
@@ -71,9 +68,7 @@ export function summarizeStart(
       continue;
     }
     const confirmed = recovery.cleanupDisposition === "confirmed";
-    // One line per launch: cleanup and what it allows next.
     issues.push({
-      // Confirmed cleanup is a recovery fact, not a problem; the start error already warns.
       severity: confirmed ? "info" : "warning",
       code: `run:${recovery.runId}:cleanup-receipt`,
       message: `${label}: ${confirmed ? `cleanup is confirmed; ${retryMessages[recovery.retryDisposition]}` : "cleanup isn't confirmed; processes may still be running"}`,

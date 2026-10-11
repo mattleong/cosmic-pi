@@ -39,13 +39,11 @@ it.effect(
       const draft = widget.render(200);
       h.component!.handleInput?.("b");
       expect(widget.render(200)).toEqual([]);
-      h.tui.terminal.columns = 80;
-      h.tui.terminal.rows = 24;
+      h.resize(80, 24);
       expect(bridge.resume()).toBe(true);
       expect(widget.render(80).length).toBeGreaterThan(0);
       expect(widget.render(80).length).toBeLessThan(h.tui.terminal.rows);
-      h.tui.terminal.columns = 200;
-      h.tui.terminal.rows = 60;
+      h.resize(200, 60);
       expect(widget.render(200)).toEqual(draft);
       h.component!.handleInput?.("\r");
       expect((yield* Effect.promise(() => pending)).outcome).toBe("submitted");
@@ -151,7 +149,7 @@ for (const fault of ["ownedHide", "createGuard", "done", "guardHide"] as const) 
       const oldComponent = h.component!;
       h.showOverlay(foreign);
       h[fault].mockImplementationOnce(() => {
-        oldComponent.handleInput?.("\r"); // Reentrant finish must not acquire or pop twice.
+        oldComponent.handleInput?.("\r");
         throw new Error("secret host path /private/questionnaire");
       });
       oldComponent.handleInput?.("1");
@@ -174,13 +172,10 @@ for (const fault of ["ownedHide", "createGuard", "done", "guardHide"] as const) 
       expect(h.done).toHaveBeenCalledTimes(fault === "done" || fault === "guardHide" ? 1 : 0);
       expect(h.guardHide).toHaveBeenCalledTimes(fault === "done" || fault === "guardHide" ? 1 : 0);
       expect(bridge.resume()).toBe(false);
-      // The ticket advances independently of Pi's possibly nonsettling custom Promise.
       yield* Deferred.await(successorAdmitted);
       if (fault !== "guardHide") {
         expect(gate.canOpen()).toBe(false);
         expect(h.customCalls).toBe(1);
-        // Only a real public end (e.g. host recovery) permits the next mount.
-        // Never synthesize this in the boundary: a coalesced foreign prompt may own it.
         gate.ended();
       }
       yield* eventually(() => expect(h.customCalls).toBe(2));
@@ -313,7 +308,6 @@ for (const lateResult of ["success", "rejection"] as const) {
           expect((yield* Fiber.join(secondFiber)).outcome).toBe("submitted");
           expect(h.done).toHaveBeenCalledTimes(2);
         }).pipe(
-          // Release the fake editor before child finalizers join its cleanup on failure.
           Effect.ensuring(
             Deferred.succeed(terminated, undefined).pipe(
               Effect.andThen(Deferred.succeed(restored, undefined)),

@@ -13,7 +13,6 @@ import type { QuestionnaireOwner } from "./protocol.ts";
 import type { AskUserOutcome } from "./model.ts";
 import { normalizeAskUserRequest, validateAskUserRequest } from "./validation.ts";
 
-/** Mount and hide/resume signals an async presenter observes; blocking questionnaires omit them. */
 export interface QuestionnairePresence {
   readonly opened: Deferred.Deferred<void, AskUserHostError>;
   readonly visibility: Queue.Enqueue<"open" | "hidden">;
@@ -56,7 +55,6 @@ const makeService = Effect.fn("AskUserService.make")(function* (
   const queue = yield* makeQuestionnaireQueue;
   const blockingCount = yield* Ref.make(0);
   const async = yield* makeAsyncQuestionnaires(host, queue, delivery, idPrefix, activity);
-  /** One FIFO presentation: admit, publish Activity, race user cancellation, then settle. */
   const askRequest = Effect.fn("AskUserService.ask")(function* (
     request: AskUserRequest,
     owner?: QuestionnaireOwner,

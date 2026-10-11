@@ -163,8 +163,6 @@ it.effect("shares one bounded queue across blocking, owned and async requests", 
         ),
       ).toMatchObject({ reason: "busy" });
       yield* Fiber.interrupt(owned);
-      // The cancelled ticket still occupies its bounded slot until the active
-      // predecessor closes. Repeated cancel/admit cannot grow drain fibers.
       expect(yield* Effect.flip(service.startAsync(asyncRequest))).toMatchObject({
         reason: "busy",
       });

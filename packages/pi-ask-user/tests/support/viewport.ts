@@ -1,13 +1,11 @@
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { expect } from "vitest";
 
-/** Asserts that rendered lines fit the viewport. */
 export const expectWithin = (lines: ReadonlyArray<string>, width: number, height = Infinity) => {
   expect(lines.length).toBeLessThanOrEqual(height);
   expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 };
 
-/** Pages down from Home, asserting that every page fits, and returns each page's joined text. */
 export const pageViews = (
   component: Component,
   width: number,

@@ -28,10 +28,6 @@ const hasOwnManifest = async (directory) => {
   }
 };
 
-/**
- * Walk one package's own files. A subdirectory with its own `package.json` is a violation and
- * is not descended into, so nesting can never silently exempt files from these rules.
- */
 const walkFiles = async (directory) => {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {

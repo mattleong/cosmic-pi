@@ -38,11 +38,6 @@ export const sanitizeName = (value: string): string => {
 
 const frozenViewSnapshots = new WeakMap<SubagentRunView, SubagentRunView>();
 
-/**
- * Deep-clones and deep-freezes a view for publication. Run views are only ever
- * replaced immutably (never mutated in place), so the frozen snapshot is
- * memoized per view object and shared across projections and returned views.
- */
 export const snapshotView = (view: SubagentRunView): SubagentRunView => {
   const cached = frozenViewSnapshots.get(view);
   if (cached) return cached;
@@ -56,10 +51,6 @@ export const sanitizeDiagnosticText = (value: string, limit: number): string => 
   return clipText(sanitized, limit);
 };
 
-/**
- * A stream such as stderr can lead with its fatal error or end with it after warnings, so long
- * text keeps both ends.
- */
 export const sanitizeStreamDiagnostic = (value: string, limit: number): string => {
   const sanitized = sanitizeDiagnosticError(value, { maximumLength: Number.MAX_SAFE_INTEGER });
   if (sanitized.length <= limit) return sanitized;
@@ -85,10 +76,6 @@ const isValidUsage = (usage: SubagentUsage): boolean =>
   ) &&
   (usage.cost === undefined || (Number.isFinite(usage.cost) && usage.cost >= 0));
 
-/**
- * Sums token counts and known costs. Cost stays unknown (absent) only while no
- * event has ever reported a known cost; a known cost never regresses to unknown.
- */
 export const addUsage = (left: SubagentUsage, right: SubagentUsage): SubagentUsage => {
   if (!isValidUsage(right)) return left;
   const cost =

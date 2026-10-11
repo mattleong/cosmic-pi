@@ -32,7 +32,6 @@ function mcp(text: string, fullOutputPath?: string) {
   });
 }
 
-/** Clipping issues without the producer's code prefix. */
 const clipping = (summary: CompactSummary | undefined) =>
   (summary?.issues ?? [])
     .filter((issue) => /-output-(truncated|save-failed)$/.test(issue.code))
@@ -54,14 +53,12 @@ test("codemode and MCP read Pi's truncation envelope the same way", () => {
       path: "/tmp/full.txt",
       expected: [["output-truncated", "info"]],
     },
-    // A kept body may quote another envelope's footer; only Pi's final footer is recovery.
     {
       text: `${header}HEAD${unsaved}\nTAIL${saved}`,
       path: "/tmp/full.txt",
       expected: [["output-truncated", "info"]],
     },
     { text: `${header}HEAD${saved}\nTAIL${unsaved}`, path: undefined, expected: lost },
-    // A saved-output path cannot hide Pi saying the save failed.
     { text: `${header}HEAD…TAIL${unsaved}`, path: "/tmp/stale.txt", expected: lost },
     { text: `${header}HEAD…TAIL${unsaved}`, path: undefined, expected: lost },
     { text: `${header}HEAD…TAIL`, path: undefined, expected: [["output-truncated", "warning"]] },
@@ -71,7 +68,6 @@ test("codemode and MCP read Pi's truncation envelope the same way", () => {
       [codemode(text, path), "success"],
       [mcp(text, path), "returned"],
     ] as const) {
-      // Recoverable clipping is informational; lost output raises the row to a warning.
       assert.equal(compactStatus("settled", summary!), lostOutput ? "warning" : delivered);
       const projected = clipping(summary);
       assert.deepEqual(

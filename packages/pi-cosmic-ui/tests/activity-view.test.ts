@@ -7,8 +7,9 @@ import {
   deferredPromise,
   extensionApiFixture,
   extensionContextFixture,
-  opaqueFixture,
+  piKeybindingsFixture,
   plainTheme,
+  tuiFixture,
 } from "pi-cosmic-core/testing";
 import { discoverActivityView } from "../src/activity/view-protocol.ts";
 import { makeActivityHost } from "../src/boundary/host-activity.ts";
@@ -24,7 +25,7 @@ const fixture = (mode: "tui" | "rpc" = "tui") =>
       columns: 80,
       rows: 24,
       theme: plainTheme,
-      keybindings: opaqueFixture({ matches: () => false, getKeys: () => [] }),
+      keybindings: piKeybindingsFixture(),
     });
     const host = makeActivityHost(
       extensionApiFixture({ events }),
@@ -44,13 +45,16 @@ const fixture = (mode: "tui" | "rpc" = "tui") =>
       ui: {
         custom,
         notify() {},
-        setWidget(_key: string, value: Parameters<ExtensionContext["ui"]["setWidget"]>[1]) {
+        setWidget(
+          _key: string,
+          value: string[] | Parameters<ExtensionContext["ui"]["setWidget"]>[1],
+        ) {
           if (!value) {
             dispose?.();
             return;
           }
           if (Predicate.isFunction(value)) {
-            const component = value(opaqueFixture({ requestRender() {} }), plainTheme);
+            const component = value(tuiFixture(), plainTheme);
             dispose = () => component.dispose?.();
           }
         },

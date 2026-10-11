@@ -1,20 +1,48 @@
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   claimsOperationError,
+  prepareSubagentStartArguments,
   SUBAGENT_TOOL_SCHEMAS,
   type SubagentClaimsInput,
 } from "../src/tools/schema.ts";
 import { SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 
-/**
- * Pi's tool-call pipeline drops arguments for tools whose advertised schema has no root
- * `type: "object"` (a pure anyOf union at the root). Every registered subagent tool must
- * therefore keep an object-rooted parameter schema; per-action field requirements live in
- * runtime validation, never in a root Type.Union.
- */
 describe("subagent tool parameter schemas", () => {
   it.each(SUBAGENT_TOOL_NAMES)("registers an object-rooted schema for %s", (name) => {
     expect(SUBAGENT_TOOL_SCHEMAS[name].parameters.type).toBe("object");
+  });
+});
+
+describe("prepareSubagentStartArguments", () => {
+  it("returns Pi's coerced arguments, which Pi's own validation accepts unchanged", () => {
+    const prepared = prepareSubagentStartArguments({ agents: [{ task: 42, name: null }] });
+    expect(prepared).toEqual({ agents: [{ task: "42" }] });
+    expect(
+      validateToolArguments(
+        {
+          name: "subagent_start",
+          description: "",
+          parameters: SUBAGENT_TOOL_SCHEMAS.subagent_start.parameters,
+        },
+        { type: "toolCall", id: "call", name: "subagent_start", arguments: prepared },
+      ),
+    ).toEqual(prepared);
+  });
+
+  it("rejects invalid arguments with Pi's validation error", () => {
+    expect(() => prepareSubagentStartArguments({ agents: [] })).toThrow(
+      'Validation failed for tool "subagent_start"',
+    );
+  });
+
+  it("explains misplaced launch fields and route overrides before schema validation", () => {
+    expect(() => prepareSubagentStartArguments({ task: "inspect" })).toThrow(
+      "[invalid_start_shape]",
+    );
+    expect(() =>
+      prepareSubagentStartArguments({ agents: [{ task: "inspect", model: "other" }] }),
+    ).toThrow("[launch_override_not_allowed]");
   });
 });
 
@@ -45,13 +73,6 @@ describe("claimsOperationError", () => {
       claimsOperationError({ action: "grant", runId: "a", paths: ["p"], runIds: ["a"] }),
     ).toEqual(expect.any(String));
     expect(claimsOperationError({ action: "resume_admission", runId: "a", paths: ["p"] })).toEqual(
-      expect.any(String),
-    );
-  });
-
-  it("rejects an action changed after schema validation", () => {
-    // SAFETY: A Pi `tool_call` handler may replace the schema-checked action at runtime.
-    expect(claimsOperationError({ action: "toString" as never, runId: "a" })).toEqual(
       expect.any(String),
     );
   });

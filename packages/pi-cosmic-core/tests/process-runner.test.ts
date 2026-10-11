@@ -91,7 +91,6 @@ const fakeRequest = {
   timeoutMillis: 10,
   cleanupTimeoutMillis: 100,
 };
-/** Runs the fake request through `spawn` and records every cleanup report. */
 const runFake = (spawn: Parameters<typeof ChildProcessSpawner.make>[0]) => {
   const reports: boolean[] = [];
   const run = runBoundedProcessScoped({

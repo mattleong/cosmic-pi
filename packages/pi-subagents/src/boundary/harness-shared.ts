@@ -1,4 +1,3 @@
-// Shared private-filesystem and harness helpers for boundary services.
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import { hasControlCharacter, hasObjectRuntimeType } from "pi-cosmic-core";
@@ -11,7 +10,6 @@ const { isAbsolute, join, resolve } = nodePath;
 const MAX_AUTH_BYTES = 64 * 1024;
 const MAX_PATH_CHARS = 4_096;
 
-/** Quotes a value as a TOML basic string for the Codex config.toml MCP fragment. */
 export const tomlString = (value: string): string => JSON.stringify(value);
 
 export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined =>
@@ -68,7 +66,6 @@ export const safeAgentDirectory = (agentDirectory: string): Promise<string> => {
     );
 };
 
-/** Removes an owned private directory tree, refusing a symlink or non-directory. */
 export const removePrivateDirectory = (directory: string): Promise<void> =>
   fs.lstat(directory).then((stat) => {
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
@@ -114,7 +111,6 @@ const readValidatedCodexAuthFromHome = (sourceHome: string): Promise<string | un
     });
 };
 
-/** Bounded, validated auth from a safe Codex home; an unsafe or missing home yields none. */
 export const readValidatedCodexAuth = (
   sourceEnvironment: NodeJS.ProcessEnv,
 ): Promise<string | undefined> =>

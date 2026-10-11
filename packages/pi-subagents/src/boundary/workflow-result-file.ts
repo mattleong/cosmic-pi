@@ -1,10 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
-/**
- * Saves a workflow's full result outside the notification, which carries only a clipped copy.
- * The file outlives the session so the main agent can read it later; undefined when saving fails.
- */
 export const saveWorkflowResult = (
   text: string,
   extension: "json" | "txt",

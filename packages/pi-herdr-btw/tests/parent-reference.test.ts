@@ -1,5 +1,9 @@
 import type { BeforeAgentStartEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
+import {
+  extensionContextFixture,
+  recordingExtensionHost,
+  type RecordedHandler,
+} from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { registerHerdrBtwParentReference } from "../src/boundary/host-parent-reference.ts";
 import type {
@@ -69,9 +73,9 @@ const harness = (options: HarnessOptions = {}) => {
     });
   };
 
-  const invoke = <EventInput>(name: string, event: EventInput, ctx: ExtensionContext) => {
-    let result: unknown;
-    for (const handler of handlers.get(name) ?? []) result = handler(event, ctx);
+  const invokeBeforeAgentStart = (event: BeforeAgentStartEvent, ctx: ExtensionContext) => {
+    let result: ReturnType<RecordedHandler<"before_agent_start">> = undefined;
+    for (const handler of handlers.get("before_agent_start") ?? []) result = handler(event, ctx);
     return result;
   };
   const sessionStart = (ctx = makeCtx()) => bridge.activate(bridge.capture(ctx));
@@ -79,13 +83,22 @@ const harness = (options: HarnessOptions = {}) => {
     another_extension: "keep me",
   };
   const beforeAgentStart = () => {
-    const result = invoke(
-      "before_agent_start",
+    const result = invokeBeforeAgentStart(
       {
         type: "before_agent_start",
         prompt: "p",
         systemPrompt: BASE_PROMPT,
-        systemPromptOptions: { sections },
+        systemPromptOptions: {
+          cwd: "/project",
+          selectedTools: [],
+          toolSnippets: {},
+          toolGuidelines: {},
+          promptGuidelines: [],
+          appendSystemPrompt: "",
+          sections,
+          contextFiles: [],
+          skills: [],
+        },
       },
       makeCtx(),
     );
@@ -219,10 +232,8 @@ describe("herdr-btw parent reference", () => {
     const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE });
     h.sessionStart();
     expect(h.beforeAgentStart()).toBeDefined();
-    // Replacement with another child session ID clears the process-scoped reference.
     h.sessionStart(h.makeCtx({ sessionId: "other-child" }));
     expect(h.beforeAgentStart()).toBeUndefined();
-    // A later matching session start reactivates it.
     h.sessionStart();
     expect(h.beforeAgentStart()).toBeDefined();
   });

@@ -40,7 +40,6 @@ export const DEFAULT_IMAGE_CONFIG = {
 } satisfies ResolvedConfig["image"];
 export const DEFAULT_CONFIG = {
   persistState: true,
-  active: false,
   desiredActive: false,
   usage: DEFAULT_USAGE_CONFIG,
   compaction: DEFAULT_COMPACTION_CONFIG,

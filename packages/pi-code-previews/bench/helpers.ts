@@ -1,6 +1,5 @@
-// Benchmark reporting and high-resolution timing are explicit non-application boundaries.
 import { performance } from "node:perf_hooks";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -8,15 +7,12 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-/** Synchronous Effect Console bridge for benchmark reporting. */
 export function benchLog(...args: ReadonlyArray<unknown>): void {
   Effect.runSync(Console.log(...args));
 }
 
-/** One printable benchmark table row: report labels mapped to formatted cells. */
 type BenchTableRow = Record<string, string | number | boolean | undefined>;
 
-/** Synchronous Effect Console bridge for tabular benchmark reporting. */
 export function benchTable(rows: ReadonlyArray<BenchTableRow>): void {
   Effect.runSync(Console.table(rows));
 }
@@ -142,33 +138,64 @@ export function numberedLines(prefix: string, count: number): string[] {
 }
 
 export function benchTheme(): Theme {
-  const fgAnsi = new Map<string, string>(
-    Object.entries({
-      accent: "\x1b[38;2;120;180;255m",
-      error: "\x1b[38;2;255;110;120m",
-      muted: "\x1b[38;2;140;145;155m",
-      success: "\x1b[38;2;95;210;130m",
-      toolDiffAdded: "\x1b[38;2;95;210;130m",
-      toolDiffContext: "\x1b[38;2;200;205;215m",
-      toolDiffRemoved: "\x1b[38;2;255;110;120m",
-      toolOutput: "\x1b[38;2;200;205;215m",
-      toolTitle: "\x1b[38;2;150;190;255m",
-      warning: "\x1b[38;2;255;205;95m",
-    }),
+  return new Theme(
+    {
+      accent: "#78b4ff",
+      border: "",
+      borderAccent: "",
+      borderMuted: "",
+      success: "#5fd282",
+      error: "#ff6e78",
+      warning: "#ffcd5f",
+      muted: "#8c919b",
+      dim: "",
+      text: "",
+      thinkingText: "",
+      userMessageText: "",
+      customMessageText: "",
+      customMessageLabel: "",
+      toolTitle: "#96beff",
+      toolOutput: "#c8cdd7",
+      mdHeading: "",
+      mdLink: "",
+      mdLinkUrl: "",
+      mdCode: "",
+      mdCodeBlock: "",
+      mdCodeBlockBorder: "",
+      mdQuote: "",
+      mdQuoteBorder: "",
+      mdHr: "",
+      mdListBullet: "",
+      toolDiffAdded: "#5fd282",
+      toolDiffRemoved: "#ff6e78",
+      toolDiffContext: "#c8cdd7",
+      syntaxComment: "",
+      syntaxKeyword: "",
+      syntaxFunction: "",
+      syntaxVariable: "",
+      syntaxString: "",
+      syntaxNumber: "",
+      syntaxType: "",
+      syntaxOperator: "",
+      syntaxPunctuation: "",
+      thinkingOff: "",
+      thinkingMinimal: "",
+      thinkingLow: "",
+      thinkingMedium: "",
+      thinkingHigh: "",
+      thinkingXhigh: "",
+      bashMode: "",
+    },
+    {
+      selectedBg: "",
+      userMessageBg: "",
+      customMessageBg: "",
+      toolPendingBg: "",
+      toolSuccessBg: "#12281a",
+      toolErrorBg: "#2d1218",
+    },
+    "truecolor",
   );
-  const bgAnsi = new Map<string, string>(
-    Object.entries({
-      toolErrorBg: "\x1b[48;2;45;18;24m",
-      toolSuccessBg: "\x1b[48;2;18;40;26m",
-    }),
-  );
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-  return {
-    bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
-    fg: (key: string, text: string) => `${fgAnsi.get(key) ?? ""}${text}\x1b[39m`,
-    getFgAnsi: (key: string) => fgAnsi.get(key) ?? "",
-    getBgAnsi: (key: string) => bgAnsi.get(key) ?? "",
-  } as Theme;
 }
 
 function runFor(ms: number, fn: () => void) {

@@ -24,7 +24,6 @@ const ViewCapability = Schema.Struct({
 const sectionIsValid = (section: string): section is ActivitySection =>
   section === "workflows" || section === "subagents" || section === "tasks";
 
-/** Checked synchronous discovery; only a plain checked Promise capability crosses events. */
 export function discoverActivityView(
   events: ActivityEvents,
   sessionId: string,
@@ -67,7 +66,6 @@ export interface ActivityViewInstallation {
   readonly open: (section: ActivitySection, signal?: AbortSignal) => Promise<boolean>;
 }
 
-/** Answers view discovery for one installation, not merely its reusable session ID. */
 export function installActivityView(
   events: ActivityEvents,
   installation: ActivityViewInstallation,

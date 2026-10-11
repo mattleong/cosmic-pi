@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as Struct from "effect/Struct";
 import { test } from "vitest";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../../src/config/schema";
@@ -35,7 +36,6 @@ test("settings normalization keeps defaults for invalid values", () => {
     toolCallCollapsedStyle: "compact",
     tools: ["bash", "not-a-tool", "write", "bash"],
   });
-  // Invalid values, including an array with an unknown tool, keep their defaults.
   assert.deepEqual(normalized, {
     ...defaultCodePreviewSettings,
     ...disabledFlags,
@@ -45,7 +45,7 @@ test("settings normalization keeps defaults for invalid values", () => {
 });
 
 test("settings normalization falls back to accumulated settings for invalid overrides", () => {
-  const fallback = {
+  const fallback: CodePreviewSettings = {
     ...defaultCodePreviewSettings,
     shikiTheme: "github-dark",
     readCollapsedLines: 40,
@@ -61,8 +61,7 @@ test("settings normalization falls back to accumulated settings for invalid over
   assert.equal(validOverride.shikiTheme, "dark-plus");
   assert.equal(validOverride.readCollapsedLines, 20);
   assert.equal(updateSetting(validOverride, "wordEmphasis", "all").wordEmphasis, "all");
-  // SAFETY: disabledFlags is a literal object whose own keys are exactly its declared keys.
-  for (const key of Object.keys(disabledFlags) as Array<keyof typeof disabledFlags>)
+  for (const key of Struct.keys(disabledFlags))
     assert.equal(updateSetting(validOverride, key, "off")[key], false, key);
   assert.equal(updateSetting(validOverride, "toolCallBackground", "off").toolCallBackground, "off");
   assert.equal(
@@ -75,7 +74,6 @@ test("settings normalization falls back to accumulated settings for invalid over
     "border",
   );
   assert.deepEqual(settingsFrom({ tools: ["read", "grep"] }, fallback).tools, ["read", "grep"]);
-  // Legacy value shapes (boolean toolCallBackground, CSV tools) are invalid, not coerced.
   assert.equal(
     settingsFrom({ toolCallBackground: true }, fallback).toolCallBackground,
     fallback.toolCallBackground,
@@ -84,11 +82,11 @@ test("settings normalization falls back to accumulated settings for invalid over
 });
 
 test("settings recover valid siblings and expose bounded path-only diagnostics", () => {
-  const fallback = {
+  const fallback: CodePreviewSettings = {
     ...defaultCodePreviewSettings,
     shikiTheme: "github-dark",
-    toolCallCollapsedStyle: "compact" as const,
-    tools: ["write" as const],
+    toolCallCollapsedStyle: "compact",
+    tools: ["write"],
   };
   const normalized = normalizeSettingsWithDiagnostics(
     {
@@ -135,7 +133,6 @@ test("turning a preview off and on again leaves the saved tool selection unchang
   assert.deepEqual(normalized.tools, ["grep"]);
   const off = updateSetting(normalized, "readContentPreview", "off");
   assert.deepEqual(updateSetting(off, "readContentPreview", "on").tools, ["grep"]);
-  // Turning a tool off sticks even while its preview setting keeps it rendered.
   assert.deepEqual(updateSetting({ ...off, tools: ["grep", "read"] }, "tools", "grep").tools, [
     "grep",
   ]);

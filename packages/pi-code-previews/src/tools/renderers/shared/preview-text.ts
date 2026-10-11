@@ -13,11 +13,9 @@ import { renderHighlightedText, shouldSkipHighlight } from "../../../syntax/rend
 import { expandPreviewTabs } from "../../../shared/helpers";
 import { escapeLineControlChars } from "../../../shared/terminal-text";
 
-/** The highlighting language for a file, from its path and, when given, its content. */
 export const pathPreviewLanguage = (path: string, content?: string): string | undefined =>
   resolvePreviewLanguage({ path, content });
 
-/** File content, numbered from `firstLine` when given; a zero `limit` shows every line. */
 export function renderContentPreview(options: {
   content: string;
   limit: number;
@@ -54,7 +52,6 @@ export function renderContentPreview(options: {
   return new Text(text, 0, 0);
 }
 
-/** Output lines within `limit`, and a footer counting `noun` when some are hidden. */
 export function renderSelectedOutputLines(
   rawLines: string[],
   limit: number,

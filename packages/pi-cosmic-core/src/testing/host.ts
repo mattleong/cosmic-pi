@@ -1,86 +1,142 @@
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
-  ExtensionToolContext,
-  Theme,
+import {
+  createEventBus,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+  type ExtensionToolContext,
+  type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import * as Deferred from "effect/Deferred";
-import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
+import { modelRegistryFixture, type HostModelRegistry } from "./model.ts";
+import { ignore, overlay, memberDescriptors } from "./overlay.ts";
+import { FIXTURE_CWD, sessionManagerFixture, type HostSessionManager } from "./session.ts";
+import { extensionUiFixture } from "./ui.ts";
 
-/** Adds the Pi extension API contract to a fixture while keeping its concrete members. */
-export const extensionApiFixture = <Fixture extends object>(
-  fixture: Fixture,
-): Fixture & ExtensionAPI => {
-  // SAFETY: Each test uses only the ExtensionAPI members its fixture implements.
-  return fixture as Fixture & ExtensionAPI;
+export type ExtensionHostContext = ExtensionContext &
+  ExtensionCommandContext &
+  ExtensionToolContext;
+
+export type ExtensionContextOverrides = Partial<
+  Omit<ExtensionHostContext, "ui" | "sessionManager" | "modelRegistry">
+> & {
+  readonly ui?: Partial<ExtensionUIContext>;
+  readonly sessionManager?: Partial<HostSessionManager>;
+  readonly modelRegistry?: Partial<HostModelRegistry>;
 };
 
-/** One partial fixture usable at extension-event, command, and tool callback boundaries. */
-export const extensionContextFixture = <Fixture extends object>(
-  fixture: Fixture,
-): Fixture & ExtensionContext & ExtensionCommandContext & ExtensionToolContext => {
-  // SAFETY: Each test uses only the host context members its fixture implements.
-  return fixture as Fixture & ExtensionContext & ExtensionCommandContext & ExtensionToolContext;
-};
+type ToolCallOutcome = Awaited<ReturnType<ExtensionToolContext["executeTool"]>>;
 
-/** An opaque host value, such as a TUI or keybindings manager, typed for any target. */
-export const opaqueFixture = <Value>(value: Value): never => {
-  // SAFETY: Each test supplies every opaque host member its subject exercises.
-  return value as never;
-};
-
-const unstyled = (_token: string, text: string) => text;
-const plain = (text: string) => text;
-
-/** Identity styling: every text style returns its input unchanged. */
-export const plainTheme =
-  // SAFETY: Renderers under test call only these text-styling members of Theme.
-  Object.freeze({
-    fg: unstyled,
-    bg: unstyled,
-    bold: plain,
-    italic: plain,
-    underline: plain,
-    inverse: plain,
-    strikethrough: plain,
-  }) as Theme;
-
-interface FailingThemeOptions {
-  /** The thrown message, so a test can prove the host error never leaks. */
-  readonly message?: string;
-  /** Throws only for matching `fg` calls; other calls stay identity. */
-  readonly when?: (token: string, text: string) => boolean;
-  /** Makes `bold` throw as well. */
-  readonly bold?: boolean;
+interface ContextDefaults {
+  readonly cwd: string;
+  readonly mode: ExtensionContext["mode"];
+  readonly hasUI: boolean;
+  readonly ui: ExtensionUIContext;
+  readonly sessionManager: HostSessionManager;
+  readonly modelRegistry: ExtensionContext["modelRegistry"];
 }
 
-/** A hostile host theme: `fg` (and optionally `bold`) throws; other styles stay identity. */
-export const failingTheme = ({
-  message = "theme unavailable",
-  when = () => true,
-  bold = false,
-}: FailingThemeOptions = {}): Theme => {
-  const fail = (): never => {
-    throw new Error(message);
-  };
-  return opaqueFixture({
-    ...plainTheme,
-    fg: (token: string, text: string) => (when(token, text) ? fail() : text),
-    ...(bold && { bold: fail }),
+const nestedContextKeys = new Set(["ui", "sessionManager", "modelRegistry"]);
+
+const unavailableToolOutcome = (name: string): ToolCallOutcome => ({
+  toolCall: { type: "toolCall", id: "fixture-tool-call", name, arguments: {} },
+  result: {
+    content: [{ type: "text", text: `Tool ${name} is unavailable in this fixture.` }],
+    details: undefined,
+    isError: true,
+  },
+  isError: true,
+});
+
+const cancelled = () => Promise.resolve({ cancelled: true });
+
+const contextDefaults = (defaults: ContextDefaults): ExtensionHostContext => ({
+  ...defaults,
+  model: undefined,
+  scopedModels: [],
+  isIdle: () => true,
+  isProjectTrusted: () => false,
+  signal: undefined,
+  abort: ignore,
+  hasPendingMessages: () => false,
+  shutdown: ignore,
+  getContextUsage: () => undefined,
+  compact: ignore,
+  getSystemPrompt: () => "",
+  tools: [],
+  executeTool: (name) => Promise.resolve(unavailableToolOutcome(name)),
+  getSystemPromptOptions: () => ({ cwd: defaults.cwd }),
+  waitForIdle: () => Promise.resolve(),
+  newSession: cancelled,
+  fork: cancelled,
+  navigateTree: cancelled,
+  switchSession: cancelled,
+  reload: () => Promise.resolve(),
+});
+
+export const extensionContextFixture = (
+  overrides: ExtensionContextOverrides = {},
+): ExtensionHostContext => {
+  const descriptors = Object.getOwnPropertyDescriptors(overrides);
+  const declaredCwd = descriptors.cwd?.value;
+  const declaredMode = descriptors.mode?.value;
+  const cwd = Predicate.isString(declaredCwd) ? declaredCwd : FIXTURE_CWD;
+  const { ui, sessionManager, modelRegistry } = overrides;
+  const context = contextDefaults({
+    cwd,
+    mode: descriptors.hasUI?.value === true ? "tui" : "print",
+    hasUI: declaredMode === "tui" || declaredMode === "rpc",
+    ui: extensionUiFixture(ui),
+    sessionManager: sessionManagerFixture(sessionManager, cwd),
+    modelRegistry: modelRegistryFixture(modelRegistry),
   });
+  const flatOverrides = Object.fromEntries(
+    Object.entries(memberDescriptors(overrides)).filter(([key]) => !nestedContextKeys.has(key)),
+  );
+  return Object.defineProperties(context, flatOverrides);
 };
 
-/** A Promise the test settles explicitly; later settlements are ignored. */
-export const deferredPromise = <A = void>() => {
-  const deferred = Deferred.makeUnsafe<A, Error>();
-  return {
-    promise: Effect.runPromise(Deferred.await(deferred)),
-    resolve: (value: A): void => {
-      Deferred.doneUnsafe(deferred, Effect.succeed(value));
+export const extensionApiFixture = (overrides: Partial<ExtensionAPI> = {}): ExtensionAPI =>
+  overlay<ExtensionAPI>(
+    {
+      on: () => ignore,
+      registerTool: ignore,
+      registerCommand: ignore,
+      registerShortcut: ignore,
+      registerFlag: ignore,
+      getFlag: () => undefined,
+      registerMessageRenderer: ignore,
+      registerMarkdownTransformer: ignore,
+      registerEntryRenderer: ignore,
+      registerToolRenderer: ignore,
+      sendMessage: ignore,
+      sendUserMessage: ignore,
+      appendEntry: ignore,
+      setSessionName: ignore,
+      getSessionName: () => undefined,
+      setLabel: ignore,
+      exec: () =>
+        Promise.resolve({
+          stdout: "",
+          stderr: "Commands are unavailable in this fixture.",
+          code: 127,
+          killed: false,
+        }),
+      getActiveTools: () => [],
+      getAllTools: () => [],
+      getSettings: () => ({}),
+      setActiveTools: ignore,
+      getCommands: () => [],
+      setModel: () => Promise.resolve(false),
+      getThinkingLevel: () => "off",
+      setThinkingLevel: ignore,
+      registerProvider: ignore,
+      unregisterProvider: ignore,
+      registerMcpServer: ignore,
+      unregisterMcpServer: ignore,
+      getMcpServers: () => [],
+      registerVirtualModel: ignore,
+      unregisterVirtualModel: ignore,
+      events: createEventBus(),
     },
-    reject: (error: Error): void => {
-      Deferred.doneUnsafe(deferred, Effect.fail(error));
-    },
-  };
-};
+    overrides,
+  );

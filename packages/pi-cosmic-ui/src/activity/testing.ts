@@ -1,4 +1,4 @@
-/** Source-only, test-runner-independent Activity fakes and gallery frames for producer tests. */
+import * as Schema from "effect/Schema";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { ActivityComponent, makeActivityPresentation } from "./component.ts";
@@ -7,6 +7,7 @@ import {
   ACTIVITY_DISCOVER,
   ACTIVITY_EVENT,
   ACTIVITY_HOST,
+  ActivityEnvelopeSchema,
   activityKey,
   type ActivityEnvelope,
   type ActivityEvents,
@@ -14,10 +15,6 @@ import {
 } from "./protocol.ts";
 import { renderActivityWidget } from "./widget.ts";
 
-/**
- * An in-memory event bus whose host answers discovery for `sessionId`, records the latest
- * envelope, and acknowledges each registration.
- */
 export function fakeActivityHost(sessionId = "session") {
   const hostToken = {};
   const listeners = new Map<string, Set<Parameters<ActivityEvents["on"]>[1]>>();
@@ -40,11 +37,11 @@ export function fakeActivityHost(sessionId = "session") {
     events.emit(ACTIVITY_HOST, { version: 1, sessionId, hostToken, available: true }),
   );
   events.on(ACTIVITY_EVENT, (value) => {
-    // SAFETY: The fake captures only envelopes emitted by the producer's protocol adapter.
-    envelope = value as ActivityEnvelope;
-    if (envelope.operation === "register") {
-      capability = envelope;
-      envelope.acknowledge?.(true);
+    if (!Schema.is(ActivityEnvelopeSchema)(value)) return;
+    envelope = value;
+    if (value.operation === "register") {
+      capability = value;
+      value.acknowledge?.(true);
     }
   });
   return { events, hostToken, get: () => envelope, capability: () => capability };
@@ -54,24 +51,15 @@ interface ActivityGalleryOptions {
   readonly title: string;
   readonly providerId: string;
   readonly items: readonly ActivityItem[];
-  /** The producer's detail for an item, as its `getDetail` would return it. */
   readonly detail?: (itemId: string) => string | undefined;
-  /** Items whose detail a manager frame opens, one frame each. */
   readonly open?: readonly string[];
-  /** Widget widths, each rendered at every row bound. */
   readonly widths?: readonly number[];
   readonly maxRows?: readonly number[];
   readonly now?: number;
 }
 
-/**
- * Plain-text frames of producer items through the real Activity renderers, for galleries: the
- * persistent widget at each width and row bound, then the manager with each `open` item selected
- * and its detail loaded. Frames assert nothing.
- */
 export function activityGalleryFrames(options: ActivityGalleryOptions): string[] {
   const { providerId } = options;
-  // Producer items as the host holds them, in their first generation.
   const rows: readonly ActivityRow[] = Object.freeze(
     options.items.map((item) => ({
       ...item,
@@ -93,7 +81,6 @@ export function activityGalleryFrames(options: ActivityGalleryOptions): string[]
   const width = 140;
   for (const itemId of options.open ?? []) {
     const presentation = makeActivityPresentation();
-    // Finished branches start collapsed as history; open them so any item can be selected.
     for (const row of rows) presentation.expandedHistory.add(row.key);
     const component = new ActivityComponent({
       snapshot: () => rows,

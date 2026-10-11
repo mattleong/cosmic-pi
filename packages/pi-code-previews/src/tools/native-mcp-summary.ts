@@ -12,6 +12,7 @@ import {
 import { getBoundedTextContent } from "./data/results";
 import type { CompactIssue } from "./compact-issues";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
+import type { RendererState } from "./renderers/shared/types";
 import { nativeMcpReceiptMatches, type NativeMcpIdentity } from "./native-mcp-identity";
 import { nativeMcpArgumentText, nativeMcpHeading } from "./native-mcp-subject";
 import { visibleDiagnosticLine } from "./native-safe-content";
@@ -23,10 +24,8 @@ const Evidence = Schema.Struct({
   tool: Text,
   fullOutputPath: Schema.optionalKey(Text),
 });
-/** Native `details`: `{ server, tool, fullOutputPath? }`. Never an operation outcome. */
 export type NativeMcpEvidence = typeof Evidence.Type;
 
-/** Own data properties only: accessors are never invoked, and other fields are ignored. */
 export function nativeMcpEvidence<Details>(details: Details): NativeMcpEvidence | undefined {
   return invokeHostCallback(() => {
     if (!Predicate.isObject(details)) return undefined;
@@ -44,10 +43,6 @@ export function nativeMcpEvidence<Details>(details: Details): NativeMcpEvidence 
   }, undefined);
 }
 
-/**
- * The result's native receipt, only when it matches the alias/namespace, or a resource tool and
- * its observed server.
- */
 export function nativeMcpReceipt<Args>(
   identity: NativeMcpIdentity,
   result: AgentToolResult<unknown>,
@@ -83,7 +78,6 @@ const TemplateListing = Schema.fromJsonString(
     ),
   }),
 );
-/** Native listings are one JSON text block under the 20 KB model limit unless truncated. */
 const MAX_LISTING_TEXT = 64 * 1024;
 const MAX_LISTED_FAILURES = 3;
 
@@ -93,7 +87,6 @@ interface NativeMcpListing {
   readonly failures: readonly (typeof ListingFailure.Type)[];
 }
 
-/** Only the complete native JSON envelope is listing evidence; anything else declines. */
 function nativeMcpListing(
   name: "list_mcp_resources" | "list_mcp_resource_templates",
   result: AgentToolResult<unknown>,
@@ -102,7 +95,6 @@ function nativeMcpListing(
   const [part, ...rest] = result.content;
   if (rest.length > 0 || part?.type !== "text" || part.text.length > MAX_LISTING_TEXT)
     return undefined;
-  // Decoding keeps only declared fields, so a listing has exactly one item array.
   const listing =
     name === "list_mcp_resources"
       ? decodeUnknownOrUndefined(ResourceListing, part.text)
@@ -116,7 +108,6 @@ function nativeMcpListing(
   };
 }
 
-/** Each bounded server failure in an aggregate listing, then how many more were not shown. */
 function listingFailureIssues(listing: NativeMcpListing): CompactIssue[] {
   const issues: CompactIssue[] = [];
   for (const failure of listing.failures.slice(0, MAX_LISTED_FAILURES)) {
@@ -140,7 +131,6 @@ function listingFailureIssues(listing: NativeMcpListing): CompactIssue[] {
   return issues;
 }
 
-/** Only an owned, recognized, recoverable envelope may replace the raw collapsed preview. */
 export function nativeMcpHasRecoverableClipping<Args>(
   identity: NativeMcpIdentity,
   result: AgentToolResult<unknown>,
@@ -155,7 +145,6 @@ export function nativeMcpHasRecoverableClipping<Args>(
   );
 }
 
-/** Native middle truncation and where, or whether, the full output was saved. */
 function outputIssues(
   result: AgentToolResult<unknown>,
   evidence: NativeMcpEvidence,
@@ -170,10 +159,6 @@ function outputIssues(
 
 const MAX_ERROR_TEXT = 8192;
 
-/**
- * The failure's own first line, read inside Pi's truncation envelope when the error was long.
- * Text that opens with agent guidance stays in the output.
- */
 function errorIssue(identity: NativeMcpIdentity, result: AgentToolResult<unknown>): CompactIssue {
   const text = result.content
     .flatMap((part) =>
@@ -190,7 +175,6 @@ function errorIssue(identity: NativeMcpIdentity, result: AgentToolResult<unknown
   };
 }
 
-/** Lines and images the call returned; no count when the text is beyond the counting budget. */
 function contentCounters(result: AgentToolResult<unknown>): string[] {
   const text = getBoundedTextContent(result.content)?.trim();
   const images = result.content.filter((part) => part.type === "image").length;
@@ -201,11 +185,9 @@ function contentCounters(result: AgentToolResult<unknown>): string[] {
   return labels.length > 1 && first ? [labels.join(", "), first] : labels;
 }
 
-/** A running call's latest native progress message, one bounded plain line. */
 export function nativeMcpProgress(result: AgentToolResult<unknown> | undefined): string {
   const part = result?.content.find((entry) => entry.type === "text");
   const text = part?.type === "text" ? part.text.slice(0, 1024) : "";
-  // Redact only up to the first visible line; this runs on every animation frame.
   for (const line of text.split("\n")) {
     const visible = visibleDiagnosticLine(line, 80);
     if (visible) return visible;
@@ -213,13 +195,8 @@ export function nativeMcpProgress(result: AgentToolResult<unknown> | undefined):
   return "";
 }
 
-/**
- * Native MCP results report delivery, not domain success: a settled call that Pi does not flag
- * as an error is `returned`. Recoverable clipping is informational; unsaved output and aggregate
- * listing failures raise warnings. Missing, malformed, or foreign details decline to the generic row.
- */
 export const nativeMcpSummary =
-  (identity: NativeMcpIdentity): CompactSummaryProvider<any, any, any> =>
+  (identity: NativeMcpIdentity): CompactSummaryProvider<unknown, unknown, RendererState> =>
   ({ phase, args, result, context }) => {
     const pending = { ...nativeMcpHeading(identity, args), showTiming: true as const };
     if (phase !== "settled") {
@@ -239,7 +216,6 @@ export const nativeMcpSummary =
     const listing = nativeMcpListing(identity.name, result, owned.server);
     const noun = identity.name === "list_mcp_resources" ? "resource" : "template";
     if (!listing)
-      // A truncated or replaced aggregate listing can hide the servers that failed.
       return owned.server === ""
         ? {
             ...summary,

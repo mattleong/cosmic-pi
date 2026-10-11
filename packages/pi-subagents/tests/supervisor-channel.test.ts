@@ -1,4 +1,3 @@
-// Node/MCP Promise behavior is characterized at this boundary.
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { hasObjectRuntimeType, runtimeTypeName } from "pi-cosmic-core";
 import { connect } from "node:net";
@@ -9,6 +8,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as EffectRpcClient from "effect/rpc/RpcClient";
@@ -26,24 +26,30 @@ import {
 } from "./support/node-builtins.ts";
 import {
   makeSupervisorChannel,
-  SupervisorChannelError,
   type SupervisorChannelHandle,
   type SupervisorChannelLayerOptions,
 } from "../src/boundary/supervisor-channel.ts";
+import { SupervisorChannelError } from "../src/boundary/supervisor-channel-errors.ts";
 import { compileResultContract, type ResultContract } from "../src/domain/result-contract.ts";
 import {
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
   SupervisorAuthTokenSchema,
   SupervisorChannelIdSchema,
   type SupervisorChannelConfig,
+  SupervisorChannelConfigSchema,
   SupervisorDeliveryIdSchema,
   SupervisorRpcGroup,
 } from "../src/supervisor/protocol.ts";
 
-type JsonRpcValue = string | number | boolean | null | JsonRpcValue[] | JsonRpcObject;
+type JsonRpcValue = Schema.Json;
 interface JsonRpcObject {
   readonly [key: string]: JsonRpcValue;
 }
+
+const decodeJsonLine = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
+const decodeConnectionConfig = Schema.decodeUnknownSync(
+  Schema.fromJsonString(SupervisorChannelConfigSchema),
+);
 
 const { mkdir, readFile, readdir, stat, symlink, writeFile } = nodeFsPromises;
 const { join } = nodePath;
@@ -52,8 +58,6 @@ const children: ChildProcessWithoutNullStreams[] = [];
 const scopes: Scope.Closeable[] = [];
 const directories: Scope.Closeable[] = [];
 
-// Real-time coordination with live child processes deliberately runs on the live default clock,
-// including the channel's own reply deadlines that test bodies await inline.
 const liveTest = (
   name: string,
   body: () => Generator<Effect.Effect<unknown, never, Scope.Scope>, void, never>,
@@ -75,8 +79,6 @@ const withTimeout = <A>(promise: Promise<A>, millis = 5_000): Promise<A> => {
 const closeAll = (owned: Scope.Closeable[]) =>
   Promise.all(owned.splice(0).map((scope) => Effect.runPromiseExit(Scope.close(scope, Exit.void))));
 
-// Registered channel scopes close first, while helpers are still live, as an in-test close would.
-// Temporary directories go last, so a test can inspect what a failed close left behind.
 afterEach(() =>
   closeAll(scopes).then((closed) => {
     for (const child of children.splice(0)) {
@@ -94,7 +96,6 @@ interface OpenTestChannel {
   readonly projectDirectory: string;
 }
 
-/** Stages a private agent home and a test-owned scope that afterEach closes. */
 const stageAgentHome = (prefix: string) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -109,7 +110,6 @@ const stageAgentHome = (prefix: string) =>
     }),
   );
 
-/** Opens a channel whose resources belong to a test-owned scope. */
 const openIn = (
   scope: Scope.Closeable,
   options: SupervisorChannelLayerOptions,
@@ -153,8 +153,7 @@ class RpcClient {
       while (newline >= 0) {
         const line = this.#buffer.slice(0, newline);
         this.#buffer = this.#buffer.slice(newline + 1);
-        // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
-        const value = JSON.parse(line) as JsonRpcValue;
+        const value = decodeJsonLine(line);
         this.messages.push(value);
         if (value && hasObjectRuntimeType(value) && "id" in value) {
           const key = `${runtimeTypeName(value.id)}:${String(value.id)}`;
@@ -238,7 +237,6 @@ const initialize = (rpc: RpcClient) =>
       rpc.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
     });
 
-/** Spawns a helper that has completed the MCP handshake and acknowledged assignment epoch 1. */
 const readyHelper = (handle: SupervisorChannelHandle) =>
   Effect.gen(function* () {
     const helper = spawnHelper(handle);
@@ -259,7 +257,6 @@ const connectionRefused = ({ host, port }: { readonly host: string; readonly por
   return withTimeout(refused.promise);
 };
 
-/** Connects a raw peer, optionally writes one frame, and resolves once the channel closes it. */
 const awaitPeerClosed = (handle: SupervisorChannelHandle, frame?: string) => {
   const socket = connect({ host: handle.metadata.host, port: handle.metadata.port });
   const closed = deferredPromise();
@@ -277,7 +274,6 @@ const toolCall = (rpc: RpcClient, id: string | number, name: string, args: JsonR
     params: { name, arguments: args },
   });
 
-/** Matches the JSON-RPC error response with a null id and this code. */
 const isNullIdError = (code: number) => (value: JsonRpcValue) =>
   Predicate.isObject(value) &&
   value.id === null &&
@@ -342,13 +338,9 @@ const nextAssignment = (channel: DirectRpcChannel) =>
     (update) => Option.getOrThrow(update),
   );
 
-// SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
 const connectionConfig = (handle: SupervisorChannelHandle): Promise<SupervisorChannelConfig> =>
-  readFile(handle.metadata.connectionConfigPath, "utf8").then(
-    (source) => JSON.parse(source) as SupervisorChannelConfig,
-  );
+  readFile(handle.metadata.connectionConfigPath, "utf8").then(decodeConnectionConfig);
 
-// Wait for an observable queue boundary without draining events or assuming RPC scheduling.
 const waitForEventCount = (handle: SupervisorChannelHandle, count: number) =>
   withTimeout(
     Effect.runPromise(
@@ -559,7 +551,6 @@ describe("private supervisor channel", () => {
     yield* step(() => withTimeout(epochSeen.promise));
 
     yield* Scope.close(scope, Exit.void);
-    // Logical shutdown rejects owned acknowledgements before socket teardown can replace the cause.
     for (const pending of [advancing]) {
       const error = yield* step(() => withTimeout(pending));
       expect(error).toBeInstanceOf(SupervisorChannelError);
@@ -592,7 +583,6 @@ describe("private supervisor channel", () => {
     yield* step(() => expect(stat(opened.handle.metadata.stateDirectory)).resolves.toBeDefined());
   });
 
-  // The malformed-frame row keeps the default auth deadline so the frame, not the timer, closes it.
   for (const [name, runId, options, frame] of [
     [
       "closes an unauthenticated peer at the scoped authentication deadline",
@@ -657,7 +647,6 @@ describe("private supervisor channel", () => {
       const listed = yield* step(() =>
         rpc.request({ jsonrpc: "2.0", id: "list", method: "tools/list", params: {} }),
       );
-      // The advertised argument contract is structural; validators own the exact patterns.
       const messageSchema = {
         properties: { message: {} },
         required: ["message"],
@@ -720,8 +709,6 @@ describe("private supervisor channel", () => {
       expect(report).toMatchObject({
         result: { content: [{ text: expect.stringContaining("sequence 1") }] },
       });
-      // Report acceptance is causally visible before the adapter drains either queued event, even
-      // when progress/backpressure is ahead of the report.
       expect(yield* Effect.orDie(handle.hasAcceptedReport(1))).toBe(true);
       expect(yield* Effect.orDie(handle.acceptedReportForEpoch(1))).toMatchObject({
         runId: "agent-supervisor-test",

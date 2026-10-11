@@ -49,7 +49,6 @@ describe("OpenAI image resources", () => {
   it.effect("reports a failed output-path probe as a typed save failure", () =>
     Effect.gen(function* () {
       const { fs: realFs, path, root, directory } = yield* tempImages;
-      // A platform failure other than a missing path, such as EACCES on an ancestor.
       const probeFailure = realFs.readFile(path.join(root, "missing")).pipe(Effect.as(false));
       const hostileFs: typeof realFs = Object.assign({}, realFs, { exists: () => probeFailure });
       const failure = yield* makeImageOutput({ fs: hostileFs, path, sharp: pngSharp })
@@ -195,8 +194,6 @@ describe("OpenAI image resources", () => {
     const capture = makeCapturedLogger();
     return Effect.gen(function* () {
       const { fs: realFs, path, root, directory } = yield* tempImages;
-      // Only the published destination (.png) is stat'd after the hard-link commit, so a
-      // defecting stat here simulates verification I/O loss immediately after commit.
       const hostileFs: typeof realFs = Object.assign({}, realFs, {
         stat: (pathArg: Parameters<typeof realFs.stat>[0]) =>
           String(pathArg).endsWith(".png")

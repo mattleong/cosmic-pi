@@ -30,31 +30,19 @@ import type { BackgroundTaskToolDetails } from "../tools/command.ts";
 import type { BackgroundTaskToolInput } from "../tools/schema.ts";
 import { taskDisplayName, taskStateLabel } from "./task-state.ts";
 
-/** Persisted details decoded with the shared task schema, minus retired fields; else None. */
 export const decodeBackgroundTaskDetails = Schema.decodeUnknownOption(BackgroundTaskDetailsSchema);
 
-/** Aggregate messages name their task in a short prefix; the raw result keeps full identity. */
 const MAX_TASK_LABEL_CHARS = 40;
-/** A wait's literal text as headings and messages quote it. */
 const MAX_QUOTED_CHARS = 40;
 
 const SEVERITY_ORDER: ReadonlyArray<CompactIssue["severity"]> = ["error", "warning", "info"];
 
-/**
- * An action as people read it: `stop_all` is "stop all", and every other action reads as its
- * name. Foreign arguments can name any action, so the name is sanitized rather than trusted.
- */
-export const backgroundTaskActionLabel = (action: BackgroundTaskToolInput["action"]): string =>
+export const backgroundTaskActionLabel = (action: string): string =>
   action === "stop_all" ? "stop all" : sanitizeTerminalLine(String(action));
 
-/** Literal text a wait matches, quoted and bounded for one row. */
 export const quotedWaitText = (text: string): string =>
   `"${clipText(sanitizeTerminalLine(text), MAX_QUOTED_CHARS)}"`;
 
-/**
- * What a call names before its result: a start's name or command, what a wait awaits, a list's
- * filter. Task IDs are never a subject; the settled result names the task.
- */
 export function backgroundTaskCallSubject(args: Partial<BackgroundTaskToolInput>): string {
   const text = (value: string | undefined) => (Predicate.isString(value) ? value : "");
   switch (args.action) {
@@ -72,7 +60,6 @@ export function backgroundTaskCallSubject(args: Partial<BackgroundTaskToolInput>
   }
 }
 
-/** The one snapshot a single-task result carries. */
 export function resultSnapshot(
   details: BackgroundTaskToolDetails,
 ): BackgroundTaskSnapshot | undefined {
@@ -81,7 +68,6 @@ export function resultSnapshot(
   return details.action === "wait" ? details.wait.snapshot : undefined;
 }
 
-/** The task a settled result is about, by name or command; empty when the details name none. */
 export function backgroundTaskResultSubject(
   details: BackgroundTaskToolDetails,
   args: Partial<BackgroundTaskToolInput>,
@@ -112,7 +98,6 @@ const cleanupUnconfirmedIssue = (id: string) =>
     "Some task processes may still be running",
     "Process-tree cleanup is not confirmed; inspect status before retrying work.",
   );
-/** The task's runtime limit ended it; how long it ran, when known, is the fact people need. */
 const runtimeTimeoutIssue = (id: string, ranMs: number | undefined, detail?: string) =>
   issue(
     "error",
@@ -121,7 +106,6 @@ const runtimeTimeoutIssue = (id: string, ranMs: number | undefined, detail?: str
     detail,
   );
 
-/** Unclassified task errors keep their full text on expansion when the message is only a part. */
 function taskErrorIssue(id: string, error: string): CompactIssue {
   const { line, detail } = quoteText(stripTerminalControls(error).trim());
   return issue("error", `${id}:error`, line ?? "Reported an error", detail);
@@ -132,7 +116,6 @@ type TaskSummary = CompactSummary & {
   readonly issues: readonly CompactIssue[];
 };
 
-/** A state word, with the exit code when it is not a clean one: "failed, exit 1", "finished". */
 function stateDetail(value: BackgroundTaskSnapshot): string {
   const label = taskStateLabel(value.state);
   const endedByUs = value.state === "timed_out" || value.state === "stopped";
@@ -141,14 +124,9 @@ function stateDetail(value: BackgroundTaskSnapshot): string {
     : label;
 }
 
-/**
- * Why a failed task failed: its exit code or signal, with the captured cause or its meaning. The
- * row names the task, so messages start with what happened, as bash's do.
- */
 function failureIssues(value: BackgroundTaskSnapshot, cause: string | undefined): CompactIssue[] {
   const issues: CompactIssue[] = [];
   if (value.exitCode != null && value.exitCode !== 0) {
-    // The captured output line says why; a conventional exit status stands in when none did.
     const exitCause = cause ?? exitStatusMeaning(value.exitCode);
     issues.push(
       issue(
@@ -191,7 +169,6 @@ function taskSummary(value: BackgroundTaskSnapshot, cause?: string): TaskSummary
   else if (value.state === "stopping" || (value.state === "exited" && value.exitCode !== 0))
     outcome = "uncertain";
   const issues: CompactIssue[] = [];
-  // The time limit explains a timed-out task; the signal that ended it is ours, not a cause.
   if (value.state === "timed_out")
     issues.push(
       runtimeTimeoutIssue(
@@ -215,7 +192,6 @@ function taskSummary(value: BackgroundTaskSnapshot, cause?: string): TaskSummary
   return { subject: taskDisplayName(value), metadata: [stateDetail(value)], outcome, issues };
 }
 
-/** Lost output as a log read or wait reports it, with where the retained output resumes. */
 function cursorIssues(value: Omit<BackgroundLogMetadata, "state">): CompactIssue[] {
   if (value.droppedBytes <= 0) return [];
   return [
@@ -227,10 +203,6 @@ function cursorIssues(value: Omit<BackgroundLogMetadata, "state">): CompactIssue
   ];
 }
 
-/**
- * Human labels that keep tasks attributable without internal IDs: a unique name or command, a
- * numbered one when several share it.
- */
 function taskLabels(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string[] {
   const names = tasks.map((task) => clipText(taskDisplayName(task), MAX_TASK_LABEL_CHARS));
   return names.map((name, index) => {
@@ -240,11 +212,6 @@ function taskLabels(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string[] {
   });
 }
 
-/**
- * How long a timed-out wait lasted and what it awaited. The time is the wait the service applied,
- * never the requested `waitSeconds`, which the `maxWaitSeconds` setting can shorten. Older details
- * without it leave elapsed time to the shell's measured timing.
- */
 function waitTimeoutIssue(
   id: string,
   snapshot: BackgroundTaskSnapshot,
@@ -269,12 +236,10 @@ function waitTimeoutIssue(
 export interface BackgroundTaskCompactSummaryInput {
   readonly phase: CompactPhase;
   readonly args: Partial<BackgroundTaskToolInput>;
-  /** `text` is the result text that the details' cause spans point into. */
   readonly result: { details?: unknown; text?: string } | undefined;
   readonly isError: boolean;
 }
 
-/** Each failed task's cause, read from the result text at its producer-recorded span. */
 const causesById = (
   spans: ReadonlyArray<{ readonly id: string; readonly start: number; readonly end: number }>,
   text: string | undefined,
@@ -288,7 +253,143 @@ const causesById = (
         }),
   );
 
-/** Display-only projection. Unknown errors keep their original text on expansion. */
+type DecodedTaskDetails = typeof BackgroundTaskDetailsSchema.Type;
+type DetailsFor<Action extends DecodedTaskDetails["action"]> = Extract<
+  DecodedTaskDetails,
+  { readonly action: Action }
+>;
+
+function aggregateOutcome(tasks: readonly TaskSummary[]): CompactOutcome {
+  let outcome: CompactOutcome = "success";
+  for (const task of tasks) {
+    if (task.outcome === "error") outcome = "error";
+    else if (outcome !== "error" && task.outcome === "uncertain") outcome = "uncertain";
+    else if (outcome === "success" && task.outcome === "cancelled") outcome = "cancelled";
+  }
+  return outcome;
+}
+
+function aggregateCounters(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string[] {
+  const counts = BACKGROUND_TASK_STATES.flatMap((state) => {
+    const n = tasks.filter((task) => task.state === state).length;
+    return n ? [`${n} ${taskStateLabel(state)}`] : [];
+  });
+  const total = countLabel(tasks.length, "task");
+  const { active, failed } = countTaskStates(tasks);
+  const brief = [total, active && `${active} active`, failed && `${failed} failed`]
+    .filter(Boolean)
+    .join(", ");
+  return [...new Set([counts.join(", ") || total, brief, total])];
+}
+
+function aggregateSummary(
+  details: DetailsFor<"list" | "stop_all">,
+  causes: ReadonlyMap<string, string>,
+  action: string,
+  subject: string,
+): CompactSummary {
+  const tasks = details.tasks.map((value) => taskSummary(value, causes.get(value.id)));
+  const labels = taskLabels(details.tasks);
+  const issues = tasks.flatMap((task, index) =>
+    task.issues.map((entry) => ({
+      ...entry,
+      message: firstLineMessage(`${labels[index]}: ${entry.message}`, entry.message),
+    })),
+  );
+  const ordered = SEVERITY_ORDER.flatMap((severity) =>
+    issues.filter((entry) => entry.severity === severity),
+  );
+  return {
+    action,
+    subject,
+    counters: aggregateCounters(details.tasks),
+    issues: ordered,
+    outcome: aggregateOutcome(tasks),
+  };
+}
+
+function waitMetadata(wait: DetailsFor<"wait">["wait"], state: string): string {
+  if (wait.outcome === "matched") return `output found, ${state}`;
+  return wait.outcome === "timeout" ? `still ${taskStateLabel(wait.snapshot.state)}` : state;
+}
+
+function waitSummary(
+  details: DetailsFor<"wait">,
+  causes: ReadonlyMap<string, string>,
+  args: Partial<BackgroundTaskToolInput>,
+  action: string,
+): CompactSummary | undefined {
+  const { wait } = details;
+  if (wait.id !== wait.snapshot.id) return undefined;
+  const task = taskSummary(wait.snapshot, causes.get(wait.snapshot.id));
+  const issues = [
+    ...task.issues.filter((entry) => entry.code !== `${wait.id}:log-loss`),
+    ...cursorIssues(wait),
+  ];
+  const timeout = wait.outcome === "timeout";
+  const applied = details.appliedWaitSeconds;
+  if (timeout) issues.unshift(waitTimeoutIssue(wait.id, wait.snapshot, args, applied));
+  const state = task.metadata?.[0] ?? taskStateLabel(wait.snapshot.state);
+  return {
+    ...task,
+    action,
+    metadata: [waitMetadata(wait, state)],
+    issues,
+    outcome: timeout && task.outcome === "success" ? "warning" : task.outcome,
+    ...(timeout && applied === undefined && { showTiming: true as const }),
+  };
+}
+
+function logsIssues(details: DetailsFor<"logs">): CompactIssue[] {
+  const logs = details.logs;
+  const issues: CompactIssue[] = [];
+  if (logs.state === "failed")
+    issues.push(
+      issue(
+        "error",
+        `${logs.id}:failed`,
+        "Failed",
+        "Read task status for the exit code and failure cause.",
+      ),
+    );
+  if (logs.state === "timed_out")
+    issues.push(runtimeTimeoutIssue(logs.id, undefined, "Read task status for how long it ran."));
+  if (logs.state === "stopping") issues.push(cleanupUnconfirmedIssue(logs.id));
+  issues.push(...cursorIssues(logs));
+  const cut = details.truncation;
+  if (cut?.truncated)
+    issues.push(
+      issue(
+        "warning",
+        `${logs.id}:slice-truncated`,
+        `Returned the last ${cut.outputLines} of ${countLabel(cut.totalLines, "log line")}`,
+        `The result holds ${formatBytes(cut.outputBytes)} of ${formatBytes(cut.totalBytes)}. Request a smaller log slice with tailLines or afterCursor to read the rest.`,
+      ),
+    );
+  return issues;
+}
+
+function logsOutcome(
+  state: BackgroundTaskSnapshot["state"],
+  issues: readonly CompactIssue[],
+): CompactOutcome {
+  if (state === "failed" || state === "timed_out") return "error";
+  if (state === "stopped") return "cancelled";
+  if (state === "stopping") return "uncertain";
+  return issues.some((entry) => entry.severity === "warning") ? "warning" : "success";
+}
+
+function logsSummary(details: DetailsFor<"logs">, action: string, subject: string): CompactSummary {
+  const issues = logsIssues(details);
+  return {
+    action,
+    subject,
+    metadata: [taskStateLabel(details.logs.state)],
+    outcome: logsOutcome(details.logs.state, issues),
+    issues,
+  };
+}
+
 export const projectBackgroundTaskCompactSummary = ({
   phase,
   args,
@@ -298,7 +399,6 @@ export const projectBackgroundTaskCompactSummary = ({
   const action = args.action ?? "task";
   const subject = backgroundTaskCallSubject(args);
   if (phase !== "settled") return { action, subject };
-  // A rejected call carries only its message; the shell explains the error from it.
   if (isError) return { action, subject, outcome: "error", issues: [] };
   const decoded = decodeBackgroundTaskDetails(result?.details);
   if (Option.isNone(decoded)) return undefined;
@@ -322,114 +422,15 @@ export const projectBackgroundTaskCompactSummary = ({
         issues: [],
       };
     case "list":
-    case "stop_all": {
-      const tasks = details.tasks.map((value) => taskSummary(value, causes.get(value.id)));
-      const labels = taskLabels(details.tasks);
-      const issues: CompactIssue[] = [];
-      let outcome: CompactOutcome = "success";
-      for (const [index, task] of tasks.entries()) {
-        if (task.outcome === "error") outcome = "error";
-        else if (outcome !== "error" && task.outcome === "uncertain") outcome = "uncertain";
-        else if (outcome === "success" && task.outcome === "cancelled") outcome = "cancelled";
-        issues.push(
-          ...task.issues.map((entry) => ({
-            ...entry,
-            message: firstLineMessage(`${labels[index]}: ${entry.message}`, entry.message),
-          })),
-        );
-      }
-      const counts = BACKGROUND_TASK_STATES.flatMap((state) => {
-        const n = details.tasks.filter((task) => task.state === state).length;
-        return n ? [`${n} ${taskStateLabel(state)}`] : [];
-      });
-      // Every state count first; narrower rows fall back to the total with what needs attention.
-      const total = countLabel(details.tasks.length, "task");
-      const { active, failed } = countTaskStates(details.tasks);
-      const brief = [total, active && `${active} active`, failed && `${failed} failed`]
-        .filter(Boolean)
-        .join(", ");
-      const counters = [...new Set([counts.join(", ") || total, brief, total])];
-      // Failures lead; each severity keeps the tasks' order.
-      const ordered = SEVERITY_ORDER.flatMap((severity) =>
-        issues.filter((entry) => entry.severity === severity),
-      );
-      return { action, subject, counters, issues: ordered, outcome };
-    }
-    case "wait": {
-      const { wait } = details;
-      if (wait.id !== wait.snapshot.id) return undefined;
-      const task = taskSummary(wait.snapshot, causes.get(wait.snapshot.id));
-      // The wait's cursors say where retained output resumes; its loss replaces the snapshot's.
-      const issues = [
-        ...task.issues.filter((entry) => entry.code !== `${wait.id}:log-loss`),
-        ...cursorIssues(wait),
-      ];
-      const timeout = wait.outcome === "timeout";
-      const applied = details.appliedWaitSeconds;
-      if (timeout) issues.unshift(waitTimeoutIssue(wait.id, wait.snapshot, args, applied));
-      const state = task.metadata?.[0] ?? taskStateLabel(wait.snapshot.state);
-      return {
-        ...task,
-        action,
-        metadata: [
-          wait.outcome === "matched"
-            ? `output found, ${state}`
-            : timeout
-              ? `still ${taskStateLabel(wait.snapshot.state)}`
-              : state,
-        ],
-        issues,
-        outcome: timeout && task.outcome === "success" ? "warning" : task.outcome,
-        // Without the applied wait, the measured call time says how long a timed-out wait lasted.
-        ...(timeout && applied === undefined && { showTiming: true as const }),
-      };
-    }
-    case "logs": {
-      const logs = details.logs;
-      const issues: CompactIssue[] = [];
-      if (logs.state === "failed")
-        issues.push(
-          issue(
-            "error",
-            `${logs.id}:failed`,
-            "Failed",
-            "Read task status for the exit code and failure cause.",
-          ),
-        );
-      if (logs.state === "timed_out")
-        issues.push(
-          runtimeTimeoutIssue(logs.id, undefined, "Read task status for how long it ran."),
-        );
-      if (logs.state === "stopping") issues.push(cleanupUnconfirmedIssue(logs.id));
-      issues.push(...cursorIssues(logs));
-      const cut = details.truncation;
-      if (cut?.truncated)
-        issues.push(
-          issue(
-            "warning",
-            `${logs.id}:slice-truncated`,
-            `Returned the last ${cut.outputLines} of ${countLabel(cut.totalLines, "log line")}`,
-            `The result holds ${formatBytes(cut.outputBytes)} of ${formatBytes(cut.totalBytes)}. Request a smaller log slice with tailLines or afterCursor to read the rest.`,
-          ),
-        );
-      // Success here describes log retrieval, not a clean process exit. Log slices omit
-      // exit codes by contract; snapshot-based status checks still classify exit evidence.
-      const outcome: CompactOutcome =
-        logs.state === "failed" || logs.state === "timed_out"
-          ? "error"
-          : logs.state === "stopped"
-            ? "cancelled"
-            : logs.state === "stopping"
-              ? "uncertain"
-              : issues.some((entry) => entry.severity === "warning")
-                ? "warning"
-                : "success";
-      return { action, subject, metadata: [taskStateLabel(logs.state)], outcome, issues };
-    }
+    case "stop_all":
+      return aggregateSummary(details, causes, action, subject);
+    case "wait":
+      return waitSummary(details, causes, args, action);
+    case "logs":
+      return logsSummary(details, action, subject);
   }
 };
 
-/** The shell's provider: the shared projection, with the action as people read it. */
 export const backgroundTaskCompactSummary: CompactSummaryProvider<
   BackgroundTaskToolInput,
   unknown,

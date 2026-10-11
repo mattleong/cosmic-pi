@@ -4,10 +4,6 @@ import { clipToWidth, managerNoticeColor, managerNoticeGlyph } from "pi-cosmic-u
 import type { CompactIssue } from "../tools/compact-issues";
 import { compactPlainText, compactSingleLine } from "./compact-row";
 
-/**
- * Wraps text under a hanging prefix: `first` leads the first line and `rest` the others. On rows
- * leaving fewer than `minimum` cells for text, the decoration yields before the text does.
- */
 export function wrapHanging(
   text: string,
   width: number,
@@ -21,10 +17,6 @@ export function wrapHanging(
   );
 }
 
-/**
- * Issue text for a one-line row: the first error, else the first warning, with a count of the
- * row's other attention issues.
- */
 export function compactIssueLabel(issues: readonly CompactIssue[], theme: Theme): string {
   const primary =
     issues.find((issue) => issue.severity === "error") ??
@@ -37,10 +29,6 @@ export function compactIssueLabel(issues: readonly CompactIssue[], theme: Theme)
   );
 }
 
-/**
- * One line per issue, each with its own glyph and color. Collapsed rows show messages only;
- * expansion adds informational issues and each issue's dimmed detail beneath its message.
- */
 export function renderCompactIssues(
   issues: readonly CompactIssue[] | undefined,
   theme: Pick<Theme, "fg">,
@@ -55,7 +43,6 @@ export function renderCompactIssues(
     if (!message) return [];
     const color = managerNoticeColor(issue.severity);
     const prefix = `${indent}${managerNoticeGlyph(issue.severity)} `;
-    // Surrender decoration before losing text on very narrow rows.
     const pad = " ".repeat(width - visibleWidth(prefix) >= 2 ? visibleWidth(prefix) : 0);
     const rows = wrapHanging(theme.fg(color, message), width, theme.fg(color, prefix), pad, 2);
     if (!expanded || !issue.detail) return rows;

@@ -1,4 +1,3 @@
-// Each iteration builds a fresh service scope against an owned process boundary.
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -85,7 +84,6 @@ function processFixture(behavior: Behavior, gated = false) {
     counts: () => ({ acquisitions, releases, streams, releaseBeforeExit }),
     spawn: Effect.gen(function* () {
       yield* Deferred.succeed(entered, undefined);
-      // Waiting before acquisition is interruptible and owns no process yet.
       if (gated) yield* Deferred.await(acquire);
       return yield* Effect.acquireRelease(
         Effect.sync(() => {
@@ -109,8 +107,6 @@ type ProcessFixture = ReturnType<typeof processFixture>;
 const openService = (fixtures: ProcessFixture[]) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
-    // Assertion failures must not strand a fake behind a gate or a test-clock deadline.
-    // Successful iterations close explicitly before this fallback can settle anything.
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
         for (const fixture of fixtures) {
@@ -169,7 +165,6 @@ describe("background task lifecycle stress", () => {
     () =>
       Effect.gen(function* () {
         for (let iteration = 0; iteration < LIFETIMES; iteration += 1) {
-          // Failures occupy both the first and last batch. The middle batch cannot be skipped.
           const fixtures = Array.from({ length: BATCH_SIZE }, (_, index) =>
             processFixture(
               index === 0 || index === 16
@@ -196,7 +191,6 @@ describe("background task lifecycle stress", () => {
           yield* TestClock.adjust("1 second");
           yield* Deferred.await(fixtures[15]!.forced);
           expect(yield* service.status(tasks[15]!.id)).toMatchObject({ state: "stopping" });
-          // Let runnable callers settle without opening the delayed process's exit gate.
           yield* TestClock.adjust("0 millis");
           expect(yield* Deferred.isDone(fixtures[15]!.exited)).toBe(false);
           expect(yield* Deferred.isDone(batchSettled)).toBe(false);
@@ -209,7 +203,6 @@ describe("background task lifecycle stress", () => {
           expect((yield* service.list("active")).map((task) => task.id).sort()).toEqual(
             [tasks[0]!.id, tasks[16]!.id].sort(),
           );
-          // Failed termination retains ownership. A later force retry must recover it.
           fixtures[0]!.recover();
           fixtures[16]!.recover();
           yield* service.stopAll(true);
@@ -234,7 +227,6 @@ describe("background task lifecycle stress", () => {
           const stopping = yield* service.stopAll().pipe(Effect.forkScoped);
           yield* Deferred.await(fixtures[0]!.graceful);
           yield* Fiber.interrupt(stopping);
-          // Cancellation may leave queued records untouched, but cannot transfer their ownership.
           const closing = yield* Scope.close(scope, Exit.void).pipe(Effect.forkScoped);
           yield* TestClock.adjust("1 second");
           yield* Fiber.join(closing);
@@ -290,7 +282,6 @@ describe("background task lifecycle stress", () => {
       const closing = yield* Scope.close(scope, Exit.void).pipe(
         Effect.forkScoped({ startImmediately: true }),
       );
-      // Shutdown gives up on the handle, then closes the monitor that is still spawning.
       yield* TestClock.adjust("11 seconds");
       yield* Fiber.join(closing);
       expect(yield* Fiber.join(starting)).toMatchObject({ _tag: "BackgroundRuntimeClosedError" });

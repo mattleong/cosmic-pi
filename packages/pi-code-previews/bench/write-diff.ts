@@ -1,4 +1,3 @@
-// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
 import { summarizeDiff } from "../src/diff/summary";
 import { createSimpleDiff } from "../src/diff/structured";
 import {

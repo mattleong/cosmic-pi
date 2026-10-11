@@ -12,13 +12,13 @@ import {
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_PROTOCOL_VERSION,
-  type CosmicUiHostQuery,
+  normalizeCosmicUiHostQuery,
 } from "pi-cosmic-ui/protocol";
 import { afterEach, vi } from "vitest";
 import { OPENAI_COMPACTION_DETAILS_TYPE } from "../src/compaction/protocol.ts";
 import * as configStore from "../src/config/store.ts";
 import { extensionHarness } from "./extension-harness.ts";
-import { waitUntil } from "./helpers.ts";
+import { testModel, waitUntil } from "./helpers.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -28,7 +28,6 @@ afterEach(() => {
 const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
   Effect.promise(() => Promise.resolve(value).then(() => undefined));
 
-/** While armed, each config commit signals `committed`, then waits for `release`. */
 const gateConfigCommits = Effect.gen(function* () {
   const committed = yield* Deferred.make<void>();
   const release = yield* Deferred.make<void>();
@@ -68,7 +67,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
           gate.arm(true);
           const pending = h.commands.get("openai")?.handler(`settings ${setting} true`, h.ctx);
           yield* Deferred.await(gate.committed);
-          vi.mocked(h.ctx.ui.notify).mockClear();
+          h.notify.mockClear();
           const shutdown = yield* h
             .emit("session_shutdown")
             .pipe(Effect.forkScoped({ startImmediately: true }));
@@ -77,14 +76,17 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
           yield* invoke(pending);
           yield* Fiber.join(shutdown);
           expect(h.ctx.ui.notify).not.toHaveBeenCalled();
-          vi.mocked(h.ctx.ui.setStatus).mockClear();
+          h.setStatus.mockClear();
           yield* h.emit("agent_start");
           expect(h.ctx.ui.setStatus).not.toHaveBeenCalled();
           const requestHook = h.handlers.get("before_provider_request")?.[0];
           const injection = () =>
-            Effect.promise(() => Promise.resolve(requestHook?.({ payload: {} }, h.ctx)));
+            Effect.promise(() =>
+              Promise.resolve(
+                requestHook?.({ type: "before_provider_request", payload: {} }, h.ctx),
+              ),
+            );
           expect(yield* injection()).toBeUndefined();
-          // The committed setting is durable, and a later session may legitimately use it.
           gate.arm(false);
           yield* h.emit("session_start");
           if (setting === "fast.enabled") {
@@ -113,12 +115,12 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         ),
       );
       const replacement = yield* h
-        .emit("session_start", {}, { ...h.ctx })
+        .emit("session_start", { ...h.ctx })
         .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* Deferred.succeed(gate.release, undefined);
       yield* invoke(pending);
       yield* Fiber.join(replacement);
-      vi.mocked(h.ctx.ui.setStatus).mockClear();
+      h.setStatus.mockClear();
       yield* h.emit("agent_start");
       expect(h.ctx.ui.setStatus).not.toHaveBeenCalled();
       yield* h.emit("session_shutdown");
@@ -151,27 +153,26 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
               api: "openai-responses",
               model: "gpt-5.5",
               output: [{ type: "compaction", encrypted_content: "encrypted" }],
-              rawInputCount: 1,
+              omittedEntryIds: [],
               createdAt: 0,
-              tokensBefore: 100,
             },
           },
           true,
         );
         const ctx = { ...h.ctx, sessionManager: manager, abort: vi.fn() };
-        yield* h.emit("session_start", {}, ctx);
+        yield* h.emit("session_start", ctx);
         const handler = h.handlers.get("context_with_system")![0]!;
         const messages = manager.buildSessionContext().messages;
-        const repaired = yield* Effect.promise(() =>
+        const result = yield* Effect.promise(() =>
           Promise.resolve(handler({ type: "context_with_system", messages }, ctx)),
         );
-        expect(repaired.messages[0]?.role).toBe("system");
-        expect(getCurrentSystemPrompt(repaired.messages)).toBe("system authority");
-        expect(getCurrentTools(repaired.messages).map((tool) => tool.name)).toEqual(["read"]);
+        const repaired = result ? result.messages : undefined;
+        if (!repaired) throw new Error("Expected a repaired context");
+        expect(repaired[0]?.role).toBe("system");
+        expect(getCurrentSystemPrompt(repaired)).toBe("system authority");
+        expect(getCurrentTools(repaired).map((tool) => tool.name)).toEqual(["read"]);
         expect(
-          repaired.messages.some(
-            (message: { content: unknown }) => message.content === "covered history",
-          ),
+          repaired.some((message) => "content" in message && message.content === "covered history"),
         ).toBe(true);
         expect(ctx.abort).not.toHaveBeenCalled();
         const rejected = yield* Effect.promise(() =>
@@ -181,7 +182,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         );
         expect(rejected).toBeUndefined();
         expect(ctx.abort).toHaveBeenCalledOnce();
-        yield* h.emit("session_shutdown", {}, ctx);
+        yield* h.emit("session_shutdown", ctx);
       }),
   );
 
@@ -205,7 +206,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* waitUntil(() => loadIndex === 1);
       const second = yield* h
-        .emit("session_start", {}, replacement)
+        .emit("session_start", replacement)
         .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* waitUntil(() => loadIndex === 2);
       loads[1]!.resolve();
@@ -220,7 +221,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
       expect(h.tools).toHaveLength(1);
-      yield* h.emit("session_shutdown", {}, replacement);
+      yield* h.emit("session_shutdown", replacement);
     }),
   );
 
@@ -235,7 +236,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* h.emit("session_start");
 
       expect(h.tools).toHaveLength(1);
-      vi.mocked(h.ctx.ui.notify).mockClear();
+      h.notify.mockClear();
       yield* invoke(h.commands.get("openai")?.handler("usage", h.ctx));
       expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
@@ -254,7 +255,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         },
       });
       yield* h.emit("session_start");
-      vi.mocked(h.ctx.ui.notify).mockClear();
+      h.notify.mockClear();
 
       yield* invoke(h.commands.get("openai")?.handler("fast", h.ctx));
 
@@ -270,7 +271,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       const controller = new AbortController();
       controller.abort(new Error("cancel image"));
       h.ctx.signal = controller.signal;
-      vi.mocked(h.ctx.ui.notify).mockClear();
+      h.notify.mockClear();
 
       yield* invoke(h.commands.get("openai")?.handler("image cancelled prompt", h.ctx));
 
@@ -286,18 +287,19 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       });
       yield* h.emit("session_start");
       const replacement = { ...h.ctx };
-      yield* h.emit("session_start", {}, replacement);
-      vi.mocked(h.ctx.ui.notify).mockClear();
+      yield* h.emit("session_start", replacement);
+      h.notify.mockClear();
 
-      const selected = {
-        ...replacement,
-        model: { ...replacement.model, provider: "anthropic", id: "claude" },
-      };
-      yield* h.emit("model_select", { model: selected.model }, selected);
+      const model = testModel("claude", "anthropic", "anthropic-messages");
+      const selected = { ...replacement, model };
+      yield* h.emitEvent(
+        { type: "model_select", model, previousModel: replacement.model, source: "set" },
+        selected,
+      );
       yield* invoke(h.commands.get("openai")?.handler("usage", selected));
 
       expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
-      yield* h.emit("session_shutdown", {}, selected);
+      yield* h.emit("session_shutdown", selected);
     }),
   );
 
@@ -305,22 +307,20 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
     Effect.gen(function* () {
       const h = yield* extensionHarness();
       const ctx = { ...h.ctx, mode: "tui" as const };
-      vi.mocked(h.pi.getFlag).mockReturnValue(true);
+      h.getFlag.mockReturnValue(true);
       let active = true;
       let hidden: string[] = [];
-      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
-        if (name === COSMIC_UI_HOST_QUERY) {
-          // SAFETY: Only the typed host query is emitted under this name.
-          (data as CosmicUiHostQuery).respond({ active, ready: true, hidden });
-        }
+      h.eventsEmit.mockImplementation((name, data) => {
+        if (name === COSMIC_UI_HOST_QUERY)
+          normalizeCosmicUiHostQuery(data)?.respond({ active, ready: true, hidden });
       });
-      yield* h.emit("session_start", {}, ctx);
-      const stateListener = vi
-        .mocked(h.pi.events.on)
-        .mock.calls.find(([name]) => name === COSMIC_UI_HOST_STATE)?.[1];
+      yield* h.emit("session_start", ctx);
+      const stateListener = h.eventsOn.mock.calls.find(
+        ([name]) => name === COSMIC_UI_HOST_STATE,
+      )?.[1];
       const publish = () =>
         stateListener?.({ version: COSMIC_UI_PROTOCOL_VERSION, active, ready: true, hidden });
-      expect(h.pi.events.emit).toHaveBeenCalledWith(
+      expect(h.eventsEmit).toHaveBeenCalledWith(
         COSMIC_UI_FOOTER_UPSERT,
         expect.objectContaining({ contribution: expect.objectContaining({ id: "openai.fast" }) }),
       );
@@ -332,7 +332,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       hidden = ["openai.fast"];
       publish();
       expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
-      expect(h.pi.events.emit).toHaveBeenCalledWith(
+      expect(h.eventsEmit).toHaveBeenCalledWith(
         COSMIC_UI_FOOTER_REMOVE,
         expect.objectContaining({ id: "openai.fast" }),
       );
@@ -340,7 +340,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       hidden = [];
       publish();
       expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", expect.any(String));
-      yield* h.emit("session_shutdown", {}, ctx);
+      yield* h.emit("session_shutdown", ctx);
       expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
       expect(ctx.ui.setFooter).not.toHaveBeenCalled();
     }),
@@ -416,7 +416,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       Effect.gen(function* () {
         const h = yield* extensionHarness();
         yield* h.emit("session_start");
-        vi.mocked(h.ctx.ui.notify).mockClear();
+        h.notify.mockClear();
         const replacement = { ...h.ctx };
         Object.defineProperty(replacement, property, {
           configurable: true,
@@ -425,7 +425,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
           },
         });
 
-        yield* h.emit("session_start", {}, replacement);
+        yield* h.emit("session_start", replacement);
 
         expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
         yield* Effect.promise(() =>
@@ -450,10 +450,15 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         },
       });
 
-      yield* h.emit("model_select", {}, h.ctx);
+      yield* h.emitEvent({
+        type: "model_select",
+        model: testModel(),
+        previousModel: undefined,
+        source: "set",
+      });
 
       expect(reads).toBe(1);
-      yield* h.emit("session_shutdown", {}, h.ctx);
+      yield* h.emit("session_shutdown");
     }),
   );
 });

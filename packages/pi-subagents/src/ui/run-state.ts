@@ -13,7 +13,6 @@ import {
 } from "../run/model.ts";
 import type { WorkflowRunState } from "../workflow/model.ts";
 
-/** Each run state in the shared activity vocabulary every extension draws from. */
 const RUN_STATE_KINDS = {
   starting: "pending",
   running: "running",
@@ -26,11 +25,9 @@ const RUN_STATE_KINDS = {
   stopped: "stopped",
 } as const satisfies Readonly<Record<SubagentRunState, ManagerActivityKind>>;
 
-/** A run state's glyph; `frame` animates the live states. */
 export const runStateGlyph = (state: SubagentRunState, frame?: number): string =>
   managerActivityGlyph(RUN_STATE_KINDS[state], frame);
 
-/** The shared word, except where a run's own word is more precise. */
 export const runStateLabel = (state: SubagentRunState): string =>
   state === "waiting_for_parent"
     ? "waiting for reply"
@@ -47,19 +44,11 @@ const WORKFLOW_STATE_KINDS = {
   stopped: "stopped",
 } as const satisfies Readonly<Record<WorkflowRunState, ManagerActivityKind>>;
 
-/** A workflow run's state in the shared words, for people; a teardown interrupts a run. */
 export const workflowStateLabel = (state: WorkflowRunState | "interrupted"): string =>
   state === "interrupted" ? "interrupted" : managerActivityLabel(WORKFLOW_STATE_KINDS[state]);
 
-// What a run's state and backend let a person do, shared by `/subagents` and Activity so both
-// offer the same actions; each surface adds only its own safeguards.
-
 export type RunMessageMode = "guidance" | "reply";
 
-/**
- * The one message a run can currently accept. Pending or unresolved native guidance rejects new
- * input and queue-cancelling interruption; parent-question replies and stop stay available.
- */
 export const runMessageMode = (run: SubagentRunView): RunMessageMode | undefined => {
   if (run.state === "waiting_for_parent")
     return hasSubagentCapability(run, "parent-contact") ? "reply" : undefined;

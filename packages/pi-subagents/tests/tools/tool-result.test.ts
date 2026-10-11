@@ -1,16 +1,21 @@
-// Actual registered execute results plus Pi's compositional tool_result boundary.
 import {
   createEventBus,
   type AgentToolResult,
   type ExtensionHandler,
   type ToolDefinition,
   type ToolResultEvent,
+  type ToolResultEventResult,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import type { JsonObject } from "pi-cosmic-core";
 import {
   deferredPromise,
   extensionContextFixture,
   recordingExtensionHost,
+  type DefaultedEventName,
+  type ExtensionEventName,
+  type ExtensionEventNamed,
+  type RecordedHandlers,
 } from "pi-cosmic-core/testing";
 import { describe, expect } from "vitest";
 import * as Schema from "effect/Schema";
@@ -40,31 +45,24 @@ import {
   view,
 } from "./fixtures/tool-harness.ts";
 
-type Handler = ExtensionHandler<any, any>;
-type HookEvent = Parameters<Handler>[0];
-type Tool = ToolDefinition<any, any, any>;
-const toolHosts = new WeakMap<Tool, Map<string, Handler[]>>();
-const runHooks = (
-  hooks: ReadonlyMap<string, Handler[]> | undefined,
-  name: string,
-  event: HookEvent,
+type ToolResultHandler = ExtensionHandler<ToolResultEvent, ToolResultEventResult>;
+type Tool = ToolDefinition;
+const toolHosts = new WeakMap<Tool, RecordedHandlers>();
+const runHooks = <Name extends ExtensionEventName>(
+  hooks: RecordedHandlers | undefined,
+  name: Name,
+  event: ExtensionEventNamed<Name>,
 ) =>
   Effect.forEach(hooks?.get(name) ?? [], (hook) => step(() => Promise.resolve(hook(event, ctx))));
-const execute = (
-  tool: Tool,
-  args: Parameters<Tool["execute"]>[1],
-  options?: Parameters<typeof executeTool>[2],
-) =>
+const execute = (tool: Tool, args: JsonObject, options?: Parameters<typeof executeTool>[2]) =>
   Effect.gen(function* () {
-    // Owned host fixture follows Pi start and admission provenance before execution.
     const hooks = toolHosts.get(tool);
     const call = { toolName: tool.name, toolCallId: options?.callID ?? "call" };
     yield* runHooks(hooks, "tool_execution_start", { type: "tool_execution_start", ...call, args });
-    const admission = { type: "tool_call", ...call, input: args } as const;
-    // Like Pi, admission stops at the first blocking hook.
+    const admission: ExtensionEventNamed<"tool_call"> = { type: "tool_call", ...call, input: args };
     for (const hook of hooks?.get("tool_call") ?? []) {
       const result = yield* step(() => Promise.resolve(hook(admission, ctx)));
-      if (result?.block) return yield* Effect.die(new Error(result.reason));
+      if (result !== undefined && result.block) return yield* Effect.die(new Error(result.reason));
     }
     return yield* step(() => executeTool(tool, args, options));
   });
@@ -83,6 +81,7 @@ function host() {
     pi,
     handlers: hooks,
     tools,
+    emit: emitEvent,
   } = recordingExtensionHost(
     {},
     {
@@ -92,20 +91,20 @@ function host() {
       getFlag: (name: string) => (name === "pi-subagents-supervisor-config" ? "/unused" : false),
     },
   );
-  const emit = (name: string) => runHooks(hooks, name, {}).pipe(Effect.asVoid);
+  const emit = (name: DefaultedEventName) => step(() => emitEvent(name, ctx));
   const result = (event: ToolResultEvent) =>
     Effect.gen(function* () {
       let current = event;
       for (const handler of hooks.get("tool_result") ?? []) {
         const patch = yield* step(() => Promise.resolve(handler(current, ctx)));
-        if (patch) current = { ...current, ...patch };
+        if (patch !== undefined) current = { ...current, ...patch };
       }
       return current;
     });
-  /** The one registered receipt hook for `name`; a missing hook fails the test. */
-  const dispatch = (name: string, event: HookEvent) =>
-    step(() => Promise.resolve(hooks.get(name)![0]!(event, ctx)));
-  /** Pi's start event; `parentToolCallId` is present only when supplied. */
+  const dispatch = <Name extends ExtensionEventName>(
+    name: Name,
+    event: ExtensionEventNamed<Name>,
+  ) => step(() => Promise.resolve(hooks.get(name)![0]!(event, ctx)));
   const startCall = (
     toolCallId: string,
     extra: { readonly toolName?: string; readonly parentToolCallId?: string } = {},
@@ -117,10 +116,9 @@ function host() {
       args: {},
       ...extra,
     });
-  /** Pi's admission event; `parentToolCallId` is present only when supplied. */
   const admitCall = (
     toolCallId: string,
-    extra: { readonly input?: object; readonly parentToolCallId?: string } = {},
+    extra: { readonly input?: JsonObject; readonly parentToolCallId?: string } = {},
   ) =>
     dispatch("tool_call", {
       type: "tool_call",
@@ -132,15 +130,13 @@ function host() {
   return { pi, hooks, tools, emit, result, dispatch, startCall, admitCall };
 }
 
-/** A host with active error receipts; `earlierResult` is tool_result middleware installed first. */
-function receiptHost(earlierResult?: Handler) {
+function receiptHost(earlierResult?: ToolResultHandler) {
   const h = host();
   if (earlierResult) h.pi.on("tool_result", earlierResult);
   const receipts = registerSubagentErrorReceipts(h.pi);
   return { ...h, receipts, owner: receipts.activate() };
 }
 
-/** Registers proxied coordinator tools whose every call resolves through `proxyCall`. */
 const proxiedTools = (
   h: ReturnType<typeof receiptHost>,
   proxyCall: NonNullable<SubagentToolRuntime["proxyCall"]>,
@@ -178,7 +174,6 @@ const pendingFailure = () => ({
   message: "Guidance may have been sent; acknowledgement is pending. Do not resend.",
   pendingDelivery: true as const,
 });
-/** Backend steering failures exactly as the send producer receives them. */
 const steeringError = (pendingDelivery: boolean, code = "steer_outcome_uncertain") =>
   new SubagentProcessError({
     operation: "steer",
@@ -191,7 +186,7 @@ const failed = () => ({
   details: makeCompactToolDetails({ action: "send", runs: [], actionFailures: [failure()] }),
 });
 
-function ownedTools(service = subagentServiceDouble({}), earlierResult?: Handler) {
+function ownedTools(service = subagentServiceDouble({}), earlierResult?: ToolResultHandler) {
   const h = receiptHost(earlierResult);
   registerSubagentTools(
     h.pi,
@@ -236,8 +231,6 @@ effectTest("fails closed on unknown origin and releases aborted call provenance"
     isError: true,
     result: {},
   });
-  // The overflow start was not retained. A freed slot must not turn its lost empty
-  // parent into model privilege when admission finally arrives.
   expect(yield* admit("over-cap", false)).toBeUndefined();
   expect(receipts.isNested(owner, "over-cap")).toBe(true);
   receipts.activate();
@@ -249,7 +242,7 @@ effectTest(
   function* () {
     const { receipts, owner, startCall, admitCall } = receiptHost();
     yield* startCall("opaque", { parentToolCallId: "" });
-    yield* admitCall("opaque"); // Pi's admission hook drops the empty parent ID.
+    yield* admitCall("opaque");
     expect(receipts.isNested(owner, "opaque")).toBe(true);
     yield* startCall("opaque");
     yield* admitCall("opaque");
@@ -352,7 +345,7 @@ effectTest(
       expect(patched.isError).toBe(ids.some((id) => id !== "good"));
       expect(patched.details).toBe(response.details);
       expect(patched.content).toBe(patchedContent);
-      expect(yield* h.result(original)).toEqual(original); // one-shot, no replay
+      expect(yield* h.result(original)).toEqual(original);
     }
   },
 );
@@ -386,7 +379,7 @@ effectTest(
     ];
     for (const [ids, isError] of cases) {
       const response = yield* execute(h.tools.get("subagent_send")!, {
-        runIds: ids,
+        runIds: [...ids],
         message: "guidance",
       });
       const flagged = ids.filter((id) => id.startsWith("pending"));
@@ -399,7 +392,6 @@ effectTest(
       expect(failures.filter((entry) => entry.pendingDelivery === true)).toHaveLength(
         flagged.length,
       );
-      // Content middleware may add native images; receipts never replace content or details.
       const content = [...response.content, image];
       const patched = yield* h.result(event({ ...response, content }));
       expect(patched.isError).toBe(isError);
@@ -612,7 +604,6 @@ describe("local Pi serialized proxy", () => {
           expect(decoded.details).not.toBe(response.details);
           expect((yield* h.result(event(response))).isError).toBe(false);
           const patched = yield* h.result(event(decoded));
-          // Typed pending delivery survives the private wire without becoming a tool error.
           expect(patched.isError).toBe(failures.some((entry) => !("pendingDelivery" in entry)));
           expect(patched.details).toBe(decoded.details);
           expect(patched.content).toBe(decoded.content);

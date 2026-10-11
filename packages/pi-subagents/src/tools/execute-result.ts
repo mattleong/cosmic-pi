@@ -28,7 +28,6 @@ export interface SubagentExecutionResult {
   readonly contract?: SubagentContract;
 }
 
-/** Three independent projections: human text, persisted display details, and script data. */
 export const presentSubagentResult = (
   input: Exclude<SubagentToolInput, { readonly tool: "subagent_models" | "subagent_workspace" }>,
   executionResult: SubagentExecutionResult,

@@ -1,4 +1,3 @@
-// Local-only MCP fixture for the packed-consumer smoke. No credentials, network, or SDK dependency.
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 

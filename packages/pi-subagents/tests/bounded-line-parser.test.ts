@@ -1,4 +1,3 @@
-// Test-owned event ingress exercises the parser without assuming Node stream internals.
 import { EventEmitter, once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { attachBoundedLineParser } from "../src/boundary/bounded-line-parser.ts";
@@ -72,7 +71,6 @@ describe("bounded child line parser", () => {
       maxQueuedBytes: 32,
       onLine: (line) => {
         lines.push(line);
-        // Re-entrant chunks remain queued until this callback returns and are bounded in aggregate.
         stream.emit("data", Buffer.from("x".repeat(20), "utf8"));
         stream.emit("data", Buffer.from("y".repeat(20), "utf8"));
       },

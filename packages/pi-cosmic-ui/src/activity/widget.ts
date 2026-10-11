@@ -30,7 +30,6 @@ export const activityStartupGlyph = (
   starting > 0 && !rows.some((row) => !isFinished(row) && !activityPlanned(row))
     ? managerActivityGlyph("pending", spinnerFrameAt(now))
     : "";
-/** A row's ownership path, dropping leading owners until it fits `width`. */
 export function activityOwnerLabel(
   rows: readonly ActivityRow[],
   row: ActivityRow,
@@ -47,7 +46,6 @@ export function activityOwnerLabel(
   return clipToWidth(parts[0] ?? "", Math.max(0, width), "…");
 }
 
-/** Reserve space for attention and omitted evidence before routine progress or long names. */
 const widgetGroupLine = (
   summary: GroupSummary,
   width: number,
@@ -95,7 +93,6 @@ const omissionLabels = (hidden: Omissions): string[] => [
   ...(hidden.hiddenPlanned ? [`+${hidden.hiddenPlanned} planned`] : []),
 ];
 
-/** A workflow's narrator line, dim beneath its row and continuing the tree guide to its phases. */
 const narratorLine = (
   text: string,
   width: number,
@@ -106,11 +103,6 @@ const narratorLine = (
   return theme?.fg("dim", line) ?? line;
 };
 
-/**
- * A branch's failed members past the per-workflow cap, at the depth of its members: beneath its
- * last failure shown, continuing that row's guides, or beneath the branch row itself, continuing
- * the guide to its children when `continues`.
- */
 const hiddenFailuresLine = (
   entry: GroupedActivityRow,
   count: number,
@@ -127,7 +119,6 @@ const hiddenFailuresLine = (
   return theme?.fg("warning", line) ?? line;
 };
 
-/** A bounded read-only overview. All execution capabilities stay in the manager. */
 export function renderActivityWidget(
   rows: readonly ActivityRow[],
   width: number,
@@ -146,7 +137,6 @@ export function renderActivityWidget(
       ),
     );
   if (sections.length > maxRows - lines.length) {
-    // At tiny heights, preserve all sections' evidence rather than only the first question.
     const total = sections
       .map(({ heading }) => heading.summary)
       .reduce(addGroupSummaries, emptyGroupSummary);
@@ -156,7 +146,6 @@ export function renderActivityWidget(
       sum((section) => section.entries.filter(matches).length);
     const hidden = (type: GroupedActivityRow["type"]) => shown((entry) => entry.type === type);
     const shownPlanned = shown(isPlannedEntry);
-    // Capped failures that would have had a count line are hidden here too.
     const countedFailures = sum((section) =>
       [...section.failureOverflow.values()].reduce((total, count) => total + count, 0),
     );

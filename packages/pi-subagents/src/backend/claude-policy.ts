@@ -1,7 +1,3 @@
-// Pure Claude CLI policy: writer cwd rule grammar, fixed tool constants, strict sandbox
-// settings, allowed-tool logic, and the Claude argv builder. This module imports no
-// Effect and no Node process/filesystem APIs; platform cwd validation stays in the boundary
-// path adapter, which passes its prevalidated policy result to these builders.
 import type { SubagentEffort, SubagentWriteIntent } from "../domain/routing.ts";
 import {
   SUPERVISOR_MCP_REGISTRATION,
@@ -9,7 +5,6 @@ import {
 } from "../supervisor/mcp-contract.ts";
 
 const MAX_CLAUDE_WRITER_CWD_CHARS = 4_096;
-/** Line and NUL characters plus the rule grammar's glob, group, negation, and list syntax. */
 const UNSUPPORTED_CLAUDE_RULE_CHARACTERS = /[\0\r\n*?[\]{}()!,]/u;
 
 export interface ClaudeWriterCwdPolicy {
@@ -17,10 +12,6 @@ export interface ClaudeWriterCwdPolicy {
   readonly scopedEditRule: string;
 }
 
-/**
- * Build one cwd/rule pair only when the comma-delimited tool grammar can represent it. The
- * caller must already have platform-validated the cwd as a nonempty absolute path.
- */
 export const claudeWriterCwdRulePolicy = (cwd: string): ClaudeWriterCwdPolicy | undefined =>
   cwd.length === 0 ||
   cwd.length > MAX_CLAUDE_WRITER_CWD_CHARS ||
@@ -52,7 +43,6 @@ const CLAUDE_DENIED_TOOLS: ReadonlyArray<string> = [
   "Write",
 ];
 
-/** The launch fields this pure policy reads; `BackendLaunchRequest` satisfies it structurally. */
 interface ClaudeLaunchPolicyRequest {
   readonly cwd: string;
   readonly writeIntent: SubagentWriteIntent;

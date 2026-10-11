@@ -56,7 +56,6 @@ export const inspectSource = (cwd: string) =>
         "source",
         "Invocation directory must be contained in the source checkout.",
       );
-    // Linked source worktrees, bare repositories, sparse indexes and submodules are not supported.
     yield* checkDirectory(path.join(sourceRoot, ".git"));
     const sparse = yield* workspaceIOIfPresent("source", () =>
       fs.access(path.join(sourceRoot, ".git", "info", "sparse-checkout")).then(() => true),
@@ -107,8 +106,6 @@ export const readWorkspaceFile = (
       after.nlink !== 1
     )
       return yield* workspaceFailure("snapshot", "Workspace file changed while reading.");
-    // Git only checks the first 8000 bytes for NUL when choosing binary patches.
-    // Textual diff stdout is UTF-8, so reject invalid UTF-8 that Git would call text.
     if (!bytes.subarray(0, 8000).includes(0))
       yield* Effect.try({
         try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
@@ -203,7 +200,6 @@ export const captureSnapshot = (
         "snapshot",
         "Workspace link target was not captured as a regular file.",
       );
-    // All path/content checks complete before any blob is written. No git add, ever.
     yield* git(repository, ["read-tree", "--empty"], { index });
     const entries: SnapshotEntry[] = [];
     for (const file of files) {
@@ -227,12 +223,6 @@ export const captureSnapshot = (
     return { entries, tree, commit, excludedPaths } satisfies WorkspaceSnapshot;
   });
 
-/**
- * Whether a settled worker at `root` holds nothing beyond its baseline: its snapshot has the
- * baseline's tree and leaves no file out, and its tree has no file the index doesn't track,
- * ignored ones included. The worker was checked out from the baseline snapshot, which holds none
- * of those, so a writer made each one. Empty directories hold no work: no revision carries them.
- */
 export const workerMatchesBaseline = (
   root: string,
   snapshot: WorkspaceSnapshot,

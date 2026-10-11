@@ -63,7 +63,6 @@ describe("discovery contracts", () => {
       const tools = captureSubagentTools(
         subagentServiceDouble({
           list: Effect.succeed(input),
-          // Any attempted consumption, even an empty one, would violate list's read-only contract.
           consumeCompletions: () => Effect.die("Discovery must not consume reports"),
         }),
       );
@@ -86,7 +85,6 @@ describe("discovery contracts", () => {
       expectPrivate(contract);
       expect(input.at(-1)?.reportStatus).toBe("available");
       expect(listContract([]).runs).toEqual([]);
-      // The schema protects report privacy even for an externally decoded/proxied result.
       expect(
         decodeSubagentContract("subagent_list", {
           ...contract,
@@ -166,7 +164,6 @@ describe("discovery contracts", () => {
       });
       const tools = captureSubagentTools(subagentServiceDouble({}), {
         profiles,
-        // Model discovery must not execute preflight/auth/spawn.
         registry: {
           resolve: () => Effect.die("No launch"),
           preflight: () => Effect.die("No preflight"),

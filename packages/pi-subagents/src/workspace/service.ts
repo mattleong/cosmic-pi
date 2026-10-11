@@ -41,12 +41,6 @@ export interface WorkspaceServiceContract {
     target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
   ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
-  /**
-   * Discards a settled workspace only when its worker holds no work, checked under the same lock:
-   * its snapshot matches the baseline and no other file is in its tree. `confirm` gets the
-   * discard, still under that lock, and runs it or declines it with false. True once discarded;
-   * false for a worker that holds work, a record already frozen for review, or a declined discard.
-   */
   readonly discardUnchanged: <E>(
     target: WorkspaceSettledTarget,
     confirm: (discard: Effect.Effect<void, WorkspaceError>) => Effect.Effect<boolean, E>,

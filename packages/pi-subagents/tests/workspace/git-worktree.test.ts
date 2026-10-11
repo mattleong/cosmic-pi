@@ -26,7 +26,6 @@ const test = workspaceTests([
   [".env", "SECRET=never-copy-this-head-value\n"],
   [".gitignore", "ignored.ts\n"],
 ]);
-/** Freezes and prepares a workspace, returning the matching integration request. */
 const prepareIntegration = (handle: WorkspaceHandle) =>
   Effect.gen(function* () {
     const service = yield* WorkspaceService;
@@ -82,7 +81,6 @@ test("rejects an unleased ancestor appearing between lease revalidation and publ
   let acquired = false;
   const spy = vi.spyOn(publication, "publishWorkspace").mockImplementation((...args) =>
     Effect.gen(function* () {
-      // This owned boundary is called only after requiredLeaseDirectories succeeds.
       yield* io(() => fs.mkdir(ancestor));
       const cwd = yield* leases.canonicalize(ancestor).pipe(Effect.orDie);
       return yield* Effect.acquireUseRelease(
@@ -123,7 +121,6 @@ test("reports and owns a create interrupted while it commits the active record",
     Effect.ensuring(Effect.sync(() => spy.mockRestore())),
   );
   expect(Exit.hasInterrupts(exit)).toBe(true);
-  // The launch learned of its workspace, so its own cleanup can still discard it.
   expect(reported).toHaveLength(1);
   yield* service.discard(workspaceTarget(reported[0]!));
   expect(yield* exists(reported[0]!.cwd)).toBe(false);
@@ -312,7 +309,6 @@ test("keeps the worker when it holds files the integrated revision left out", fu
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   yield* io(() => fs.mkdir(path.dirname(invoice), { recursive: true }));
   yield* writeFile(invoice, "class Invoice {}\n");
-  // Ignored by the source's own rules, so it is disposable output that keeps nothing.
   yield* writeFile(path.join(handle.cwd, "ignored.ts"), "output\n");
   const { revision, prepared, integration } = yield* prepareIntegration(handle);
   expect(revision.changedPaths).toEqual(["src/main.ts"]);
@@ -325,13 +321,11 @@ test("keeps the worker when it holds files the integrated revision left out", fu
     "class Invoice {}\n",
   );
   expect(yield* exists(prepared.cwd)).toBe(false);
-  // Discarding the integrated workspace afterwards deletes the kept worker.
   yield* service.discard(workspaceTarget(handle));
   expect(yield* exists(handle.cwd)).toBe(false);
 });
 
 test("keeps the worker for writer files at paths the source itself left out", function* (service, root) {
-  // The source tracks an excluded vendor file and holds an ineligible untracked file.
   yield* io(() => fs.mkdir(path.join(root, "vendor")));
   yield* writeFile(path.join(root, "vendor/lib.go"), "package lib\n");
   yield* git(root, ["add", "vendor/lib.go"]);
@@ -402,7 +396,6 @@ for (const mismatch of ["seed", "owner", "source", "registration"] as const) {
     const seed = path.join(registry, fork.workspaceId, "seed");
     if (mismatch === "seed") yield* io(() => fs.mkdir(seed));
     else if (mismatch === "registration") {
-      // A live seed registration without its tree needs manual inspection, never a broad prune.
       const predecessor = yield* service.inspect(workspaceTarget(original));
       const repository = path.join(registry, original.workspaceId, "repo.git");
       yield* git(repository, ["worktree", "add", "--detach", seed, predecessor.baseline]);

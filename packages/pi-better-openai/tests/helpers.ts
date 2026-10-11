@@ -49,13 +49,9 @@ export function testModel(
   };
 }
 
-/**
- * A minimal Pi context. Its registry resolves `token` as openai-codex auth, or rejects with an
- * Error token; `model` is read through a getter on every access.
- */
 export function testContext(
   options: {
-    readonly model?: () => Pick<Model<Api>, "provider" | "id">;
+    readonly model?: () => Model<Api>;
     readonly token?: string | Error | undefined;
     readonly oauth?: boolean;
   } = {},
@@ -63,9 +59,9 @@ export function testContext(
   const { token } = options;
   return extensionContextFixture({
     cwd: "/project",
-    hasUI: true as const,
+    hasUI: true,
     get model() {
-      return options.model?.() ?? { provider: "openai", id: "gpt-5.5" };
+      return options.model?.() ?? testModel();
     },
     modelRegistry: {
       isUsingOAuth: () => options.oauth ?? true,
@@ -109,8 +105,6 @@ export const appendAssistant = (
   timestamp = 10,
 ) => manager.appendMessage(assistantMessage([{ type: "text", text }], { stopReason, timestamp }));
 
-// Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
-// runtime values (tagged failures, redacted credentials) for secret fragments.
 export const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
 
 export const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>

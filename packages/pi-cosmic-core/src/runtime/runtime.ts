@@ -13,42 +13,17 @@ import type * as Types from "effect/Types";
 import { invokeHostCallback } from "../host-session.ts";
 import { PiApi } from "./pi-api.ts";
 
-/**
- * Pi owns the TTY. Effect's default console logger writes with `console.log` and
- * corrupts the TUI editor/input region. Keep only the span-event logger so
- * Effect.log* still contributes to traces without touching stdout/stderr.
- *
- * This layer has no diagnostic sink of its own: tracer log events are only observable
- * through a span exporter, and no extension owns one. Prefer
- * {@link piHostFileLoggerLayer} wherever an agent directory is available.
- */
 export const piHostLoggerLayer = Logger.layer([Logger.tracerLogger]);
 
-/** Log delivery is best effort; a missing sink must never take down a Pi session. */
 const discardLogger = Logger.make<unknown, void>(() => {});
 
-/**
- * Host log destination for one package: `<agentDirectory>/logs/<packageName>.jsonl`.
- *
- * The directory is a thunk because the Pi host resolves it lazily and may throw;
- * resolution happens inside the layer's fail-safe region.
- */
 interface PiHostLogTarget {
   readonly agentDirectory: () => string;
   readonly packageName: string;
 }
 
-/** Retain one rotated log generation. */
 const MAX_HOST_LOG_BYTES = 1_000_000;
 
-/**
- * Rotates at session start rather than per write: `Logger.toFile` has no size bound, and a
- * once-per-runtime check keeps growth bounded without adding work to the logging path.
- *
- * Failure, such as a missing log, is absorbed separately from the open below. Concurrent
- * sessions of the same package can race here, and a lost race must not cost that session its
- * log sink.
- */
 const rotateHostLog = (fs: FileSystem.FileSystem, logPath: string) =>
   Effect.gen(function* () {
     const info = yield* fs.stat(logPath);
@@ -59,10 +34,6 @@ const rotateHostLog = (fs: FileSystem.FileSystem, logPath: string) =>
     yield* fs.chmod(previous, 0o600);
   }).pipe(Effect.ignoreCause);
 
-/**
- * Opens the package's JSONL host log, degrading to a discarding logger when the
- * directory cannot be resolved, created, or opened. The handle closes with the scope.
- */
 const makePiHostFileLogger = (target: PiHostLogTarget) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
@@ -75,14 +46,6 @@ const makePiHostFileLogger = (target: PiHostLogTarget) =>
     return yield* Logger.formatJson.pipe(Logger.toFile(logPath, { mode: 0o600 }));
   }).pipe(Effect.catchCause(() => Effect.succeed(discardLogger)));
 
-/**
- * TTY-safe host logging: span events plus a JSONL file sink so `Effect.log*` and
- * recovered boundary failures are actually observable.
- *
- * Requirements and failures are absorbed here on purpose. The layer stays
- * `Layer<never, never, never>` so adding a log sink never widens the `Layer.Error`
- * that Pi session-runtime facades carry.
- */
 export const piHostFileLoggerLayer = (target: PiHostLogTarget): Layer.Layer<never> =>
   Logger.layer([Logger.tracerLogger, makePiHostFileLogger(target)]).pipe(
     Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
@@ -90,7 +53,6 @@ export const piHostFileLoggerLayer = (target: PiHostLogTarget): Layer.Layer<neve
 
 declare const PiManagedRuntimeRuntimeError: unique symbol;
 
-/** Never exposes a guarded host signal to Effect's runner after the fiber has started. */
 const ownAbortSignal = (source: AbortSignal) => {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -98,7 +60,6 @@ const ownAbortSignal = (source: AbortSignal) => {
   const release = () => {
     if (!removePending) return;
     removePending = false;
-    // A hostile host signal cannot prevent Effect-owned fiber cleanup.
     invokeHostCallback(() => source.removeEventListener("abort", abort), undefined);
   };
   try {
@@ -114,13 +75,6 @@ const ownAbortSignal = (source: AbortSignal) => {
   return { signal: controller.signal, release };
 };
 
-/**
- * Creates one host-owned Effect runtime for a pi extension.
- *
- * Construct this from `session_start` (or lazily from the first session-bound
- * operation) and dispose it during `session_shutdown`. Application code should
- * not create nested runtimes.
- */
 export function makePiRuntime<R, E>(
   pi: ExtensionAPI,
   applicationLayer: Layer.Layer<R, E, PiApi>,
@@ -132,7 +86,6 @@ export function makePiRuntime<R, E>(
   );
 }
 
-/** The only runtime operations exposed to Pi host-boundary adapters. */
 export interface PiManagedRuntime<R, RuntimeError = unknown> {
   readonly [PiManagedRuntimeRuntimeError]?: Types.Covariant<RuntimeError>;
   readonly run: <A, E>(effect: Effect.Effect<A, E, PiApi | R>, signal?: AbortSignal) => Promise<A>;
@@ -143,7 +96,6 @@ export interface PiManagedRuntime<R, RuntimeError = unknown> {
   readonly dispose: () => Promise<void>;
 }
 
-/** Wraps the raw ManagedRuntime so packages share one stable Pi-boundary facade. */
 export function makePiManagedRuntime<R, E>(
   pi: ExtensionAPI,
   applicationLayer: Layer.Layer<R, E, PiApi>,

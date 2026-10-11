@@ -10,10 +10,8 @@ const http = Layer.merge(JsonHttpClient.layer, StreamingHttpClient.layer).pipe(
   Layer.provide(NodeHttpClient.layerUndici),
 );
 
-/** Filesystem, path, and atomic JSON-document services without networking capabilities. */
 export const fileLayer = JsonDocumentStore.layer.pipe(
   Layer.provideMerge(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
 );
 
-/** Node platform services used by network-capable cosmic-pi extensions. */
 export const layer = Layer.merge(fileLayer, http);

@@ -8,19 +8,16 @@ import { formatDisplayPath } from "pi-cosmic-core";
 
 export type BuiltinCompactTool = (typeof CORE_CODE_PREVIEW_TOOLS)[number];
 
-/** A string argument, or empty when it is missing or not a string. */
 export function stringArg<Args>(args: Args, name: string): string {
   const value = getObjectValue(args, name);
   return Predicate.isString(value) ? value : "";
 }
 
-/** Argument-only display target shared by standalone and nested calls. Never reads output. */
 export function describeBuiltinCompactSubject<Args>(
   tool: BuiltinCompactTool,
   args: Args,
   cwd: string,
 ): string {
-  // Subject clipping is harmless. Notices, unlike subjects, are never clipped.
   const path = escapeControlChars(formatDisplayPath(getPathArg(args), cwd).slice(0, 4096));
   if (tool === "bash")
     return escapeControlChars(

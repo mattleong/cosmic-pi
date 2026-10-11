@@ -34,8 +34,6 @@ export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerialize
         ),
       ),
     ).pipe(Effect.forkScoped({ startImmediately: true }));
-    // Native ingress reserves capacity synchronously. The returned Effect only awaits that
-    // frame's acknowledgement; interrupting its waiter cannot enqueue or publish a second frame.
     const write = <ValueInput>(value: ValueInput): Effect.Effect<void, McpWriteFailure> => {
       if (closed) return Effect.fail(new McpWriteFailure({ reason: "closed" }));
       if (acknowledgements.size >= MAX_PENDING_WRITES)
@@ -59,7 +57,6 @@ export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerialize
         Deferred.doneUnsafe(acknowledgement, Effect.fail(failure));
       acknowledgements.clear();
     };
-    // Also cover startup failure before the helper installs its earlier ordered input close.
     yield* Effect.addFinalizer(() => Effect.sync(close));
     return { write, close };
   },

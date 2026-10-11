@@ -8,27 +8,15 @@ import { WorkflowNotFoundError } from "./errors.ts";
 import type { WorkflowFailure, WorkflowRunView } from "./model.ts";
 import { withWorkflowEvent, type WorkflowEvent } from "./state.ts";
 
-/** Per-run control state the service alone mutates. */
 export interface WorkflowRunControl {
   calls: number;
   readonly skips: Map<string, Deferred.Deferred<void>>;
-  /** Completes when the run is asked to stop; the script aborts and keeps its output. */
   readonly stop: Deferred.Deferred<void>;
-  /**
-   * Completes when the host fails the run, such as for a call past its agent limit: the script
-   * aborts and the run fails with this failure, so a script's catch can't keep it going.
-   */
   readonly failed: Deferred.Deferred<WorkflowFailure>;
-  /** Serializes results journal appends, so concurrent agents never interleave lines. */
   readonly journalLock: Semaphore.Semaphore;
-  /**
-   * Whether a journal line was written, which shows the file, whether a failure was logged, and
-   * how many full results were saved beside the journal.
-   */
   journal: { written: boolean; warned: boolean; results: number };
 }
 
-/** The refusal for a run this session neither holds nor remembers. */
 export const workflowNotFound = (id: string): Effect.Effect<never, WorkflowNotFoundError> =>
   Effect.fail(
     new WorkflowNotFoundError({
@@ -36,57 +24,35 @@ export const workflowNotFound = (id: string): Effect.Effect<never, WorkflowNotFo
     }),
   );
 
-/** How long a change waits for later ones before Activity republishes them together. */
 export const WORKFLOW_ACTIVITY_PUBLISH_MS = 75;
 
-/**
- * The host's synchronous Activity bridge. A publish runs the host's render work, so the run store
- * coalesces publishes: at most one per {@link WORKFLOW_ACTIVITY_PUBLISH_MS}, at once when a run
- * starts, ends, starts stopping or is evicted. The host checks detail and actions against the
- * views it was last published, the only ones it holds revisions for.
- */
 export interface WorkflowActivitySink {
   readonly publish: (runs: ReadonlyArray<WorkflowRunView>) => void;
 }
 
-/**
- * The session's run views and the controls of its live runs. Every change takes the views' lock
- * and then hands the latest views to one Activity bridge, which coalesces publishes.
- */
 export interface WorkflowRuns {
   readonly list: Effect.Effect<ReadonlyArray<WorkflowRunView>>;
   readonly find: (id: string) => Effect.Effect<WorkflowRunView | undefined>;
   readonly require: (id: string) => Effect.Effect<WorkflowRunView, WorkflowNotFoundError>;
-  /** A change to every run view, such as adding a run or evicting old ones. */
   readonly mutate: (
     change: (runs: ReadonlyArray<WorkflowRunView>) => ReadonlyArray<WorkflowRunView>,
   ) => Effect.Effect<void>;
-  /**
-   * Atomically applies an effectful `change` to one run, under the views' lock, which also
-   * returns a value derived from the run as it was; undefined once the run is evicted. A change
-   * that returns the same run publishes nothing.
-   */
   readonly modifyEffect: <A>(
     id: string,
     change: (run: WorkflowRunView) => Effect.Effect<readonly [A, WorkflowRunView]>,
   ) => Effect.Effect<A | undefined>;
-  /** {@link WorkflowRuns.modifyEffect} with a pure change. */
   readonly modify: <A>(
     id: string,
     change: (run: WorkflowRunView) => readonly [A, WorkflowRunView],
   ) => Effect.Effect<A | undefined>;
-  /** Applies `change` to one run and returns the result, or undefined once evicted. */
   readonly update: (
     id: string,
     change: (run: WorkflowRunView) => WorkflowRunView,
   ) => Effect.Effect<WorkflowRunView | undefined>;
-  /** Applies a script or service event to one run, stamped with the current time. */
   readonly recordEvent: (id: string, event: WorkflowEvent) => Effect.Effect<void>;
-  /** Controls of the runs whose fibers are live, keyed by workflow run id. */
   readonly controls: Map<string, WorkflowRunControl>;
 }
 
-/** Whether a change starts, ends, stops or evicts a run, which Activity shows at once. */
 const changesRunStates = (
   before: ReadonlyArray<WorkflowRunView>,
   after: ReadonlyArray<WorkflowRunView>,
@@ -94,11 +60,6 @@ const changesRunStates = (
   before.length !== after.length ||
   after.some((run, index) => before[index]?.id !== run.id || before[index]?.state !== run.state);
 
-/**
- * Coalesces the views' publishes to the host's Activity bridge, in the caller's scope. Its
- * finalizers run in reverse: the closed flag first, so a closing session publishes nothing, then
- * a pending publish is dropped.
- */
 const makeActivityPublisher = Effect.fnUntraced(function* (
   sink: WorkflowActivitySink | undefined,
   latest: () => ReadonlyArray<WorkflowRunView>,
@@ -110,12 +71,9 @@ const makeActivityPublisher = Effect.fnUntraced(function* (
       closed = true;
     }),
   );
-  /** Views changed since the last publish. */
   let dirty = false;
-  /** A trailing publish is scheduled. */
   let scheduled = false;
 
-  // The only path to the bridge: it always sends the latest views, never a stale change.
   const flush = Effect.suspend(() => {
     if (!sink || closed || !dirty) return Effect.void;
     dirty = false;
@@ -131,7 +89,6 @@ const makeActivityPublisher = Effect.fnUntraced(function* (
     ),
   );
 
-  /** Publishes a change at once, or with later changes after {@link WORKFLOW_ACTIVITY_PUBLISH_MS}. */
   const changed = (urgent: boolean) =>
     Effect.suspend(() => {
       if (!sink || closed) return Effect.void;
@@ -145,10 +102,6 @@ const makeActivityPublisher = Effect.fnUntraced(function* (
   return { changed };
 });
 
-/**
- * Builds the run store in the caller's scope. `activity` is the host's synchronous bridge for
- * Activity; it receives coalesced publishes until the scope closes.
- */
 export const makeWorkflowRuns = Effect.fnUntraced(function* (
   activity: WorkflowActivitySink | undefined,
 ) {
@@ -177,7 +130,6 @@ export const makeWorkflowRuns = Effect.fnUntraced(function* (
         const index = runs.findIndex((run) => run.id === id);
         const current = runs[index];
         if (!current) return Effect.succeed([[undefined, undefined], runs]);
-        // A changed run state, such as a start of stopping or a finish, publishes at once.
         return change(current).pipe(
           Effect.map(([value, updated]) =>
             updated === current

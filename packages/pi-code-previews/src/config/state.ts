@@ -7,14 +7,12 @@ import {
 import type { SettingsLoadProblem } from "./service";
 import type { CodePreviewSettings } from "./schema";
 
-/** Live immutable synchronous projection. Imports observe replacement atomically. */
 export let codePreviewSettings: CodePreviewSettings = defaultCodePreviewSettings;
 
 export function setCodePreviewSettings(next: CodePreviewSettings): void {
   codePreviewSettings = freezeSnapshot(next);
 }
 
-/** Settings files the latest load ignored in whole or in part. */
 export let codePreviewSettingsProblems: readonly SettingsLoadProblem[] = [];
 
 export function setCodePreviewSettingsProblems(next: readonly SettingsLoadProblem[]): void {
@@ -25,7 +23,6 @@ export function cloneCodePreviewSettings(settings: CodePreviewSettings): CodePre
   return { ...settings, tools: [...settings.tools] };
 }
 
-/** Fixed rendering budgets. Only tests and benchmarks replace them. */
 export let codePreviewPerformanceConfig: CodePreviewPerformanceConfig =
   defaultCodePreviewPerformanceConfig;
 

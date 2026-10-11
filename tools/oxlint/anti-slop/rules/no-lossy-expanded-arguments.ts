@@ -7,11 +7,29 @@ import {
   importedMember,
   isImmutable,
   isRuntimeFunction,
+  isStringLiteral,
   resolveVariable,
+  returnedValue,
   staticPropertyName,
   unwrapExpression,
   type RuntimeFunction,
 } from "../shared/ast.ts";
+
+const CORE = "pi-cosmic-core";
+const DESTRUCTIVE = new Set(["stripTerminalControls", "stripAnsi"]);
+const STYLED_TEXT = new Map([
+  ["fg", 1],
+  ["bg", 1],
+  ["bold", 0],
+]);
+const MAX_DEPTH = 12;
+
+function testFile(filename: string): boolean {
+  return filename.replaceAll("\\", "/").includes("/tests/");
+}
+
+type RendererRole = "renderCall" | "renderResult";
+type Step = boolean | "next";
 
 function imported(
   sourceCode: SourceCode,
@@ -23,15 +41,57 @@ function imported(
   return binding?.source === source && binding.name === name;
 }
 
-function renderCall(node: RuntimeFunction): boolean {
-  return (
-    node.parent.type === "Property" &&
-    staticPropertyName(node.parent.key, node.parent.computed) === "renderCall"
-  );
+function destructiveSanitizer(
+  sourceCode: SourceCode,
+  expression: ESTree.Expression,
+): string | null {
+  const binding = importedMember(sourceCode, expression);
+  return binding?.source === CORE && DESTRUCTIVE.has(binding.name) ? binding.name : null;
+}
+
+function passesValue(parent: ESTree.Node, child: ESTree.Node): boolean {
+  switch (parent.type) {
+    case "ParenthesizedExpression":
+    case "TSAsExpression":
+    case "TSSatisfiesExpression":
+    case "TSNonNullExpression":
+    case "TSTypeAssertion":
+      return true;
+    case "ConditionalExpression":
+      return parent.test !== child;
+    case "LogicalExpression":
+      return parent.operator !== "&&" || parent.right === child;
+    case "SequenceExpression":
+      return parent.expressions.at(-1) === child;
+    default:
+      return false;
+  }
+}
+
+function carriesText(parent: ESTree.Node, child: ESTree.Node): boolean {
+  if (parent.type === "TemplateLiteral") return true;
+  if (parent.type === "BinaryExpression") return parent.operator === "+";
+  return passesValue(parent, child);
+}
+
+function holderOf(node: ESTree.Node): ESTree.Node {
+  let holder = node;
+  while (holder.parent !== null && passesValue(holder.parent, holder)) holder = holder.parent;
+  return holder;
+}
+
+function propertyRole(node: ESTree.Node, value: ESTree.Node): RendererRole | null {
+  if (node.type !== "Property" || node.value !== value) return null;
+  const name = staticPropertyName(node.key, node.computed);
+  return name === "renderCall" || name === "renderResult" ? name : null;
 }
 
 function functionBinding(sourceCode: SourceCode, node: RuntimeFunction): Variable | null {
-  const declaration = node.parent.type === "VariableDeclarator" ? node.parent : node;
+  const holder = holderOf(node);
+  const declaration =
+    holder.parent?.type === "VariableDeclarator" && holder.parent.init === holder
+      ? holder.parent
+      : node;
   return (
     sourceCode
       .getDeclaredVariables(declaration)
@@ -43,14 +103,38 @@ function functionBinding(sourceCode: SourceCode, node: RuntimeFunction): Variabl
   );
 }
 
-/** Only a renderer's whole input, or its input passed directly to one local helper. */
+function rendererRole(sourceCode: SourceCode, node: RuntimeFunction): RendererRole | null {
+  const holder = holderOf(node);
+  const direct = holder.parent === null ? null : propertyRole(holder.parent, holder);
+  if (direct !== null) return direct;
+  const binding = functionBinding(sourceCode, node);
+  if (binding === null || !isImmutable(binding)) return null;
+  for (const { identifier } of binding.references) {
+    const role = propertyRole(identifier.parent, identifier);
+    if (role !== null) return role;
+  }
+  return null;
+}
+
+function enclosingFunction(node: ESTree.Node): RuntimeFunction | null {
+  for (let current = node.parent; current !== null; current = current.parent)
+    if (isRuntimeFunction(current)) return current;
+  return null;
+}
+
+function insideRenderer(sourceCode: SourceCode, node: ESTree.Node): boolean {
+  for (let fn = enclosingFunction(node); fn !== null; fn = enclosingFunction(fn))
+    if (rendererRole(sourceCode, fn) !== null) return true;
+  return false;
+}
+
 function exactArguments(
   sourceCode: SourceCode,
   expression: ESTree.Expression,
   depth = 0,
   helpers = 1,
 ): boolean {
-  if (depth > 12) return false;
+  if (depth > MAX_DEPTH) return false;
   const node = unwrapExpression(expression);
   if (
     node.type === "LogicalExpression" &&
@@ -72,7 +156,7 @@ function exactArguments(
     (param) => param.type === "Identifier" && param.name === node.name,
   );
   if (index < 0) return false;
-  if (renderCall(fn)) return index === 0;
+  if (rendererRole(sourceCode, fn) === "renderCall") return index === 0;
   if (helpers === 0) return false;
   const binding = functionBinding(sourceCode, fn);
   if (binding === null || !isImmutable(binding)) return false;
@@ -88,16 +172,49 @@ function exactArguments(
   });
 }
 
-function returned(node: ESTree.Expression): ESTree.Expression | null {
-  const fn = unwrapExpression(node);
-  if (!isRuntimeFunction(fn) || fn.body === null) return null;
-  if (fn.body.type !== "BlockStatement") return fn.body;
-  const statements = fn.body.body;
-  const last = statements.at(-1);
-  return last?.type === "ReturnStatement" &&
-    statements.slice(0, -1).every((statement) => statement.type === "VariableDeclaration")
-    ? last.argument
-    : null;
+function globalBinding(sourceCode: SourceCode, identifier: ESTree.IdentifierReference): boolean {
+  return (resolveVariable(sourceCode, identifier)?.defs.length ?? 0) === 0;
+}
+
+function plainReplacer(sourceCode: SourceCode, replacer: ESTree.Argument | undefined): boolean {
+  return (
+    replacer === undefined ||
+    (replacer.type === "Literal" && replacer.value === null) ||
+    (replacer.type === "Identifier" &&
+      replacer.name === "undefined" &&
+      globalBinding(sourceCode, replacer))
+  );
+}
+
+function jsonStringify(sourceCode: SourceCode, callee: ESTree.Expression): boolean {
+  return (
+    callee.type === "MemberExpression" &&
+    staticPropertyName(callee.property, callee.computed) === "stringify" &&
+    callee.object.type === "Identifier" &&
+    callee.object.name === "JSON" &&
+    globalBinding(sourceCode, callee.object)
+  );
+}
+
+function serializedCall(sourceCode: SourceCode, node: ESTree.CallExpression, depth = 0): boolean {
+  const callee = unwrapExpression(node.callee);
+  if (imported(sourceCode, callee, CORE, "invokeHostCallback")) {
+    const callback = node.arguments[0];
+    const fn =
+      callback === undefined || callback.type === "SpreadElement"
+        ? null
+        : unwrapExpression(callback);
+    const value = fn !== null && isRuntimeFunction(fn) ? returnedValue(fn) : null;
+    return value !== null && serializedArguments(sourceCode, value, depth + 1);
+  }
+  const input = node.arguments[0];
+  return (
+    jsonStringify(sourceCode, callee) &&
+    plainReplacer(sourceCode, node.arguments[1]) &&
+    input !== undefined &&
+    input.type !== "SpreadElement" &&
+    exactArguments(sourceCode, input)
+  );
 }
 
 function serializedArguments(
@@ -105,7 +222,7 @@ function serializedArguments(
   expression: ESTree.Expression,
   depth = 0,
 ): boolean {
-  if (depth > 12) return false;
+  if (depth > MAX_DEPTH) return false;
   const node = unwrapExpression(expression);
   if (node.type === "Identifier") {
     const initializer = constValue(sourceCode, node);
@@ -119,113 +236,118 @@ function serializedArguments(
   ) {
     return serializedArguments(sourceCode, node.left, depth + 1);
   }
-  if (node.type !== "CallExpression") return false;
-  const callee = unwrapExpression(node.callee);
-  if (imported(sourceCode, callee, "pi-cosmic-core", "invokeHostCallback")) {
-    const callback = node.arguments[0];
-    const value =
-      callback !== undefined && callback.type !== "SpreadElement" ? returned(callback) : null;
-    return value !== null && serializedArguments(sourceCode, value, depth + 1);
-  }
-  const input = node.arguments[0];
-  const replacer = node.arguments[1];
-  if (
-    replacer !== undefined &&
-    !(replacer.type === "Literal" && replacer.value === null) &&
-    !(
-      replacer.type === "Identifier" &&
-      replacer.name === "undefined" &&
-      (resolveVariable(sourceCode, replacer)?.defs.length ?? 0) === 0
-    )
-  )
-    return false;
+  return node.type === "CallExpression" && serializedCall(sourceCode, node, depth);
+}
+
+function styledSink(sourceCode: SourceCode, call: ESTree.CallExpression, child: ESTree.Node): Step {
+  const callee = unwrapExpression(call.callee);
+  if (callee.type !== "MemberExpression") return false;
+  const method = staticPropertyName(callee.property, callee.computed);
+  const index = method === null ? undefined : STYLED_TEXT.get(method);
+  if (index === undefined || call.arguments[index] !== child) return false;
+  const color = call.arguments[0];
+  if (method !== "fg" || color === undefined || !isStringLiteral(color)) return "next";
+  if (color.value === "toolOutput") return true;
+  return color.value === "error" && insideRenderer(sourceCode, call) ? true : "next";
+}
+
+function bindingSink(
+  sourceCode: SourceCode,
+  declarator: ESTree.VariableDeclarator,
+  exact: boolean,
+  depth: number,
+): boolean {
+  const variable = sourceCode.getDeclaredVariables(declarator)[0];
   return (
-    callee.type === "MemberExpression" &&
-    staticPropertyName(callee.property, callee.computed) === "stringify" &&
-    callee.object.type === "Identifier" &&
-    callee.object.name === "JSON" &&
-    (resolveVariable(sourceCode, callee.object)?.defs.length ?? 0) === 0 &&
-    input !== undefined &&
-    input.type !== "SpreadElement" &&
-    exactArguments(sourceCode, input)
+    declarator.id.type === "Identifier" &&
+    declarator.parent.type === "VariableDeclaration" &&
+    declarator.parent.kind === "const" &&
+    variable !== undefined &&
+    isImmutable(variable) &&
+    variable.references.some(
+      (reference) =>
+        reference.isRead() && reachesSink(sourceCode, reference.identifier, exact, depth + 1),
+    )
   );
 }
 
-/** Follow only expression ancestry and immutable text aliases, not arbitrary renderer helpers. */
-function renderingSink(sourceCode: SourceCode, node: ESTree.Node, depth = 0): boolean {
-  if (depth > 12) return false;
-  for (
-    let child = node, parent = node.parent;
-    parent !== null;
-    child = parent, parent = parent.parent
-  ) {
-    // Conditions and discarded sequence values do not supply the rendered text.
-    if (
-      (parent.type === "ConditionalExpression" && parent.test === child) ||
-      (parent.type === "SequenceExpression" && parent.expressions.at(-1) !== child)
-    )
-      return false;
-    if (
-      parent.type === "NewExpression" &&
-      parent.arguments.some((argument) => argument === child) &&
-      imported(sourceCode, parent.callee, "@earendil-works/pi-tui", "Text")
-    )
-      return true;
-    if (
-      parent.type === "VariableDeclarator" &&
-      parent.init === child &&
-      parent.id.type === "Identifier"
-    ) {
-      const variable = sourceCode.getDeclaredVariables(parent)[0];
+function sinkStep(
+  sourceCode: SourceCode,
+  parent: ESTree.Node,
+  child: ESTree.Node,
+  exact: boolean,
+  depth: number,
+): Step {
+  if (carriesText(parent, child)) return "next";
+  switch (parent.type) {
+    case "CallExpression":
+      return styledSink(sourceCode, parent, child);
+    case "NewExpression":
       return (
-        parent.parent.type === "VariableDeclaration" &&
-        parent.parent.kind === "const" &&
-        variable !== undefined &&
-        isImmutable(variable) &&
-        variable.references.some(
-          (reference) =>
-            reference.isRead() && renderingSink(sourceCode, reference.identifier, depth + 1),
-        )
+        exact &&
+        parent.arguments.some((argument) => argument === child) &&
+        imported(sourceCode, parent.callee, "@earendil-works/pi-tui", "Text")
       );
+    case "ReturnStatement": {
+      const owner = enclosingFunction(parent);
+      return exact && owner !== null && rendererRole(sourceCode, owner) === "renderCall";
     }
-    if (parent.type === "ReturnStatement") {
-      let owner = parent.parent;
-      while (!isRuntimeFunction(owner) && owner.parent !== null) owner = owner.parent;
-      return isRuntimeFunction(owner) && renderCall(owner);
-    }
-    if (isRuntimeFunction(parent)) return parent.body === child && renderCall(parent);
-    if (
-      parent.type === "ExpressionStatement" ||
-      parent.type === "BlockStatement" ||
-      parent.type === "Program"
-    )
+    case "ArrowFunctionExpression":
+      return exact && parent.body === child && rendererRole(sourceCode, parent) === "renderCall";
+    case "VariableDeclarator":
+      return parent.init === child && bindingSink(sourceCode, parent, exact, depth);
+    default:
       return false;
+  }
+}
+
+function reachesSink(
+  sourceCode: SourceCode,
+  node: ESTree.Node,
+  exact: boolean,
+  depth = 0,
+): boolean {
+  if (depth > MAX_DEPTH) return false;
+  let child = node;
+  for (let parent = node.parent; parent !== null; child = parent, parent = parent.parent) {
+    const step = sinkStep(sourceCode, parent, child, exact, depth);
+    if (step !== "next") return step;
   }
   return false;
 }
 
-/** Exact expanded inputs must escape controls visibly, never delete them. */
 export const noLossyExpandedArgumentsRule = defineRule({
   meta: {
     type: "problem",
-    docs: { description: "Disallow lossy terminal sanitization of serialized renderer arguments." },
+    docs: {
+      description:
+        "Disallow lossy sanitization or unescaped argument serialization in expanded tool output.",
+    },
     messages: {
-      lossyArguments:
-        "Preserve exact expanded arguments with expandedArguments or visible control escaping instead of stripTerminalControls.",
+      lossyText:
+        "{{name}} drops control characters from expanded tool output. Keep the exact text with expandedArguments(theme, args), escapeControlChars, or visible control escaping.",
+      unescapedArguments:
+        "Serialized renderer arguments reach the terminal unescaped; JSON.stringify keeps C1 controls. Render them with expandedArguments(theme, args) or escapeControlChars.",
     },
   },
   createOnce(context) {
     return {
+      before: () => !testFile(context.filename),
       CallExpression(node) {
-        const input = node.arguments[0];
-        if (input === undefined || input.type === "SpreadElement") return;
-        if (
-          imported(context.sourceCode, node.callee, "pi-cosmic-core", "stripTerminalControls") &&
-          serializedArguments(context.sourceCode, input) &&
-          renderingSink(context.sourceCode, node)
-        ) {
-          context.report({ node, messageId: "lossyArguments" });
+        const { sourceCode } = context;
+        const name = destructiveSanitizer(sourceCode, node.callee);
+        if (name !== null) {
+          const input = node.arguments[0];
+          const exact =
+            input !== undefined &&
+            input.type !== "SpreadElement" &&
+            serializedArguments(sourceCode, input);
+          if (reachesSink(sourceCode, node, exact))
+            context.report({ node, messageId: "lossyText", data: { name } });
+          return;
         }
+        if (serializedCall(sourceCode, node) && reachesSink(sourceCode, node, true))
+          context.report({ node, messageId: "unescapedArguments" });
       },
     };
   },

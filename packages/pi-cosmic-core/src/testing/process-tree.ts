@@ -3,7 +3,6 @@ import type { ProcessTreeTerminatorSpawn } from "../platform/process-tree.ts";
 type TerminatorEvent = "exit" | "error";
 type TerminatorListener = (result: Error | number | null) => void;
 
-/** Platform-neutral fake taskkill helper, so terminator semantics are testable everywhere. */
 export const fakeProcessTreeTerminator = () => {
   const listeners = new Map<TerminatorEvent, TerminatorListener[]>();
   const spawns: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> = [];

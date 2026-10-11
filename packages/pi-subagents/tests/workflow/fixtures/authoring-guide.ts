@@ -24,7 +24,7 @@ import {
   type WorkflowAgentOptions,
 } from "../../../src/workflow/options.ts";
 import { parseWorkflowScript } from "../../../src/workflow/script.ts";
-import { extensionApiFixture } from "../../fixtures/pi-host.ts";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { nodeFsPromises } from "../../support/node-builtins.ts";
 import {
   context,
@@ -32,9 +32,7 @@ import {
   testBackendRegistry,
 } from "../../tools/fixtures/tool-harness.ts";
 
-/** A `js` block in the guide; a `js fragment` block assumes definitions from the blocks around it. */
 interface GuideExample {
-  /** The line its fence opens on, which failures name. */
   readonly line: number;
   readonly fragment: boolean;
   readonly code: string;
@@ -57,7 +55,6 @@ export const guideExamples = (markdown: string): ReadonlyArray<GuideExample> =>
 export const scriptOf = (example: GuideExample): string =>
   example.fragment ? `${FRAGMENT_META}\n${example.code}` : example.code;
 
-/** How a stubbed agent answers: booleans it returns, and how many items its arrays hold. */
 interface StubAnswers {
   readonly name: string;
   readonly flag: boolean;
@@ -114,7 +111,6 @@ const sampleOfType = (node: JsonRecord, answers: StubAnswers): Schema.Json => {
   }
 };
 
-/** A value the JSON Schema accepts, for the subset scripts write: what a stubbed agent returns. */
 function sampleValue(schema: Schema.Json, answers: StubAnswers): Schema.Json {
   const node = Option.getOrUndefined(decodeJsonRecord(schema));
   if (node === undefined) return null;
@@ -127,7 +123,6 @@ function sampleValue(schema: Schema.Json, answers: StubAnswers): Schema.Json {
 
 const invalid = (message: string): WorkflowHostFailure => ({ _tag: "InvalidAgentCall", message });
 
-/** The host's own call checks, over the built-in profiles. */
 const workflowHost = makeWorkflowHost(extensionApiFixture({}), context, {
   cwd: "/project",
   projectTrusted: true,
@@ -140,10 +135,6 @@ const decodeCall = Schema.decodeUnknownEffect(
   Schema.Tuple([Schema.String, Schema.Json, Schema.optionalKey(Schema.String)]),
 );
 
-/**
- * Answers one agent() call after the real option, schema and claim checks: text without a schema,
- * else a value the compiled schema accepts.
- */
 const answer = (host: WorkflowHost, call: Schema.Json, answers: StubAnswers) =>
   Effect.gen(function* () {
     const [prompt, raw] = yield* decodeCall(call).pipe(
@@ -163,7 +154,6 @@ const answer = (host: WorkflowHost, call: Schema.Json, answers: StubAnswers) =>
     ).pipe(Effect.mapError((error) => invalid(`The stub's answer doesn't fit: ${error.message}`)));
   });
 
-/** Far above any example, so a loop that never ends fails instead of hanging the test. */
 const CALL_LIMIT = 500;
 
 const decodeWarning = Schema.decodeUnknownOption(
@@ -174,7 +164,6 @@ const decodeWarning = Schema.decodeUnknownOption(
   }),
 );
 
-/** Runs a complete script in the sandbox with stubbed agents; returns what went wrong, if anything. */
 export const runProblems = (name: string, source: string, answers: StubAnswers) =>
   Effect.gen(function* () {
     const at = `${name} (${answers.name})`;
@@ -217,7 +206,6 @@ export interface GuideCall {
   readonly options: WorkflowAgentOptions;
 }
 
-/** Executes real recipe code with checked calls and schema-settled replies, never real agents. */
 export const runRecipe = (
   source: string,
   args: Schema.Json,
@@ -253,7 +241,6 @@ export const runRecipe = (
               : yield* compileResultContract(decoded.schema).pipe(
                   Effect.mapError((error) => invalid(error.message)),
                 );
-          // A missing/invalid structured report settles as a failed agent, not as evidence.
           const result =
             value === null || contract === undefined
               ? value
@@ -278,7 +265,6 @@ export const runRecipe = (
     };
   });
 
-/** Locate complete recipes by their declared name, rather than their prose or line number. */
 export const recipe = (name: string) =>
   Effect.gen(function* () {
     for (const example of guideExamples(yield* readGuide)) {
@@ -289,7 +275,6 @@ export const recipe = (name: string) =>
     return yield* Effect.fail(invalid(`Missing guide recipe: ${name}`));
   });
 
-/** A fragment's section identifies it; its executable code remains the tested artifact. */
 export const fragment = (section: string) =>
   Effect.gen(function* () {
     const markdown = yield* readGuide;

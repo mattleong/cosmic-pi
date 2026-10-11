@@ -11,7 +11,6 @@ import { zeroUsageComponents } from "../src/backend/local-claude-usage.ts";
 
 type UserEvent = Extract<ClaudeProtocolEvent, { readonly type: "user" }>;
 
-/** A plain replayed top-level user text frame; tests override only the fields they classify. */
 const userEvent = (overrides: Partial<UserEvent>): UserEvent => ({
   type: "user",
   text: "",

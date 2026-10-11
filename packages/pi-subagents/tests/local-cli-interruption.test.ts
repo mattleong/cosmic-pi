@@ -59,7 +59,6 @@ const settled = (rawOwner?: LocalCliWireEvent) => [
   rawOwner,
 ];
 
-/** One shared interrupt owner whose correlated response is the given effect. */
 const interruptHarness = () => {
   const offered: Array<[BackendEvent, LocalCliWireEvent | undefined]> = [];
   const released: LocalCliWireEvent[] = [];
@@ -73,7 +72,6 @@ const interruptHarness = () => {
   );
   const run = (respond: Effect.Effect<unknown, SubagentError>) =>
     interrupts.run({ make: (base) => base, respond: () => respond, timeoutMessage: "Timed out" });
-  /** Forks an interrupt and returns it once it owns the lifecycle. */
   const start = (respond: Effect.Effect<unknown, SubagentError>) =>
     Effect.gen(function* () {
       const caller = yield* Effect.forkChild(run(respond));
@@ -108,7 +106,6 @@ describe("local CLI interrupt lifecycle", () => {
       });
       expect(interrupts.current).toBe(owned);
       expect(owned.abandoned).toBe(true);
-      // A second interrupt would be ambiguously correlated with the late evidence.
       expect(yield* Effect.flip(run(Effect.void))).toMatchObject({ code: "interrupt_not_sent" });
       yield* interrupts.complete(owned, raw);
       expect(offered).toEqual([settled(raw)]);

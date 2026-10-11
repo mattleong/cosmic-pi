@@ -28,7 +28,6 @@ test("a usable summary preserves its values and reconciles Pi errors", () => {
 });
 
 test("settled results without a usable summary never claim success", () => {
-  // Provider output crosses a runtime boundary; malformed values arrive untyped.
   const summaries: Array<CompactSummary | undefined> = JSON.parse(
     JSON.stringify([
       null,
@@ -69,7 +68,6 @@ test("live calls without a summary show only the argument heading", () => {
     expect(planned.collapsedSummary).toEqual(heading);
     expect(compactStatus(phase, planned.collapsedSummary)).toBe(phase);
   }
-  // Only heading fields are borrowed; stale counters or issues never leak into the fallback.
   const stale: CompactSummary = {
     subject: "target",
     showTiming: true,

@@ -12,7 +12,6 @@ describe("screen viewport", () => {
     [80, 60, 80, 60, false],
     [0, 0, 0, 0, false],
     [1, 3, 1, 3, false],
-    // Unusable and fractional terminal dimensions stay bounded.
     [-1, Number.NaN, 0, 0, false],
     [Number.POSITIVE_INFINITY, 24.9, 0, 24, false],
     [124.9, 30, 124, 30, false],

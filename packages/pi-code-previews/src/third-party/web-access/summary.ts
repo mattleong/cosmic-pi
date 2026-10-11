@@ -1,122 +1,126 @@
 import { countLabel, failureMessage, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { CompactIssue } from "../../tools/compact-issues";
 import type { CompactSummaryProvider } from "../../tools/compact-summary";
-import { webAccessArgumentReference, webAccessEvidence, webAccessSubject } from "./evidence";
+import {
+  webAccessArgumentReference,
+  webAccessEvidence,
+  webAccessSubject,
+  type WebAccessDetails,
+} from "./evidence";
 import type { WebAccessTool } from "./identity";
 
-/** Counts describe delivered evidence, never search quality, claim truth, or recovery availability. */
+function reportedIssues(details: WebAccessDetails, error: string | undefined): CompactIssue[] {
+  const issues: CompactIssue[] = [];
+  if (error && !details.cancelled)
+    issues.push({
+      severity: "error",
+      code: "web-error",
+      message: failureMessage(error, "The web tool reported an error"),
+      detail: sanitizeDiagnosticContent(error),
+    });
+  if (details.browserOpenError?.trim())
+    issues.push({
+      severity: "warning",
+      code: "web-browser",
+      message: "The search curator couldn't open automatically",
+      detail: sanitizeDiagnosticContent(details.browserOpenError),
+    });
+  return issues;
+}
+
+const shortfall = (total: number | undefined, succeeded: number | undefined): number =>
+  total !== undefined && succeeded !== undefined ? total - succeeded : 0;
+
+function failureIssues(details: WebAccessDetails, researchErrors: number): CompactIssue[] {
+  const failures = [
+    [
+      shortfall(details.queryCount, details.successfulQueries),
+      "query",
+      "queries",
+      "web-query-failures",
+    ],
+    [shortfall(details.urlCount, details.successful), "URL", "URLs", "web-fetch-failures"],
+    [researchErrors, "source-check operation", "source-check operations", "web-research-failures"],
+    [details.unavailable?.length ?? 0, "web capability", "web capabilities", "web-unavailable"],
+    [details.missing?.length ?? 0, "web tool", "web tools", "web-missing"],
+  ] as const;
+  return failures.flatMap(([count, noun, plural, code]): CompactIssue[] =>
+    count > 0
+      ? [{ severity: "warning", code, message: `${countLabel(count, noun, plural)} failed` }]
+      : [],
+  );
+}
+
+function truncationIssues<Args>(
+  name: WebAccessTool,
+  args: Args,
+  details: WebAccessDetails,
+): CompactIssue[] {
+  if (!details.truncated) return [];
+  const reference =
+    details.responseId?.trim() ||
+    details.searchId?.trim() ||
+    (name === "get_search_content" ? webAccessArgumentReference(args) : "");
+  return [
+    {
+      severity: reference ? "info" : "warning",
+      code: "web-shortened",
+      message: reference
+        ? "The output is a bounded excerpt"
+        : "The output was shortened without a recovery reference",
+      ...(reference && {
+        detail: `Stored content reference: ${sanitizeDiagnosticContent(reference)}`,
+      }),
+    },
+  ];
+}
+
+function storedContentCounters(details: WebAccessDetails): string[] | undefined {
+  const { matchCount, returnedMatches, returnedChars, contentLength } = details;
+  if (matchCount !== undefined && returnedMatches !== undefined)
+    return [`${returnedMatches}/${matchCount} matches`];
+  if (returnedChars !== undefined && contentLength !== undefined)
+    return [countLabel(returnedChars, "character")];
+  return undefined;
+}
+
+const COUNTERS = {
+  web_search: ({ queryCount, successfulQueries, totalResults }) =>
+    queryCount !== undefined && successfulQueries !== undefined && totalResults !== undefined
+      ? [countLabel(totalResults, "source"), countLabel(queryCount, "query", "queries")]
+      : undefined,
+  fetch_content: ({ urlCount, successful }) =>
+    urlCount !== undefined && successful !== undefined
+      ? [`${successful}/${urlCount} URLs`, countLabel(successful, "URL")]
+      : undefined,
+  source_check: ({ sourceCount, passageCount, searchCount }) =>
+    sourceCount !== undefined && passageCount !== undefined && searchCount !== undefined
+      ? [
+          `${countLabel(sourceCount, "source")} · ${countLabel(passageCount, "passage")}`,
+          countLabel(sourceCount, "source"),
+        ]
+      : undefined,
+  get_search_content: storedContentCounters,
+  web_enable: ({ enabled }) => (enabled ? [countLabel(enabled.length, "tool")] : undefined),
+} satisfies Record<WebAccessTool, (details: WebAccessDetails) => string[] | undefined>;
+
 export function webAccessSummary(name: WebAccessTool): CompactSummaryProvider {
   return ({ phase, args, result }) => {
     const heading = { subject: webAccessSubject(name, args), showTiming: true as const };
     if (!result) return phase === "settled" ? undefined : heading;
     const evidence = webAccessEvidence(name, result.details);
     if (!evidence) return undefined;
-    const { details, researchErrors } = evidence;
-    const issues: CompactIssue[] = [];
+    const { details } = evidence;
     const error = details.error?.trim();
-    if (error && !details.cancelled)
-      issues.push({
-        severity: "error",
-        code: "web-error",
-        message: failureMessage(error, "The web tool reported an error"),
-        detail: sanitizeDiagnosticContent(error),
-      });
-    if (details.browserOpenError?.trim())
-      issues.push({
-        severity: "warning",
-        code: "web-browser",
-        message: "The search curator couldn't open automatically",
-        detail: sanitizeDiagnosticContent(details.browserOpenError),
-      });
-    const failedQueries =
-      details.queryCount !== undefined && details.successfulQueries !== undefined
-        ? details.queryCount - details.successfulQueries
-        : 0;
-    const failedUrls =
-      details.urlCount !== undefined && details.successful !== undefined
-        ? details.urlCount - details.successful
-        : 0;
-    for (const [count, noun, plural, code] of [
-      [failedQueries, "query", "queries", "web-query-failures"],
-      [failedUrls, "URL", "URLs", "web-fetch-failures"],
-      [
-        researchErrors,
-        "source-check operation",
-        "source-check operations",
-        "web-research-failures",
-      ],
-      [details.unavailable?.length ?? 0, "web capability", "web capabilities", "web-unavailable"],
-      [details.missing?.length ?? 0, "web tool", "web tools", "web-missing"],
-    ] as const)
-      if (count > 0)
-        issues.push({
-          severity: "warning",
-          code,
-          message: `${countLabel(count, noun, plural)} failed`,
-        });
-    if (details.truncated) {
-      const reference =
-        details.responseId?.trim() ||
-        details.searchId?.trim() ||
-        (name === "get_search_content" ? webAccessArgumentReference(args) : "");
-      issues.push({
-        severity: reference ? "info" : "warning",
-        code: "web-shortened",
-        message: reference
-          ? "The output is a bounded excerpt"
-          : "The output was shortened without a recovery reference",
-        ...(reference && {
-          detail: `Stored content reference: ${sanitizeDiagnosticContent(reference)}`,
-        }),
-      });
-    }
+    const issues = [
+      ...reportedIssues(details, error),
+      ...failureIssues(details, evidence.researchErrors),
+      ...truncationIssues(name, args, details),
+    ];
     if (phase !== "settled") return { ...heading, issues };
     if (details.cancelled) return { ...heading, outcome: "cancelled", issues };
     if (error) return { ...heading, outcome: "error", issues };
-    let counters: string[] | undefined;
-    if (
-      name === "web_search" &&
-      details.queryCount !== undefined &&
-      details.successfulQueries !== undefined &&
-      details.totalResults !== undefined
-    )
-      counters = [
-        countLabel(details.totalResults, "source"),
-        countLabel(details.queryCount, "query", "queries"),
-      ];
-    else if (
-      name === "fetch_content" &&
-      details.urlCount !== undefined &&
-      details.successful !== undefined
-    )
-      counters = [
-        `${details.successful}/${details.urlCount} URLs`,
-        countLabel(details.successful, "URL"),
-      ];
-    else if (
-      name === "source_check" &&
-      details.sourceCount !== undefined &&
-      details.passageCount !== undefined &&
-      details.searchCount !== undefined
-    )
-      counters = [
-        `${countLabel(details.sourceCount, "source")} · ${countLabel(details.passageCount, "passage")}`,
-        countLabel(details.sourceCount, "source"),
-      ];
-    else if (
-      name === "get_search_content" &&
-      details.matchCount !== undefined &&
-      details.returnedMatches !== undefined
-    )
-      counters = [`${details.returnedMatches}/${details.matchCount} matches`];
-    else if (
-      name === "get_search_content" &&
-      details.returnedChars !== undefined &&
-      details.contentLength !== undefined
-    )
-      counters = [countLabel(details.returnedChars, "character")];
-    else if (name === "web_enable" && details.enabled)
-      counters = [countLabel(details.enabled.length, "tool")];
+    const counters = COUNTERS[name](details);
     if (!counters) return undefined;
     return { ...heading, counters, outcome: "returned", issues };
   };

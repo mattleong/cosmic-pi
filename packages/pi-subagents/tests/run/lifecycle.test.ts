@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -96,7 +95,6 @@ describe("SubagentService", () => {
         gate = true;
         const waiter = yield* service.resume(run.id).pipe(Effect.forkChild);
         yield* yieldUntil(() => entered);
-        // Both must finish while the foreign Promise remains permanently unsettled.
         yield* service.rename(run.id, "lock-reused");
         yield* Fiber.interrupt(waiter);
         expect(yield* service.status(run.id)).toMatchObject({

@@ -1,15 +1,6 @@
 import { isJsonObject, type JsonObject } from "pi-cosmic-core";
-import {
-  MIGRATED_PROFILE_SET_NAME,
-  SUBAGENT_CONFIG_VERSION,
-  decodeSubagentConfig,
-  isLegacyConfigVersion,
-} from "../config/schema.ts";
-import {
-  captureRestoreDeclaration,
-  migrateLegacyRouteJson,
-  stableJson,
-} from "../config/profile-restore.ts";
+import { decodeSubagentConfig } from "../config/schema.ts";
+import { captureRestoreDeclaration, stableJson } from "../config/profile-restore.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { PROFILE_IDS, cloneProfileCandidates, type ProfileId } from "../profiles/model.ts";
 import {
@@ -23,7 +14,6 @@ import {
 } from "./profile-route-editor.ts";
 
 export interface ProfileEditRestore {
-  readonly sourceVersion: number;
   readonly declaration?: JsonObject[string] | undefined;
 }
 export type ProfileEditCommitReceipt =
@@ -33,13 +23,8 @@ export interface ProfileEditUndoPlan {
   readonly draft: ProfileRouteDraft;
   readonly restore?: ProfileEditRestore;
 }
-// Match store migration for comparison only; retain the raw checkpoint for exact restore.
-const restoreKey = ({ declaration, sourceVersion }: ProfileEditRestore): string =>
-  declaration === undefined
-    ? "absent"
-    : stableJson(
-        isLegacyConfigVersion(sourceVersion) ? migrateLegacyRouteJson(declaration) : declaration,
-      );
+const restoreKey = ({ declaration }: ProfileEditRestore): string =>
+  declaration === undefined ? "absent" : stableJson(declaration);
 const rawRestore = (
   target: ProfileWorkspaceTarget,
   profile: ProfileId,
@@ -49,20 +34,11 @@ const rawRestore = (
   const document = inspection[`${target.set.scope}Document` as const];
   const sets = document?.profileSets;
   const set = isJsonObject(sets) ? sets[target.set.name] : undefined;
-  const profiles =
-    isLegacyConfigVersion(document?.version) && target.set.name === MIGRATED_PROFILE_SET_NAME
-      ? document?.profiles
-      : isJsonObject(set)
-        ? set.profiles
-        : undefined;
+  const profiles = isJsonObject(set) ? set.profiles : undefined;
   const declaration = isJsonObject(profiles) ? profiles[profile] : undefined;
-  return {
-    sourceVersion: inspection[target.set.scope]?.file.version ?? SUBAGENT_CONFIG_VERSION,
-    declaration: structuredClone(declaration),
-  };
+  return { declaration: structuredClone(declaration) };
 };
 
-// Fixed tuples compare domain values, not object insertion order or document formatting.
 const candidatesKey = (draft: ProfileRouteDraft): string =>
   JSON.stringify(
     draft.candidates.map((c) => [
@@ -148,11 +124,8 @@ interface Checkpoint {
 
 const restorable = (checkpoint: Checkpoint): boolean =>
   checkpoint.opening.kind !== "invalid" &&
-  (!checkpoint.restore ||
-    captureRestoreDeclaration(checkpoint.restore.declaration, checkpoint.restore.sourceVersion) !==
-      undefined);
+  (!checkpoint.restore || captureRestoreDeclaration(checkpoint.restore.declaration) !== undefined);
 
-/** Synchronous bookkeeping for one dashboard visit. It owns no runtime or persistence. */
 export class ProfileEditVisit {
   private readonly checkpoints = new Map<string, Map<ProfileId, Checkpoint>>();
   private baseline: string;
@@ -241,7 +214,6 @@ export class ProfileEditVisit {
     return checkpoint.restore ? { draft, restore: structuredClone(checkpoint.restore) } : { draft };
   }
 
-  /** Call only after a successful save, before reconciling its returned inspection. */
   recordSave(
     target: ProfileWorkspaceTarget,
     profile: ProfileId,
@@ -289,7 +261,6 @@ export class ProfileEditVisit {
     this.captureTarget({ kind: "session" }, inspection);
   }
 
-  /** Call before reconcile after an owned rename. External renames must not transfer authority. */
   renameTarget(
     previous: ProfileWorkspaceTarget,
     next: ProfileWorkspaceTarget,

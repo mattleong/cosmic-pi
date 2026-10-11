@@ -8,7 +8,6 @@ type DiffLineKind = "add" | "remove";
 type DiffBackgroundResolver = (kind: DiffLineKind) => string | undefined;
 type MarkedDiffLine = { kind?: DiffLineKind; line: string };
 
-/** Paints marked add/remove rows across the full width, wrapping long rows under the gutter. */
 export class FullWidthDiffText implements Component {
   private cachedWidth: number | undefined;
   private cachedRows: string[] | undefined;
@@ -96,7 +95,6 @@ function fallbackDiffBg(kind: DiffLineKind, intensity: "subtle" | "medium"): str
   return intensity === "medium" ? "\x1b[48;2;78;36;40m" : "\x1b[48;2;50;24;30m";
 }
 
-/** Tints the theme's success/error background toward its diff foreground; test themes may lack ANSI getters. */
 function deriveDiffBg(
   kind: DiffLineKind,
   theme: Theme | undefined,

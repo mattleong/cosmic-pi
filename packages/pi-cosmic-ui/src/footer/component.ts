@@ -113,8 +113,6 @@ export function createFooterComponent(options: {
         const contextVisible = metrics.some((entry) => entry.id === "context");
         const metricEntries = metrics.filter((entry) => entry.id !== "context");
         const details = text.filter((entry) => entry.region === "details");
-        // Labeled, unlabeled host-status, and other details partition the region, so a labeled
-        // contribution renders once even when its id starts with `extension.`.
         const labeledDetails = details.filter(
           (entry): entry is LabeledContribution => entry.label !== undefined,
         );

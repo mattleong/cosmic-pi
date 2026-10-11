@@ -9,8 +9,8 @@ import {
   type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
-import { opaqueFixture } from "pi-cosmic-core/testing";
-import { describe, it } from "@effect/vitest";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
@@ -26,6 +26,7 @@ import { registerAskUserTool } from "../src/tools/ask-user.ts";
 import {
   registerAsyncAskUserMessageRenderer,
   registerAsyncAskUserTools,
+  renderAskUserAsyncMessage,
 } from "../src/tools/ask-user-async.ts";
 import { noExecution } from "./support/questionnaire.ts";
 
@@ -147,7 +148,6 @@ interface ToolScenario extends GalleryScenario {
   readonly tool: ToolName;
 }
 
-/** Runs the registered tool's own execute over a stubbed questionnaire service. */
 const executed = (
   tool: ToolName,
   title: string,
@@ -157,7 +157,7 @@ const executed = (
   Effect.promise(() =>
     captureRegistrations(register)
       .tools.find((entry) => entry.name === tool)!
-      .execute("gallery", args, undefined, undefined, opaqueFixture({})),
+      .execute("gallery", args, undefined, undefined, extensionContextFixture()),
   ).pipe(Effect.map((result): ToolScenario => ({ tool, title, args, result })));
 
 const asked = (title: string, args: AskUserRequest, outcome: AskUserOutcome) =>
@@ -176,7 +176,6 @@ const controlled = (
   executed("ask_user_async_control", title, args, (pi) =>
     registerAsyncAskUserTools(pi, noExecution, () => Promise.resolve({ requests })),
   );
-/** Pi's own result when execute rejects: the error message and empty details. */
 const failed = (tool: ToolName, title: string, args: ToolArgs, message: string) =>
   Effect.succeed<ToolScenario>({
     tool,
@@ -275,7 +274,6 @@ describe.skipIf(!directory)("presentation gallery", () => {
           snapshot("ask-3", { ...settled, status: "failed", delivery: "waiter" }),
         ]),
         controlled("questionnaires waiting for answers", { action: "status" }, [open, queued]),
-        // Status without a requestId lists metadata only; the service strips each outcome.
         controlled("finished and waiting questionnaires", { action: "status" }, [
           snapshot("ask-1", { ...settled, status: "submitted", delivery: "sent" }),
           snapshot("ask-2", { ...settled, status: "cancelled", delivery: "sent" }),
@@ -299,7 +297,6 @@ describe.skipIf(!directory)("presentation gallery", () => {
           toolCallTiming: false,
         });
         try {
-          // Registration captures the collapsed style, so it follows the settings above.
           const { tools, messageRenderers } = captureRegistrations(registerAll);
           for (const { tool, ...scenario } of scenarios)
             lines.push(
@@ -308,7 +305,8 @@ describe.skipIf(!directory)("presentation gallery", () => {
                 title: `${style} · ${tool} · ${scenario.title}`,
               }),
             );
-          const render = messageRenderers.get(ASYNC_MESSAGE_TYPE)!;
+          expect(messageRenderers.get(ASYNC_MESSAGE_TYPE)).toBe(renderAskUserAsyncMessage);
+          const render = renderAskUserAsyncMessage;
           for (const scenario of messages)
             lines.push(
               ...galleryMessageFrames(render, {

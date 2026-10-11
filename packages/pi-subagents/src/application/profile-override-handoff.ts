@@ -5,11 +5,6 @@ import {
   type SessionProfileOverrideSeed,
 } from "../profiles/session-overrides.ts";
 
-/**
- * Keeps the complete detached session profile baseline, sparse edits, and nesting across `/tree`.
- * Only the runtime that opened it last may publish; real Pi session lifecycle boundaries clear
- * this host-owned handoff explicitly, which also retires that runtime.
- */
 export const makeProfileOverrideHandoff = () => {
   let seed = emptySessionProfileOverrideSeed();
   let seedIsAuthoritative = false;
@@ -17,11 +12,9 @@ export const makeProfileOverrideHandoff = () => {
   let owner = 0;
   return {
     capture: () => cloneSessionProfileOverrideSeed(seed),
-    /** Present after the runtime publishes its complete frozen session baseline and overlays. */
     captureAuthoritative: () =>
       seedIsAuthoritative ? cloneSessionProfileOverrideSeed(seed) : undefined,
     captureBaseConfig: () => baseConfig,
-    /** Makes a new runtime the only publisher and returns its owner token. */
     open: () => ++owner,
     publishBaseConfig: (from: number, config: ResolvedSubagentConfig) => {
       if (from === owner) baseConfig = config;

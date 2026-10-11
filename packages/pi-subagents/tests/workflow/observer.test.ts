@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type { WorkflowRunObserver } from "../../src/workflow/run-observer.ts";
@@ -16,7 +15,6 @@ import {
   until,
 } from "./fixtures/workflow-harness.ts";
 
-/** Records what the observer hears, as `opened <id>` and `closed <id> <handoff>`. */
 const recordingObserver = () => {
   const events: string[] = [];
   const observer: WorkflowRunObserver = {
@@ -34,11 +32,9 @@ describe("workflow run observer", () => {
       const started = yield* startScript(workflows, "return 1;");
       yield* finished(workflows, started.id);
       yield* eventually(() => fixture.workflowNotifications[0], "the refused notification");
-      // The run stays open while its notification waits to be accepted.
       expect(events).toEqual([`opened ${started.id}`]);
       accept = true;
       yield* eventually(() => fixture.delivered[0], "the accepted notification");
-      // The result wakes the main agent, so the agent run it joins or starts handles it.
       yield* until(() => events.includes(`closed ${started.id} now`), "the run to close");
     });
   });
@@ -64,7 +60,6 @@ describe("workflow run observer", () => {
       const stopped = yield* workflows.stop(started.id, "tool");
       expect(stopped).toMatchObject({ state: "stopped", stoppedBy: "tool" });
       expect(events).toEqual([`opened ${started.id}`, `closed ${started.id} now`]);
-      // Let any delivery fiber run before checking that none was started.
       yield* Effect.sleep("50 millis");
       expect(fixture.workflowNotifications).toEqual([]);
     });
@@ -86,7 +81,6 @@ describe("workflow run observer", () => {
       yield* withWorkflows(reloaded, () =>
         until(() => events.includes(`closed ${runId} next-turn`), "the notice to be accepted"),
       );
-      // The notice waits for the next turn, so the next agent run handles it.
       expect(events).toEqual([`opened ${runId}`, `closed ${runId} next-turn`]);
       expect(reloaded.delivered).toEqual([
         expect.objectContaining({ runId, outcome: "interrupted" }),

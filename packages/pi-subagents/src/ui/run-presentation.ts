@@ -5,7 +5,6 @@ const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 
 export const shortRunId = (id: string): string => (id.length <= 14 ? id : `…${id.slice(-13)}`);
 
-/** Names more than one run shares, so each of those runs also shows its short id. */
 export const duplicateRunNames = (
   runs: Iterable<{ readonly name: string }>,
 ): ReadonlySet<string> => {
@@ -15,20 +14,17 @@ export const duplicateRunNames = (
   return duplicates;
 };
 
-/** A span within this session, or undefined when the clock readings are implausible. */
 const sessionSpan = (later: number, earlier: number | undefined): number | undefined => {
   if (earlier === undefined) return undefined;
   const age = later - earlier;
   return Number.isFinite(age) && age >= 0 && age <= MAX_SESSION_DISPLAY_AGE ? age : undefined;
 };
 
-/** How long a run has been going: "12s", "2m 5s". */
 export const formatSessionAge = (later: number, earlier: number | undefined): string => {
   const span = sessionSpan(later, earlier);
   return span === undefined ? "" : formatElapsed(span);
 };
 
-/** When a run last did something: "just now", "5s ago". */
 export const formatSessionActivity = (now: number, earlier: number | undefined): string => {
   const span = sessionSpan(now, earlier);
   return span === undefined ? "" : formatRelativeAge(span);
@@ -65,7 +61,6 @@ export const formatRunRoute = (run: RunRoutePresentationInput): string => {
   return `${route.hostRuntime} · ${route.model}`;
 };
 
-/** The wide `profile → host/runtime · model` line, themed when a theme is supplied. */
 export const formatRunRouteLine = (
   run: RunRoutePresentationInput,
   theme?: Pick<Theme, "fg">,

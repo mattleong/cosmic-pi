@@ -27,8 +27,6 @@ function contextUsageCandidates(
   const meter = progressBar(percent, cells, theme, color);
   const percentage = theme.fg(color, `${Math.round(percent)}%`);
   const counts = theme.fg("syntaxNumber", `${formatTokens(tokens)}/${formatTokens(contextWindow)}`);
-  // Counts are the first responsive detail to drop, followed by the meter. This keeps the
-  // percentage useful on narrow terminals while preserving the healthy/warning tone.
   return [
     `${label} ${meter} ${percentage} ${counts}`,
     `${label} ${meter} ${percentage}`,
@@ -36,7 +34,6 @@ function contextUsageCandidates(
   ];
 }
 
-/** Renders the model identity at left and the context meter at right without a fixed right budget. */
 export function renderModelContextLine(
   modelIdentity: CosmicFooterTextContribution[],
   usage: { contextWindow?: number; tokens?: number | null; percent?: number | null } | undefined,
@@ -49,8 +46,6 @@ export function renderModelContextLine(
   const leftWidth = visibleWidth(leftRaw);
   const contextBudget = leftRaw ? Math.max(1, width - leftWidth - 2) : width;
   const candidates = contextUsageCandidates(usage, theme, compact);
-  // Prefer the fullest context projection that fits beside model identity. If identity is too
-  // wide, retain the percentage before clipping identity; counts and then the meter are dropped.
   const context =
     candidates.find((candidate) => visibleWidth(candidate) <= contextBudget) ??
     clipToWidth(candidates.at(-1) ?? "", width, "");

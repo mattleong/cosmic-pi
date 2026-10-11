@@ -19,10 +19,6 @@ export interface DirectoryModelSessionInput {
   readonly explicitPreference: boolean;
 }
 
-/**
- * Total, nonthrowing host notifier. `warnOnce` invokes it inside `Effect.sync`,
- * and the only supplier is `notifyAtHostBoundary`, which already absorbs host failures.
- */
 export type DirectoryModelWarn = (message: string) => void;
 
 const READ_WARNING = "The saved model for this directory is invalid, so Pi kept its current model";
@@ -37,7 +33,6 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
         const pi = yield* PiApi;
         const store = yield* DirectoryModelStore;
         const gate = yield* Semaphore.make(1);
-        // Every access to these session-local values occurs under the single-permit gate.
         let cachedIdentity: DirectoryIdentity | undefined;
         const warned = new Set<string>();
 
@@ -48,7 +43,6 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
             warn(message);
           });
 
-        /** Recover any failure into `undefined` after one warning per key. */
         const recovered = <Value, E>(
           effect: Effect.Effect<Value, E>,
           key: string,
@@ -66,9 +60,6 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
         const write = (identified: DirectoryIdentity, preference: DirectoryModelPreference) =>
           recovered(store.write(identified, preference), "write", WRITE_WARNING);
 
-        // Snapshot the live session model and Pi's thinking level at serialized capture time
-        // so a delayed host event re-persists the current state instead of a stale one.
-        // An absent or malformed session model yields `undefined` without a warning.
         const currentPreference = (canonicalCwd: string) =>
           Effect.suspend(() => {
             const selected = captureContextModel(input.ctx);
@@ -95,7 +86,6 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
             if (!input.fresh || input.explicitPreference) return;
             const identified = yield* recovered(identity, "identify", IDENTIFY_WARNING);
             if (!identified) return;
-            // None means the read failed (already warned); Some(undefined) means no document.
             const loaded = yield* store.read(identified).pipe(
               Effect.tapError(() => warnOnce("read", READ_WARNING)),
               Effect.option,
@@ -107,9 +97,6 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
               if (current) yield* write(identified, current);
               return;
             }
-            // Restoration runs inside pre-activation startup: the session slot admits host
-            // events only after this whole Effect resolves, and setModel settlement is
-            // awaited (uninterruptibly) before that point, so no restore marker is needed.
             const restored = yield* applyHostPreference(pi, input.ctx, loadedPreference).pipe(
               Effect.catch((error) =>
                 Effect.as(warnOnce(`restore:${error.operation}`, error.message), undefined),

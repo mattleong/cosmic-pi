@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import type * as Schema from "effect/Schema";
+import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import {
   runWorkflowSandbox,
   type WorkflowSandboxHost,
@@ -8,28 +9,36 @@ import {
 } from "../../src/boundary/codemode-sandbox.ts";
 import { decodeWorkflowAgentOptions } from "../../src/workflow/options.ts";
 
+const JsonFields = Schema.Record(Schema.String, Schema.Json);
+type JsonFields = typeof JsonFields.Type;
+
+const decodeAgentCall = Schema.decodeUnknownSync(
+  Schema.TupleWithRest(Schema.Tuple([Schema.String, JsonFields]), [Schema.Json]),
+);
+const decodeEvent = Schema.decodeUnknownSync(JsonFields);
+const decodeLoadCall = Schema.decodeUnknownSync(
+  Schema.TupleWithRest(Schema.Tuple([Schema.String]), [Schema.Json]),
+);
+
 interface Recorded {
-  readonly agents: Array<{ readonly prompt: string; readonly options: Record<string, string> }>;
-  readonly events: Array<Record<string, string>>;
+  readonly agents: Array<{ readonly prompt: string; readonly options: JsonFields }>;
+  readonly events: Array<JsonFields>;
 }
 
 const invalid = (message: string) => Effect.fail({ _tag: "InvalidCall", message });
 
-/** Nested workflow bodies by reference; any other reference loads `scan`'s. */
 const NESTED = new Map([
   ["deep", "return await parallel([() => workflow('scan', { n: 1 })]);"],
   ["blank", "return await agent('nested', { phase: ' ' });"],
 ]);
 const SCAN = "phase('Inner'); return { args, inner: await agent('child-' + args.n) };";
 
-/** Runs a script body through the sandbox boundary, with recording host members. */
 const run = (body: string, args: Schema.Json = null, budget?: number) =>
   Effect.gen(function* () {
     const recorded: Recorded = { agents: [], events: [] };
     const host: WorkflowSandboxHost<never> = {
       agent: (call) => {
-        // SAFETY: the prelude always calls the spread agent member as (prompt, options).
-        const [prompt, options] = call as [string, Record<string, string>];
+        const [prompt, options] = decodeAgentCall(call);
         recorded.agents.push({ prompt, options });
         if (prompt.startsWith("reject")) return invalid("invalid agent options");
         if (prompt.startsWith("over"))
@@ -37,12 +46,9 @@ const run = (body: string, args: Schema.Json = null, budget?: number) =>
         const result = prompt.startsWith("fail") ? null : `done:${prompt}`;
         return Effect.succeed({ result, outputTokens: result === null ? 0 : 5 });
       },
-      // SAFETY: the prelude only emits flat string-valued phase and log events.
-      event: (event) =>
-        Effect.sync(() => void recorded.events.push(event as Record<string, string>)),
+      event: (event) => Effect.sync(() => void recorded.events.push(decodeEvent(event))),
       load: (call) => {
-        // SAFETY: the prelude always calls the spread load member as (reference, args).
-        const [reference] = call as [string, Schema.Json];
+        const [reference] = decodeLoadCall(call);
         if (reference === "strict")
           return invalid('Args for workflow "strict" don\'t match its meta.args schema.');
         return Effect.succeed({ name: reference, body: NESTED.get(reference) ?? SCAN });
@@ -96,7 +102,10 @@ describe("workflow prelude", () => {
       expect(value(outcome)).toEqual({ p: ["done:ok", null, null], q: ["done:s1:0", null] });
       expect(
         events.some(
-          (event) => event.level === "warning" && event.message?.includes("boom") === true,
+          (event) =>
+            event.level === "warning" &&
+            Predicate.isString(event.message) &&
+            event.message.includes("boom"),
         ),
       ).toBe(true);
     }),
@@ -121,7 +130,6 @@ describe("workflow prelude", () => {
       expect(error.name).toBe("TypeError");
       expect(error.message).toContain("item 1");
       expect(error.message).toContain("() => agent(...)");
-      // The batch is checked before any item starts.
       expect(agents).toEqual([]);
     }),
   );
@@ -164,7 +172,6 @@ describe("workflow prelude", () => {
           " let caught; try { await agent('over 3') } catch (error) { caught = error.message }" +
           " return { items, piped, caught, spent: budget.spent() };",
       );
-      // The tokens a refused call spent count before it throws.
       expect(value(outcome)).toEqual({
         items: ["done:ok", null],
         piped: [null],
@@ -178,7 +185,6 @@ describe("workflow prelude", () => {
   it.effect("fails the run at the script line of an uncaught error", () =>
     Effect.gen(function* () {
       for (const [line, message] of [
-        // An uncaught budget refusal, an invalid call and the script's own throw.
         ["await agent('over');", "budget spent"],
         ["await parallel([() => agent('reject')]);", "invalid agent options"],
         ["throw new Error('line three');", "line three"],
@@ -254,7 +260,6 @@ describe("workflow prelude", () => {
         ["await workflow('strict', { n: 1 });", "meta.args"],
         ["await parallel([() => workflow('strict')]);", "meta.args"],
         ["await pipeline([1], (n) => workflow('strict', { n }));", "meta.args"],
-        // Args that aren't JSON, and a second level of nesting, are invalid calls too.
         ["await parallel([() => workflow('scan', 1n)]);", "BigInt"],
         ["await parallel([() => workflow('deep')]);", "one level deep"],
       ] as const) {

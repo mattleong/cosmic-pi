@@ -19,17 +19,12 @@ const fsFailure = (tag: PlatformError.SystemErrorTag, method: string) =>
 const toBytes = (source: string | Uint8Array) =>
   source instanceof Uint8Array ? source : new TextEncoder().encode(source);
 
-/**
- * Owned in-memory FileSystem. Tests may reassign `fileSystem` members to inject faults; the
- * store calls them through it.
- */
 function documentLayer(initial: Readonly<Record<string, string | Uint8Array>>) {
   const files = new Map(Object.entries(initial));
   let sequence = 0;
   const fileSystem = {
     ...FileSystem.make(
       FileSystem.makeNoop({
-        // Yielding lets unlocked read-modify-write transactions interleave.
         readFile: (path) =>
           Effect.yieldNow.pipe(Effect.andThen(Effect.sync(() => toBytes(files.get(path) ?? "")))),
         chmod: () => Effect.void,
@@ -71,7 +66,6 @@ const modify = <A>(modification: JsonDocumentModification<A>) =>
     store.modifyObject("/config.json", () => Effect.succeed(modification)),
   );
 
-/** A replacement that records whether it ran and whether its commit was published. */
 const trackedModification = (document: JsonObject) => {
   const state = { mutated: false, published: false };
   const change = () => {
@@ -157,14 +151,14 @@ it.effect("rejects non-JSON values instead of coercing persisted data", () => {
   const harness = documentLayer({});
   return Effect.gen(function* () {
     const store = yield* JsonDocumentStore;
-    const invalidDocument = {
-      dropped: undefined,
-      coerced: Number.NaN,
-    };
-    // SAFETY: This deliberately invalid fixture exercises the store's runtime JSON validation.
-    const invalidJsonDocument = invalidDocument as typeof invalidDocument &
-      Schema.MutableJsonObject;
-    const result = yield* Effect.result(store.writeObject("/config.json", invalidJsonDocument));
+    const invalidDocument: Schema.MutableJsonObject = { coerced: Number.NaN };
+    Object.defineProperty(invalidDocument, "dropped", {
+      value: undefined,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    const result = yield* Effect.result(store.writeObject("/config.json", invalidDocument));
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("encode");
     expect(harness.files.has("/config.json")).toBe(false);
@@ -306,7 +300,6 @@ it.effect("preserves a rename failure when best-effort cleanup also defects", ()
 });
 
 it.effect("rejects a truncated UTF-8 tail after the object", () => {
-  // A complete object followed by the first two bytes of a three-byte character.
   const source = Uint8Array.of(...new TextEncoder().encode('{"a":1}\n'), 0xe2, 0x82);
   const harness = documentLayer({ "/config.json": source });
   return Effect.gen(function* () {

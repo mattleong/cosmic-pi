@@ -1,4 +1,3 @@
-// Pi tool execution is a Promise-shaped host boundary.
 import {
   defineTool,
   type ExtensionAPI,
@@ -37,10 +36,8 @@ import {
 import { countLabel, invokeHostCallback, toPiToolOutputSchema } from "pi-cosmic-core";
 import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
 
-// Pi renders calls while arguments stream in, so any field may still be absent.
 const quoted = (message: string | undefined) => (message ? `“${message}”` : "");
 
-/** A call's targets, counted as execution reads them. */
 const targetsLabel = (args: SummaryArguments) =>
   countLabel(requestedRunIds(args)?.length ?? 0, "subagent");
 
@@ -48,17 +45,34 @@ type SubagentToolSpec<N extends SubagentToolName> = Pick<
   ToolDefinition<SubagentToolParameters<N>>,
   "label" | "description" | "promptSnippet" | "promptGuidelines" | "prepareArguments" | "renderCall"
 > & {
-  /** Presentation lease held for the whole execution, including proxy calls. */
   readonly lease?: (
     presentation: SubagentToolPresentation,
-    // Pi's own TypeBox copy types execute args, so derive them from its definition.
     args: Parameters<ToolDefinition<SubagentToolParameters<N>>["execute"]>[1],
   ) => () => void;
 };
 
 type SubagentToolSpecs = { readonly [N in SubagentToolName]: SubagentToolSpec<N> };
 
-/** Offered only while root scripts can reach the orchestration tools. */
+type SubagentToolInputs = {
+  readonly [N in SubagentToolName]: (
+    args: Parameters<ToolDefinition<SubagentToolParameters<N>>["execute"]>[1],
+  ) => SubagentToolInput;
+};
+
+const TOOL_INPUTS: SubagentToolInputs = {
+  [SUBAGENT_TOOL_NAME.models]: (args) => ({ tool: SUBAGENT_TOOL_NAME.models, args }),
+  [SUBAGENT_TOOL_NAME.start]: (args) => ({ tool: SUBAGENT_TOOL_NAME.start, args }),
+  [SUBAGENT_TOOL_NAME.list]: (args) => ({ tool: SUBAGENT_TOOL_NAME.list, args }),
+  [SUBAGENT_TOOL_NAME.status]: (args) => ({ tool: SUBAGENT_TOOL_NAME.status, args }),
+  [SUBAGENT_TOOL_NAME.await]: (args) => ({ tool: SUBAGENT_TOOL_NAME.await, args }),
+  [SUBAGENT_TOOL_NAME.send]: (args) => ({ tool: SUBAGENT_TOOL_NAME.send, args }),
+  [SUBAGENT_TOOL_NAME.reply]: (args) => ({ tool: SUBAGENT_TOOL_NAME.reply, args }),
+  [SUBAGENT_TOOL_NAME.lifecycle]: (args) => ({ tool: SUBAGENT_TOOL_NAME.lifecycle, args }),
+  [SUBAGENT_TOOL_NAME.rename]: (args) => ({ tool: SUBAGENT_TOOL_NAME.rename, args }),
+  [SUBAGENT_TOOL_NAME.claims]: (args) => ({ tool: SUBAGENT_TOOL_NAME.claims, args }),
+  [SUBAGENT_TOOL_NAME.workspace]: (args) => ({ tool: SUBAGENT_TOOL_NAME.workspace, args }),
+};
+
 const SCRIPTED_WORKFLOW_GUIDELINE =
   "For bounded root-session read-only workflows, native codemode can script subagent_start, subagent_await, subagent_status, lifecycle stop, subagent_models, subagent_list, and subagent_rename using version-1 structured results. List and rename never return report text; models reports static eligibility, not authentication readiness. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. The main agent chooses the appropriate profile for each workflow assignment.";
 
@@ -86,7 +100,6 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "When a profiled run fails and its start receipt or status reports an eligible remaining route candidate, call subagent_lifecycle with action=retry for that run before launching any generalist replacement. Retry creates a new run on the next candidate from the original frozen route and never re-attempts the failed candidate.",
     ],
     prepareArguments: prepareSubagentStartArguments,
-    // Pi renders calls while arguments stream in, before `agents` exists.
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(
         Array.isArray(args.agents) ? args.agents : [],
@@ -197,7 +210,6 @@ const TOOL_SPECS: SubagentToolSpecs = {
   },
 };
 
-/** `shell` is the root's replay-staging wrapper; proxied child registrations use the plain one. */
 export function registerSubagentTools(
   pi: ExtensionAPI,
   runtime: SubagentToolRuntime,
@@ -206,7 +218,6 @@ export function registerSubagentTools(
 ): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
   const settlePresentation = <A>(release: () => void, operation: () => Promise<A>): Promise<A> => {
-    // Presentation teardown cannot replace the tool outcome.
     const releaseSafely = () => invokeHostCallback(release, undefined);
     let pending: Promise<A>;
     try {
@@ -217,7 +228,6 @@ export function registerSubagentTools(
     }
     return pending.finally(releaseSafely);
   };
-  /** Syncs the progress ticker and reports whether the activity widget owns the live hierarchy. */
   const panelOwnsHierarchy = (
     result: Parameters<typeof renderSubagentResult>[0],
     isPartial: boolean,
@@ -234,9 +244,6 @@ export function registerSubagentTools(
 
   const register = <N extends SubagentToolName>(name: N) => {
     const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
-    // Native codemode may batch the root orchestration tools; proxied child registrations stay
-    // model-only. Ultracode gates only subagent_workflow. Judgment tools remain model-issued;
-    // the structured contract stays for model calls too.
     const rootContract = !runtime.proxyCall && isSubagentContractTool(name);
     const scriptable = rootContract;
     const tool = defineTool<SubagentToolParameters<N>>({
@@ -255,20 +262,30 @@ export function registerSubagentTools(
         },
       }),
       parameters: SUBAGENT_TOOL_SCHEMAS[name].parameters,
-      execute: (_id, args, ...rest) =>
-        settlePresentation(
+      execute: (id, args, ...rest) => {
+        const input = TOOL_INPUTS[name](args);
+        return settlePresentation(
           (runtime.toolPresentation && lease?.(runtime.toolPresentation, args)) ??
             (() => undefined),
           () =>
-            // SAFETY: Pi validated args against this tool's catalog schema, typed by its TypeBox copy.
             executeSubagentAction(
               pi,
               runtime,
-              { tool: name, args } as SubagentToolInput,
+              input,
               ...rest,
-              receiptOwner?.receipts.isNested(receiptOwner.owner, _id) ?? false,
+              receiptOwner?.receipts.isNested(receiptOwner.owner, id) ?? false,
             ),
-        ),
+        ).then((result) => {
+          receiptOwner?.receipts.retain(
+            receiptOwner.owner,
+            name,
+            id,
+            subagentToolAction(input),
+            result.details,
+          );
+          return result;
+        });
+      },
       renderResult: (result, options, theme, context) =>
         renderSubagentResult(result, options.isPartial, options.expanded, theme, {
           panelOwnsLiveHierarchy: panelOwnsHierarchy(result, options.isPartial, context),
@@ -302,12 +319,8 @@ export function registerSubagentTools(
             panelOwnsLiveHierarchy,
             isError: context.isError,
           });
-          // A rejected call's text is its whole result; the content already labels it.
           if (!isTypedReceipt(result.details)) return content;
           if (!context.isError && !hasReturnedFailureEvidence(result.details)) return content;
-          // The typed projection is bounded; keep all returned recovery evidence and earlier
-          // content middleware accessible for classified errors and for pending delivery,
-          // which is returned failure evidence without Pi's error flag.
           const container = new Container();
           container.addChild(content);
           container.addChild(
@@ -322,30 +335,12 @@ export function registerSubagentTools(
       },
       compactSummary: (input) => {
         const summary = project(input);
-        // Compact mode owns every collapsed row, even when projection declines.
-        // Hidden original renderers cannot retire a ticker started while expanded.
         if (!input.context.isPartial || !input.context.expanded)
           syncAwaitProgressTicker(undefined, false, input.context, startUiTicker);
         return summary;
       },
     });
-    pi.registerTool({
-      ...wrapped,
-      execute: (id, args, ...rest) =>
-        wrapped.execute(id, args, ...rest).then((result) => {
-          // Retain only the FINAL registered result, including decoded local proxy details.
-          // SAFETY: Pi validated this correlated name/args pair with the catalog schema.
-          const input = { tool: name, args } as SubagentToolInput;
-          receiptOwner?.receipts.retain(
-            receiptOwner.owner,
-            name,
-            id,
-            subagentToolAction(input),
-            result.details,
-          );
-          return result;
-        }),
-    });
+    pi.registerTool(wrapped);
   };
   for (const name of SUBAGENT_TOOL_NAMES) register(name);
 }

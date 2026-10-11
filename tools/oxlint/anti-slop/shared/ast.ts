@@ -47,7 +47,6 @@ export function referencedAliasName(type: ESTree.TSType): string | null {
     : null;
 }
 
-/** Function values that run, unlike the type-level signatures `FunctionNode` also covers. */
 export type RuntimeFunction = ESTree.ArrowFunctionExpression | ESTree.Function;
 
 export function isRuntimeFunction(node: ESTree.Node): node is RuntimeFunction {
@@ -58,7 +57,6 @@ export function isRuntimeFunction(node: ESTree.Node): node is RuntimeFunction {
   );
 }
 
-/** Strip parentheses, optional chains, and type-only wrappers that leave the value unchanged. */
 export function unwrapExpression(expression: ESTree.Expression): ESTree.Expression {
   let current = expression;
   while (
@@ -74,7 +72,6 @@ export function unwrapExpression(expression: ESTree.Expression): ESTree.Expressi
   return current;
 }
 
-/** Quoted tokens are the parser's StringLiteral variant; retain its decoded value. */
 export function isStringLiteral(node: ESTree.Node): node is ESTree.StringLiteral {
   return (
     node.type === "Literal" &&
@@ -83,18 +80,15 @@ export function isStringLiteral(node: ESTree.Node): node is ESTree.StringLiteral
   );
 }
 
-/** A property key's static name: a non-computed identifier or a string literal. */
 export function staticPropertyName(key: ESTree.Node, computed: boolean): string | null {
   if (!computed && key.type === "Identifier") return key.name;
   return isStringLiteral(key) ? key.value : null;
 }
 
-/** Whether a binding keeps the value it was declared with. */
 export function isImmutable(variable: Variable): boolean {
   return !variable.references.some((reference) => reference.isWrite() && !reference.init);
 }
 
-/** The declarator of a single, never-reassigned `const` binding, including destructuring. */
 export function constDeclarator(variable: Variable): ESTree.VariableDeclarator | null {
   if (variable.defs.length !== 1 || !isImmutable(variable)) return null;
   const definition = variable.defs[0];
@@ -105,7 +99,6 @@ export function constDeclarator(variable: Variable): ESTree.VariableDeclarator |
     : null;
 }
 
-/** The value of a `const name = value` binding; destructured bindings hold only a part of it. */
 export function constInitializer(variable: Variable): ESTree.Expression | null {
   const declarator = constDeclarator(variable);
   return declarator?.id.type === "Identifier" ? declarator.init : null;
@@ -119,7 +112,6 @@ export function constValue(
   return variable === null ? null : constInitializer(variable);
 }
 
-/** A function literal, or one reached through a function declaration or `const` aliases. */
 export function resolveFunction(
   sourceCode: SourceCode,
   expression: ESTree.Expression,
@@ -138,13 +130,22 @@ export function resolveFunction(
   return init === null ? null : resolveFunction(sourceCode, init, seen);
 }
 
-/** A value import's module specifier and imported name: `*` for a namespace. */
+export function returnedValue(fn: RuntimeFunction): ESTree.Expression | null {
+  if (fn.body === null) return null;
+  if (fn.body.type !== "BlockStatement") return fn.body;
+  const statements = fn.body.body;
+  const last = statements.at(-1);
+  return last?.type === "ReturnStatement" &&
+    statements.slice(0, -1).every((statement) => statement.type === "VariableDeclaration")
+    ? last.argument
+    : null;
+}
+
 export interface ImportedValue {
   readonly source: string;
   readonly name: string;
 }
 
-/** The value import that declares a binding; type-only imports declare no runtime value. */
 export function importedValue(variable: Variable): ImportedValue | null {
   for (const definition of variable.defs) {
     if (definition.type !== "ImportBinding" || definition.parent?.type !== "ImportDeclaration")
@@ -162,10 +163,6 @@ export function importedValue(variable: Variable): ImportedValue | null {
   return null;
 }
 
-/**
- * The import an expression names: an imported binding, a static member of an imported
- * namespace, or a `const` alias of either. Never matches by spelling alone.
- */
 export function importedMember(
   sourceCode: SourceCode,
   expression: ESTree.Expression,

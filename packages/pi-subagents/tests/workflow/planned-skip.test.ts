@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { emptyUsage } from "../../src/run/model.ts";
@@ -34,7 +33,6 @@ const agentNamed = (run: WorkflowRunView, label: string) =>
 
 describe("skipping planned agents", () => {
   it.live("resolves the call that claims a skipped agent to null without starting it", () => {
-    // One slot, so a call that waited for one couldn't settle while the verifier holds it.
     return workflowTest({ concurrency: 1 }, function* ({ fixture, workflows }) {
       const started = yield* startScript(
         workflows,
@@ -54,7 +52,6 @@ describe("skipping planned agents", () => {
       );
       expect(marked.agents).toEqual([]);
       yield* reportTask(fixture, "check correctness", "Correct.");
-      // It settles while the verifier still holds the run's only slot, keeping its row id.
       const settled = yield* runWhere(
         workflows,
         started.id,
@@ -74,7 +71,6 @@ describe("skipping planned agents", () => {
         verified: "Verified.",
         security: null,
       });
-      // No subagent ever received its task.
       expect(stateOfTask(fixture, "check security")).toBeUndefined();
       expect(
         journalLines(fixture.runFiles, done.journalPath).find((line) => line.label === "security"),
@@ -108,7 +104,6 @@ describe("skipping planned agents", () => {
       expect(workflowRunSummary(done).skipped).toBe(1);
       const notification = yield* eventually(() => fixture.delivered[0], "the notification");
       expect(notification.agents.skipped).toBe(1);
-      // A finished run's planned agents can no longer be skipped, nor can unknown ones.
       const late = yield* Effect.flip(workflows.skip(plannedId(done, "security")));
       expect(late._tag).toBe("WorkflowNotFoundError");
       expect((yield* Effect.flip(workflows.skip("agent-unknown")))._tag).toBe(
@@ -131,7 +126,6 @@ describe("skipping planned agents", () => {
       const resumed = yield* startScript(workflows, plannedSource(body), {
         resumeFromRunId: original.id,
       });
-      // It had no result to reuse, so it runs live this time.
       yield* reportTask(fixture, "check security", "Secure.");
       const done = yield* finished(workflows, resumed.id);
       expect(resultValue(done)).toEqual(["Correct.", "Secure."]);
@@ -151,7 +145,6 @@ describe("skipping planned agents", () => {
       yield* reportTask(fixture, "check correctness", "Correct.");
       yield* reportTask(fixture, "check security", "Secure.");
       yield* finished(workflows, original.id);
-      // A live call holds the script until the skip is in.
       const resumed = yield* startScript(
         workflows,
         plannedSource(`phase("Review"); ${first}
@@ -212,7 +205,6 @@ describe("skipping planned agents", () => {
         yield* reportTask(fixture, "check auth", "Auth fine.");
         yield* reportTask(fixture, "check input", "Input fine.");
         yield* finished(workflows, original.id);
-        // A live call holds the script until the skip is in.
         const resumed = yield* startScript(
           workflows,
           plannedSource(`phase("Review"); ${first}
@@ -223,7 +215,6 @@ describe("skipping planned agents", () => {
         yield* workflows.skip(plannedId(resumed, "security"));
         yield* reportTask(fixture, "verify it", "Verified.");
         const done = yield* finished(workflows, resumed.id);
-        // The first call claimed the one skipped entry; the second still reuses its result.
         expect(resultValue(done)).toEqual(["Correct.", "Verified.", null, "Input fine."]);
         expect(done.reused).toBe(2);
       });
@@ -247,7 +238,6 @@ describe("claiming planned agents outside any phase", () => {
       expect(loose?.phase).toBeUndefined();
       expect(queued.planned.map((entry) => entry.label)).toEqual(["correctness", "security"]);
       expect(queued.planned.some((entry) => entry.runId === loose?.runId)).toBe(false);
-      // Its subagent runs in that phase too, so Activity nests it there.
       const subagentId = yield* reportTask(fixture, "verify it", "Verified.");
       expect(subagentId).toBe(verifier);
       expect(

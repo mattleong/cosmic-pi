@@ -1,9 +1,5 @@
 import type { CodexImageDetails } from "./types.ts";
 
-/**
- * The agent-facing text attached beside a generated image. Renderers compare against it to tell
- * whether a result's text says anything its structured details do not.
- */
 export const imageResultText = (result: CodexImageDetails): string => {
   const parts = [
     `Generated image using OpenAI image_generation tool via openai-codex/${result.model}.`,

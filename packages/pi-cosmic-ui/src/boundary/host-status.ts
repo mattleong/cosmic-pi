@@ -9,7 +9,6 @@ import {
 import type { CosmicFooterStatusContribution } from "../protocol/protocol.ts";
 import { makeHostUiTickerPool, type HostUiTickerPool } from "./host-ui-ticker-pool.ts";
 
-/** Rotates the process-shared pool before awaiting the old pool's Effect cleanup. */
 export const makeHostUiTickerOwner = (
   createPool: () => HostUiTickerPool = makeHostUiTickerPool,
 ) => {
@@ -26,17 +25,14 @@ export const makeHostUiTickerOwner = (
 
 const hostUiTickerOwner = makeHostUiTickerOwner();
 
-/** Shares one underlying Effect timer across all host-UI consumers at the same cadence. */
 export const startHostUiTicker = hostUiTickerOwner.start;
 
-/** Session shutdown awaits the old pool; later sessions use the replacement pool. */
 export const shutdownHostUiTickers = hostUiTickerOwner.shutdown;
 
 export const makeSetStatusSafely =
   (statusKey: string) =>
   (ctx: ExtensionContext | undefined, text?: string): void => {
     if (!ctx) return;
-    // Host UI may already be tearing down.
     invokeBestEffort(() => {
       if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
       ctx.ui.setStatus(
@@ -53,11 +49,6 @@ interface FooterStatusDeclaration {
   readonly shutdown: () => void;
 }
 
-/**
- * Declares how a host status entry (`ctx.ui.setStatus`) is placed in the
- * Cosmic footer. Inert when no Cosmic host answers the query; the status text
- * itself keeps flowing through the host status channel either way.
- */
 export function makeFooterStatusDeclaration(options: {
   readonly events: ExtensionAPI["events"] | undefined;
   readonly owner: string;
@@ -104,7 +95,6 @@ interface ProjectionBridgeOptions<P> {
   readonly statusKey: string;
   readonly emptyProjection: () => P;
   readonly footerStatus: (projection: P) => string | undefined;
-  /** Cosmic footer placement declaration for this status entry. */
   readonly footerPlacement: FooterStatusDeclaration;
 }
 

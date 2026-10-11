@@ -1,4 +1,3 @@
-// Public SDK host boundary: the real agent loop runs the local Pi child bridge; no inference.
 import { fauxAssistantMessage, fauxToolCall, type AssistantMessage } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
@@ -46,11 +45,9 @@ const encodeContractDocument = Schema.encodeEffect(
 interface ChildSessionOptions {
   readonly schema?: Schema.Json | undefined;
   readonly codemode?: "on" | "only";
-  /** The parent's rejection message for a submission, or undefined to accept it. */
   readonly reject?: ((valueJson: string) => string | undefined) | undefined;
 }
 
-/** A real Pi session running the child bridge, with a parent IPC fake that answers results. */
 const childSession = (options: ChildSessionOptions = {}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -111,7 +108,6 @@ const childSession = (options: ChildSessionOptions = {}) =>
         strictSafe: contract.strictSafe,
       }).pipe(Effect.orDie);
       yield* fs.writeFileString(file, source).pipe(Effect.orDie);
-      // Pi's CLI parser fills this runtime map from `--pi-subagents-result-schema <file>`.
       loader.getExtensions().runtime.flagValues.set(LOCAL_PI_RESULT_CONTRACT_FLAG, file);
     }
     const session = yield* scopedPrintSession({
@@ -159,7 +155,6 @@ const childSession = (options: ChildSessionOptions = {}) =>
 const callResult = (args: Record<string, Schema.Json>) =>
   fauxAssistantMessage(fauxToolCall(SUBAGENT_RESULT_TOOL_NAME, args), { stopReason: "toolUse" });
 
-/** A live test whose body runs scoped over the Node filesystem. */
 const childTest = (
   name: string,
   body: () => Generator<
@@ -170,7 +165,6 @@ const childTest = (
 ) =>
   it.live(name, () => Effect.gen(body).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)));
 
-// Live time is intentional: the real agent loop schedules its own provider streaming.
 describe("local Pi child result tool", () => {
   childTest("is absent, with no reminder, for a launch without a result contract", function* () {
     const child = yield* childSession();
@@ -275,7 +269,6 @@ describe("local Pi child result tool", () => {
           fauxAssistantMessage(`Prose answer ${index}.`),
         ),
       );
-      // Past its reminder budget the run settles without another request, and fails.
       expect(exhausted).toMatchObject({
         requests: MAX_RESULT_REMINDERS + 1,
         unused: 1,
@@ -283,7 +276,6 @@ describe("local Pi child result tool", () => {
         submissions: [],
       });
 
-      // The next prompt reminds again even though the last one used up its budget.
       const resumed = yield* child.run([
         fauxAssistantMessage("Still prose."),
         callResult({ verdict: "ok" }),
@@ -291,7 +283,6 @@ describe("local Pi child result tool", () => {
       expect(resumed.reminders - exhausted.reminders).toBe(1);
       expect(resumed.submissions).toEqual([canonicalResultJson({ verdict: "ok" })]);
 
-      // An accepted result belongs to its prompt; the next one must submit its own.
       const next = yield* child.run([
         fauxAssistantMessage("I already returned the verdict."),
         callResult({ verdict: "bad" }),

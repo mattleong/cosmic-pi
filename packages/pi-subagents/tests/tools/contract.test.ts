@@ -15,7 +15,6 @@ import {
 } from "../../src/tools/contract-schema.ts";
 import { containedWriter, view } from "../fixtures/run-view.ts";
 
-/** Every builder result must survive the strict public decoder unchanged. */
 const decoded = <Tool extends SubagentContractTool>(
   tool: Tool,
   contract: SubagentContract<Tool>,
@@ -124,9 +123,7 @@ describe("report disposition", () => {
       status: "delivered",
       text: "Done.",
     });
-    // Owned but truncated in the visible result: deferred, never silently consumed.
     expect(report({ run, completionReceipt: receipt("a") })).toEqual({ status: "deferred" });
-    // Rendered without ownership never delivers.
     expect(report({ run: finished("a", { finalText: "Done." }) }, ["a"])).toEqual({
       status: "unknown",
     });

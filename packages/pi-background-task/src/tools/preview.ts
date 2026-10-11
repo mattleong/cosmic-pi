@@ -1,7 +1,3 @@
-/**
- * Preview-style bodies for `background_task`: what the typed details say, in people's words, under
- * the shell's heading and issue lines. The agent's raw text appears only once expanded.
- */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
@@ -18,12 +14,10 @@ import type { BackgroundTaskToolInput } from "./schema.ts";
 
 type PreviewTheme = Pick<Theme, "fg" | "bold">;
 
-/** Collapsed log previews show a head and a tail around one hidden-lines marker. */
 const LOG_HEAD_LINES = 8;
 const LOG_TAIL_LINES = 4;
 const COLLAPSED_TASK_ROWS = 8;
 
-/** What ended a task, when it is worth saying: a non-zero exit or a signal, with its meaning. */
 function exitStatus(task: BackgroundTaskSnapshot): string | undefined {
   if (task.state !== "failed" && task.state !== "exited") return undefined;
   if (task.exitCode != null && task.exitCode !== 0) {
@@ -35,7 +29,6 @@ function exitStatus(task: BackgroundTaskSnapshot): string | undefined {
   return `signal ${sanitizeTerminalLine(task.signal)}${meaning ? `: ${meaning}` : ""}`;
 }
 
-/** One task as people know it: name, state, how it ended, and the command a name stands for. */
 function taskPreviewLine(task: BackgroundTaskSnapshot, theme: PreviewTheme): string {
   const state = taskStatePresentation(task.state, 0);
   const status = exitStatus(task);
@@ -47,13 +40,11 @@ function taskPreviewLine(task: BackgroundTaskSnapshot, theme: PreviewTheme): str
   ].join(theme.fg("dim", " · "));
 }
 
-/** Where a task runs: its working directory and process ID. */
 export function taskProcessLine(task: BackgroundTaskSnapshot, theme: PreviewTheme): string {
   const pid = task.pid === undefined ? [] : [`pid ${task.pid}`];
   return theme.fg("muted", [sanitizeTerminalLine(task.cwd), ...pid].join(" · "));
 }
 
-/** A row that is clipped to one line collapsed and wrapped once expanded. */
 interface Row {
   readonly text: string;
   readonly wrap?: boolean;
@@ -63,7 +54,6 @@ const hiddenMarker = (hidden: number, theme: PreviewTheme): Row => ({
   text: theme.fg("muted", `--- ${countLabel(hidden, "line")} hidden ---`),
 });
 
-/** A bounded head and tail of `lines`, then how many show, counting only these lines. */
 function boundedLines(lines: ReadonlyArray<string>, label: string, theme: PreviewTheme): Row[] {
   const shown = LOG_HEAD_LINES + LOG_TAIL_LINES;
   const text = (line: string): Row => ({ text: theme.fg("toolOutput", line) });
@@ -104,7 +94,6 @@ const EMPTY_LISTS = {
   all: "No background tasks",
 } as const;
 
-/** The result in people's words, without the raw agent text. */
 function detailRows(
   details: BackgroundTaskToolDetails,
   text: string,
@@ -151,7 +140,6 @@ function detailRows(
   }
 }
 
-/** The agent's text, labelled, for expanded views. */
 function rawRows(text: string, theme: PreviewTheme): Row[] {
   const raw = text.replace(/\n+$/u, "");
   if (!raw) return [];
@@ -163,7 +151,6 @@ function rawRows(text: string, theme: PreviewTheme): Row[] {
 
 export interface BackgroundTaskPreviewInput {
   readonly details: Option.Option<BackgroundTaskToolDetails>;
-  /** The result's text with terminal controls removed. */
   readonly text: string;
   readonly args: Partial<BackgroundTaskToolInput>;
   readonly expanded: boolean;
@@ -173,13 +160,11 @@ export interface BackgroundTaskPreviewInput {
 function previewRows(input: BackgroundTaskPreviewInput, theme: PreviewTheme): Row[] {
   const { text, args, expanded } = input;
   if (Option.isNone(input.details)) {
-    // Undecodable details have no human view. A rejected call's message is the shell's issue.
     if (expanded) return rawRows(text, theme);
     return input.isError ? [] : boundedLines(text.replace(/\n+$/u, "").split("\n"), "lines", theme);
   }
   const details = input.details.value;
   if (!expanded) return detailRows(details, text, args, false, theme);
-  // Expanded logs are the raw slice itself; repeating every log line above it adds nothing.
   const body = details.action === "logs" ? [] : detailRows(details, text, args, true, theme);
   const snapshot = resultSnapshot(details);
   return [
@@ -189,7 +174,6 @@ function previewRows(input: BackgroundTaskPreviewInput, theme: PreviewTheme): Ro
   ];
 }
 
-/** Preview body: rows computed once, laid out per width, recomputed only on invalidation. */
 export function renderBackgroundTaskPreview(
   input: BackgroundTaskPreviewInput,
   theme: PreviewTheme,

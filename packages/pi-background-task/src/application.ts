@@ -39,9 +39,7 @@ import { registerTasksCommand } from "./settings/controller.ts";
 import { registerBackgroundTaskTool } from "./tools/background-task.ts";
 
 interface BackgroundTaskSessionActivation extends BackgroundTaskSessionInput {
-  /** Revoked before disposal can publish late task settlement into the shared UI bridge. */
   readonly publicationOwner: MutableRef.MutableRef<boolean>;
-  /** Only session_start activations may publish cold-history replay; tree restarts never do. */
   readonly publishesReplay: boolean;
 }
 
@@ -60,11 +58,9 @@ export function registerBackgroundTaskApplication(
   boundaries: BackgroundTaskApplicationBoundaries = { loadSettings: loadCodePreviewSettings },
 ): void {
   const bridge = makeProjectionBridge(pi.events);
-  // History rebuilt before session_start adopts the first ready activation's presentation.
   const replay = registerCodePreviewReplay(pi, { command: "tasks", tools: ["background_task"] });
   let releaseActivity: (() => void) | undefined;
   let openActivity: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
-  /** The settings this session started with; `/tasks settings` changes apply after /reload. */
   let currentConfig: BackgroundTaskConfig | undefined;
 
   const slot = makePiSessionRuntimeSlot<
@@ -87,9 +83,6 @@ export function registerBackgroundTaskApplication(
       ),
     startup: (input) =>
       Effect.gen(function* () {
-        // The slot has already deactivated any prior runtime, so no tool call can target the
-        // prior session while this activation loads trusted code-preview settings. Replacement
-        // and shutdown interrupt this best-effort prerequisite without awaiting a hostile loader.
         yield* bestEffortHostBootstrap("pi-background-task.preview-settings", (signal) =>
           boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
         );
@@ -99,8 +92,6 @@ export function registerBackgroundTaskApplication(
         };
       }),
     onActivated: ({ ctx, publishesReplay }, token, prepared) => {
-      // Only the current-generation activation reaches this hook, and settings are already
-      // loaded, so the cooperative-shell wrapper captures the fresh shell mode here.
       registerBackgroundTaskTool(
         pi,
         {
@@ -139,8 +130,6 @@ export function registerBackgroundTaskApplication(
           clear: clearTasks,
         });
     },
-    // Every start and shutdown removes the active runtime synchronously, so revocation runs here
-    // before any replacement or disposal work.
     onDeactivated: (input) => {
       MutableRef.set(input.publicationOwner, false);
       currentConfig = undefined;
@@ -154,7 +143,6 @@ export function registerBackgroundTaskApplication(
     },
   });
 
-  // Check authority beside synchronous slot admission, never after dispatching to a replacement.
   const runWhen =
     (isCurrent: () => boolean) =>
     <A, E>(effect: Effect.Effect<A, E, BackgroundTaskApplication>, signal?: AbortSignal) =>
@@ -207,11 +195,7 @@ export function registerBackgroundTaskApplication(
       .then(() => undefined);
   };
 
-  // Settlement closes replay adoption unless the first startup published it. Session capture
-  // and the slot never throw synchronously, so the returned Promise always reaches it.
   pi.on("session_start", (_event, ctx) => startSession(ctx, true).finally(replay.finishStartup));
-  // Tree navigation keeps the session id but abandons the prior branch's task ownership.
-  // Slot replacement joins process cleanup and revokes capabilities before reactivation.
   pi.on("session_tree", (_event, ctx) => startSession(ctx, false));
 
   pi.on("turn_end", (_event, ctx) => {

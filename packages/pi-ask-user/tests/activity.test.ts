@@ -85,7 +85,6 @@ it.effect("closes Activity before Resume shows the questionnaire and cancels in 
     f.bridge.markOpened(token);
     f.bridge.markCollapsed(token);
     const actions = f.items()[0]?.actions ?? [];
-    // Showing the questionnaire takes keyboard focus; a manager left open would hide it.
     expect(actions.find((action) => action.id === "resume")?.handoff).toBe(true);
     expect(actions.find((action) => action.id === "cancel")?.handoff).toBe(false);
     f.activity.dispose();

@@ -10,11 +10,6 @@ export interface StyledLogLine {
 const closeVisualStyle = (line: string): string =>
   line.includes("\u001b[") && !line.endsWith("\u001b[0m") ? `${line}\u001b[0m` : line;
 
-/**
- * Render chronological stdout/stderr events into independently safe styled rows. Core-owned
- * parser and SGR state are retained per stream, so interleaved pipe chunks cannot split or leak
- * controls; manager framing closes each visible group before its border.
- */
 export function styledBackgroundLogLines(
   events: ReadonlyArray<BackgroundLogEvent>,
 ): ReadonlyArray<StyledLogLine> {

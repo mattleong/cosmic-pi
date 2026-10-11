@@ -1,4 +1,3 @@
-// Typed Local Pi parent-contact protocol over the inherited raw Node IPC channel.
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -17,7 +16,6 @@ type IpcMessageListener = <MessageInput>(message: MessageInput) => void;
 export interface LocalPiIpcPort<Outbound> {
   readonly connected: () => boolean;
   readonly send: (message: Outbound, callback: (error: Error | null) => void) => void;
-  /** The IPC endpoint that emits Node's `message` and `disconnect` events. */
   readonly events: Pick<NodeJS.EventEmitter, "on" | "off">;
 }
 
@@ -46,7 +44,6 @@ const boundedSend = <Message, Failure>(
     Effect.timeoutOrElse({ duration: IPC_WRITE_TIMEOUT, orElse: () => Effect.fail(uncertain()) }),
   );
 
-/** Attaches this call's own listeners, so detaching never removes another attachment's. */
 const attachListeners = <Outbound, Inbound>(
   port: LocalPiIpcPort<Outbound>,
   decode: <Input>(input: Input) => Option.Option<Inbound>,
@@ -71,7 +68,6 @@ const attachListeners = <Outbound, Inbound>(
   };
 };
 
-/** The parent observes child disconnect through process close, not the IPC channel. */
 export interface LocalPiParentIpcHandlers {
   readonly onContact: (contact: LocalPiContact) => void;
   readonly onProtocolError: (message: string) => void;

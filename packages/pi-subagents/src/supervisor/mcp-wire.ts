@@ -55,7 +55,6 @@ const exactKeys = <ValueInput>(
   isJsonObject(value) &&
   Object.keys(value).every((key) => allowed.includes(key)) &&
   required.every((key) => own(value, key)) &&
-  // Params that allow `_meta` accept only bounded metadata there.
   (!own(value, "_meta") || boundedMetadata(value._meta));
 
 export const boundedString = <ValueInput>(

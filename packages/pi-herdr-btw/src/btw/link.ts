@@ -1,4 +1,3 @@
-// Versioned durable link between a parent Pi session and its reusable BTW session.
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
@@ -12,11 +11,6 @@ const HerdrBtwLinkOwnerSchema = Schema.Struct({
   parentSessionPath: BoundedPath,
 });
 
-/**
- * Version 1 of the reusable-link record persisted in the parent session.
- * It carries the bounded child session identity plus the exact live Herdr
- * identity needed to revalidate and focus an already-running BTW agent.
- */
 export const HerdrBtwLinkSchema = Schema.Struct({
   ...HerdrBtwLinkOwnerSchema.fields,
   childSessionId: HerdrBtwSessionIdSchema,
@@ -43,20 +37,12 @@ export type HerdrBtwLinkRestoration =
   | { readonly _tag: "restored"; readonly link: HerdrBtwLink }
   | { readonly _tag: "malformed" };
 
-/**
- * Reconstructs the authoritative link owned by one parent session. Native
- * forks copy custom entries, so links owned by ancestor sessions are ignored.
- * The newest entry for the requested owner wins. An undecodable link whose
- * owner cannot be established is reported as malformed so callers fail closed.
- */
 export const restoreHerdrBtwLink = (
   entries: Iterable<unknown>,
   owner: HerdrBtwLinkOwner,
 ): HerdrBtwLinkRestoration => {
   let restoration: HerdrBtwLinkRestoration = { _tag: "none" };
   for (const entry of entries) {
-    // Unlike the tolerant link decodes below, a throwing host entry propagates so the store
-    // reports the whole restoration as malformed.
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(CustomEntrySchema)(entry));
     if (decoded?.customType !== HERDR_BTW_LINK_ENTRY_TYPE) continue;
     const linkOwner = decodeUnknownOrUndefined(HerdrBtwLinkOwnerSchema, decoded.data);

@@ -7,12 +7,13 @@ import {
   probeAnimationOwnership,
   renderContextFixture,
 } from "pi-code-previews/testing";
-import { opaqueFixture as fixture, plainTheme as theme } from "pi-cosmic-core/testing";
+import { plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
 import {
   registerAsyncAskUserMessageRenderer,
   registerAsyncAskUserTools,
+  renderAskUserAsyncMessage,
 } from "../src/tools/ask-user-async.ts";
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 import { asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
@@ -46,11 +47,11 @@ function register(
     registerAsyncAskUserTools(pi, noExecution, noExecution, scheduleAnimation);
     registerAsyncAskUserMessageRenderer(pi);
   });
-  return { tools, messages: [...messageRenderers.values()] };
+  expect([...messageRenderers.values()]).toEqual([renderAskUserAsyncMessage]);
+  return { tools };
 }
 const restoreSettings = applyPresentationSettings({});
 afterEach(restoreSettings);
-/** The settled details each registered tool reports for one questionnaire. */
 const detailsFor = <Blocking, Row>(toolName: string, blocking: Blocking, row: Row) =>
   toolName === "ask_user" ? blocking : toolName === "ask_user_async" ? row : { requests: [row] };
 
@@ -111,7 +112,7 @@ describe("registered questionnaire presentation", () => {
         },
       ],
     };
-    const { tools, messages } = register("compact");
+    const { tools } = register("compact");
     for (const tool of tools) {
       const harness = createToolPresentationHarness(tool, { width: 160 });
       const isBlocking = tool.name === "ask_user";
@@ -140,8 +141,11 @@ describe("registered questionnaire presentation", () => {
       if (!tool.name.endsWith("control")) expect(text).toContain("FULL_PROMPT_EVIDENCE");
     }
     const message = {
+      role: "custom" as const,
       customType: "pi-ask-user-async-answer",
       content: formatAskUserOutcome(selected),
+      display: true,
+      timestamp: 0,
       details: {
         requestId: row.requestId,
         deliveryId: row.deliveryId,
@@ -150,7 +154,7 @@ describe("registered questionnaire presentation", () => {
       },
     };
     expect(
-      messages[0]!(fixture(message), { expanded: true, outputPad: 0 }, theme)!
+      renderAskUserAsyncMessage(message, { expanded: true, outputPad: 0 }, theme)!
         .render(160)
         .join("\n"),
     ).toContain("ACTUAL_VALUE");
@@ -172,7 +176,6 @@ describe("registered questionnaire presentation", () => {
       outcome,
     }));
     const args = { action: "status" as const };
-    // The one grouped issue the summary reports for each list.
     const grouped = (rows: ReadonlyArray<object>) => {
       const issues = asyncAskUserCompactSummary({
         phase: "settled",
@@ -199,11 +202,9 @@ describe("registered questionnaire presentation", () => {
         const before = structuredClone(result);
         const harness = createToolPresentationHarness(tool, { width: 200 });
         for (const { expanded, text } of harness.cycle(args, result)) {
-          // One grouped fact; routine waiting shows it only on expansion, like its procedure.
           expect(text.split(message)).toHaveLength(!routine || expanded ? 2 : 1);
           expect(text.split(procedure.slice(0, 40))).toHaveLength(expanded ? 2 : 1);
           expect(text.includes("Independent raw result marker")).toBe(expanded);
-          // Request IDs appear only in the agent's own text, which this result does not repeat.
           for (const row of rows) expect(text).not.toContain(row.requestId);
         }
         expect(result).toEqual(before);
@@ -232,17 +233,20 @@ describe("registered questionnaire presentation", () => {
         },
         { expanded: true, isError: true },
       );
-      // The agent's guidance stays under its label; the heading shows the cancellation.
       const text = harness.render().join("\n");
       expect(text).toContain("Do not immediately ask");
     }
   });
 
   it("renders owned async messages with padding and private answers on expansion", () => {
-    const renderer = register("compact").messages[0]!;
+    register("compact");
+    const renderer = renderAskUserAsyncMessage;
     const message = {
+      role: "custom" as const,
       customType: "pi-ask-user-async-answer",
       content: "",
+      display: true,
+      timestamp: 0,
       details: {
         requestId: snapshot.requestId,
         deliveryId: snapshot.deliveryId,
@@ -251,12 +255,9 @@ describe("registered questionnaire presentation", () => {
       },
     };
     for (const expanded of [false, true, false]) {
-      const text = renderer(fixture(message), { expanded, outputPad: 2 }, theme)!
-        .render(100)
-        .join("\n");
+      const text = renderer(message, { expanded, outputPad: 2 }, theme)!.render(100).join("\n");
       expect(text.includes("Historical answer")).toBe(expanded);
       expect(text.includes("Retained note")).toBe(expanded);
-      // The generation is provenance for context filtering, never shown.
       expect(text).not.toContain("historical-generation");
     }
   });

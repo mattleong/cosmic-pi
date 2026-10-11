@@ -12,8 +12,8 @@ import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
+import { getObjectValue } from "../../shared/helpers";
 
-/** Find and ls present one path listing; only their wording and preview setting differ. */
 const PATH_LISTS = {
   find: {
     previewEnabled: () => codePreviewSettings.findResultPreview,
@@ -35,9 +35,10 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
   const config = PATH_LISTS[tool];
   return {
     renderCall(args, theme) {
-      const pattern = Predicate.isString(args.pattern) ? args.pattern : "";
-      const path = Predicate.isString(args.path) && args.path ? args.path : ".";
-      // Find names its pattern before the folder it searches; ls names only the folder.
+      const patternArg = getObjectValue(args, "pattern");
+      const pathArg = getObjectValue(args, "path");
+      const pattern = Predicate.isString(patternArg) ? patternArg : "";
+      const path = Predicate.isString(pathArg) && pathArg ? pathArg : ".";
       const search =
         tool === "find"
           ? `${theme.fg("accent", escapeControlChars(pattern || "*"))} ${theme.fg("muted", "in")} `

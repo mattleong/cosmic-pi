@@ -11,7 +11,6 @@ export interface QuestionnaireTicket {
   readonly close: Effect.Effect<void>;
 }
 
-/** One FIFO for every questionnaire. Cancelled waiters cannot skip their predecessor. */
 export const makeQuestionnaireQueue = Effect.gen(function* () {
   const parent = yield* Effect.scope;
   const scope = yield* Scope.fork(parent, "sequential");

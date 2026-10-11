@@ -1,4 +1,3 @@
-/** Better OpenAI, implemented as one Effect-managed runtime per Pi session. */
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -56,6 +55,7 @@ import {
   OPENAI_IMAGE_TOOL,
   registerOpenAIImage,
   registerOpenAIImageMessageRenderer,
+  type OpenAIImageMessageRenderer,
 } from "./image/register.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import { fastModeFooterPrimitive, openAIUsageFooterPrimitive } from "./ui/primitives.ts";
@@ -77,9 +77,9 @@ export interface BetterOpenAIExtensionDependencies {
     signal?: AbortSignal,
   ) => PromiseLike<CodePreviewSettings | void>;
   readonly resetOpenAICodexTransport?: (ctx: ExtensionContext) => void;
+  readonly imageMessageRenderer?: OpenAIImageMessageRenderer;
 }
 
-/** Pi registration; `dependencies` is the seam for deterministic lifecycle/finalizer tests. */
 export function betterOpenAIWithDependencies(
   pi: ExtensionAPI,
   dependencies: BetterOpenAIExtensionDependencies = {},
@@ -95,13 +95,11 @@ export function betterOpenAIWithDependencies(
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
   const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-openai");
-  // `/openai image` arrives with each session; the startup flag keeps its short `--fast` name.
   const command = registerExtensionCommand(pi, {
     name: COMMAND,
     description: "OpenAI usage, fast mode, images, and settings",
   });
-  // Pi draws history before session_start, so image message and cold tool-row renderers load now.
-  const noteImageCwd = registerOpenAIImageMessageRenderer(pi);
+  const noteImageCwd = registerOpenAIImageMessageRenderer(pi, dependencies.imageMessageRenderer);
   const replay = registerCodePreviewReplay(pi, { command: COMMAND, tools: [OPENAI_IMAGE_TOOL] });
   const config = () => {
     const cfg = MutableRef.get(projection).config;
@@ -145,7 +143,6 @@ export function betterOpenAIWithDependencies(
       slot.fork(refreshForNewContext);
     }
   };
-  // A wanted fast mode the current model cannot use warns; every other state informs.
   const notifyFastState = (ctx: ExtensionContext, fast: FastSnapshot) =>
     notifyAtHostBoundary(
       ctx,
@@ -211,7 +208,6 @@ export function betterOpenAIWithDependencies(
         isCurrent,
         shell: replay.shell,
       });
-      // Only a successfully registered tool lets cold history adopt this activation's shell.
       replay.publish();
       cosmicUiWatch.start();
       updateFooter(ctx);
@@ -219,7 +215,6 @@ export function betterOpenAIWithDependencies(
       if (fast.desiredActive) notifyFastState(ctx, fast);
     },
     onDeactivated: ({ context, publicationOwner }) => {
-      // Revocation must precede reset and disposal: admitted durable commits may finish.
       MutableRef.set(publicationOwner, false);
       if (currentContext === context) {
         setStatus(MutableRef.get(context), undefined);
@@ -350,7 +345,6 @@ export function betterOpenAIWithDependencies(
       .then(() => undefined);
   };
   pi.on("session_start", (_event, ctx) => {
-    // Replay adoption is first-startup-only: settling without publication closes it.
     try {
       return startSession(ctx).finally(replay.finishStartup);
     } catch (error) {
@@ -366,7 +360,6 @@ export function betterOpenAIWithDependencies(
       safeHostSignal(ctx),
     );
   });
-  // The microtask turns a synchronous runner throw into the hook's own rejection path.
   const runCompaction = <A, E>(
     use: (service: OpenAICompactionService["Service"]) => Effect.Effect<A, E>,
     signal: () => AbortSignal | undefined,
@@ -374,7 +367,6 @@ export function betterOpenAIWithDependencies(
   const needsContextRepair = (ctx: ExtensionContext) =>
     invokeHostCallback(() => Boolean(latestOwnedCheckpoint(ctx.sessionManager.getBranch())), true);
   const abortIncompleteContext = (ctx: ExtensionContext) => {
-    // Pi contains extension exceptions. Aborting the run is required to fail closed.
     invokeBestEffort(() => ctx.abort());
     notifyAtHostBoundary(
       ctx,

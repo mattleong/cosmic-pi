@@ -30,13 +30,6 @@ const scheduleHostUiTicker: HostUiTickerScheduler = (intervalMs, tick) =>
     ),
   );
 
-/**
- * Multiplexes same-cadence presentation tickers onto one Effect fiber.
- *
- * Animation consumers derive their frame from the shared wall clock, so aligning their wakeups
- * does not alter animation state. It only prevents phase-shifted cards and overlays from asking
- * Pi to render more often than their common cadence.
- */
 export const makeHostUiTickerPool = (
   schedule: HostUiTickerScheduler = scheduleHostUiTicker,
 ): HostUiTickerPool => {

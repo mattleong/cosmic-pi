@@ -102,7 +102,6 @@ test("bounded retained issues accept valid evidence and reject every overflow", 
   const wide = Schema.is(
     createBoundedCompactIssuesSchema({ maxTextLength: 10_000, maxEntries: 1 }),
   );
-  // Collapsed messages stay one bounded line even when retained details may be longer.
   expect(wide([{ ...valid, message: "x".repeat(COMPACT_ISSUE_MESSAGE_LIMIT + 1) }])).toBe(false);
   expect(wide([{ ...valid, detail: "x".repeat(5_000) }])).toBe(true);
 });
@@ -116,7 +115,6 @@ describe("summary resolution", () => {
     expect(resolveCompactSummary({ subject: "work" }, "running", false)).toEqual({
       subject: "work",
     });
-    // Provider output crosses a runtime boundary; malformed values arrive untyped.
     const malformed: CompactSummary[] = JSON.parse(
       JSON.stringify([
         { subject: 42 },
@@ -231,7 +229,6 @@ describe("status precedence", () => {
     expect(status("success", [warning])).toBe("warning");
     expect(status("success", [info])).toBe("success");
     expect(status("warning", [info])).toBe("warning");
-    // A neutral delivery stays neutral until an issue says otherwise.
     expect(status("returned", [info])).toBe("returned");
     expect(status("returned", [warning])).toBe("warning");
     expect(status(undefined)).toBe("uncertain");

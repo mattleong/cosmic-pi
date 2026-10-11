@@ -2,7 +2,6 @@ import { invokeHostCallback } from "pi-cosmic-core";
 import type { SubagentUiRefreshCadence } from "../ui/refresh.ts";
 
 export interface AdaptiveHostRefreshTicker {
-  /** Re-evaluates the requested cadence and replaces the host ticker only when it changes. */
   readonly sync: () => void;
   readonly dispose: () => void;
 }
@@ -13,7 +12,6 @@ export interface AdaptiveHostRefreshTickerOptions {
   readonly requestRender: () => void;
 }
 
-/** Owns one replaceable host ticker for a projection whose repaint cadence can change. */
 export const makeAdaptiveHostRefreshTicker = (
   options: AdaptiveHostRefreshTickerOptions,
 ): AdaptiveHostRefreshTicker => {

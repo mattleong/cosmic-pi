@@ -1,4 +1,3 @@
-// Native CLI catalog discovery and bounded child-process ownership live at this boundary.
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -156,11 +155,8 @@ export interface NativeModelCatalogContract {
 }
 
 export interface NativeModelCatalogLayerOptions {
-  /** Production private-state root used to isolate Codex configuration. */
   readonly agentDirectory?: string | undefined;
-  /** Package-test seam only. Production always uses fixed executable names. */
   readonly executables?: { readonly claude: string; readonly codex: string } | undefined;
-  /** Package-test seam only. */
   readonly environment?: NodeJS.ProcessEnv | undefined;
 }
 
@@ -299,8 +295,6 @@ const runCatalogProcess = (
         );
         const diagnostics = bounded(child.stderr, "diagnostics").pipe(
           Stream.runDrain,
-          // Stderr can close before the stdout decoder drains the final reply.
-          // Stay pending after clean EOF while still surfacing overflow/stream failures.
           Effect.andThen(Effect.never),
         );
         const outcome = yield* restore(Effect.raceFirst(reply, diagnostics)).pipe(Effect.exit);
@@ -332,11 +326,6 @@ const claudeRuntimeModel = (model: ClaudeAdvertisedModel): NativeRuntimeModel =>
   isDefault: model.value === "default",
 });
 
-/**
- * Aliases such as `opus` move to newer models, so each alias target also gets an explicit row
- * right after the first alias that names it. `default` names a target only when no other alias
- * does, because its display name describes the alias rather than the model.
- */
 const withExplicitClaudeModels = (
   models: ReadonlyArray<ClaudeAdvertisedModel>,
 ): ReadonlyArray<NativeRuntimeModel> => {
@@ -366,7 +355,6 @@ const withExplicitClaudeModels = (
 const jsonLines = (...frames: ReadonlyArray<Schema.Json>): string =>
   `${frames.map((frame) => JSON.stringify(frame)).join("\n")}\n`;
 
-/** How each native CLI is asked for its model list, and how its reply reads. */
 const CATALOG_PROTOCOLS = {
   claude: {
     product: "Claude Code",
@@ -490,7 +478,6 @@ const loadNativeModelCatalog =
       const defaults = yield* load("default");
       if (runtime !== "claude" || key.probeSelector === "default") return defaults;
       const preferred = yield* load(key.probeSelector);
-      // Keep every advertised selector, with the preference probe's metadata for duplicates.
       return [
         ...new Map([...defaults, ...preferred].map((model) => [model.selector, model])).values(),
       ];
@@ -509,7 +496,6 @@ export const makeNativeModelCatalog = (
     return {
       list: (runtime, cwd) =>
         Effect.gen(function* () {
-          // Re-read before cache lookup so external preference edits need no session reload.
           const probeSelector =
             runtime === "claude"
               ? yield* readClaudeModelPreference(

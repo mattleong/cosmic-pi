@@ -1,48 +1,34 @@
-/**
- * Syntax-highlighted code previews for pi.
- *
- * The package root is the public API for package authors. Keep extension internals under `src/`
- * and expose only stable helpers/types from this file.
- */
 export { codePreviews as default } from "./src/extension";
 
-/** Load persisted code-preview settings into the runtime singleton and return a defensive copy. */
 export { loadCodePreviewSettings } from "./src/config/store";
 
-/** Decorate a package-owned tool, capturing the current visual shell mode at wrapping time. */
 export {
   withCodePreviewShell,
   withCodePreviewRenderers,
   type CodePreviewShellOptions,
 } from "./src/tools/cooperative-tools";
 
-/** Register an owned tool's cold-history renderer before session_start installs execution. */
 export {
   registerCodePreviewReplay,
   type CodePreviewReplay,
   type CodePreviewReplayOptions,
 } from "./src/application/owned-replay";
 
-/** Compose into the registering extension's session Layer, then pass schedule to its shell. */
 export {
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
 } from "./src/application/scheduler";
 
-/** Reuse the canonical standalone-call icon in compound or nested tool renderers. */
 export { getCodePreviewToolIcon } from "./src/tools/presentation";
 
-/** Newline-joined text parts of a tool result's content. */
 export { getTextContent } from "./src/tools/data/results";
 
-/** Public settings types used by package authors integrating with pi-code-previews. */
 export type {
   CodePreviewSettings,
   ToolCallBackgroundMode,
   ToolCallCollapsedStyle,
 } from "./src/config/schema";
 
-/** One issue shape for every compact card: a human message plus expanded-only detail. */
 export {
   compactIssueSeverity,
   mergeCompactIssues,
@@ -58,7 +44,6 @@ export { previewIssuesSlot } from "./src/preview/preview-issues";
 export { createBoundedCompactIssuesSchema } from "./src/tools/compact-issues-schema";
 export { planCompactPresentation } from "./src/tools/compact-presentation";
 
-/** Semantic compact summaries for cooperating tools. */
 export {
   compactStatus,
   resolveCompactSummary,

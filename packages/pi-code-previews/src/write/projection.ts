@@ -18,7 +18,6 @@ export function publishWriteProjection(
 
 export const clearWriteProjection = slot.clear;
 
-/** Synchronous, non-destructive renderer lookup. Duplicate renders observe the same correlation. */
 export function lookupBeforeWrite(toolCallId: string): CodePreviewBeforeWrite {
   return slot.read().snapshot?.entries.findLast(([id]) => id === toolCallId)?.[1];
 }

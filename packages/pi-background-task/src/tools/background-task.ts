@@ -1,4 +1,3 @@
-// Pi tool execution is a Promise-shaped host boundary.
 import {
   defineTool,
   type AgentToolResult,
@@ -47,17 +46,12 @@ export interface BackgroundTaskToolRunner {
   ) => Promise<A>;
 }
 
-/**
- * Row state shared by the call and result renderers. The result names the task, so the call's
- * heading, drawn after both render, can say which task an ID-only call was about.
- */
 interface BackgroundTaskRenderState {
   backgroundTaskSubject?: string;
 }
 
 const TITLE = "Background task";
 
-/** The heading's subtitle: the action as people read it, then its human subject. */
 const headingSubtitle = (
   args: Partial<BackgroundTaskToolInput>,
   resultSubject: string | undefined,
@@ -70,17 +64,11 @@ const headingSubtitle = (
 const resultText = (content: Parameters<typeof getTextContent>[0]): string =>
   sanitizeTerminalText(getTextContent(content));
 
-/** Native Pi `outputSchema`: the encoded side of the strict version-1 contract codec. */
 const OUTPUT_SCHEMA = toPiToolOutputSchema(BackgroundTaskContractSchema);
 
 const CONTRACT_UNAVAILABLE =
   "Background task result is unavailable; the action may have taken effect";
 
-/**
- * The model-facing text, persisted details, and strictly encoded contract. If encoding breaks a
- * producer invariant, the action has already run: the result becomes an error without structured
- * data that keeps the original receipt text, task IDs included, and details unchanged.
- */
 const backgroundTaskToolResult = (
   result: BackgroundTaskContractResult,
 ): AgentToolResult<BackgroundTaskToolDetails> => {
@@ -124,15 +112,12 @@ export function registerBackgroundTaskTool(
     parameters: BackgroundTaskParameters,
     outputSchema: OUTPUT_SCHEMA,
     execute(_toolCallId, input, signal, _onUpdate, ctx) {
-      // Typed failures and interruption still reject; only successes carry the contract.
       return runner
         .run(executeBackgroundTaskCommand(input, ctx.cwd), signal)
         .then(backgroundTaskToolResult);
     },
     renderCall(args, theme, context) {
-      // The heading keeps only these, never the context: its lastComponent links prior calls.
       const { state, executionStarted, isPartial } = context;
-      // Drawn lazily: the result, rendered after the call, supplies the task's name.
       const heading = composeToolComponent((width) => {
         if (!Number.isFinite(width) || width < 1) return [];
         const subtitle = headingSubtitle(args, state.backgroundTaskSubject);
@@ -146,12 +131,10 @@ export function registerBackgroundTaskTool(
       const body = new Container();
       body.addChild(heading);
       body.addChild(previewIssuesSlot(context));
-      // The submitted values, not normalized task metadata or the abbreviated heading.
       body.addChild(expandedArguments(theme, args));
       return body;
     },
     renderResult(result, { isPartial, expanded }, theme, context) {
-      // The call body says it is running; a partial result has nothing else to show.
       if (isPartial) return new Container();
       const details = decodeBackgroundTaskDetails(result.details).pipe(
         Option.filter((decoded) => decoded.action === context.args.action),
@@ -178,8 +161,6 @@ export function registerBackgroundTaskTool(
       expandedContent: {
         renderCall: (args, theme) => expandedArguments(theme, args),
         renderResult(result, _options, theme) {
-          // Preserve fetched output and cursor text verbatim apart from terminal controls.
-          // Task attention is projected from typed details, never parsed from this body.
           const text = resultText(result.content).replace(/\n+$/u, "");
           const snapshot = Option.getOrUndefined(
             Option.map(decodeBackgroundTaskDetails(result.details), resultSnapshot),

@@ -3,25 +3,17 @@ import * as Schema from "effect/Schema";
 import { invokeBestEffort } from "./host-session.ts";
 import { decodeUnknownOrUndefined } from "./schema/decode.ts";
 
-/** One versioned session-capability event protocol. */
 interface SessionCapabilityProtocolOptions<Version extends number> {
   readonly version: Version;
-  /** Inclusive session-id bound. Omitted means unbounded; an empty id is always rejected. */
   readonly maxSessionIdChars?: number;
 }
 
-/** A decoded capability query. `respond` swallows throws and contains a returned thenable. */
 interface SessionCapabilityQuery<Version extends number> {
   readonly version: Version;
   readonly sessionId: string;
   readonly respond: <Candidate>(candidate: Candidate) => void;
 }
 
-/**
- * Provider side of a synchronous `{ version, sessionId, respond }` event-bus query. Every hostile
- * payload is decoded once; only checked fields are retained. The owning package keeps its gates
- * and its public protocol names.
- */
 export const makeSessionCapabilityProtocol = <const Version extends number>(
   options: SessionCapabilityProtocolOptions<Version>,
 ) => {
@@ -48,7 +40,6 @@ export const makeSessionCapabilityProtocol = <const Version extends number>(
   return { normalizeQuery };
 };
 
-/** Any synchronous event bus; Pi's `ExtensionAPI["events"]` fits structurally. */
 interface SessionCapabilityEvents<Candidate> {
   emit(
     channel: string,
@@ -60,12 +51,6 @@ interface SessionCapabilityEvents<Candidate> {
   ): void;
 }
 
-/**
- * Consumer side: emits one `{ version, sessionId, respond }` query and keeps the candidates that
- * `accept` returns, in response order. Responses after `emit` returns or once `limit` candidates
- * are kept are ignored unread. A throwing `emit` or `accept` marks the query `failed`; the caller
- * owns its selection policy (last wins, exactly one).
- */
 export const querySessionCapability = <Candidate, Capability>(
   events: SessionCapabilityEvents<Candidate>,
   channel: string,

@@ -22,10 +22,30 @@ export const PROFILE_IDS = [
 
 export type ProfileId = (typeof PROFILE_IDS)[number];
 
-/** Builds one complete record over every fixed profile ID in canonical order. */
-export const mapProfileIds = <A>(f: (id: ProfileId) => A): Record<ProfileId, A> =>
-  // SAFETY: The entries cover exactly PROFILE_IDS, so every fixed key receives one value.
-  Object.fromEntries(PROFILE_IDS.map((id) => [id, f(id)])) as Record<ProfileId, A>;
+export const mapProfileIds = <A>(f: (id: ProfileId) => A) => ({
+  scout: f("scout"),
+  researcher: f("researcher"),
+  planner: f("planner"),
+  worker: f("worker"),
+  reviewer: f("reviewer"),
+  oracle: f("oracle"),
+  generalist: f("generalist"),
+});
+
+export const completeProfileRecord = <A>(
+  partial: Partial<Readonly<Record<ProfileId, A>>>,
+): Record<ProfileId, A> | undefined => {
+  const { scout, researcher, planner, worker, reviewer, oracle, generalist } = partial;
+  return scout !== undefined &&
+    researcher !== undefined &&
+    planner !== undefined &&
+    worker !== undefined &&
+    reviewer !== undefined &&
+    oracle !== undefined &&
+    generalist !== undefined
+    ? { scout, researcher, planner, worker, reviewer, oracle, generalist }
+    : undefined;
+};
 
 export const isProfileId = (value: string): value is ProfileId =>
   PROFILE_IDS.some((profileId) => profileId === value);
@@ -41,7 +61,6 @@ export type ProfileCandidateEffort = (typeof PROFILE_CANDIDATE_EFFORTS)[number];
 
 const SAFE_NATIVE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*(?:\[[1-9][0-9]*[kKmM]\])?$/;
 
-/** Syntax-only argv/config safety grammar; catalog availability is a runtime rule. */
 export const isSafeNativeModelSelector = (selector: string): boolean =>
   selector.length <= MAX_PROFILE_MODEL_SELECTOR_CHARS && SAFE_NATIVE_MODEL_SELECTOR.test(selector);
 
@@ -53,7 +72,6 @@ const splitPiModelSelector = (
   return { provider: selector.slice(0, slash), model: selector.slice(slash + 1) };
 };
 
-/** Runtime-specific native selector grammar; catalog canonicalization remains a runtime rule. */
 export const isNativeProfileModelSelector = (runtime: string, selector: string): boolean => {
   if (!isSafeNativeModelSelector(selector)) return false;
   if (selector === "parent") return runtime === "pi";
@@ -69,7 +87,6 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
   );
 };
 
-/** A normalized local route candidate. */
 export interface ProfileCandidate {
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
@@ -77,13 +94,10 @@ export interface ProfileCandidate {
   readonly effort: ProfileCandidateEffort;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  /** Requests OpenAI priority service for supported Pi/Codex models. Omission means false. */
   readonly openaiFastMode?: boolean | undefined;
-  /** Omitted configuration values normalize to true. */
   readonly closeOnReport: boolean;
 }
 
-/** Runtime-normalized route. The configured `disabled` value is represented by zero candidates. */
 export interface ProfileRoute {
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
@@ -113,21 +127,13 @@ export const cloneProfileRoute = (route: ProfileRoute): ProfileRoute => ({
 
 export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): ProfileRoute => {
   if (route === "disabled") return { candidates: [] };
-  // SAFETY: Configuration decoding validates the persisted declaration before this typed access.
-  const candidates = Array.isArray(route)
-    ? (route as ReadonlyArray<DeclaredProfileCandidate>)
-    : [route as DeclaredProfileCandidate];
-  return { candidates: cloneProfileCandidates(candidates) };
+  return { candidates: cloneProfileCandidates("host" in route ? [route] : route) };
 };
 
 export const isLocalPiProfileCandidate = (
   candidate: Pick<ProfileCandidate, "host" | "runtime">,
 ): boolean => candidate.host === "local" && candidate.runtime === "pi";
 
-/**
- * Static persisted-route policy. `parent` is deferred to the live parent-model check, explicit Pi
- * selectors must already be priority-tier eligible, and Codex defers tier support to its catalog.
- */
 export const supportsSubagentFastMode = (runtime: SubagentRuntime, model: string): boolean => {
   if (runtime === "codex") return isNativeProfileModelSelector("codex", model);
   if (runtime !== "pi") return false;
@@ -150,7 +156,6 @@ export interface ProfileCandidateValidationIssue {
   readonly code: ProfileCandidateValidationIssueCode;
 }
 
-/** Exhaustive candidate issues in the repair and user-message order. */
 export const profileCandidateValidationIssues = (
   candidate: ProfileCandidate,
 ): ReadonlyArray<ProfileCandidateValidationIssue> => {
@@ -178,7 +183,6 @@ export const profileCandidateValidationIssues = (
 export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
   `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:openaiFastMode=${candidate.openaiFastMode ?? false}:closeOnReport=${candidate.closeOnReport}`;
 
-/** Candidate fields shared by every config version; only the fast-mode key differs by version. */
 export const PROFILE_CANDIDATE_BASE_KEYS = [
   "host",
   "runtime",
@@ -214,26 +218,21 @@ export interface ProfileDefinition {
   readonly guidance: string;
   readonly defaultContext: SubagentContextMode;
   readonly defaultWriteIntent: SubagentWriteIntent;
-  /** Soft built-in preference used by candidates whose effort is `default`. */
   readonly defaultEffort?: SubagentEffort | undefined;
 }
 
 export interface SkippedProfileCandidate {
-  /** Zero-based configured candidate index. */
   readonly candidateIndex?: number | undefined;
   readonly candidate: string;
   readonly code: string;
   readonly reason: string;
 }
 
-/** Immutable launch-time route state used only to continue after an explicit retry action. */
 export interface ProfileRouteContinuation {
   readonly profile: ProfileId;
   readonly routeSource: ProfileRouteSource;
   readonly candidates: ReadonlyArray<ProfileCandidate>;
-  /** Zero-based candidate selected for the run carrying this continuation. */
   readonly selectedCandidateIndex: number;
-  /** Static/dynamic skips accumulated before selection. */
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
 
@@ -241,9 +240,7 @@ export type SubagentSelectionSource = "profile-candidate" | "profile-parent-cand
 
 export interface SubagentSelectionProvenance {
   readonly source: SubagentSelectionSource;
-  /** Configuration layer that supplied the selected ordered route. */
   readonly routeSource?: ProfileRouteSource | undefined;
-  /** Zero-based configured candidate index. */
   readonly candidateIndex?: number | undefined;
   readonly reason: string;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;

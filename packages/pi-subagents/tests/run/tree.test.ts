@@ -21,7 +21,7 @@ const policy = (maxDirectChildren: number, maxDepth: number) => ({
   maxDepth,
 });
 
-const withFixture = <Eff extends Effect.Effect<any, any, any>, A>(
+const withFixture = <Eff extends Effect.Effect<unknown, unknown, unknown>, A>(
   body: (
     service: SubagentServiceContract,
     fake: ReturnType<typeof fakeChildLayer>,
@@ -186,7 +186,6 @@ describe("root-owned subagent run tree", () => {
     return withService(layer, function* (service) {
       const parent = yield* service.start(request({ name: "parent" }));
       const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
-      // A completed parent cannot take its child's outcome, so delivery falls back to the root.
       yield* completeLocalRun(service, fake.controls[0]!, parent.id);
       yield* completeLocalRun(service, fake.controls[1]!, child.id);
       yield* TestClock.adjust("100 millis");
@@ -197,7 +196,6 @@ describe("root-owned subagent run tree", () => {
             notification.runs.some((run) => run.id === child.id),
         ),
       );
-      // Status queues behind the delivery gate, so it observes the acknowledgement.
       const reportStatus = yield* service.withStatusObservations([child.id], ({ observations }) =>
         Effect.succeed(observations[0]?.run.reportStatus),
       );

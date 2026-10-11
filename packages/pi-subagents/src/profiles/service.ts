@@ -85,8 +85,6 @@ export const makeSubagentProfileService = (
         : Effect.void;
     };
     const initial = makeSessionProfileSnapshot(config, options.initialSessionOverrides);
-    // A plain Ref behind a lock, rather than a SynchronizedRef, lets the state assignment and
-    // the handoff publication commit together while lock waiting stays interruptible.
     const state = yield* Ref.make(initial);
     const lock = yield* Semaphore.make(1);
     yield* publishSeed(initial);

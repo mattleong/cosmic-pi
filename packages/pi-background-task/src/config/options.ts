@@ -1,7 +1,6 @@
 import type { BackgroundTaskConfig } from "./schema.ts";
 import { DEFAULT_BACKGROUND_TASK_CONFIG } from "./schema.ts";
 
-/** Whole-number ranges that both normalization and the `/tasks settings` parsers enforce. */
 const NUMBER_BOUNDS = {
   maxRunning: { minimum: 1, maximum: 64 },
   maxRetained: { minimum: 1, maximum: 500 },
@@ -35,13 +34,11 @@ export function normalizeConfig(value: Partial<BackgroundTaskConfig> = {}): Back
   return shellPath ? { ...normalizedConfig, shellPath } : normalizedConfig;
 }
 
-/** One `/tasks settings` setting: its words, and how a typed value becomes a stored one. */
 interface BackgroundTaskSettingDescriptor {
   readonly id: keyof BackgroundTaskConfig;
   readonly label: string;
   readonly description: string;
   readonly values: readonly string[];
-  /** Other values are accepted when they parse and fall inside the bounds. */
   readonly openValues: boolean;
   readonly parse: (value: string) => boolean | number | string | undefined;
   readonly invalid: string;

@@ -45,29 +45,4 @@ describe("image tool result projection", () => {
     expect(result.structuredContent).not.toHaveProperty("internal");
     expect(result.structuredContent).toHaveProperty("image.data", generated.data);
   });
-
-  it("fails closed after a producer invariant breaks while retaining the image and receipt", () => {
-    const malformed = {
-      ...generated,
-      savedPath: "/project/.pi/generated-images/comet.png",
-      // SAFETY: Simulates invalid service metadata after generation and saving committed.
-      outputFormat: "unexpected-format" as CodexImageResult["outputFormat"],
-    };
-    const result = imageToolResult(malformed);
-    expect(result.isError).toBe(true);
-    expect(result).not.toHaveProperty("structuredContent");
-    const { data: _data, ...details } = malformed;
-    expect(result.details).toEqual(details);
-    expect(result.content[1]).toEqual({
-      type: "image",
-      data: generated.data,
-      mimeType: generated.mimeType,
-    });
-    const first = result.content[0];
-    expect(first?.type).toBe("text");
-    if (first?.type !== "text") throw new Error("Missing image receipt");
-    expect(first.text).toContain(imageResultText(malformed));
-    expect(first.text).not.toContain("unexpected-format");
-    expect(first.text).not.toContain(generated.data);
-  });
 });

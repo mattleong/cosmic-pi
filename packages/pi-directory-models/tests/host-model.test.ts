@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, extensionContextFixture, modelFixture } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import {
   applyHostPreference,
@@ -42,14 +42,13 @@ describe("directory model host capture", () => {
       "high",
     );
     const pi = extensionApiFixture({});
-    const nestedHostile = extensionContextFixture({
-      model: Object.defineProperty({ provider: "openai-codex" }, "id", {
-        enumerable: true,
-        get() {
-          throw new Error("host getter failed");
-        },
-      }),
+    const hostileModel = Object.defineProperty(modelFixture({ provider: "openai-codex" }), "id", {
+      enumerable: true,
+      get() {
+        throw new Error("host getter failed");
+      },
     });
+    const nestedHostile = extensionContextFixture({ model: hostileModel });
     for (const context of [ctx, nestedHostile]) {
       const error = Effect.runSync(Effect.flip(applyHostPreference(pi, context, preference)));
       expect(error).toMatchObject({ _tag: "DirectoryModelHostError", operation: "read" });

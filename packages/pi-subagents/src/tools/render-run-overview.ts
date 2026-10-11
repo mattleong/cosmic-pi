@@ -1,8 +1,3 @@
-/**
- * Run cards as preview bodies: routine counters, run rows, reports, and expanded diagnostics.
- * Attention and failures are the shell's issue lines; agent procedures appear only expanded,
- * under their own label.
- */
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
@@ -94,10 +89,8 @@ const reportAffordance = (
   return renderExpansionAffordance(label, expanded, theme);
 };
 
-// Generic reasons restate the source; only a specific reason, such as a fallback, adds a fact.
 const GENERIC_SELECTION_REASON = /^Profile (?:model|route) selection\.?$/u;
 
-/** How the route was chosen; empty when it would only restate the default. */
 const runSelectionSummary = (run: SubagentRunCard): string => {
   const { source, candidateIndex, reason } = run.selection;
   const parts = [
@@ -119,7 +112,6 @@ const CAPABILITY_LABELS = new Map<string, string>([
   ["native-fork", "fork"],
 ]);
 
-/** The actions this subagent's backend supports, as a reader would name them. */
 const runControls = (run: SubagentRunCard): string => {
   const labels = run.capabilities.map(
     (capability) => CAPABILITY_LABELS.get(capability) ?? capability,
@@ -141,7 +133,6 @@ const runWriterSummary = (run: SubagentRunCard): string | undefined => {
 const dimLines = (text: string, width: number, theme: Theme): string[] =>
   wrapTextWithAnsi(theme.fg("dim", sanitizeTerminalLine(text)), width);
 
-/** Identity, route choice, and controls: routine facts every expanded row states. */
 const routineRunDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
   const selection = runSelectionSummary(run);
   const assignment = (run.reportGeneration || 1) > 1 ? ` · assignment ${run.reportGeneration}` : "";
@@ -153,7 +144,6 @@ const routineRunDiagnostics = (run: SubagentRunCard, width: number, theme: Theme
   ];
 };
 
-/** Only what differs from the default: an await's rows already carry the route. */
 const exceptionalRunDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
   const fallbackSelected =
     (run.selection.candidateIndex ?? 0) > 0 || run.selection.skippedCandidates.length > 0;
@@ -161,7 +151,6 @@ const exceptionalRunDiagnostics = (run: SubagentRunCard, width: number, theme: T
   return fallbackSelected && selection ? dimLines(selection, width, theme) : [];
 };
 
-/** Work state as labelled facts; the shell's issue lines say what needs attention. */
 const runStateDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
   const writer = runWriterSummary(run);
   return [
@@ -177,7 +166,6 @@ const runStateDiagnostics = (run: SubagentRunCard, width: number, theme: Theme):
   ];
 };
 
-/** Every skipped option with its full reason, and the launch's own option warning. */
 const runRouteDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => [
   ...run.selection.skippedCandidates.flatMap((candidate) =>
     dimLines(
@@ -196,7 +184,6 @@ const REPORT_STATUS_TEXT = {
   available: "final report omitted from this card",
 } as const;
 
-/** Completed runs without report text say where the report went. */
 const reportStatusLines = (
   runs: ReadonlyArray<SubagentRunCard>,
   width: number,
@@ -221,7 +208,6 @@ const reportStatusLines = (
 interface RunOverviewOptions {
   readonly expanded: boolean;
   readonly reportSections: ReadonlyArray<RunReportSection>;
-  /** Routine counts, shown first as muted text. */
   readonly counters?: string | undefined;
   readonly showReportOutcomes?: boolean | undefined;
   readonly hierarchy?: RunHierarchy | undefined;
@@ -231,7 +217,6 @@ interface RunOverviewOptions {
   readonly contentOnly?: boolean | undefined;
 }
 
-/** Once expanded, the agent's own recovery steps. */
 const nextStepLines = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
@@ -324,7 +309,6 @@ export const appendReportSections = (
   }
 };
 
-/** Expanded run rows with their diagnostics, then each run's report or failure. */
 export const renderExpandedRunsResult = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
@@ -347,7 +331,6 @@ export const renderExpandedRunsResult = (
   return container;
 };
 
-/** A settled await leads with its targets' reports, then every run's outcome. */
 export const renderExpandedAwaitResult = (
   runs: ReadonlyArray<SubagentRunCard>,
   targets: ReadonlyArray<SubagentRunCard>,

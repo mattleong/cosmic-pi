@@ -1,4 +1,3 @@
-// Test-owned process fixture is boundary code.
 import { describe, expect, it } from "@effect/vitest";
 import { signalProcess } from "pi-cosmic-core";
 import { fakeProcessTreeTerminator } from "pi-cosmic-core/testing";
@@ -9,9 +8,15 @@ import { terminateProcessTree } from "../src/boundary/process-tree.ts";
 import { nodeSpawn as spawn, type NodeChildProcess } from "./support/node-builtins.ts";
 import { processAlive, waitForDead } from "./support/process-liveness.ts";
 
+const { ChildProcess: NodeChildProcessClass } = process.getBuiltinModule("node:child_process");
+
 const childStub = (pid: number, exitCode: number | null = null): NodeChildProcess => {
-  // SAFETY: The process-tree boundary reads only pid, exitCode, and signalCode from this stub.
-  return { pid, exitCode, signalCode: null } as NodeChildProcess;
+  const child = new NodeChildProcessClass();
+  Object.defineProperties(child, {
+    pid: { value: pid },
+    exitCode: { value: exitCode, writable: true },
+  });
+  return child;
 };
 
 describe("subagent process-tree boundary", () => {
@@ -64,7 +69,6 @@ process.stdout.write(String(child.pid) + "\\n");`,
         yield* Effect.promise(() => once(leader, "close"));
         const grandchildPid = Number(output.trim());
         expect(Number.isSafeInteger(grandchildPid)).toBe(true);
-        // Best-effort fixture cleanup.
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => signalProcess(grandchildPid, "SIGKILL")),
         );

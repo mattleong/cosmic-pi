@@ -11,7 +11,6 @@ export class NativeCompactionError extends Schema.TaggedError<NativeCompactionEr
   { message: Schema.String },
 ) {}
 
-/** Pi's registry owns provider authentication and runtime selection. */
 export const compactWithPi = Effect.fn("BetterOpenAI.compactWithPi")(
   (
     ctx: ExtensionContext,

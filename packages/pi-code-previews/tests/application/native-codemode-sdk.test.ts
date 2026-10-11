@@ -1,7 +1,7 @@
-// Public SDK/Promise host boundary with the actual native QuickJS engine; no provider/network calls.
 import assert from "node:assert/strict";
 import {
   createCodemodeExtension,
+  defineTool,
   type AgentSession,
   type ToolDefinition,
   type ToolRendererResolver,
@@ -18,6 +18,7 @@ import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { createToolPresentationHarness, renderContextFixture } from "../../testing";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
+import type { CompactSummary } from "../../src/tools/compact-summary";
 
 const projectionTools = [
   "background_task",
@@ -26,6 +27,31 @@ const projectionTools = [
   "list_mcp_resources",
   "list_mcp_resource_templates",
 ];
+
+function assertScriptFailure(summary: CompactSummary | undefined, marker: string): void {
+  assert.equal(summary?.outcome, "error");
+  assert.ok(summary?.issues?.some((issue) => issue.message.includes(marker)));
+}
+
+function assertSpillIssues(summary: CompactSummary | undefined): void {
+  assert.ok(summary?.issues?.some((issue) => issue.code === "native-output-truncated"));
+  assert.ok(summary?.issues?.some((issue) => issue.code === "native-output-save-failed"));
+}
+
+function assertTargetRows(summary: CompactSummary | undefined): void {
+  const targetRows = summary?.children?.entries;
+  assert.ok(targetRows);
+  assert.equal(targetRows[0]?.subject, "target.ts");
+  assert.ok(targetRows[1]?.subject?.startsWith("printf test"));
+  assert.ok(targetRows[1]?.subject?.endsWith("…"));
+  assert.equal(targetRows[2]?.subject, "Verify targets");
+  assert.equal(targetRows[3]?.label, "mcp");
+  assert.equal(targetRows[3]?.subject, "docs / lookup");
+  assert.equal(targetRows[4]?.subject, "docs / docs://guide/start");
+  assert.equal(targetRows[5]?.subject, "docs");
+  assert.equal(targetRows[6]?.subject, "");
+  assert.equal(targetRows[6]?.action, "list templates");
+}
 
 it.live(
   "native SDK renderer selection preserves independently loaded builtin execution/store/hooks",
@@ -36,7 +62,7 @@ it.live(
       const models = yield* offlineModels(directory);
       const settings = quietSettings({ defaultTools: ["+codemode"] });
       let boundSession: AgentSession | undefined;
-      const nativeDefinitions: ToolDefinition<any, any, any>[] = [];
+      const nativeDefinitions: ToolDefinition[] = [];
       const rendererRegistrations: ToolRendererResolver[] = [];
       const hooks: string[] = [];
       const presentation = codePreviewsUnderTest(
@@ -75,7 +101,7 @@ it.live(
               createCodemodeExtension()({
                 ...pi,
                 registerTool(tool) {
-                  nativeDefinitions.push(tool);
+                  nativeDefinitions.push(defineTool(tool));
                   pi.registerTool(tool);
                 },
               }),
@@ -130,9 +156,6 @@ it.live(
                 execute(id, args, signal, update, ctx) {
                   const native = nativeDefinitions.findLast((tool) => tool.name === "codemode");
                   assert.ok(native);
-                  // Direct SDK AgentTool invocation has no assistant-issued call admission. This
-                  // owned fixture boundary drives public SDK hooks, while the real native engine
-                  // retains its untouched execution function, store callbacks, and script semantics.
                   return native.execute(id, args, signal, update, {
                     ...ctx,
                     tools: ctx.tools,
@@ -297,17 +320,11 @@ it.live(
           result,
           context: renderContextFixture({ isError: result.isError ?? false, args: { code: "" } }),
         });
-      assert.equal(summarize(spoofed)?.outcome, "error");
-      assert.ok(
-        summarize(spoofed)?.issues?.some((issue) => issue.message.includes("REAL_FAILURE")),
-      );
+      assertScriptFailure(summarize(spoofed), "REAL_FAILURE");
       const disguised = yield* step(() =>
         run("const e = new Error('GUEST_FAILURE'); e.name = 'Script aborted'; throw e;"),
       );
-      assert.equal(summarize(disguised)?.outcome, "error");
-      assert.ok(
-        summarize(disguised)?.issues?.some((issue) => issue.message.includes("GUEST_FAILURE")),
-      );
+      assertScriptFailure(summarize(disguised), "GUEST_FAILURE");
       vi.stubEnv("TMPDIR", `${directory}/unavailable`);
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
       const spillFailed = yield* step(() =>
@@ -315,9 +332,7 @@ it.live(
           '// @options: {"max_output_tokens": 1}\ntext("long native output that exceeds the budget");',
         ),
       );
-      const spillSummary = summarize(spillFailed);
-      assert.ok(spillSummary?.issues?.some((issue) => issue.code === "native-output-truncated"));
-      assert.ok(spillSummary?.issues?.some((issue) => issue.code === "native-output-save-failed"));
+      assertSpillIssues(summarize(spillFailed));
       vi.unstubAllEnvs();
       const targets = yield* step(() =>
         run(`
@@ -330,18 +345,7 @@ it.live(
           await tools.list_mcp_resource_templates({});
         `),
       );
-      const targetRows = summarize(targets)?.children?.entries;
-      assert.ok(targetRows);
-      assert.equal(targetRows[0]?.subject, "target.ts");
-      assert.ok(targetRows[1]?.subject?.startsWith("printf test"));
-      assert.ok(targetRows[1]?.subject?.endsWith("…"));
-      assert.equal(targetRows[2]?.subject, "Verify targets");
-      assert.equal(targetRows[3]?.label, "mcp");
-      assert.equal(targetRows[3]?.subject, "docs / lookup");
-      assert.equal(targetRows[4]?.subject, "docs / docs://guide/start");
-      assert.equal(targetRows[5]?.subject, "docs");
-      assert.equal(targetRows[6]?.subject, "");
-      assert.equal(targetRows[6]?.action, "list templates");
+      assertTargetRows(summarize(targets));
       const unchanged = yield* step(() => run("return load('answer');"));
       assert.ok(unchanged.content.some((part) => part.type === "text" && part.text === "41"));
       const image = yield* step(() =>
@@ -373,7 +377,6 @@ it.live(
       }
       assert.deepEqual(image, imageBefore);
       settings.applyOverrides({ codemode: { mode: "only", inlineBudget: 0 } });
-      // The preserved hook still consults the owning API's *live* settings.
       const freshLoadout = native.prepareLoadout!({
         declared: [probe],
         callable: [probe],

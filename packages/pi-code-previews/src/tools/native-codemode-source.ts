@@ -12,7 +12,6 @@ interface NativeProgramContext {
 
 const COLLAPSED_PROGRAM_ROWS = 8;
 
-/** Cap wrapped screen rows, not logical lines; expansion and theme fallback retain all source. */
 export function renderNativeCodemodeProgram(
   source: string,
   theme: Theme,
@@ -28,9 +27,7 @@ export function renderNativeCodemodeProgram(
       0,
       0,
     );
-  } catch {
-    // The plain source follows the same collapsed row budget.
-  }
+  } catch {}
   return {
     render(width) {
       if (width <= 0) return [];

@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -26,7 +25,6 @@ import {
 const bump = (counts: Map<string, number>, task: string) =>
   void counts.set(task, (counts.get(task) ?? 0) + 1);
 
-/** Counts owned start attempts and refusals per task, as the workflow service makes them. */
 const countingStarts = () => {
   const attempts = new Map<string, number>();
   const refusals = new Map<string, number>();
@@ -43,7 +41,6 @@ const countingStarts = () => {
   return { attempts, refusals, decorate };
 };
 
-/** The tasks whose agents have started, in the order they first ran. */
 const startOrder = (fixture: WorkflowFixture, tasks: ReadonlyArray<string>) => {
   const order: string[] = [];
   for (const projection of fixture.projections)
@@ -53,7 +50,6 @@ const startOrder = (fixture: WorkflowFixture, tasks: ReadonlyArray<string>) => {
   return order;
 };
 
-/** A script body that runs one agent per task in parallel and returns their results. */
 const fanOut = (tasks: ReadonlyArray<string>) =>
   `return await parallel([${tasks.map((task) => `"${task}"`).join(", ")}].map((task) => () => agent(task)));`;
 
@@ -71,8 +67,6 @@ describe("workflow agent admission", () => {
       function* ({ fixture, workflows, subagents }) {
         const started = yield* startScript(workflows, fanOut(tasks));
         for (const task of tasks) yield* runningTask(fixture, task);
-        // Workflow agents take none of the root's direct-child slots, so the main agent can
-        // still start as many children as its limit allows, and no more.
         yield* mainChildren(subagents, ["main-1", "main-2", "main-3", "main-4"], nestingPolicy);
         const full = yield* mainChildren(subagents, ["main-5"], nestingPolicy).pipe(Effect.flip);
         expect(subagentErrorCode(full)).toBe("direct_child_capacity");
@@ -128,8 +122,6 @@ describe("workflow agent admission", () => {
         yield* mainChildren(subagents, ["main-1", "main-2"], nestingPolicy);
         const ids: string[] = [];
         for (const tasks of runs) ids.push((yield* startScript(workflows, fanOut(tasks))).id);
-        // Each run runs two agents at once, beside the other run's two and the main agent's
-        // children, and its third waits for one of its own slots.
         for (const id of ids) {
           const view = yield* runWhere(
             workflows,
@@ -171,7 +163,6 @@ describe("workflow agent admission", () => {
           ),
         );
         yield* Deferred.await(creating.entered);
-        // Meanwhile the main agent fills its slots, and another run's reader starts.
         yield* mainChildren(subagents, ["main-1", "main-2"], nestingPolicy);
         const reading = yield* startScript(
           workflows,
@@ -180,7 +171,6 @@ describe("workflow agent admission", () => {
         yield* runningTask(fixture, "reader");
 
         yield* Deferred.succeed(creating.release, undefined);
-        // Admitted into the worktree it created, never refused and sent to create another.
         expect(yield* leaveInWorktree(fixture, "writer", "changed")).toBe("workspace-1");
         yield* reportTask(fixture, "writer", "written");
         yield* reportTask(fixture, "reader", "read");
@@ -208,8 +198,6 @@ describe("workflow agent admission", () => {
               return results;`,
         );
         yield* reportTask(fixture, "Migrate a.ts", "a.ts migrated");
-        // The first writer's process is still cleaning up, so the second one waits behind it
-        // without a start attempt, and stays queued instead of resolving null.
         const queued = yield* runWhere(
           workflows,
           started.id,
@@ -250,11 +238,9 @@ describe("workflow agent admission", () => {
           ? [running[0]!, running[0] === "x.ts" ? "y.ts" : "x.ts"]
           : undefined;
       }, "one running writer");
-      // The queued writer holds no slot, so the reader takes it.
       const writerId = yield* runningTask(fixture, `Edit ${first}`);
       yield* runningTask(fixture, "Review the plan");
       expect(stateOfTask(fixture, `Edit ${second}`)).toBeUndefined();
-      // The wait is logged with the writer it is queued behind.
       const queued = yield* runWhere(workflows, started.id, (run) =>
         run.logs.some((entry) => entry.message.includes(writerId)),
       );

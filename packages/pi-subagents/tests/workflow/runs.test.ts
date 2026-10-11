@@ -14,7 +14,6 @@ import { eventually, finished, startScript, workflowTest } from "./fixtures/work
 
 const run = (id = "wf-a-1"): WorkflowRunView => workflowRunView({ id });
 
-/** Records what reaches the host: every published snapshot. */
 const recordingSink = () => {
   const published: Array<ReadonlyArray<WorkflowRunView>> = [];
   const sink: WorkflowActivitySink = { publish: (runs) => void published.push(runs) };
@@ -27,19 +26,15 @@ describe("workflow run views in Activity", () => {
       const host = recordingSink();
       const runs = yield* makeWorkflowRuns(host.sink);
       yield* runs.mutate((views) => [...views, run()]);
-      // A start publishes before any time passes.
       expect(host.published).toHaveLength(1);
       for (let line = 0; line < 2_000; line++)
         yield* runs.recordEvent("wf-a-1", { type: "log", message: `line ${line}` });
-      // The lines are held back; nothing republished yet.
       expect(host.published).toHaveLength(1);
       yield* TestClock.adjust(WORKFLOW_ACTIVITY_PUBLISH_MS);
       expect(host.published).toHaveLength(2);
       expect(host.published.at(-1)?.[0]?.lastLog).toBe("line 1999");
-      // A quiet store publishes nothing more.
       yield* TestClock.adjust(WORKFLOW_ACTIVITY_PUBLISH_MS * 4);
       expect(host.published).toHaveLength(2);
-      // Lines still held back go out with the stop, which publishes at once.
       yield* runs.recordEvent("wf-a-1", { type: "log", message: "stopping now" });
       yield* runs.update("wf-a-1", (view) => ({ ...view, state: "stopping" }));
       expect(host.published).toHaveLength(3);
@@ -64,7 +59,6 @@ describe("workflow run views in Activity", () => {
       yield* runs.mutate((views) => [...views, run("wf-a-2")]);
       yield* TestClock.adjust(WORKFLOW_ACTIVITY_PUBLISH_MS * 2);
       expect(host.published).toHaveLength(1);
-      // The views themselves still change for status.
       expect((yield* runs.list).map((view) => view.id)).toEqual(["wf-a-1", "wf-a-2"]);
     }),
   );
@@ -88,7 +82,6 @@ describe("workflow run views in Activity", () => {
         workflows,
         `for (let line = 0; line < ${lines}; line++) log("line " + line); return 1;`,
       );
-      // The start is in Activity before the script logs anything.
       expect(host.published[0]?.map((view) => view.id)).toEqual([started.id]);
       yield* finished(workflows, started.id);
       yield* eventually(

@@ -1,4 +1,3 @@
-// Live filesystem/process checks protect preference freshness and isolated no-inference discovery.
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Config from "effect/Config";
@@ -142,7 +141,6 @@ describe("Claude catalog preference", () => {
     const test = yield* setup;
     const catalog = yield* makeNativeModelCatalog(test.options);
     const defaultsOnly = yield* catalog.list("claude", test.cwd).pipe(Effect.orDie);
-    // A target reached only through `default` is named by its model ID.
     expect(defaultsOnly.find((model) => model.selector === "fixture-next")).toMatchObject({
       label: "fixture-next",
       isDefault: false,

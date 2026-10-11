@@ -17,15 +17,12 @@ import {
 export interface ModelPickerModel {
   readonly provider: string;
   readonly id: string;
-  /** Canonical selection identity override for native runtimes and pseudo-model rows. */
   readonly selector?: string | undefined;
   readonly name?: string | undefined;
   readonly reasoning?: boolean | undefined;
   readonly supportedEfforts?: ReadonlyArray<string> | undefined;
-  /** Unavailable rows remain visible and searchable but cannot be selected. */
   readonly available?: boolean | undefined;
   readonly unavailableReason?: string | undefined;
-  /** Optional complete presentation overrides; callers retain domain-specific model metadata. */
   readonly label?: string | undefined;
   readonly description?: string | undefined;
   readonly searchText?: string | undefined;
@@ -74,7 +71,6 @@ const modelItem = <M extends ModelPickerModel>(model: M, current?: string): Sele
   };
 };
 
-/** Projects already-authorized model data into terminal-safe searchable choices. */
 export const createModelPickerChoices = <M extends ModelPickerModel>(
   models: ReadonlyArray<M>,
   current?: string,
@@ -88,7 +84,6 @@ export const createModelPickerChoices = <M extends ModelPickerModel>(
       payload: model,
       tone: managerTone.value,
       enabled: model.available !== false,
-      // An unavailable row is described by its sanitized reason, which a label may omit if blank.
       disabledReason: model.available === false ? (item.description ?? "") : undefined,
     };
   });
@@ -103,7 +98,6 @@ export interface ModelPickerPageOptions<
   readonly scopedModels: ReadonlyArray<M>;
   readonly allModels?: ReadonlyArray<M> | undefined;
   readonly initialScope?: ModelPickerScope | undefined;
-  /** Start ready to type; Escape cancels directly instead of leaving search first. */
   readonly initialSearchMode?: boolean | undefined;
   readonly current?: string | undefined;
   readonly notice?: string | undefined;
@@ -111,10 +105,6 @@ export interface ModelPickerPageOptions<
   readonly cancel: () => void;
 }
 
-/**
- * Pi-native model selector over the generic searchable page. The caller owns model discovery,
- * authorization, compatibility policy, validation, persistence, and lifecycle.
- */
 export class ModelPickerPage<M extends ModelPickerModel> implements Component, Focusable {
   private readonly options: ModelPickerPageOptions<M>;
   private readonly canScope: boolean;

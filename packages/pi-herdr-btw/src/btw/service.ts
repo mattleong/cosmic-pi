@@ -31,7 +31,6 @@ import {
 } from "./validation.ts";
 
 export const HERDR_BTW_COMMAND = "herdr-btw";
-/** The fresh-session subcommand, typed after `/herdr-btw`. */
 export const HERDR_BTW_NEW_SUBCOMMAND = "new";
 const NEW_COMMAND_GUIDANCE = `Run /${HERDR_BTW_COMMAND} ${HERDR_BTW_NEW_SUBCOMMAND} to start a fresh side session`;
 
@@ -50,7 +49,6 @@ export interface HerdrBtwResult {
   readonly mode: "created" | "resumed" | "focused";
 }
 
-/** Session-file boundary defaults; the options parameter overrides them in tests. */
 const sessionFileBoundary = {
   probeSessionHeader,
   compareSessionFileIdentity,
@@ -83,8 +81,6 @@ const makeHerdrBtwService = (
   options: Partial<typeof sessionFileBoundary> = {},
 ) =>
   Effect.gen(function* () {
-    // One permit serializes commands in this runtime. Fresh Herdr snapshots
-    // separately guard observed live-session reuse across runtimes.
     const gate = yield* Semaphore.make(1);
     const herdr = yield* HerdrClient;
     const linkStore = input.linkStore;
@@ -134,8 +130,6 @@ const makeHerdrBtwService = (
         prompt === undefined
           ? undefined
           : yield* Effect.result(herdr.promptSideSessionPi(agentName, sideSessionPrompt(prompt)));
-      // Focus is attempted after prompt settlement even when prompt delivery
-      // failed or its mutation outcome is uncertain.
       const focusResult = yield* Effect.result(herdr.focusSideSessionPi(agentName));
       if (promptResult?._tag === "Failure")
         return yield* retainPaneFailure(
@@ -240,8 +234,6 @@ const makeHerdrBtwService = (
             "The side session started, but its file changed unexpectedly",
           );
 
-        // The link is superseded only after confirmed startup and child-file
-        // validation; every earlier failure keeps the prior link authoritative.
         const recordResult = linkStore.record({
           childSessionId,
           childSessionPath,
@@ -299,8 +291,6 @@ const makeHerdrBtwService = (
       if (restoration._tag === "none")
         return yield* openFreshCreate(prompt, sessionFile, sessionId);
 
-      // The link store has already filtered copied ancestor entries against the
-      // captured owner before returning a restored link.
       const link = restoration.link;
       if (
         !isValidBlankChildProbe(probeSessionHeader(link.childSessionPath), link.childSessionId) ||

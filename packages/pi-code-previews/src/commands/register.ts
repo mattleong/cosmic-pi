@@ -3,7 +3,6 @@ import { registerExtensionCommand } from "pi-cosmic-core";
 import { codePreviewSettingsSubcommand } from "../settings/controller";
 import { healthSubcommand } from "./health";
 
-/** `/code-previews`, with `health` and `settings`; a bare command lists them. */
 export function registerCodePreviewsCommand(pi: ExtensionAPI): void {
   registerExtensionCommand(pi, {
     name: "code-previews",

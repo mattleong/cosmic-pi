@@ -1,5 +1,3 @@
-import * as Predicate from "effect/Predicate";
-
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -10,25 +8,27 @@ import { extensionApiFixture } from "../testing.ts";
 import { silencedConsole } from "./support/spies.ts";
 
 const makeHostileSignal = (operation: "aborted" | "addEventListener") => {
-  const controller = new AbortController();
+  const { signal } = new AbortController();
+  const addEventListener = signal.addEventListener.bind(signal);
+  const removeEventListener = signal.removeEventListener.bind(signal);
   let removals = 0;
-  const signal = new Proxy(controller.signal, {
-    get(target, property) {
-      if (property === "aborted" && operation === "aborted")
+  if (operation === "aborted")
+    Object.defineProperty(signal, "aborted", {
+      get() {
         throw new Error("hostile aborted getter");
-      if (property === "addEventListener" && operation === "addEventListener")
-        return (...args: Parameters<AbortSignal["addEventListener"]>) => {
-          target.addEventListener(...args);
-          throw new Error("hostile addEventListener");
-        };
-      if (property === "removeEventListener")
-        return (...args: Parameters<AbortSignal["removeEventListener"]>) => {
-          removals++;
-          return target.removeEventListener(...args);
-        };
-      // SAFETY: The `in` check proves this proxy property belongs to the AbortSignal contract.
-      const value = property in target ? target[property as keyof AbortSignal] : undefined;
-      return Predicate.isFunction(value) ? value.bind(target) : value;
+      },
+    });
+  else
+    Object.defineProperty(signal, "addEventListener", {
+      value: (...args: Parameters<AbortSignal["addEventListener"]>) => {
+        addEventListener(...args);
+        throw new Error("hostile addEventListener");
+      },
+    });
+  Object.defineProperty(signal, "removeEventListener", {
+    value: (...args: Parameters<AbortSignal["removeEventListener"]>) => {
+      removals++;
+      return removeEventListener(...args);
     },
   });
   return { signal, removals: () => removals };
@@ -36,13 +36,13 @@ const makeHostileSignal = (operation: "aborted" | "addEventListener") => {
 
 it.effect("provides the pi host API through one managed runtime", () =>
   Effect.gen(function* () {
-    const pi = extensionApiFixture({ marker: "pi-api" });
+    const pi = extensionApiFixture();
     const marker = yield* Effect.acquireUseRelease(
       Effect.sync(() => makePiRuntime(pi, Layer.empty)),
       (runtime) =>
         Effect.promise(() =>
           runtime.runPromise(
-            PiApi.use((api) => Effect.succeed(api === pi ? pi.marker : "wrong-api")),
+            PiApi.use((api) => Effect.succeed(api === pi ? "pi-api" : "wrong-api")),
           ),
         ),
       (runtime) => runtime.disposeEffect,
@@ -62,7 +62,6 @@ it.effect("keeps Effect log output off the TTY console", () =>
     yield* Effect.promise(() =>
       runtime.run(Effect.logWarning("Subscription usage recovery: refresh_failed.")),
     );
-    // Standalone runners share the same exported host logger layer.
     yield* Effect.logWarning("standalone host logger must stay off the TTY").pipe(
       Effect.provide(piHostLoggerLayer),
     );

@@ -33,7 +33,6 @@ it.live(
       const overhead = Buffer.byteLength(
         yield* Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema))(record),
       );
-      // Backslashes exercise JSON expansion; the accepted record hits the byte bound exactly.
       const diff =
         "\\".repeat(Math.floor((cap - overhead - 2) / 2)) + "é" + "x".repeat((cap - overhead) % 2);
       yield* saveWorkspaceRecord(root, { ...record, revision: { ...record.revision!, diff } });
@@ -43,14 +42,12 @@ it.live(
       expect((yield* readWorkspaceRecord(root, workspaceId)).revision?.diff.length).toBe(
         diff.length,
       );
-      // One extra byte must fail even when the encoded character count still fits.
       expect(
         (yield* saveWorkspaceRecord(root, {
           ...record,
           revision: { ...record.revision!, diff: diff + "x" },
         }).pipe(Effect.flip)).operation,
       ).toBe("registry");
-      // A raw 32 MiB deletion diff is permitted, but its encoded record exceeds the cap.
       const failure = yield* saveWorkspaceRecord(root, {
         ...record,
         revision: { ...record.revision!, diff: "\\".repeat(32 * 1024 * 1024) },

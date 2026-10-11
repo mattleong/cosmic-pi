@@ -1,4 +1,3 @@
-// Host callbacks are Promise-shaped test boundaries.
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -6,12 +5,11 @@ import * as Effect from "effect/Effect";
 import { describe, expect, vi } from "vitest";
 import { registerUltracodeController } from "../../src/application/ultracode.ts";
 import { workflowAuthoringGuidePath } from "../../src/boundary/workflow-authoring-guide.ts";
+import { beforeAgentStartEvent } from "../fixtures/pi-host.ts";
 import { effectTest, settle, step } from "../support/effect-test.ts";
 
 const WORKFLOW = "subagent_workflow";
-/** Tools other extensions own, which the controller must never remove. */
 const OTHERS = ["read", "mcp__docs__search"];
-/** The section of its own the controller writes its guidance to. */
 const SECTION = "subagents_ultracode";
 
 const controllerFixture = () => {
@@ -40,22 +38,14 @@ const controllerFixture = () => {
     waitForIdle: () => Effect.runPromise(Deferred.await(compaction)),
     ui: { setStatus, notify: vi.fn() },
   });
-  /**
-   * Starts an agent run from `prompt`, by default the latest request Pi was sent, and returns
-   * the ultracode section of its system prompt. The custom prompt shows the section survives one.
-   */
   const promptRun = function* (prompt = userMessages.at(-1) ?? "") {
     const sections: Record<string, string> = {};
     yield* settle(() =>
-      emit("before_agent_start", ctx, {
-        type: "before_agent_start",
-        prompt,
-        systemPromptOptions: {
-          customPrompt: "A custom system prompt",
-          promptGuidelines: [],
-          sections,
-        },
-      }),
+      emit(
+        "before_agent_start",
+        ctx,
+        beforeAgentStartEvent(prompt, { customPrompt: "A custom system prompt", sections }),
+      ),
     );
     return sections[SECTION];
   };
@@ -71,7 +61,6 @@ const controllerFixture = () => {
     setIdle: (value: boolean) => {
       idle = value;
     },
-    /** Pi finished compacting. */
     finishCompaction: () => {
       idle = true;
       Deferred.doneUnsafe(compaction, Effect.void);
@@ -82,7 +71,6 @@ const controllerFixture = () => {
     restore: (names: ReadonlyArray<string>) => {
       active = [...active, ...names];
     },
-    /** Whether the footer shows a marker now. */
     marked: () => {
       const last = setStatus.mock.lastCall;
       return last !== undefined && last[1] !== undefined && String(last[1]).trim() !== "";
@@ -132,7 +120,6 @@ describe("ultracode tool activation", () => {
     expect(fixture.workflowActive()).toBe(false);
     expect(fixture.othersKept()).toBe(true);
 
-    // The standing guidance covers more scope than the one-off note does.
     fixture.controller.setEnabled(true);
     const standing = yield* fixture.promptRun();
     expect(standing).toBeDefined();
@@ -144,7 +131,6 @@ describe("ultracode tool activation", () => {
     fixture.controller.activate(fixture.ctx, false);
     yield* fixture.promptRun("an earlier prompt");
     yield* fixture.settled();
-    // Pi swallowed the request's failure, for example because no model is selected.
     yield* step(() => fixture.controller.send(fixture.ctx, { task: "review the parser" }));
     expect(fixture.workflowActive()).toBe(true);
     expect(yield* fixture.promptRun("an unrelated prompt")).toBeUndefined();
@@ -170,7 +156,6 @@ describe("ultracode tool activation", () => {
     fixture.controller.activate(fixture.ctx, false);
     fixture.setIdle(false);
     const sending = fixture.controller.send(fixture.ctx, { task: "review the parser" });
-    // Pi refuses prompts while it compacts, so nothing is sent or held yet.
     expect(fixture.userMessages).toEqual([]);
     expect(fixture.workflowActive()).toBe(false);
     fixture.finishCompaction();
@@ -187,11 +172,9 @@ describe("ultracode tool activation", () => {
     yield* fixture.promptRun();
     observer.opened("wf-1");
     yield* fixture.settled();
-    // The run is still live after the request's agent run settled.
     expect(fixture.workflowActive()).toBe(true);
     observer.closed("wf-1", "now");
     expect(fixture.workflowActive()).toBe(true);
-    // A run that handles the notification without a prompt still settles the window.
     yield* fixture.agentStarted();
     expect(fixture.workflowActive()).toBe(true);
     yield* fixture.settled();
@@ -207,11 +190,9 @@ describe("ultracode tool activation", () => {
       yield* step(() => fixture.controller.send(fixture.ctx, { task: "review the parser" }));
       yield* fixture.promptRun();
       observer.opened("wf-1");
-      // The user stops the run in Activity while this agent run is still under way.
       observer.closed("wf-1", "next-turn");
       yield* fixture.settled();
       expect(fixture.workflowActive()).toBe(true);
-      // The user's next prompt, asking to fix and resume, still has the runner and a note.
       expect(yield* fixture.promptRun("fix it and resume")).toBeDefined();
       yield* fixture.settled();
       expect(fixture.workflowActive()).toBe(false);
@@ -229,11 +210,9 @@ describe("ultracode tool activation", () => {
 
   effectTest("leaves a runner Pi restored until the next agent run starts", function* () {
     const fixture = controllerFixture();
-    // Pi restored the runner with tools still registering after a reload.
     fixture.restore([WORKFLOW, "mcp__late__tool"]);
     fixture.controller.activate(fixture.ctx, true);
     fixture.controller.setEnabled(false);
-    // Removing a tool now would drop the rest of a loadout Pi is still restoring.
     expect(fixture.pi.setActiveTools).not.toHaveBeenCalled();
     expect(fixture.workflowActive()).toBe(true);
     yield* fixture.agentStarted();

@@ -7,11 +7,11 @@ import type {
 import { Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { rowPerState, withSelfBackground } from "../preview/self-background";
+import { fallbackArguments } from "../tools/data/args";
 import { getFallbackResultText } from "../tools/data/results";
 import { escapeControlChars } from "../shared/terminal-text";
-import type { RendererArguments, ToolRenderContext } from "../tools/renderers/shared/types";
+import type { RendererState, ToolRenderContext } from "../tools/renderers/shared/types";
 
-/** Keep only Pi's public presentation fields, never an execution definition. */
 export function rendererFields(renderers: ToolRenderers | undefined): ToolRenderers | undefined {
   if (!renderers) return undefined;
   return {
@@ -21,7 +21,6 @@ export function rendererFields(renderers: ToolRenderers | undefined): ToolRender
   };
 }
 
-/** An owner's one-way readiness: rows retained before startup refresh once when it publishes. */
 export class RetainedRendererGate {
   live = true;
   ready = false;
@@ -31,7 +30,6 @@ export class RetainedRendererGate {
     if (this.live && !this.ready) this.refreshers.add(refresh);
   }
 
-  /** Publish the owner's state first; each retained row then adopts it. */
   markReady(): void {
     this.ready = true;
     for (const refresh of this.refreshers) invokeHostCallback(refresh, undefined);
@@ -43,16 +41,14 @@ export class RetainedRendererGate {
     this.refreshers.clear();
   }
 }
-/** Rows observe readiness; only the owner publishes or retires it. */
 type RetainedRendererOwner = Readonly<Pick<RetainedRendererGate, "live" | "ready" | "subscribe">>;
 
-/** Cold rows preserve downstream content with the same framing Pi would otherwise provide. */
 function nativeBackground(name: string, downstream: ToolRenderers | undefined): ToolRenderers {
   const call: NonNullable<ToolRenderers["renderCall"]> =
     downstream?.renderCall ??
     ((args, theme) =>
       new Text(
-        `${theme.fg("toolTitle", theme.bold(name))}\n${JSON.stringify(args, null, 2)}`,
+        [theme.fg("toolTitle", theme.bold(name)), ...fallbackArguments(args)].join("\n"),
         0,
         0,
       ));
@@ -85,15 +81,17 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
   };
 }
 
+type RowContext = ToolRenderContext<RendererState, unknown>;
+
 class RetainedRendererRow {
   private renderers: ToolRenderers;
   private adopted = false;
-  private state: ToolRenderContext["state"];
+  private state: RendererState | undefined;
   private call: Component | undefined;
   private result: Component | undefined;
-  private args: RendererArguments;
+  private args: unknown;
   private theme: Theme | undefined;
-  private context: ToolRenderContext | undefined;
+  private context: RowContext | undefined;
   private value: AgentToolResult<unknown> | undefined;
   private options: ToolRenderResultOptions | undefined;
   private readonly stale = { call: true, result: true };
@@ -113,7 +111,6 @@ class RetainedRendererRow {
     this.select = select;
     this.renderers = fallback;
     owner.subscribe(() => {
-      // Capture this owner's first-ready shell even if the host defers its next draw.
       try {
         this.refresh();
       } finally {
@@ -122,7 +119,7 @@ class RetainedRendererRow {
     });
   }
 
-  updateCall(args: RendererArguments, theme: Theme, context: ToolRenderContext): Component {
+  updateCall<Args>(args: Args, theme: Theme, context: RowContext): Component {
     this.args = args;
     this.theme = theme;
     this.context = context;
@@ -135,7 +132,7 @@ class RetainedRendererRow {
     value: AgentToolResult<unknown>,
     options: ToolRenderResultOptions,
     theme: Theme,
-    context: ToolRenderContext,
+    context: RowContext,
   ): Component {
     this.args = context.args;
     this.value = value;
@@ -147,7 +144,6 @@ class RetainedRendererRow {
     return this.resultSlot;
   }
 
-  /** Pi draws the call, then the result, so a call update need not rebuild retained output. */
   private refresh(through: "call" | "result" = "result"): void {
     if (!this.context || !this.theme) return;
     this.state ??= { ...this.context.state };
@@ -156,12 +152,10 @@ class RetainedRendererRow {
       const selected = this.select();
       if (selected) {
         this.renderers = selected;
-        // New internal slots don't inherit downstream caches; preserve public initial state.
         this.state = { ...this.context.state };
         this.call = undefined;
         this.result = undefined;
       }
-      // Adoption rebuilds call first, then refeeds retained output: combined shells own both.
       this.stale.call = true;
       this.stale.result = true;
     }
@@ -201,7 +195,6 @@ class RetainedRendererRow {
   }
 }
 
-/** Pi retains this facade once, including renderShell, before session_start during replay. */
 export function retainedCodePreviewRenderers(
   name: string,
   downstream: ToolRenderers | undefined,

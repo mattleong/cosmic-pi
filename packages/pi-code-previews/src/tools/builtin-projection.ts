@@ -47,105 +47,154 @@ export interface BuiltinCompactProjectionInput extends BuiltinCompactPolicy {
   beforeWrite: BuiltinBeforeWrite;
 }
 
-/** Pure transient projection. Retaining consumers must redact sensitive text and bound
- * every retained string and collection. Never retain raw output.
- */
+interface ProjectionParts {
+  readonly counters: readonly string[];
+  readonly metadata: readonly string[];
+  readonly issues: readonly CompactIssue[];
+}
+
+const EMPTY_PARTS: ProjectionParts = { counters: [], metadata: [], issues: [] };
+
+const scanSecrets = (policy: BuiltinCompactPolicy, sources: readonly string[]) =>
+  secretIssues(sources, policy.secretWarnings, policy.secretScanChars);
+
 export function projectBuiltinCompactSummary(
   tool: BuiltinCompactTool,
   input: BuiltinCompactProjectionInput,
 ): CompactSummary | undefined {
-  const { phase, args, result, cwd, isError, beforeWrite } = input;
-  const scan = (sources: readonly string[]) =>
-    secretIssues(sources, input.secretWarnings, input.secretScanChars);
+  const { phase, args, result, cwd, isError } = input;
   const output = getBoundedTextContent(result?.content);
   if (output === undefined) return undefined;
   const inputSources = secretInputSources(tool, args, input.secretWarnings);
   if (!inputSources) return undefined;
-  const issues = scan([...inputSources, output]);
-  const metadata: string[] = [];
-  const counters: string[] = [];
+  const issues = scanSecrets(input, [...inputSources, output]);
   if (tool === "bash")
     issues.push(...bashCommandIssues(stringArg(args, "command"), input.bashWarnings));
   const subject = describeBuiltinCompactSubject(tool, args, cwd);
-  if (result) {
-    if (tool === "read" && !isError) {
-      const read = readIssues(
-        result.details,
-        output,
-        Predicate.isNumber(getObjectValue(args, "limit")),
-      );
-      if (!read) return undefined;
-      issues.push(...read);
-    } else if (tool === "bash" || tool === "grep" || tool === "find" || tool === "ls") {
-      const projection = outputLimitProjection(tool, result.details);
-      counters.push(...projection.counters);
-      issues.push(...projection.issues);
-    }
-  }
-  if (isError) {
-    // Text ownership must not replace attachment-aware failure renderers.
-    if (result?.content.some((part) => part.type !== "text")) return undefined;
-    const failure = builtinFailure(tool, output, issues);
-    return {
-      subject,
-      outcome: failure.outcome,
-      issues: mergeCompactIssues(failure.issues, issues),
-    };
-  }
+  const live = liveResultParts(tool, input, output);
+  if (!live) return undefined;
+  issues.push(...live.issues);
+  if (isError) return failureSummary(tool, subject, result, output, issues);
   if (phase !== "settled") return { subject, issues };
   if (!result) return undefined;
-  if (tool === "write") {
-    const content = getObjectValue(args, "content");
-    if (!Predicate.isString(content)) return undefined;
-    const before = beforeWrite.kind === "snapshot" ? beforeWrite.value : undefined;
-    const beforeContent = getObjectValue(before, "content");
-    if (Predicate.isString(beforeContent)) issues.push(...scan([beforeContent]));
-    if (beforeWrite.kind === "new") counters.push("new file");
-    else {
-      const projection = writeDiffProjection(before, content, input);
-      issues.push(...projection.issues);
-      metadata.push(...projection.metadata);
-      if (!projection.issues.length && !projection.metadata.length) {
-        const detail =
-          beforeWrite.kind === "snapshot" && beforeWrite.counts
-            ? beforeWrite.counts.detail
-            : projectWriteResultDetail(before, content, input);
-        if (detail) counters.push(detail);
-      }
-    }
-  } else if (tool === "edit") {
-    const detail = editResultDetail(args);
-    if (detail) counters.push(detail);
-    const diff = getEditDiff(result.details);
-    if (diff) issues.push(...scan([diff]));
-    else
-      issues.push({
-        severity: "info",
-        code: "edit-diff-unavailable",
-        message: "Diff unavailable",
-      });
-  }
-  if (tool === "grep" && counters.length === 0) {
-    const detail = grepResultDetail(output, result.details);
-    if (detail) counters.push(detail);
-  }
-  const merged = mergeCompactIssues(issues);
+  const settled = settledResultParts(tool, input, result);
+  if (!settled) return undefined;
+  const counters = [...live.counters, ...settled.counters];
+  if (tool === "grep" && counters.length === 0) counters.push(...grepCounters(output, result));
+  const merged = mergeCompactIssues([...issues, ...settled.issues]);
   return {
     subject,
     counters,
-    metadata,
+    metadata: [...settled.metadata],
     outcome: compactIssueSeverity(merged) === "warning" ? "warning" : "success",
     issues: merged,
   };
 }
 
-/** Recognized builtin error envelopes get a human message; anything else shows its first line. */
+function liveResultParts(
+  tool: BuiltinCompactTool,
+  input: BuiltinCompactProjectionInput,
+  output: string,
+): ProjectionParts | undefined {
+  const { args, result, isError } = input;
+  if (!result) return EMPTY_PARTS;
+  if (tool === "read" && !isError) {
+    const read = readIssues(
+      result.details,
+      output,
+      Predicate.isNumber(getObjectValue(args, "limit")),
+    );
+    return read && { ...EMPTY_PARTS, issues: read };
+  }
+  if (tool === "bash" || tool === "grep" || tool === "find" || tool === "ls")
+    return { ...EMPTY_PARTS, ...outputLimitProjection(tool, result.details) };
+  return EMPTY_PARTS;
+}
+
+function failureSummary(
+  tool: BuiltinCompactTool,
+  subject: string,
+  result: AgentToolResult<unknown> | undefined,
+  output: string,
+  issues: readonly CompactIssue[],
+): CompactSummary | undefined {
+  if (result?.content.some((part) => part.type !== "text")) return undefined;
+  const failure = builtinFailure(tool, output, issues);
+  return {
+    subject,
+    outcome: failure.outcome,
+    issues: mergeCompactIssues(failure.issues, issues),
+  };
+}
+
+function settledResultParts(
+  tool: BuiltinCompactTool,
+  input: BuiltinCompactProjectionInput,
+  result: AgentToolResult<unknown>,
+): ProjectionParts | undefined {
+  if (tool === "write") return writeParts(input);
+  if (tool === "edit") return editParts(input, result);
+  return EMPTY_PARTS;
+}
+
+function writeParts(input: BuiltinCompactProjectionInput): ProjectionParts | undefined {
+  const { args, beforeWrite } = input;
+  const content = getObjectValue(args, "content");
+  if (!Predicate.isString(content)) return undefined;
+  const before = beforeWrite.kind === "snapshot" ? beforeWrite.value : undefined;
+  const beforeContent = getObjectValue(before, "content");
+  const issues = Predicate.isString(beforeContent) ? scanSecrets(input, [beforeContent]) : [];
+  if (beforeWrite.kind === "new") return { counters: ["new file"], metadata: [], issues };
+  const projection = writeDiffProjection(before, content, input);
+  const counters =
+    projection.issues.length || projection.metadata.length
+      ? []
+      : writeCounters(before, content, input);
+  return {
+    counters,
+    metadata: projection.metadata,
+    issues: [...issues, ...projection.issues],
+  };
+}
+
+function writeCounters<Before>(
+  before: Before,
+  content: string,
+  input: BuiltinCompactProjectionInput,
+): string[] {
+  const { beforeWrite } = input;
+  const detail =
+    beforeWrite.kind === "snapshot" && beforeWrite.counts
+      ? beforeWrite.counts.detail
+      : projectWriteResultDetail(before, content, input);
+  return detail ? [detail] : [];
+}
+
+function editParts(
+  input: BuiltinCompactProjectionInput,
+  result: AgentToolResult<unknown>,
+): ProjectionParts {
+  const detail = editResultDetail(input.args);
+  const diff = getEditDiff(result.details);
+  return {
+    counters: detail ? [detail] : [],
+    metadata: [],
+    issues: diff
+      ? scanSecrets(input, [diff])
+      : [{ severity: "info", code: "edit-diff-unavailable", message: "Diff unavailable" }],
+  };
+}
+
+function grepCounters(output: string, result: AgentToolResult<unknown>): string[] {
+  const detail = grepResultDetail(output, result.details);
+  return detail ? [detail] : [];
+}
+
 function builtinFailure(tool: BuiltinCompactTool, output: string, issues: readonly CompactIssue[]) {
   const details = output || `${tool} failed`;
   if (details.trim() === "Operation aborted") return { outcome: "cancelled" as const, issues: [] };
   const lines = details.trimEnd().split(/\r?\n/u);
   if (tool !== "bash") return fileFailure(tool, details, lines);
-  // Structured details may already name where the full output was saved.
   const retained = issues.some(({ code }) => code === "retained-output");
   return shellFailure(details, lines, retained);
 }
@@ -161,7 +210,6 @@ function secretInputSources<Args>(
   if (tool === "edit") {
     const edits = getObjectValue(args, "edits");
     const operations = Array.isArray(edits) ? edits : [args];
-    // Keep input discovery bounded as well as each individual secret scan.
     if (operations.length > 64) return undefined;
     for (const edit of operations) {
       sources.push(

@@ -121,7 +121,7 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         dependencies: Context.empty(),
       });
       const persistFast = Effect.fn("OpenAIUsage.persistFast")(
-        function* (active: boolean, desiredActive: boolean, afterCommit: Effect.Effect<void>) {
+        function* (desiredActive: boolean, afterCommit: Effect.Effect<void>) {
           yield* controller.withSettingsPermit(
             Effect.gen(function* () {
               const freshConfig = yield* resolveConfig(cwd, controller.agentDir, projectTrusted);
@@ -132,11 +132,8 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
               yield* commitPreferredScope(
                 { readRawConfig, modifyConfig, resolveCommittedConfig },
                 freshConfig,
-                (raw) => ({ ...raw, active, desiredActive }),
+                (raw) => ({ ...raw, desiredActive }),
                 (nextConfig) =>
-                  // Changed usage settings invalidate pending results and wake polling. A
-                  // fast-only write leaves both alone: an in-flight usage result is still current,
-                  // though eligibility follows any usage settings changed outside this session.
                   (usageConfigChanged(freshConfig, nextConfig)
                     ? controller.installConfig(nextConfig)
                     : controller.updateState((current) =>

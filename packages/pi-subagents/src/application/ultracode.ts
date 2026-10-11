@@ -34,38 +34,18 @@ import {
 
 const STATUS_KEY = "pi-subagents-ultracode";
 
-/**
- * Keeps `subagent_workflow` active only while the user has opted into workflows: the ultracode
- * setting is on, or a one-off `/ultracode` window is open. It adds or removes only that tool and
- * leaves every other tool in Pi's active set alone. Its guidance is a system-prompt section of
- * its own, which Pi keeps even under a custom system prompt.
- */
 export interface UltracodeController {
-  /**
-   * The session's tools registered with ultracode at `enabled`. Until the next agent run starts,
-   * the workflow tool is only ever added: removing a tool then would drop the tools Pi is still
-   * restoring after a reload or `/tree`, so a removal waits for that run.
-   */
   readonly activate: (ctx: ExtensionContext, enabled: boolean) => void;
-  /** The session's runtime went away; the application deactivates its tools itself. */
   readonly suspend: () => void;
-  /** A session boundary forgets the window; the next activation announces its runs again. */
   readonly reset: () => void;
-  /** The session's effective ultracode setting changed. */
   readonly setEnabled: (enabled: boolean) => void;
   readonly window: () => UltracodeWindow;
-  /** Follows workflow runs for the activation that starts after the latest `reset`. */
   readonly observer: () => WorkflowRunObserver;
-  /**
-   * Opens the window for `request` and sends it to the main agent as a user message. Pi refuses
-   * prompts while it compacts, so a request sent then waits until Pi is idle.
-   */
   readonly send: (ctx: ExtensionCommandContext, request: UltracodeRequest) => Promise<void>;
 }
 
 const isIdle = (ctx: ExtensionContext): boolean => invokeHostCallback(() => ctx.isIdle(), true);
 
-/** Registers the Pi events that move the window and returns the controller. */
 export function registerUltracodeController(
   pi: Pick<ExtensionAPI, "on" | "events" | "getActiveTools" | "setActiveTools" | "sendUserMessage">,
 ): UltracodeController {
@@ -80,12 +60,10 @@ export function registerUltracodeController(
   let enabled = false;
   let state = closedUltracodeWindow;
   let epoch = 0;
-  /** Set from activation until the next agent run starts, while Pi may still restore tools. */
   let restoring = false;
 
   const optedIn = () => enabled || isUltracodeWindowOpen(state);
 
-  /** Activates the tool when opted in, and deactivates it otherwise unless Pi is restoring. */
   const reconcile = () => {
     if (!context) return;
     const wanted = optedIn();
@@ -119,7 +97,6 @@ export function registerUltracodeController(
     reconcile();
   };
 
-  /** An agent run started, so Pi has finished restoring tools. */
   const runStarted = (next: UltracodeWindow) => {
     restoring = false;
     move(next);
@@ -141,7 +118,6 @@ export function registerUltracodeController(
     if (context && current)
       sections.subagents_ultracode = ultracodeGuideline(current, workflowAuthoringGuidePath());
   });
-  // Runs a notification starts skip before_agent_start; later turns still see the right tools.
   pi.on("agent_start", () => runStarted(ultracodeAgentRunStarted(state)));
   pi.on("agent_settled", () => move(ultracodeAgentRunSettled(state)));
 
@@ -181,7 +157,6 @@ export function registerUltracodeController(
         const queued = sent.queuedRequests > state.queuedRequests;
         move(sent);
         try {
-          // Pi uses the delivery mode only while an agent run is under way.
           pi.sendUserMessage(ultracodeRequestMessage(request, workflowAuthoringGuidePath()), {
             deliverAs: "followUp",
           });
@@ -190,10 +165,8 @@ export function registerUltracodeController(
           throw error;
         }
       };
-      // Not idle without an agent run under way means Pi is compacting or summarizing a branch.
       if (!state.agentRunning && !isIdle(ctx))
         return invokeHostCallback(() => ctx.waitForIdle(), Promise.resolve()).then(deliver);
-      // Delivers now, reporting the outcome as a promise.
       try {
         deliver();
         return Promise.resolve();

@@ -35,11 +35,9 @@ const result = (
 
 const MAX_LISTED_PATHS = 8;
 
-/** The last segment of a worker-relative path, as one short plain row. */
 const fileName = (name: string) =>
   clipText(sanitizeTerminalLine(name.replace(/\/+$/u, "").split("/").pop() ?? ""), 40) || "A file";
 
-/** Problems a committed integration left behind, worded for people and for the agent. */
 function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWarning[] {
   const warnings: WorkspaceWarning[] = [];
   const paths = outcome.uncapturedPaths;
@@ -170,10 +168,6 @@ const executeWorkspaceList = (
     );
   });
 
-/**
- * The coordinator binds identity and enforces direct-parent authority before any engine access.
- * The schema is checked again because Pi `tool_call` handlers may mutate already-validated input.
- */
 export const executeWorkspaceAction = (
   operation: SubagentWorkspaceInput,
   callerRunId = SUBAGENT_ROOT_RUN_ID,

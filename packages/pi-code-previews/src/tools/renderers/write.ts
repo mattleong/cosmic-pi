@@ -38,7 +38,6 @@ import { previewIssuesSlot } from "../../preview/preview-issues";
 export function createWritePreviewTool(cwd: string) {
   const originalWrite = createWriteToolDefinition(cwd);
 
-  // Native rendering is selected independently; the hook owns execution only.
   const { renderCall: _renderCall, renderResult: _renderResult, ...definition } = originalWrite;
   return {
     ...definition,
@@ -46,7 +45,6 @@ export function createWritePreviewTool(cwd: string) {
       const [toolCallId, params, signal, , ctx] = args;
       const path = getPathArg(params);
       const content = getObjectValue(params, "content");
-      // Pi writes directly without a preview session or for arguments its schema would refuse.
       if (!path || !Predicate.isString(content) || !hasCodePreviewSessionCapability())
         return originalWrite.execute(...args);
       return executeWriteWithPreview(toolCallId, path, content, cwd, signal, ctx);
@@ -54,14 +52,13 @@ export function createWritePreviewTool(cwd: string) {
   };
 }
 
-/** Presentation is independent of the before-write execution hook. */
 export function writePreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
-      // Closures keep only these, never the context: its lastComponent links every prior call.
       const { state, expanded, invalidate } = renderContext;
       const path = getPathArg(args);
-      const content = Predicate.isString(args.content) ? args.content : "";
+      const contentArg = getObjectValue(args, "content");
+      const content = Predicate.isString(contentArg) ? contentArg : "";
       const lang = pathPreviewLanguage(path, content);
       const title = `${renderCodePreviewToolTitle("write", theme)} ${renderDisplayPath(path, cwd, theme)}`;
       const details = [
@@ -72,11 +69,9 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       const existingHeader = title + metadata(theme, details);
       const newHeader = title + metadata(theme, ["new file", ...details]);
       const container = new Container();
-      // The result settles whether the file is new after the call is built, before it is drawn.
       container.addChild(
         stateHeading(() => (state.writeNewFile === true ? newHeader : existingHeader)),
       );
-      // Issues sit directly under the heading, above the content they may describe.
       container.addChild(previewIssuesSlot(renderContext));
       if (!expanded && !codePreviewSettings.writeContentPreview) {
         const hint = hiddenPreviewExpandHintForShell(state, theme, "content");
@@ -97,13 +92,11 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
             skipHighlightLabel: "Syntax highlighting skipped for large content",
           }),
         );
-      // The proposed content stays until the applied diff replaces it.
       container.addChild(unlessResultDiffShown(state, preview));
       return container;
     },
 
     renderResult: (result, { expanded }, theme, renderContext) => {
-      // A deferred render keeps only these, never the context and its prior components.
       const { state, invalidate } = renderContext;
       setResultDiffShown(state, false);
       const firstText = getTextContent(result.content);
@@ -114,7 +107,6 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
 
       const path = getPathArg(renderContext.args);
       const before = writeBeforeSnapshot(state, renderContext.toolCallId, result.details);
-      // Only an observed absent file is new; the heading says so once the write is known.
       state.writeNewFile = isKnownNewWrite(before, result.details);
       const plan = writeDiffPlan(before, getObjectValue(renderContext.args, "content"));
       if (plan.kind === "skipped")
@@ -123,11 +115,9 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
           : new Container();
       if (plan.kind === "unknown") return new Container();
       if (plan.kind === "unchanged") return new Text(theme.fg("muted", "no changes"), 0, 0);
-      // A hidden collapsed preview leaves expansion to the call's hint.
       if (!expanded && !codePreviewSettings.writeContentPreview) return new Container();
       if (plan.kind === "guarded") return new Text(diffSkippedNote(theme, plan.guard), 0, 0);
       const { previous, content } = plan;
-      // Expansion keeps the exact written content above the diff.
       setResultDiffShown(state, !expanded);
       const render = () =>
         renderWriteDiffPreview(previous, content, path, expanded, theme, invalidate);

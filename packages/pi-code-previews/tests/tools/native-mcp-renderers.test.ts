@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import type { ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import { opaqueFixture } from "pi-cosmic-core/testing";
 import { stripAnsi } from "pi-cosmic-core";
 import { beforeEach, test } from "vitest";
 import {
@@ -16,7 +15,7 @@ const name = "mcp__team_docs__find_page";
 const metadata = (path = "builtin:mcp", exposure: ToolInfo["exposure"] = "direct"): ToolInfo => ({
   name,
   description: "Public native tool metadata, no label or execution",
-  parameters: opaqueFixture({ type: "object" }),
+  parameters: { type: "object" },
   namespace: { name: "mcp__team_docs" },
   sourceInfo: { path, source: "builtin", scope: "temporary", origin: "top-level" },
   exposure,
@@ -33,7 +32,6 @@ const settings = (style: "preview" | "compact", background: "off" | "on" | "bord
   applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
 beforeEach(() => applyPresentationSettings({ syntaxHighlighting: false, toolCallTiming: false }));
 
-/** Like Pi's own MCP call: its label, then the arguments as key/value lines. */
 const native: ToolRenderers = {
   renderCall: (args, _theme, context) => {
     const body = new Container();
@@ -76,7 +74,6 @@ for (const style of ["preview", "compact"] as const)
       for (const marker of ["EXACT_ARGUMENT", '"retained"', "COMPLETE_OUTPUT"])
         assert.ok(expanded.includes(marker), marker);
       assert.equal(occurrences(expanded, "EXACT_ARGUMENT"), 1, "arguments appear once");
-      // One shared heading names the confirmed remote tool; the native call adds no second one.
       assert.ok(expanded.includes("find.page"));
       for (const marker of [
         "NATIVE_LABEL",
@@ -170,7 +167,6 @@ test("historical missing-before-connect presentation stays conservative, then fo
 
 test("renderer-only downstream never needs labels, schemas or execution fields", () => {
   const foreign = Object.freeze({ renderCall: () => new Text("FOREIGN_WINNER", 0, 0) });
-  // Public next() exposes renderers only. Poison fields ensure no accidental definition inspection.
   const downstream = Object.defineProperties(
     { ...foreign },
     {

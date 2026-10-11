@@ -3,8 +3,8 @@ import { decodeSubagentConfig } from "../src/config/schema.ts";
 import { resolveTestConfig as resolve } from "./fixtures/profile-settings-inspection.ts";
 
 describe("writer workspace configuration", () => {
-  it.each([4, 5, 6])("defaults existing version %s documents to shared checkout", (version) => {
-    expect(resolve({ version }).writerWorkspaceMode).toBe("shared-checkout");
+  it("defaults existing documents to shared checkout", () => {
+    expect(resolve({ version: 6 }).writerWorkspaceMode).toBe("shared-checkout");
   });
 
   it("preserves an explicitly saved worktree preference", () => {
@@ -31,8 +31,8 @@ describe("writer workspace configuration", () => {
 });
 
 describe("feature switch configuration", () => {
-  it.each([4, 5, 6])("leaves ultracode off for version %s documents by default", (version) => {
-    expect(resolve({ version })).toMatchObject({
+  it("leaves ultracode off by default", () => {
+    expect(resolve({ version: 6 })).toMatchObject({
       ultracode: false,
       featureSources: { ultracode: "default" },
     });
@@ -59,32 +59,5 @@ describe("feature switch configuration", () => {
       expect(decoded.file.ultracode).toBeUndefined();
       expect(decoded.diagnostics).toContain("config.ultracode");
     }
-  });
-
-  it.each(["automaticProfileRouting", "scriptedWorkflows"])(
-    "ignores all retired v6 %s values without an effective field",
-    (key) => {
-      for (const value of [true, false, null, 0, "off", [], { enabled: "private-value" }]) {
-        const raw = { version: 6, [key]: value };
-        const decoded = decodeSubagentConfig(raw);
-        expect(decoded.diagnostics).toEqual([]);
-        expect(decoded.file).toEqual({ version: 6 });
-        expect(resolve(raw)).toEqual(resolve({ version: 6 }));
-        expect(resolve({ version: 6 }, raw)).toEqual(resolve({ version: 6 }));
-      }
-    },
-  );
-
-  it("never reads the retired routing value", () => {
-    let reads = 0;
-    const raw = {
-      version: 6,
-      get automaticProfileRouting() {
-        reads += 1;
-        throw new Error("The retired value must not be read.");
-      },
-    };
-    expect(decodeSubagentConfig(raw).diagnostics).toEqual([]);
-    expect(reads).toBe(0);
   });
 });

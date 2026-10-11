@@ -1,4 +1,3 @@
-/** Private markers used to carry add/remove kind through full-width diff text. */
 export const DIFF_ADD_MARKER = "\u0000PI_DIFF_ADD\u0000";
 export const DIFF_REMOVE_MARKER = "\u0000PI_DIFF_REMOVE\u0000";
 
@@ -10,18 +9,15 @@ export function diffLineNumberWidth(lines: Array<ParsedDiffLine | null>): number
   return lines.reduce((width, line) => Math.max(width, line?.lineNumber.trim().length ?? 0), 0);
 }
 
-/** A zero width omits the number, for diffs whose numbers are not file positions. */
 export function formatDiffLineNumber(lineNumber: string, width: number): string {
   return width > 0 ? lineNumber.trim().padStart(width, " ") : "";
 }
 
 export function parseDiffLine(line: string): ParsedDiffLine | null {
   if (line.startsWith("+++") || line.startsWith("---")) return null;
-  // Pi's numbered diffs mark skipped context with a blank number column and "...".
   if (/^ {2,}\.\.\.$/u.test(line)) return null;
   const kind = line[0];
   if (kind !== "+" && kind !== "-" && kind !== " ") return null;
-  // Rows are already split on "\n"; a lone CR, U+2028 or U+2029 is content (dotAll).
   const [, lineNumber = "", content = line.slice(1)] = /^.(\s*\d+)\s(.*)$/su.exec(line) ?? [];
   return { kind, lineNumber, content };
 }
@@ -34,7 +30,6 @@ export function isRemovedDiffLine(line: ParsedDiffLine | null): line is RemovedD
   return line?.kind === "-";
 }
 
-/** Maximal `[start, end)` runs of consecutive parsed lines that share a defined key. */
 export function* diffLineRuns(
   lines: readonly (ParsedDiffLine | null)[],
   key: (line: ParsedDiffLine) => string | undefined,
@@ -52,6 +47,5 @@ export function* diffLineRuns(
   }
 }
 
-/** Maximal runs of added and removed rows; word emphasis pairs lines only within one run. */
 export const changedDiffBlocks = (lines: readonly (ParsedDiffLine | null)[]) =>
   diffLineRuns(lines, (line) => (line.kind === " " ? undefined : "changed"));

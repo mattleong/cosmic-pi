@@ -40,7 +40,6 @@ const checkPreimage = (root: string, name: string, expected: SnapshotEntry | und
       );
   });
 
-/** Caller holds every prepared source writer lease through helper cleanup. */
 export const publishWorkspace = (
   registry: string,
   record: WorkspaceRecord,
@@ -120,8 +119,6 @@ export const publishWorkspace = (
         };
       }),
     );
-    // Predetermined names and pinned/fsynced before/after Git blobs precede all source
-    // mutation. Interrupted helper calls retain this journal and never auto-retry.
     let journal: WorkspaceRecord = {
       ...record,
       status: "integrating",

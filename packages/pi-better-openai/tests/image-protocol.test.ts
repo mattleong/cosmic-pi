@@ -25,7 +25,6 @@ describe("OpenAI image protocol", () => {
       const result = yield* parseImageSse(
         body(
           dataEvent({ type: "response.in_progress", sequence_number: 1 }) +
-            // Reasoning models complete a reasoning item before the image call.
             dataEvent({
               type: "response.output_item.done",
               item: { type: "reasoning", id: "rs_1", summary: [] },

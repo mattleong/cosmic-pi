@@ -1,4 +1,3 @@
-// Actual Pi agent loop and native QuickJS over the real owned service with a fake child process.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -25,7 +24,6 @@ const decodeMarker = Schema.decodeUnknownSync(
     ]),
   ),
 );
-/** Every marker the script printed, in output order; other output is ignored. */
 const markers = (text: string) =>
   text
     .split("\n")
@@ -34,7 +32,6 @@ const markers = (text: string) =>
 const print = (expression: string) =>
   `text(${JSON.stringify(MARKER)} + JSON.stringify(${expression}));`;
 
-// Live time is intentional: the test drives the actual native QuickJS worker, not an LLM.
 describe("native scripted report recovery", () => {
   it.live(
     "reads back a report printed before a failed nested call without another notification",
@@ -75,7 +72,6 @@ describe("native scripted report recovery", () => {
             report: { status: "delivered", text: "Report printed before the failure" },
           },
         ]);
-        // The nested call reached the service with valid arguments and failed on the missing ID.
         expect(awaitFailures).toEqual([
           expect.objectContaining({
             _tag: "InvalidSubagentRequestError",
@@ -97,8 +93,6 @@ describe("native scripted report recovery", () => {
             ordinary: { status: "already_delivered" },
           },
         ]);
-        // An unclaimed control completion drains through the same outbox. Its batch collects
-        // every eligible report, so a stale one for the recovered run could not arrive later.
         const control = yield* service.start(request({ task: "Confirm outbox delivery" }));
         fixture.fake.controls[1]!.settle("Control report");
         yield* Deferred.await(completionNotified);

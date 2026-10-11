@@ -1,4 +1,3 @@
-// The child-only Pi/Node bridge is intentionally Promise- and callback-shaped.
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
@@ -179,7 +178,6 @@ export function registerSubagentChildBridge(
   const onControl = (input: ChildSessionInput, message: LocalPiParentControl): void => {
     if (!isSessionCurrent(input)) return;
     if (message.type === "proxy_response") {
-      // The root finished this request, whatever the outcome; teardown has nothing to cancel.
       input.questionnaires.delete(message.requestId);
       const result = message.ok ? decodeSubagentProxyResult(message.payloadJson) : undefined;
       pendingProxy.settle(
@@ -230,7 +228,6 @@ export function registerSubagentChildBridge(
     }
     if (message.type === "peer_notice")
       invokeBestEffort(() =>
-        // Do not steer the active child; that can repeat its final response.
         pi.sendMessage(
           {
             customType: "pi-subagents-peer-notice",
@@ -347,7 +344,6 @@ export function registerSubagentChildBridge(
                 if (!isActivationCurrent(input, token)) throw unavailable();
                 return { content: [{ type: "text" as const, text }], details: {} };
               },
-              // Progress and warnings keep their own rejection.
               question
                 ? (error) => {
                     if (signal?.aborted) throw new Error("Parent question was cancelled.");
@@ -468,7 +464,6 @@ export function registerSubagentChildBridge(
     deactivate(currentSession);
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") return slot.shutdown();
-    // Questionnaire discovery fails closed without a stable session.
     const sessionId = invokeHostCallback(() => ctx.sessionManager.getSessionId(), undefined);
     const input: ChildSessionInput = {
       sessionId,
@@ -484,7 +479,6 @@ export function registerSubagentChildBridge(
         : undefined;
     const contract = results.load();
     if (!contract) return start();
-    // An unreadable contract still starts the session; the parent then fails the missing result.
     return Promise.resolve(contract).then(
       (document) => {
         input.result = document;

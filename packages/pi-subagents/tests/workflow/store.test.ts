@@ -38,7 +38,6 @@ const fixture = Effect.gen(function* () {
 
 type Fixture = Effect.Success<typeof fixture>;
 
-/** Runs a generator body, as `Effect.gen` would, with a fresh fixture on the real file system. */
 const onDisk = <Eff extends Effect.Effect<unknown, unknown, unknown>, A>(
   body: (setup: Fixture, fs: FileSystem.FileSystem) => Generator<Eff, A, never>,
 ) =>
@@ -140,7 +139,6 @@ describe("saved workflows", () => {
       yield* setup.write(setup.join(real, "draft.js"), script("drafted"));
       yield* setup.write(setup.join(setup.root, "outside.js"), script("outside"));
       yield* fs.symlink(setup.join(setup.root, "outside.js"), setup.join(real, "leaf.js"));
-      // Like macOS's /tmp, a directory on the way to the script is a symlink.
       const linked = setup.join(setup.root, "linked");
       yield* fs.symlink(real, linked);
       const loaded = yield* withStore(setup, (store) =>
@@ -207,7 +205,6 @@ describe("workflow run files", () => {
       expect(again._tag).toBe("WorkflowRunFileError");
       expect(yield* fs.readFileString(files.script)).toBe(source);
 
-      // The saved copy is what the main agent edits and starts again.
       const loaded = yield* withStore(setup, (store) => store.loadPath(files.script));
       expect(loaded.script.meta.name).toBe("iterate");
     }),
@@ -241,7 +238,6 @@ describe("workflow run files", () => {
       expect(read?.text.trim()).toBe('{"state":"completed"}');
       expect(read?.files.record).toBe(setup.join(runsOf(setup), "wf-r-1", "run.json"));
       expect(yield* permissions(read?.files.record ?? "")).toBe(0o600);
-      // No temporary file is left beside the record.
       expect((yield* fs.readDirectory(read?.files.directory ?? "")).toSorted()).toEqual([
         "run.json",
         "script.js",
@@ -252,7 +248,6 @@ describe("workflow run files", () => {
   it.effect("reads saved workflows and run files through a symlinked agent directory", () =>
     onDisk(function* (setup, fs) {
       yield* setup.write(setup.join(setup.userWorkflows, "review.js"), script("review"));
-      // A dotfile manager links the agent directory from elsewhere.
       const linked = setup.join(setup.root, "linked-agent");
       yield* fs.symlink(setup.agentDirectory, linked);
       const sessionKey = "session-linked";
@@ -337,7 +332,6 @@ describe("workflow run files", () => {
           const none = yield* store.readRunJournal(files, 1_024);
           yield* store.appendRunJournal(files, '{"callId":1}');
           yield* store.appendRunJournal(files, '{"callId":2}');
-          // A line still being written has no newline yet.
           yield* fs.writeFileString(files.journal, '{"call', { flag: "a" });
           return [
             none,
@@ -365,7 +359,6 @@ describe("workflow run files", () => {
     }),
   );
 
-  /** Run directories `wf-<prefix>-1..count`, each last written at its time in seconds. */
   const runDirectories = (
     setup: Fixture,
     prefix: string,
@@ -377,7 +370,6 @@ describe("workflow run files", () => {
       for (let ordinal = 1; ordinal <= count; ordinal++) {
         const directory = setup.join(runsOf(setup), `wf-${prefix}-${ordinal}`);
         yield* fs.makeDirectory(directory, { recursive: true });
-        // Node reads numeric times as seconds since the epoch.
         yield* fs.utimes(directory, writtenAt(ordinal), writtenAt(ordinal));
       }
     });
@@ -387,7 +379,6 @@ describe("workflow run files", () => {
       (name) => !left.has(name),
     );
 
-  // A day old and more: outside the window in which another Pi process may still run them.
   const OLD = 1_767_225_600;
   const nowSeconds = Clock.currentTimeMillis.pipe(
     Effect.map((millis) => Math.floor(millis / 1_000)),
@@ -419,7 +410,6 @@ describe("workflow run files", () => {
   it.live("never prunes a run directory written in the last day, whichever process runs it", () =>
     onDisk(function* (setup, fs) {
       const recent = (yield* nowSeconds) - 60 * 60;
-      // Other processes' runs, none live here, all written within the last hour.
       yield* runDirectories(setup, "a", 70, (ordinal) => recent + ordinal);
       yield* runDirectories(setup, "c", 3, (ordinal) => OLD + ordinal);
       yield* withStore(setup, (store) => store.createRunFiles("wf-b-1", source, new Set()));
@@ -436,10 +426,8 @@ describe("workflow run files", () => {
         Effect.gen(function* () {
           const files = yield* store.createRunFiles("wf-d-1", source, new Set());
           yield* store.appendRunJournal(files, '{"callId":1}');
-          // Quiet for a long time, then another line.
           yield* fs.utimes(files.directory, OLD, OLD);
           yield* store.appendRunJournal(files, '{"callId":2}');
-          // Another process starts a run: wf-d-1 isn't live there, and it is the oldest by far.
           yield* store.createRunFiles("wf-e-1", source, new Set());
         }),
       );
@@ -457,11 +445,9 @@ describe("workflow run files", () => {
             yield* store.writeRunRecord(files, `{"ordinal":${ordinal + 1}}`);
             yield* fs.utimes(files.directory, writtenAt, writtenAt);
           }
-          // A directory without a record is skipped.
           yield* store.createRunFiles("wf-l-4", source, new Set());
           return {
             all: yield* store.listRunRecords(3, () => true),
-            // The limit counts only the records kept, however many newer ones are left out.
             kept: yield* store.listRunRecords(1, (file) => file.runId !== "wf-l-1"),
           };
         }),

@@ -32,7 +32,6 @@ export function secretIssues(
 
 export function bashCommandIssues(command: string, enabled: boolean): CompactIssue[] {
   if (!enabled) return [];
-  // Do not partially scan a command and imply its unscanned middle is safe.
   if (command.length > 16 * 1024)
     return [
       {
@@ -61,7 +60,6 @@ export function readIssues<Details>(
 ): CompactIssue[] | undefined {
   const truncation = getObjectValue(details, "truncation");
   if (getObjectValue(truncation, "firstLineExceedsLimit") === true) {
-    // This successful read contains only the host's bash recovery instruction.
     return output
       ? [
           {
@@ -84,8 +82,6 @@ export function readIssues<Details>(
       truncated &&
       getObjectValue(truncation, "truncatedBy") === "lines" &&
       /^Showing lines \d+-\d+ of \d+\. Use offset=\d+ to continue\.$/u.test(notice);
-    // Byte pagination is safe only when the host confirms complete returned lines.
-    // Do not classify arbitrary parenthetical recovery text as a size-limit footer.
     const bytePage =
       truncated &&
       getObjectValue(truncation, "truncatedBy") === "bytes" &&
@@ -107,7 +103,6 @@ export function readIssues<Details>(
     }
     return [{ ...READ_TRUNCATED, detail: escapeControlChars(notice) }];
   }
-  // An unrecognized continuation stays in the expanded output; the truncation itself is a warning.
   return truncated ? [READ_TRUNCATED] : [];
 }
 
@@ -142,7 +137,6 @@ export function outputLimitProjection<Details>(
   }
   const field = LIMIT_FIELDS[tool];
   const limit = getObjectValue(details, field);
-  // A reached cap says nothing about the total or how many survived byte truncation.
   if (Predicate.isNumber(limit) && Number.isSafeInteger(limit) && limit > 0)
     counters.push(`limit reached: ${limit}`);
   if (tool === "grep" && getObjectValue(details, "linesTruncated") === true)
@@ -160,8 +154,6 @@ export function writeDiffProjection<Before>(
   content: string,
   policy: Omit<BuiltinCompactPolicy, "bashWarnings">,
 ) {
-  // Validate the owned skipped-snapshot shape before using its size evidence.
-  // Do not classify prose reasons or let large new content mask missing history.
   const skipReason = getWriteDiffSkipReason(before, "", policy.maxWriteDiffBytes);
   if (skipReason !== undefined) {
     if (hasWriteDiffSizeEvidence(before))
@@ -169,7 +161,6 @@ export function writeDiffProjection<Before>(
         issues: secretIssues([skipReason], policy.secretWarnings, policy.secretScanChars),
         metadata: ["diff skipped: size"],
       };
-    // Diff availability concerns the preview, not the write, so it is informational.
     const skipped = {
       severity: "info",
       code: "write-diff-skipped",

@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vitest";
-import { type HerdrPane, type HerdrStartSideSessionInput } from "../src/boundary/herdr-client.ts";
+import { type HerdrPane } from "../src/boundary/herdr-client.ts";
 import {
   HERDR_BTW_LINK_ENTRY_TYPE,
   restoreHerdrBtwLink,
@@ -248,9 +248,7 @@ describe("herdr-btw reuse workflow", () => {
       const test = fixture({ initialLinks: [LINK], startedSession: CHILD_FILE });
       const result = yield* withReadiness(test.open("resume work"));
       expect(result).toMatchObject({ mode: "resumed", paneId: "w1:p2" });
-      expect(
-        operationInputs<HerdrStartSideSessionInput>(test.calls, "start side-session Pi")[0],
-      ).toEqual({
+      expect(operationInputs(test.calls, "start side-session Pi")[0]).toEqual({
         agentName: result.agentName,
         paneId: "w1:p2",
         childSessionId: CHILD_ID,
@@ -348,9 +346,7 @@ describe("herdr-btw reuse workflow", () => {
       const result = yield* withReadiness(test.openNew("fresh BTW session"));
       expect(result.mode).toBe("created");
       expect(operationNames(test.calls)).not.toContain("inspect live agents");
-      expect(
-        operationInputs<HerdrStartSideSessionInput>(test.calls, "start side-session Pi")[0],
-      ).toMatchObject({
+      expect(operationInputs(test.calls, "start side-session Pi")[0]).toMatchObject({
         childSessionId: NEW_CHILD_ID,
         childSessionPath: NEW_CHILD_FILE,
         parentSessionPath: SESSION_FILE,

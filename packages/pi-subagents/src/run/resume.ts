@@ -57,8 +57,6 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
     return invalidRequest("resume_state_invalid", `Subagent ${id} cannot resume while ${state}.`);
   if (record.stoppedByParent)
     return invalidRequest("resume_cancelled", `Subagent ${id} was stopped and cannot resume.`);
-  // A paused owned run continues its owned generation; resuming a completed one would
-  // start a generation that only the root receives.
   const ownedFailure =
     state === "completed" ? workflowOwnedRunError(record, "resume after completing") : undefined;
   if (ownedFailure) return ownedFailure;
@@ -86,12 +84,6 @@ export interface RunResumeDependencies extends RunContext {
   readonly workspaces: Pick<RunWorkspaceControl, "invalidateForResume" | "heldLaunchSlots">;
 }
 
-/**
- * Owns paused/completed-run resumption: cleanup waiting, assignment epoch
- * rollover, replacement backend/lease scopes, completion backlog and writer
- * admission guards, respawn/initialization uncertainty, and uninterruptible
- * ownership of the resume commit.
- */
 export function makeRunResume(dependencies: RunResumeDependencies) {
   const {
     ownerScope,
@@ -111,7 +103,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
     sendPeerNotices,
   } = dependencies;
 
-  /** Waits at most 10 seconds for the run's pending cleanup to be confirmed. */
   const waitForRunCleanup = (id: string) =>
     withLock(
       Effect.gen(function* () {
@@ -149,7 +140,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
       }),
     );
 
-  /** Settles what the run reported while its resume initialization still owned it. */
   const settlePendingInitialization = (
     record: RunRecord,
     pending: PendingInitializationSettlement,
@@ -158,7 +148,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
       ? settlement.failRun(record, pending.error ?? "Subagent failed while resuming.")
       : settlement.settle(record, pending.state, pending.error);
 
-  /** Session-owned commit of a claimed resume: respawns when needed, then issues the prompt. */
   const commitResume = (
     id: string,
     claimed: ClaimedResume,
@@ -296,8 +285,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
       ),
       Effect.flatMap((candidate) =>
         Effect.gen(function* () {
-          // No ownership has changed. Filesystem validation must not hold the service
-          // lock or the claim mask while waiting on a noncooperative filesystem.
           const currentCwd = candidate.validateCwd
             ? yield* canonicalizeWriterCwd(writerLeases, candidate.cwd)
             : undefined;
@@ -346,7 +333,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                   "backend_resume_unavailable",
                   `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
                 );
-              // A workflow agent has its workflow's own concurrency instead of a direct-child slot.
               if (workflowOwned(selected)) return;
               const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
               const capacityFailure = processCapacityError(
@@ -358,7 +344,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
               );
               if (capacityFailure) return yield* capacityFailure;
             });
-          /** Every resume admission check, run under the lock at the claim. */
           const admitLocked = Effect.gen(function* () {
             const selected = yield* requireRecord(id);
             if (!isCurrentCandidate(selected))
@@ -378,9 +363,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
           const prompt = message?.trim()
             ? yield* validateParentMessage(message, "Resume message is required.")
             : "Continue the assigned task from the current session state.";
-          // One locked claim checks everything, including the writer's workspace, before the
-          // assignment rolls over. The workspace changes only as the claim commits, so a refused
-          // resume keeps its reviewed revision and preparation.
           return yield* runSessionOwned(
             ownerScope,
             Effect.gen(function* () {
@@ -419,7 +401,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
     );
 
   return {
-    /** Bounded cleanup wait plus uninterruptible epoch-rollover resume coordinator. */
     resume,
   };
 }

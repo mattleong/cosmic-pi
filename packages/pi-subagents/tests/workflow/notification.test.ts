@@ -1,6 +1,6 @@
 import { applyPresentationSettings, captureRegistrations } from "pi-code-previews/testing";
 import { formatCost, formatTokens } from "pi-cosmic-core";
-import { plainTheme } from "pi-cosmic-core/testing";
+import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerSubagentMessageRenderers } from "../../src/application/messages.ts";
 import {
@@ -22,10 +22,8 @@ import {
 } from "../../src/workflow/notification.ts";
 import { clipWorkflowText } from "../../src/workflow/run-text.ts";
 import { withWorkflowEvent } from "../../src/workflow/state.ts";
-import { extensionApiFixture } from "../fixtures/pi-host.ts";
 import { workflowRunView } from "../fixtures/run-view.ts";
 
-/** A run started from an inline script whose copy was never saved, so it has no file to restart. */
 const inlineOrigin = { source: { kind: "inline" } } as const;
 
 const finishedRun = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView =>
@@ -54,7 +52,6 @@ const finishedRun = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView =>
     ...patch,
   });
 
-/** A run an earlier activation left unfinished, as its notice describes it. */
 const interrupted = (patch: Partial<WorkflowInterruptedRun> = {}) =>
   interruptedWorkflowNotification({
     runId: "wf-a-3",
@@ -65,7 +62,6 @@ const interrupted = (patch: Partial<WorkflowInterruptedRun> = {}) =>
     ...patch,
   });
 
-/** Sends notifications through the real host notifier; returns what reached Pi. */
 const sent = (...notifications: ReadonlyArray<SubagentWorkflowNotification>) => {
   const sendMessage = vi.fn();
   const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
@@ -162,7 +158,6 @@ describe("workflow notification", () => {
   });
 
   it("fits a result whose redaction would push the notification past the host's clip", () => {
-    // Each short secret-like value grows when the host redacts it.
     const text = `${Array.from({ length: 1_300 }, (_, index) => `item ${index} token=1`).join("\n")}\nEND`;
     const run = finishedRun({ result: undefined });
     expect(text.length).toBeLessThan(workflowResultBudget(run));
@@ -172,15 +167,12 @@ describe("workflow notification", () => {
       ...run,
       result: { ...fitted, path: "/tmp/full-result.txt" },
     })!;
-    // The host delivers the content whole, so the saved file's path and the tail survive.
     expect(sent(notification).calls[0]![0].content).toBe(notification.content);
     expect(notification.content).toContain("/tmp/full-result.txt");
     expect(notification.content.endsWith("END")).toBe(true);
   });
 
   it("keeps as much of a result as fits when redaction more than doubles it", () => {
-    // `token=1` redacts to more than twice its length, so the clip window must shrink by more
-    // than half, yet a large share of the room is still left for the result.
     const text = `${Array.from({ length: 6_000 }, (_, index) => `token=${index % 10}`).join("\n")}\nEND`;
     const run = finishedRun({ result: undefined });
     const fitted = fitWorkflowResult(run, text);
@@ -195,7 +187,6 @@ describe("workflow notification", () => {
   });
 
   it("keeps a failed run's notification within its bound however long its error is", () => {
-    // Every short secret-like value grows when redacted, so bounds apply to redacted text.
     const dense = "token=1 ".repeat(20_000);
     const notification = workflowNotification(
       finishedRun({

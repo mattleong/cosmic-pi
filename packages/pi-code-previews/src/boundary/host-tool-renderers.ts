@@ -6,7 +6,6 @@ export interface PreviewHostTools {
   readonly previewSource: SourceInfo | undefined;
 }
 
-/** Public metadata only. Startup deliberately lets discovery failures reach lifecycle handling. */
 export function capturePreviewHostTools(
   pi: ExtensionAPI,
   anchorCommand = "code-previews",
@@ -17,7 +16,6 @@ export function capturePreviewHostTools(
     if (tools.has(tool.name)) repeated.add(tool.name);
     tools.set(tool.name, tool);
   }
-  // A name listed twice proves no single owner, so it reads as unknown.
   for (const name of repeated) tools.delete(name);
   const commands = pi.getCommands();
   const managers = commands.filter((command) => command.name === "mcp");

@@ -26,7 +26,6 @@ import type { WorkflowRunObserver } from "./workflow/run-observer.ts";
 import { WorkflowService } from "./workflow/service.ts";
 import { WorkflowStore } from "./workflow/store.ts";
 
-/** One memoized registry owns the three local drivers and their shared boundary services. */
 const subagentBackendRegistryLayer = Layer.effect(
   SubagentBackendRegistry,
   Effect.gen(function* () {
@@ -42,17 +41,10 @@ const subagentBackendRegistryLayer = Layer.effect(
 );
 
 export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
-  /**
-   * Pi session whose resume memory survives /reload and /tree, whose workflow run records let a
-   * restarted Pi resume and announce its runs, and which owns its writer workspaces; absent keeps
-   * them local to the activation.
-   */
   readonly sessionKey?: string | undefined;
-  /** Read live before loading project workflows. */
   readonly isProjectTrusted: () => boolean;
   readonly publish: (projection: SubagentProjection) => void;
   readonly workflowActivity: WorkflowActivitySink;
-  /** Follows which workflow runs still need the main agent, which keeps workflows available. */
   readonly workflowObserver: WorkflowRunObserver;
   readonly notify: SubagentNotifier;
   readonly proxyHandler: NonNullable<SubagentServiceOptions["proxyHandler"]>;
@@ -60,7 +52,6 @@ export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
 }
 
 export const makeSubagentLayer = (options: SubagentLayerOptions) => {
-  // The store remains the single persistence door and is exposed for the human settings command.
   const configStore = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
   const profiles = subagentProfileServiceLayer(options).pipe(Layer.provide(configStore));
   const directory = { agentDirectory: options.agentDirectory };
@@ -74,7 +65,6 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   const workspaces = WorkspaceService.layer(directory);
   const service = Layer.unwrap(
     Effect.gen(function* () {
-      // Read the persisted mode separately from profile handoffs, which preserve an older route baseline.
       const store = yield* SubagentConfigStore;
       const inspection = yield* store.inspect(
         options.cwd,
@@ -97,7 +87,6 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
     agentDirectory: options.agentDirectory,
     isProjectTrusted: options.isProjectTrusted,
   }).pipe(Layer.provide(SafeFile.layer), Layer.provide(nodeFilePlatformLayer));
-  // Built on the subagent service, so its runs are interrupted before that service stops.
   const workflows = WorkflowService.layer({
     activity: options.workflowActivity,
     observer: options.workflowObserver,
@@ -109,7 +98,6 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
     ),
     Layer.provide(nodeFilePlatformLayer),
   );
-  // Layer memoization shares both persistence and the backend registry with host preflight/service use.
   return Layer.mergeAll(
     workflows,
     workflowStore,

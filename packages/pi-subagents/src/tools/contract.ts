@@ -1,9 +1,3 @@
-/**
- * Pure projections from domain observations and outcomes to version-1 orchestration contracts.
- * Inputs are run views, receipts, recovery facts, and typed failures, never persisted details or
- * formatted text. Every field is picked explicitly, so task, cwd, session, process, and event
- * data cannot reach a contract, and free-form metadata passes the core redaction helpers.
- */
 import {
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
@@ -44,7 +38,7 @@ import {
   type SubagentStartContract,
   type SubagentStatusContract,
 } from "./contract-schema.ts";
-import { nonNegativeInteger } from "./details.ts";
+import { nonNegativeInteger } from "./details-projection.ts";
 import { MAX_FAILURE_CODE_CHARS } from "./details-schema.ts";
 import type { SubagentActionFailure, SubagentStartFailure, SubagentStartOutcome } from "./model.ts";
 import { actionFailureDisposition } from "./outcome.ts";
@@ -56,7 +50,6 @@ export const envelope = <Tool extends SubagentContractTool>(tool: Tool) =>
 const batchOutcome = <Success extends string>(succeeded: number, total: number, success: Success) =>
   succeeded === 0 ? ("failed" as const) : succeeded === total ? success : ("partial" as const);
 
-/** Redacted, single-line, bounded metadata; blank or control-only text is absent. */
 export const metadata = (value: string | undefined, maximum: number): string | undefined => {
   const line = value === undefined ? "" : sanitizeTerminalLine(value);
   return line ? sanitizeDiagnosticError(line, { maximumLength: maximum }) : undefined;
@@ -102,7 +95,6 @@ const projectWarnings = (run: SubagentRunView): ContractRunTarget["warnings"] =>
   const system = metadata(run.systemWarning, MAX_CONTRACT_MESSAGE_CHARS);
   if (warning !== undefined)
     warnings.push({ ...(run.warningSource && { source: run.warningSource }), message: warning });
-  // Source identity, not prose, decides whether the system slot repeats the current warning.
   const repeatsCurrent = run.warningSource === "system" && run.systemWarning === run.warning;
   if (system !== undefined && !repeatsCurrent) warnings.push({ source: "system", message: system });
   return warnings;
@@ -118,7 +110,6 @@ const WITHHELD_REPORT_STATUS = {
   ContractWithheldReport["status"]
 >;
 
-/** Every report fact that carries no text; used wherever this call does not deliver one. */
 const withheldReport = (run: SubagentRunView): ContractWithheldReport => ({
   status: !isAssignmentFinishedRunState(run.state)
     ? "not_finished"
@@ -132,11 +123,6 @@ const reportText = (value: string | undefined): string | undefined => {
   return cleaned.trim() && cleaned.length <= MAX_CONTRACT_REPORT_CHARS ? cleaned : undefined;
 };
 
-/**
- * Text only for this call's owned receipt whose complete report was rendered (`delivered`, the
- * same receipts the caller consumes) or a parent-requested delivered read-back (`read_back`,
- * which carries no receipt). Everything else is an explicit withheld disposition.
- */
 const observedReport = (
   { run, completionReceipt }: SubagentRunObservation,
   fullyRenderedIds: ReadonlySet<string>,
@@ -178,7 +164,6 @@ const targetFields = (
   };
 };
 
-/** Report-free target facts for discovery and management receipts. */
 export const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
   ...targetFields(run),
   report: withheldReport(run),
@@ -192,7 +177,6 @@ const observedTarget = (
   report: observedReport(observation, fullyRenderedIds),
 });
 
-/** Settled, never confirmed: a missing outcome cannot prove that nothing was admitted. */
 const UNOBSERVED_LAUNCH: SubagentStartFailure = {
   index: -1,
   code: "launch_outcome_uncertain",
@@ -233,7 +217,6 @@ const projectLaunch = (
   };
 };
 
-/** Request-ordered launch receipts from the raw batch outcomes. */
 export const startContract = (
   specs: ReadonlyArray<SubagentStartSpec>,
   outcomes: ReadonlyArray<SubagentStartOutcome>,
@@ -249,9 +232,7 @@ export const startContract = (
 };
 
 export interface AwaitContractInput {
-  /** Requested-target observations in request order; descendant context never belongs here. */
   readonly observations: ReadonlyArray<SubagentRunObservation>;
-  /** Runs whose complete report reached the result; only their owned receipts are consumed. */
   readonly fullyRenderedIds: ReadonlySet<string>;
   readonly until: SubagentAwaitUntil;
   readonly requestedRunIds: ReadonlyArray<string>;
@@ -271,17 +252,13 @@ export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract 
 };
 
 export interface CancelledAwaitContractInput {
-  /** The latest observation, possibly empty. Report text is never projected from it. */
   readonly runs: ReadonlyArray<SubagentRunView>;
   readonly requestedRunIds: ReadonlyArray<string>;
   readonly until: SubagentAwaitUntil;
-  /** Whether completion-claim cleanup was confirmed before this receipt was produced. */
   readonly cleanup: "confirmed" | "unconfirmed";
-  /** Consumption may have committed before a late abort; do not assert these remain deferred. */
   readonly deliveryAttemptedIds?: ReadonlySet<string>;
 }
 
-/** Only the local wait ended: no report is delivered, claimed, or consumed by this receipt. */
 export const cancelledAwaitContract = (
   input: CancelledAwaitContractInput,
 ): SubagentAwaitContract => {
@@ -302,7 +279,6 @@ export const cancelledAwaitContract = (
 
 export interface StatusContractInput {
   readonly observations: ReadonlyArray<SubagentRunObservation>;
-  /** Runs whose complete report reached the result; only their owned receipts are consumed. */
   readonly fullyRenderedIds: ReadonlySet<string>;
   readonly missingRunIds: ReadonlyArray<string>;
 }
@@ -315,15 +291,10 @@ export const statusContract = (input: StatusContractInput): SubagentStatusContra
   missingRunIds: [...input.missingRunIds],
 });
 
-/** One request-ordered lifecycle target: the returned run view or its typed failure. */
 export type LifecycleContractOutcome =
   | { readonly runId: string; readonly run: SubagentRunView }
   | { readonly runId: string; readonly failure: SubagentActionFailure };
 
-/**
- * `requestedRunId` is always the caller's target. For retry, the successor's own `runId` and its
- * `predecessorRunId` stay separate from it. Lifecycle receipts never carry report text.
- */
 export const lifecycleContract = (
   action: ContractLifecycleAction,
   outcomes: ReadonlyArray<LifecycleContractOutcome>,

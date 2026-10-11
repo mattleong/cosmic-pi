@@ -10,17 +10,11 @@ type CompactHeading = Pick<
   "subject" | "compactSubject" | "action" | "showTiming" | "showShortTiming"
 >;
 
-/**
- * Shared display policy only. Domain outcome classification stays with the producer.
- * Without a usable summary, the heading comes from the arguments and the row states only
- * what Pi reported: an error explains itself with its first line; anything else is unconfirmed.
- */
 export function planCompactPresentation(input: {
   summary: CompactSummary | undefined;
   phase: CompactPhase;
   isError: boolean;
   errorText?: string;
-  /** Expanded views already show the details, so they get no "details on expand" hint. */
   expanded?: boolean;
   heading?: CompactHeading | undefined;
 }) {

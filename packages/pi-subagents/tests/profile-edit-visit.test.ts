@@ -49,10 +49,7 @@ const withSession = (
     },
     base.projectDocument,
   );
-// Test candidates allow missing fields and invalid enum strings before configuration decoding.
-type CandidateFixture = Partial<
-  Record<keyof ProfileCandidate | "fastMode", string | boolean | undefined>
->;
+type CandidateFixture = Partial<Record<keyof ProfileCandidate, string | boolean | undefined>>;
 const doc = (
   route: CandidateFixture | ReadonlyArray<CandidateFixture> | "disabled" | undefined,
   name = "one",
@@ -142,37 +139,6 @@ describe("profile editing visit", () => {
     expect(visit.isEdited(saved(), "worker", after)).toBe(false);
   });
 
-  it.each([4, 5])("clears legacy v%s undo and preserves sibling migration authority", (version) => {
-    const { openaiFastMode: _fast, closeOnReport: _close, ...sparse } = candidate;
-    for (const fastMode of [undefined, false, true]) {
-      const rawCandidate: typeof sparse & { fastMode?: boolean } = { ...sparse };
-      const migratedCandidate: typeof sparse & { openaiFastMode?: boolean } = { ...sparse };
-      if (fastMode !== undefined) rawCandidate.fastMode = fastMode;
-      if (fastMode === true) migratedCandidate.openaiFastMode = true;
-      const raw = [rawCandidate];
-      const migrated = [migratedCandidate];
-      const opening = inspect(json({ version, profiles: { worker: raw } }));
-      const target = saved("default");
-      const visit = new ProfileEditVisit(opening);
-      const seed = { baseline: opening.session.baseline, revision: 0, overrides: {} };
-      const after = inspect(doc("disabled", "default"), seed);
-      expect(save(visit, target, "worker", opening, after, disabled)).toBe(true);
-      expect(visit.isEdited(target, "worker", after)).toBe(true);
-      const undo = visit.undoDraft(target, "worker", after);
-      if (!("draft" in undo)) throw new Error(undo.error);
-      expect(undo.restore).toEqual({ sourceVersion: version, declaration: raw });
-      const restored = inspect(doc(migrated, "default"), seed);
-      expect(save(visit, target, "worker", after, restored, undo.draft)).toBe(true);
-      expect(visit.isEdited(target, "worker", restored)).toBe(false);
-
-      // A different route's save migrates worker without changing its declaration.
-      const siblingVisit = new ProfileEditVisit(opening);
-      siblingVisit.reconcile(restored);
-      expect(save(siblingVisit, target, "worker", restored, after, disabled)).toBe(true);
-      expect(siblingVisit.isEdited(target, "worker", after)).toBe(true);
-    }
-  });
-
   it("keeps Project undo through Global edits while inheriting, but rejects Project drift", () => {
     const opening = inspect(doc(candidate), undefined, doc(candidate));
     const target = saved("one", "project");
@@ -232,7 +198,7 @@ describe("profile editing visit", () => {
     const after = inspect(doc("disabled"));
     save(visit, saved(), "worker", opening, after, disabled);
     const undo = visit.undoDraft(saved(), "worker", after);
-    expect(undo).toMatchObject({ restore: { sourceVersion: 6, declaration: raw } });
+    expect(undo).toMatchObject({ restore: { declaration: raw } });
     if (!("draft" in undo)) throw new Error(undo.error);
     if (Array.isArray(undo.restore?.declaration)) undo.restore.declaration.push("disabled");
     expect(visit.undoDraft(saved(), "worker", after)).toMatchObject({

@@ -200,7 +200,6 @@ for (const style of ["preview", "compact"] as const)
       const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] }, [
         "bash",
       ]);
-      // HTML export resolves renderers for each slot and shares only the row's state.
       const args = { command: "echo exact" };
       const state = {};
       const call = resolver("bash", () => downstream)!.renderCall!(
@@ -375,7 +374,6 @@ it("retired or declined animation admission never borrows a replacement schedule
   assert.equal(ticks, 1);
   assert.equal(cancels, 1);
   assert.equal(replacementAdmissions, 0);
-  // Cancellation remains harmless if the content clears its stored subscription later.
   stop?.();
   assert.equal(cancels, 1);
   second.retire();

@@ -86,7 +86,6 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
 >(value: Value, fallbackMimeType: string, fallbackId: string) {
   const discriminant = yield* Schema.decodeUnknownEffect(EventDiscriminantSchema)(value);
   if (discriminant.type === "response.output_item.done") {
-    // Every output item completes this way; reasoning and message items carry no image.
     const done = yield* Schema.decodeUnknownEffect(OutputItemDoneSchema)(value);
     if (done.item.type !== "image_generation_call") return ignoredEvent;
     const event = yield* Schema.decodeUnknownEffect(CompletedEventSchema)(value);

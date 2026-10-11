@@ -45,10 +45,6 @@ const decodeOwner = <Input>(input: Input) =>
 const ownerKey = (owner: QuestionnaireOwner) =>
   JSON.stringify([owner.runId, owner.assignmentEpoch, owner.requestId]);
 
-/**
- * Publishes the root capability as one exact-owner registry: it owns only cancellation joins,
- * never presentation or FIFO admission, and joins actual root runs, not foreign answer Promises.
- */
 export function registerQuestionnaireCapability(
   options: QuestionnaireCapabilityOptions,
 ): () => void {
@@ -74,8 +70,6 @@ export function registerQuestionnaireCapability(
       if (!current() || calls.has(key) || calls.size >= MAX_PENDING_QUESTIONNAIRES)
         return Promise.reject(unavailable());
       const controller = new AbortController();
-      // Install the receipt before start. Its microtask reads the owned run only
-      // after this synchronous admission has assigned it, never an answer from a foreign host.
       let running: Promise<AskUserOutcome> | undefined;
       const settled = Promise.resolve()
         .then(() => running)
@@ -86,20 +80,19 @@ export function registerQuestionnaireCapability(
       const abort = () => controller.abort();
       const call = { abort, settled };
       const finish = () => {
-        invokeHostCallback(() => signal.removeEventListener("abort", abort), undefined);
         if (calls.get(key) === call) calls.delete(key);
       };
       try {
         if (!signal || signal.aborted) return Promise.reject(unavailable());
+        const linked = AbortSignal.any([signal, controller.signal]);
         calls.set(key, call);
-        signal.addEventListener("abort", abort, { once: true });
-        if (signal.aborted || controller.signal.aborted || !current()) {
+        if (linked.aborted || !current()) {
           finish();
           return Promise.reject(unavailable());
         }
         running = options.run(
           AskUserService.use((service) => service.askOwned(request, owner)),
-          controller.signal,
+          linked,
         );
         return running.then(
           (outcome) => {
@@ -126,7 +119,6 @@ export function registerQuestionnaireCapability(
       return call.settled;
     },
   });
-  // Discovery cannot acquire a call: decoding, `current`, and the best-effort `respond` never throw.
   const unsubscribe = options.events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (input) => {
     const query = queries.normalizeQuery(input);
     if (query && current() && query.sessionId === options.sessionId) query.respond(capability);
@@ -134,7 +126,7 @@ export function registerQuestionnaireCapability(
   return () => {
     if (!live) return;
     live = false;
-    invokeHostCallback(unsubscribe, undefined); // Revocation must not block session teardown.
+    invokeHostCallback(unsubscribe, undefined);
     for (const call of calls.values()) call.abort();
   };
 }

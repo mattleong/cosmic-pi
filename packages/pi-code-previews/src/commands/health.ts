@@ -12,7 +12,6 @@ import {
   isNativeMcpRendererAvailable,
 } from "../tools/status";
 
-/** `/code-previews health`: renderer health and the settings in effect. */
 export const healthSubcommand: ExtensionSubcommand = {
   name: "health",
   description: "Show code preview renderer health and settings",

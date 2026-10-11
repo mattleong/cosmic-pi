@@ -1,6 +1,6 @@
-// Shared questionnaire relay fixtures: one single-choice request and Pi's event bus.
-import { createEventBus } from "@earendil-works/pi-coding-agent";
-import type { AskUserRequest } from "pi-ask-user/protocol";
+import { createEventBus, type EventBus } from "@earendil-works/pi-coding-agent";
+import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
+import { QUESTIONNAIRE_CAPABILITY_QUERY, type AskUserRequest } from "pi-ask-user/protocol";
 
 export const pickQuestionnaire: AskUserRequest = {
   questions: [
@@ -17,8 +17,11 @@ export const pickQuestionnaire: AskUserRequest = {
   ],
 };
 
-/** Pi's event bus, whose test handlers read the shape of the query they answer. */
-export const eventBus = (): {
-  readonly on: (name: string, handler: (event: any) => void) => () => void;
-  readonly emit: <Event>(name: string, event: Event) => void;
-} => createEventBus();
+export const eventBus = (): EventBus => createEventBus();
+
+const capabilityQueries = makeSessionCapabilityProtocol({ version: 1 });
+
+export const answerCapabilityQueries = <Capability>(events: EventBus, answer: () => Capability) =>
+  events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (input) =>
+    capabilityQueries.normalizeQuery(input)?.respond(answer()),
+  );

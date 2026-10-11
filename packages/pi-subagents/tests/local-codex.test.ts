@@ -7,10 +7,8 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { makeLocalCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
-import {
-  SupervisorChannelError,
-  type SupervisorChannelHandle,
-} from "../src/boundary/supervisor-channel.ts";
+import type { SupervisorChannelHandle } from "../src/boundary/supervisor-channel.ts";
+import { SupervisorChannelError } from "../src/boundary/supervisor-channel-errors.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 import {
   backendLaunch,
@@ -26,7 +24,6 @@ const report = {
   text: "Done",
 };
 
-/** A Codex backend over a fake app-server, started on its active turn `turn` of `thread`. */
 const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedReport"]) =>
   Effect.gen(function* () {
     const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
@@ -122,7 +119,6 @@ it.effect("Codex keeps a failed report-ownership check distinct from an invalid 
           params: { threadId: "thread", turn: { id: "turn", status: "completed" } },
         },
       });
-      // The run fails closed on the supervisor's cause, not on a misreported protocol frame.
       expect(yield* Queue.take(backend.events)).toMatchObject({
         type: "protocol_error",
         message: expect.stringContaining("Supervisor channel closed."),

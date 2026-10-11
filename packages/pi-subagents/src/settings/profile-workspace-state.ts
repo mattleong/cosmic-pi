@@ -39,14 +39,11 @@ export type WorkspaceMessage = {
 };
 
 export interface ModelPickerOpening {
-  /** Start on the runtime's advertised default instead of the configured model. */
   readonly preferAdvertisedDefault?: boolean | undefined;
   readonly priorNotices?: ReadonlyArray<string> | undefined;
-  /** Claude or Codex route that takes its model from this picker's live catalog. */
   readonly nativeSwitch?: Pick<ProfileCandidate, "host" | "runtime"> | undefined;
 }
 
-/** The fixed-target editor's synchronous state. The dashboard owns its lifetime. */
 export abstract class ProfileWorkspaceState {
   protected inspection: ProfileSettingsInspection;
   protected readonly scope: ProfileSettingsScope;
@@ -159,7 +156,6 @@ export abstract class ProfileWorkspaceState {
     if (moved >= 0) this.candidateIndex = moved;
     this.editVisit.reconcile(inspection);
     this.inspection = inspection;
-    // Hidden editors cannot keep a picker continuation based on a replaced route.
     this.catalogLoad?.abort();
     if (this.catalogLoad) this.busy = false;
     this.catalogLoad = undefined;

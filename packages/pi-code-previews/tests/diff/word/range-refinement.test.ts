@@ -18,13 +18,10 @@ test("token refinement preserves the identity of alignment gaps", () => {
 });
 
 test.each<[before: string, after: string, removed: TextRange[], added: TextRange[]]>([
-  // Similar single-token edits narrow to the changed text.
   ["value1000", "value1001", [[8, 9]], [[8, 9]]],
   ["color", "colour", [], [[4, 5]]],
-  // Text refinement requires shared token edges.
   ["stringify", "bringHome", [[0, 9]], [[0, 9]]],
   ["customerRecord", "mustardResult", [[0, 14]], [[0, 13]]],
-  // Refinements expand to complete extended grapheme clusters.
   ["a\u0301Value", "a\u0302Value", [[0, 2]], [[0, 2]]],
   ["𐐀a", "𐐁a", [[0, 2]], [[0, 2]]],
   ["👨‍👩‍👧‍👦Foo", "👨‍👩‍👧‍👧Foo", [[0, 11]], [[0, 11]]],

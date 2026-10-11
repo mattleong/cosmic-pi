@@ -37,18 +37,13 @@ import {
   workflowWorkspacesSection,
 } from "./run-text.ts";
 
-/** Log lines a notification repeats: every level for failed or stopped runs, warnings otherwise. */
 const NOTIFICATION_LOG_LINES = 12;
-/** Room kept for the saved file's path in a clipped result's header. */
 const RESULT_PATH_RESERVE = 1024;
-/** Fitting stops once the largest clip window that fits is known to within this many characters. */
 const RESULT_FIT_PRECISION = 64;
 
-/** The script's value as the main agent reads it: strings verbatim, anything else as JSON. */
 export const workflowValueText = (value: Schema.Json): string =>
   Predicate.isString(value) ? value : JSON.stringify(value, null, 2);
 
-/** Redacted before it is bounded, so redaction can't lengthen a section past its bound. */
 const boundedText = (text: string, maximum: number): string =>
   clipWorkflowText(sanitizeNotificationContent(text), maximum);
 
@@ -62,7 +57,6 @@ const logSection = (title: string, entries: ReadonlyArray<WorkflowLogEntry>): st
     ? undefined
     : [title, ...entries.slice(-NOTIFICATION_LOG_LINES).map(logLine)].join("\n");
 
-/** Sections in order; a completed run's result comes last, sized to the room left for it. */
 const sections = (run: WorkflowRunView): ReadonlyArray<string | undefined> => {
   const frame = [
     workflowOutcomeHeadline(run),
@@ -79,7 +73,6 @@ const sections = (run: WorkflowRunView): ReadonlyArray<string | undefined> => {
   if (run.state === "completed")
     return [
       ...frame,
-      // Warnings explain null results, such as agents that failed or items that threw.
       workflowWarningsSection(run, NOTIFICATION_LOG_LINES, logLine),
       workflowExtendLine(run),
       run.result ? workflowResultSection(run.result) : "Result: null",
@@ -90,11 +83,9 @@ const sections = (run: WorkflowRunView): ReadonlyArray<string | undefined> => {
       workflowFailureSection(run, boundedText).join("\n\n"),
       logSection("Recent log:", run.logs),
     ];
-  // Someone chose to stop it; nothing suggests running it again.
   return [...frame, logSection("Recent log:", run.logs)];
 };
 
-/** Redacted as the host redacts it, so its length is the length the host clips. */
 const content = (run: WorkflowRunView): string =>
   sanitizeNotificationContent(
     sections(run)
@@ -102,26 +93,15 @@ const content = (run: WorkflowRunView): string =>
       .join("\n\n"),
   );
 
-/** Notification length with `text` as a clipped result, leaving room for the file's path. */
 const clippedLength = (run: WorkflowRunView, text: string): number =>
   content({ ...run, result: { text, clipped: true, path: "" } }).length + RESULT_PATH_RESERVE;
 
-/**
- * Characters a finished run's result may use: what the notification's other sections leave,
- * at most {@link WORKFLOW_RESULT_MAX_CHARS}. A longer result is clipped and saved to a file.
- */
 export const workflowResultBudget = (run: WorkflowRunView): number =>
   Math.max(
     0,
     Math.min(WORKFLOW_RESULT_MAX_CHARS, WORKFLOW_NOTIFICATION_MAX_CHARS - clippedLength(run, "")),
   );
 
-/**
- * A finished run's result text as its notification carries it: verbatim when the redacted
- * notification fits, otherwise clipped to about the largest head and tail that fit with room for
- * the saved file's path. Redaction can lengthen text, so fitting measures the redacted
- * notification, not the raw text.
- */
 export const fitWorkflowResult = (run: WorkflowRunView, text: string): WorkflowResult => {
   if (
     text.length <= WORKFLOW_RESULT_MAX_CHARS &&
@@ -130,7 +110,6 @@ export const fitWorkflowResult = (run: WorkflowRunView, text: string): WorkflowR
     return { text, clipped: false };
   const fits = (maximum: number) =>
     clippedLength(run, clipWorkflowText(text, maximum)) <= WORKFLOW_NOTIFICATION_MAX_CHARS;
-  // Redaction can grow a window by any ratio, so search for the largest window that fits.
   let low = 0;
   let high = workflowResultBudget(run);
   if (fits(high)) return { text: clipWorkflowText(text, high), clipped: true };
@@ -139,14 +118,9 @@ export const fitWorkflowResult = (run: WorkflowRunView, text: string): WorkflowR
     if (fits(middle)) low = middle;
     else high = middle;
   }
-  // When even a small window doesn't fit, only the clip marker is left; the file holds the value.
   return { text: clipWorkflowText(text, low), clipped: true };
 };
 
-/**
- * The single notification a finished run delivers, or undefined while it still runs or when the
- * main agent stopped it: the stop's own result already carries the final state.
- */
 export const workflowNotification = (
   run: WorkflowRunView,
 ): SubagentWorkflowNotification | undefined => {
@@ -162,7 +136,6 @@ export const workflowNotification = (
     durationMs: Math.max(0, (run.endedAt ?? run.startedAt) - run.startedAt),
     usage: {
       totalTokens: run.usage.totalTokens,
-      // A cost some agents didn't report is a lower bound, which the compact row leaves out.
       ...(run.usage.cost !== undefined && run.usage.unpriced === 0 && { cost: run.usage.cost }),
     },
     content: content(run),
@@ -177,13 +150,11 @@ export const workflowNotification = (
   };
 };
 
-/** What cut the run short: `teardown`, as this process remembers it, or Pi's restart. */
 const teardownCause = (run: WorkflowInterruptedRun, teardown: string): string =>
   run.restarted ? "before Pi restarted" : teardown;
 
 const SESSION_TEARDOWN = "the session was reloaded, navigated or replaced";
 
-/** How to start the run again with its finished agents reused. */
 const resumeLine = (run: WorkflowInterruptedRun): string => {
   const restart = workflowRestart(run.origin.source, run.origin.scriptPath);
   const script = restart === undefined ? "" : `, ${restart.argument}`;
@@ -197,7 +168,6 @@ const resumeLine = (run: WorkflowInterruptedRun): string => {
 const interruptedOpening = (run: WorkflowInterruptedRun): ReadonlyArray<string> => {
   const subject = workflowRunSubject(run.name, run.runId);
   const interrupted = teardownCause(run, `when ${SESSION_TEARDOWN}`);
-  // Nothing suggests running again a run someone chose to stop.
   if (run.ended !== undefined) {
     const undelivered = teardownCause(run, `before ${SESSION_TEARDOWN}`);
     const opening = `${subject} ${run.ended}, but its report didn't arrive ${undelivered}.`;
@@ -211,11 +181,6 @@ const interruptedOpening = (run: WorkflowInterruptedRun): ReadonlyArray<string> 
   ];
 };
 
-/**
- * The notice for a run an earlier activation of the session, or an earlier Pi process, left
- * unfinished. Its worktrees belong to that activation, so the notice offers manual recovery, not
- * review.
- */
 export const interruptedWorkflowNotification = (
   run: WorkflowInterruptedRun,
 ): SubagentWorkflowNotification => {

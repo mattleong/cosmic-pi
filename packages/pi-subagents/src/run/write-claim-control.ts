@@ -31,7 +31,6 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
       : Effect.fail(invalid(normalized.code, normalized.message));
   };
 
-  /** Under the lock: the writer, with its cwd, once its claims may change. */
   const claimChangeTarget = (id: string) =>
     Effect.gen(function* () {
       const record = yield* requireRecord(id);
@@ -68,7 +67,6 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
       return { record, cwd };
     });
 
-  /** Normalizes `paths`, commits the claims `next` returns under the lock, then notifies peers. */
   const changeClaims = (
     id: string,
     paths: ReadonlyArray<string>,
@@ -106,7 +104,6 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
             "too_many_write_claims",
             `A writer may claim at most ${MAX_WRITE_CLAIMS} files.`,
           );
-        // The pause a confirmed offender caused on its own pool doesn't block its repair.
         const pools =
           record.view.state === "paused" && record.writerPool?.violationRunIds.has(id)
             ? new Map()

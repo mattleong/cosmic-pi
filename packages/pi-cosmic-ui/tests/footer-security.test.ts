@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   extensionApiFixture,
   extensionContextFixture,
-  opaqueFixture,
+  footerDataFixture,
 } from "pi-cosmic-core/testing";
 import { materializeFooterHostProjection } from "../src/boundary/host-footer-projection.ts";
 import { makeSetStatusSafely } from "../src/boundary/host-status.ts";
@@ -35,11 +35,9 @@ describe("footer terminal safety", () => {
 
   it("sanitizes materialized host status text", () => {
     const pi = extensionApiFixture({ getThinkingLevel: () => "off" });
-    const footerData = opaqueFixture({
+    const footerData = footerDataFixture({
       getExtensionStatuses: () => new Map([["hostile", "\x1b]52;c;Y2xpcA==\x07status\ntext"]]),
-      getGitBranch: () => null,
       getAvailableProviderCount: () => 1,
-      onBranchChange: () => () => undefined,
     });
     const projection = materializeFooterHostProjection({
       pi,

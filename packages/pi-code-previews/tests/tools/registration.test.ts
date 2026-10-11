@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
-import type {
-  ExtensionAPI,
-  SourceInfo,
-  ToolDefinition,
-  ToolInfo,
+import {
+  defineTool,
+  type ExtensionAPI,
+  type SourceInfo,
+  type ToolDefinition,
+  type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
-import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import {
   clearCodePreviewSessionCapability,
@@ -46,7 +47,7 @@ function toolInfo(name: string, sourceInfo: SourceInfo = builtinSource): ToolInf
   return {
     name,
     description: `${name} tool`,
-    parameters: opaqueFixture({}),
+    parameters: {},
     exposure: "direct",
     sourceInfo,
   };
@@ -66,7 +67,6 @@ function piFixture(options: Partial<ExtensionAPI> = {}): ExtensionAPI {
 function enableOnly(...tools: CodePreviewToolName[]): void {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: [...tools] });
 }
-/** The session the resolver publishes, enabling whatever the current settings enable. */
 const presentation = () => ({
   cwd: "/project",
   selfShell: true,
@@ -103,11 +103,13 @@ it.effect.each([
     enableOnly("write");
     const fs = yield* FileSystem.FileSystem;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-native-write-" });
-    const hooks: ToolDefinition<any, any, any>[] = [];
-    registerWritePreviewTool(piFixture({ registerTool: (tool) => hooks.push(tool) }), directory);
+    const hooks: ToolDefinition[] = [];
+    registerWritePreviewTool(
+      piFixture({ registerTool: (tool) => hooks.push(defineTool(tool)) }),
+      directory,
+    );
     const [hook] = hooks;
     assert.ok(hook);
-    // A session that refuses all work proves the hook never takes a snapshot of its own.
     if (session)
       installCodePreviewSessionCapability({
         run: () => Promise.reject(new Error("no preview work expected")),
@@ -121,22 +123,21 @@ it.effect.each([
         { path: "a.txt", content },
         undefined,
         undefined,
-        opaqueFixture({ cwd: directory }),
+        extensionContextFixture({ cwd: directory }),
       ),
     );
     assert.equal(yield* fs.readFileString(`${directory}/a.txt`), "next");
-    // Unobserved prior contents never support a new-file claim.
     assert.equal(result.details, undefined);
   }).pipe(provideBuiltLayer(nodeFilePlatformLayer)),
 );
 
 test.each([false, true])("write registration preserves active selection: %s", (active) => {
   enableOnly("write");
-  const definitions: ToolDefinition<any, any, any>[] = [];
+  const definitions: ToolDefinition[] = [];
   registerWritePreviewTool(
     piFixture({
       getActiveTools: () => (active ? ["write"] : ["read"]),
-      registerTool: (tool) => definitions.push(tool),
+      registerTool: (tool) => definitions.push(defineTool(tool)),
     }),
     "/project",
   );
@@ -219,7 +220,6 @@ test("mutate-then-refresh failure stays owned and retries without reinstalling a
   registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
   assert.equal(mutations, 2);
   assert.deepEqual(installedTools, new Set(["write"]));
-  // Even settled prior ownership cannot authorize a later foreign replacement.
   visible = toolInfo("write", foreignSource);
   registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
   assert.equal(mutations, 2);

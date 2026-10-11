@@ -37,7 +37,6 @@ afterEach(restoreSettings);
 
 type ServiceOverrides = Partial<BackgroundTaskServiceContract>;
 
-// Command, cwd, and pid carry markers that must never reach a contract.
 const task = (overrides: Partial<BackgroundTaskStatus> = {}): BackgroundTaskStatus => ({
   id: "task-1",
   name: "dev server",
@@ -66,7 +65,6 @@ const decodeStrict = Schema.decodeUnknownSync(Schema.toCodecJson(BackgroundTaskC
   onExcessProperty: "error",
 });
 
-/** The strict JSON encoding, which must decode back to the producer's contract unchanged. */
 const encoded = (contract: BackgroundTaskContract) => {
   const json = encodeBackgroundTaskContract(contract);
   expect(json).toBeDefined();
@@ -171,7 +169,6 @@ describe("background_task contract", () => {
         ["stopped", true],
         ["timed_out", true],
       ]);
-      // Finished failures keep the evidence that distinguishes them from success.
       expect(contract.tasks[3]).toMatchObject({ state: "failed", finished: true, exitCode: 1 });
       expect(contract.tasks[4]).not.toHaveProperty("exitCode");
       expect(contract.tasks[5]).toMatchObject({ exitCode: null, signal: "SIGTERM" });
@@ -201,7 +198,6 @@ describe("background_task contract", () => {
       expect(contract.task.cause).toMatch(/^FAIL auth password=/u);
       expect(contract.task.name!.length).toBeLessThanOrEqual(256);
       expect(contract.task.error!.length).toBeLessThanOrEqual(2_048);
-      // Persisted details stay metadata only; the cause reaches them only as a text span.
       expect(serialize(result.details)).not.toContain("FAIL auth");
       expect(result.details).toMatchObject({ causes: [{ id: "task-1" }] });
 
@@ -230,7 +226,6 @@ describe("background_task contract", () => {
       expect(Object.isFrozen(json)).toBe(true);
       expect(Object.isFrozen(nested)).toBe(true);
 
-      // Excess keys and out-of-bounds facts are producer invariant failures, never partial data.
       const withExtraKey = { ...contract, extra: true };
       const withCommand = { ...contract.task, command: "pnpm dev" };
       const invalid: ReadonlyArray<BackgroundTaskContract> = [
@@ -275,7 +270,6 @@ describe("background_task contract", () => {
       });
       encoded(plain.contract);
 
-      // Multi-byte output larger than the payload bound keeps only its newest whole characters.
       const big = `oldest-marker${"é".repeat(MAX_CONTRACT_LOG_OUTPUT_BYTES / 2)}newest-marker`;
       const clipped = yield* logs([event(7, big)]);
       if (clipped.contract.action !== "logs") throw new Error("logs returned the wrong contract");
@@ -284,9 +278,7 @@ describe("background_task contract", () => {
       expect(utf8ByteLength(output)).toBeLessThanOrEqual(MAX_CONTRACT_LOG_OUTPUT_BYTES);
       expect(output.endsWith("newest-marker")).toBe(true);
       expect(output).not.toContain("oldest-marker");
-      // Clipping is payload-only: buffer loss stays zero and the cursor is the latest assigned.
       expect(clipped.contract).toMatchObject({ truncated: true, droppedBytes: 0, nextCursor: 9 });
-      // The model-facing text keeps its own independent, smaller bound.
       expect(utf8ByteLength(clipped.text)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
       expect(clipped.details).toMatchObject({ truncation: { truncated: true } });
 
@@ -335,7 +327,6 @@ describe("registered background_task output", () => {
       expect(result.content).toEqual([{ type: "text", text: direct.text }]);
       expect(result.details).toEqual(direct.details);
       expect(decodeStrict(result.structuredContent)).toEqual(direct.contract);
-      // Pi's generated declaration must independently accept the actual encoded result.
       expect(declared(result.structuredContent)).toBe(true);
     }),
   );
@@ -358,7 +349,6 @@ describe("registered background_task output", () => {
     "keeps the original receipt as an error without structured data on encode failure",
     () =>
       Effect.gen(function* () {
-        // A domain fact outside the contract bounds: the start already happened and is not undone.
         const services: ServiceOverrides = {
           start: () => Effect.succeed(task({ id: "task-7", startedAt: -1 })),
         };

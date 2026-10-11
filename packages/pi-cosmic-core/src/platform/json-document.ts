@@ -8,10 +8,8 @@ import * as Schema from "effect/Schema";
 import { JsonDocumentError } from "./errors.ts";
 import { withProcessLock } from "./process-coordinator.ts";
 
-/** Mutable JSON value accepted by the document store. */
 export type JsonValue = Schema.MutableJson;
 
-/** Schema-backed mutable JSON object persisted by the document store. */
 export type JsonObject = Schema.MutableJsonObject;
 
 export const isJsonObject = <Value>(value: Value): value is Value & JsonObject =>
@@ -20,9 +18,7 @@ export const isJsonObject = <Value>(value: Value): value is Value & JsonObject =
 export interface JsonDocumentModification<A, AfterCommitR = never> {
   readonly value: A;
   readonly document: JsonObject;
-  /** False returns from the locked transaction without writing or running `afterCommit`. */
   readonly write?: boolean | undefined;
-  /** Runs exactly once after the document rename, inside the same uninterruptible commit region. */
   readonly afterCommit?: Effect.Effect<void, never, AfterCommitR>;
 }
 
@@ -41,7 +37,6 @@ export interface JsonDocumentStoreContract {
     path: string,
     document: JsonObject,
   ) => Effect.Effect<void, JsonDocumentError>;
-  /** Effectful read-modify-write transaction under the per-path process lock. */
   readonly modifyObject: <A, E, R, AfterCommitR = never>(
     path: string,
     modify: (

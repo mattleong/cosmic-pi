@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { failingTheme, opaqueFixture } from "pi-cosmic-core/testing";
+import { failingTheme } from "pi-cosmic-core/testing";
 import { beforeEach, test } from "vitest";
 import {
   animationSchedulerProbe,
@@ -17,12 +17,12 @@ import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { sha256Text, stripAnsi } from "pi-cosmic-core";
 
 const styleNativeMcp = (
-  definition: ToolDefinition<any, any, any>,
+  definition: ToolDefinition,
   schedule = animationSchedulerProbe().schedule,
 ) =>
   createNativeMcpRenderers(definition.name, definition, undefined, { scheduleAnimation: schedule });
 
-type NativeDefinition = ToolDefinition<any, any, any>;
+type NativeDefinition = ToolDefinition;
 type ResourceTool = "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource";
 const resourceTools: readonly ResourceTool[] = [
   "list_mcp_resources",
@@ -30,10 +30,6 @@ const resourceTools: readonly ResourceTool[] = [
   "read_mcp_resource",
 ];
 
-/**
- * Mirrors Pi's fresh `createMcpToolDefinition` output: identifier-safe names and namespaces,
- * with a deliberately unavailable label: presentation consumes public namespace metadata only.
- */
 function dynamicTool(
   server = "docs",
   tool = "lookup",
@@ -43,8 +39,8 @@ function dynamicTool(
     name,
     label: `${server}/${tool}`,
     description: `MCP tool ${tool} from server ${server}`,
-    parameters: opaqueFixture({ type: "object", properties: { query: { type: "string" } } }),
-    outputSchema: opaqueFixture({ type: "object", required: ["content"] }),
+    parameters: { type: "object", properties: { query: { type: "string" } } },
+    outputSchema: { type: "object", required: ["content"] },
     exposure: "direct",
     namespace: { name: `mcp__${server.replaceAll("-", "_")}` },
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -53,14 +49,13 @@ function dynamicTool(
   return definition;
 }
 
-/** Mirrors Pi's fresh resource tool definitions, which have no renderers or namespace. */
 function resourceTool(name: ResourceTool) {
   const definition: NativeDefinition = {
     name,
     label: name,
     description: "MCP resources",
-    parameters: opaqueFixture({ type: "object", properties: { server: { type: "string" } } }),
-    outputSchema: opaqueFixture({ type: "object" }),
+    parameters: { type: "object", properties: { server: { type: "string" } } },
+    outputSchema: { type: "object" },
     exposure: "codemode",
     annotations: { readOnlyHint: true },
     execute: () => Promise.resolve({ content: [], details: { server: "", tool: name } }),
@@ -101,7 +96,6 @@ function summarize(
 const status = (summary: CompactSummary | undefined) =>
   summary ? compactStatus("settled", summary) : undefined;
 
-/** Control characters other than the style reset that width clipping itself appends. */
 const hasControls = (row: string) =>
   [...row.replaceAll("\u001b[0m", "")].some((character) => {
     const code = character.codePointAt(0) ?? 0;
@@ -260,7 +254,6 @@ test("malformed, foreign, or accessor details decline without invoking getters",
     undefined,
     "evidence from another tool is not this resource tool's",
   );
-  // Pi's error flag explains itself even when native details are absent.
   const thrown = summarize(
     dynamicTool(),
     result("connect ECONNREFUSED 127.0.0.1:3000", {}),
@@ -496,7 +489,6 @@ test("aggregate listings report bounded server failures, pagination, and unreada
 
   const templates = summarize(
     resourceTool("list_mcp_resource_templates"),
-    // A server name with nothing visible is not shown as invented text.
     result(
       JSON.stringify({ resourceTemplates: [], errors: [{ ...failures[1], server: "\u0007" }] }),
       {
@@ -541,7 +533,6 @@ for (const style of ["compact", "preview"] as const)
     const probe = animationSchedulerProbe();
     const h = createToolPresentationHarness(styleNativeMcp(dynamicTool(), probe.schedule));
     h.call({ query: "effect" }, { executionStarted: true });
-    // A line with nothing visible, such as a terminal clear, is not the progress message.
     h.result(result("\u001b[2K\nIndexing 3/10", docs), { isPartial: true });
     assert.ok(stripAnsi(h.render(100).join("\n")).includes("Indexing 3/10"));
     assert.ok(probe.scheduled > 0);

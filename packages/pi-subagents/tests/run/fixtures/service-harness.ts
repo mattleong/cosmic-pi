@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -59,8 +58,7 @@ import * as Fiber from "effect/Fiber";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 
-/** Runs one scoped test body against the service that `layer` builds, typed like Effect.gen. */
-export const withService = <Eff extends Effect.Effect<any, any, any>, A, ROut, LE, LR>(
+export const withService = <Eff extends Effect.Effect<unknown, unknown, unknown>, A, ROut, LE, LR>(
   layer: Layer.Layer<ROut, LE, LR>,
   body: (service: SubagentServiceContract) => Generator<Eff, A, never>,
 ) =>
@@ -69,10 +67,6 @@ export const withService = <Eff extends Effect.Effect<any, any, any>, A, ROut, L
     provideBuiltLayer(layer),
   );
 
-/**
- * Awaits runs the way the await tool does: through the public observation API, consuming the
- * completion reports it observed. Resolves to the observations.
- */
 export const awaitObservations = (
   service: SubagentServiceContract,
   ids: ReadonlyArray<string>,
@@ -92,7 +86,6 @@ export const awaitObservations = (
       .pipe(Effect.as(observations)),
   );
 
-/** `awaitObservations`, resolving to the observed runs. */
 export const awaitRuns = (...args: Parameters<typeof awaitObservations>) =>
   awaitObservations(...args).pipe(
     Effect.map((observations) => observations.map((observation) => observation.run)),
@@ -107,7 +100,6 @@ export const waitForCompleted = (service: SubagentServiceContract, id: string) =
     return yield* Effect.die(new Error("Run did not complete before the delivery clock advance."));
   });
 
-/** Settles a local run's assignment, then waits for completion and the child's release. */
 export const completeLocalRun = (
   service: SubagentServiceContract,
   control: FakeChildControl,
@@ -120,13 +112,11 @@ export const completeLocalRun = (
     yield* yieldUntil(() => control.released() === 1);
   });
 
-/** A notify policy that acknowledges every completion generation it is shown. */
 export const acknowledgeCompletions = (notification: SubagentNotification) =>
   notification.type === "completed"
     ? { deliveredCompletionKeys: notification.runs.map((run) => `${run.id}:${run.generation}`) }
     : undefined;
 
-/** An observation `use` callback that records whether it was ever entered. */
 export const useProbe = () => {
   const probe = {
     entered: false,
@@ -138,10 +128,6 @@ export const useProbe = () => {
   return probe;
 };
 
-/**
- * Interrupts a forked observation while `gate` is held and expects it to cancel before use.
- * The gate is released even when an expectation fails, so a regression fails rather than hangs.
- */
 export const expectInterruptBeforeUse = <A, E>(
   waiter: Fiber.Fiber<A, E>,
   probe: { readonly entered: boolean },
@@ -182,16 +168,12 @@ export interface FakeChildControl {
   readonly ipc: LocalPiParentControl[];
   readonly terminations: Array<"graceful" | "force">;
   readonly released: () => number;
-  /** Whether the child received an RPC command of `type`. */
   readonly sent: (type: RpcCommand["type"]) => boolean;
-  /** Whether the child received an IPC control of `type` that `matches`. */
   readonly sentIpc: <T extends LocalPiParentControl["type"]>(
     type: T,
     matches?: (message: IpcControlOf<T>) => boolean,
   ) => boolean;
-  /** The received RPC command types in order, restricted to `only` when given. */
   readonly commandTypes: (...only: RpcCommand["type"][]) => RpcCommand["type"][];
-  /** Ends the assignment with a final assistant message, then settles the agent. */
   readonly settle: (text?: string) => void;
   readonly failNext: (type: RpcCommand["type"], error: string) => void;
   readonly failTransportNext: (type: RpcCommand["type"], code: string) => void;
@@ -222,7 +204,6 @@ const isIpcControl =
   (message: LocalPiParentControl): message is IpcControlOf<T> =>
     message.type === type;
 
-/** Removes and returns the first entry that `matches`, preserving FIFO matching. */
 const takeFirst = <A>(entries: A[], matches: (entry: A) => boolean): A | undefined => {
   const index = entries.findIndex(matches);
   return index >= 0 ? entries.splice(index, 1)[0] : undefined;
@@ -328,7 +309,6 @@ export function fakeChildLayer(
           const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
           let cost = 0;
           const usageToken = Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
-          // Malformed per-message usage fails the whole decode, so it is never accounted.
           const persistedMessage = Schema.Struct({
             type: Schema.Literal("message_end"),
             message: Schema.Struct({
@@ -350,7 +330,6 @@ export function fakeChildLayer(
             }),
           });
           const offer = (value: RpcWireValue) => {
-            // Persist accounting when the fixture emits a completed message, never on a stats read.
             const message = Schema.decodeUnknownOption(persistedMessage)(value);
             const usage = message._tag === "Some" ? message.value.message.usage : undefined;
             if (usage) {
@@ -451,8 +430,6 @@ export function fakeChildLayer(
               }),
             sendContactControl: (message) =>
               Effect.gen(function* () {
-                // Model Node child.send handing the envelope to the child before
-                // its acknowledgement callback settles.
                 ipc.push(message);
                 const ipcFailure = ipcFailures.shift();
                 if (ipcFailure)
@@ -536,7 +513,6 @@ export const profileLayerFor = <Global>(global: Global) =>
     ),
   );
 
-/** Calls the writer-lease fake received, counted before any injected failure. */
 export const leaseCounts = () => ({ canonicalize: 0, acquire: 0, mark: 0, release: 0 });
 
 export function fakeWriterLeaseLayer(
@@ -666,7 +642,6 @@ export interface FakeNativeReportControl {
   readonly offer: (
     event: BackendEvent | ({ readonly type: "report" } & Omit<BackendReport, "assignmentEpoch">),
   ) => void;
-  /** Offers a report frame for the current assignment epoch. */
   readonly report: (
     runId: string,
     sequence: number,
@@ -683,16 +658,12 @@ export function fakeNativeReportBackendLayer(
     readonly interruptGate?: Deferred.Deferred<void, never> | undefined;
     readonly onInterruptStarted?: (() => void) | undefined;
     readonly capabilities?: BackendDriver["capabilities"] | undefined;
-    /** Holds every backend release until opened. */
     readonly releaseGate?: Deferred.Deferred<void, never> | undefined;
-    /** Hands back continuation state, so a closed run can resume in a new process. */
     readonly resumable?: boolean | undefined;
-    /** Holds the first process's initialization until opened. */
     readonly initializeGate?: Deferred.Deferred<void, never> | undefined;
   } = {},
 ) {
   const controls: FakeNativeReportControl[] = [];
-  /** Every launch request the backend spawned, in order. */
   const launches: BackendLaunchRequest[] = [];
   const driver: BackendDriver = {
     host: "local",
@@ -714,12 +685,10 @@ export function fakeNativeReportBackendLayer(
           let releaseCount = 0;
           let assignmentEpoch = 0;
           const offer: FakeNativeReportControl["offer"] = (event) => {
-            // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-            const normalized: BackendEvent =
-              event.type === "report" && !("assignmentEpoch" in event)
-                ? { ...event, assignmentEpoch }
-                : (event as BackendEvent);
-            Queue.offerUnsafe(events, normalized);
+            Queue.offerUnsafe(
+              events,
+              event.type === "report" ? { assignmentEpoch, ...event } : event,
+            );
           };
           const control: FakeNativeReportControl = {
             prompts,
@@ -800,7 +769,6 @@ export function fakeNativeReportBackendLayer(
   };
 }
 
-/** Options that record every projection and notification while keeping the caller's policies. */
 const capturing = (options: SubagentServiceOptions) => {
   const projections: SubagentProjection[] = [];
   const notifications: SubagentNotification[] = [];
@@ -873,7 +841,6 @@ export const contactParentFrame = (
   message: string,
 ): IpcWireValue => ({ channel: "pi-subagents", type: "contact_parent", requestId, kind, message });
 
-/** Offers a blocking child question, then waits until the newest run waits for its parent. */
 export const askParent = (
   control: FakeChildControl,
   projections: ReadonlyArray<SubagentProjection>,
@@ -908,7 +875,6 @@ export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSub
 export const nativeReportRequest = (overrides: Partial<StartSubagentRequest> = {}) =>
   request({ runtime: "claude", model: "claude-native", effortWasExplicit: false, ...overrides });
 
-/** A reviewer route over two local Pi candidates, selected at `selectedCandidateIndex`. */
 export const reviewerContinuation = (
   selectedCandidateIndex: number,
   skippedCandidates: ProfileRouteContinuation["skippedCandidates"] = [],

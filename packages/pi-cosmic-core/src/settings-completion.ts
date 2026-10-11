@@ -1,4 +1,3 @@
-/** Pure slash-command argument completion shared by extension settings surfaces. */
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-document.ts";
@@ -16,12 +15,6 @@ interface SettingsCompletionChoice {
   readonly description: string;
 }
 
-/**
- * Completes `/…-settings` arguments against option descriptors plus caller-supplied extra
- * verbs (help/status), preserving descriptor order, case-insensitive prefix matching, and the
- * host contract of `null` (never an empty array) when nothing matches. An optional leading
- * scope token (one of `scopes`) completes like the rest, prefixed with that scope.
- */
 export const completeSettingsArguments = (
   prefix: string,
   descriptors: ReadonlyArray<SettingsCompletionDescriptor>,
@@ -60,7 +53,6 @@ export const completeSettingsArguments = (
   const descriptor = descriptors.find((entry) => entry.id.toLowerCase() === headId);
   if (!descriptor) return null;
   const valuePrefix = (rest[0] ?? "").toLowerCase();
-  // The canonical id, not the typed one: dispatch matches ids exactly.
   const matches = (descriptor.values ?? [])
     .filter((value) => value.toLowerCase().startsWith(valuePrefix))
     .map((value) => ({
@@ -71,11 +63,6 @@ export const completeSettingsArguments = (
   return matches.length > 0 ? matches : null;
 };
 
-/**
- * Write-side twin of `completeSettingsArguments`: build a document patch that assigns one
- * settings value into its dotted section (`section` + `key`, e.g. `"footer"` + `"mode"`).
- * A missing section is created; a non-object section value is replaced.
- */
 export const sectionSettingValue =
   (section: string, key: string, value: JsonValue): ((current: JsonObject) => JsonObject) =>
   (current) => {
@@ -84,13 +71,11 @@ export const sectionSettingValue =
     return { ...current, [section]: { ...sectionObject, [key]: value } };
   };
 
-/** Shared settings error for unknown setting ids and values that fail their decoder. */
 export class InvalidSettingError extends Schema.TaggedError<InvalidSettingError>()(
   "InvalidSettingError",
   { id: Schema.String, message: Schema.String },
 ) {}
 
-/** One user-facing settings option: presentation metadata plus a wire decoder. */
 export interface SettingsOptionDescriptor<Config = unknown> {
   readonly id: string;
   readonly label: string;
@@ -105,7 +90,6 @@ export const FiniteNumberFromJsonSchema = Schema.fromJsonString(
   Schema.Number.check(Schema.isFinite()),
 );
 
-/** The three usage settings shared by subscription providers; schemas stay provider-owned. */
 export const makeUsageSettingDescriptors = <
   Config extends { readonly usage: SubscriptionUsageConfig },
 >(
@@ -137,11 +121,6 @@ export const makeUsageSettingDescriptors = <
   },
 ];
 
-/**
- * Builds the shared settings-update decoder over a package's descriptors: unknown ids and values
- * that fail their decoder fail with `InvalidSettingError`, while a known id yields a document
- * patch assigning the decoded value to its top-level key or its dotted section.
- */
 export const decodeSettingUpdate = <Config>(
   descriptors: ReadonlyArray<Pick<SettingsOptionDescriptor<Config>, "id" | "decoder">>,
 ) =>

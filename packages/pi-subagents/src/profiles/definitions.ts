@@ -75,7 +75,6 @@ export const PROFILE_DEFINITIONS = {
   },
 } satisfies Readonly<Record<ProfileId, ProfileDefinition>>;
 
-/** Every built-in is an explicit local Pi parent candidate using the profile's defaults. */
 const builtinRoute = (id: ProfileId): ProfileRoute => {
   const definition = PROFILE_DEFINITIONS[id];
   return {

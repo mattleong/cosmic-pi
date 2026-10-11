@@ -15,17 +15,12 @@ interface SubscriptionRefreshOptions<Key, Value, E, R> {
 
 interface SubscriptionRefresh<E, R> {
   readonly request: (request: RefreshRequest) => Effect.Effect<void, E, R>;
-  /** Consumer invalidation and stale validation/publication share the same reentrant gate. */
   readonly invalidateWith: <A, E2, R2>(
     effect: Effect.Effect<A, E2, R2>,
   ) => Effect.Effect<A, E2, R2>;
   readonly startPolling: (request: RefreshRequest) => Effect.Effect<void, E, R>;
 }
 
-/**
- * Shared provider refresh engine. It owns single-flight coordination, interval wakeups,
- * and stale-result suppression while provider payloads and policy remain local.
- */
 export const makeSubscriptionRefresh = <Key, Value, E, R>(
   options: SubscriptionRefreshOptions<Key, Value, E, R>,
 ): Effect.Effect<SubscriptionRefresh<E, R>> =>
@@ -36,8 +31,6 @@ export const makeSubscriptionRefresh = <Key, Value, E, R>(
     const wakeLatch = yield* Latch.make();
     const spanName = options.spanName ?? "pi-cosmic-core.subscription.refresh";
 
-    // Validation and commit share one reentrant gate with external invalidation so a commit may
-    // deliberately invalidate its own result without admitting any other fiber.
     const withCommitPermit = <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) =>
       TxReentrantLock.withLock(commitGate, effect);
 
@@ -66,8 +59,6 @@ export const makeSubscriptionRefresh = <Key, Value, E, R>(
         options.interval.pipe(
           Effect.flatMap((interval) => Latch.await(wakeLatch).pipe(Effect.timeoutOption(interval))),
           Effect.andThen(request(pollRequest)),
-          // A joined owner's interruption is replayed to its joiners; only this fiber's own
-          // interruption ends polling.
           Effect.catchCauseIf(
             (cause) => Cause.hasInterruptsOnly(cause),
             () => Effect.void,

@@ -25,8 +25,7 @@ describe("sectionSettingValue", () => {
     ["an array section", [1, 2]],
     ["a null section", null],
   ])("replaces %s with an object holding the assigned key", (_label, existing) => {
-    // SAFETY: Each fixture is a JSON-encodable literal satisfying the JsonObject contract.
-    const current = { footer: existing } as JsonObject;
+    const current: JsonObject = { footer: existing };
     expect(sectionSettingValue("footer", "mode", "status")(current)).toEqual({
       footer: { mode: "status" },
     });

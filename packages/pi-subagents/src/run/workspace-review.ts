@@ -29,10 +29,8 @@ export interface WorkspaceReviewOptions {
   readonly limit?: number;
 }
 
-/** How long a settled writer's background process cleanup may take before a check gives up. */
 const WRITER_CLEANUP_WAIT = "10 seconds";
 
-/** Whether `abandon` completed or the caller was interrupted, even while it is uninterruptible. */
 const abandoned = (abandon: Deferred.Deferred<void>): Effect.Effect<boolean> =>
   Deferred.isDone(abandon).pipe(
     Effect.flatMap((done) =>
@@ -42,10 +40,6 @@ const abandoned = (abandon: Deferred.Deferred<void>): Effect.Effect<boolean> =>
     ),
   );
 
-/**
- * Runs `wait` unless `abandon` completes or the caller is interrupted first, even while it is
- * uninterruptible; true once `wait` finished.
- */
 const awaitUnlessAbandoned = <A>(
   wait: Effect.Effect<A>,
   abandon: Deferred.Deferred<void>,
@@ -57,23 +51,13 @@ const awaitUnlessAbandoned = <A>(
     Effect.map((exit) => Exit.isSuccess(exit) && exit.value),
   );
 
-/** A root operation's hold on its binding while the engine works outside the run lock. */
 interface HeldBinding {
   readonly binding: WorkspaceBinding;
-  /** Under the run lock: fails unless the hold is still intact. */
   readonly heldLocked: () => Effect.Effect<void, SubagentError>;
 }
 
-/**
- * Root review, preparation and discard of a settled writer's workspace, including the discard
- * of one that holds no work, which workflows use for their worktree writers. Each queues on the
- * coordinator's operation lock, holds its binding busy, and calls the engine outside the run
- * lock; only removing an unchanged worker's trees also holds the run lock. A review first
- * reopens an engine record whose revision a later assignment made stale.
- */
 export function makeWorkspaceReview(context: WorkspaceControlContext) {
   const { withLock, state, records, requireBinding, requireEngine, operations } = context;
-  /** Holds the caller's binding busy around `use`, under an operation permit already held. */
   const hold = <A>(
     workspaceId: string,
     caller: string,
@@ -108,17 +92,11 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
           }),
         ),
     );
-  /**
-   * Runs one root operation on the caller's binding. Root operations queue on `operations`;
-   * each holds its binding busy and calls the engine outside the run lock, so settlement, stops
-   * and admissions never wait behind engine work such as a slow workspace create.
-   */
   const operate = <A>(
     workspaceId: string,
     caller: string,
     use: (held: HeldBinding) => Effect.Effect<A, SubagentError>,
   ): Effect.Effect<A, SubagentError> => operations.withPermits(1)(hold(workspaceId, caller, use));
-  /** The frozen revision the engine holds for a binding's workspace, if any. */
   const engineRevision = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
     service.list({ ownerId: handle.ownerId }).pipe(
       Effect.mapError(mapWorkspaceError),
@@ -127,7 +105,6 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
           entries.find((entry) => entry.handle.workspaceId === handle.workspaceId)?.revision,
       ),
     );
-  /** The revision a review reads: the named frozen one, or a fresh freeze of the worker. */
   const reviewedRevision = (
     service: WorkspaceServiceContract,
     binding: WorkspaceBinding,
@@ -141,7 +118,6 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
       };
       if (revisionId) {
         const revision = yield* engineRevision(service, binding);
-        // A pending reopen makes the revision the engine still holds stale.
         if (binding.reopenPending || revision?.revisionId !== revisionId)
           return yield* invalid(
             "workspace_revision_stale",
@@ -215,7 +191,6 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
       return yield* operate(workspaceId, caller, ({ binding }) =>
         Effect.gen(function* () {
           const revision = yield* engineRevision(service, binding);
-          // A pending reopen also cleared the reviewed revision.
           if (
             binding.reviewedRevision !== revisionId ||
             revision?.revisionId !== revisionId ||
@@ -255,10 +230,6 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
         }),
       );
     });
-  /**
-   * The cleanup a settled writer of the workspace still runs in the background, such as a
-   * completed writer's process exit; undefined once confirmed or without a bound writer.
-   */
   const pendingCleanup = (workspaceId: string) =>
     withLock(
       Effect.sync(() => {
@@ -268,29 +239,14 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
           : undefined;
       }),
     );
-  /**
-   * Takes an operation permit, waiting for one unless `abandon` completes or the caller is
-   * interrupted first; false, holding none, once abandoned. The take itself is one synchronous
-   * step, as in `withPermits`, so an abandoned wait never leaves a permit taken.
-   */
   const takeOperation = (abandon: Deferred.Deferred<void>): Effect.Effect<boolean> =>
     Effect.gen(function* () {
       if (yield* abandoned(abandon)) return false;
       if (yield* operations.takeIfAvailable(1)) return true;
-      // Waits until a permit is free; another waiter may take it first, so this tries again.
       if (!(yield* awaitUnlessAbandoned(operations.withPermits(1)(Effect.void), abandon)))
         return false;
       return yield* takeOperation(abandon);
     });
-  /**
-   * Under the held binding: discards the workspace when the engine finds its worker unchanged
-   * and no other run works, or worked meanwhile, inside its trees, such as a reader the writer
-   * started, which outlives a writer that completed. The engine checks and discards under its
-   * own lock, and the discard also holds the run lock, so no run starts inside the worker until
-   * its trees are gone. This is the only operation that takes the run lock while holding the
-   * engine's: its permit keeps integration, which takes them the other way, from running, and
-   * its busy binding keeps mode checks from listing workspaces under the run lock.
-   */
   const discardIfUnchanged = (service: WorkspaceServiceContract, held: HeldBinding) =>
     Effect.gen(function* () {
       const { binding } = held;
@@ -315,7 +271,6 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
                   [...after].some(([record, view]) => before.get(record) !== view)
                 )
                   return false;
-                // Failing here, after the check, the worker held nothing but may be partly gone.
                 yield* discard.pipe(
                   Effect.mapError((error) =>
                     invalid("workspace_discard_incomplete", error.message),
@@ -332,14 +287,6 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
           ),
         );
     });
-  /**
-   * Discards a settled writer's workspace only when it holds no work. It first waits a while for
-   * the writer's background process cleanup; one still unconfirmed then fails like any other
-   * operation, so the workspace is kept. Only its waits, for that cleanup and for its turn among
-   * root operations, end early, with false, once `abandon` completes or the caller is
-   * interrupted; a check already under way always finishes. True once discarded. A discard that
-   * fails after the check fails with `workspace_discard_incomplete`.
-   */
   const workspaceDiscardUnchanged = (
     workspaceId: string,
     abandon: Deferred.Deferred<void>,

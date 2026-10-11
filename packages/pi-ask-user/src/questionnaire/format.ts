@@ -18,7 +18,6 @@ export function formatAskUserOutcome(outcome: AskUserOutcome): string {
   return lines.join("\n");
 }
 
-/** Where a pending questionnaire is: queued ones are not on screen and have no answer yet. */
 const PENDING_PRESENTATION = new Map<AsyncQuestionnaireSnapshot["presentation"], string>([
   [
     "queued",

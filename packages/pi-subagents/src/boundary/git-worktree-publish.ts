@@ -67,7 +67,6 @@ const launch = <A, E>(
 const base64 = (image?: { readonly bytes: Uint8Array; readonly mode: number }) =>
   image && { bytes: Buffer.from(image.bytes).toString("base64"), mode: image.mode };
 
-/** Caller durably journals both artifact names before starting this process. No cleanup here. */
 export const publishWorkspaceFile = (request: WorkspacePublicationRequest) => {
   const { directory, before, after, ...fields } = request;
   return launch(
@@ -77,6 +76,5 @@ export const publishWorkspaceFile = (request: WorkspacePublicationRequest) => {
   );
 };
 
-/** Caller journals the planned directory first; existing destinations always fail closed. */
 export const createWorkspaceDirectory = ({ directory, ...fields }: WorkspaceDirectoryRequest) =>
   launch(directory, { ...fields, operation: "mkdir" }, decodeDirectoryResult);

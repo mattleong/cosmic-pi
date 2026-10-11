@@ -7,7 +7,6 @@ import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { writerPoolUnavailable } from "./writer-pool.ts";
 
-/** Canonicalizes a writer cwd; failure rejects the request rather than the backend. */
 export const canonicalizeWriterCwd = (writerLeases: WriterLeaseContract, cwd: string) =>
   writerLeases
     .canonicalize(cwd)
@@ -27,20 +26,9 @@ const ownsWriterSlot = (record: RunRecord): boolean =>
   record.view.writeIntent === "writer" &&
   (record.cleanupPending || isActiveRunState(record.view.state));
 
-/**
- * Whether a workflow still owns a run it started: the run kept the workflow placement its start
- * request named, as launch admission keys the exemption on, and the workflow hasn't relinquished
- * it. Such a run has its workflow's own concurrency instead of a direct-child slot.
- */
 export const workflowOwned = (record: RunRecord): boolean =>
   record.view.workflow !== undefined && record.owner?.live === true;
 
-/**
- * Whether a record holds one of `parentRunId`'s direct-child slots: an active, starting or
- * cleaning-up child of that parent, or a history record whose eviction claim reserves the slot of
- * a start under it. A run its workflow still owns holds none, and neither does a workflow
- * start's eviction claim.
- */
 const holdsChildSlot = (record: RunRecord, parentRunId: string): boolean => {
   const claim = record.evictionClaim;
   if (claim) return claim.parentRunId === parentRunId;
@@ -51,13 +39,11 @@ const holdsChildSlot = (record: RunRecord, parentRunId: string): boolean => {
   );
 };
 
-/** The refusal for a start or respawn under `parentRunId` once its direct-child slots are full. */
 export const processCapacityError = (
   records: ReadonlyMap<string, RunRecord>,
   parentRunId: string,
   limit: number,
   excluded?: RunRecord,
-  /** Slots that launches still acquiring workspaces hold for this parent. */
   held = 0,
 ): SubagentCapacityError | undefined => {
   const occupied = [...records.values()].filter(
@@ -105,7 +91,6 @@ export const writerConflictError = (
   return undefined;
 };
 
-/** A releasing pool, or a failed one whose members are still leaving, clears without help. */
 const writerPoolSettlesAlone = (pool: WriterPoolEntry | undefined): boolean =>
   pool?.admissionPaused !== true && (pool?.state === "releasing" || pool?.state === "failed");
 
@@ -127,7 +112,6 @@ interface WriterConflict {
   readonly transient: boolean;
 }
 
-/** Why one record blocks a writer start on the same canonical cwd, or undefined when it does not. */
 const writerConflict = (
   record: RunRecord,
   canonicalCwd: CanonicalWriterCwd,
@@ -169,7 +153,6 @@ const writerConflict = (
   };
 };
 
-/** Each file a writer's slot or retry reservation claims, or the whole cwd when exclusive. */
 const claimHoldings = (record: RunRecord): ReadonlyArray<string> =>
   ownsWriterSlot(record) || record.retryClaim
     ? (record.view.writeClaims ?? ["<exclusive>"]).map(
@@ -177,13 +160,6 @@ const claimHoldings = (record: RunRecord): ReadonlyArray<string> =>
       )
     : [];
 
-/**
- * Everything a writer conflict can wait on: writer slots, the files a writer or retry claims,
- * cleanup still under way, retry and eviction reservations, and unavailable writer pools. A
- * start refused for a conflict that clears by itself can only succeed after one of these
- * holdings disappears, so narrowing a writer's claims counts as a release while widening them
- * does not.
- */
 export const writerConflictHoldings = (
   records: ReadonlyMap<string, RunRecord>,
   pools: ReadonlyMap<string, WriterPoolEntry>,
@@ -193,7 +169,6 @@ export const writerConflictHoldings = (
     const id = record.view.id;
     if (ownsWriterSlot(record)) holdings.add(`writer:${id}`);
     for (const claim of claimHoldings(record)) holdings.add(claim);
-    // Quarantine ends this holding too, so waiters learn the conflict will not clear.
     if (record.cleanupPending && record.cleanupDisposition !== "quarantined")
       holdings.add(`cleanup:${id}`);
     if (record.retryClaim) holdings.add(`retry:${id}`);

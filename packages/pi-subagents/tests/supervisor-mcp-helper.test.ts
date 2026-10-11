@@ -9,7 +9,6 @@ it.effect("writer scope closure settles queued acknowledgements despite stalled 
     const stream: Pick<NodeJS.WritableStream, "write"> = {
       write() {
         Deferred.doneUnsafe(started, Effect.void);
-        // Hold the native callback indefinitely, as with a backpressured pipe.
         return false;
       },
     };

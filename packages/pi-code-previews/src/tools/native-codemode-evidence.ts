@@ -23,7 +23,6 @@ export type NativeCallEvidence = (
   | {
       readonly kind: "available";
       readonly calls: readonly NativeCodemodeCall[];
-      /** Received metadata slots, not an asserted count of validated dispatches. */
       readonly recordCount: number;
       readonly inspected: number;
       readonly rejected: number;
@@ -32,7 +31,6 @@ export type NativeCallEvidence = (
     }
 ) & { readonly fullOutputPath?: string };
 
-/** One record from its fixed own data fields; any accessor or invalid field rejects it. */
 function callRecord<Value>(value: Value): NativeCodemodeCall | undefined {
   return invokeHostCallback(() => {
     if (!Predicate.isObject(value)) return undefined;
@@ -49,7 +47,6 @@ function callRecord<Value>(value: Value): NativeCodemodeCall | undefined {
   }, undefined);
 }
 
-/** Inspect only fixed own fields and the latest 256 slots; no getters, whole-ledger scan or repair. */
 export function nativeCodemodeEvidence<Value>(value: Value): NativeCallEvidence {
   const fullOutputPath = ownData(value, "fullOutputPath", Text);
   const recovery = fullOutputPath?.trim() ? { fullOutputPath } : {};
@@ -78,7 +75,6 @@ export function nativeCodemodeEvidence<Value>(value: Value): NativeCallEvidence 
   };
 }
 
-/** Coverage is expanded-only diagnostics; incomplete metadata never becomes a dispatch total. */
 export function nativeEvidenceCoverage(evidence: NativeCallEvidence): string {
   if (evidence.kind === "unavailable") return "No readable call ledger is available";
   return `${evidence.calls.length} validated records; ${evidence.inspected} of ${evidence.recordCount} records inspected; ${evidence.rejected} inspected records unavailable; ${evidence.uninspected} older records not inspected`;

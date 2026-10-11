@@ -135,7 +135,6 @@ describe("question notification ownership", () => {
             ?.runs.some((view) => view.id === run.id && view.state === "running") === true,
       );
       const beforeReplacement = projections.length;
-      // Deliberately reuse the request ID: only the notification generation differs.
       fake.controls[0]?.offerIpc(contactParentFrame("old", "question", "New question?"));
       yield* yieldUntil(
         () =>
@@ -168,7 +167,6 @@ describe("question notification ownership", () => {
       const run = yield* service.start(request({ name: "uncertain-ack" }));
       fake.controls[0]?.offerIpc(contactParentFrame("retry", "question", "Try again?"));
       yield* yieldUntil(() => attempts === 1);
-      // A warning stays in status and neither produces nor wakes question delivery.
       fake.controls[0]?.offerIpc(contactParentFrame("warning", "warning", "Status only."));
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning === "Status only.");
       expect(attempts).toBe(1);

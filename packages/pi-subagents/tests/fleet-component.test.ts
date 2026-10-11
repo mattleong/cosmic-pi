@@ -1,6 +1,3 @@
-// Behavior-first component tests for the /subagents fleet: expandable hierarchy,
-// selection identity across reorder, Esc detail → list → close, and pending action/prompt
-// clearing on identity change. Assertions use transitions and callbacks, not exact chrome.
 import { describe, expect, it, vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
@@ -242,7 +239,6 @@ describe("/subagents unresolved guidance delivery", () => {
   for (const steeringDelivery of ["pending", "unresolved"] as const) {
     it(`blocks new guidance and interruption while delivery is ${steeringDelivery}`, () => {
       const { press, actions } = makeFleet([run("alpha", { steeringDelivery })]);
-      // Without a prompt, the printable keys are ignored and Enter only inspects the run.
       press("m", "z", "z", ENTER, "h", "i");
       expect(actions.message).not.toHaveBeenCalled();
       expect(actions.interrupt).not.toHaveBeenCalled();
@@ -274,7 +270,6 @@ describe("/subagents unresolved guidance delivery", () => {
     press(ENTER);
     expect(actions.message).not.toHaveBeenCalled();
 
-    // The typed prompt survives, so a later settled state can still send it exactly once.
     setRuns([run("alpha", { steeringDelivery: "confirmed" })]);
     press(ENTER);
     expect(actions.message).toHaveBeenCalledTimes(1);

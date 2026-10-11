@@ -1,4 +1,3 @@
-// Test-only runner verifies the installed session capability contract.
 import assert from "node:assert/strict";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
@@ -14,7 +13,6 @@ import { eventLoopTurn } from "../support/effect-test";
 
 afterEach(() => clearCodePreviewSessionCapability());
 
-/** Deferred previews only defer; their cancellation interrupts the deferred fiber. */
 function installTestCapability(): void {
   installCodePreviewSessionCapability({
     run: () => Promise.reject(new Error("not used")),

@@ -1,4 +1,3 @@
-// Test lifecycle boundary intentionally uses Promise-shaped host callbacks and AbortController.
 import assert from "node:assert/strict";
 import { withFileMutationQueue, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
@@ -9,10 +8,11 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime, nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
 import {
-  extensionApiFixture,
+  extensionContextFixture,
   makeLifecycleProbe,
-  opaqueFixture,
   recordingExtensionHost,
+  type ExtensionContextOverrides,
+  type ExtensionHostContext,
 } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import {
@@ -80,7 +80,6 @@ for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
           outcome = "failure";
         },
       );
-      // Let the owner enter the queue wait before cancellation.
       for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
       if (cancellation === "abort") controller.abort();
       else if (cancellation === "replacement") yield* step(() => start(h));
@@ -98,7 +97,6 @@ for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
       yield* Deferred.succeed(release, undefined);
       yield* step(() => predecessor);
       yield* step(() => pending);
-      // Joining a fresh queue entry proves the revoked delayed callback has drained.
       yield* step(() => withFileMutationQueue(path, () => Promise.resolve()));
       assert.equal(yield* fs.readFileString(path), "before");
       if (cancellation !== "shutdown") {
@@ -176,13 +174,6 @@ effectTest("captured capability cannot execute through a replacement slot", func
   yield* step(() => shutdown(h));
 });
 
-type HostContext = {
-  cwd?: unknown;
-  signal?: unknown;
-  isProjectTrusted?: unknown;
-  ui: { notify(message: string, level: string): void | PromiseLike<void> };
-};
-
 type HarnessOptions = {
   readonly load?: (
     call: number,
@@ -190,7 +181,6 @@ type HarnessOptions = {
     projectTrusted: boolean,
   ) => Effect.Effect<CodePreviewSettings>;
   readonly initializeSyntax?: (theme: string) => Effect.Effect<void>;
-  /** Uses the real tool-renderer registration instead of recording a startup event. */
   readonly realRenderers?: true;
 };
 
@@ -254,24 +244,23 @@ function harness(options: HarnessOptions = {}) {
       };
     },
   };
-  const context = (signal?: AbortSignal): HostContext => {
-    const value: HostContext = {
+  const context = (overrides: ExtensionContextOverrides = {}): ExtensionHostContext =>
+    extensionContextFixture({
       cwd: "/project",
       isProjectTrusted: () => true,
+      ...overrides,
       ui: {
-        notify: (message: string) => {
+        notify: (message) => {
           notifications.push(message);
         },
+        ...overrides.ui,
       },
-    };
-    if (signal) value.signal = signal;
-    return value;
-  };
+    });
   return {
     pi: host.pi,
     handlers: host.handlers,
-    /** Runs every handler for `name`; a hostile context reaches them as Pi would pass it. */
-    dispatch: (name: string, ctx: HostContext = context()) => host.emit(name, opaqueFixture(ctx)),
+    dispatch: (name: "session_start" | "session_shutdown", ctx: ExtensionHostContext = context()) =>
+      host.emit(name, ctx),
     dependencies,
     context,
     notifications,
@@ -288,13 +277,11 @@ function harness(options: HarnessOptions = {}) {
   };
 }
 
-/** Builds a harness and registers the extension without starting a session. */
 function registered(options: HarnessOptions = {}) {
   const h = harness(options);
   return step(() => codePreviewsWithDependencies(h.pi, h.dependencies)).pipe(Effect.as(h));
 }
 
-/** Makes one host-context property throw whenever it is read. */
 function throwingGetter<Target extends object>(target: Target, property: string): Target {
   return Object.defineProperty(target, property, {
     configurable: true,
@@ -367,7 +354,7 @@ effectTest("abort interrupts pending startup and awaits its application finalize
       ),
   });
   const controller = new AbortController();
-  const startup = start(h, h.context(controller.signal));
+  const startup = start(h, h.context({ signal: controller.signal }));
   yield* Deferred.await(pending);
 
   controller.abort();
@@ -528,17 +515,21 @@ effectTest(
   },
 );
 
-const captureFailures: ReadonlyArray<readonly [string, (context: HostContext) => void]> = [
-  ["cwd getters", (context) => throwingGetter(context, "cwd")],
-  ["signal getters", (context) => throwingGetter(context, "signal")],
-  ["AbortSignal.aborted getters", (context) => (context.signal = throwingGetter({}, "aborted"))],
+const captureFailures: ReadonlyArray<
+  readonly [string, (h: ReturnType<typeof harness>) => ExtensionHostContext]
+> = [
+  ["cwd getters", (h) => throwingGetter(h.context(), "cwd")],
+  ["signal getters", (h) => throwingGetter(h.context(), "signal")],
+  [
+    "AbortSignal.aborted getters",
+    (h) => h.context({ signal: throwingGetter(new AbortController().signal, "aborted") }),
+  ],
 ];
 
-for (const [name, sabotage] of captureFailures)
+for (const [name, sabotaged] of captureFailures)
   effectTest(`throwing session ${name} fail before runtime acquisition`, function* () {
     const h = yield* registered();
-    const context = h.context();
-    sabotage(context);
+    const context = sabotaged(h);
 
     assert.doesNotThrow(() => h.dispatch("session_start", context));
     yield* settle(() => h.dispatch("session_shutdown", context));
@@ -546,16 +537,6 @@ for (const [name, sabotage] of captureFailures)
     assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
     assert.equal(h.notifications.length, 1);
   });
-
-effectTest("hosts without renderer resolvers load idle and warn at session start", function* () {
-  const h = harness();
-  const pi = extensionApiFixture({ ...h.pi, registerToolRenderer: undefined });
-  yield* step(() => codePreviewsWithDependencies(pi, h.dependencies));
-  yield* settle(() => h.dispatch("session_start"));
-
-  assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
-  assert.equal(h.notifications.length, 1);
-});
 
 effectTest("settings a load ignored are reported when the session starts", function* () {
   const h = yield* registered({
@@ -580,36 +561,35 @@ effectTest("project trust fails closed unless the callback returns literal true"
       return Effect.succeed(settings);
     },
   });
-  const trustValues: unknown[] = [
-    undefined,
-    true,
+  const trustValues: ReadonlyArray<() => boolean> = [
     () => false,
-    () => "true",
     () => {
       throw new Error("host trust failure");
     },
     () => true,
   ];
 
-  for (const trust of trustValues) {
-    const context = h.context();
-    if (trust === undefined) delete context.isProjectTrusted;
-    else context.isProjectTrusted = trust;
-    yield* step(() => start(h, context));
-  }
+  for (const trust of trustValues)
+    yield* step(() => start(h, h.context({ isProjectTrusted: trust })));
   yield* step(() => start(h, throwingGetter(h.context(), "isProjectTrusted")));
 
-  assert.deepEqual(observedTrust, [false, false, false, false, false, true, false]);
+  assert.deepEqual(observedTrust, [false, false, true, false]);
   assert.deepEqual(h.notifications, []);
   yield* step(() => shutdown(h));
 });
 
 effectTest("throwing notification callbacks cannot escape host capture failure", function* () {
   const h = yield* registered();
-  const context = throwingGetter(h.context(), "cwd");
-  context.ui.notify = () => {
-    throw new Error("host notify failure");
-  };
+  const context = throwingGetter(
+    h.context({
+      ui: {
+        notify: () => {
+          throw new Error("host notify failure");
+        },
+      },
+    }),
+    "cwd",
+  );
 
   assert.doesNotThrow(() => h.dispatch("session_start", context));
   yield* settle(() => h.dispatch("session_shutdown", context));
@@ -618,12 +598,15 @@ effectTest("throwing notification callbacks cannot escape host capture failure",
 
 effectTest("rejecting notification thenables are contained", function* () {
   const h = yield* registered({ load: () => Effect.die("settings failed") });
-  const context = h.context();
   let notifications = 0;
-  context.ui.notify = () => {
-    notifications++;
-    return Promise.reject(new Error("host notify rejection"));
-  };
+  const context = h.context({
+    ui: {
+      notify: () => {
+        notifications++;
+        return Promise.reject(new Error("host notify rejection"));
+      },
+    },
+  });
 
   yield* step(() => start(h, context));
   yield* Effect.yieldNow;

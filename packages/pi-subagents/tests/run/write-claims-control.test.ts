@@ -18,7 +18,6 @@ import {
 const writer = (name: string, writes: ReadonlyArray<string>) =>
   request({ name, writeIntent: "writer", writes: [...writes] });
 
-/** A native edit of `path` that the child starts. */
 const offerEdit = (control: FakeChildControl | undefined, toolCallId: string, path: string) =>
   control?.offer({
     type: "tool_execution_start",

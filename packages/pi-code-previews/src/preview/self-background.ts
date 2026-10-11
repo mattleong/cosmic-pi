@@ -1,12 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Box, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
+import { Box, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { CodePreviewToolShell } from "./tool-shell";
 
-/** One self-shell row per tool call: Pi shares renderer state between its call and result slots. */
-export function rowPerState<Row>(create: (context: ToolRenderContext, theme: Theme) => Row) {
+export function rowPerState<TArgs, TState extends object, Row>(
+  create: (context: ToolRenderContext<TState, TArgs>, theme: Theme) => Row,
+) {
   const rows = new WeakMap<object, Row>();
-  return (context: ToolRenderContext, theme: Theme): Row => {
+  return (context: ToolRenderContext<TState, TArgs>, theme: Theme): Row => {
     const current = rows.get(context.state);
     if (current) return current;
     const row = create(context, theme);
@@ -15,7 +16,6 @@ export function rowPerState<Row>(create: (context: ToolRenderContext, theme: The
   };
 }
 
-/** The result slot shows its row only while no call slot has mounted that row. */
 export const resultStandIn = (row: Component, callMounted: () => boolean): Component => ({
   render: (width) => (callMounted() ? [] : row.render(width)),
   handleMouse: (event) => (callMounted() ? undefined : row.handleMouse?.(event)),
@@ -24,21 +24,19 @@ export const resultStandIn = (row: Component, callMounted: () => boolean): Compo
   },
 });
 
-/** A fixed self shell can adopt settings after Pi has retained a replayed row. */
-class SelfBackgroundRow implements Component {
+class SelfBackgroundRow<TArgs, TState> implements Component {
   private readonly box: Box;
   private call: Component | undefined;
   private result: Component | undefined;
   readonly resultSlot = resultStandIn(this, () => this.call !== undefined);
 
-  private context: ToolRenderContext;
+  private context: ToolRenderContext<TState, TArgs>;
   private theme: Theme;
 
-  constructor(context: ToolRenderContext, theme: Theme) {
+  constructor(context: ToolRenderContext<TState, TArgs>, theme: Theme) {
     this.context = context;
     this.theme = theme;
     this.box = new Box(1, 1, (text) =>
-      // Pi's own box stays pending until the call settles, even for an error update.
       this.theme.bg(
         this.context.isPartial
           ? "toolPendingBg"
@@ -50,7 +48,12 @@ class SelfBackgroundRow implements Component {
     );
   }
 
-  set(slot: "call" | "result", component: Component, context: ToolRenderContext, theme: Theme) {
+  set(
+    slot: "call" | "result",
+    component: Component,
+    context: ToolRenderContext<TState, TArgs>,
+    theme: Theme,
+  ) {
     this[slot] = component;
     this.context = context;
     this.theme = theme;
@@ -76,9 +79,12 @@ class SelfBackgroundRow implements Component {
   }
 }
 
-/** Reproduce the default host background without changing Pi's retained shell selection. */
-export function withSelfBackground(shell: CodePreviewToolShell): CodePreviewToolShell {
-  const row = rowPerState((context, theme) => new SelfBackgroundRow(context, theme));
+export function withSelfBackground<TArgs, TDetails, TState extends object>(
+  shell: CodePreviewToolShell<TArgs, TDetails, TState>,
+): CodePreviewToolShell<TArgs, TDetails, TState> {
+  const row = rowPerState<TArgs, TState, SelfBackgroundRow<TArgs, TState>>(
+    (context, theme) => new SelfBackgroundRow(context, theme),
+  );
   return {
     renderShell: "self",
     renderCall(context, theme, render, content) {

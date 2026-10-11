@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// A no-inference CLI stand-in that refuses unsafe catalog startup and reports the selector.
 import { createInterface } from "node:readline";
 const args = process.argv.slice(2);
 const value = (flag) => args[args.indexOf(flag) + 1];

@@ -1,4 +1,3 @@
-// Raw lstat inspects symbolic links because Effect FileSystem.stat follows them.
 import assert from "node:assert/strict";
 import { layer } from "@effect/vitest";
 import { createWriteTool } from "@earendil-works/pi-coding-agent";
@@ -17,7 +16,6 @@ import { executeWriteWithPreviewEffect } from "../../src/write/preview-execution
 import { lookupBeforeWrite } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";
 
-// Raw Node builtin access for test scaffolding, mirroring pi-cosmic-core's platform boundary.
 const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
 if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
@@ -27,14 +25,12 @@ const { join } = nodePathModule;
 const isSymlink = (path: string) =>
   Effect.promise(() => lstat(path).then((stats) => stats.isSymbolicLink()));
 
-/** The shared FileSystem plus a temp directory removed when the test scope closes. */
 const fixture = (prefix: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     return { fs, dir: yield* fs.makeTempDirectoryScoped({ prefix }) };
   });
 
-/** The error text a write reports, the way Pi reads a rejected tool call. */
 class NativeWriteFailure extends Data.TaggedError("NativeWriteFailure")<{
   readonly message: string;
 }> {}
@@ -57,7 +53,6 @@ layer(testLayer)("session write service", (it) => {
   it.effect("reads the previous file Pi writes under a working directory with Unicode spaces", () =>
     Effect.gen(function* () {
       const { fs, dir } = yield* fixture("pi-code-preview-unicode-");
-      // Pi normalizes Unicode spaces in the tool path, never in the working directory.
       const cwd = join(dir, "project\u3000a");
       yield* fs.makeDirectory(cwd);
       yield* fs.writeFileString(join(cwd, "file.txt"), "before");
@@ -153,7 +148,6 @@ layer(testLayer)("session write service", (it) => {
       yield* fs.writeFileString(join(dir, "read-only.txt"), "before");
       yield* fs.chmod(join(dir, "read-only.txt"), 0o444);
       yield* fs.makeDirectory(join(dir, "folder"));
-      // A privileged runner may write the read-only file; the directory always fails.
       for (const path of ["read-only.txt", "folder"]) {
         const native = yield* writeOutcome(
           Effect.tryPromise({

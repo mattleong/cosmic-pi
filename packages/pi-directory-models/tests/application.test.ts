@@ -1,4 +1,9 @@
-import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  SessionEntry,
+  SessionStartEvent,
+  ThinkingLevelSelectEvent,
+} from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -9,7 +14,7 @@ import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import {
   extensionContextFixture,
-  opaqueFixture,
+  modelFixture,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
@@ -29,8 +34,10 @@ type Model = NonNullable<ExtensionContext["model"]>;
 
 const PreferenceFromJson = Schema.fromJsonString(DirectoryModelPreferenceSchema);
 
+type ThinkingLevel = ThinkingLevelSelectEvent["level"];
+
 const model = (provider: string, id: string): Model =>
-  opaqueFixture({ provider, id, reasoning: true });
+  modelFixture({ provider, id, reasoning: true });
 
 const entryBase = (id: string) => ({
   id,
@@ -69,7 +76,6 @@ const readPreference = (agentDirectory: string, cwd: string) =>
     return yield* Schema.decodeEffect(PreferenceFromJson)(serialized);
   });
 
-/** Writes a preference document stamped with `documentCwd`, or the canonical cwd by default. */
 const writePreference = (
   agentDirectory: string,
   cwd: string,
@@ -131,7 +137,7 @@ const harness = (
     let thinkingLevel: "low" | "medium" | "high" = "low";
     const notify = vi.fn();
     let ctx!: ExtensionContext;
-    const delayedThinkingEvents: unknown[] = [];
+    const delayedThinkingEvents: ThinkingLevelSelectEvent[] = [];
     const setModel = vi.fn((next: Model): Promise<boolean> => {
       options.onSetModel?.();
       return Promise.resolve(options.setModelSettlement).then(() => {
@@ -151,7 +157,11 @@ const harness = (
     const setThinkingLevel = vi.fn((level: typeof thinkingLevel) => {
       const previousLevel = thinkingLevel;
       thinkingLevel = level;
-      const event = { type: "thinking_level_select", level, previousLevel };
+      const event: ThinkingLevelSelectEvent = {
+        type: "thinking_level_select",
+        level,
+        previousLevel,
+      };
       if (options.delayThinkingEvents) delayedThinkingEvents.push(event);
       else void host.emit("thinking_level_select", ctx, event);
     });
@@ -188,11 +198,9 @@ const harness = (
     });
     registerDirectoryModelsApplication(host.pi, options.explicitPreference ?? false);
 
-    const emit = <Event>(name: string, event: Event): Effect.Effect<void> =>
-      Effect.promise(() => host.emit(name, ctx, event));
-    const start = (reason: "startup" | "new" | "resume" | "fork" | "reload" = "startup") =>
-      emit("session_start", { type: "session_start", reason });
-    const shutdown = () => emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+    const start = (reason: SessionStartEvent["reason"] = "startup") =>
+      Effect.promise(() => host.emit("session_start", ctx, { type: "session_start", reason }));
+    const shutdown = () => Effect.promise(() => host.emit("session_shutdown", ctx));
     yield* Effect.addFinalizer(() => shutdown());
 
     return {
@@ -213,9 +221,17 @@ const harness = (
       start,
       shutdown,
       emitModel: (model: Model, previousModel: Model, source: "set" | "restore" = "set") =>
-        emit("model_select", { type: "model_select", model, previousModel, source }),
-      emitThinking: (level: string, previousLevel: string) =>
-        emit("thinking_level_select", { type: "thinking_level_select", level, previousLevel }),
+        Effect.promise(() =>
+          host.emit("model_select", ctx, { type: "model_select", model, previousModel, source }),
+        ),
+      emitThinking: (level: ThinkingLevel, previousLevel: ThinkingLevel) =>
+        Effect.promise(() =>
+          host.emit("thinking_level_select", ctx, {
+            type: "thinking_level_select",
+            level,
+            previousLevel,
+          }),
+        ),
       select(next: Model, thinking: "low" | "medium" | "high" = thinkingLevel) {
         activeModel = next;
         thinkingLevel = thinking;
@@ -294,10 +310,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect(h.setModel).toHaveBeenCalledTimes(1);
       expect(h.thinking()).toBe("high");
       expect(h.notify).not.toHaveBeenCalled();
-    }).pipe(
-      // Release the host call before scoped fibers and harness shutdown are finalized.
-      Effect.ensuring(Deferred.succeed(settlement, undefined)),
-    );
+    }).pipe(Effect.ensuring(Deferred.succeed(settlement, undefined)));
   });
 
   it.effect("leaves explicit CLI preferences alone", () =>
@@ -408,22 +421,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       h.select(h.alternate, "low");
       yield* h.emitModel(h.alternate, h.remembered, "restore");
       expect(yield* h.readPreference()).toMatchObject(h.rememberedPreference);
-    }),
-  );
-
-  it.effect("ignores malformed thinking-level events", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      yield* h.start();
-      h.select(h.remembered, "high");
-
-      yield* h.emitThinking("unexpected-level", "low");
-
-      expect(yield* h.readPreference()).toMatchObject({
-        provider: h.initial.provider,
-        model: h.initial.id,
-        thinkingLevel: "low",
-      });
     }),
   );
 

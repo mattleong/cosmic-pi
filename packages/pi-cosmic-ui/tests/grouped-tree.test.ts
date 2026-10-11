@@ -46,7 +46,6 @@ describe("grouped activity projection", () => {
     });
     expect(sources(tree)).toHaveLength(rows.length);
     expect(new Set(sources(tree).map((row) => row.key)).size).toBe(rows.length);
-    // The workflow row is a container; its summary counts only its work.
     expect(root(tree).summary).toMatchObject({ items: rows.length - 1, running: 4, pending: 1 });
   });
   it("assigns only roots to kind sections and keeps owned work beneath its owner", () => {
@@ -208,7 +207,6 @@ describe("grouped activity projection", () => {
     const tree = groupedActivityTree(rows, expandedAll(rows));
     expect(phases(tree).map((entry) => entry.state)).toEqual(["done", "stopped", "skipped"]);
     expect(root(tree).phaseCounts).toMatchObject({ done: 1, stopped: 1, skipped: 1 });
-    // Every settled phase still moves to history with its workflow.
     expect(tree.filter((entry) => entry.type !== "section").every((entry) => entry.history)).toBe(
       true,
     );
@@ -228,7 +226,6 @@ describe("grouped activity projection", () => {
     const tree = groupedActivityTree(rows, expandedAll(rows));
     expect(phases(tree).map((entry) => entry.state)).toEqual(["skipped", "stopped"]);
     expect(root(tree).summary).toMatchObject({ items: 4, stopped: 1, skipped: 3 });
-    // Without producer counts, the visible members decide.
     const visible = groupedActivityTree(
       [workflowRow("workflow", ["Plan"], "cancelled", "Plan"), rows[1]!],
       expandedAll(rows),
@@ -243,7 +240,6 @@ describe("grouped activity projection", () => {
         { title: "Verify" },
       ],
     });
-    // The producer's count includes the failure it still shows.
     const rows = [
       workflow,
       memberRow("broken", workflow, "Build", "failed"),
@@ -259,7 +255,6 @@ describe("grouped activity projection", () => {
       phaseCounts: { done: 0, failed: 1 },
       summary: { items: 5, attention: { failed: 1 } },
     });
-    // Without a failure count, the visible failed member decides.
     const uncounted = withStatus(workflow, "running", {
       phases: [
         { title: "Build", work: { items: 4, finished: 4, stopped: 0 } },

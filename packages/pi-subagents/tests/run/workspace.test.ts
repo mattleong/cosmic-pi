@@ -54,7 +54,6 @@ const record = (
   baseline: "baseline",
 });
 
-/** Expects a writer-mode switch to be refused as busy before its persist effect runs. */
 const expectModeSwitchBlocked = (service: SubagentServiceContract) =>
   Effect.gen(function* () {
     let persisted = false;
@@ -67,17 +66,14 @@ const expectModeSwitchBlocked = (service: SubagentServiceContract) =>
     expect(persisted).toBe(false);
   });
 
-/** A writer started in `/repo`, which the fixture's worktree mode isolates. */
 const repoWriter = (overrides: Partial<StartSubagentRequest> = {}) =>
   request({ cwd: "/repo", writeIntent: "writer", ...overrides });
 
-/** Starts a writer and stops it, leaving its proposal ready for review. */
 const stoppedWriter = (
   service: SubagentServiceContract,
   overrides?: Partial<StartSubagentRequest>,
 ) => service.start(repoWriter(overrides)).pipe(Effect.tap((run) => service.stop(run.id)));
 
-/** Reads every diff page of a stopped writer's proposal, then prepares that exact revision. */
 const reviewAndPrepare = (service: SubagentServiceContract, workspaceId: string) =>
   Effect.gen(function* () {
     const first = yield* service.workspaceReview(workspaceId);
@@ -89,7 +85,6 @@ const reviewAndPrepare = (service: SubagentServiceContract, workspaceId: string)
     return { revisionId: first.revisionId, preparationId: prepared.preparationId };
   });
 
-/** Expects a refused change to have kept the tested preparation, which then integrates. */
 const expectTestedIntegrates = (
   service: SubagentServiceContract,
   f: ReturnType<typeof fixture>,
@@ -102,7 +97,6 @@ const expectTestedIntegrates = (
     expect(f.entries.get(workspaceId)?.status).toBe("integrated");
   });
 
-/** The fake writer-lease service with `override` applied over it. */
 const leasesWith = (override: (base: WriterLeaseContract) => Partial<WriterLeaseContract>) =>
   Layer.effect(
     WriterLeaseService,
@@ -113,17 +107,14 @@ const leasesWith = (override: (base: WriterLeaseContract) => Partial<WriterLease
 
 const policy = { maxDirectChildren: 1, maxDepth: 3 };
 
-/** Engine operations a test can pause before their state change. */
 type GatedOperation = "freeze" | "prepare" | "discard";
 
-/** Injection points inside the fixture engine: after a create, and before other operations. */
 interface EngineHooks {
   afterCreate: Effect.Effect<void>;
   before: { [Operation in GatedOperation]?: Effect.Effect<void> | undefined };
   failDiscard: boolean;
 }
 
-/** Pauses at a gate until released; `entered` completes once the operation reaches it. */
 const pauseAt = Effect.gen(function* () {
   const entered = yield* Deferred.make<void>();
   const release = yield* Deferred.make<void>();
@@ -131,7 +122,6 @@ const pauseAt = Effect.gen(function* () {
   return { entered, release, pause };
 });
 
-/** Pauses the fixture engine right after it creates a workspace. */
 const gateCreate = (f: ReturnType<typeof fixture>) =>
   pauseAt.pipe(
     Effect.tap(({ pause }) =>
@@ -328,7 +318,6 @@ describe("writer workspace orchestration", () => {
           .pipe(Effect.forkChild);
         expect(Exit.isFailure(yield* Fiber.await(integrating))).toBe(true);
         expect(f.entries.get(id)?.status).toBe("prepared");
-        // Re-acquiring proves the interrupted integration released the source lease.
         const replacement = yield* leases.acquire({ cwd, runId: "replacement" });
         yield* leases.release(replacement);
       });
@@ -561,7 +550,6 @@ describe("writer workspace orchestration", () => {
       f.hooks.failDiscard = false;
       const [entry] = (yield* service.workspaceList()).records;
       expect(entry?.status).toBe("active");
-      // Only a live coordinator binding authorizes this, never the owner string alone.
       yield* service.workspaceDiscard(entry!.handle.workspaceId);
       expect(f.statuses()).toEqual(["discarded"]);
     });
@@ -590,7 +578,6 @@ describe("writer workspace orchestration", () => {
         .pipe(Effect.forkChild);
       yield* Deferred.await(create.entered);
       f.hooks.afterCreate = Effect.void;
-      // A start under a higher child limit can still take the slot the writer was counting on.
       yield* service.start(
         request({ cwd: "/repo", nestingPolicy: { ...policy, maxDirectChildren: 2 } }),
       );
@@ -670,7 +657,6 @@ describe("writer workspace orchestration", () => {
 
   it.effect("keeps an abandoned revision's hold until its successor is admitted", () => {
     let successorGate: Effect.Effect<void> | undefined;
-    // Pauses the successor's launch inside admission, at its worker-cwd canonicalization.
     const f = fixture({
       writerLeases: leasesWith((base) => ({
         canonicalize: (cwd) =>
@@ -690,7 +676,6 @@ describe("writer workspace orchestration", () => {
         .pipe(Effect.forkChild);
       yield* Deferred.await(admission.entered);
       successorGate = undefined;
-      // The caller abandons the revise; its successor keeps launching and keeps the workspace.
       yield* Fiber.interrupt(revising);
       const discard = yield* service.workspaceDiscard(id).pipe(Effect.result);
       expect(Result.isFailure(discard) ? discard.failure : "discarded").toMatchObject({
@@ -706,7 +691,6 @@ describe("writer workspace orchestration", () => {
       );
       expect(successor?.task).toContain("Cover the error path.");
       yield* completeLocalRun(service, f.children.controls[1]!, successor!.id, "Done.");
-      // Admission committed the revision: the old pair is stale and the next review reopens.
       const [listed] = (yield* service.workspaceList()).records;
       expect(listed).toMatchObject({ status: "active" });
       expect(
@@ -747,7 +731,6 @@ describe("writer workspace orchestration", () => {
   });
 
   it.effect("never invalidates the tested preparation for a resume it refuses", () => {
-    // The direct-child limit is 2 when the resume is first checked and 1 afterwards.
     const limits: number[] = [];
     const profiles = Layer.effect(
       SubagentProfileService,
@@ -781,7 +764,6 @@ describe("writer workspace orchestration", () => {
       yield* service.start(request({ cwd: "/repo" }));
       limits.push(2);
       const outcome = yield* service.resume(writer.id).pipe(Effect.result);
-      // Either the resume took the workspace, or the workspace kept its tested preparation.
       expect(Result.isSuccess(outcome) || f.entries.get(id)?.status === "prepared").toBe(true);
       if (Result.isFailure(outcome))
         yield* service.workspaceIntegrate(id, tested.revisionId, tested.preparationId);
@@ -803,7 +785,6 @@ describe("writer workspace orchestration", () => {
         yield* service.workspaceRevise(id, "One more change.").pipe(Effect.flip),
       ).toMatchObject({ code: "workspace_finished" });
       expect(f.children.controls).toHaveLength(1);
-      // A worker kept after integration can still be discarded.
       yield* service.workspaceDiscard(id);
       expect(f.entries.get(id)?.status).toBe("discarded");
     });
@@ -868,7 +849,6 @@ describe("writer workspace orchestration", () => {
         .start(repoWriter({ nestingPolicy: policy }))
         .pipe(Effect.forkChild);
       yield* Deferred.await(create.entered);
-      // A reader admitted now would make the writer discard the workspace it just acquired.
       expect(
         yield* service.start(request({ cwd: "/repo", nestingPolicy: policy })).pipe(Effect.flip),
       ).toMatchObject({ code: "direct_child_capacity" });
@@ -891,7 +871,6 @@ describe("writer workspace orchestration", () => {
       yield* Deferred.await(create.entered);
       const interrupting = yield* Fiber.interrupt(writer).pipe(Effect.forkChild);
       yield* Deferred.await(discard.entered);
-      // The interrupted launch can never be admitted, so its discard holds no direct-child slot.
       const reader = yield* service
         .start(request({ cwd: "/repo", nestingPolicy: policy }))
         .pipe(Effect.result);
@@ -926,7 +905,6 @@ describe("writer workspace orchestration", () => {
         .pipe(Effect.forkChild);
       yield* yieldUntil(() => children.reclaimedRunIds.includes(history[0]!));
       reclaimGate = undefined;
-      // The writer's eviction claim already reserves its slot, so one slot remains for a reader.
       const reader = yield* service
         .start(request({ cwd: "/repo", name: "reader", nestingPolicy: pair }))
         .pipe(Effect.result);
@@ -958,9 +936,7 @@ describe("writer workspace orchestration", () => {
         ).pipe(Effect.forkChild);
         yield* Deferred.await(entered);
         f.hooks.before[operation] = undefined;
-        // Deadlocks if the operation holds the run lock while the engine works.
         yield* service.rename(writer.id, "still-responsive");
-        // A second root operation on the workspace queues rather than being refused as busy.
         const queuedReview = yield* service
           .workspaceReview(id, { revisionId: first.revisionId })
           .pipe(Effect.result, Effect.forkChild);
@@ -1014,7 +990,6 @@ describe("writer workspace orchestration", () => {
       const outcome = yield* integrate;
       expect(f.entries.get(id)?.status).toBe("integrated");
       expect(outcome.leaseReleaseUnconfirmed).toBe(true);
-      // The unconfirmed source lease still blocks later writers and integrations.
       expect(yield* service.start(repoWriter()).pipe(Effect.flip)).toMatchObject({
         code: "workspace_integration_quarantined",
       });

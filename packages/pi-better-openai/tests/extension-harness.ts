@@ -1,14 +1,26 @@
-import type { ExtensionContext, SourceInfo } from "@earendil-works/pi-coding-agent";
+import type {
+  EventBus,
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionEvent,
+  ExtensionUIContext,
+  SourceInfo,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type { JsonObject } from "pi-cosmic-core";
-import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
+import {
+  extensionContextFixture,
+  recordingExtensionHost,
+  type DefaultedEventName,
+} from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
   betterOpenAIWithDependencies,
   type BetterOpenAIExtensionDependencies,
 } from "../src/application.ts";
+import { testModel } from "./helpers.ts";
 
 export const ownerSource: SourceInfo = {
   source: "local",
@@ -17,15 +29,9 @@ export const ownerSource: SourceInfo = {
   origin: "top-level",
 };
 
-// Pure fixture serialization stays outside Effect code on purpose: the runtime under
-// test owns schema decoding of this persisted document.
 const encodeConfigDocument = (overrides: JsonObject): string =>
   JSON.stringify({ persistState: false, usage: {}, image: { enabled: false }, ...overrides });
 
-/**
- * The actual factory over a temporary trusted project. Public tool metadata names `toolSource`;
- * command metadata always names the extension itself.
- */
 export const extensionHarness = (
   options: {
     readonly dependencies?: BetterOpenAIExtensionDependencies;
@@ -44,26 +50,30 @@ export const extensionHarness = (
       encodeConfigDocument(options.config ?? {}),
     );
     yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDir));
+    const notify = vi.fn<ExtensionUIContext["notify"]>();
+    const setStatus = vi.fn<ExtensionUIContext["setStatus"]>();
+    const setFooter = vi.fn<ExtensionUIContext["setFooter"]>();
+    const getFlag = vi.fn<ExtensionAPI["getFlag"]>(() => false);
+    const eventsEmit = vi.fn<EventBus["emit"]>();
+    const eventsOn = vi.fn<EventBus["on"]>(() => () => undefined);
     const host = recordingExtensionHost(
       { source: ownerSource, ...(options.toolSource && { toolSource: options.toolSource }) },
       {
-        registerFlag: vi.fn(),
-        getFlag: vi.fn(() => false),
-        getThinkingLevel: vi.fn(() => "off"),
-        sendMessage: vi.fn(),
-        events: { emit: vi.fn(), on: vi.fn() },
+        getFlag,
+        getThinkingLevel: () => "off",
+        events: { emit: eventsEmit, on: eventsOn },
       },
     );
     const ctx = extensionContextFixture({
       cwd,
       mode: "rpc",
       hasUI: true,
-      model: { provider: "openai", id: "gpt-5.5" },
+      model: testModel(),
       modelRegistry: {
         isUsingOAuth: () => true,
         getProviderAuth: () => Promise.resolve(undefined),
       },
-      ui: { notify: vi.fn(), setStatus: vi.fn(), setFooter: vi.fn() },
+      ui: { notify, setStatus, setFooter },
       sessionManager: {
         getEntries: () => [],
         getBranch: () => [],
@@ -72,9 +82,9 @@ export const extensionHarness = (
         getCwd: () => cwd,
         getSessionName: () => undefined,
       },
-      getContextUsage: () => ({ contextWindow: 100, percent: 1 }),
+      getContextUsage: () => ({ tokens: 1, contextWindow: 100, percent: 1 }),
       getSystemPrompt: () => "system",
-      isProjectTrusted: vi.fn(() => true),
+      isProjectTrusted: () => true,
     });
     betterOpenAIWithDependencies(host.pi, options.dependencies);
     return {
@@ -82,7 +92,15 @@ export const extensionHarness = (
       ctx,
       cwd,
       tools: host.registrations,
-      emit: <Event>(name: string, event?: Event, useCtx: ExtensionContext = ctx) =>
-        Effect.promise(() => host.emit(name, useCtx, event)),
+      notify,
+      setStatus,
+      setFooter,
+      getFlag,
+      eventsEmit,
+      eventsOn,
+      emit: (name: DefaultedEventName, useCtx: ExtensionContext = ctx) =>
+        Effect.promise(() => host.emit(name, useCtx)),
+      emitEvent: (event: ExtensionEvent, useCtx: ExtensionContext = ctx) =>
+        Effect.promise(() => host.emit(event.type, useCtx, event)),
     };
   });

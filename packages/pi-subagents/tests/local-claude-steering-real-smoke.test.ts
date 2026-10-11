@@ -1,5 +1,3 @@
-// Opt-in installed-CLI timing probe. This can incur provider usage; never retry it
-// automatically. Capture `claude --version` separately before a live invocation.
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -38,7 +36,6 @@ const tasks = {
   ].join(" "),
 } satisfies Record<Scenario, string>;
 
-// Never serialize native errors, diagnostics, frames, tool arguments, or reports.
 const failureCode = (cause: Cause.Cause<unknown>): string => {
   const failure = Cause.findErrorOption(cause);
   if (Option.isSome(failure)) {
@@ -50,8 +47,6 @@ const failureCode = (cause: Cause.Cause<unknown>): string => {
   return Cause.hasDies(cause) ? "defect" : "interrupted";
 };
 
-// Deliberately not a shell parser: admit only fixed sleep forms, never arbitrary
-// wrapper arguments, expansions, compound commands, or login-shell startup.
 const delayCommands = new Set([
   delayCommand,
   "/bin/sleep 25",
@@ -85,7 +80,6 @@ const TOOL_CATEGORIES = {
   mcp__pi_subagents_supervisor__supervisor_submit_report: "supervisorReport",
 } as const;
 type ToolCategory = (typeof TOOL_CATEGORIES)[keyof typeof TOOL_CATEGORIES] | "other";
-// A Map lookup, so tool names never resolve inherited object keys.
 const categoryByTool: ReadonlyMap<string, ToolCategory> = new Map(Object.entries(TOOL_CATEGORIES));
 const toolCategory = (name: string): ToolCategory => categoryByTool.get(name) ?? "other";
 
@@ -183,7 +177,6 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
     const program = Effect.gen(function* () {
       const startedAt = yield* Clock.currentTimeMillis;
       const elapsed = Clock.currentTimeMillis.pipe(Effect.map((now) => now - startedAt));
-      // Override only this invocation's environment; no config or raw CLI debug file.
       const processes = makeLocalCliProcess({
         agentDirectory,
         environment: { ...sourceEnvironment, PI_SUBAGENTS_CLAUDE_DEBUG: "0" },
@@ -198,7 +191,6 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
                 record: (entry) =>
                   Effect.gen(function* () {
                     const atMs = yield* elapsed;
-                    // This hook is before send, not evidence that stdin accepted the frame.
                     if (entry.kind === "outbound-user" && entry.operation === "steer")
                       observation.steerOutboundPreparedAtMs = atMs;
                     if (
@@ -252,39 +244,62 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
       let delayActive = false;
       let sawTool = false;
       let terminal = false;
+      const observeNativeAgent = (event: BackendEvent) => {
+        if (event.type !== "native_agent_activity" || event.assignmentEpoch !== 1) return;
+        if (event.kind === "Agent" && event.state === "running")
+          observation.nativeAgentObserved = true;
+        if (event.state === "failed") observation.nativeFailures += 1;
+      };
+      const observeToolStarted = (event: BackendEvent) => {
+        if (event.type !== "tool_started" || event.assignmentEpoch !== 1) return;
+        sawTool = true;
+        observation.toolCategories[toolCategory(event.toolName)] = true;
+        if (event.toolName !== "Bash") return;
+        const bash = classifyBash(event);
+        if (!bash.delayCommand) observation.bashOtherCommandObserved = true;
+        if (bash.background) observation.bashBackgroundObserved = true;
+        if (bash.delayCommand && !bash.background) {
+          observation.delayToolObserved = true;
+          delayToolId = event.toolCallId;
+          delayActive = true;
+        }
+      };
+      const observeToolFinished = (event: BackendEvent) => {
+        if (event.type !== "tool_finished") return;
+        if (event.isError) observation.toolFailures += 1;
+        if (event.toolCallId === delayToolId) {
+          delayActive = false;
+          observation.delayToolFinished = true;
+        }
+      };
+      const observeDiagnostics = (event: BackendEvent) => {
+        if (event.type === "input_delivery" && event.assignmentEpoch === 1)
+          observation.steeringDelivery = event.state;
+        if (event.type === "warning") observation.warnings += 1;
+        if (event.type === "protocol_error" || event.type === "backend_failure")
+          observation.protocolErrors += 1;
+      };
+      const observeReport = (event: BackendEvent, atMs: number) =>
+        Effect.gen(function* () {
+          if (event.type !== "report") return;
+          observation.reportReceived = true;
+          observation.reportAtMs = atMs;
+          observation.reportEpochValid =
+            event.assignmentEpoch === 1 && event.runId === launch.runId;
+          observation.reportNonempty = Boolean(event.text?.trim());
+          observation.reportMentionsGuidance = event.text?.includes(guidanceMarker) ?? false;
+          terminal = true;
+          yield* Deferred.succeed(activity, false);
+          yield* Deferred.succeed(finished, undefined);
+        });
       const consume = (event: BackendEvent) =>
         Effect.gen(function* () {
-          // Drain and release raw ownership even while initialize/start/steer is waiting.
           backend.acknowledge(event);
           observation.backendEvents += 1;
           const atMs = yield* elapsed;
-          if (event.type === "native_agent_activity" && event.assignmentEpoch === 1) {
-            if (event.kind === "Agent" && event.state === "running")
-              observation.nativeAgentObserved = true;
-            if (event.state === "failed") observation.nativeFailures += 1;
-          }
-          if (event.type === "tool_started" && event.assignmentEpoch === 1) {
-            sawTool = true;
-            observation.toolCategories[toolCategory(event.toolName)] = true;
-            if (event.toolName === "Bash") {
-              const bash = classifyBash(event);
-              if (!bash.delayCommand) observation.bashOtherCommandObserved = true;
-              if (bash.background) observation.bashBackgroundObserved = true;
-              if (bash.delayCommand && !bash.background) {
-                observation.delayToolObserved = true;
-                delayToolId = event.toolCallId;
-                delayActive = true;
-              }
-            }
-          }
-          if (event.type === "tool_finished") {
-            if (event.isError) observation.toolFailures += 1;
-            if (event.toolCallId === delayToolId) {
-              delayActive = false;
-              observation.delayToolFinished = true;
-            }
-          }
-          // Normalized activity is stream evidence, not proof of a particular token.
+          observeNativeAgent(event);
+          observeToolStarted(event);
+          observeToolFinished(event);
           const generationActive =
             event.type === "activity" && event.assignmentEpoch === 1 && !sawTool;
           const eligible =
@@ -296,24 +311,8 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
             observation.triggerAtMs = atMs;
             yield* Deferred.succeed(activity, true);
           }
-          if (event.type === "input_delivery" && event.assignmentEpoch === 1)
-            observation.steeringDelivery = event.state;
-          if (event.type === "warning") observation.warnings += 1;
-          if (event.type === "protocol_error" || event.type === "backend_failure")
-            observation.protocolErrors += 1;
-          if (event.type === "report") {
-            observation.reportReceived = true;
-            observation.reportAtMs = atMs;
-            // Backend report events are accepted supervisor reports, not assistant text.
-            observation.reportEpochValid =
-              event.assignmentEpoch === 1 && event.runId === launch.runId;
-            observation.reportNonempty = Boolean(event.text?.trim());
-            // A report alone is not evidence that guidance was applied.
-            observation.reportMentionsGuidance = event.text?.includes(guidanceMarker) ?? false;
-            terminal = true;
-            yield* Deferred.succeed(activity, false);
-            yield* Deferred.succeed(finished, undefined);
-          }
+          observeDiagnostics(event);
+          yield* observeReport(event, atMs);
         });
       yield* Stream.fromQueue(backend.events).pipe(
         Stream.runForEach(consume),
@@ -344,7 +343,6 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
       yield* backend.controls.initialize;
       yield* backend.controls.start(tasks[scenario], 1);
       const observed = yield* Deferred.await(activity);
-      // Let the already-observed tool enter execution; never send on a mere timer.
       if (observed && scenario !== "generation") yield* Effect.sleep("1 second");
       if (observed && !terminal && (scenario === "generation" || delayActive)) {
         observation.steerCalls += 1;
@@ -363,13 +361,11 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
                   : failureCode(exit.cause);
               }),
             ),
-            // Preserve report/closure evidence after uncertainty; never resend guidance.
             Effect.exit,
           );
       }
       yield* Deferred.await(finished);
     }).pipe(
-      // Timeout is INSIDE the scope, so interruption still joins owned cleanup.
       Effect.timeout("120 seconds"),
       Effect.scoped,
       provideBuiltLayer(SupervisorChannel.layer({ agentDirectory })),
@@ -401,8 +397,6 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
               acceptedReport &&
               observation.steerReplayAtMs !== undefined &&
               (observation.steerOutcome === "confirmed" || lateReplayAfterUncertainty);
-            // Completion is a separate outcome: this state explicitly denies confirmation
-            // of guidance rather than treating a report as an acknowledgement.
             const completedWithUnconfirmedGuidance =
               acceptedReport &&
               observation.steerOutcome === "steer_outcome_uncertain" &&
@@ -420,7 +414,6 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
               inconclusive,
             });
             yield* Effect.logInfo("Local Claude steering smoke (metadata only)", metadata);
-            // Runtime skip can discard evidence; an inconclusive probe is visibly non-passing.
             expect(
               inconclusive,
               `INCONCLUSIVE requested activity missing; metadata: ${metadata}`,

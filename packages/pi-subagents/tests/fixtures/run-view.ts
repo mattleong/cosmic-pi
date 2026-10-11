@@ -5,7 +5,6 @@ import {
   type WorkflowRunView,
 } from "../../src/workflow/model.ts";
 
-/** A running local Pi run view; tests override only the fields they assert. */
 export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   id: "agent-1",
   name: "auth-review",
@@ -42,7 +41,6 @@ export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView 
   ...overrides,
 });
 
-/** A revision-1 projection of `runs`. */
 export const projectionOf = (runs: ReadonlyArray<SubagentRunView>): SubagentProjection => ({
   revision: 1,
   runs,
@@ -54,7 +52,6 @@ export const violationAudit = (path: string, observedAt = 2) => ({
   bashWriteHints: 0,
 });
 
-/** A writer whose out-of-claim edit made it the current containment offender. */
 export const containedWriter = (overrides: Partial<SubagentRunView> = {}) =>
   view({
     writeIntent: "writer",
@@ -65,7 +62,6 @@ export const containedWriter = (overrides: Partial<SubagentRunView> = {}) =>
     ...overrides,
   });
 
-/** A running workflow run view with no agents; tests override only the fields they assert. */
 export const workflowRunView = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView => ({
   id: "wf-a-1",
   name: "review",
@@ -83,7 +79,6 @@ export const workflowRunView = (patch: Partial<WorkflowRunView> = {}): WorkflowR
   ...patch,
 });
 
-/** A queued workflow agent view; tests override only the fields they assert. */
 export const workflowAgentView = (patch: Partial<WorkflowAgentView> = {}): WorkflowAgentView => ({
   callId: 1,
   runId: "agent-r1-1",

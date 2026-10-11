@@ -63,7 +63,6 @@ describe("result contracts", () => {
   });
 
   it("uses strict sampling only when it cannot change what the schema accepts", () => {
-    // Strict conversion closes every object, so an open one could only be sampled as `{}`.
     const unsafe: ReadonlyArray<Schema.Json> = [
       { type: "object" },
       { type: "object", properties: { a: { type: "string" } } },
@@ -78,7 +77,6 @@ describe("result contracts", () => {
       closed({ value: { description: "anything" } }),
       closed({ either: { type: ["string", "null"] } }),
       closed({ flag: true }),
-      // Non-structural keywords would be dropped.
       closed({ n: { type: "integer", minimum: 0 } }),
       closed({ code: { type: "string", pattern: "^[A-Z]+$" } }),
     ];
@@ -96,7 +94,6 @@ describe("result contracts", () => {
   it("keeps patterns in the tool schema but never evaluates them in the root", () => {
     const schema = closed({ code: { type: "string", pattern: "^[A-Z]+$" } });
     const contract = compile(schema);
-    // The schema the child validates and CLI agents read still carries the pattern.
     expect(contract.parameters).toEqual(schema);
     expect(resultValueSchema(contract)).toEqual(schema);
     expect(decode(contract, { code: "not upper case" })).toMatchObject({ _tag: "Success" });
@@ -112,7 +109,6 @@ describe("result contracts", () => {
     });
     expect(decode(patterned, { value: "abc" })).toMatchObject({ success: "abc" });
     expect(decode(patterned, { value: 1 })._tag).toBe("Failure");
-    // Pi's child enforces formats, so each address matches exactly one branch there.
     const contact = compile({
       type: "object",
       properties: {
@@ -161,7 +157,6 @@ describe("result contracts", () => {
       for (const schema of placements(pattern))
         expect(compileError(schema), JSON.stringify(schema)).toContain(pattern);
     expect(compileError(closed({ code: { type: "string", pattern: 1 } }))).toContain("string");
-    // Unicode-only syntax and correctly escaped classes still compile.
     for (const pattern of ["^\\p{Lu}+$", "^[\\w.-]+$", "^\\d{4}-\\d{2}$"])
       expect(compile(closed({ code: { type: "string", pattern } })).parameters).toEqual(
         closed({ code: { type: "string", pattern } }),
@@ -171,7 +166,6 @@ describe("result contracts", () => {
   it("accepts integral numbers of any magnitude for integer schemas", () => {
     const schema = closed({ startedAtNs: { type: "integer" } });
     const contract = compile(schema);
-    // The child still sees `integer`, and strict sampling is unaffected.
     expect(contract.parameters).toEqual(schema);
     expect(contract.strictSafe).toBe(true);
     for (const startedAtNs of [1_759_480_000_000_000_000, -1e20, 0, 42])

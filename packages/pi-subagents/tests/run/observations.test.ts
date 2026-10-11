@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -34,7 +33,6 @@ type CompletionPolicy = (
 
 const unacknowledged: CompletionPolicy = () => ({ deliveredCompletionKeys: [] });
 
-/** One local run whose completed notifications go through `policy`, counting each attempt. */
 const completionRetryFixture = (policy: CompletionPolicy) => {
   let attempts = 0;
   const { fake, projections, notifications, layer } = localServiceFixture({
@@ -47,7 +45,6 @@ const completionRetryFixture = (policy: CompletionPolicy) => {
       );
     },
   });
-  /** Starts and completes the run, then waits for its first delivery attempt. */
   const firstAttempt = (service: SubagentServiceContract) =>
     Effect.gen(function* () {
       const run = yield* service.start(request({ name: "completion-retry" }));
@@ -64,7 +61,6 @@ const includeDeliveredReports: SubagentStatusObservationOptions = {
   includeDeliveredReports: true,
 };
 
-/** Observes one run through status, returning its observation without consuming it. */
 const observeStatus = (
   service: SubagentServiceContract,
   id: string,
@@ -336,7 +332,6 @@ describe("SubagentService", () => {
         expect(competing?.run).not.toHaveProperty("finalText");
       });
       yield* expectRedacted;
-      // A forged receipt cannot release the owned report into status or read-back.
       yield* service.consumeCompletions([
         { id: run.id, generation: 1, claimToken: "forged-owner" },
       ]);
@@ -374,7 +369,6 @@ describe("SubagentService", () => {
         expect(defaultObservation?.run).not.toHaveProperty("finalText");
         expect(yield* service.status(run.id)).not.toHaveProperty("finalText");
 
-        // Repeated read-back neither consumes nor re-queues the delivered outcome.
         for (let read = 0; read < 2; read++) {
           const readBack = yield* observeStatus(service, run.id, includeDeliveredReports);
           expect(readBack).not.toHaveProperty("completionReceipt");
@@ -387,7 +381,6 @@ describe("SubagentService", () => {
           );
         }
 
-        // Await keeps redacting an outcome it can no longer own.
         const [awaitedAgain] = yield* awaitRuns(service, [run.id], "all_finished");
         expect(awaitedAgain?.reportStatus).toBe("delivered");
         expect(awaitedAgain).not.toHaveProperty("finalText");
@@ -418,7 +411,6 @@ describe("SubagentService", () => {
       });
 
       yield* Deferred.succeed(cleanupGate, undefined);
-      // The continuation claim waits for confirmed cleanup, then blocks a concurrent retry.
       const claim = yield* service.claimRetryContinuation(run.id);
       expect(yield* recovery()).toMatchObject({
         cleanupDisposition: "confirmed",
@@ -765,8 +757,6 @@ describe("SubagentService", () => {
         { id: two.id, generation: 1 },
       ]);
 
-      // A partial acknowledgment resets the retry delay to its initial value and
-      // retains only the unacknowledged completion for the next attempt.
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => batches.length === 2);
       expect(batches[1]).toEqual([{ id: two.id, generation: 1 }]);
@@ -779,7 +769,6 @@ describe("SubagentService", () => {
     const { layer, attempts, firstAttempt } = completionRetryFixture(unacknowledged);
     return withService(layer, function* (service) {
       const run = yield* firstAttempt(service);
-      // The await claim is serialized against delivery and removes the queued retry.
       const runs = yield* awaitRuns(service, [run.id], "all_finished");
       expect(runs[0]?.state).toBe("completed");
       yield* TestClock.adjust("60 seconds");
@@ -793,7 +782,6 @@ describe("SubagentService", () => {
       yield* withService(layer, function* (service) {
         yield* firstAttempt(service);
       });
-      // The retry fiber is owner-scoped: closing the session scope ends redelivery.
       yield* TestClock.adjust("60 seconds");
       expect(attempts()).toBe(1);
     });

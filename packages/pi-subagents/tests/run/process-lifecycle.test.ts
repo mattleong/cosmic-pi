@@ -55,7 +55,6 @@ const processFixture = () =>
           () => Effect.sync(() => void counts.released++),
         ),
     };
-    // Each flow removes the cwd's pool before admitting its next writer, which gets a fresh one.
     const newRecord = (id: string) =>
       Effect.gen(function* () {
         const pool = yield* addWriterPoolMemberLocked(context.writerPools, cwd, id);
@@ -122,7 +121,6 @@ const initializer = (context: RunContext, prepareBackendSpawn = makeWriterPrepar
   });
 };
 
-/** `context` with its lock pausing once, on leaving the first locked step after which `reached`. */
 const pauseOnceAfterLock = (context: RunContext, reached: () => boolean) =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
@@ -151,7 +149,6 @@ it.effect(
       const fixture = yield* processFixture();
       const record = yield* fixture.newRecord("writer");
       const pool = record.writerPool!;
-      // Pause after pending → preparing, before the caller installs its handler.
       const claim = yield* pauseOnceAfterLock(fixture.context, () => pool.state === "preparing");
       const context = claim.context;
       const cleanup = makeRunRecordCleanup(context);
@@ -160,7 +157,6 @@ it.effect(
       preparing.interruptUnsafe();
       yield* Deferred.succeed(claim.release, undefined);
       expect(Exit.isFailure(yield* Fiber.await(preparing))).toBe(true);
-      // Assert before cleanup so the old leak fails directly, not by a timeout.
       expect(yield* Deferred.isDone(pool.preparationSettled)).toBe(true);
       yield* cleanup.closeRecordScope(record);
       expect(record.cleanupDisposition).toBe("confirmed");
@@ -181,7 +177,6 @@ it.effect("settles an interrupted spawn claim before stop, compensation and sess
     yield* Effect.gen(function* () {
       const fixture = yield* processFixture();
       const record = yield* fixture.newRecord("writer");
-      // Pause exactly after claim publication, before returning to the driver.
       const claim = yield* pauseOnceAfterLock(
         fixture.context,
         () => record.backendSpawnAttempt !== undefined,
@@ -199,12 +194,11 @@ it.effect("settles an interrupted spawn claim before stop, compensation and sess
       starting.interruptUnsafe();
       yield* Deferred.succeed(claim.release, undefined);
       expect(Exit.isFailure(yield* Fiber.await(starting))).toBe(true);
-      // Fail directly on the old handoff leak before entering a cleanup join.
       expect(yield* Deferred.isDone(spawnSettlement)).toBe(true);
       expect(record.backendSpawnAttempt).toBeUndefined();
       expect(fixture.counts.spawned).toBe(0);
       yield* Fiber.join(stopping);
-      yield* cleanup.closeRecordScope(record); // Launch compensation joins the same owner.
+      yield* cleanup.closeRecordScope(record);
       expect(record.cleanupDisposition).toBe("confirmed");
       expect(record.writerPool).toBeUndefined();
       expect(fixture.context.writerPools.size).toBe(0);
@@ -247,7 +241,6 @@ it.effect("cancels spawn admission while the registry permit remains held", () =
             Effect.andThen(fixture.context.withLock(effect)),
           ),
       };
-      // Lease preparation already finished; only spawn admission may enter the lock.
       const starting = yield* initializer(
         context,
         () => Effect.void,
@@ -276,7 +269,6 @@ it.effect("spawn ownership remains reusable across scheduler interruption checkp
     for (let interruptAt = 1; interruptAt <= 160; interruptAt++) {
       const fixture = yield* processFixture();
       const record = yield* fixture.newRecord(`writer-${interruptAt}`);
-      // Isolate the spawn handoff from already-tested lease preparation.
       yield* makeWriterPreparation(fixture.context)(record);
       let checkpoints = 0;
       const scheduler = interruptingScheduler(

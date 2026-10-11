@@ -1,11 +1,9 @@
-// The child-only result tool is Promise-shaped because Pi tool execution is.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { type CompactAnimationScheduler, withCodePreviewShell } from "pi-code-previews";
-import type { TSchema } from "typebox";
 import {
   LOCAL_PI_RESULT_CONTRACT_FLAG,
   LocalPiResultContractDocument,
@@ -25,7 +23,6 @@ import {
 import { makeParentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
 import { ParentContactError } from "./local-pi-ipc.ts";
 
-/** Reminders a child gets for stopping without a result, before it settles and fails. */
 export const MAX_RESULT_REMINDERS = 2;
 export const RESULT_REMINDER_MESSAGE_TYPE = "pi-subagents-result-reminder";
 const MAX_CONTRACT_FILE_CHARS = 64 * 1024;
@@ -41,7 +38,6 @@ type StructuredResultAck = Extract<
   { readonly type: "structured_result_ack" }
 >;
 
-/** One activation's parent channel, as the child bridge owns it. */
 export interface ChildResultTransport {
   readonly isCurrent: () => boolean;
   readonly send: (contact: LocalPiContact) => Effect.Effect<void, ParentContactError>;
@@ -53,26 +49,15 @@ export interface ChildResultTransport {
 }
 
 export interface ChildResults {
-  /**
-   * Reads this launch's result contract, or returns undefined synchronously when there is none.
-   * Pi applies CLI flags only after extension factories finish, so call it at session start.
-   */
   readonly load: () => PromiseLike<LocalPiResultContractDocument> | undefined;
-  /** Registers the private result tool for one activation. */
   readonly register: (
     contract: LocalPiResultContractDocument,
     transport: ChildResultTransport,
   ) => void;
-  /** Settles the waiting submission the parent answered. */
   readonly acknowledge: (ack: StructuredResultAck) => void;
-  /** Fails every waiting submission, for a disconnect or a replaced session. */
   readonly rejectPending: (message: string) => void;
 }
 
-/**
- * The private result tool as a child registers it. `submit` resolves once the parent accepted the
- * value's canonical JSON; the presentation gallery renders this exact definition.
- */
 export const subagentResultTool = (
   document: LocalPiResultContractDocument,
   submit: (valueJson: string, signal: AbortSignal | undefined) => Promise<void>,
@@ -83,15 +68,13 @@ export const subagentResultTool = (
       ...resultToolRenderers,
       name: SUBAGENT_RESULT_TOOL_NAME,
       label: RESULT_TOOL_LABEL,
-      // Final submission must end the child turn; nested codemode calls cannot carry terminate.
       exposure: "model-only" as const,
       description:
         "Return your final result to the program that started you. The arguments are your return value. Call once, after all work is done.",
       promptGuidelines: [
         `Call ${SUBAGENT_RESULT_TOOL_NAME} exactly once as your last action; its arguments are your return value.`,
       ],
-      // SAFETY: Pi validates arguments against raw JSON Schema; the root compiled and bounded it.
-      parameters: document.parameters as TSchema,
+      parameters: document.parameters,
       ...(document.strictSafe && {
         constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const },
       }),
@@ -119,11 +102,6 @@ export const subagentResultTool = (
     },
   );
 
-/**
- * Owns one child process's result state. Each parent prompt is a new assignment, and resuming a
- * paused run prompts the same process again, so acceptance and the reminder budget reset per
- * prompt. They do not reset on `agent_start`, which also fires for each reminder continuation.
- */
 export function registerChildResults(
   pi: ExtensionAPI,
   readContractFile: (path: string) => PromiseLike<string>,

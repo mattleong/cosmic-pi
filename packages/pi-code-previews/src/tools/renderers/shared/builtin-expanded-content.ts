@@ -27,7 +27,6 @@ import { readResultBody } from "./read-result";
 import type { PreviewRenderers, RendererState, ToolRenderContext } from "./types";
 import { writeBeforeSnapshot, writeDiffPlan } from "./write-result";
 
-/** Detailed content only. The shared shell owns headings, outcome, and attention. */
 export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme, context) {
@@ -36,7 +35,6 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       const operations = tool === "edit" ? getEditPreviewOperations(args) : [];
       const edits = getObjectValue(args, "edits");
       const completeEdits = Array.isArray(edits) && operations.length === edits.length;
-      // The heading shows the target; list only the remaining options.
       const options = builtinOptionLabels(tool, args, completeEdits);
       if (options.length)
         container.addChild(
@@ -52,7 +50,6 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
         container.addChild(
           expandedSection(theme, undefined, source(content, path, theme, context.invalidate)),
         );
-      // The complete old/new source also preserves unchanged lines outside diff context.
       for (const { oldText, newText } of operations)
         for (const [label, text] of [
           ["Old text", oldText],
@@ -77,10 +74,6 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
   };
 }
 
-/**
- * Output without the recovery text Pi appends for the agent. Expansion keeps that text under its
- * own label rather than drawing it as file content or as an output line.
- */
 function splitAgentNotice(tool: BuiltinCompactTool, result: AgentToolResult<unknown>) {
   const output = getTextContent(result.content);
   if (tool === "read") {
@@ -92,7 +85,6 @@ function splitAgentNotice(tool: BuiltinCompactTool, result: AgentToolResult<unkn
   return { output: split.lines.join("\n"), notice: split.notice };
 }
 
-/** `output` is the result text without the agent's notes. */
 function builtinResultBody(
   tool: BuiltinCompactTool,
   cwd: string,
@@ -107,9 +99,7 @@ function builtinResultBody(
   const path = getPathArg(context.args);
   if (tool === "read") {
     const body = readResultBody(result, context.args);
-    // Images remain Pi-owned, including mixed image/text results.
     if (body.kind === "image") return new Text(escapeControlChars(body.text), 0, 0);
-    // The agent's notes carry an oversized line's recovery instruction.
     if (body.kind === "oversized") return new Container();
     return source(body.content, path, theme, context.invalidate, body.firstLine);
   }
@@ -153,7 +143,6 @@ function builtinResultBody(
   return new Text(escapeControlChars(output), 0, 0);
 }
 
-/** Values the heading shows exactly: short, single-spaced, and free of control characters. */
 function headingShowsExactly(value: string): boolean {
   return (
     value.length <= 60 &&
@@ -162,10 +151,6 @@ function headingShowsExactly(value: string): boolean {
   );
 }
 
-/**
- * Arguments the heading cannot show exactly, as short labels. Values are never collapsed or
- * clipped: expansion must preserve the exact input.
- */
 function builtinOptionLabels<Args>(
   tool: BuiltinCompactTool,
   args: Args,
@@ -194,12 +179,10 @@ function builtinOptionLabels<Args>(
 }
 
 function commandBody(command: string, theme: Theme, invalidate?: () => void): Component {
-  // The heading normalizes whitespace, so only an already-normal command appears there exactly.
   const exactInHeading = normalizeShellCommandWhitespace(command) === command;
   let highlighted: Text | undefined;
   return {
     render(width) {
-      // Leave room for the heading's icon, tool name, and a counter or timing.
       if (exactInHeading && visibleWidth(command) <= width - 30) return [];
       highlighted ??= new Text(
         renderHighlightedText(command, "bash", theme, invalidate).join("\n"),

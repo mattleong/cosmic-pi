@@ -26,13 +26,9 @@ import type {
 import { snapshotView } from "./state.ts";
 
 export interface RunCompletionObservationDependencies extends RunContext {
-  /** The shared notification gate serializing claim acquisition against delivery. */
   readonly withCompletionGate: WithRunLock;
-  /** The stored immutable snapshot, captured under the shared lock to prevent missed publications. */
   readonly currentProjection: () => SubagentProjection;
-  /** Waits for a service publication strictly newer than the supplied revision. */
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
-  /** Claim-token allocation stays owned by the service. */
   readonly allocateClaimToken: () => string;
   readonly delivery: Pick<
     RunNotificationDelivery,
@@ -44,11 +40,6 @@ export interface RunCompletionObservationDependencies extends RunContext {
   >;
 }
 
-/**
- * Owns exclusive completion-claim observation: claim acquisition/release under
- * the shared gate and lock, redacted competing observation, revision-driven
- * terminal waits, and claimed-receipt consumption.
- */
 export function makeRunCompletionObservations(dependencies: RunCompletionObservationDependencies) {
   const {
     records,
@@ -81,7 +72,6 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     });
   };
 
-  /** Caller must hold the service lock. */
   const observeRecord = (
     record: RunRecord,
     claimToken?: string,
@@ -111,15 +101,11 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
             ? "available"
             : "claimed",
     };
-    // Read-back returns only the latest in-memory report and never a receipt. Any claim
-    // held by another operation, including one waiting for a later generation, keeps it redacted.
     const readBack =
       options?.includeDeliveredReports === true &&
       observed.reportStatus === "delivered" &&
       [...record.completionClaims.values()].every((owner) => owner === claimToken);
     const redacted = owns ? undefined : redactCompletionReport(observed);
-    // Recovery facts come from the record, never from the public view. Like retry claims,
-    // they cover only a failed initial assignment.
     const recovery =
       record.view.state === "failed" && record.view.reportGeneration === 0
         ? failedStartRecoveryForRecord(record)
@@ -168,11 +154,9 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     readonly missingIds: ReadonlyArray<string>;
     readonly ownsQuestions: boolean;
   }
-  /** Claiming all awaited runs requires every id; status observation tolerates missing ids. */
   const acquireCompletionClaims = (ids: ReadonlyArray<string>, claimAll: boolean) =>
     withCompletionGate(
       withLock(
-        // Wait for both permits interruptibly. Mask only insertion and finalizer installation.
         Effect.acquireRelease(
           Effect.gen(function* () {
             const selected = ids.flatMap((id) => {
@@ -192,8 +176,6 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
               : undefined;
             if (ownedFailure) return yield* ownedFailure;
             const claimToken = allocateClaimToken();
-            // A finished run offers its unresolved current generation; await also claims the
-            // generation a running run will produce next. Generations start at 1.
             const desired = selected.flatMap((record) => {
               const finished = isAssignmentFinishedRunState(record.view.state);
               const generation = record.completionGeneration + (finished ? 0 : 1);
@@ -243,11 +225,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     use: (claim: CompletionClaim) => Effect.Effect<A, E, R>,
   ) =>
     Effect.scopedWith((scope) =>
-      acquireCompletionClaims(ids, claimAll).pipe(
-        Scope.provide(scope),
-        // Do not provide our private claim scope to the caller's use effect.
-        Effect.flatMap(use),
-      ),
+      acquireCompletionClaims(ids, claimAll).pipe(Scope.provide(scope), Effect.flatMap(use)),
     );
 
   const waitForTerminalObservations = (
@@ -258,7 +236,6 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       projection?: ReadonlyArray<SubagentRunView>,
     ) => void,
   ): Effect.Effect<ReadonlyArray<SubagentRunObservation>, SubagentRuntimeClosedError> => {
-    // Pi partial-result delivery is best effort and cannot own the waiter.
     const emitUpdate = (runs: ReadonlyArray<SubagentRunView>) =>
       Effect.sync(() =>
         invokeHostCallback(() => onUpdate?.(runs, currentProjection().runs), undefined),
@@ -308,8 +285,6 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       waitForTerminalObservations(claim, until, onUpdate).pipe(
         Effect.flatMap((observations) =>
           use(observations).pipe(
-            // Only a successfully constructed result owns the question. On cancellation,
-            // failure, or defect the scoped claim release wakes the outbox instead.
             Effect.flatMap((result) => {
               const covered = questionCoverage?.(result);
               return withLock(
@@ -336,7 +311,6 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     options,
   ) =>
     withCompletionClaims(ids, false, (claim) =>
-      // observeRecord reads record state, so it runs under the lock like the await loop.
       withLock(
         Effect.sync(() =>
           claim.selected.map((record) => observeRecord(record, claim.claimToken, options)),

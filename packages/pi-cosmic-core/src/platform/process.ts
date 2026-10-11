@@ -13,7 +13,6 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { signalProcessGroup } from "./process-tree.ts";
 
-/** Opt-in process authority. It is intentionally excluded from nodeFilePlatformLayer. */
 export const nodeProcessLayer = NodeChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
 );
@@ -42,11 +41,7 @@ export interface BoundedProcessRequest {
   readonly totalOutputLimitBytes?: number;
   readonly timeoutMillis: number;
   readonly cleanupTimeoutMillis?: number;
-  /** Total, synchronous observer called during finalization, including interruption.
-   * False also covers failed acquisition: no handle means no proof of cleanup.
-   */
   readonly onCleanup?: (confirmed: boolean) => void;
-  /** Sweep a detached process group even after a successful leader exit. */
   readonly sweepProcessTreeOnExit?: boolean;
   readonly detached?: boolean;
   readonly windowsHide?: boolean;
@@ -62,7 +57,6 @@ export interface BoundedProcessResult {
   readonly cleanupUnconfirmed: boolean;
 }
 
-/** Retains one stream within its own and the shared total budget; any excess is an overflow. */
 const boundedOutput = (
   source: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
   streamName: "stdout" | "stderr",
@@ -98,7 +92,6 @@ interface EffectProcessExit {
   readonly signal: string | null;
 }
 
-/** Decodes the public Effect child-process exit channel without leaking PlatformError. */
 export const effectProcessExit = (
   exit: Exit.Exit<ChildProcessSpawner.ExitCode, PlatformError.PlatformError>,
 ): EffectProcessExit => {
@@ -109,7 +102,6 @@ export const effectProcessExit = (
       ? failure.reason.cause
       : failure;
   const message = source instanceof Error ? source.message : String(source);
-  // Pinned Effect 4.0.0 exposes the signal only through this stable nested cause text.
   return { code: null, signal: /receipt of signal: '([^']+)'/u.exec(message)?.[1] ?? null };
 };
 
@@ -125,13 +117,10 @@ const sweepExitedProcessTree = (
   return handle.kill({ killSignal: "SIGKILL" }).pipe(
     Effect.timeoutOption(Math.max(1, timeoutMillis)),
     Effect.map(Option.isSome),
-    // The leader has already exited. Match the previous Windows adapter, which
-    // treats a non-zero taskkill result as settled in that state.
     Effect.orElseSucceed(() => true),
   );
 };
 
-/** Kill a scoped Effect child and bound confirmation of its exit. */
 export const confirmEffectProcessClose = (
   handle: ChildProcessSpawner.ChildProcessHandle,
   timeoutMillis: number,
@@ -142,8 +131,6 @@ export const confirmEffectProcessClose = (
     yield* handle
       .kill({ killSignal: "SIGTERM", forceKillAfter: Math.max(1, timeoutMillis / 2) })
       .pipe(Effect.ignore);
-    // Successful signal delivery is not proof of exit. Pinned Node uses its
-    // exit-event Deferred for isRunning, including signal-terminated children.
     return !(yield* handle.isRunning);
   }).pipe(
     Effect.interruptible,
@@ -152,10 +139,6 @@ export const confirmEffectProcessClose = (
     Effect.catchCause(() => Effect.succeed(false)),
   );
 
-/**
- * Runs a bounded one-shot process under Effect scope ownership. Output overflow
- * and deadlines terminate the process before returning their structured result.
- */
 const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   request: BoundedProcessRequest,
 ) {
@@ -174,8 +157,6 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   });
   const handle = yield* Effect.uninterruptible(
     Effect.gen(function* () {
-      // Register before dispatch. The spawner can acquire a native child and
-      // fail before publishing its handle; its own finalizer swallows kill errors.
       let confirmed = false;
       if (request.onCleanup)
         yield* Effect.addFinalizer(() => Effect.sync(() => request.onCleanup!(confirmed)));
@@ -254,7 +235,6 @@ export const runBoundedProcessScoped = (
   ChildProcessSpawner.ChildProcessSpawner
 > => Effect.scoped(runBoundedProcess(request));
 
-/** Named Node boundary for consumers that do not own a larger platform Layer. */
 export const provideNodeProcess = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, Exclude<R, ChildProcessSpawner.ChildProcessSpawner>> =>

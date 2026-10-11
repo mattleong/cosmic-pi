@@ -79,7 +79,6 @@ interface ResolvedModel {
   readonly runtimeApiKey?: RuntimeApiKey | undefined;
 }
 
-/** A candidate's route as one label, such as `local/pi/openai/gpt:high`. */
 const routeLabel = (route: {
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
@@ -94,8 +93,6 @@ const resolvePiModel = (
   ctx: ExtensionContext,
 ): Effect.Effect<ResolvedModel, InvalidSubagentRequestError> =>
   Effect.gen(function* () {
-    // The root registry already reflects the current project-trust decision. Local Pi mirrors
-    // that decision, so every authenticated canonical model is eligible for resolution.
     const availableModels = ctx.modelRegistry
       .getAvailable()
       .map((model) => ({ provider: model.provider, id: model.id }));
@@ -144,7 +141,6 @@ const resolvePiModel = (
     };
   });
 
-/** Unknown host values clamp to the existing conservative inheritance default. */
 const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
   decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
 
@@ -248,10 +244,6 @@ const exhaustedRoute = (
   });
 };
 
-/**
- * Readiness-only fallback: the first candidate that resolves and passes preflight, with every
- * candidate skipped before it. Uncertain cleanup or outcomes stop the walk.
- */
 const selectCandidate = (
   input: PlannedStartInput,
   writesClaimed: boolean,
@@ -475,6 +467,5 @@ export const resolveProfileRetry = (
       ctx,
       environment,
     );
-    // The retry above always yields this exact predecessor claim.
     return { ...request, supersedes: { runId: claim.source.id, claimToken: claim.claimToken } };
   });

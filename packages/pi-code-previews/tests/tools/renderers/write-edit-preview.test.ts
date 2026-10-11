@@ -1,5 +1,3 @@
-// Preview-style write and edit rows rendered through Pi's own component, which renders the call
-// before the result on every update.
 import assert from "node:assert/strict";
 import {
   generateDiffString,
@@ -71,7 +69,6 @@ const overwrite = result("Successfully wrote to a.txt", {
 
 test("a finished write shows its diff once, and its content when no diff is shown", () => {
   const row = liveRow("write", { path: "/project/a.txt", content });
-  // Unchanged leading lines appear only in the proposed content, not in the diff's context.
   assert.match(text(row), /line 0\b/u);
   row.markExecutionStarted();
   assert.match(text(row), /line 0\b/u);
@@ -79,7 +76,6 @@ test("a finished write shows its diff once, and its content when no diff is show
   const settled = text(row);
   assert.equal(count(settled, /LINE 10/gu), 1);
   assert.doesNotMatch(settled, /line 0\b/u);
-  // Expansion keeps the exact written content above the diff.
   row.setExpanded(true);
   assert.match(text(row), /line 0\b/u);
 
@@ -105,7 +101,6 @@ test("a successful write without a diff adds no outcome rows", () => {
   }
   const fresh = liveRow("write", { path: "/project/a.txt", content });
   assert.doesNotMatch(text(fresh), /new file/iu);
-  // Pi draws a settled result without invalidating the call it already rendered.
   fresh.updateResult(result("Successfully wrote to a.txt", { codePreviewBeforeWrite: undefined }));
   assert.equal(count(text(fresh), /new file/giu), 1);
   fresh.updateResult(result("Permission denied", undefined, true));
@@ -153,7 +148,6 @@ test("an edit keeps its proposal until the applied diff replaces it", () => {
     }),
   );
   assert.equal(count(text(row), /BETA/gu), 1);
-  // Expansion keeps the exact proposed edit above the applied diff.
   row.setExpanded(true);
   assert.equal(count(text(row), /BETA/gu), 2);
 
@@ -193,7 +187,7 @@ test.each([
     let drawing = false;
     const theme = failingTheme({ when: () => drawing });
     const renderer = factory("/project");
-    const context = renderContextFixture({ args, isPartial: false });
+    const context = renderContextFixture<{ readonly path: string }>({ args, isPartial: false });
     const retained = renderer.renderCall(args, theme, context);
     assert.doesNotMatch(renderComponent(retained), marker);
     context.args = { ...args, path: "/project/b.ts" };
@@ -240,12 +234,10 @@ it.effect.each([
     const released = new WeakRef(first);
     const row = liveRow(name, first);
     first = undefined;
-    // Pi passes the previous call component back as lastComponent on every update.
     for (let size = 2; size <= 20; size++) {
       row.updateArgs(argsAt(size));
       row.render(120);
     }
-    // A WeakRef target survives until the current job ends, so collect after a macrotask.
     yield* macrotask;
     collectGarbage();
     assert.equal(released.deref(), undefined);
@@ -254,7 +246,6 @@ it.effect.each([
 );
 
 test("a proposed edit does not number its rows as file lines", () => {
-  // The snippet's own line 2 is not line 2 of the file.
   const changed = text(liveRow("edit", edit))
     .split("\n")
     .filter((line) => line.includes("BETA") || line.includes("beta"));

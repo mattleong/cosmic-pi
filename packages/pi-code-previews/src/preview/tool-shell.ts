@@ -1,7 +1,8 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
+import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { createCompactToolShell, type CompactShellOptions } from "./compact-shell";
 import { withSelfBackground } from "./self-background";
-import { recordPreviewResult, renderWithPreviewIssues } from "./preview-issues";
+import { PreviewFrames, renderWithPreviewIssues } from "./preview-issues";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import {
   borderState,
@@ -12,44 +13,48 @@ import {
 import { renderTimedResultFooter, updateToolCallTiming, withLastComponent } from "./tool-timing";
 import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
-import type { ToolRenderContext } from "../tools/renderers/shared/types";
 
-export interface CodePreviewToolShell {
+export type ShellRenderBody<TArgs, TState> = (
+  context: ToolRenderContext<TState, TArgs>,
+) => Component;
+
+export interface CodePreviewToolShell<TArgs, TDetails, TState extends object> {
   renderShell: "default" | "self";
-  renderCall<TState, TArgs>(
+  renderCall(
     context: ToolRenderContext<TState, TArgs>,
     theme: Theme,
-    render: (context: ToolRenderContext<TState, TArgs>) => Component,
-    expandedContent?: (context: ToolRenderContext<TState, TArgs>) => Component,
+    render: ShellRenderBody<TArgs, TState>,
+    expandedContent?: ShellRenderBody<TArgs, TState>,
   ): Component;
-  renderResult<TState, TArgs>(
+  renderResult(
     context: ToolRenderContext<TState, TArgs>,
     theme: Theme,
-    render: (context: ToolRenderContext<TState, TArgs>) => Component,
-    result: AgentToolResult<unknown>,
-    expandedContent?: (context: ToolRenderContext<TState, TArgs>) => Component,
+    render: ShellRenderBody<TArgs, TState>,
+    result: AgentToolResult<TDetails>,
+    expandedContent?: ShellRenderBody<TArgs, TState>,
   ): Component;
 }
 
-export function createCodePreviewToolShell(
+export function createCodePreviewToolShell<TArgs, TDetails, TState extends object>(
   mode: ToolCallBackgroundMode = codePreviewSettings.toolCallBackground,
-  compact: CompactShellOptions,
+  compact: CompactShellOptions<TArgs, TDetails, TState>,
   selfShell = false,
   collapsedStyle: ToolCallCollapsedStyle = codePreviewSettings.toolCallCollapsedStyle,
-): CodePreviewToolShell {
+): CodePreviewToolShell<TArgs, TDetails, TState> {
   if (collapsedStyle === "compact") return createCompactToolShell(mode, compact);
   const summary = compact.compactSummary;
+  const frames = new PreviewFrames<TArgs, TDetails, TState>();
   const animateProgress = compact.animateProgress ?? false;
   const timing = {
     scheduleAnimation: compact.scheduleAnimation,
     animateWithoutTiming: animateProgress,
     showShortTiming: compact.showShortTiming ?? false,
   };
-  const shell: CodePreviewToolShell = {
+  const shell: CodePreviewToolShell<TArgs, TDetails, TState> = {
     renderShell: mode === "on" ? "default" : "self",
     renderCall: (context, theme, body) => {
       const render = (current: typeof context) =>
-        renderWithPreviewIssues(body, summary, current, theme);
+        renderWithPreviewIssues(frames, body, summary, current, theme);
       if (mode !== "border") {
         const component = render(context);
         updateToolCallTiming(context, { ...timing, animate: animateProgress, formatLabel: false });
@@ -66,7 +71,7 @@ export function createCodePreviewToolShell(
       return frameBorderShell(context, theme, label);
     },
     renderResult: (context, theme, render, result) => {
-      recordPreviewResult(context, result);
+      frames.record(context, result);
       const label = updateToolCallTiming(context, timing)?.label;
       if (mode !== "border") return renderTimedResultFooter(context, theme, render, label);
       const state = borderState(context);

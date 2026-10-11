@@ -1,7 +1,3 @@
-/**
- * Compact headings from arguments and receipts: subjects, operation words, and receipt
- * counters. Run and workspace IDs never become subjects; they stay in expanded evidence.
- */
 import { getTextContent, type CompactPhase, type CompactSummary } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
@@ -27,7 +23,6 @@ export interface SummaryArguments {
   paths?: unknown;
 }
 
-/** Operations named by a raw token read as words in headings. */
 const OPERATION_LABELS = new Map([
   ["list", "inspect"],
   ["resume_admission", "resume admission"],
@@ -35,7 +30,6 @@ const OPERATION_LABELS = new Map([
 
 const operationLabel = (operation: string): string => OPERATION_LABELS.get(operation) ?? operation;
 
-/** Run IDs as execution reads them: trimmed, nonblank, and each once. */
 const targetIds = <Ids>(ids: Ids): string[] | undefined =>
   Array.isArray(ids) && ids.every(Predicate.isString)
     ? [...new Set(ids.map((id) => id.trim()).filter(Boolean))]
@@ -44,7 +38,6 @@ const targetIds = <Ids>(ids: Ids): string[] | undefined =>
 export const requestedRunIds = (input: SummaryArguments): string[] | undefined =>
   targetIds(input.runIds);
 
-/** The runs a call names: its one `runId`, or else its `runIds`. */
 export const requestedTargets = (input: SummaryArguments): string[] | undefined =>
   Predicate.isString(input.runId) ? targetIds([input.runId]) : requestedRunIds(input);
 
@@ -72,10 +65,6 @@ function claimCounters(
   ];
 }
 
-/**
- * The heading before a receipt exists. Run and workspace IDs never become subjects: the
- * receipt names its runs, and a workspace is the proposal it holds.
- */
 export function argumentSummary(
   input: SummaryArguments,
   action: string,
@@ -103,13 +92,11 @@ export function argumentSummary(
   return summary;
 }
 
-/** A retry returns its successor run, never the failed source it continues. */
 const retrySuccessor = (
   details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
 ): SubagentRunCard | undefined =>
   details.action === "retry" && details.cards.length === 1 ? details.cards[0] : undefined;
 
-/** A card's display name, unless it is only an ID. */
 const displayName = (card: SubagentRunCard | undefined, ids: readonly string[]): string =>
   card && card.name !== card.id && !ids.includes(card.name) ? card.name : "";
 
@@ -122,8 +109,6 @@ export function projectedSubject(
 ): string {
   if (details.action === "models" && Predicate.isString(input.profile)) return input.profile;
   const requested = targets ?? requestedTargets(input);
-  // A lone target is named by its card, or by a retry's successor. A target without a visible
-  // card, or whose name is only an ID, stays unnamed; IDs are expanded-only detail.
   if (requested?.length === 1 && "cards" in details)
     return displayName(
       details.cards.find((entry) => entry.id === requested[0]) ?? retrySuccessor(details),
@@ -134,10 +119,6 @@ export function projectedSubject(
   return displayName(details.cards.length === 1 ? details.cards[0] : undefined, []) || subject;
 }
 
-/**
- * "sent" for a lone confirmed target, else counts: "2 sent, 1 failed", "1 unconfirmed". A zero
- * beside a failure count says nothing the failure count does not.
- */
 function receiptCounter(
   details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
   receipt: string,
@@ -165,7 +146,6 @@ export function applyArgumentLanes(
   if (details.action === "claims")
     summary.counters = claimCounters(details) ?? summary.counters ?? [];
   if (phase === "settled" && (details.action === "send" || details.action === "reply")) {
-    // runCount counts confirmed operations, not failures or only the bounded visible cards.
     const count = receiptCounter(details, details.action === "send" ? "sent" : "replied");
     summary.counters = [
       details.runCount > details.cards.length
@@ -178,13 +158,11 @@ export function applyArgumentLanes(
     summary.counters = lanes.counters ?? [];
 }
 
-/** Any typed receipt, whichever action it belongs to, rather than a rejected call's text. */
 export const isTypedReceipt = <Details>(details: Details): boolean =>
   decodeStartAwaitCardDetails(details) !== undefined ||
   decodeCompactToolDetails(details) !== undefined ||
   decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, details) !== undefined;
 
-/** Whom a rejected call was about, in people's words. */
 function rejectedTarget(input: SummaryArguments, action: string): string {
   if (action === "workspace") return "the proposed changes";
   if (action === "models") return "profile routes";
@@ -193,11 +171,6 @@ function rejectedTarget(input: SummaryArguments, action: string): string {
   return (ids?.length ?? 0) > 1 || Array.isArray(input.agents) ? "the subagents" : "the subagent";
 }
 
-/**
- * A call rejected before it returned a receipt keeps its heading. A thrown rejection carries only
- * text, while a receipt, even another action's, is never one and declines. Guidance on anything
- * but a resume is classified from the arguments; other text is quoted when people can read it.
- */
 export function rejectedCall(
   input: SummaryArguments,
   action: string,

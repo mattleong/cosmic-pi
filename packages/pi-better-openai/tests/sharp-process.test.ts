@@ -10,7 +10,6 @@ import { nodeFilePlatformLayer, runBoundedProcessNode } from "pi-cosmic-core";
 import sharp from "sharp";
 import { makeSharpAdapter } from "../src/boundary/sharp.ts";
 
-// Native failure injection cannot be expressed by the Effect process service.
 const nativeProcess = process.getBuiltinModule("node:child_process");
 if (!nativeProcess) throw new Error("Node child_process builtin unavailable.");
 const NativeChildProcess = nativeProcess.ChildProcess;
@@ -70,7 +69,6 @@ it.live("enforces the child stdin limit even without the parent guard", () =>
       timeoutMillis: 5_000,
       cleanupTimeoutMillis: 200,
     }).pipe(Effect.result);
-    // Closing an oversized stdin can surface as either a stream failure or exit 1.
     if (result._tag === "Success") {
       expect(result.success.code).not.toBe(0);
       expect(result.success.stdout).toBe("");
@@ -116,7 +114,6 @@ const waitForPid = (marker: string) =>
     }
   }).pipe(Effect.timeout(5_000));
 
-// Test ownership survives failed assertions and bypasses injected kill failures.
 const nativeKill = process.kill.bind(process);
 const ownPid = (marker: string) =>
   Effect.acquireRelease(waitForPid(marker), (pid) =>
@@ -166,7 +163,6 @@ it.live("cancellation confirms forced child exit before releasing shared admissi
   }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
 );
 
-// Last: uncertainty disables this module's admission permanently.
 it.live("failed native cancellation cannot admit another decoder while its child survives", () =>
   Effect.gen(function* () {
     const marker = yield* makeMarker;

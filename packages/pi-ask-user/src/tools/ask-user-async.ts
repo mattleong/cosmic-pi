@@ -4,7 +4,12 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+  defineTool,
+  type ExtensionAPI,
+  type MessageRenderer,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import { toPiToolOutputSchema } from "pi-cosmic-core";
 import {
   AskUserAsyncParameters,
@@ -38,19 +43,16 @@ import {
 const START_OUTPUT_SCHEMA = toPiToolOutputSchema(AskUserAsyncContractSchema);
 const CONTROL_OUTPUT_SCHEMA = toPiToolOutputSchema(AskUserAsyncControlContractSchema);
 
-/**
- * Register once at factory time: Pi draws historical answers before session_start.
- * Each invocation reads current presentation policy without acquiring session resources.
- */
-export function registerAsyncAskUserMessageRenderer(pi: ExtensionAPI): void {
-  pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, (message, options, theme) =>
-    renderAsyncMessage(
-      message,
-      options,
-      theme,
-      captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
-    ),
+export const renderAskUserAsyncMessage: MessageRenderer = (message, options, theme) =>
+  renderAsyncMessage(
+    message,
+    options,
+    theme,
+    captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
   );
+
+export function registerAsyncAskUserMessageRenderer(pi: ExtensionAPI): void {
+  pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, renderAskUserAsyncMessage);
 }
 
 export function registerAsyncAskUserTools(

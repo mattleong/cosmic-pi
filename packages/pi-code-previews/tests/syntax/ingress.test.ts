@@ -58,7 +58,6 @@ it.effect("a saturated row's synchronous redraw does not invalidate it again", (
       ingress.shutdown.pipe(Effect.andThen(Effect.sync(() => clearSyntaxProjection(owner)))),
     );
     for (let index = 0; index < 128; index++) requestSyntaxLanguage("rust", () => undefined);
-    // Pi's invalidate redraws the row at once, and the redraw requests the language again.
     let redraws = 0;
     const invalidate = () => {
       redraws++;

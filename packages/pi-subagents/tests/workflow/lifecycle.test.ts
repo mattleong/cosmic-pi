@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -35,7 +34,6 @@ import {
 
 const WORKTREE_WRITER = `const fixed = await ${worktreeWriter("fix the bug")};`;
 
-/** Runs a worktree writer, then fails the script; returns the run and the writer's worktree. */
 const failAfterWorktreeWriter = (fixture: WorkflowFixture, workflows: WorkflowServiceContract) =>
   Effect.gen(function* () {
     const original = yield* startScript(
@@ -50,7 +48,6 @@ const failAfterWorktreeWriter = (fixture: WorkflowFixture, workflows: WorkflowSe
     return { runId: original.id, workspaceId: workspaceId ?? "" };
   });
 
-/** Like `failAfterWorktreeWriter`, then integrates the writer's worktree as the main agent. */
 const failAfterIntegratedWriter = (
   fixture: WorkflowFixture,
   workflows: WorkflowServiceContract,
@@ -69,13 +66,11 @@ const failAfterIntegratedWriter = (
     return original;
   });
 
-/** Resumes `runId` with a script that runs a reader after the writer; returns the new run's id. */
 const resumeWithChecker = (workflows: WorkflowServiceContract, runId: string) =>
   startScript(workflows, `${WORKTREE_WRITER}\nreturn [fixed, await agent("check it")];`, {
     resumeFromRunId: runId,
   }).pipe(Effect.map((resumed) => resumed.id));
 
-/** Agents take a while to stop, which leaves a stop waiting long enough to interrupt. */
 const slowToStop = (service: SubagentServiceContract): SubagentServiceContract => ({
   ...service,
   closeOwner: (ownerId) =>
@@ -89,7 +84,6 @@ describe("workflow stops", () => {
       yield* runningTask(fixture, "fix");
       const stopping = yield* workflows.stop(started.id, "tool").pipe(Effect.forkChild);
       yield* runWhere(workflows, started.id, (run) => run.state === "stopping");
-      // The user interrupts the stop call, so its result never reaches the main agent.
       yield* Fiber.interrupt(stopping);
       const run = yield* finished(workflows, started.id);
       expect(run.state).toBe("stopped");
@@ -108,13 +102,10 @@ describe("workflow stops", () => {
         () => runRecord(fixture.runFiles, started.id)?.["stoppedBy"] === "tool",
         "the first stop's origin",
       );
-      // Another stop call joins the first and ends before the run stops, then the user's joins;
-      // each enters the stop before this fiber goes on.
       const joining = Effect.forkChild({ startImmediately: true });
       yield* Fiber.interrupt(yield* workflows.stop(started.id, "tool").pipe(joining));
       const user = yield* workflows.stop(started.id, "user").pipe(joining);
       expect(runRecord(fixture.runFiles, started.id)).toMatchObject({ stoppedBy: "tool" });
-      // The first call still returns the final state, so the run sends no notification.
       expect(yield* Fiber.join(first)).toMatchObject({ state: "stopped", stoppedBy: "tool" });
       yield* Fiber.join(user);
       yield* Effect.sleep("50 millis");
@@ -128,10 +119,8 @@ describe("workflow stops", () => {
       yield* runningTask(fixture, "long");
       const tool = yield* workflows.stop(started.id, "tool").pipe(Effect.forkChild);
       yield* runWhere(workflows, started.id, (run) => run.state === "stopping");
-      // The user interrupts the main agent's stop call, then stops the run themselves.
       yield* Fiber.interrupt(tool);
       yield* workflows.stop(started.id, "user");
-      // Once the run leaves memory, its record then offers no restart.
       expect(runRecord(fixture.runFiles, started.id)).toMatchObject({
         state: "stopped",
         stoppedBy: "user",
@@ -212,7 +201,6 @@ describe("workflow results", () => {
   it.live("saves a result that would push the notification past its limit", () =>
     workflowTest({}, function* ({ fixture, workflows }) {
       const fs = yield* FileSystem.FileSystem;
-      // Twelve long warnings take room the 27 KiB result would otherwise use.
       const started = yield* startScript(
         workflows,
         `
@@ -322,7 +310,6 @@ describe("workflow teardown", () => {
         return original;
       });
 
-      // A later activation can't review the first one's worktree, so it doesn't reuse it.
       yield* workflowTest({ sessionKey, worktrees: true }, function* ({ fixture, workflows }) {
         const resumed = yield* startScript(workflows, `${WORKTREE_WRITER}\nreturn fixed;`, {
           resumeFromRunId: original.runId,
@@ -363,7 +350,6 @@ describe("workflow teardown", () => {
       expect(run.reused).toBe(0);
       expect(run.logs.some((entry) => entry.message.includes(original.workspaceId))).toBe(true);
       const notification = yield* deliveredFor(fixture, resumedId);
-      // Only the new writer's worktree awaits review.
       expect(notification.workspaces).toHaveLength(1);
       expect(notification.workspaces).not.toContain(original.workspaceId);
     }),
@@ -391,7 +377,6 @@ describe("workflow teardown", () => {
         function* ({ fixture, workflows, subagents }) {
           const original = yield* failAfterIntegratedWriter(fixture, workflows, subagents);
           const resumedId = yield* resumeWithChecker(workflows, original.runId);
-          // The writer was reused; the session tears down while the checker still runs.
           yield* runningTask(fixture, "check it");
           return resumedId;
         },

@@ -6,17 +6,36 @@ import {
   type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { opaqueFixture, plainTheme, recordingExtensionHost } from "pi-cosmic-core/testing";
+import { plainTheme, recordingExtensionHost, tuiFixture } from "pi-cosmic-core/testing";
 import type { CodePreviewSettings } from "../config/schema";
 import { codePreviewSettings, setCodePreviewSettings } from "../config/state";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
-import type { AdaptableToolDefinition, AdaptableToolRenderers } from "../tools/cooperative-tools";
-import type { ToolRenderContext } from "../tools/renderers/shared/types";
+import type { CodePreviewRenderers, ToolRenderContext } from "../tools/renderers/shared/types";
 
-type RenderContext = ToolRenderContext<any, any>;
+type EmptyRecord = Record<PropertyKey, never>;
+type ContextFields = Omit<ToolRenderContext<EmptyRecord, EmptyRecord>, "args" | "state">;
+type ContextOverrides<TState, TArgs> = Partial<ToolRenderContext<TState, TArgs>>;
+type PresentableRenderers<TArgs, TDetails, TState> = CodePreviewRenderers<
+  TArgs,
+  TDetails,
+  TState | EmptyRecord
+>;
 
-/** A pending, collapsed render context; each test passes only the fields it changes. */
-export function renderContextFixture(overrides: Partial<RenderContext> = {}): RenderContext {
+export function renderContextFixture<TArgs, TState>(
+  overrides: ContextOverrides<TState, TArgs> & { readonly args: TArgs; readonly state: TState },
+): ToolRenderContext<TState, TArgs>;
+export function renderContextFixture<TArgs>(
+  overrides: ContextOverrides<EmptyRecord, TArgs> & { readonly args: TArgs },
+): ToolRenderContext<EmptyRecord, TArgs>;
+export function renderContextFixture<TState>(
+  overrides: ContextOverrides<TState, EmptyRecord> & { readonly state: TState },
+): ToolRenderContext<TState, EmptyRecord>;
+export function renderContextFixture(
+  overrides?: Partial<ContextFields>,
+): ToolRenderContext<EmptyRecord, EmptyRecord>;
+export function renderContextFixture(
+  overrides: ContextOverrides<unknown, unknown> = {},
+): ToolRenderContext<unknown, unknown> {
   return {
     args: {},
     toolCallId: "presentation-test",
@@ -34,18 +53,12 @@ export function renderContextFixture(overrides: Partial<RenderContext> = {}): Re
   };
 }
 
-/**
- * Publishes `overrides` over a snapshot of the current settings and returns its restore.
- * Keep settings applied through rendering: timing and preview flags are read at render time.
- * Effect tests can pair it with `Effect.acquireRelease`.
- */
 export function applyPresentationSettings(overrides: Partial<CodePreviewSettings>): () => void {
   const snapshot = codePreviewSettings;
   setCodePreviewSettings({ ...snapshot, ...overrides });
   return () => setCodePreviewSettings(snapshot);
 }
 
-/** Runs `run` with `overrides` applied, restoring the snapshot even when it throws. */
 export function withPresentationSettings<A>(
   overrides: Partial<CodePreviewSettings>,
   run: () => A,
@@ -58,7 +71,6 @@ export function withPresentationSettings<A>(
   }
 }
 
-/** Registers through core's recording extension host; commands are recorded and never run. */
 export function captureRegistrations(register: (pi: ExtensionAPI) => void) {
   const host = recordingExtensionHost();
   register(host.pi);
@@ -70,88 +82,98 @@ export function captureRegistrations(register: (pi: ExtensionAPI) => void) {
   };
 }
 
-interface PresentationCycleOptions {
-  /** Expansion states in order. Defaults to collapsed, expanded, collapsed, expanded. */
+interface PresentationCycleOptions<TState, TArgs> {
   readonly states?: readonly boolean[];
-  /** Opt-in harness invalidation around each state's render. */
   readonly invalidate?: "before" | "after" | false;
-  /** Extra context for a state, applied to both the call and the result. */
-  readonly overrides?: (expanded: boolean) => Partial<RenderContext>;
+  readonly overrides?: (expanded: boolean) => ContextOverrides<TState, TArgs>;
 }
 
-export interface ToolPresentationHarness {
-  call(args: RenderContext["args"], overrides?: Partial<RenderContext>): Component | undefined;
-  result(result: AgentToolResult<any>, overrides?: Partial<RenderContext>): Component | undefined;
+type HarnessContext<TState, TArgs> = Omit<ToolRenderContext<TState, TArgs>, "args"> & {
+  readonly args: TArgs | undefined;
+};
+
+export interface ToolPresentationHarness<TArgs = unknown, TDetails = unknown, TState = unknown> {
+  call(args: TArgs, overrides?: ContextOverrides<TState, TArgs>): Component | undefined;
+  result(
+    result: AgentToolResult<TDetails>,
+    overrides?: ContextOverrides<TState, TArgs>,
+  ): Component | undefined;
   render(width?: number): string[];
   invalidate(): void;
-  /** Renders the call, then any result, once per state and returns each joined text. */
   cycle(
-    args: RenderContext["args"],
-    result?: AgentToolResult<any>,
-    options?: PresentationCycleOptions,
+    args: TArgs,
+    result?: AgentToolResult<TDetails>,
+    options?: PresentationCycleOptions<TState, TArgs>,
   ): Array<{ readonly expanded: boolean; readonly text: string }>;
   readonly component: Component | undefined;
-  readonly context: RenderContext;
+  readonly context: HarnessContext<TState, TArgs>;
 }
 
-/** Drives the registered render callbacks, never execute; independent of any test runner. */
-export function createToolPresentationHarness(
-  tool: Pick<AdaptableToolRenderers, "renderShell" | "renderCall" | "renderResult">,
-  options: { theme?: Theme; width?: number; state?: object; cwd?: string } = {},
-): ToolPresentationHarness {
+export function createToolPresentationHarness<TArgs, TDetails, TState = EmptyRecord>(
+  tool: PresentableRenderers<TArgs, TDetails, TState>,
+  options: { theme?: Theme; width?: number; state?: TState; cwd?: string } = {},
+): ToolPresentationHarness<TArgs, TDetails, TState | EmptyRecord> {
   const theme = options.theme ?? plainTheme;
-  let context = renderContextFixture({
-    state: options.state ?? {},
-    cwd: options.cwd ?? "/project",
-    invalidate: () => invalidate(),
-  });
+  const initialState: TState | EmptyRecord = options.state ?? {};
+  let fields: Omit<ToolRenderContext<TState | EmptyRecord, TArgs>, "args"> = {
+    ...renderContextFixture({ cwd: options.cwd ?? "/project", invalidate: () => invalidate() }),
+    state: initialState,
+  };
+  let args: TArgs | undefined;
   let call: Component | undefined;
   let result: Component | undefined;
   let callMounted = false;
-  let resultValue: AgentToolResult<any> | undefined;
-  const renderCall = () => {
-    const render = tool.renderCall;
-    call = render?.(context.args, theme, {
-      ...context,
-      lastComponent: call,
-      invalidate: () => context.invalidate(),
-    });
+  let resultValue: AgentToolResult<TDetails> | undefined;
+  const contextFor = (
+    current: TArgs,
+    lastComponent: Component | undefined,
+  ): ToolRenderContext<TState | EmptyRecord, TArgs> => ({
+    ...fields,
+    args: current,
+    lastComponent,
+    invalidate: () => fields.invalidate(),
+  });
+  const renderCall = (current: TArgs) => {
+    call = tool.renderCall?.(current, theme, contextFor(current, call));
   };
-  const renderResult = () => {
+  const renderResult = (current: TArgs) => {
     if (!resultValue) return;
-    const render = tool.renderResult;
-    result = render?.(
+    result = tool.renderResult?.(
       { content: resultValue.content, details: resultValue.details },
-      { expanded: context.expanded, isPartial: context.isPartial },
+      { expanded: fields.expanded, isPartial: fields.isPartial },
       theme,
-      { ...context, lastComponent: result, invalidate: () => context.invalidate() },
+      contextFor(current, result),
     );
   };
-  /** Like ToolExecutionComponent.updateDisplay: the call, then any result, with fresh envelopes. */
   const update = () => {
-    if (callMounted) renderCall();
-    renderResult();
+    if (args === undefined) return;
+    if (callMounted) renderCall(args);
+    renderResult(args);
   };
   function invalidate() {
     call?.invalidate();
     result?.invalidate();
     update();
   }
-  const harness: ToolPresentationHarness = {
-    call(args, overrides = {}) {
-      context = { ...context, ...overrides, args, lastComponent: call };
+  const merge = (overrides: ContextOverrides<TState | EmptyRecord, TArgs>) => {
+    const { args: overriddenArgs, ...rest } = overrides;
+    fields = { ...fields, ...rest };
+    if (overriddenArgs !== undefined) args = overriddenArgs;
+  };
+  const harness: ToolPresentationHarness<TArgs, TDetails, TState | EmptyRecord> = {
+    call(nextArgs, overrides = {}) {
+      merge(overrides);
+      args = nextArgs;
+      fields = { ...fields, lastComponent: call };
       callMounted = true;
       update();
       return call;
     },
     result(value, overrides = {}) {
-      context = {
-        ...context,
-        executionStarted: true,
-        isPartial: false,
-        ...overrides,
-        lastComponent: result,
-      };
+      if (args === undefined) throw new Error("Call the tool before rendering its result.");
+      fields = { ...fields, executionStarted: true, isPartial: false };
+      merge(overrides);
+      fields = { ...fields, lastComponent: result };
       resultValue = value;
       update();
       return result;
@@ -160,11 +182,11 @@ export function createToolPresentationHarness(
       return [...(call?.render(width) ?? []), ...(result?.render(width) ?? [])];
     },
     invalidate,
-    cycle(args, value, plan = {}) {
+    cycle(cycleArgs, value, plan = {}) {
       return (plan.states ?? [false, true, false, true]).map((expanded) => {
         const state = { ...plan.overrides?.(expanded), expanded };
         if (plan.invalidate === "before") invalidate();
-        harness.call(args, state);
+        harness.call(cycleArgs, state);
         if (value) harness.result(value, state);
         const text = harness.render().join("\n");
         if (plan.invalidate === "after") invalidate();
@@ -175,16 +197,12 @@ export function createToolPresentationHarness(
       return call ?? result;
     },
     get context() {
-      return context;
+      return { ...fields, args };
     },
   };
   return harness;
 }
 
-/**
- * Pi's own tool row, built once with the renderers it resolved, as history replay does, then
- * given `result` when there is one.
- */
 export function hostToolRow<Args>(
   name: string,
   args: Args,
@@ -201,27 +219,24 @@ export function hostToolRow<Args>(
     args,
     { showImages: false },
     renderers,
-    opaqueFixture({ requestRender() {} }),
+    tuiFixture({ requestRender() {} }),
     options.cwd ?? "/project",
   );
   if (options.result) row.updateResult(options.result);
   return row;
 }
 
-/** A row's text after a reader sets its expansion, which invalidates it as Pi does. */
 export function drawToolRow(row: ToolExecutionComponent, expanded = false, width = 120): string {
   row.setExpanded(expanded);
   row.invalidate();
   return row.render(width).join("\n");
 }
 
-/** A row's text collapsed, then expanded. */
 export const toolRowFrames = (row: ToolExecutionComponent) => [
   drawToolRow(row, false),
   drawToolRow(row, true),
 ];
 
-/** A fake `scheduleAnimation` owner that records scheduled ticks and released animations. */
 export function animationSchedulerProbe() {
   let latest: (() => void) | undefined;
   let scheduled = 0;
@@ -235,7 +250,6 @@ export function animationSchedulerProbe() {
   };
   return {
     schedule,
-    /** Fires the most recently scheduled tick. */
     tick: () => latest?.(),
     get scheduled() {
       return scheduled;
@@ -248,18 +262,21 @@ export function animationSchedulerProbe() {
 
 type AnimationSchedulerProbe = ReturnType<typeof animationSchedulerProbe>;
 
-/**
- * For each tool: renders a started pending call, fires the owner's newest tick, then settles
- * the result. Reports ticks scheduled, whether a tick invalidated the call, and stops, each
- * counted for that tool alone. Apply compact presentation settings around the call.
- */
-export function probeAnimationOwnership(
-  tools: readonly AdaptableToolDefinition[],
+type ProbedTool<TArgs, TDetails, TState> = PresentableRenderers<
+  TArgs,
+  TDetails | undefined,
+  TState
+> & { readonly name: string };
+
+export function probeAnimationOwnership<TArgs, TDetails, TState>(
+  tools: ReadonlyArray<ProbedTool<TArgs, TDetails, TState>>,
   scheduler: AnimationSchedulerProbe,
   options: {
-    readonly args: (tool: AdaptableToolDefinition) => RenderContext["args"];
-    readonly result?: (tool: AdaptableToolDefinition) => AgentToolResult<any>;
-    readonly filter?: (tool: AdaptableToolDefinition) => boolean;
+    readonly args: (tool: ProbedTool<TArgs, TDetails, TState>) => TArgs;
+    readonly result?: (
+      tool: ProbedTool<TArgs, TDetails, TState>,
+    ) => AgentToolResult<TDetails | undefined>;
+    readonly filter?: (tool: ProbedTool<TArgs, TDetails, TState>) => boolean;
   },
 ) {
   return tools

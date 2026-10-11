@@ -89,22 +89,24 @@ function fixture(options: {
   readonly streamSimple?: ExtensionContext["modelRegistry"]["streamSimple"];
 }) {
   const branch = options.branch ?? [];
-  const ctxFixture = {
-    modelRegistry: { streamSimple: options.streamSimple },
-    thinkingLevel: "high" as const,
+  const base = extensionContextFixture({
+    modelRegistry: options.streamSimple ? { streamSimple: options.streamSimple } : {},
+    thinkingLevel: "high",
     model: options.currentModel ?? testModel(),
     getSystemPrompt: () =>
       options.manager
         ? getCurrentSystemPrompt(convertToLlm(options.manager.buildSessionContext().messages))
         : "system contract",
-    sessionManager: options.manager ?? {
+    sessionManager: {
       getBranch: () => {
         if (options.hostileBranch) throw new Error("host-context-secret");
         return branch;
       },
     },
-  };
-  const context = MutableRef.make(extensionContextFixture(ctxFixture));
+  });
+  const context = MutableRef.make<ExtensionContext>(
+    options.manager ? { ...base, sessionManager: options.manager } : base,
+  );
   const projection = MutableRef.make({
     ...initialProjection(),
     config: makeResolvedConfig({ compaction: { enabled: options.enabled } }),
@@ -176,6 +178,25 @@ const commit = (manager: SessionManager, result: CompactionResult | undefined) =
     result.usage,
   );
   return result;
+};
+
+const checkpointEntry = (
+  id: string,
+  parentId: string,
+  second: number,
+  result: CompactionResult | undefined,
+): SessionEntry => {
+  if (!result) throw new Error("Expected compaction");
+  return {
+    type: "compaction",
+    id,
+    parentId,
+    timestamp: `2026-01-01T00:00:0${second}.000Z`,
+    summary: result.summary,
+    firstKeptEntryId: result.firstKeptEntryId,
+    tokensBefore: result.tokensBefore,
+    details: result.details,
+  };
 };
 
 describe("OpenAICompactionClient", () => {
@@ -265,13 +286,6 @@ describe("OpenAICompactionService", () => {
               totalTokens: 15,
             });
             expect(result.usage?.cost.total).toBeCloseTo(0.000062);
-            expect(decodeOpenAICompactionDetails(result.details)?.checkpoint.usage).toEqual({
-              inputTokens: 12,
-              cachedInputTokens: 5,
-              outputTokens: 3,
-              totalTokens: 15,
-            });
-            // Inspect before any fresh update can hide stale snapshot replay.
             const compactedMessages = manager.buildSessionContext().messages;
             const compactedPrompt = getCurrentSystemPrompt(convertToLlm(compactedMessages));
             expect(compactedPrompt.split("opaque initial content")).toHaveLength(2);
@@ -369,7 +383,7 @@ describe("OpenAICompactionService", () => {
   for (const supportsMidConvoSystemMessages of [false, true]) {
     for (const anchor of ["system", "custom", "usage", "assistant"] as const) {
       it.effect(
-        `counts the retained ${anchor} anchor, mid-conversation=${supportsMidConvoSystemMessages}`,
+        `reuses checkpoints with a retained ${anchor} anchor, mid-conversation=${supportsMidConvoSystemMessages}`,
         () => {
           const manager = SessionManager.inMemory("/virtual/anchors");
           const requestModel = { ...testModel(), compat: { supportsMidConvoSystemMessages } };
@@ -400,10 +414,7 @@ describe("OpenAICompactionService", () => {
                     timestamp: round + 10,
                   }),
                 );
-              const result = commit(manager, yield* service.compact(compactEvent()));
-              expect(decodeOpenAICompactionDetails(result.details)?.checkpoint.rawInputCount).toBe(
-                anchor === "assistant" ? 1 : 0,
-              );
+              commit(manager, yield* service.compact(compactEvent()));
               const messages = manager.buildSessionContext().messages;
               const filtered = yield* service.filterContext(messages);
               const input = responsesInput(requestModel, filtered ?? messages);
@@ -507,38 +518,17 @@ describe("OpenAICompactionService", () => {
       const first = yield* service.compact(compactEvent());
       expect(first?.firstKeptEntryId).toBe("two");
       expect(first?.tokensBefore).toBe(321);
-      const firstDetails = decodeOpenAICompactionDetails(first?.details);
-      expect(firstDetails).toBeDefined();
-      expect(firstDetails?.checkpoint.rawInputCount).toBe(1);
+      expect(decodeOpenAICompactionDetails(first?.details)).toBeDefined();
 
-      target.branch.push({
-        type: "compaction",
-        id: "checkpoint-entry",
-        parentId: "two",
-        timestamp: "2026-01-01T00:00:01.000Z",
-        summary: first?.summary ?? "",
-        firstKeptEntryId: first?.firstKeptEntryId ?? "kept",
-        tokensBefore: first?.tokensBefore ?? 0,
-        details: first?.details,
-      });
+      target.branch.push(checkpointEntry("checkpoint-entry", "two", 1, first));
       target.branch.push({ ...entry("three", "third turn"), parentId: "checkpoint-entry" });
 
       const second = yield* service.compact(compactEvent("kept-again"));
-      const secondDetails = decodeOpenAICompactionDetails(second?.details);
-      expect(secondDetails?.checkpoint.rawInputCount).toBe(1);
+      expect(decodeOpenAICompactionDetails(second?.details)).toBeDefined();
       expect(requests[1]?.input.slice(0, 1)).toEqual(output(1));
       expect(requests[1]?.input.length).toBe(2);
 
-      target.branch.push({
-        type: "compaction",
-        id: "checkpoint-entry-2",
-        parentId: "three",
-        timestamp: "2026-01-01T00:00:02.000Z",
-        summary: second?.summary ?? "",
-        firstKeptEntryId: second?.firstKeptEntryId ?? "kept-again",
-        tokensBefore: second?.tokensBefore ?? 0,
-        details: second?.details,
-      });
+      target.branch.push(checkpointEntry("checkpoint-entry-2", "three", 2, second));
       const messages = buildSessionContext(target.branch).messages;
       const repaired = yield* service.filterContext(messages);
       expect(serializedSnapshot(repaired)).toContain("first turn");

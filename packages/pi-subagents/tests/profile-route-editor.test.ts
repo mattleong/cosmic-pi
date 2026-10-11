@@ -28,25 +28,18 @@ import {
 } from "./fixtures/profile-settings-inspection.ts";
 import { profileCandidate as candidate } from "./fixtures/profiles.ts";
 
-interface InspectionDocumentSeed {
-  readonly version: number;
-  readonly profiles?: Readonly<Record<string, DeclaredProfileRoute>>;
-}
+type ProfileSetSeed = Readonly<Record<string, DeclaredProfileRoute>>;
 
 const inspection = (
-  global: InspectionDocumentSeed = { version: 4 },
-  project?: InspectionDocumentSeed,
+  global: ProfileSetSeed = {},
+  project?: ProfileSetSeed,
 ): ProfileSettingsInspection => {
-  const currentDocument = (input: InspectionDocumentSeed) =>
-    jsonObject(
-      input.version === 4
-        ? {
-            version: 6,
-            defaultProfileSet: "default",
-            profileSets: { default: { profiles: input.profiles ?? {} } },
-          }
-        : input,
-    );
+  const currentDocument = (profiles: ProfileSetSeed) =>
+    jsonObject({
+      version: 6,
+      defaultProfileSet: "default",
+      profileSets: { default: { profiles } },
+    });
   return makeProfileSettingsInspection({
     globalDocument: currentDocument(global),
     projectDocument: project ? currentDocument(project) : undefined,
@@ -54,7 +47,6 @@ const inspection = (
   });
 };
 
-/** Loads a profile from the "default" saved set in one persistent scope. */
 const load = (
   value: ProfileSettingsInspection,
   profile: ProfileId,
@@ -70,7 +62,7 @@ const threeRoute = [
 
 describe("ordered profile-route editor state", () => {
   it("loads and declares a three-candidate route without collapse or reorder", () => {
-    const value = inspection({ version: 4, profiles: { worker: threeRoute } });
+    const value = inspection({ worker: threeRoute });
     const draft = load(value, "worker");
     expect(draft).toEqual({ kind: "explicit", candidates: threeRoute });
     expect(draft.candidates).not.toBe(threeRoute);
@@ -88,7 +80,7 @@ describe("ordered profile-route editor state", () => {
       context: "fresh",
       writeIntent: "read-only",
     } as const;
-    const value = inspection({ version: 4, profiles: { worker: declared } });
+    const value = inspection({ worker: declared });
     const before = structuredClone(value.global.file);
     const draft = load(value, "worker");
     expect(draft.candidates[0]).toMatchObject({ ...declared, closeOnReport: true });
@@ -98,8 +90,8 @@ describe("ordered profile-route editor state", () => {
 
   it("loads session overrides as explicit routes and resets to the active base", () => {
     const base = inspection(
-      { version: 4, profiles: { reviewer: candidate("openai/global") } },
-      { version: 4, profiles: { reviewer: candidate("openai/project") } },
+      { reviewer: candidate("openai/global") },
+      { reviewer: candidate("openai/project") },
     );
     const value = {
       ...base,
@@ -142,14 +134,11 @@ describe("ordered profile-route editor state", () => {
   it("models reset, inherit, disabled, and invalid fail-closed declarations distinctly", () => {
     const value = inspection(
       {
-        version: 4,
-        profiles: {
-          reviewer: threeRoute,
-          scout: "disabled",
-          worker: { ...candidate("bare"), model: "bare" },
-        },
+        reviewer: threeRoute,
+        scout: "disabled",
+        worker: { ...candidate("bare"), model: "bare" },
       },
-      { version: 4 },
+      {},
     );
     expect(load(value, "scout")).toEqual({ kind: "disabled", candidates: [] });
     expect(load(value, "scout", "project")).toEqual({ kind: "inherit", candidates: [] });

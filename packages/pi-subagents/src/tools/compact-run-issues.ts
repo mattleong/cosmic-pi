@@ -5,10 +5,6 @@ import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
 
-/**
- * Card-scoped issue. The message is one sentence that starts with the worker's name; the
- * expanded detail keeps the full text and agent guidance.
- */
 type AddIssue = (
   severity: CompactIssue["severity"],
   code: string,
@@ -16,10 +12,8 @@ type AddIssue = (
   detail?: string,
 ) => void;
 
-/** Worker and system text shown collapsed is bounded tighter than producer copy. */
 export const QUOTED_TEXT_LIMIT = 120;
 
-// Only static alternative selection is routine history. Unknown launch evidence stays visible.
 const staticSkipCodes = new Set([
   "pi_model_unknown",
   "pi_model_ambiguous",
@@ -31,14 +25,11 @@ const staticSkipCodes = new Set([
   "fork_context_unavailable",
 ]);
 
-/** Producer copy that reads as a standalone sentence, continued after `name:`. */
 const continued = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 
-/** A collapsed name for a subagent whose card has no display name of its own. */
 const cardLabel = (card: Pick<SubagentRunCard, "id" | "name">) =>
   (card.name === card.id ? "Subagent" : card.name).slice(0, 60);
 
-/** A reported writer's changes still need review before integration. */
 export const hasChangesToReview = (card: SubagentRunCard): boolean =>
   (Boolean(card.finalText) || card.finalTextTruncated === true) &&
   card.writeIntent === "writer" &&
@@ -49,24 +40,19 @@ const cardIssueAdder =
   (severity, code, message, detail) =>
     issues.push({ severity, code: `${card.id}:${code}`, message, ...(detail && { detail }) });
 
-/** How a projection's issues read; each flag makes routine facts quieter. */
 interface RunIssueOptions {
-  /** A clean settled view keeps routine selection history to expansion. */
   readonly quietHistory?: boolean | undefined;
-  /** The caller asked for a pause, so a paused run is the expected result. */
   readonly requestedPause?: boolean | undefined;
 }
 
 const PROFILE_OPTION_KEY =
   /^([^/]+)\/([^/]+)\/(.+):([^:]+):[^:]+:[^:]+:openaiFastMode=(?:true|false):closeOnReport=(?:true|false)$/u;
 
-/** A profile option key as people read a route: "local/pi · anthropic/claude-opus-4-7:high". */
 export const profileOptionLabel = (key: string): string => {
   const match = PROFILE_OPTION_KEY.exec(key);
   return match ? `${match[1]}/${match[2]} · ${match[3]}:${match[4]}` : key;
 };
 
-/** Each skipped option by its route, with the reason in people's terms. */
 const skippedOptionsDetail = (card: SubagentRunCard): string =>
   card.selection.skippedCandidates
     .map(
@@ -84,7 +70,6 @@ function selectionIssues(
   const skipped = card.selection.skippedCandidates;
   if (!skipped.length) return;
   const detail = skippedOptionsDetail(card);
-  // A retry moves past the option that failed: the expected step, not a problem.
   if (skipped.every((entry) => entry.code === "previous_run_failed")) {
     add("info", "selection-skipped", `${label} moved on to its next profile option`, detail);
     return;
@@ -99,7 +84,6 @@ function selectionIssues(
   );
 }
 
-/** Card audits are bounded projections, never authority for granting paths. */
 export function compactRunIssues(
   cards: readonly SubagentRunCard[],
   options: RunIssueOptions = {},
@@ -120,7 +104,6 @@ export function compactRunIssues(
       );
     }
     evidenceIssues(card, label, add);
-    // Clean terminal static skips are routine history: kept, but only on expansion.
     const quiet =
       options.quietHistory === true &&
       card.state === "completed" &&
@@ -131,10 +114,6 @@ export function compactRunIssues(
   return issues;
 }
 
-/**
- * Worker or system text quoted by its first line, after the worker's name. Text that opens with
- * an instruction is agent guidance, so the message says only that it exists.
- */
 export function quoted(
   label: string,
   text: string,
@@ -152,7 +131,6 @@ function quote(add: AddIssue, label: string, code: string, text: string, fallbac
   add("warning", code, message, detail);
 }
 
-/** The recorded out-of-claim writes, by their first path. */
 function outsideClaims(card: SubagentRunCard): string {
   const paths = [...new Set(card.writeAudit?.violations.map((violation) => violation.path))];
   const first = paths[0];
@@ -242,11 +220,9 @@ function attentionIssues(
 }
 
 function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
-  // Retry guidance belongs with the failure it follows, not on a line of its own.
   const retryGuidance =
     "Inspect expanded details and full subagent_status for cleanup and retry disposition. Do not retry when execution is uncertain or cleanup is unconfirmed; missing projected retry data does not establish eligibility.";
   if (card.error) {
-    // Unrecognised worker prose: common service failures get a short name; the full text stays.
     const { line, detail } = quoteText(card.error, { limit: QUOTED_TEXT_LIMIT, failure: true });
     add(
       "error",
@@ -268,7 +244,6 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
       `${label} is stopping; cleanup isn't confirmed yet`,
       "Stopping; cleanup is not yet confirmed. Inspect status before replacement or recovery.",
     );
-  // A stop is routine: the stopped status already says it. Cleanup guidance stays expanded.
   if (card.state === "stopped")
     add(
       "info",
@@ -276,11 +251,9 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
       `${label} stopped`,
       "Inspect full status for cleanup confirmation before replacement or recovery.",
     );
-  // Source identity, not prose, determines whether the system slot repeats the current warning.
   const systemSourced = card.warningSource === "system";
   const fallback = systemSourced ? "reported a system warning" : "reported a warning";
   if (card.warning) quote(add, label, "warning", card.warning, fallback);
-  // Inconsistent historical projections cannot establish that these are one event.
   if (card.systemWarning && !(systemSourced && card.systemWarning === card.warning))
     quote(add, label, "system-warning", card.systemWarning, "reported a system warning");
   if (card.selection.warning)
@@ -289,7 +262,6 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
 }
 
 function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
-  // Reviewing reported changes is the normal next step, not a problem.
   if (hasChangesToReview(card))
     add(
       "info",
@@ -297,8 +269,6 @@ function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssu
       `${label}: changes are ready for review`,
       "A report does not approve workspace integration.",
     );
-  // Text this view leaves out entirely is one note for the whole view; only clipped text or
-  // claims are this run's own gap.
   const clipped =
     (card.finalTextTruncated === true && card.finalText !== undefined) ||
     (card.errorTruncated === true && card.error !== undefined);

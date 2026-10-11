@@ -33,7 +33,6 @@ export type ProfileWorkspaceTarget =
 export const profileWorkspaceScope = (target: ProfileWorkspaceTarget): ProfileSettingsScope =>
   target.kind === "session" ? "session" : target.set.scope;
 
-/** One editing target's identity; saved-set keys always carry their scope. */
 export const profileTargetKey = (target: ProfileWorkspaceTarget): string =>
   target.kind === "session" ? "session" : `${target.set.scope}:${target.set.name}`;
 
@@ -49,14 +48,12 @@ export interface ProfileSettingsInspection extends SubagentConfigInspection {
 
 export type ProfileRouteDraftKind = "explicit" | "disabled" | "reset" | "inherit" | "invalid";
 
-/** A staged route declaration. Reference candidates make reset/inherit routes inspectable and copyable. */
 export interface ProfileRouteDraft {
   readonly kind: ProfileRouteDraftKind;
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
 
 export interface CandidateControlDefaults {
-  /** Claude or Codex model picked from that runtime's live catalog; neither has a built-in default. */
   readonly nativeModel?: string | undefined;
 }
 
@@ -90,7 +87,6 @@ const declaredAt = (
 export const resolvedSet = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) =>
   resolveNamedProfileSet({ ...set, global: inspection.global, project: inspection.project });
 
-/** Whether resetting this route can remove an actual declaration, including a malformed one. */
 export const hasOwnProfileRouteDeclaration = (
   inspection: ProfileSettingsInspection,
   target: ProfileWorkspaceTarget,
@@ -105,7 +101,6 @@ export const hasOwnProfileRouteDeclaration = (
   );
 };
 
-/** Loads the exact declaration state without collapsing or reordering ordered candidates. */
 export function loadProfileRouteDraft(
   inspection: ProfileSettingsInspection,
   target: ProfileWorkspaceTarget,
@@ -209,7 +204,6 @@ export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
 export const runtimeLabel = (runtime: SubagentRuntime): string =>
   runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude" : "Codex";
 
-/** A candidate's place in its route. */
 export const profileRouteOptionLabel = (index: number): string =>
   index <= 0 ? "Primary" : `Fallback ${index}`;
 
@@ -241,7 +235,6 @@ export const candidateValidationError = (candidate: ProfileCandidate): string | 
   return issue ? candidateIssueMessage(candidate, issue.code) : undefined;
 };
 
-/** Applies controlling fields and visibly normalizes incompatible dependent fields. */
 export function updateCandidateControls(
   candidate: ProfileCandidate,
   patch: Partial<Pick<ProfileCandidate, "host" | "runtime" | "writeIntent">>,

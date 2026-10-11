@@ -35,8 +35,6 @@ describe("workflow slots", () => {
         });
       yield* hold("first", 0);
       yield* yieldUntil(() => granted.length === 1);
-      // Calls queued at the same time keep their call order; a call queued earlier, such as one
-      // back from waiting behind a writer, goes ahead of them even though it arrives last.
       yield* hold("second", 5);
       yield* hold("third", 5);
       yield* hold("earlier", 3);
@@ -46,7 +44,6 @@ describe("workflow slots", () => {
         yield* Deferred.succeed(finish.get(granted.at(-1)!)!, undefined);
       }
       expect(granted).toEqual(["first", "earlier", "second", "third"]);
-      // Only the calls that couldn't take a slot on arrival waited, each once.
       expect(waiting).toBe(3);
     }),
   );
@@ -102,7 +99,6 @@ describe("workflow slots", () => {
       yield* Fiber.interrupt(interrupted);
       yield* Deferred.succeed(abort, undefined);
       expect(Option.isNone(yield* Fiber.join(aborted))).toBe(true);
-      // Neither left a slot behind, so the next waiter takes the holder's place.
       yield* Fiber.interrupt(holder);
       yield* yieldUntil(() => granted.length === 2);
       expect(granted).toEqual(["holder", "next"]);

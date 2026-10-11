@@ -12,7 +12,6 @@ export function formatDiffPreview(
   options: {
     totalLines: number;
     invalidate?: (() => void) | undefined;
-    /** A proposed snippet's rows have no file positions, so they carry only +/- markers. */
     proposed?: boolean;
   },
 ): string {
@@ -29,12 +28,10 @@ export function formatDiffPreview(
   return text;
 }
 
-/** Added and removed line counts, as `+N -M`. */
 export function diffCounts(theme: Theme, counts: { additions: number; removals: number }): string {
   return `${theme.fg("success", `+${counts.additions}`)} ${theme.fg("error", `-${counts.removals}`)}`;
 }
 
-/** A routine note where a size or complexity guard skipped a diff. */
 export function diffSkippedNote(theme: Theme, guard: "size" | "complexity"): string {
   return theme.fg(
     "muted",

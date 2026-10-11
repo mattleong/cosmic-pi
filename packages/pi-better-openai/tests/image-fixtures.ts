@@ -1,13 +1,32 @@
+import type { MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Image, type Component } from "@earendil-works/pi-tui";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import { captureRegistrations } from "pi-code-previews/testing";
 import { registerExtensionCommand } from "pi-cosmic-core";
-import { registerOpenAIImage, registerOpenAIImageMessageRenderer } from "../src/image/register.ts";
+import { expect } from "vitest";
+import {
+  createOpenAIImageMessageRenderer,
+  registerOpenAIImage,
+  registerOpenAIImageMessageRenderer,
+} from "../src/image/register.ts";
 
 export const pngPart = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
 export const textPart = (text: string) => ({ type: "text" as const, text });
 
-/** Image components anywhere in a rendered component tree. */
+export type ImageCustomMessage<Details = unknown> = Parameters<MessageRenderer<Details>>[0];
+
+export const imageMessage = <Details>(
+  content: ImageCustomMessage["content"],
+  details: Details,
+): ImageCustomMessage<Details> => ({
+  role: "custom",
+  customType: "openai-image",
+  content,
+  display: true,
+  details,
+  timestamp: 0,
+});
+
 export const countImages = (component: Component): number =>
   component instanceof Image
     ? 1
@@ -15,11 +34,10 @@ export const countImages = (component: Component): number =>
       ? component.children.reduce((count, child) => count + countImages(child), 0)
       : 0;
 
-/** Registers the image message renderer and tool through a host that must never execute. */
 export function registerImagePresentation(scheduleAnimation?: CompactAnimationScheduler) {
+  const messageRenderer = createOpenAIImageMessageRenderer();
   const { tools, messageRenderers } = captureRegistrations((pi) => {
-    // The application installs the message renderer at factory time, before any session.
-    const noteCwd = registerOpenAIImageMessageRenderer(pi);
+    const noteCwd = registerOpenAIImageMessageRenderer(pi, messageRenderer);
     registerOpenAIImage(
       pi,
       registerExtensionCommand(pi, { name: "openai", description: "OpenAI" }),
@@ -32,5 +50,6 @@ export function registerImagePresentation(scheduleAnimation?: CompactAnimationSc
       { noteCwd, scheduleAnimation },
     );
   });
-  return { tool: tools[0]!, message: messageRenderers.get("openai-image")! };
+  expect(messageRenderers.get("openai-image")).toBe(messageRenderer.render);
+  return { tool: tools[0]!, message: messageRenderer.render };
 }

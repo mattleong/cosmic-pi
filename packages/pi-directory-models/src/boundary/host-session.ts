@@ -5,11 +5,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core";
 
-/** Captures cwd, signal, and freshness; undefined means the session is unavailable. */
 export function captureDirectorySession(event: SessionStartEvent, ctx: ExtensionContext) {
   const host = captureSessionHost(ctx);
   if (host._tag === "Unavailable") return undefined;
-  // Only startup resolves the active leaf; other starts never read session entries.
   const fresh =
     event.reason === "startup"
       ? invokeHostCallback(

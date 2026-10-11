@@ -1,4 +1,3 @@
-// Serialized save boundary. No optimistic value is used as a commit receipt.
 import { sameProfileCandidate, MAX_PROFILE_CANDIDATES } from "../profiles/model.ts";
 import {
   CANDIDATE_LIMIT_REACHED,

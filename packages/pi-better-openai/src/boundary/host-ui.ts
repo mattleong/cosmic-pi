@@ -4,13 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { captureHostSignal, sanitizeDiagnosticError, notifyAtHostBoundary } from "pi-cosmic-core";
 
-/** Materializes Pi's dynamic cancellation signal without allowing a host getter to defect. */
 export function safeHostSignal(ctx: ExtensionContext): AbortSignal | undefined {
   const captured = captureHostSignal(ctx);
   return captured._tag === "Captured" ? captured.signal : undefined;
 }
 
-/** Contains a host command: typed failures and defects warn, interrupts stay silent. */
 export const containCommandFailure = <A, E extends { readonly message: string }, R>(
   effect: Effect.Effect<A, E, R>,
   ctx: ExtensionContext,

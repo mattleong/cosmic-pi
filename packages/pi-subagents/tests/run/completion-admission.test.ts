@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
 import { makeRunCompletionObservations } from "../../src/run/completion-observations.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
-import { makeRunContext, partialRecord } from "./fixtures/run-context.ts";
+import { makeRunContext, runRecordFixture } from "./fixtures/run-context.ts";
 import { useProbe } from "./fixtures/service-harness.ts";
 
 describe("completion admission", () => {
@@ -15,8 +15,7 @@ describe("completion admission", () => {
         const runLock = yield* Semaphore.make(1);
         const completionGate = yield* Semaphore.make(1);
         const enteredGate = yield* Deferred.make<void>();
-        // The observation boundary reads only the completion fields and the view.
-        const record = partialRecord({
+        const record = yield* runRecordFixture({
           view: view({ state: "completed", reportGeneration: 1, finalText: "Report" }),
           completionGeneration: 1,
           completionGenerations: new Map([
@@ -88,8 +87,6 @@ describe("completion admission", () => {
           yield* Fiber.join(gateProbe);
           yield* Fiber.join(cancellation);
         }).pipe(Effect.ensuring(runLock.release(1)));
-        // The cancelled admission must not acquire a claim when the second lock opens.
-        // A new caller can still own and consume the original report.
         yield* observations.withAwaitTerminalObservations(
           [record.view.id],
           "all_finished",

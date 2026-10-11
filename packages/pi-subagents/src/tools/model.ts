@@ -11,9 +11,7 @@ export interface SubagentStartFailure {
   readonly index: number;
   readonly name?: string;
   readonly message: string;
-  /** Machine-actionable failure code (specific validation code or the error tag). */
   readonly code?: string;
-  /** Present only when launch admission occurred and complete cleanup facts have settled. */
   readonly admittedRun?: FailedStartRecovery;
 }
 
@@ -36,16 +34,13 @@ export type SubagentStartOutcome =
   | {
       readonly index: number;
       readonly failure: SubagentStartFailure;
-      /** Present only after a concrete route/model was selected and attempted. */
       readonly resolvedRoute?: SubagentStartResolvedRoute | undefined;
     };
 
 export interface SubagentActionFailure {
   readonly id: string;
   readonly message: string;
-  /** Machine-actionable failure code (specific validation code or the error tag). */
   readonly code?: string;
-  /** The backend's typed pending-delivery flag, produced only for `send` steering. */
   readonly pendingDelivery?: true;
 }
 

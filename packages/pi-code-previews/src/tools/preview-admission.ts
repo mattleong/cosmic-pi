@@ -6,11 +6,9 @@ import { isNativeMcpName } from "./native-mcp-identity";
 export const isCorePreviewName = (name: string): name is (typeof CORE_CODE_PREVIEW_TOOLS)[number] =>
   CORE_CODE_PREVIEW_TOOLS.some((tool) => tool === name);
 
-/** Names presentation may claim at all; every other name falls through untouched. */
 export const isPreviewName = (name: string): boolean =>
   isCodePreviewToolName(name) || isNativeMcpName(name);
 
-/** Exact public builtin source `builtin:<path>`; the path defaults to the tool's own name. */
 export function isBuiltinTool(
   tool: ToolInfo | undefined,
   path: string | undefined = tool?.name,
@@ -18,7 +16,6 @@ export function isBuiltinTool(
   return tool?.sourceInfo.source === "builtin" && tool.sourceInfo.path === `builtin:${path}`;
 }
 
-/** Exact extension ownership, anchored by a unique public command from the same factory. */
 export function isSameExtensionSource(
   tool: ToolInfo | undefined,
   source: SourceInfo | undefined,
@@ -35,10 +32,6 @@ export function isSameExtensionSource(
   );
 }
 
-/**
- * Public source admission shared by rendering, status and write registration: exact builtins,
- * native codemode and MCP, or a write hook this extension already owns.
- */
 export function admitsPreviewSource(
   name: string,
   host: PreviewHostTools,
@@ -54,7 +47,5 @@ export function admitsPreviewSource(
     );
   if (name === "codemode") return isBuiltinTool(tool);
   if (name === "tool_search") return isBuiltinTool(tool, "tool-search");
-  // Registered MCP definitions need exact builtin MCP ownership. Historical calls may precede
-  // server connection; only an independently proven builtin manager admits their facade.
   return isNativeMcpName(name) && (tool ? isBuiltinTool(tool, "mcp") : host.nativeManager);
 }

@@ -183,7 +183,6 @@ describe("hierarchical tool result rendering", () => {
       const details = makeAwaitDetails({ ...input, [outcome]: true });
       const expanded = text(details, { expanded: true });
 
-      // The summary's issue lines tell the outcomes apart; the body keeps the run data.
       expect(signature(details)).not.toEqual(ordinary);
       expect(expanded).toContain(active.progress);
       expect(expanded).toContain(failure.error);
@@ -302,7 +301,6 @@ describe("hierarchical tool result rendering", () => {
       }),
       { expanded: true },
     );
-    // A section heading sits two columns in, above its four-column body.
     const sectionOf = (id: string) => {
       const row = lines.findIndex((line) => line.includes(id));
       return lines.slice(0, row).findLast((line) => /^ {2}\S/u.test(line));

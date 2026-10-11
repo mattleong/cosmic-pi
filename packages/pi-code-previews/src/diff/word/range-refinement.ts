@@ -74,7 +74,6 @@ function rangesForTokenGroup(tokens: WordEmphasisToken[], group: TokenGroup): Te
   );
 }
 
-/** Joins start-sorted ranges separated by at most one character. */
 function mergeRanges(ranges: TextRange[]): TextRange[] {
   const merged: TextRange[] = [];
   for (const range of ranges) {
@@ -135,7 +134,6 @@ function shouldSuppressUnbalancedIdentifierPartRefinement(
   return Math.min(beforePartCount, afterPartCount) === 1 && beforePartCount !== afterPartCount;
 }
 
-/** Narrows a token pair to the text between their shared prefix and suffix. */
 function refinedTokenTextRanges(
   beforeToken: WordEmphasisToken,
   afterToken: WordEmphasisToken,
@@ -144,7 +142,6 @@ function refinedTokenTextRanges(
   const prefix = commonPrefixLength(beforeToken.value, afterToken.value);
   const suffix = commonSuffixLength(beforeToken.value, afterToken.value, prefix);
   if (!shouldRefineTokenText(beforeToken.value, afterToken.value, prefix, suffix)) return undefined;
-  // Distinct values leave a non-empty middle on at least one side.
   return {
     removed: tokenMiddleRange(beforeToken, prefix, suffix),
     added: tokenMiddleRange(afterToken, prefix, suffix),

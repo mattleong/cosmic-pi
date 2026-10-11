@@ -2,10 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import * as Option from "effect/Option";
 import type { ExtensionCommand, ExtensionSubcommand } from "pi-cosmic-core";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { OPENAI_IMAGE_TOOL, registerOpenAIImage } from "../src/image/register.ts";
+import { OpenAIImageService } from "../src/image/service.ts";
 import type { CodexImageResult } from "../src/image/types.ts";
 
 const image: CodexImageResult = {
@@ -34,10 +34,16 @@ function fixture() {
     },
   };
   const { pi, tools } = recordingExtensionHost({}, { sendMessage });
-  // The command's contained request resolves an Option; the tool's resolves the image itself.
-  const runFixture = vi.fn().mockResolvedValueOnce(Option.some(image)).mockResolvedValue(image);
-  // SAFETY: This owned runner seam returns the result each path expects, in call order.
-  const run = runFixture as Parameters<typeof registerOpenAIImage>[2];
+  const runFixture = vi.fn();
+  const run: Parameters<typeof registerOpenAIImage>[2] = (effect, signal) => {
+    runFixture();
+    return Effect.runPromise(
+      effect.pipe(
+        Effect.provideService(OpenAIImageService, { generate: () => Effect.succeed(image) }),
+      ),
+      { signal },
+    );
+  };
   registerOpenAIImage(pi, command, run, updateContext, { noteCwd, isCurrent: () => current });
   const controller = new AbortController();
   const ctx = extensionContextFixture({
@@ -71,7 +77,6 @@ describe("image command delivery authority", () => {
         Effect.gen(function* () {
           const h = fixture();
           const pending = h.invoke();
-          // Queue retirement beside admission, before any Effect scheduler checkpoint.
           const retired = Promise.resolve().then(() => {
             if (retirement !== "abort") h.replace();
             if (retirement !== "replacement") h.abort();
@@ -91,7 +96,6 @@ describe("image command delivery authority", () => {
       yield* Effect.promise(() => Promise.resolve(h.invoke()));
       expect(h.runFixture).not.toHaveBeenCalled();
       expect(h.updateContext).not.toHaveBeenCalled();
-      // The factory-scoped message renderer keeps the current session's display directory.
       expect(h.noteCwd).not.toHaveBeenCalled();
       expect(h.notify).not.toHaveBeenCalled();
       expect(h.sendMessage).not.toHaveBeenCalled();
@@ -126,8 +130,6 @@ describe("image command delivery authority", () => {
         });
         const toolResult = yield* Effect.promise(() => h.execute(undefined));
         const { data, ...details } = image;
-        // The transient result also carries the script image; native-codemode.test.ts checks the
-        // actual persisted Pi transcript, which does not store this structured payload a second time.
         expect(toolResult.structuredContent).toMatchObject({
           contract: "pi-better-openai/image",
           version: 1,

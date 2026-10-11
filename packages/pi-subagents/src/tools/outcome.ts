@@ -10,7 +10,6 @@ import {
 
 export type SubagentOutcomeDetails = SubagentStartAwaitCardDetails | CompactSubagentToolDetails;
 
-/** Match the owned action, never raw text or the state of an observed worker. */
 export const decodeSubagentOutcomeDetails = <ValueInput>(
   action: string,
   value: ValueInput,
@@ -19,17 +18,11 @@ export const decodeSubagentOutcomeDetails = <ValueInput>(
   return details?.action === action ? details : undefined;
 };
 
-/**
- * Any returned target-operation failure evidence, including pending delivery. Summaries and
- * expansion use this; receipt policy uses `marksSubagentToolError`. A successful observation of
- * a failed worker is not a failed tool operation.
- */
 export const hasSubagentToolFailure = (details: SubagentOutcomeDetails): boolean =>
   details.action === "start"
     ? (details.startFailures?.length ?? 0) > 0
     : "actionFailures" in details && (details.actionFailures?.length ?? 0) > 0;
 
-/** Unknown-input form for renderers that must keep returned failure evidence visible. */
 export const hasReturnedFailureEvidence = <ValueInput>(value: ValueInput): boolean => {
   const details = decodeStartAwaitCardDetails(value) ?? decodeCompactToolDetails(value);
   return details !== undefined && hasSubagentToolFailure(details);
@@ -38,16 +31,9 @@ export const hasReturnedFailureEvidence = <ValueInput>(value: ValueInput): boole
 export const isUncertainToolFailure = (failure: { readonly code?: string | undefined }): boolean =>
   isOutcomeUncertain(failure) || isCleanupUnconfirmed(failure);
 
-/** Only the backend's explicit typed flag on its exact steering code reports pending delivery. */
 export const isPendingDeliveryError = (error: SubagentError): boolean =>
   error._tag === "SubagentProcessError" && actionFailureDisposition("send", error) === "pending";
 
-/**
- * `pending`: typed guidance delivery is still tracked by the backend (not a tool error).
- * `unconfirmed`: outcome or cleanup is uncertain by code (error; never resend or retry).
- * `failed`: a definite failure. Historical or unflagged uncertain codes stay `unconfirmed`, and
- * a flag on any other action or code keeps its code-based classification.
- */
 export type ActionFailureDisposition = "pending" | "unconfirmed" | "failed";
 
 export const actionFailureDisposition = (
@@ -75,7 +61,6 @@ export const countActionFailures = (
 };
 export type ActionFailureCounts = Readonly<ReturnType<typeof countActionFailures>>;
 
-/** Receipt policy: pending-only, and pending plus confirmed, results are not Pi tool errors. */
 export const marksSubagentToolError = (details: SubagentOutcomeDetails): boolean =>
   details.action === "start"
     ? (details.startFailures?.length ?? 0) > 0
@@ -84,7 +69,6 @@ export const marksSubagentToolError = (details: SubagentOutcomeDetails): boolean
         (failure) => actionFailureDisposition(details.action, failure) !== "pending",
       );
 
-/** Typed pending send evidence: neither delivered nor failed, and never a reason to resend. */
 export const pendingDeliveryEvidence = {
   message: "Guidance is awaiting delivery confirmation",
   detail:
@@ -94,7 +78,6 @@ export const pendingDeliveryEvidence = {
 export const unconfirmedActionRecovery =
   "The action may already have taken effect. Do not resend, retry, or launch a replacement while the outcome or cleanup is unconfirmed; inspect full subagent_status before choosing recovery.";
 
-/** Delivery evidence is not proof that a model incorporated guidance or permission to retry. */
 export const steeringDeliveryEvidence = {
   pending: {
     message: "Guidance delivery is awaiting confirmation",

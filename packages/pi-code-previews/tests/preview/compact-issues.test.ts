@@ -44,7 +44,6 @@ test("expansion adds informational issues and each detail beneath its own messag
   expect(at("Showing lines 1-2000 of 9000")).toBe(4);
   expect(at("Use offset=2001 to continue.")).toBe(5);
   expect(rows).toHaveLength(6);
-  // The message line itself is identical whether collapsed or expanded.
   expect(render(issues).every((row) => rows.includes(row))).toBe(true);
 });
 
@@ -65,7 +64,6 @@ test("narrow widths wrap messages and details without clipping any text", () => 
     },
     { severity: "info", code: "hint", message: "Continue from line 2001 of 9000" },
   ];
-  // Width 2 is the narrowest row that can hold a wide grapheme.
   for (const width of [2, 3, 4, 6, 12, 20, 40])
     for (const expanded of [false, true]) {
       const rows = render(long, width, expanded);

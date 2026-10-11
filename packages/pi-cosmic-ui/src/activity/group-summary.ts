@@ -9,21 +9,14 @@ import {
 } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 
-/**
- * Work in a branch, each source counted once; workflow rows are containers, not work. Planned
- * rows are declarations, not work: they count only in `planned` (still possible) or `unrun`
- * (their owner ended without starting them), so they never make a phase running or done.
- */
 export interface GroupSummary {
   readonly items: number;
   readonly running: number;
   readonly pending: number;
-  /** Pending work that has not started and queued questionnaires; included in `pending`. */
   readonly queued: number;
   readonly stopping: number;
   readonly terminal: number;
   readonly stopped: number;
-  /** Cancelled work skipped before it started; disjoint from `stopped`. */
   readonly skipped: number;
   readonly awaited: number;
   readonly planned: number;
@@ -89,13 +82,11 @@ const rowSummary = (row: ActivityRow): GroupSummary =>
 export const summarizeGroup = (rows: readonly ActivityRow[]): GroupSummary =>
   rows.reduce((total, row) => addGroupSummaries(total, rowSummary(row)), emptyGroupSummary);
 
-/** Planned and never-run declarations, kept apart from work progress. */
 export const plannedLabels = (summary: Pick<GroupSummary, "planned" | "unrun">): string[] => [
   ...(summary.planned ? [`${summary.planned} planned`] : []),
   ...(summary.unrun ? [`${summary.unrun} not run`] : []),
 ];
 
-/** Work that is under way or waiting to start. */
 export const activeWorkLabels = (summary: GroupSummary): string[] => [
   ...(summary.running ? [`${summary.running} running`] : []),
   ...(summary.pending > summary.queued ? [`${summary.pending - summary.queued} starting`] : []),
@@ -103,21 +94,14 @@ export const activeWorkLabels = (summary: GroupSummary): string[] => [
   ...(summary.stopping ? [`${summary.stopping} stopping`] : []),
 ];
 
-/** Work that ended without finishing: stopped, then skipped before it started. */
 export const endedWorkLabels = (summary: Pick<GroupSummary, "stopped" | "skipped">): string[] => [
   ...(summary.stopped ? [`${summary.stopped} stopped`] : []),
   ...(summary.skipped ? [`${summary.skipped} skipped`] : []),
 ];
 
-/** Settled work that succeeded: never stopped, skipped or failed work. */
 export const finishedWork = (summary: GroupSummary): number =>
   Math.max(0, summary.terminal - summary.stopped - summary.skipped - summary.attention.failed);
 
-/**
- * A section header's counts: attention first, in the widget's short words, so a header clipped
- * to the list's width keeps what needs someone; then work under way, stopped and skipped work and
- * the rest.
- */
 export const groupSummaryLabels = (summary: GroupSummary): string[] => [
   ...compactNotices(summary.attention),
   ...activeWorkLabels(summary),
@@ -126,10 +110,6 @@ export const groupSummaryLabels = (summary: GroupSummary): string[] => [
   ...plannedLabels(summary),
 ];
 
-/**
- * Every work state with a count, for details. Finished counts only work that succeeded, so
- * stopped, skipped and failed work is never called finished.
- */
 export const workStateLabels = (summary: GroupSummary): string[] => {
   const finished = finishedWork(summary);
   return [
@@ -141,13 +121,8 @@ export const workStateLabels = (summary: GroupSummary): string[] => {
 };
 
 export type PhaseState = "pending" | "running" | "done" | "failed" | "stopped" | "skipped";
-/** Phases in each state. */
 export type PhaseCounts = Readonly<Record<PhaseState, number>>;
 
-/**
- * Settled phases, for history placement only. Done, failed, stopped and skipped phases have all
- * settled; display counts keep them apart, so only done phases count as done.
- */
 export const phaseFinished = (state: PhaseState): boolean =>
   state !== "pending" && state !== "running";
 
@@ -164,11 +139,6 @@ export const countPhases = (states: readonly PhaseState[]) => {
   return counts;
 };
 
-/**
- * Done phases out of all phases, then stopped and skipped phases, which never count as done.
- * Rows leave failed phases to their members' failure notices; details name them after the done
- * count when `failed` is set.
- */
 export const phaseCountLabels = (
   counts: PhaseCounts,
   total: number,
@@ -181,7 +151,6 @@ export const phaseCountLabels = (
   ...(counts.skipped ? [`${counts.skipped} skipped`] : []),
 ];
 
-/** Wall span across started members, not summed effort; queued members have not started. */
 export function workflowMemberSpan(
   members: readonly ActivityRow[],
   now: number | undefined,
@@ -198,11 +167,6 @@ export function workflowMemberSpan(
   return start === Infinity ? undefined : Math.max(0, end - start);
 }
 
-/**
- * Planned declarations under a workflow: the producer's own `count` when it sends one, since it
- * may publish only some planned rows and retention can drop the rest, otherwise the `visible`
- * planned rows. Once the workflow ends, what was planned was never run.
- */
 export const declaredPlanned = (
   workflow: ActivityRow,
   count: number | undefined,
@@ -212,15 +176,6 @@ export const declaredPlanned = (
   return isFinished(workflow) ? { planned: 0, unrun: count } : { planned: count, unrun: 0 };
 };
 
-/**
- * Derives one phase's state from its summary, which carries the producer's own counts when it
- * sends them, and the workflow row. `current` is the index of the workflow's current phase. The
- * current phase of a live workflow stays running between its sequential members. Settled work
- * that was all skipped is skipped, work that all stopped or was skipped is stopped, and settled
- * work with any failure is failed, never done. A phase without work that the workflow passed, or
- * ended before reaching, is skipped; while the workflow is live, planned agents keep it pending,
- * since the script can still call them.
- */
 export function phaseState(
   workflow: ActivityRow,
   index: number,

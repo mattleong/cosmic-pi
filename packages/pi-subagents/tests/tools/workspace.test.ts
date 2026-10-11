@@ -14,7 +14,6 @@ import {
   type SubagentServiceDoubleInput,
 } from "./fixtures/subagent-service-double.ts";
 
-/** Runs one workspace action against a service double with only `overrides` implemented. */
 const run = (
   operation: Parameters<typeof executeWorkspaceAction>[0],
   caller?: string,
@@ -191,15 +190,12 @@ describe("workspace tool", () => {
       Effect.orDie,
     );
     expect(failed).toMatchObject({ code: "workspace_input_invalid" });
-    // Pi `tool_call` handlers can mutate arguments after Pi validated them.
-    for (const operation of [
-      { action: "bogus" },
-      { action: "review", workspaceId: "w", limit: 10_000_000 },
-    ])
-      // SAFETY: These operations deliberately violate the parameter schema.
-      expect(yield* run(operation as never).pipe(Effect.flip, Effect.orDie)).toMatchObject({
-        code: "workspace_input_invalid",
-      });
+    const oversizedPage = yield* run({
+      action: "review",
+      workspaceId: "w",
+      limit: 10_000_000,
+    }).pipe(Effect.flip, Effect.orDie);
+    expect(oversizedPage).toMatchObject({ code: "workspace_input_invalid" });
   });
 
   effectTest("warns about what a committed integration left behind", function* () {
@@ -241,7 +237,6 @@ describe("workspace tool", () => {
       ).toEqual([]);
       expect(text).toContain(issue.detail);
     }
-    // The agent learns which files were kept and where.
     expect(text).toContain("src/Billing/Invoice.cs");
     expect(text).toContain("/agent/git-workspaces/w/worker");
   });

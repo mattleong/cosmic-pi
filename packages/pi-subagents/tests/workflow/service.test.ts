@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
@@ -48,7 +47,6 @@ describe("workflow runs", () => {
         expect.objectContaining({ runId: started.id, outcome: "completed" }),
       ]);
       expect(fixture.workflowNotifications[0]!.content).toContain("Two bugs in src/a.ts.");
-      // The workflow owns its agents' reports; none reach the root on their own.
       expect(fixture.rootNotifications.filter((n) => n.type === "completed")).toEqual([]);
     }),
   );
@@ -161,11 +159,9 @@ describe("workflow runs", () => {
       expect(stateOfTask(fixture, "left")).toBe("stopped");
       expect(stateOfTask(fixture, "right")).toBe("stopped");
       expect(stopped.agents.map((agent) => agent.state)).toEqual(["stopped", "stopped"]);
-      // Stopping again is a no-op that returns the same final state.
       expect((yield* workflows.stop(started.id)).state).toBe("stopped");
       const notification = yield* eventually(() => fixture.delivered[0], "the stop notification");
       expect(fixture.workflowNotifications.map((n) => n.outcome)).toEqual(["stopped"]);
-      // The user chose to stop it, so nothing asks the main agent to start it again.
       expect(notification.content).not.toContain("resumeFromRunId");
     }),
   );
@@ -227,7 +223,6 @@ describe("workflow resume", () => {
         'return [await agent("same"), await agent("same", { label: "again" }), await agent("other")];',
       );
       yield* reportTask(fixture, "same", "first same");
-      // The identical second call is a separate agent with the same task.
       yield* until(() => fixture.backend.controls.length === 2, "the second identical call");
       yield* reportTask(fixture, "same", "second same");
       yield* reportTask(fixture, "other", "other result");
@@ -393,7 +388,6 @@ describe("workflow agents", () => {
           () => stateOfTask(fixture, "needs input") === "waiting_for_parent",
           "the question",
         );
-        // Status names the agent whose question waits for a reply, and how to answer it.
         const status = yield* workflows.status(started.id);
         if (status.kind !== "view") return yield* Effect.die(new Error("Expected a live run."));
         expect(status.attention).toMatchObject([

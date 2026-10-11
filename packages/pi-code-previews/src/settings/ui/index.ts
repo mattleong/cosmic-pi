@@ -146,7 +146,6 @@ export function createSettingsCategoryItems(
           settings.tools,
           done,
           theme,
-          // Tools whose preview setting is off still render, to hide that preview.
           getEffectiveCodePreviewToolSet([], settings),
         );
       },

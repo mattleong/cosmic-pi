@@ -45,11 +45,9 @@ export interface FullScreenKeymapOptions {
   readonly matchesKeybinding?:
     | ((data: string, id: FullScreenSelectionKeybindingId) => boolean)
     | undefined;
-  /** Screen-owned printable commands that must remain reachable before configured movement keys. */
   readonly reservedKeys?: ReadonlySet<string> | undefined;
 }
 
-/** Decodes raw or Kitty CSI-u printable input; DEL (0x7f) is a control key, never printable. */
 export const decodeFullScreenPrintable = (data: string): string | undefined => {
   const printable =
     data.length === 1 && data.charCodeAt(0) >= 32 ? data : decodeKittyPrintable(data);
@@ -85,7 +83,99 @@ export const FULL_SCREEN_NAVIGATION_SHORTCUTS: ReadonlySet<string> = new Set([
   "?",
 ]);
 
-/** Stateful, synchronous resolver for extension-owned full-screen navigation. */
+const NAVIGATION_KEYS: ReadonlyArray<readonly [FullScreenAction, ReadonlyArray<string>, KeyId?]> = [
+  ["last", ["G"]],
+  ["up", ["k"]],
+  ["down", ["j"]],
+  ["previous-pane", [], Key.shift("tab")],
+  ["next-pane", [], Key.tab],
+  ["back", ["h"], Key.left],
+  ["forward", ["l"], Key.right],
+  ["half-page-up", [], Key.ctrl("u")],
+  ["half-page-down", [], Key.ctrl("d")],
+  ["search", ["/"]],
+  ["quit", ["q", "Q"]],
+  ["help", ["?"]],
+];
+
+interface KeyInput {
+  readonly data: string;
+  readonly printable: string | undefined;
+  readonly configured: (id: FullScreenSelectionKeybindingId) => boolean;
+}
+
+const keyInput = (data: string, options: FullScreenKeymapOptions): KeyInput => {
+  const { mode, matchesKeybinding } = options;
+  const printable = decodeFullScreenPrintable(data);
+  const textOwnsPrintable = (mode === "search" || mode === "text-input") && printable !== undefined;
+  const sharedActionOwnsPrintable =
+    mode === "navigation" &&
+    printable !== undefined &&
+    FULL_SCREEN_NAVIGATION_SHORTCUTS.has(printable);
+  return {
+    data,
+    printable,
+    configured: (id) =>
+      !textOwnsPrintable && !sharedActionOwnsPrintable && Boolean(matchesKeybinding?.(data, id)),
+  };
+};
+
+const isReserved = (
+  { printable }: KeyInput,
+  reservedKeys: ReadonlySet<string> | undefined,
+): boolean => printable !== undefined && reservedKeys?.has(printable) === true;
+
+const shortcut = ({ data, printable }: KeyInput): FullScreenResolution | undefined =>
+  printable === undefined || isKeyRepeat(data) ? undefined : { _tag: "Shortcut", key: printable };
+
+const cancels = ({ data, configured }: KeyInput): boolean =>
+  matchesKey(data, Key.escape) || configured("tui.select.cancel");
+
+const confirms = ({ data, configured }: KeyInput): boolean =>
+  matchesKey(data, Key.enter) || configured("tui.select.confirm");
+
+const selectionMotion = ({ data, configured }: KeyInput): FullScreenResolution | undefined => {
+  for (const [key, motion, id] of SELECTION_MOTIONS)
+    if (matchesKey(data, key) || (id !== undefined && configured(id))) return action(motion);
+  return undefined;
+};
+
+const navigationKey = ({ data, printable }: KeyInput): FullScreenResolution | undefined => {
+  for (const [motion, printables, key] of NAVIGATION_KEYS)
+    if (
+      (printable !== undefined && printables.includes(printable)) ||
+      (key !== undefined && matchesKey(data, key))
+    )
+      return action(motion);
+  return undefined;
+};
+
+const resolveConfirmation = (
+  input: KeyInput,
+  reservedKeys: ReadonlySet<string> | undefined,
+): FullScreenResolution | undefined => {
+  if (isReserved(input, reservedKeys)) return shortcut(input);
+  if (isKeyRepeat(input.data)) return undefined;
+  if (cancels(input) || input.printable?.toLowerCase() === "q") return action("cancel");
+  return confirms(input) ? action("confirm") : undefined;
+};
+
+const resolveBusy = (input: KeyInput): FullScreenResolution | undefined => {
+  if (cancels(input)) return action("cancel");
+  return input.printable?.toLowerCase() === "q" ? action("quit") : undefined;
+};
+
+const resolveTextInput = (input: KeyInput): FullScreenResolution | undefined => {
+  if (cancels(input)) return action("cancel");
+  return confirms(input) ? action("confirm") : undefined;
+};
+
+const resolveSearch = (input: KeyInput): FullScreenResolution | undefined => {
+  if (cancels(input)) return action("cancel");
+  if (confirms(input)) return action("confirm");
+  return input.printable === undefined ? selectionMotion(input) : undefined;
+};
+
 export class FullScreenKeymap {
   private pendingFirst = false;
 
@@ -94,59 +184,45 @@ export class FullScreenKeymap {
   }
 
   resolve(data: string, options: FullScreenKeymapOptions): FullScreenResolution | undefined {
-    const { mode, matchesKeybinding } = options;
-    const printable = decodeFullScreenPrintable(data);
-    // Every input ends a pending `gg` chord except a lone `g`, which re-arms it below.
     const pendingFirst = this.pendingFirst;
     this.pendingFirst = false;
-
-    const textOwnsPrintable =
-      (mode === "search" || mode === "text-input") && printable !== undefined;
-    const sharedActionOwnsPrintable =
-      mode === "navigation" &&
-      printable !== undefined &&
-      FULL_SCREEN_NAVIGATION_SHORTCUTS.has(printable);
-    const configured = (id: FullScreenSelectionKeybindingId): boolean =>
-      !textOwnsPrintable && !sharedActionOwnsPrintable && Boolean(matchesKeybinding?.(data, id));
-    if (
-      (mode === "navigation" || mode === "confirmation") &&
-      printable !== undefined &&
-      options.reservedKeys?.has(printable)
-    )
-      return isKeyRepeat(data) ? undefined : { _tag: "Shortcut", key: printable };
-    if (mode === "confirmation" && isKeyRepeat(data)) return undefined;
-    if (matchesKey(data, Key.escape) || configured("tui.select.cancel")) return action("cancel");
-    if (mode === "busy") return printable?.toLowerCase() === "q" ? action("quit") : undefined;
-    if (mode === "confirmation" && printable?.toLowerCase() === "q") return action("cancel");
-    if (matchesKey(data, Key.enter) || configured("tui.select.confirm")) return action("confirm");
-    if (mode === "confirmation" || mode === "text-input" || textOwnsPrintable) return undefined;
-
-    for (const [key, motion, id] of SELECTION_MOTIONS)
-      if (matchesKey(data, key) || (id !== undefined && configured(id))) return action(motion);
-    if (mode === "search") return undefined;
-
-    if (printable === "g") {
-      // A held `g` neither completes nor starts the chord.
-      if (isKeyRepeat(data)) {
-        this.pendingFirst = pendingFirst;
-        return undefined;
-      }
-      this.pendingFirst = !pendingFirst;
-      return action(pendingFirst ? "first" : "pending-first");
+    const input = keyInput(data, options);
+    switch (options.mode) {
+      case "confirmation":
+        return resolveConfirmation(input, options.reservedKeys);
+      case "busy":
+        return resolveBusy(input);
+      case "text-input":
+        return resolveTextInput(input);
+      case "search":
+        return resolveSearch(input);
+      case "navigation":
+        return this.resolveNavigation(input, options.reservedKeys, pendingFirst);
     }
-    if (printable === "G") return action("last");
-    if (printable === "k") return action("up");
-    if (printable === "j") return action("down");
-    if (matchesKey(data, Key.shift("tab"))) return action("previous-pane");
-    if (matchesKey(data, Key.tab)) return action("next-pane");
-    if (printable === "h" || matchesKey(data, Key.left)) return action("back");
-    if (printable === "l" || matchesKey(data, Key.right)) return action("forward");
-    if (matchesKey(data, Key.ctrl("u"))) return action("half-page-up");
-    if (matchesKey(data, Key.ctrl("d"))) return action("half-page-down");
-    if (printable === "/") return action("search");
-    if (printable?.toLowerCase() === "q") return action("quit");
-    if (printable === "?") return action("help");
-    return undefined;
+  }
+
+  private resolveNavigation(
+    input: KeyInput,
+    reservedKeys: ReadonlySet<string> | undefined,
+    pendingFirst: boolean,
+  ): FullScreenResolution | undefined {
+    if (isReserved(input, reservedKeys)) return shortcut(input);
+    if (cancels(input)) return action("cancel");
+    if (confirms(input)) return action("confirm");
+    const motion = selectionMotion(input);
+    if (motion) return motion;
+    return input.printable === "g"
+      ? this.firstChord(input.data, pendingFirst)
+      : navigationKey(input);
+  }
+
+  private firstChord(data: string, pendingFirst: boolean): FullScreenResolution | undefined {
+    if (isKeyRepeat(data)) {
+      this.pendingFirst = pendingFirst;
+      return undefined;
+    }
+    this.pendingFirst = !pendingFirst;
+    return action(pendingFirst ? "first" : "pending-first");
   }
 }
 
@@ -155,7 +231,6 @@ export interface PageSteps {
   readonly half: number;
 }
 
-/** Pure page-step arithmetic shared by full-screen list surfaces; both steps are at least 1. */
 export const pageSteps = (pageSize: number): PageSteps => {
   const page = Math.max(1, pageSize);
   return { page, half: Math.max(1, Math.floor(page / 2)) };

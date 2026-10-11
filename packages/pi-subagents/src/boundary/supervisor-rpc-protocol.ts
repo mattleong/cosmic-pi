@@ -1,4 +1,3 @@
-// Bounded Node socket transport adapter for Effect RPC's server Protocol.
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -8,6 +7,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as RpcMessage from "effect/rpc/RpcMessage";
@@ -48,6 +48,30 @@ interface ClientTransport {
   readonly close: () => void;
 }
 
+const RequestIdEncoded = Schema.Union([Schema.String, Schema.Finite]);
+
+const isClientMessages = Schema.is(
+  Schema.Array(
+    Schema.Union([
+      Schema.Struct({
+        _tag: Schema.tag("Request"),
+        id: RequestIdEncoded,
+        tag: Schema.String,
+        payload: Schema.Unknown,
+        headers: Schema.Array(Schema.mutable(Schema.Tuple([Schema.String, Schema.String]))),
+        isNotification: Schema.optionalKey(Schema.Literal(true)),
+        traceId: Schema.optionalKey(Schema.String),
+        spanId: Schema.optionalKey(Schema.String),
+        sampled: Schema.optionalKey(Schema.Boolean),
+      }),
+      Schema.Struct({ _tag: Schema.tag("Ack"), requestId: RequestIdEncoded }),
+      Schema.Struct({ _tag: Schema.tag("Interrupt"), requestId: RequestIdEncoded }),
+      Schema.Struct({ _tag: Schema.tag("Ping") }),
+      Schema.Struct({ _tag: Schema.tag("Eof") }),
+    ]),
+  ),
+);
+
 const validRequestId = (id: string | number): boolean =>
   Predicate.isNumber(id)
     ? Number.isSafeInteger(id)
@@ -68,7 +92,6 @@ export const makeSupervisorRpcServerProtocol = (
 > =>
   Effect.gen(function* () {
     const serialization = yield* RpcSerialization.RpcSerialization;
-    // Unbounded like Effect's own protocols: connection finalizers must never wait on a consumer.
     const disconnects = yield* Queue.unbounded<number>();
     const clients = new Map<number, ClientTransport>();
     let nextClientId = 0;
@@ -81,7 +104,6 @@ export const makeSupervisorRpcServerProtocol = (
       writeRequest = write;
       return Effect.succeed({
         disconnects,
-        // An unencodable response or a full output queue closes that peer.
         send: (clientId, response) =>
           Effect.sync(() => {
             const client = clients.get(clientId);
@@ -176,11 +198,8 @@ export const makeSupervisorRpcServerProtocol = (
 
           yield* Stream.fromPull(socket.reader.pipe(Effect.map((reader) => reader.pull))).pipe(
             Stream.runForEach((data) => {
-              const decoded = Result.try(
-                // SAFETY: The Effect RPC serialization service owns decoding into its declared client envelope.
-                () => parser.decode(data) as ReadonlyArray<RpcMessage.FromClientEncoded>,
-              );
-              if (Result.isFailure(decoded)) {
+              const decoded = Result.try(() => parser.decode(data));
+              if (Result.isFailure(decoded) || !isClientMessages(decoded.success)) {
                 guard.close();
                 return Effect.void;
               }

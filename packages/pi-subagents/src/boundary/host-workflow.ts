@@ -12,11 +12,6 @@ import {
 } from "../workflow/options.ts";
 import { resolveProfileStart, type SubagentSessionEnvironment } from "./host-profile-resolution.ts";
 
-/**
- * Captures the starting tool call's Pi host and one profile snapshot for the whole run, like a
- * subagent_start batch. An agent resolves its route, and a fork-context profile forks from the
- * root's leaf, when the call first gets one of the run's slots; a queued call keeps that request.
- */
 export const makeWorkflowHost = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -55,7 +50,6 @@ export const makeWorkflowHost = (
 
     const resolveAgent = (spec: WorkflowAgentSpec) =>
       resolveProfileStart(pi, spec, ctx, environment, snapshot).pipe(
-        // Without the captured policy, launch would fall back to default nesting limits.
         Effect.map((request) => ({
           ...request,
           nestingPolicy: snapshot.effectiveConfig.nesting,

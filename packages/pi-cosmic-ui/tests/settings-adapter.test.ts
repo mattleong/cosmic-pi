@@ -26,7 +26,6 @@ const makeChild = () => {
 };
 
 describe("VimSettingsAdapter", () => {
-  // Vim navigation is translated; Space stays the built-in alternate activation key.
   it.each([
     ["j", "\x1b[B"],
     ["l", "\r"],

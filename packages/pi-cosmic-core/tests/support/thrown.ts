@@ -1,4 +1,3 @@
-/** The typed error `run` throws; any other outcome fails the test. */
 export const thrownInstance = <E>(
   Ctor: abstract new (...args: never[]) => E,
   run: () => void,

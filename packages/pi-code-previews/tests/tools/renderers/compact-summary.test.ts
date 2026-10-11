@@ -19,7 +19,7 @@ import {
 import { createBuiltinCompactSummary } from "../../../src/tools/builtin-compact-summary";
 import type { BuiltinCompactTool } from "../../../src/tools/builtin-subject";
 import type { CompactPhase, CompactSummary } from "../../../src/tools/compact-summary";
-import type { ToolRenderContext } from "../../../src/tools/renderers/shared/types";
+import type { RendererState, ToolRenderContext } from "../../../src/tools/renderers/shared/types";
 import { readPreviewRenderers } from "../../../src/tools/renderers/read";
 import {
   builtinRenderers,
@@ -73,7 +73,6 @@ function summary(
   });
 }
 
-/** Issue codes of a defined summary, in display order. */
 function codes(value: CompactSummary | undefined): string[] {
   expect(value).toBeDefined();
   return value?.issues?.map((issue) => issue.code) ?? [];
@@ -110,7 +109,6 @@ test.each([
   const call = readPreviewRenderers("/project").renderCall(args, theme, renderContextFixture());
   const heading = renderComponent(call);
   expect(heading).toContain(subject);
-  // No further range follows the subject's own.
   for (const next of [":", "-"]) expect(heading).not.toContain(subject + next);
 });
 
@@ -122,8 +120,6 @@ test.each([{ offset: "5" }, { offset: null }])(
     const heading = renderComponent(call);
     expect(heading).toContain("a.ts");
     expect(heading).not.toContain("a.ts:");
-    // Pi coerces the offset before reading, so `:1` would name the wrong line. Replayed
-    // arguments may carry an offset outside the declared input type.
     const replayed: Args = { path: args.path };
     Object.assign(replayed, range);
     expect(summary("read", replayed)?.subject).toBe("src/a.ts");
@@ -133,7 +129,6 @@ test.each([{ offset: "5" }, { offset: null }])(
 test("write replay needs actual submitted content before describing changes", () => {
   const details = { codePreviewBeforeWrite: { kind: "content", content: "keep\n" } };
   for (const content of [undefined, null, 42]) {
-    // Replayed write arguments may carry content outside the declared input type.
     const args: Args = { path: "x" };
     Object.assign(args, { content });
     const replay = result("applied", details);
@@ -280,7 +275,6 @@ describe("issues independent of hidden preview bodies", () => {
       expect(value?.issues).toEqual([
         expect.objectContaining({ severity: "info", code: "read-continuation", detail: page.next }),
       ]);
-      // The collapsed message states the page; the agent procedure is expanded detail only.
       expect(value?.issues?.[0]?.message).not.toContain("offset=");
       const sensitive = summary("read", page.args, {
         ...page.output,
@@ -354,7 +348,6 @@ describe("issues independent of hidden preview bodies", () => {
         detail: recovery,
       }),
     ]);
-    // An unrecognized continuation is still reported as truncation; its text stays expanded.
     const unknown = summary(
       "read",
       {},
@@ -422,7 +415,6 @@ describe("write and edit diff limitations", () => {
       { codePreviewBeforeWrite: { kind: "content", byteLength: 4 } },
     ]) {
       const replay = summary("write", args, result("applied", details));
-      // Unavailable history limits the preview, not the write.
       expect(replay?.outcome).toBe("success");
       expect(codes(replay)).toEqual(["write-history-unavailable"]);
       expect(JSON.stringify(replay)).not.toMatch(/new file/i);
@@ -516,7 +508,6 @@ describe("write and edit diff limitations", () => {
   });
 });
 
-/** Renders both slots from one context so toggles share the retained shell state. */
 function renderText(
   tool: ToolRenderers,
   output: AgentToolResult<unknown>,
@@ -544,10 +535,11 @@ describe("builtin factory compact integration", () => {
     edits: [{ oldText: "before", newText: "proposedContent" }],
   };
   const context = (
-    overrides: Partial<ToolRenderContext<object, typeof args>> = {},
-  ): ToolRenderContext<object, typeof args> =>
-    renderContextFixture({
+    overrides: Partial<ToolRenderContext<RendererState, typeof args>> = {},
+  ): ToolRenderContext<RendererState, typeof args> =>
+    renderContextFixture<typeof args, RendererState>({
       args,
+      state: {},
       toolCallId: "builtin-render-test",
       isPartial: false,
       ...overrides,
@@ -593,7 +585,6 @@ describe("builtin factory compact integration", () => {
       for (const expanded of [false, true, false, true]) {
         const text = renderText(tool, output, { ...ctx, expanded }, 200);
         expect(/new file/iu.test(text)).toBe(knownNew);
-        // Informational: explained on expansion only.
         expect(/previous contents unknown/u.test(text)).toBe(!knownNew && expanded);
       }
     }
@@ -680,11 +671,9 @@ describe("builtin factory compact integration", () => {
         const ctx = { ...context({ isError: true, expanded }), state: {} };
         const text = renderText(edit, editOutput, ctx);
         expect(text.split(refusal!.message)).toHaveLength(2);
-        // The raw host error is kept once, in the expanded result.
         expect(text.split("The replacements produced identical content.")).toHaveLength(
           expanded ? 2 : 1,
         );
-        // Unique call source survives a failed edit.
         expect(text.includes("proposedContent")).toBe(expanded);
       }
       const read = builtin("read");
@@ -748,7 +737,6 @@ describe("builtin factory compact integration", () => {
         expect(summary(name, args, output, "settled", { isError: true })).toBeUndefined();
         for (const expanded of [false, true, false]) {
           const text = renderText(tool, output, { ...ctx, expanded }, 200);
-          // Without a projection the collapsed row explains the error by its first line.
           expect(text.includes("Diagnostic starts")).toBe(true);
           expect(text.includes("Inspect destination before retrying.")).toBe(expanded);
           expect(text.includes("x".repeat(100))).toBe(expanded);
@@ -772,7 +760,6 @@ test("over-budget parsing declines compaction rather than clipping error text", 
   const output = "x".repeat(128 * 1024 + 1);
   expect(summary("bash", {}, result(output), "settled", { isError: true })).toBeUndefined();
   expect(summary("read", {}, result(output))).toBeUndefined();
-  // An unscanned long command is flagged rather than implied safe.
   expect(summary("bash", { command: "x".repeat(16 * 1024 + 1) })?.issues).toEqual([
     expect.objectContaining({ severity: "warning", code: "command-unchecked" }),
   ]);

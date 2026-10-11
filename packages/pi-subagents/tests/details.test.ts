@@ -6,8 +6,8 @@ import {
   makeAwaitDetails,
   makeCompactToolDetails,
   makeStartDetails,
-  projectSubagentRunCard,
 } from "../src/tools/details.ts";
+import { projectSubagentRunCard } from "../src/tools/details-projection.ts";
 import type { ProfileCandidateDiscovery as ProfileCandidateDetailsInput } from "../src/tools/model.ts";
 import {
   SUBAGENT_CARD_DETAILS_VERSION,
@@ -17,7 +17,6 @@ import {
 } from "../src/tools/details-schema.ts";
 import { view } from "./fixtures/run-view.ts";
 
-/** A completed Claude run whose private fields must never reach persisted cards. */
 const run = (index = 1, cost?: number): SubagentRunView =>
   view({
     id: `agent-r2-${index}`,
@@ -92,17 +91,13 @@ const startedEntry = (
   runId: `agent-r2-${index + 1}`,
 });
 
-type Mutable<Value> =
-  Value extends ReadonlyArray<infer Item>
-    ? Array<Mutable<Item>>
-    : Value extends object
-      ? { -readonly [Key in keyof Value]: Mutable<Value[Key]> }
-      : Value;
+const clone = <Value>(value: Value): Value => structuredClone(value);
 
-const clone = <Value>(value: Value): Mutable<Value> => {
-  // SAFETY: JSON parsing returns the mutable plain-data clone described by the recursive test type.
-  return JSON.parse(JSON.stringify(value)) as Mutable<Value>;
-};
+const replaceAt = <Item, Next>(
+  items: ReadonlyArray<Item>,
+  index: number,
+  next: (item: Item) => Next,
+): Array<Item | Next> => items.map((item, position) => (position === index ? next(item) : item));
 
 const expectDeeplyFrozen = <ValueInput>(value: ValueInput): void => {
   expect(Object.isFrozen(value)).toBe(true);
@@ -138,7 +133,20 @@ const modelsDetails = () => {
   return details;
 };
 
-/** Forged array whose length is readable but whose elements throw when read. */
+type ModelsDetails = ReturnType<typeof modelsDetails>;
+type ModelsCandidate = ModelsDetails["profiles"][number]["candidates"][number];
+
+const withFirstCandidate = <Next>(
+  details: ModelsDetails,
+  next: (candidate: ModelsCandidate) => Next,
+) => ({
+  ...details,
+  profiles: replaceAt(details.profiles, 0, (profile) => ({
+    ...profile,
+    candidates: replaceAt(profile.candidates, 0, next),
+  })),
+});
+
 const readGuarded = <Item>(items: Item[]) => {
   let reads = 0;
   const value = new Proxy(items, {
@@ -280,8 +288,13 @@ describe("persisted subagent details version 2", () => {
     expect(details.contextOmitted).toBe(true);
     expect(JSON.stringify(details)).not.toContain("Unclaimed descendant report");
 
-    const forged = clone(details);
-    forged.cards[1]!.finalText = "Forged descendant report.";
+    const forged = {
+      ...details,
+      cards: replaceAt(details.cards, 1, (card) => ({
+        ...card,
+        finalText: "Forged descendant report.",
+      })),
+    };
     expect(decodeStartAwaitCardDetails(forged)).toBeUndefined();
   });
 
@@ -379,11 +392,12 @@ describe("persisted subagent details version 2", () => {
     expect(startEntries.reads()).toBe(0);
 
     const source = awaitWire();
-    const capabilities = readGuarded(Array(8).fill("resume"));
-    // SAFETY: The forged oversized array deliberately violates the decoded capability contract.
-    source.cards[0]!.capabilities =
-      capabilities.value as (typeof source.cards)[number]["capabilities"];
-    expect(decodeStartAwaitCardDetails(source)).toBeUndefined();
+    const capabilities = readGuarded(Array.from({ length: 8 }, () => "resume"));
+    const guarded = {
+      ...source,
+      cards: replaceAt(source.cards, 0, (card) => ({ ...card, capabilities: capabilities.value })),
+    };
+    expect(decodeStartAwaitCardDetails(guarded)).toBeUndefined();
     expect(capabilities.reads()).toBe(0);
   });
 
@@ -424,34 +438,32 @@ describe("persisted subagent details version 2", () => {
   });
 
   it("rejects malformed fields and children without partial salvage", () => {
-    const malformedCard = awaitWire();
-    // SAFETY: This forged child deliberately violates the persisted card model type.
-    malformedCard.cards.push({ ...malformedCard.cards[0]!, model: 42 } as never);
+    const wire = awaitWire();
+    const malformedCard = { ...wire, cards: [...wire.cards, { ...wire.cards[0]!, model: 42 }] };
     expect(decodeStartAwaitCardDetails(malformedCard)).toBeUndefined();
 
-    const malformedCapability = awaitWire();
-    // SAFETY: This forged enum value deliberately violates the capability schema.
-    malformedCapability.cards[0]!.capabilities = ["resume", "forged"] as never;
+    const malformedCapability = {
+      ...wire,
+      cards: replaceAt(wire.cards, 0, (card) => ({ ...card, capabilities: ["resume", "forged"] })),
+    };
     expect(decodeStartAwaitCardDetails(malformedCapability)).toBeUndefined();
 
-    const malformedFailure = clone(
-      makeCompactToolDetails({
-        action: "send",
-        runs: [run()],
-        actionFailures: [{ id: "missing", message: "Missing." }],
-      }),
-    );
-    if (malformedFailure.action !== "models")
-      malformedFailure.actionFailures = [
-        ...(malformedFailure.actionFailures ?? []),
-        // SAFETY: This forged child deliberately violates the action-failure message type.
-        { id: "bad", message: 42 } as never,
-      ];
+    const failures = makeCompactToolDetails({
+      action: "send",
+      runs: [run()],
+      actionFailures: [{ id: "missing", message: "Missing." }],
+    });
+    if (failures.action === "models") throw new Error("Expected run details.");
+    const malformedFailure = {
+      ...failures,
+      actionFailures: [...(failures.actionFailures ?? []), { id: "bad", message: 42 }],
+    };
     expect(decodeCompactToolDetails(malformedFailure)).toBeUndefined();
 
-    const malformedProfile = modelsDetails();
-    // SAFETY: This forged child deliberately violates the profile-candidate reason type.
-    malformedProfile.profiles[0]!.candidates[0]!.reason = 42 as never;
+    const malformedProfile = withFirstCandidate(modelsDetails(), (candidate) => ({
+      ...candidate,
+      reason: 42,
+    }));
     expect(decodeCompactToolDetails(malformedProfile)).toBeUndefined();
   });
 
@@ -459,9 +471,7 @@ describe("persisted subagent details version 2", () => {
     const details = modelsDetails();
     const rawCandidate = details.profiles[0]!.candidates[0]!;
 
-    const missing = clone(details);
-    // SAFETY: This forged mutable view removes a required wire field for decoder coverage.
-    delete (missing.profiles[0]!.candidates[0] as { model?: string }).model;
+    const missing = withFirstCandidate(details, ({ model: _model, ...candidate }) => candidate);
     expect(decodeCompactToolDetails(missing)).toBeUndefined();
 
     const crossField = clone(details);
@@ -472,14 +482,12 @@ describe("persisted subagent details version 2", () => {
     });
     expect(decodeCompactToolDetails(crossField)).toBeUndefined();
 
-    const oldProse = clone(details);
-    // SAFETY: This cast injects the removed prose card shape into a current-version wire fixture.
-    oldProse.profiles[0]!.candidates[0] = {
+    const oldProse = withFirstCandidate(details, () => ({
       order: 1,
       candidate: "local/pi/openai/model:default:fresh:read-only",
       status: "eligible",
       reason: "Ready.",
-    } as never;
+    }));
     expect(decodeCompactToolDetails(oldProse)).toBeUndefined();
 
     let privateReads = 0;
@@ -529,22 +537,23 @@ describe("persisted subagent details version 2", () => {
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
     expectDeeplyFrozen(details);
 
-    const reordered = clone(details);
-    reordered.startEntries.reverse();
+    const reordered = { ...details, startEntries: [...details.startEntries].reverse() };
     expect(decodeStartAwaitCardDetails(reordered)).toBeUndefined();
 
-    const missingFailure = clone(details);
-    delete missingFailure.startFailures;
+    const { startFailures: _startFailures, ...missingFailure } = details;
     expect(decodeStartAwaitCardDetails(missingFailure)).toBeUndefined();
 
-    const forgedFailure = clone(details);
-    forgedFailure.startFailures![0]!.index = 0;
+    const forgedFailure = {
+      ...details,
+      startFailures: replaceAt(details.startFailures ?? [], 0, (failure) => ({
+        ...failure,
+        index: 0,
+      })),
+    };
     expect(decodeStartAwaitCardDetails(forgedFailure)).toBeUndefined();
   });
 
   it("fits and strictly decodes 32 dense selected and unavailable start failures in receipt order", () => {
-    // Every fourth entry is an unavailable route whose warning fitting must drop before strict
-    // decode; the rest stay selected so the payload still escalates to minimal density.
     const entries: SubagentStartEntry[] = Array.from({ length: 32 }, (_, index) => {
       const identity = {
         index,
@@ -665,16 +674,20 @@ describe("persisted subagent details version 2", () => {
     expect(formatted).toContain('subagent_lifecycle({ action: "retry", runIds: ["agent-r2-1"] })');
     expect(formatted).toContain("retry blocked");
 
-    const forgedEligibility = clone(details);
-    forgedEligibility.startFailures![0]!.admittedRun!.cleanupDisposition = "pending";
+    const withFirstAdmitted = <Patch>(patch: Patch) => ({
+      ...details,
+      startFailures: replaceAt(details.startFailures ?? [], 0, (failure) => ({
+        ...failure,
+        admittedRun: { ...failure.admittedRun, ...patch },
+      })),
+    });
+    const forgedEligibility = withFirstAdmitted({ cleanupDisposition: "pending" });
     expect(decodeStartAwaitCardDetails(forgedEligibility)).toBeUndefined();
 
-    const forgedRemaining = clone(details);
-    forgedRemaining.startFailures![0]!.admittedRun!.hasRemainingCandidate = false;
+    const forgedRemaining = withFirstAdmitted({ hasRemainingCandidate: false });
     expect(decodeStartAwaitCardDetails(forgedRemaining)).toBeUndefined();
 
-    const reordered = clone(details);
-    reordered.startFailures!.reverse();
+    const reordered = { ...details, startFailures: [...(details.startFailures ?? [])].reverse() };
     expect(decodeStartAwaitCardDetails(reordered)).toBeUndefined();
   });
 
@@ -747,9 +760,9 @@ describe("persisted subagent details version 2", () => {
     expect(JSON.stringify(status).length).toBeLessThanOrEqual(48_000);
     expect(decodeCompactToolDetails(status)).toEqual(status);
 
-    expect(decodeCompactToolDetails({ ...clone(status), action: "models" })).toBeUndefined();
+    expect(decodeCompactToolDetails({ ...status, action: "models" })).toBeUndefined();
     expect(
-      decodeCompactToolDetails({ ...clone(status), profiles: [], fallbackProfile: "generalist" }),
+      decodeCompactToolDetails({ ...status, profiles: [], fallbackProfile: "generalist" }),
     ).toBeUndefined();
   });
 
@@ -859,22 +872,22 @@ describe("persisted subagent details version 2", () => {
   });
 
   it("rejects canonical decoded details larger than 48,000 characters", () => {
-    const valid = awaitWire();
-    valid.cards = Array.from({ length: 12 }, (_, index) => ({
-      ...valid.cards[0]!,
+    const wire = awaitWire();
+    const card = wire.cards[0]!;
+    const cards = Array.from({ length: 12 }, (_, index) => ({
+      ...card,
       id: `agent-${index}`,
       finalText: "x".repeat(20_000),
     }));
-    valid.awaitedRunIds = valid.cards.map((card) => card.id);
-    expect(decodeStartAwaitCardDetails(valid)).toBeUndefined();
+    const oversized = { ...wire, cards, awaitedRunIds: cards.map((entry) => entry.id) };
+    expect(decodeStartAwaitCardDetails(oversized)).toBeUndefined();
 
+    const { finalText: _finalText, ...reportless } = card;
+    const valid = { ...wire, cards: [reportless], awaitedRunIds: [card.id] };
     Object.defineProperty(valid, "unknownLargeValue", {
       enumerable: true,
       value: "private".repeat(20_000),
     });
-    delete valid.cards[0]!.finalText;
-    valid.cards = [valid.cards[0]!];
-    valid.awaitedRunIds = [valid.cards[0]!.id];
     const stripped = decodeStartAwaitCardDetails(valid);
     expect(stripped).toBeDefined();
     expect(JSON.stringify(stripped).length).toBeLessThanOrEqual(48_000);

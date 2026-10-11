@@ -1,4 +1,3 @@
-// Explicit test entry-point Effects drive the write diff boundaries.
 import assert from "node:assert/strict";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
@@ -17,7 +16,6 @@ import {
   shouldSkipWriteDiffComplexity,
 } from "../../src/write/diff";
 
-// Raw Node builtin access for test scaffolding, mirroring pi-cosmic-core's platform boundary.
 const nodePathModule = process.getBuiltinModule("node:path");
 const childProcessModule = process.getBuiltinModule("node:child_process");
 if (!nodePathModule || !childProcessModule) throw new Error("Node builtins are unavailable.");
@@ -32,7 +30,6 @@ it.effect("previous content is bounded, exact and skipped with measured reasons"
     const read = (name: string) => readExistingFileForPreviewEffect(join(dir, name), "after");
     yield* fs.writeFileString(join(dir, "small.txt"), "before");
     assert.deepEqual(yield* read("small.txt"), { kind: "content", content: "before" });
-    // Pi writes verbatim, so removing a byte order mark is a change to show.
     yield* fs.writeFileString(join(dir, "bom.txt"), "\uFEFFbefore");
     assert.deepEqual(yield* read("bom.txt"), { kind: "content", content: "\uFEFFbefore" });
 
@@ -44,7 +41,6 @@ it.effect("previous content is bounded, exact and skipped with measured reasons"
 
     yield* fs.makeDirectory(join(dir, "folder"));
     const folder = getWriteDiffSkipReason(yield* read("folder"), "after") ?? "";
-    // Only size limits compare against a threshold.
     assert.match(folder, /previous path is not a regular file \([^>]+\)$/);
   }).pipe(provideBuiltLayer(previewFileLayer)),
 );

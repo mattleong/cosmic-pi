@@ -24,7 +24,6 @@ test("workspace checks ignore manifest-less retired residue but include real pac
     join(current, "package.json"),
   ]);
 
-  // Adding a manifest makes the previously ignored directory part of the workspace again.
   await writeFile(join(retired, "package.json"), "{}");
   assert.deepEqual(await workspacePackageDirectories(root), [current, retired]);
 });

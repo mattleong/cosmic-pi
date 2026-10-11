@@ -11,12 +11,9 @@ import {
   type JsonRecord,
 } from "./json-schema.ts";
 
-/** Canonical JSON of an accepted result stays well under report clipping. */
 export const RESULT_VALUE_MAX_CHARS = 32 * 1024;
-/** Property that carries a non-object result inside the object-rooted tool parameters. */
 export const WRAPPED_RESULT_PROPERTY = "value";
 
-/** A result value's JSON text, as reports, journals and size bounds count it. */
 export const canonicalResultJson = canonicalJsonText;
 
 export class ResultContractViolation extends Schema.TaggedError<ResultContractViolation>()(
@@ -25,30 +22,16 @@ export class ResultContractViolation extends Schema.TaggedError<ResultContractVi
 ) {}
 
 export interface ResultContract {
-  /** Object-rooted JSON Schema for the result tool's parameters. */
   readonly parameters: JsonRecord;
-  /** True when a non-object schema was wrapped under {@link WRAPPED_RESULT_PROPERTY}. */
   readonly wrapped: boolean;
-  /**
-   * Providers' strict tool sampling keeps the schema's meaning: every node is typed (or a pure
-   * enum/const), objects are closed over listed properties, and arrays have an item schema.
-   */
   readonly strictSafe: boolean;
-  /** Stable identity of the schema, for resume journals. */
   readonly digest: string;
-  /**
-   * Validates submitted tool arguments and returns the unwrapped result value. This is a safety
-   * net that may admit more than the schema: patterns and formats are not evaluated (the root never
-   * runs script-authored regexes), and `oneOf` validates as `anyOf`. A Pi child's own tool
-   * validation enforces them; for other backends they are advisory schema text.
-   */
   readonly decode: (submitted: Schema.Json) => Effect.Effect<Schema.Json, ResultContractViolation>;
 }
 
 const isObjectRooted = (schema: JsonRecord): boolean =>
   schema.type === "object" && Option.isSome(decodeJsonRecord(schema.properties));
 
-/** The schema a result value itself must match, before any wrapping for the tool parameters. */
 export const resultValueSchema = (contract: ResultContract): Schema.Json =>
   contract.wrapped
     ? Option.getOrElse(
@@ -59,7 +42,6 @@ export const resultValueSchema = (contract: ResultContract): Schema.Json =>
       )
     : contract.parameters;
 
-/** Validates an unwrapped result value, such as a JSON report, and returns it. */
 export const decodeResultValue = (
   contract: ResultContract,
   value: Schema.Json,
@@ -69,7 +51,6 @@ export const decodeResultValue = (
 const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 const FENCED_BLOCK = /```[a-z]*[ \t]*\r?\n([\s\S]*?)```/giu;
 
-/** JSON a text answer may carry: the whole text, else its fenced blocks, last first. */
 const resultJsonCandidates = (text: string): ReadonlyArray<Schema.Json> => {
   const whole = decodeJsonText(text.trim());
   if (Option.isSome(whole)) return [whole.value];
@@ -78,10 +59,6 @@ const resultJsonCandidates = (text: string): ReadonlyArray<Schema.Json> => {
     .flatMap((match) => Option.toArray(decodeJsonText((match[1] ?? "").trim())));
 };
 
-/**
- * Validates a result written as text. The value form is tried first; a wrapped contract also
- * accepts its tool-argument form. The first candidate's problems explain a rejection.
- */
 export const decodeResultText = (
   contract: ResultContract,
   text: string,
@@ -101,12 +78,6 @@ export const decodeResultText = (
   );
 };
 
-/**
- * Compiles an agent's JSON Schema (Draft 2020-12 subset supported by Effect's importer) into a
- * result contract. The tool parameters keep the schema as written, `pattern` included; the root's
- * validator ignores patterns so a script-authored regex can never block the root's event loop, but
- * every pattern must still compile in Unicode mode, as Pi's tool validation requires.
- */
 export const compileResultContract = (
   schema: Schema.Json,
 ): Effect.Effect<ResultContract, InvalidJsonSchemaError> =>

@@ -1,4 +1,3 @@
-// Cancellable full-page selectors. Runtime and model changes commit together.
 import type { SearchableSelectPage } from "pi-cosmic-ui/manager/searchable-select";
 import { PROFILE_IDS, type ProfileCandidate } from "../profiles/model.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
@@ -175,7 +174,6 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
           select: (option) => {
             this.modelPicker = undefined;
             if (!this.addingCandidate) this.candidateIndex = candidateIndex;
-            // Runtime and model commit together, so a native switch applies only on selection.
             const switched = nativeSwitch
               ? updateCandidateControls(candidate, nativeSwitch, {
                   nativeModel: option.selector,

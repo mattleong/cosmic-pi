@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { nodeFsConstants as constants } from "./node-builtins.ts";
-// Synchronous syscalls are confined to the killable one-shot child, never the host.
 const fs = process.getBuiltinModule("node:fs");
 if (!fs) throw new Error("Node filesystem unavailable");
 
@@ -146,7 +145,6 @@ const eligibleTarget = (r: PublicationWireRequest) => {
 const artifactsExist = (r: PublicationWireRequest) =>
   Boolean(inspect(r.backupName) || inspect(r.temporaryName));
 
-/** Runs only in the one-shot child's anchored cwd. Hooks are test-only, never wire input. */
 export const executePublication = (
   r: PublicationWireRequest,
   hooks?: {
@@ -163,11 +161,9 @@ export const executePublication = (
       ): PublicationResult => ({ status, reason, captured });
       if (!validRequest(r)) return result("conflict", "invalid-request");
       try {
-        // cwd is resolved by spawn exactly once. Never use the caller's absolute path again.
         if (!anchorMatches(r)) return result("conflict", "directory-changed");
         hooks?.anchored?.();
         if (!eligibleTarget(r)) return result("conflict", "target-changed");
-        // Exclusive reservations establish ownership. Never clean up by an unowned intention.
         if (artifactsExist(r)) return result("conflict", "destination-exists");
         if (r.after !== undefined) {
           const temporary = fs.openSync(r.temporaryName, "wx", 0o600);
@@ -187,15 +183,10 @@ export const executePublication = (
           syncDirectory();
           const { stat, matches } = capturedMatches(r.backupName, r.before);
           if (!matches) {
-            // link is exclusive: a concurrent editor's new target is never overwritten.
-            // Keep the backup even after restoration for journal-driven recovery.
-            // Successful restoration intentionally has nlink=2 until manual recovery removes backup.
             if (stat.isFile() && !stat.isSymbolicLink()) {
               try {
                 fs.linkSync(r.backupName, r.name);
-              } catch {
-                /* Exclusive restoration may lose to an editor. */
-              }
+              } catch {}
             }
             syncDirectory();
             return result("conflict", "target-changed");
@@ -243,7 +234,6 @@ const createDirectory = (r: DirectoryWireRequest) =>
     catch: () => new PublicationHelperError(),
   });
 
-/** Standalone process entrypoint; this is the only runner, not a session adapter. */
 export const publicationMain = () =>
   Effect.runPromise(
     Effect.gen(function* () {

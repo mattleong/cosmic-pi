@@ -81,7 +81,6 @@ interface CandidateResult {
   readonly skipped?: SkippedProfileCandidate | undefined;
 }
 
-/** Exact skip codes and message fragments distinguishing parent from explicit local-Pi selectors. */
 type PiModelSkips = typeof PARENT_MODEL_SKIPS | typeof LOCAL_PI_MODEL_SKIPS;
 
 const PARENT_MODEL_SKIPS = {
@@ -124,7 +123,6 @@ const resolveCandidate = (
       effortWasExplicit: hardEffort !== undefined,
     },
   });
-  /** Shared tail for parent and explicit local-Pi model selection: resolve, effort, fast mode. */
   const resolvePiModel = (selector: string, skips: PiModelSkips): CandidateResult => {
     const resolved = resolvePiModelSelector(selector, environment.availablePiModels);
     if (resolved.kind !== "resolved")
@@ -161,8 +159,6 @@ const resolveCandidate = (
       "Forked context requires a persisted parent session with a stable leaf.",
     );
 
-  // Unsupported adapters remain syntactically and statically representable. Host resolution
-  // dynamically classifies them so ordered fallback is visible in launch provenance.
   if (!isLocalPiProfileCandidate(candidate)) return accept();
 
   if (candidate.model === "parent") {
@@ -236,7 +232,6 @@ const resolveKnownProfileRoute = (
   };
 };
 
-/** Pure deterministic profile planning. Foreign readiness checks happen while consuming attempts. */
 export function resolveProfilePlan(
   profile: string,
   config: ResolvedSubagentConfig,
@@ -268,7 +263,6 @@ export function resolveProfilePlan(
   return resolveKnownProfileRoute(profile, route, config.profileSources[profile], environment, 0);
 }
 
-/** Re-evaluates only candidates after the failed run's frozen route cursor. */
 export const resolveProfileContinuationPlan = (
   continuation: ProfileRouteContinuation,
   environment: ProfileResolutionEnvironment,

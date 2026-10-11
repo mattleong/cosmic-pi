@@ -25,7 +25,6 @@ export function getTextContent(
   );
 }
 
-/** Native images remain host-owned; describe attachments when native display is unavailable. */
 export function getFallbackResultText(
   content: AgentToolResult<unknown>["content"],
   showImages: boolean,
@@ -40,7 +39,6 @@ export function getFallbackResultText(
 
 const MAX_BOUNDED_TEXT_CHARS = 128 * 1024;
 
-/** Decline summary parsing rather than silently dropping output outside the budget. */
 export function getBoundedTextContent(
   content: Array<{ type: string; text?: string }> | undefined,
 ): string | undefined {

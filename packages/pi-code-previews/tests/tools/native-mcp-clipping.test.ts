@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { failingTheme, opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import { failingTheme, plainTheme } from "pi-cosmic-core/testing";
 import { beforeEach, test } from "vitest";
 import {
   animationSchedulerProbe,
@@ -12,7 +12,7 @@ import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import type { NativeMcpEvidence } from "../../src/tools/native-mcp-summary";
 import { stripAnsi } from "pi-cosmic-core";
 
-const styleNativeMcp = (definition: ToolDefinition<any, any, any>) =>
+const styleNativeMcp = (definition: ToolDefinition) =>
   createNativeMcpRenderers(definition.name, definition, undefined, {
     scheduleAnimation: animationSchedulerProbe().schedule,
   });
@@ -26,12 +26,12 @@ const value = (text = output, metadata: NativeMcpEvidence = details): AgentToolR
   content: [{ type: "text", text }],
   details: metadata,
 });
-const definition = (): ToolDefinition<any, any, any> => ({
+const definition = (): ToolDefinition => ({
   name: "mcp__docs__lookup",
   label: "docs/lookup",
   namespace: { name: "mcp__docs" },
   description: "Owned MCP fixture",
-  parameters: opaqueFixture({ type: "object" }),
+  parameters: { type: "object" },
   execute: () => Promise.resolve(value()),
 });
 const settings = (style: "compact" | "preview", background: "off" | "on" | "border" = "off") =>
@@ -47,7 +47,6 @@ for (const style of ["compact", "preview"] as const)
         when: (token) => token === "toolOutput",
       });
       const themes = [plainTheme, outputFailureTheme];
-      // A producer's total theme fallback is exercised without theme-dependent shell chrome.
       if (style === "preview" && background !== "border")
         themes.push(failingTheme({ message: "Theme unavailable" }));
       for (const theme of themes) {
@@ -216,7 +215,7 @@ test("namespace and observed resource-server mismatches cannot hide native clipp
 test("quiet saved resource clipping still exposes aggregate-listing uncertainty", () => {
   for (const style of ["compact", "preview"] as const) {
     settings(style);
-    const resource: ToolDefinition<any, any, any> = {
+    const resource: ToolDefinition = {
       ...definition(),
       name: "list_mcp_resources",
       label: "list_mcp_resources",

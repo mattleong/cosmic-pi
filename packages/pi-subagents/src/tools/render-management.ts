@@ -111,20 +111,17 @@ export const renderProfileRoutesComponent = (
     );
   });
 
-/** Nonzero exceptional counts, each in its own words: "1 awaiting confirmation · 1 failed". */
 const failureCounts = (
   details: RunToolDetails,
   failures: ActionFailureCounts,
 ): ReadonlyArray<string> => [
   ...(failures.pending > 0 ? [`${failures.pending} awaiting confirmation`] : []),
   ...(failures.unconfirmed > 0 ? [`${failures.unconfirmed} unconfirmed`] : []),
-  // Status only reads, so a target it could not read is missing, not failed.
   ...(failures.failed > 0
     ? [`${failures.failed} ${details.action === "status" ? "missing" : "failed"}`]
     : []),
 ];
 
-/** What each action did to the targets it reached, as a count. */
 const primaryCount = (details: RunToolDetails, count: number): string => {
   switch (details.action) {
     case "list":
@@ -147,10 +144,6 @@ const primaryCount = (details: RunToolDetails, count: number): string => {
   }
 };
 
-/**
- * Routine counters as muted body text. A count of zero beside failures says nothing the
- * failure count does not; the shell's issue lines explain the failures themselves.
- */
 const countersText = (details: RunToolDetails, count: number, failures: ActionFailureCounts) => {
   const exceptional = failureCounts(details, failures);
   return [
@@ -161,7 +154,6 @@ const countersText = (details: RunToolDetails, count: number, failures: ActionFa
   ].join(" · ");
 };
 
-/** Failed targets by ID, code, and recovery: agent evidence, so only once expanded. */
 const failedTargetLines = (
   failures: ReadonlyArray<CompactToolActionFailure>,
   recovery: (failure: CompactToolActionFailure) => string,
@@ -182,7 +174,6 @@ const failedTargetLines = (
     ];
   });
 
-/** Pending delivery is neither delivered nor failed, so each disposition has its own section. */
 const failureSections = (details: RunToolDetails, theme: Theme): ReadonlyArray<Component> =>
   ACTION_FAILURE_SECTIONS.flatMap(([disposition, title]) => {
     const failures = (details.actionFailures ?? []).filter(
@@ -216,7 +207,6 @@ export const renderCompactResultComponent = (
     countActionFailures(details.action, details.actionFailures),
   );
   const failures = expanded ? failureSections(details, theme) : [];
-  // A status says where each report went; a list draws its runs as a tree.
   const showReports = details.action === "status";
   const hierarchy = details.action === "list" ? {} : undefined;
   return renderComponent((width) => {

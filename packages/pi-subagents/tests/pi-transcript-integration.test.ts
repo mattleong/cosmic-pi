@@ -88,7 +88,6 @@ describe("installed Pi transcript reconstruction", () => {
           tools: [...childToolPolicy(["child_alpha", "child_beta"]).enabled],
           excludeTools: childToolPolicy([]).excluded.split(","),
         });
-        // Provider callbacks inspect normalized transcripts produced by Pi, never cast brands.
         fake.setResponses([
           (context) => {
             expect(getCurrentSystemPrompt(context.messages)).toContain("child-only instruction");

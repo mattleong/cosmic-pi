@@ -3,13 +3,10 @@ import { padListDetailRow } from "./list-detail.ts";
 import { clipToWidth } from "./chrome.ts";
 
 interface ManagerTableColumn {
-  /** Minimum useful width. Lower-priority columns disappear first when it cannot fit. */
   readonly minWidth: number;
-  /** Higher values reserve space first; declaration order remains the display order. */
   readonly priority: number;
 }
 
-/** Measure the complete dataset, not its visible window. Styling stays caller-owned. */
 export const managerTable = (
   rows: ReadonlyArray<ReadonlyArray<string>>,
   columns: ReadonlyArray<ManagerTableColumn>,

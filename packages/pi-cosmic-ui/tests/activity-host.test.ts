@@ -8,8 +8,10 @@ import * as Schema from "effect/Schema";
 import {
   extensionApiFixture,
   extensionContextFixture,
-  opaqueFixture,
+  piKeybindingsFixture,
   plainTheme,
+  terminalFixture,
+  tuiFixture,
 } from "pi-cosmic-core/testing";
 import {
   ACTIVITY_EVENT,
@@ -45,15 +47,21 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     work.push(effect);
   });
   let redraws = 0;
-  const terminal = { columns: 80, rows: 24 };
-  const tui = opaqueFixture({
+  let terminalRows = 24;
+  const terminal = terminalFixture({
+    columns: 80,
+    get rows() {
+      return terminalRows;
+    },
+  });
+  const tui = tuiFixture({
     terminal,
     requestRender() {
       redraws++;
     },
   });
-  const keybindings = opaqueFixture({ matches: () => false, getKeys: () => [] });
-  let widget: Widget;
+  const keybindings = piKeybindingsFixture();
+  let widget: string[] | Widget;
   let mountedWidget: (Component & { dispose?: () => void }) | undefined;
   const mountWidget = () => {
     if (!Predicate.isFunction(widget)) throw new Error("No widget factory");
@@ -64,7 +72,7 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     mode: "tui",
     sessionManager: { getSessionId: () => "session" },
     ui: {
-      setWidget(_key: string, value: Widget) {
+      setWidget(_key: string, value: string[] | Widget) {
         if (!value) {
           mountedWidget?.dispose?.();
           widget = undefined;
@@ -78,8 +86,6 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
       notify() {},
     },
   });
-  // The latest publication of any service; a replaced service publishes nothing more.
-  // Services keep the hooks they published through; tests drive the display clock by hand.
   let rows: readonly ActivityRow[] = [];
   const ticks = new Map<ActivityServiceContract, (now: number) => void>();
   const service = () =>
@@ -95,7 +101,6 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     Effect.gen(function* () {
       while (work.length) yield* work.shift()!.pipe(Effect.ignore);
     });
-  /** Opens the manager on its surface and returns the opening fiber with the mounted manager. */
   const openManager = () =>
     Effect.gen(function* () {
       const open = yield* host.open(ctx).pipe(Effect.forkScoped({ startImmediately: true }));
@@ -127,7 +132,7 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     mountWidget,
     renderWidget: () => mountedWidget?.render(80) ?? [],
     resizeWidget: (rows: number) => {
-      terminal.rows = rows;
+      terminalRows = rows;
     },
     redraws: () => redraws,
     pendingWork: () => work.length,
@@ -431,7 +436,7 @@ describe("activity host lifecycle", () => {
         [160, 29],
         [125, 30],
       ] as const) {
-        Object.assign(fixture.surface.terminal, { columns, rows });
+        fixture.surface.resize(columns, rows);
         const { width, height } = screenViewport({ columns, rows });
         const rendered = component.render(width).length;
         expect([options?.width, options?.maxHeight, rendered]).toEqual([width, height, height]);

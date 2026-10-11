@@ -4,6 +4,7 @@ import { afterEach, beforeEach, test } from "vitest";
 import { renderContextFixture } from "../../../../testing";
 import { previewCacheKey } from "../../../../src/tools/renderers/shared/preview-cache-key";
 import { cachedPreview } from "../../../../src/tools/renderers/shared/cache";
+import type { RendererState } from "../../../../src/tools/renderers/shared/types";
 import { defaultCodePreviewSettings } from "../../../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../../../src/config/state";
 import { acquireProjectionOwnership } from "../../../../src/shared/projection-ownership";
@@ -106,7 +107,8 @@ test("edit previews wait for complete arguments and replace changed content", ()
   setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: false });
   const edit = builtinRenderers("edit")!;
   const args = { path: "src/a.ts", edits: [{ oldText: "old", newText: "new" }] };
-  const context = renderContextFixture({ args, argsComplete: false });
+  const state: RendererState = {};
+  const context = renderContextFixture({ args, state, argsComplete: false });
   assert.doesNotMatch(renderComponent(edit.renderCall!(args, theme, context)), /\bnew\b/);
   context.argsComplete = true;
   const complete = stripAnsi(renderComponent(edit.renderCall!(args, theme, context)));
@@ -121,7 +123,6 @@ test("edit previews wait for complete arguments and replace changed content", ()
   assert.match(rendered, /replacement/);
   assert.doesNotMatch(rendered, /\bnew\b/);
 
-  // A result summary stays with its arguments; a changed path or edit drops it.
   context.state.editSummaryText = "retained-summary";
   assert.match(renderComponent(edit.renderCall!(changed, theme, context)), /retained-summary/);
   const moved = { ...changed, path: "src/c.ts" };

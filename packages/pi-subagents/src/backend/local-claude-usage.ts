@@ -3,7 +3,6 @@ import { rememberBounded } from "./local-claude-correlation.ts";
 
 const ASSISTANT_USAGE_MESSAGE_LIMIT = 32;
 
-/** Cumulative native usage components tracked for monotone delta accounting. */
 export type UsageComponents = Omit<SubagentUsage, "totalTokens" | "cost">;
 
 export const zeroUsageComponents: UsageComponents = {
@@ -31,10 +30,6 @@ interface CumulativeUsageDelta {
   readonly inconsistent: boolean;
 }
 
-/**
- * Nonnegative componentwise delta between cumulative native usage snapshots.
- * A regressing native total is reported as inconsistent and never subtracted.
- */
 const cumulativeUsageDelta = (
   previous: UsageComponents,
   next: UsageComponents,
@@ -50,7 +45,6 @@ const cumulativeUsageDelta = (
 export const usageComponentsTotal = (components: UsageComponents): number =>
   components.input + components.output + components.cacheRead + components.cacheWrite;
 
-/** Synchronous token bookkeeping; the driver owns query correlation and event emission. */
 export const makeLocalClaudeUsage = () => {
   const assistantUsageByMessage = new Map<string, UsageComponents>();
   let emittedUsageTotals: UsageComponents = zeroUsageComponents;
@@ -76,8 +70,6 @@ export const makeLocalClaudeUsage = () => {
     baseline: UsageComponents,
     usage: UsageComponents | undefined,
   ): CumulativeUsageDelta => {
-    // Only the already-emitted amount since this query's registration offsets
-    // its final usage. Correlation takes each result expectation exactly once.
     const emittedForQuery = cumulativeUsageDelta(baseline, emittedUsageTotals).delta;
     const result = usage
       ? cumulativeUsageDelta(emittedForQuery, usage)
@@ -90,7 +82,6 @@ export const makeLocalClaudeUsage = () => {
     assistantDelta,
     resultDelta,
     baseline: (): UsageComponents => ({ ...emittedUsageTotals }),
-    // Transport cancellation clears message history, not the emitted watermark.
     clearMessageHistory: (): void => assistantUsageByMessage.clear(),
   };
 };

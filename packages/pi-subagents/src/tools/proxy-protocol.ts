@@ -34,7 +34,6 @@ const decodeQuestionnaireJson = Schema.decodeUnknownOption(
   { onExcessProperty: "error" },
 );
 
-/** A separate bounded wire request, never a synthetic SubagentToolInput action. */
 export const decodeQuestionnaireProxyRequest = (
   request: SubagentProxyRequest,
 ): AskUserRequest | InvalidSubagentRequestError => {
@@ -70,7 +69,6 @@ const decodeProxyResultJson = Schema.decodeUnknownOption(Schema.fromJsonString(P
   onExcessProperty: "error",
 });
 
-/** Strict client-side decode for private root coordinator proxy responses. */
 export const decodeSubagentProxyResult = (source: string): AgentToolResult<unknown> | undefined => {
   if (source.length > MAX_PROXY_JSON_CHARS) return undefined;
   const decoded = decodeProxyResultJson(source);
@@ -87,7 +85,6 @@ export const decodeSubagentProxyResult = (source: string): AgentToolResult<unkno
 
 const invalid = (message: string) => invalidRequest("proxy_request_invalid", message);
 
-/** The catalog by tool name, so a generic name keeps its schema and validator correlated. */
 type ToolSchemas = {
   readonly [N in SubagentToolName]: {
     readonly parameters: SubagentToolParameters<N>;
@@ -96,7 +93,6 @@ type ToolSchemas = {
 };
 const TOOL_SCHEMAS: ToolSchemas = SUBAGENT_TOOL_SCHEMAS;
 
-// Own keys only: an inherited name such as "constructor" is an unknown tool, never a lookup.
 const isSubagentToolName = (tool: string): tool is SubagentToolName =>
   Object.hasOwn(TOOL_SCHEMAS, tool);
 
@@ -108,7 +104,6 @@ const decodeToolArguments = <N extends SubagentToolName, ValueInput>(
   return Check(parameters, args) && validate?.(args) === undefined ? { tool, args } : undefined;
 };
 
-/** Strict server-side decode for authenticated private Pi proxy calls. */
 export const decodeSubagentProxyRequest = (
   request: SubagentProxyRequest,
 ): SubagentToolInput | InvalidSubagentRequestError => {

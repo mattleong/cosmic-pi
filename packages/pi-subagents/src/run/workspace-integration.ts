@@ -9,23 +9,15 @@ import {
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
 
-/** What a committed integration left for the parent to resolve. */
 export interface WorkspaceIntegrationOutcome {
-  /** The proposal's worker tree root, where a kept or unremoved tree remains. */
   readonly workerRoot: string;
-  /** Worker files outside the integrated revision, relative to `workerRoot`; it was kept. */
   readonly uncapturedPaths: ReadonlyArray<string>;
-  /** Removing the spent editable trees failed, so they remain on disk. */
   readonly treeRemovalFailed: boolean;
-  /** The source lease release is unconfirmed, so writer admission stays quarantined. */
   readonly leaseReleaseUnconfirmed: boolean;
 }
 
-/** Integration of an exact reviewed and tested revision under the source writer leases. */
 export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
   const { records, withLock, writerLeases: leases, state, requireBinding, requireEngine } = context;
-  // Integration keeps the run lock throughout, so no writer is admitted to its source meanwhile;
-  // it still queues behind root operations whose engine work runs outside that lock.
   return (
     workspaceId: string,
     revisionId: string,
@@ -58,7 +50,6 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
           const artifact = yield* service
             .inspect({ workspaceId, ownerId: binding.handle.ownerId })
             .pipe(Effect.mapError(mapWorkspaceError));
-          // A pending reopen makes the preparation the engine still holds stale.
           if (
             binding.reopenPending ||
             !artifact.preparation ||
@@ -75,14 +66,12 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
           const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].sort(
             (left, right) => left.digest.localeCompare(right.digest),
           );
-          // A live run inside the proposal, such as a reader its writer started, keeps the trees.
           const proposalTrees = [
             binding.handle.cwd,
             artifact.preparation.cwd,
             ...(binding.record ? [binding.record.view.cwd] : []),
           ];
           const retainTrees = [...runsWithin(records, proposalTrees).keys()].some(runHoldsCwd);
-          // The engine lists every existing touched-file ancestor, so subdirectory-scoped cooperative writers conflict too.
           return yield* Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               const owned: WriterLease[] = [];
@@ -91,14 +80,11 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
               const { record: _record, ...committed } = yield* Effect.gen(function* () {
                 for (const cwd of sources)
                   owned.push(
-                    // acquire keeps only its pre-ownership checks interruptible. Keep the
-                    // returned lease masked until the finalizer can see it.
                     yield* leases
                       .acquire({ cwd, runId: workspaceId })
                       .pipe(Effect.mapError(mapWorkspaceError)),
                   );
                 yield* restore(Effect.void);
-                // Crash evidence must not be reclaimed as an unused reservation after source publication starts.
                 for (const lease of owned)
                   yield* leases.markSpawnStarted(lease).pipe(Effect.mapError(mapWorkspaceError));
                 applying = true;
@@ -141,7 +127,6 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
                   }),
                 ),
               );
-              // The integration committed. An unconfirmed lease release blocks later writers instead.
               if (releaseFailed)
                 yield* Effect.logWarning(
                   "Integration lease release is unconfirmed. Further writer admission is blocked pending manual recovery.",

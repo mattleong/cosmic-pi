@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// The executable MCP edge deliberately owns native stdio and no-follow config reads.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -28,7 +27,6 @@ import { openSupervisorClient } from "./supervisor-client.ts";
 import { configArgument, readConfig } from "./supervisor-mcp-config.ts";
 import { makeSerializedWriter } from "./supervisor-mcp-writer.ts";
 
-// The helper scrubs its entire inherited environment snapshot before any other work.
 const scrubEnvironment = (environment: NodeJS.ProcessEnv): void => {
   for (const key of Object.keys(environment)) delete environment[key];
 };
@@ -66,7 +64,6 @@ const main = Effect.gen(function* () {
   const stdout = yield* makeSerializedWriter(process.stdout);
   const activeCalls = yield* FiberMap.make<string>();
   const done = yield* Deferred.make<void>();
-  // Native stdin callbacks run detached effects with this program's services.
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   let channelClosed = false;
   let initialized = false;
@@ -151,8 +148,6 @@ const main = Effect.gen(function* () {
           void rpcError(request.id, -32600, "An MCP request with this id is already active.");
           return;
         }
-        // Only the supervisor operation is interruptible. Once its Exit is selected, one narrow
-        // uninterruptible writer commit publishes and acknowledges exactly one JSON-RPC response.
         const call = Effect.uninterruptibleMask((restore) =>
           Effect.exit(restore(executeTool(request))).pipe(
             Effect.map((exit) => toolResponseFromExit(request.id, exit)),
@@ -219,7 +214,6 @@ const main = Effect.gen(function* () {
         process.stdin.off("close", closeInput);
       }),
   );
-  // Register last so the writer closes before FiberMap and socket finalizers interrupt calls.
   yield* Effect.addFinalizer(() => Effect.sync(closeInput));
   yield* Deferred.await(done);
 });

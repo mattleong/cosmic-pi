@@ -9,8 +9,6 @@ const MAX_TOOL_TARGET_CHARS = 500;
 const MAX_ASSISTANT_TEXT_CHARS = 16 * 1024;
 const MAX_NOTICE_CHARS = 4 * 1024;
 
-// Session events are immutable once created, so each event's serialized size
-// is computed once and reused across every retention pass.
 const eventBytes = new WeakMap<SubagentSessionEvent, number>();
 
 const bytes = (event: SubagentSessionEvent): number => {
@@ -21,7 +19,6 @@ const bytes = (event: SubagentSessionEvent): number => {
   return size;
 };
 
-/** The argument that best identifies what a tool call works on. */
 const toolTarget = <ArgsInput>(toolName: string, args: ArgsInput): string | undefined => {
   const input = asObject(args);
   const path =

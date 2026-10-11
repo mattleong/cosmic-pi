@@ -1,5 +1,3 @@
-// The opt-in replay ledger is private filesystem state, so these tests exercise
-// its real permissions, retention, bounds, and content-safety properties.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
@@ -25,7 +23,6 @@ const outboundEntry = (sequence: number): LocalClaudeDebugEntry => ({
   shouldQuery: true,
 });
 
-/** Records a bounded tail and reports whether the environment enabled a recorder. */
 const recordTail = (
   agentDirectory: string,
   runId: string,
@@ -43,7 +40,6 @@ const recordTail = (
     }),
   );
 
-/** Reads the single published ledger with its directory and file metadata. */
 const readLedger = (agentDirectory: string) =>
   Effect.gen(function* () {
     const root = join(agentDirectory, "subagents", "local-claude-debug-v1");
@@ -100,7 +96,6 @@ describe("local Claude debug ledger", () => {
     }),
   );
 
-  // These entries fill the byte bound to within a few bytes of the cap, less than the header.
   it.effect("counts every entry the byte-bounded tail drops", () =>
     Effect.gen(function* () {
       const agentDirectory = yield* setup();

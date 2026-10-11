@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
@@ -18,7 +17,6 @@ const TARGET = {
   additionalProperties: false,
 } satisfies Schema.Json;
 
-/** A complete script whose meta declares {@link TARGET} as its args schema. */
 const targeted = (body: string, name = "targeted"): string =>
   `export const meta = { name: ${JSON.stringify(name)}, description: "Takes a target", phases: [{ title: "Main" }], args: ${JSON.stringify(TARGET)} };\n${body}`;
 
@@ -107,15 +105,14 @@ describe("workflow args schemas", () => {
 
   it.effect("rejects draft-07 forms the root wouldn't check, which result schemas keep", () =>
     Effect.gen(function* () {
-      const legacy: ReadonlyArray<Schema.Json> = [
+      const draft07Forms: ReadonlyArray<Schema.Json> = [
         { type: "object", properties: { pair: { type: "array", items: [{ type: "string" }] } } },
         { type: "array", prefixItems: [{ type: "string" }], additionalItems: false },
         { type: "object", properties: { a: {}, b: {} }, dependencies: { a: ["b"] } },
       ];
-      for (const [index, schema] of legacy.entries()) {
+      for (const [index, schema] of draft07Forms.entries()) {
         const error = yield* Effect.flip(compileWorkflowArgs(schema));
         expect(error._tag, `schema ${index}`).toBe("InvalidJsonSchemaError");
-        // Pi's tool validation enforces these for local agents' results.
         yield* compileResultContract(schema);
       }
       const tuple = { type: "array", prefixItems: [{ type: "string" }], items: false };
@@ -149,9 +146,7 @@ describe("workflow args schemas", () => {
     expect(either).toContain("file?: string");
     expect(either).toContain("dir?: string");
     expect(either).not.toContain("any");
-    // Required keys the schema doesn't describe are still named.
     expect(workflowArgsSummary({ type: "object", required: ["target"] })).toContain("target");
-    // Branches stand in for a node that names only a type.
     const tagged = workflowArgsSummary({
       type: "object",
       oneOf: [
@@ -161,7 +156,6 @@ describe("workflow args schemas", () => {
     });
     expect(tagged).toContain('"file"');
     expect(tagged).toContain("href");
-    // A branch the summary can't show leaves the node's own type.
     expect(workflowArgsSummary({ type: "string", anyOf: [{ minLength: 1 }, { const: "" }] })).toBe(
       "string",
     );
@@ -185,7 +179,6 @@ describe("workflow args at start", () => {
         code: "args_mismatch",
         argsProblems: [{ path: "args.target" }],
       });
-      // The refusal names the path and advertises the args the workflow expects.
       expect(mismatch.message).toContain("args.target");
       expect(mismatch.message).toContain("target: string");
 
@@ -215,7 +208,6 @@ describe("workflow args at start", () => {
         const started = yield* start(args);
         expect(resultValue(yield* finished(workflows, started.id))).toEqual({ got: args });
       }
-      // Its JSON, quotes included, is just over the limit.
       const large = yield* start("x".repeat(WORKFLOW_ARGS_MAX_CHARS - 1)).pipe(Effect.flip);
       expect(large).toMatchObject({ code: "args_too_large" });
       expect((yield* workflows.list).length).toBe(4);
@@ -240,11 +232,9 @@ describe("workflow args at start", () => {
         const mismatched = yield* run("child", "{ target: 1 }");
         expect(mismatched.state).toBe("failed");
         expect(mismatched.failure?.message).toContain("args.target");
-        // Nothing of the refused workflow was added to the run.
         expect(mismatched.phases.map((phase) => phase.title)).toEqual(["Main"]);
 
         expect((yield* run("child", "undefined")).state).toBe("failed");
-        // A nested workflow that doesn't load is an invalid call too, not a null result.
         expect((yield* run("chlid", '{ target: "src" }')).state).toBe("failed");
       },
     ),

@@ -18,7 +18,6 @@ interface TextPanelOptions {
   readonly dismiss: TextPanelDismissMode;
 }
 
-/** Bounded Pi-native read-only panel shared by diagnostics and informational submenus. */
 export class TextPanelComponent implements Component {
   private readonly options: TextPanelOptions;
   private readonly frame: ListDetailFrame;
@@ -54,7 +53,5 @@ export class TextPanelComponent implements Component {
       this.options.done();
   }
 
-  invalidate(): void {
-    // This panel has no cached rendering state.
-  }
+  invalidate(): void {}
 }

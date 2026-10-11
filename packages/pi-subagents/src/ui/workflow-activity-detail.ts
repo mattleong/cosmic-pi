@@ -27,17 +27,13 @@ import { activityReasonLine } from "./workflow-activity.ts";
 const DETAIL_LOG_LINES = 20;
 const DETAIL_AGENT_LINES = 40;
 const DETAIL_PLANNED_LINES = 40;
-/** The result the workflow's detail shows, head and tail, leaving room for what follows it. */
 const DETAIL_RESULT_MAX_CHARS = 6_000;
-/** Placeholder details: a few lines about an agent that has no subagent session. */
 const PLACEHOLDER_DETAIL_MAX_CHARS = 4_096;
 
-/** What one agent's subagent has used so far, by its run id; undefined before it starts. */
 type WorkflowAgentUsage = (runId: string) => SubagentUsage | undefined;
 
 const clipLog = (text: string): string => clipText(text, WORKFLOW_LOG_LINE_MAX_CHARS);
 
-/** An agent's state as people read it, in the words the rest of Activity uses. */
 const AGENT_STATES = {
   queued: "queued",
   running: "running",
@@ -47,15 +43,9 @@ const AGENT_STATES = {
   skipped: "skipped",
 } satisfies Readonly<Record<WorkflowAgentState, string>>;
 
-/** Where a member sits: its workflow, then its phase when it has one. */
 export const workflowMemberLine = (name: string, phase: string | undefined): string =>
   `Workflow: ${name}${phase ? ` › ${phase}` : ""}`;
 
-/**
- * Why a settled call ended without a result, in full, beside the state Activity shows; undefined
- * for a call that returned one, and for one whose row summary, the reason's first line clipped,
- * already says it all.
- */
 export const workflowEndReasonLine = (agent: WorkflowAgentView): string | undefined =>
   agent.state === "completed" ||
   agent.reason === undefined ||
@@ -63,7 +53,6 @@ export const workflowEndReasonLine = (agent: WorkflowAgentView): string | undefi
     ? undefined
     : `Reason: ${agent.reason}`;
 
-/** Failed agents first, newest first; then running ones, longest first; then the rest. */
 const AGENT_ORDER = {
   failed: 0,
   running: 1,
@@ -87,7 +76,6 @@ const agentLine = (agent: WorkflowAgentView, now: number, usage: WorkflowAgentUs
   return [
     `- ${agent.label}`,
     agent.phase,
-    // A reason such as "skipped by the user" already says the state.
     agent.reason?.startsWith(`${state} `) ? undefined : state,
     agent.startedAt === undefined
       ? undefined
@@ -136,12 +124,6 @@ const sourceText = (run: WorkflowRunView): string => {
   }
 };
 
-/**
- * Detail pane text for a workflow as of `now`, beneath the state, phase and agent counts Activity
- * already shows, people first: its description and any error, its usage, budget and waits, its
- * files, what each agent did, failures first, then its log and result, and how it was started
- * last, so the clip drops the least useful text first. `usage` gives each started agent's tokens.
- */
 export const workflowActivityDetail = (
   run: WorkflowRunView,
   now: number,
@@ -194,10 +176,6 @@ const placeholderDetail = (lines: ReadonlyArray<string>): string =>
     maximumLength: PLACEHOLDER_DETAIL_MAX_CHARS,
   });
 
-/**
- * What a declared agent no agent() call has claimed will do, by its run's state. A skipped one's
- * row summary already says it was skipped.
- */
 const plannedText = (run: WorkflowRunView, agent: WorkflowPlannedAgent): string => {
   const ended = isWorkflowRunFinished(run.state);
   if (isWorkflowPlannedSkipped(agent))
@@ -209,11 +187,9 @@ const plannedText = (run: WorkflowRunView, agent: WorkflowPlannedAgent): string 
     : "Not started yet; it queues once the workflow reaches it. If you skip it, the workflow continues without its result.";
 };
 
-/** Detail pane text for a declared agent that no agent() call has claimed. */
 export const plannedAgentDetail = (run: WorkflowRunView, agent: WorkflowPlannedAgent): string =>
   placeholderDetail([plannedText(run, agent)]);
 
-/** Why a queued agent waits, and what ends the wait. */
 const waitingDetail = (waiting: WorkflowAgentWaiting | undefined): string => {
   switch (waiting?.kind) {
     case undefined:
@@ -227,13 +203,11 @@ const waitingDetail = (waiting: WorkflowAgentWaiting | undefined): string => {
   }
 };
 
-/** Detail pane text for an agent still waiting to start. */
 export const queuedAgentDetail = (agent: WorkflowAgentView): string =>
   placeholderDetail([
     `${waitingDetail(agent.waiting)} If you skip it, the workflow continues without its result.`,
   ]);
 
-/** Detail pane text for a call that settled before it got a subagent run. */
 export const settledAgentDetail = (agent: WorkflowAgentView): string =>
   placeholderDetail([
     workflowEndReasonLine(agent) ?? "",

@@ -10,11 +10,9 @@ import {
 import { makeProfileSettingsInspection } from "./profile-settings-inspection.ts";
 import { profileCandidate } from "./profiles.ts";
 
-/** Lets submitted workspace work settle for two scheduler turns. */
 export const settleTurn = (): Promise<void> =>
   Effect.runPromise(Effect.yieldNow.pipe(Effect.andThen(Effect.yieldNow)));
 
-/** A trusted inspection whose Global default set declares nothing. */
 export const workspaceInspection = (seed?: SessionProfileOverrideSeed) =>
   makeProfileSettingsInspection(
     {
@@ -28,7 +26,6 @@ export const workspaceInspection = (seed?: SessionProfileOverrideSeed) =>
     seed,
   );
 
-/** Opens a shortcut's selector page, searches it, and chooses the first match. */
 export const chooseFromPage = (
   component: { readonly handleInput: (data: string) => void },
   shortcut: string,
@@ -37,7 +34,6 @@ export const chooseFromPage = (
   for (const key of [shortcut, "/", ...query, "\r"]) component.handleInput(key);
 };
 
-/** A Current Session generalist workspace whose saves replace its session route. */
 export const workspaceHarness = (
   overrides: Partial<ProfileWorkspaceOptions> = {},
   initial: ReadonlyArray<ProfileCandidate> = [

@@ -13,7 +13,6 @@ export function expandPreviewTabs(text: string): string {
   return text.replace(/\t/g, "   ");
 }
 
-/** Stable non-cryptographic string hash for cache keys. */
 export function hashString(value: string): string {
   let first = 0xdeadbeef;
   let second = 0x41c6ce57;

@@ -10,18 +10,15 @@ import { recordRunWarning } from "./warnings.ts";
 
 export interface RunAssignmentDependencies extends RunContext {
   readonly startPrompt: RunProcessControls["startPrompt"];
-  /** Caller holds the service lock while draining one issuing assignment. */
   readonly activateAssignmentLocked: RunSettlement["activateAssignmentLocked"];
   readonly replayAssignmentActivation: RunSettlement["replayAssignmentActivation"];
 }
 
-/** Run-start evidence may change the view before the issuing prompt confirms. */
 export const isCurrentIssuingAssignment = (record: RunRecord, attemptToken: string): boolean =>
   record.assignment.attemptToken === attemptToken &&
   record.assignment.phase === "issuing" &&
   !isInactiveRunRecord(record);
 
-/** Rolls over to a new issuing assignment and a starting view; caller holds the service lock. */
 export const beginNextAssignmentLocked = (
   record: RunRecord,
   attemptToken: string,
@@ -52,7 +49,6 @@ export const beginNextAssignmentLocked = (
   };
 };
 
-/** Owns prompt issue confirmation, rollback, and uncertain assignment retention. */
 export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
   const { withLock, publish, startPrompt, activateAssignmentLocked, replayAssignmentActivation } =
     dependencies;

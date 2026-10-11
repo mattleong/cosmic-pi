@@ -47,15 +47,9 @@ export const operationNames = (calls: ReadonlyArray<HerdrBtwClientCall>): string
 export const operationCount = (calls: ReadonlyArray<HerdrBtwClientCall>, operation: string) =>
   calls.filter((call) => call.operation === operation).length;
 
-export const operationInputs = <A>(
-  calls: ReadonlyArray<HerdrBtwClientCall>,
-  operation: string,
-): A[] => {
-  // SAFETY: Each fixture method records the semantic input paired with its fixed operation name.
-  return calls.filter((call) => call.operation === operation).map((call) => call.input as A);
-};
+export const operationInputs = (calls: ReadonlyArray<HerdrBtwClientCall>, operation: string) =>
+  calls.filter((call) => call.operation === operation).map((call) => call.input);
 
-/** Advances through the bounded shell-readiness window before joining. */
 export const withShellReadiness = <A, E>(workflow: Effect.Effect<A, E>) =>
   Effect.gen(function* () {
     const fiber = yield* workflow.pipe(Effect.forkScoped({ startImmediately: true }));
@@ -67,11 +61,9 @@ export const SESSION_FILE = "/sessions/parent.jsonl";
 export const SESSION_ID = "019fd4cd-4c88-7564-8b67-3b917b42df51";
 export const CHILD_ID = "0198aaaa-7564-4c88-8b67-child0btw001";
 export const CHILD_FILE = "/sessions/child.jsonl";
-/** A lexical alias of CHILD_FILE; comparators decide whether it names the same file. */
 export const CHILD_ALIAS = "/sessions/aliases/../child.jsonl";
 export const CWD = "/project";
 
-/** Comparator for scenarios where one or two paths are lexically distinct aliases of one file. */
 export const aliasIdentity =
   (
     aliasPaths: readonly string[],
@@ -84,7 +76,6 @@ export const aliasIdentity =
         ? "same"
         : "distinct";
 
-/** Superset of the option keys used by the btw-reuse and open-pane suites. */
 export interface HerdrBtwFixtureOptions {
   readonly initialLinks?: ReadonlyArray<HerdrBtwLink>;
   readonly restoreOverride?: HerdrBtwLinkRestoration;
@@ -112,11 +103,6 @@ export interface HerdrBtwFixtureOptions {
   readonly shellReadiness?: ReadonlyArray<boolean>;
 }
 
-/**
- * Superset service fixture: per-scenario call recording and failure injection,
- * one client stub, a link store, and the four service seams with
- * makeService/open/openNew helpers.
- */
 export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
   const calls: HerdrBtwClientCall[] = [];
   const runEffect = <A, Input>(

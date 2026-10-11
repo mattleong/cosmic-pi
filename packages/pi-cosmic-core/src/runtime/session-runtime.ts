@@ -32,12 +32,6 @@ export interface PiSessionRuntimeSlot<Input, R, RuntimeError = unknown> {
   readonly shutdown: () => Promise<void>;
   readonly isActive: () => boolean;
   readonly isCurrent: (token: number) => boolean;
-  /**
-   * A command invocation's authority, captured when it is invoked. It ends at the next start,
-   * shutdown, or runtime removal and never returns, so a command invoked while a session starts
-   * keeps working once that session activates, and nothing from an earlier session acts on a
-   * later one.
-   */
   readonly captureAuthority: () => () => boolean;
 }
 
@@ -47,14 +41,9 @@ type Active<Input, R, RuntimeError> = {
   readonly runtime: PiManagedRuntime<R, RuntimeError>;
   readonly removeAbort: () => void;
   activated: boolean;
-  /** Memoized so each runtime is disposed exactly once. */
   disposal?: Promise<void>;
 };
 
-/**
- * The minimal imperative island that owns the runtime which cannot own its own creation.
- * All resources acquired after `start` are scoped by the managed runtime.
- */
 export function makePiSessionRuntimeSlot<
   Input,
   R,
@@ -65,7 +54,6 @@ export function makePiSessionRuntimeSlot<
   hooks: PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError, StartupValue>,
 ): PiSessionRuntimeSlot<Input, R, RuntimeError> {
   let generation = 0;
-  /** Advances whenever a lifecycle begins or ends; captured authority compares against it. */
   let authorityEpoch = 0;
   let active: Active<Input, R, RuntimeError> | undefined;
   let transition: Promise<unknown> = Promise.resolve();

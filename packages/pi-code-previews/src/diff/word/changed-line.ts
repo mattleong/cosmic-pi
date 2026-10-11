@@ -13,8 +13,6 @@ export type IndexedChangedLine<T extends AddedDiffLine | RemovedDiffLine> = {
 export function normalizedChangedContent(
   line: IndexedChangedLine<AddedDiffLine | RemovedDiffLine>,
 ): string {
-  // Compute ranges against the same normalized text that Shiki/fallback rendering displays.
-  // Otherwise tabs or escaped control chars shift the emphasis range by multiple cells.
   return (line.normalizedContent ??= escapeControlChars(expandPreviewTabs(line.line.content)));
 }
 

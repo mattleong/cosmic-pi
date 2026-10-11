@@ -10,7 +10,6 @@ import {
   type SharpProcessRunner,
 } from "../src/boundary/sharp.ts";
 
-// These fakes acquire no native process and can guarantee their cleanup.
 const makeSharpAdapter = (run: SharpProcessRunner) =>
   makeOwnedSharpAdapter((bytes, onCleanup) =>
     run(bytes, onCleanup).pipe(Effect.ensuring(Effect.sync(() => onCleanup(true)))),
@@ -125,7 +124,6 @@ it.live("shares admission across independent Effect runtimes", () =>
         Effect.as(success),
       ),
     );
-    // Explicit standalone runtime entry proves admission is not fiber/runtime-local.
     const pending = Effect.runPromise(first.decode(bytes));
     yield* Effect.gen(function* () {
       yield* Deferred.await(started);
@@ -145,7 +143,6 @@ it.live("shares admission across independent Effect runtimes", () =>
 for (const outcome of ["error", "timeout", "missing-report"] as const) {
   it.live(`disables admission after ${outcome} without confirmed cleanup`, () =>
     Effect.gen(function* () {
-      // A fresh module models restart without adding a production latch reset API.
       vi.resetModules();
       const { makeSharpAdapter: makeFresh } = yield* Effect.tryPromise(
         () => import("../src/boundary/sharp.ts"),
@@ -170,7 +167,6 @@ for (const outcome of ["error", "timeout", "missing-report"] as const) {
   );
 }
 
-// Last: no reset API exists for a production cleanup-uncertain latch.
 it.effect("disables all subsequent adapters after unconfirmed cleanup", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();

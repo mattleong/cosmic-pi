@@ -24,7 +24,6 @@ export interface QuestionnaireCapability {
   readonly version: 1;
   readonly sessionId: string;
   readonly generation: string;
-  /** Revoke the exact owned request synchronously, then join its UI/editor cleanup. */
   readonly cancel: (owner: QuestionnaireOwner) => Promise<void>;
   readonly ask: (
     request: AskUserRequest,
@@ -98,8 +97,6 @@ export const QuestionnaireOutcomeSchema = Schema.Union([
   }),
 ]);
 export type AskUserOutcome = typeof QuestionnaireOutcomeSchema.Type;
-// Decode each bounded record once before inspecting nested arrays. Later schema
-// validation reads only detached data, never a second hostile getter value.
 const RawRequest = Schema.Struct({ questions: Schema.Unknown });
 const RawQuestion = Schema.Struct({
   key: Schema.Unknown,
@@ -183,7 +180,6 @@ export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome 
   }
 };
 
-/** Missing or rejected providers are unavailable, never a local fallback. Last valid wins. */
 export const queryQuestionnaireRelay = (
   events: QuestionnaireEvents,
   sessionId: string,
@@ -197,7 +193,6 @@ export const queryQuestionnaireRelay = (
         ? value
         : undefined,
   ).candidates.at(-1);
-/** Optional root capability; its ask takes an additional authenticated owner. Last valid wins. */
 export const queryQuestionnaireCapability = (
   events: QuestionnaireEvents,
   sessionId: string,

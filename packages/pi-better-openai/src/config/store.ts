@@ -25,14 +25,11 @@ export class OpenAIConfigError extends Schema.TaggedError<OpenAIConfigError>()(
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
 
-/** Tolerant field-level wire decode: one malformed field never discards valid siblings. */
 function decodeConfig<ValueInput>(value: ValueInput) {
   const root = decodeTolerantFields(
     value,
     {
       persistState: Schema.Boolean,
-      // Legacy fast-mode state retained for tolerant reads and compatibility writes.
-      active: Schema.Boolean,
       desiredActive: Schema.Boolean,
       usage: UnknownRecordSchema,
       compaction: UnknownRecordSchema,
@@ -67,7 +64,6 @@ function decodeConfig<ValueInput>(value: ValueInput) {
   ).value;
   return {
     ...(root.persistState !== undefined && { persistState: root.persistState }),
-    ...(root.active !== undefined && { active: root.active }),
     ...(root.desiredActive !== undefined && { desiredActive: root.desiredActive }),
     ...(Object.keys(usage).length > 0 && { usage }),
     ...(compaction.enabled !== undefined && { compaction }),
@@ -85,12 +81,7 @@ function resolveConfigFiles(
   return {
     ...metadata,
     persistState: project?.persistState ?? global?.persistState ?? DEFAULT_CONFIG.persistState,
-    desiredActive:
-      project?.desiredActive ??
-      project?.active ??
-      global?.desiredActive ??
-      global?.active ??
-      DEFAULT_CONFIG.desiredActive,
+    desiredActive: project?.desiredActive ?? global?.desiredActive ?? DEFAULT_CONFIG.desiredActive,
     usage: {
       ...usage,
       refreshIntervalMs: Number.clamp(usage.refreshIntervalMs, {

@@ -31,7 +31,6 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
   const selfLine = self
     ? `Your current ownership summary: ${ownershipSummary(self)}. A parent reply is authoritative for any complete changed claim set.`
     : "Your current ownership record is unavailable; contact the parent before modifying files.";
-  // Private worktrees do not share native filesystem ownership with the source checkout.
   const workspacePeers = self ? records.filter((record) => record.view.cwd === self.view.cwd) : [];
   const peers = activePeerLines(workspacePeers, selfId);
   if (peers.length === 0)
@@ -50,7 +49,6 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
 export const makeRunPeerNotifier =
   (records: ReadonlyMap<string, RunRecord>) =>
   (changedRunId: string): Effect.Effect<void> =>
-    // Recipients are read when the notices run, not when the effect is built.
     Effect.suspend(() =>
       Effect.forEach(
         [...records.values()].flatMap((record) => {

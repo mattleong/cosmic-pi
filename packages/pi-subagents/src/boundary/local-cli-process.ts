@@ -1,5 +1,3 @@
-// The LocalCliProcess service door: local CLI request/service contracts plus environment,
-// preflight, and probe orchestration over the private harness and wire-transport boundaries.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -46,12 +44,10 @@ export interface LocalCliPreflightRequest {
   readonly closeOnReport: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
-  /** Canonical assigned cwd when available. Required for local Claude writers. */
   readonly cwd?: string | undefined;
 }
 
 export interface LocalCliProcessHandle extends LocalCliHandle {
-  /** Optional metadata-only recorder owned by the local-CLI process scope. */
   readonly claudeDebug?: LocalClaudeDebugRecorder | undefined;
 }
 
@@ -65,7 +61,6 @@ export interface LocalCliProcessContract {
 }
 
 export interface LocalCliProcessLayerOptions extends LocalCliHarnessOptions {
-  /** Package-test seam only. */
   readonly platform?: NodeJS.Platform | undefined;
 }
 
@@ -132,7 +127,6 @@ const resolveCodexApiKeyFallback = (
 ) =>
   Effect.gen(function* () {
     if (request.runtime !== "codex") return false;
-    // Auth helpers contain hostile filesystem/JSON failures and cannot reject.
     const auth = yield* Effect.promise(() => readValidatedCodexAuth(environment));
     const fallback = !auth && approvedCodexApiKey(environment) !== undefined;
     if (!auth && !fallback)
@@ -216,9 +210,6 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   options: LocalCliProcessLayerOptions,
   request: LocalCliHarnessRequest,
 ) {
-  // Keep acquisition masked through finalizer registration. Preparation owns a unique private
-  // directory before its final writes, so exposing interruption between return and registration
-  // could abandon credential-bearing state.
   const harness = yield* Effect.acquireRelease(
     prepareLocalCliHarness(options, request).pipe(
       Effect.mapError((error) =>

@@ -192,7 +192,6 @@ const normalizedWarning = (summary: string, details?: string | null): string => 
   return (parts.join("\n") || "Codex warning.").slice(0, MAX_WARNING_TEXT_CHARS);
 };
 
-/** Bounded item started/completed decoding: native-agent discriminants first, then ordinary items. */
 const decodeCodexItemNotification = Effect.fn("LocalCodexProtocol.decodeItemNotification")(
   function* <ParamsInput>(method: "item/started" | "item/completed", params: ParamsInput) {
     const envelope = yield* Schema.decodeUnknownEffect(NativeItemEnvelope)(params);

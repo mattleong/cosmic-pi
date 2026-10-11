@@ -35,8 +35,6 @@ export class FastModeService extends Context.Service<FastModeService>()(
           if (options.canPublish?.() !== false) MutableRef.set(options.projection, snapshot);
         };
         yield* Effect.sync(() => publish(initialState));
-        // The permit is already held. Commit the private Ref and boundary together,
-        // including from durable afterCommit, without reacquiring this same lock.
         const commit = (snapshot: FastSnapshot) =>
           Effect.uninterruptible(
             Effect.sync(() => publish(snapshot)).pipe(Effect.andThen(Ref.set(state, snapshot))),
@@ -49,7 +47,7 @@ export class FastModeService extends Context.Service<FastModeService>()(
           transitions.withPermit(
             prepare(update).pipe(
               Effect.flatMap((snapshot) =>
-                usage.persistFast(snapshot.active, snapshot.desiredActive, commit(snapshot)),
+                usage.persistFast(snapshot.desiredActive, commit(snapshot)),
               ),
             ),
           );
@@ -74,7 +72,6 @@ export class FastModeService extends Context.Service<FastModeService>()(
           recordInjection: (event: FastInjectionEvent): void => {
             ingress.offer(event);
           },
-          // Startup writes only when --fast changes the persisted intent it was resolved from.
           initialize: (
             ctx: ExtensionContext,
             config: Pick<ResolvedConfig, "persistState" | "desiredActive">,
@@ -86,7 +83,6 @@ export class FastModeService extends Context.Service<FastModeService>()(
           },
           setDesired: (ctx: ExtensionContext, desiredActive: boolean) =>
             persistTransition(desire(ctx, desiredActive)),
-          // A model switch changes only derived state; the persisted intent is unchanged.
           modelChanged: (ctx: ExtensionContext) =>
             commitInMemory((current) => desire(ctx, current.desiredActive)(current)),
         };

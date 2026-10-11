@@ -3,7 +3,6 @@ import { renderCompactRow, type CompactRowInput } from "./compact-row";
 import { renderCompactChildren } from "./compact-children";
 import { renderCompactIssues } from "./compact-issues";
 
-/** Heading, the call's own issues, then its call tree with each child's reason on its row. */
 export function renderCompactToolCall(
   input: CompactRowInput,
   theme: Theme,

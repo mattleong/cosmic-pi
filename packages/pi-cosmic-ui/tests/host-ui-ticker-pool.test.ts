@@ -71,7 +71,6 @@ describe("host UI ticker pool", () => {
     const stopReplacement = pool.start(160, replacement);
     expect(harness.scheduled.map((ticker) => ticker.intervalMs)).toEqual([160, 1_000, 160]);
 
-    // A stale scheduler callback cannot reach the replacement group.
     harness.scheduled[0]?.tick();
     expect(replacement).not.toHaveBeenCalled();
     harness.scheduled[2]?.tick();

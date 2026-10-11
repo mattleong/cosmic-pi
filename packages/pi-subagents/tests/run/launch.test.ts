@@ -1,4 +1,3 @@
-// Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -17,7 +16,6 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 
-/** Starts and completes `count` root runs whose children are `fake.controls[offset..]`. */
 const completeHistory = (
   service: SubagentServiceContract,
   fake: ReturnType<typeof fakeChildLayer>,
@@ -127,7 +125,6 @@ describe("SubagentService", () => {
   it.effect(
     "keeps soft-effort runs alive on a non-reasoning model and reports the effective level",
     () => {
-      // Models the parent's Pi child resolving to a non-reasoning model whose effective level is off.
       const { layer } = localServiceFixture(
         {},
         fakeChildLayer(Effect.void, { stateThinkingLevel: "off" }),
@@ -302,7 +299,6 @@ describe("SubagentService", () => {
         expect(yield* refused.pipe(Effect.flip)).toMatchObject({ code: refusal });
         expect(yield* service.list).toEqual(before);
         expect(fake.reclaimedRunIds).toEqual([]);
-        // A normal start still reclaims the eligible leaf, proving history really was at capacity.
         yield* service.start(request({ name: "allowed-after-refusal" }));
         expect(fake.reclaimedRunIds).toEqual([history[0]]);
       });
@@ -324,8 +320,6 @@ describe("SubagentService", () => {
         _tag: "SubagentProcessError",
         code: "fixture_reclaim_failed",
       });
-      // Reclaim failure admitted nothing, left no starting orphan, and kept the
-      // uncertain candidate registered but quarantined against unsafe resume.
       const afterFailure = yield* service.list;
       const secondId = afterFailure[1]?.id ?? "";
       const thirdId = afterFailure[2]?.id ?? "";
@@ -335,8 +329,6 @@ describe("SubagentService", () => {
       );
       expect(afterFailure.some((run) => run.name === "blocked")).toBe(false);
       expect(fake.reclaimedRunIds).toEqual([firstId]);
-      // The prospective admission reservation is released, but the uncertain
-      // record stays quarantined; a retry selects the next safe candidate.
       const retried = yield* service.start(request({ name: "blocked-retry" })).pipe(Effect.flip);
       expect(retried).toMatchObject({ code: "fixture_reclaim_failed" });
       expect(fake.reclaimedRunIds).toEqual([firstId, secondId]);
@@ -428,8 +420,6 @@ describe("SubagentService", () => {
       const startA = yield* service.start(request({ name: "evict-a" })).pipe(Effect.forkScoped);
       const startB = yield* service.start(request({ name: "evict-b" })).pipe(Effect.forkScoped);
       yield* yieldUntil(() => fake.reclaimedRunIds.length === 2);
-      // Each start claimed a distinct candidate and reserved one prospective
-      // process slot while both destructive reclaims were in flight.
       expect(new Set(fake.reclaimedRunIds).size).toBe(2);
       const blocked = yield* service.start(request({ name: "evict-c" })).pipe(Effect.flip);
       expect(blocked).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });

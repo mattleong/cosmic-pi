@@ -1,4 +1,3 @@
-// Lifecycle fixture models only public metadata and renderer resolution, never native execution.
 import assert from "node:assert/strict";
 import type { ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -7,11 +6,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime } from "pi-cosmic-core";
-import {
-  extensionContextFixture,
-  opaqueFixture,
-  recordingExtensionHost,
-} from "pi-cosmic-core/testing";
+import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import { animationSchedulerProbe, createToolPresentationHarness } from "../../testing";
 import { codePreviewsWithDependencies } from "../../src/application/lifecycle";
@@ -46,7 +41,7 @@ const foreign = {
 const info = (sourceInfo: ToolInfo["sourceInfo"] = builtin): ToolInfo => ({
   name: "codemode",
   description: "native",
-  parameters: opaqueFixture({}),
+  parameters: {},
   exposure: "model-only",
   sourceInfo,
 });

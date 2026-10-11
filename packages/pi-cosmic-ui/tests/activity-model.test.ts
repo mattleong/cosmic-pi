@@ -9,7 +9,6 @@ import {
 import { needsYou } from "../src/activity/attention.ts";
 import { activityRow as row } from "./support/activity.ts";
 
-/** The source rows the grouped tree shows, without its section rows. */
 const members = (tree: readonly GroupedActivityRow[]) =>
   tree.flatMap((entry) => (entry.type === "member" ? [entry] : []));
 const ids = (tree: readonly GroupedActivityRow[]) => members(tree).map((entry) => entry.row.id);
@@ -59,7 +58,6 @@ describe("activity ownership", () => {
       row("grandchild", "running", "first"),
       row("last", "running", "root"),
     ];
-    // The Subagents section is the first level; live work lists before history.
     expect(
       members(groupedActivityTree(values)).map((entry) => [entry.row.id, entry.continuations]),
     ).toEqual([
@@ -221,7 +219,6 @@ describe("activity ownership", () => {
     const live = row("live", "running", "a");
     const descendant = row("descendant", "running", "live");
     const history = Array.from({ length: 100 }, (_, index) => row(`history-${index}`, "done"));
-    // Retained rows are newest first, so the cycle's finished rows are the oldest history here.
     const retained = retainActivity([...history, ...cycle], [live, descendant]);
     expect(retained.some((entry) => entry.id === "a" || entry.id === "b")).toBe(false);
     expect(activityPath(retained, live.key)).toEqual([
@@ -233,14 +230,12 @@ describe("activity ownership", () => {
     );
   });
   it("keeps the most recently finished root branches past the history bound", () => {
-    // Roots finish, then their source drops them, one after another.
     let rows: readonly ActivityRow[] = [];
     for (let index = 0; index < 105; index++)
       rows = retainActivity(retainActivity(rows, [row(`dropped-${index}`, "done")]), []);
     expect(new Set(rows.map((entry) => entry.id))).toEqual(
       new Set(Array.from({ length: 100 }, (_, index) => `dropped-${index + 5}`)),
     );
-    // A source still publishing more finished roots than the bound keeps those that ended last.
     const published = Array.from({ length: 120 }, (_, index) =>
       row(`published-${index}`, "done", undefined, { endedAt: index }),
     );

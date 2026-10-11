@@ -47,11 +47,6 @@ function run(command, args, cwd, options = {}) {
   return result.stdout ?? "";
 }
 
-/**
- * The clean consumer lives outside the workspace, so pnpm would resolve a different package
- * store for it. Reusing the workspace's store keeps the smoke reproducible from already
- * fetched packages (unchanged for normal setups, where this is the global store anyway).
- */
 const workspaceStoreDir = run("pnpm", ["store", "path"], root).trim();
 
 function assertPackedProtocolsResolved(packageName, manifest) {
@@ -102,9 +97,6 @@ try {
           ...tarballDependencies,
         },
         pnpm: {
-          // The consumer has no lockfile. Without a pin, a fresh registry resolution can float
-          // this transitive package to a newer prerelease whose peer range excludes the pinned
-          // effect, leaving it unable to import effect at all.
           overrides: {
             ...tarballDependencies,
             "@effect/platform-node-shared": expectedEffectVersion,
@@ -132,8 +124,6 @@ try {
     join(temporaryDirectory, "mcp-fixture.mjs"),
     await readFile(join(root, "scripts/fixtures/native-mcp-server.mjs")),
   );
-  // Runtime imports and config acquisition must not see the caller's agent directory,
-  // credentials, browser profiles, or configured environment values. The only server is our fixture.
   const agentDirectory = join(temporaryDirectory, "agent");
   const fixtureDirectory = join(temporaryDirectory, "mcp-project");
   const consumerEnvironment = {
@@ -328,8 +318,6 @@ try {
       if (error.code !== "ESRCH") throw error;
     }
   `;
-  // Native codemode workers inherit Node's execArgv; an --input-type eval parent cannot launch
-  // their file entrypoint. A real ESM file matches ordinary Pi execution and tests source loading.
   const sourceImportPath = join(temporaryDirectory, "source-import-smoke.mjs");
   await writeFile(sourceImportPath, sourceImportSmoke, "utf8");
   run(process.execPath, [sourceImportPath], temporaryDirectory, {
@@ -380,7 +368,6 @@ try {
     throw new Error("Packed Sharp decoder could not validate a tiny PNG in a clean consumer.");
   }
 
-  // Pi and the clean-consumer smoke load TypeScript source directly through Jiti.
   for (const source of [
     "pi-cosmic-core/index.ts",
     "pi-cosmic-core/testing.ts",
@@ -393,8 +380,6 @@ try {
   ]) {
     await readFile(join(temporaryDirectory, "node_modules", source));
   }
-  // Tests and build tooling remain repository-only. No source-hosted package may regain a
-  // generated dist dependency.
   for (const excluded of [
     "pi-code-previews/tests",
     "pi-code-previews/tsconfig.json",
