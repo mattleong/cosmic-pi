@@ -109,6 +109,40 @@ function phaseRowLine(
   );
 }
 
+type WorkflowEntry = Extract<GroupedActivityRow, { readonly type: "workflow" }>;
+
+const workflowProgressParts = (entry: WorkflowEntry): ActivityStatusPart[] => {
+  const row = entry.row;
+  const phases = row.phases?.length ?? 0;
+  if (!phases)
+    return parts(
+      [...activeWorkLabels(entry.summary), ...plannedLabels(entry.summary)],
+      STATUS_DROP.progress,
+    );
+  const phaseCounts =
+    row.status === "cancelled" ? { ...entry.phaseCounts, stopped: 0 } : entry.phaseCounts;
+  return parts(
+    [...phaseCountLabels(phaseCounts, phases, "phases"), ...plannedLabels(entry.unphased)],
+    STATUS_DROP.phases,
+  );
+};
+
+const workflowStatusParts = (
+  entry: WorkflowEntry,
+  notices: readonly string[],
+  width: number,
+  now: number | undefined,
+): ActivityStatusPart[] => {
+  const row = entry.row;
+  const ended = row.status === "failed" || row.status === "cancelled" || row.status === "stopping";
+  return [
+    ...parts(notices),
+    ...(ended ? parts([activityStatus(row)], STATUS_DROP.state) : []),
+    ...workflowProgressParts(entry),
+    ...parts([activityElapsed(row, now, width < 60)], STATUS_DROP.elapsed),
+  ];
+};
+
 export function workflowRowLine(
   entry: Extract<GroupedActivityRow, { readonly type: "workflow" | "phase" }>,
   width: number,
@@ -120,11 +154,7 @@ export function workflowRowLine(
     return phaseRowLine(entry, width, options, presentation, focusedStyle);
   const row = entry.row;
   const notices = compactNotices(entry.summary.attention);
-  const phases = row.phases?.length ?? 0;
   const overlay = notices.length > 0 && row.status !== "failed";
-  const ended = row.status === "failed" || row.status === "cancelled" || row.status === "stopping";
-  const phaseCounts =
-    row.status === "cancelled" ? { ...entry.phaseCounts, stopped: 0 } : entry.phaseCounts;
   const mark = activityMark(row, options.now);
   return renderActivityRow(
     {
@@ -136,23 +166,7 @@ export function workflowRowLine(
       glyph: overlay ? managerNoticeGlyph("warning") : mark.glyph,
       color: overlay ? "warning" : mark.color,
       typeColor: managerTone.identity,
-      status: [
-        ...parts(notices),
-        ...(ended ? parts([activityStatus(row)], STATUS_DROP.state) : []),
-        ...(phases
-          ? parts(
-              [
-                ...phaseCountLabels(phaseCounts, phases, "phases"),
-                ...plannedLabels(entry.unphased),
-              ],
-              STATUS_DROP.phases,
-            )
-          : parts(
-              [...activeWorkLabels(entry.summary), ...plannedLabels(entry.summary)],
-              STATUS_DROP.progress,
-            )),
-        ...parts([activityElapsed(row, options.now, width < 60)], STATUS_DROP.elapsed),
-      ],
+      status: workflowStatusParts(entry, notices, width, options.now),
       statusColor: notices.length ? "warning" : "muted",
       compactStatus: notices.length > 0,
       ...(entry.history && { history: true }),

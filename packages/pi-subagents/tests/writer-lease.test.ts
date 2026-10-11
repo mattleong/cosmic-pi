@@ -10,8 +10,6 @@ import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { makeWriterLease, WriterLeaseService } from "../src/boundary/writer-lease.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
-const { join } = nodePath;
-
 type LockOutcome = "live" | "recovery-required" | "unavailable";
 
 const RECOVERY_SLOT = "/agent/subagents/writer-leases-v3/slot";
@@ -128,11 +126,11 @@ describe.skipIf(process.platform === "win32")("writer lease adapter", () => {
   it.effect("excludes a live writer across service instances through aliases and renames", () =>
     Effect.gen(function* () {
       const root = yield* temporaryDirectory("pi-subagents-writer-lease-");
-      const agentDirectory = join(root, "agent");
-      const project = join(root, "project");
+      const agentDirectory = nodePath.join(root, "agent");
+      const project = nodePath.join(root, "project");
       yield* Effect.promise(() =>
         Promise.all([fs.mkdir(agentDirectory), fs.mkdir(project)]).then(() =>
-          fs.symlink(project, join(root, "alias"), "dir"),
+          fs.symlink(project, nodePath.join(root, "alias"), "dir"),
         ),
       );
       const instance = WriterLeaseService.pipe(
@@ -141,14 +139,14 @@ describe.skipIf(process.platform === "win32")("writer lease adapter", () => {
       const first = yield* instance;
       const second = yield* instance;
       const direct = yield* first.canonicalize(project);
-      const alias = yield* second.canonicalize(join(root, "alias"));
+      const alias = yield* second.canonicalize(nodePath.join(root, "alias"));
       expect(alias).toEqual(direct);
       const lease = yield* first.acquire({ cwd: direct, runId: "direct" });
       expect(yield* Effect.flip(second.acquire({ cwd: alias, runId: "alias" }))).toMatchObject({
         reason: "live",
       });
-      yield* Effect.promise(() => fs.rename(project, join(root, "renamed")));
-      const renamed = yield* second.canonicalize(join(root, "renamed"));
+      yield* Effect.promise(() => fs.rename(project, nodePath.join(root, "renamed")));
+      const renamed = yield* second.canonicalize(nodePath.join(root, "renamed"));
       expect(renamed.digest).toBe(direct.digest);
       expect(yield* Effect.flip(second.acquire({ cwd: renamed, runId: "renamed" }))).toMatchObject({
         reason: "live",
@@ -156,7 +154,7 @@ describe.skipIf(process.platform === "win32")("writer lease adapter", () => {
       expect(yield* Effect.flip(second.release(lease))).toMatchObject({
         _tag: "WriterLeaseReleaseError",
       });
-      expect(yield* Effect.promise(() => fs.readdir(join(root, "renamed")))).toEqual([]);
+      expect(yield* Effect.promise(() => fs.readdir(nodePath.join(root, "renamed")))).toEqual([]);
       yield* first.release(lease);
       yield* second.release(yield* second.acquire({ cwd: renamed, runId: "renamed" }));
     }).pipe(Effect.scoped),
@@ -166,7 +164,7 @@ describe.skipIf(process.platform === "win32")("writer lease adapter", () => {
     Effect.gen(function* () {
       const { agentDirectory, service } = yield* adapter();
       expect(
-        yield* Effect.flip(service.canonicalize(join(agentDirectory, "missing"))),
+        yield* Effect.flip(service.canonicalize(nodePath.join(agentDirectory, "missing"))),
       ).toMatchObject({ _tag: "WriterCwdCanonicalizationError" });
       expect(yield* Effect.promise(() => fs.readdir(agentDirectory))).toEqual([]);
     }).pipe(Effect.scoped),

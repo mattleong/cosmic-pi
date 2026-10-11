@@ -158,8 +158,8 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   const handle = yield* Effect.uninterruptible(
     Effect.gen(function* () {
       let confirmed = false;
-      if (request.onCleanup)
-        yield* Effect.addFinalizer(() => Effect.sync(() => request.onCleanup!(confirmed)));
+      const onCleanup = request.onCleanup;
+      if (onCleanup) yield* Effect.addFinalizer(() => Effect.sync(() => onCleanup(confirmed)));
       const acquired = yield* command.pipe(
         Effect.mapError(
           () =>

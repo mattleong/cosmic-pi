@@ -4,6 +4,7 @@ import {
   decodeFullScreenPrintable,
   FullScreenKeymap,
   pageSteps,
+  type FullScreenAction,
   type PageSteps,
 } from "pi-cosmic-ui/manager/keymap";
 import type { SubagentConfigScope } from "../config/store.ts";
@@ -132,6 +133,29 @@ const savedSetMenuPage = (
     choices: savedSetMenuChoices(entry),
     emptyText: "No matching actions",
   });
+
+type NavigationEffect = "close" | "edit" | "actions" | "render";
+
+const NAVIGATION_EFFECTS = {
+  cancel: "close",
+  quit: "close",
+  back: "close",
+  confirm: "edit",
+  forward: "edit",
+  help: "actions",
+  "next-pane": "render",
+  "previous-pane": "render",
+  search: "render",
+  up: "render",
+  down: "render",
+  first: "render",
+  last: "render",
+  "pending-first": "render",
+  "half-page-up": "render",
+  "half-page-down": "render",
+  "full-page-up": "render",
+  "full-page-down": "render",
+} as const satisfies Readonly<Record<FullScreenAction, NavigationEffect>>;
 
 export class ProfileSetPickerComponent implements Component, Focusable {
   private allEntries: ReadonlyArray<ProfileSetPickerEntry>;
@@ -315,21 +339,11 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       this.renderSoon();
       return;
     }
-    switch (resolution.action) {
-      case "cancel":
-      case "quit":
-      case "back":
-        this.options.close(undefined);
-        return;
-      case "confirm":
-      case "forward":
-        this.activate("edit");
-        return;
-      case "help":
-        this.openActions();
-        return;
-    }
-    this.renderSoon();
+    const effect = NAVIGATION_EFFECTS[resolution.action];
+    if (effect === "close") this.options.close(undefined);
+    else if (effect === "edit") this.activate("edit");
+    else if (effect === "actions") this.openActions();
+    else this.renderSoon();
   }
 
   handleInput(data: string): void {

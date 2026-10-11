@@ -39,7 +39,6 @@ import {
 } from "../backend/local-pi-protocol.ts";
 
 const { mkdir, readFile, rm, rmdir, writeFile } = nodeFsPromises;
-const { join } = nodePath;
 
 const RUNTIME_API_KEY_ENV = "PI_SUBAGENT_RUNTIME_API_KEY";
 const RUNTIME_API_PROVIDER_ENV = "PI_SUBAGENT_RUNTIME_API_PROVIDER";
@@ -84,7 +83,7 @@ export function safeSubagentDirectorySegment(value: string): string {
 }
 
 const subagentRunDirectory = (agentDirectory: string, parentSessionId: string, runId: string) =>
-  join(
+  nodePath.join(
     agentDirectory,
     "subagents",
     safeSubagentDirectorySegment(parentSessionId),
@@ -105,7 +104,7 @@ const reclaimChildRunState = (
       request.runId,
     );
     return rm(runDirectory, { recursive: true, force: true }).then(() =>
-      rmdir(join(runDirectory, "..")).catch((error) => {
+      rmdir(nodePath.join(runDirectory, "..")).catch((error) => {
         const code = nodeErrorCode(error);
         if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
           throw error;
@@ -133,7 +132,7 @@ const writeResultContract = (request: ChildLaunchRequest, runDir: string) =>
   Effect.gen(function* () {
     const contract = request.resultContract;
     if (!contract) return [];
-    const path = join(runDir, "result-schema.json");
+    const path = nodePath.join(runDir, "result-schema.json");
     const source = yield* encodeResultContractDocument({
       parameters: contract.parameters,
       strictSafe: contract.strictSafe,
@@ -239,7 +238,7 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
         "The selected parent session branch is empty.",
       );
     const sessionId = synchronousRandomUuid();
-    const sessionFile = join(runDir, `session-${sessionId}.jsonl`);
+    const sessionFile = nodePath.join(runDir, `session-${sessionId}.jsonl`);
     const header = {
       type: "session" as const,
       version: 3,
@@ -274,7 +273,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   yield* fileStep("create subagent run directory", () =>
     mkdir(runDir, { recursive: true, mode: 0o700 }),
   );
-  const promptPath = join(runDir, "system-prompt.md");
+  const promptPath = nodePath.join(runDir, "system-prompt.md");
   yield* fileStep("write subagent system prompt", () =>
     writeFile(promptPath, request.systemPrompt, { encoding: "utf8", mode: 0o600 }),
   );
@@ -284,7 +283,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       ? yield* createForkedSession(request, runDir)
       : undefined;
 
-  const cliEntry = join(getPackageDir(), "dist", "bundle", "cli.js");
+  const cliEntry = nodePath.join(getPackageDir(), "dist", "bundle", "cli.js");
   const toolPolicy = childToolPolicy(request.activeTools, request.resultContract !== undefined);
   const cliArgs = [
     "--mode",

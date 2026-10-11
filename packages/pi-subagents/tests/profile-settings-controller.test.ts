@@ -171,7 +171,7 @@ const closeDashboard = function* (fixture: ReturnType<typeof setup>, running: Pr
 const saveSnapshot = function* (fixture: ReturnType<typeof setup>) {
   press(fixture, "s");
   yield* step(settleHostPromises);
-  press(fixture, ..."snapshot", "\r");
+  press(fixture, ...Array.from("snapshot"), "\r");
   yield* step(settleHostPromises);
 };
 const useSelectedSet = function* (fixture: ReturnType<typeof setup>, beforeConfirm?: () => void) {
@@ -255,7 +255,7 @@ describe("profile settings controller", () => {
     function* () {
       const fixture = setup();
       const host = fakeCustomSurfaceHost({ theme: plainTheme, columns: 120, rows: 30 });
-      fixture.useCustom(host.ctx.ui.custom);
+      fixture.useCustom((factory, options) => host.ctx.ui.custom(factory, options));
       const activation = replaceableActivation(fixture);
       const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
       yield* step(() => vi.waitFor(() => expect(fixture.customCalls()).toBe(1)));

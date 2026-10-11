@@ -171,7 +171,7 @@ it.live("failed native cancellation cannot admit another decoder while its child
     );
     const pending = yield* adapter.decode(png).pipe(Effect.forkScoped);
     const pid = yield* ownPid(marker);
-    const originalChildKill = NativeChildProcess.prototype.kill;
+    const otherChildKills: Array<number | undefined> = [];
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         const group = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
@@ -180,8 +180,9 @@ it.live("failed native cancellation cannot admit another decoder while its child
         });
         const child = vi
           .spyOn(NativeChildProcess.prototype, "kill")
-          .mockImplementation(function (this: InstanceType<typeof NativeChildProcess>, signal) {
-            return this.pid === pid ? false : originalChildKill.call(this, signal);
+          .mockImplementation(function (this: InstanceType<typeof NativeChildProcess>) {
+            if (this.pid !== pid) otherChildKills.push(this.pid);
+            return false;
           });
         return () => {
           group.mockRestore();
@@ -199,5 +200,6 @@ it.live("failed native cancellation cannot admit another decoder while its child
     });
     expect(yield* next.decode(png).pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
     expect(spawned).toBe(false);
+    expect(otherChildKills).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
 );

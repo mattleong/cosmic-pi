@@ -1,10 +1,10 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { synchronousNow, notifyAtHostBoundary } from "pi-cosmic-core";
-import * as Predicate from "effect/Predicate";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
-import { decodeCompactToolDetails, type SubagentRunCard } from "../tools/details-schema.ts";
+import { decodeCompactToolDetails } from "../tools/details-decode.ts";
+import type { SubagentRunCard } from "../tools/details-schema.ts";
 import { actionFailureDisposition, decodeSubagentOutcomeDetails } from "../tools/outcome.ts";
 import type { SubagentLifecycleInput, SubagentToolInput } from "../tools/schema.ts";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
@@ -122,7 +122,6 @@ export const registerSubagentProxyManagerCommand = (
   visibilityRootId: string,
   call: SubagentProxyCall,
 ): void => {
-  if (!Predicate.isFunction(pi.registerCommand)) return;
   pi.registerCommand("subagents", {
     description: "Open the authenticated descendant subagent tree",
     handler: (args, ctx) => {
@@ -161,8 +160,8 @@ export const registerSubagentProxyManagerCommand = (
       };
       const refreshAfterAction = (): Promise<void> => {
         const prior = refreshInFlight;
-        const next = () => refresh();
-        return prior ? prior.then(next, next) : next();
+        const refreshAgain = () => refresh();
+        return prior ? prior.then(refreshAgain, refreshAgain) : refreshAgain();
       };
       let stopRefresh: (() => void) | undefined;
       let closed = false;

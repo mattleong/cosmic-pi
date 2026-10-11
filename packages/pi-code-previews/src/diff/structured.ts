@@ -4,60 +4,83 @@ type DiffLine = { readonly text: string; readonly ending: "" | "\n" | "\r\n" };
 
 const ENDING_SYMBOLS = { "": "", "\n": "␊", "\r\n": "␍␊" } as const;
 
+const CONTEXT_LINES = 3;
+
+type DiffChanges = ReturnType<typeof diffLines>;
+
+interface DiffCursor {
+  oldLine: number;
+  newLine: number;
+  firstChangeLine: number | undefined;
+  readonly lines: string[];
+}
+
 export function createSimpleDiff(before: string, after: string): string {
   const changes = diffLines(before, after);
   const lastChangeIndex = changes.findLastIndex((change) => change.added || change.removed);
   if (lastChangeIndex < 0) return "";
 
-  const lines: string[] = [];
-  let oldLine = 1;
-  let newLine = 1;
-  const context = 3;
-  let firstChangeLine: number | undefined;
-
+  const cursor: DiffCursor = { oldLine: 1, newLine: 1, firstChangeLine: undefined, lines: [] };
   for (let index = 0; index < changes.length; index++) {
     const change = changes[index];
     if (!change) continue;
     if (!change.added && !change.removed) {
-      const chunkLines = splitDiffLines(change.value).map((line) => line.text);
-      if (firstChangeLine === undefined) {
-        const start = Math.max(0, chunkLines.length - context);
-        lines.push(...contextLines(chunkLines.slice(start), newLine + start));
-      } else if (index < lastChangeIndex && chunkLines.length > context * 2) {
-        lines.push(
-          ...contextLines(chunkLines.slice(0, context), newLine),
-          "...",
-          ...contextLines(chunkLines.slice(-context), newLine + chunkLines.length - context),
-        );
-      } else {
-        lines.push(
-          ...contextLines(
-            index < lastChangeIndex ? chunkLines : chunkLines.slice(0, context),
-            newLine,
-          ),
-        );
-      }
-      oldLine += chunkLines.length;
-      newLine += chunkLines.length;
+      appendUnchanged(cursor, change.value, index < lastChangeIndex);
       continue;
     }
-
-    firstChangeLine ??= newLine;
-    const removed: DiffLine[] = [];
-    const added: DiffLine[] = [];
-    let next: typeof change | undefined = change;
-    while (next?.added || next?.removed) {
-      (next.removed ? removed : added).push(...splitDiffLines(next.value));
-      next = changes[++index];
-    }
-    index--;
-    for (const [offset, line] of removed.entries())
-      lines.push(`-${oldLine++} ${displayText(line, added[offset])}`);
-    for (const [offset, line] of added.entries())
-      lines.push(`+${newLine++} ${displayText(line, removed[offset])}`);
+    index = appendChangeRun(cursor, changes, index);
   }
 
+  const { lines, firstChangeLine } = cursor;
   return lines.length ? `@@ ${firstChangeLine} @@\n${lines.join("\n")}` : "";
+}
+
+function unchangedContext(
+  chunkLines: string[],
+  cursor: DiffCursor,
+  beforeLastChange: boolean,
+): string[] {
+  if (cursor.firstChangeLine === undefined) {
+    const start = Math.max(0, chunkLines.length - CONTEXT_LINES);
+    return contextLines(chunkLines.slice(start), cursor.newLine + start);
+  }
+  if (beforeLastChange && chunkLines.length > CONTEXT_LINES * 2)
+    return [
+      ...contextLines(chunkLines.slice(0, CONTEXT_LINES), cursor.newLine),
+      "...",
+      ...contextLines(
+        chunkLines.slice(-CONTEXT_LINES),
+        cursor.newLine + chunkLines.length - CONTEXT_LINES,
+      ),
+    ];
+  return contextLines(
+    beforeLastChange ? chunkLines : chunkLines.slice(0, CONTEXT_LINES),
+    cursor.newLine,
+  );
+}
+
+function appendUnchanged(cursor: DiffCursor, value: string, beforeLastChange: boolean): void {
+  const chunkLines = splitDiffLines(value).map((line) => line.text);
+  cursor.lines.push(...unchangedContext(chunkLines, cursor, beforeLastChange));
+  cursor.oldLine += chunkLines.length;
+  cursor.newLine += chunkLines.length;
+}
+
+function appendChangeRun(cursor: DiffCursor, changes: DiffChanges, start: number): number {
+  cursor.firstChangeLine ??= cursor.newLine;
+  const removed: DiffLine[] = [];
+  const added: DiffLine[] = [];
+  let index = start;
+  let next = changes[index];
+  while (next?.added || next?.removed) {
+    (next.removed ? removed : added).push(...splitDiffLines(next.value));
+    next = changes[++index];
+  }
+  for (const [offset, line] of removed.entries())
+    cursor.lines.push(`-${cursor.oldLine++} ${displayText(line, added[offset])}`);
+  for (const [offset, line] of added.entries())
+    cursor.lines.push(`+${cursor.newLine++} ${displayText(line, removed[offset])}`);
+  return index - 1;
 }
 
 export function createSnippetDiff(before: string, after: string): string {

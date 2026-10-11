@@ -8,18 +8,16 @@ import { step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 import { processAlive, waitForDead, waitForPid } from "./support/process-liveness.ts";
 
-const { join } = nodePath;
-
 const fixture = fileURLToPath(new URL("./fixtures/hanging-probe-fixture.mjs", import.meta.url));
 const ownedPids = new Set<number>();
 const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
 
 const executableFixture = Effect.gen(function* () {
   const directory = yield* temporaryDirectory("pi-subagents-probe-");
-  const executable = join(directory, "probe.mjs");
+  const executable = nodePath.join(directory, "probe.mjs");
   yield* step(() => fs.copyFile(fixture, executable));
   yield* step(() => fs.chmod(executable, 0o700));
-  return { directory, executable, pidPath: join(directory, "probe.pid") };
+  return { directory, executable, pidPath: nodePath.join(directory, "probe.pid") };
 });
 
 const expectInterruptKills = <A, E>(fiber: Fiber.Fiber<A, E>, pidPath: string) =>
@@ -58,7 +56,7 @@ describe("probe interruption cleanup", () => {
   it.live("interrupts an isolated Codex probe and removes its private harness", () =>
     Effect.gen(function* () {
       const test = yield* executableFixture;
-      const agentDirectory = join(test.directory, "agent");
+      const agentDirectory = nodePath.join(test.directory, "agent");
       yield* step(() => fs.mkdir(agentDirectory, { mode: 0o700 }));
       const fiber = yield* Effect.forkChild(
         runIsolatedCodexAuthProbe(test.executable, agentDirectory, {
@@ -68,7 +66,7 @@ describe("probe interruption cleanup", () => {
         }),
       );
       yield* expectInterruptKills(fiber, test.pidPath);
-      const harnessRoot = join(agentDirectory, "subagents", "native-model-catalog-v1");
+      const harnessRoot = nodePath.join(agentDirectory, "subagents", "native-model-catalog-v1");
       const entries = yield* step(() =>
         fs.readdir(harnessRoot).catch((error: NodeJS.ErrnoException) => {
           if (error.code === "ENOENT") return [];

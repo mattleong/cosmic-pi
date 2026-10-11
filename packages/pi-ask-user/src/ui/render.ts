@@ -131,11 +131,11 @@ function appendContinueRow(
 function renderQuestion(
   model: QuestionnaireRenderModel,
   question: AskUserQuestion,
+  draft: QuestionDraft,
   width: number,
 ): string[] {
   const lines: string[] = [];
   const append = (prefix: string, value: string) => appendWrapped(lines, prefix, value, width);
-  const draft = model.state.drafts[model.state.currentTab]!;
   append(" ", model.theme.fg("text", stripTerminalControls(question.prompt)));
   lines.push("");
   appendChoices(model, question, draft, append);
@@ -186,11 +186,11 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
 function renderInput(
   model: QuestionnaireRenderModel,
   input: DialogInputMode,
+  question: AskUserQuestion,
   width: number,
 ): string[] {
   const lines: string[] = [];
   const append = (prefix: string, value: string) => appendWrapped(lines, prefix, value, width);
-  const question = model.state.request.questions[input.question]!;
   const note = input.kind === "note";
   append(
     " ",
@@ -228,9 +228,9 @@ function renderInput(
 function renderQuestionPane(
   model: QuestionnaireRenderModel,
   question: AskUserQuestion,
+  draft: QuestionDraft,
   width: number,
 ): string[] {
-  const draft = model.state.drafts[model.state.currentTab]!;
   const choices = question.mode === "text" ? [] : question.choices;
   const choice = choices[draft.cursor];
   model.preview.setChoice(choice?.preview ? choice : undefined);
@@ -241,14 +241,14 @@ function renderQuestionPane(
     const rightWidth = Math.max(8, width - leftWidth - 2);
     lines.push(
       ...joinColumns(
-        renderQuestion(model, question, leftWidth),
+        renderQuestion(model, question, draft, leftWidth),
         model.preview.render(rightWidth),
         leftWidth,
         rightWidth,
       ),
     );
   } else {
-    lines.push(...renderQuestion(model, question, width));
+    lines.push(...renderQuestion(model, question, draft, width));
     if (hasAnyPreview) lines.push("", ...model.preview.render(width));
   }
   if (model.inputError)
@@ -270,9 +270,15 @@ function navigationHelp(model: QuestionnaireRenderModel): string {
 }
 
 function renderBody(model: QuestionnaireRenderModel, width: number): string[] {
-  if (model.input) return renderInput(model, model.input, width);
+  if (model.input) {
+    const question = model.state.request.questions[model.input.question];
+    return question ? renderInput(model, model.input, question, width) : [];
+  }
   const question = model.state.request.questions[model.state.currentTab];
-  return question ? renderQuestionPane(model, question, width) : renderReview(model, width);
+  const draft = model.state.drafts[model.state.currentTab];
+  return question && draft
+    ? renderQuestionPane(model, question, draft, width)
+    : renderReview(model, width);
 }
 
 export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: number): string[] {

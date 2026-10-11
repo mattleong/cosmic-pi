@@ -1,6 +1,5 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   captureSessionHost,
@@ -95,7 +94,8 @@ export function codePreviewsWithDependencies(
   pi: ExtensionAPI,
   dependencies: CodePreviewExtensionDependencies = defaultDependencies,
 ): Promise<void> {
-  if (!Predicate.isFunction(pi.registerToolRenderer)) {
+  const registerToolRenderer = pi.registerToolRenderer?.bind(pi);
+  if (!registerToolRenderer) {
     pi.on("session_start", (_event, ctx) =>
       notifyAtHostBoundary(ctx, "Code Previews needs Pi 1.0.1 or later", "warning"),
     );
@@ -105,7 +105,7 @@ export function codePreviewsWithDependencies(
   const installedTools = new Set<CodePreviewToolName>();
   let presentation = new CodePreviewPresentationOwner();
   let started = false;
-  pi.registerToolRenderer(createCodePreviewRendererResolver(pi, () => presentation, ownedTools));
+  registerToolRenderer(createCodePreviewRendererResolver(pi, () => presentation, ownedTools));
   dependencies.registerCommands(pi);
 
   const startup = (input: SessionInput) =>

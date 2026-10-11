@@ -19,6 +19,11 @@ import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { createToolPresentationHarness, renderContextFixture } from "../../testing";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 import type { CompactSummary } from "../../src/tools/compact-summary";
+import { executeDescriptor } from "../support/tool-identity";
+
+interface BoundSession {
+  session?: AgentSession;
+}
 
 const projectionTools = [
   "background_task",
@@ -61,7 +66,7 @@ it.live(
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-native-sdk-" });
       const models = yield* offlineModels(directory);
       const settings = quietSettings({ defaultTools: ["+codemode"] });
-      let boundSession: AgentSession | undefined;
+      const bound: BoundSession = {};
       const nativeDefinitions: ToolDefinition[] = [];
       const rendererRegistrations: ToolRendererResolver[] = [];
       const hooks: string[] = [];
@@ -183,7 +188,7 @@ it.live(
                               isError: false,
                             };
                           }
-                          const session = boundSession;
+                          const session = bound.session;
                           assert.ok(session);
                           const input = {
                             ...(yield* Schema.decodeUnknownEffect(
@@ -242,7 +247,7 @@ it.live(
                 hooks.push("call");
                 if (event.input.value === "block")
                   return { block: true, reason: "Fixture permission denied" };
-                event.input.value = `hook:${event.input.value}`;
+                event.input.value = `hook:${String(event.input.value)}`;
                 return undefined;
               });
               pi.on("tool_result", (event) => {
@@ -257,14 +262,14 @@ it.live(
       const native = nativeDefinitions[0]!;
       assert.ok(native);
       const original = {
-        execute: native.execute,
+        execute: executeDescriptor(native),
         parameters: native.parameters,
         prepareLoadout: native.prepareLoadout,
         exposure: native.exposure,
         defaultActive: native.defaultActive,
       };
       const session = yield* scopedSession({ cwd: directory, models, settings, loader });
-      boundSession = session;
+      bound.session = session;
       const initialActive = session.getActiveToolNames();
       yield* step(() => session.bindExtensions({ mode: "print" }));
       assert.deepEqual(session.getActiveToolNames(), initialActive);
@@ -356,7 +361,7 @@ it.live(
       assert.ok(image.content.some((part) => part.type === "image"));
       const renderers = session.extensionRunner.resolveToolRenderers("codemode", () => native)!;
       assert.equal(renderers.renderShell, "self");
-      assert.equal(native.execute, original.execute);
+      assert.deepEqual(executeDescriptor(native), original.execute);
       assert.equal(native.parameters, original.parameters);
       assert.equal(native.prepareLoadout, original.prepareLoadout);
       assert.equal(native.exposure, original.exposure);

@@ -232,6 +232,28 @@ export class TaskManagerComponent implements Component {
     });
   }
 
+  private confirmationLabel(
+    pending: PendingTaskAction,
+    tasks: ReadonlyArray<BackgroundTaskView>,
+    selected: BackgroundTaskView | undefined,
+  ): string {
+    if (pending.action === "clear")
+      return `c Confirm clearing ${countLabel(tasks.filter((task) => !isActiveTaskState(task.state)).length, "finished task")}`;
+    return `x Confirm stop ${selected?.id === pending.id ? taskDisplayName(selected) : "the selected task"}`;
+  }
+
+  private actionLabels(
+    tasks: ReadonlyArray<BackgroundTaskView>,
+    selected: BackgroundTaskView | undefined,
+  ): string[] {
+    const active = selected !== undefined && isActiveTaskState(selected.state);
+    return [
+      active ? `f ${this.follow ? "Unfollow" : "Follow"}` : undefined,
+      active ? "x Stop" : undefined,
+      tasks.some((task) => !isActiveTaskState(task.state)) ? "c Clear finished" : undefined,
+    ].filter((item): item is string => item !== undefined);
+  }
+
   private helpText(
     width: number,
     tasks: ReadonlyArray<BackgroundTaskView>,
@@ -248,20 +270,9 @@ export class TaskManagerComponent implements Component {
       this.shell.state.pane === "detail" ? `${escape} Back · q Close` : `${escape}/q Close`;
     if (this.pending)
       return renderResponsiveManagerFooter(contentWidth, [
-        [
-          this.pending.action === "clear"
-            ? `c Confirm clearing ${countLabel(tasks.filter((task) => !isActiveTaskState(task.state)).length, "finished task")}`
-            : `x Confirm stop ${selected?.id === this.pending.id ? taskDisplayName(selected) : "the selected task"}`,
-          `${escape}/q Cancel`,
-        ],
+        [this.confirmationLabel(this.pending, tasks, selected), `${escape}/q Cancel`],
       ]);
-    const actions = [
-      selected && isActiveTaskState(selected.state)
-        ? `f ${this.follow ? "Unfollow" : "Follow"}`
-        : undefined,
-      selected && isActiveTaskState(selected.state) ? "x Stop" : undefined,
-      tasks.some((task) => !isActiveTaskState(task.state)) ? "c Clear finished" : undefined,
-    ].filter((item): item is string => item !== undefined);
+    const actions = this.actionLabels(tasks, selected);
     const joinedActions = actions.length > 0 ? actions.join(" · ") : undefined;
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [

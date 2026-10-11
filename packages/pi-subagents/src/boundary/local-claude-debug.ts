@@ -7,8 +7,6 @@ import type { ClaudeProtocolEvent } from "../backend/local-claude-protocol.ts";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import { ensurePrivateDirectory, safeAgentDirectory, writeExclusive } from "./harness-shared.ts";
 
-const { join } = nodePath;
-
 const DEBUG_ROOT = "local-claude-debug-v1";
 const LEDGER_FILE = "replay-ledger.ndjson";
 const MAX_LEDGER_BYTES = 64 * 1024;
@@ -133,7 +131,7 @@ const ownedLedgerDirectories = Effect.fn("LocalClaudeDebug.ownedLedgers")(functi
   const owned = yield* Effect.forEach(
     candidates,
     (entry) => {
-      const directory = join(root, entry.name);
+      const directory = nodePath.join(root, entry.name);
       return diagnosticIo(() => fs.lstat(directory)).pipe(
         Effect.map((directoryStat): OwnedLedgerDirectory | undefined =>
           directoryStat.isDirectory() && !directoryStat.isSymbolicLink()
@@ -155,17 +153,17 @@ const persistLedger = Effect.fn("LocalClaudeDebug.persist")(function* (
   ledger: string,
 ) {
   const canonicalAgentDirectory = yield* diagnosticIo(() => safeAgentDirectory(agentDirectory));
-  const packageRoot = join(canonicalAgentDirectory, "subagents");
-  const root = join(packageRoot, DEBUG_ROOT);
+  const packageRoot = nodePath.join(canonicalAgentDirectory, "subagents");
+  const root = nodePath.join(packageRoot, DEBUG_ROOT);
   yield* diagnosticIo(() => ensurePrivateDirectory(packageRoot));
   yield* diagnosticIo(() => ensurePrivateDirectory(root));
   const owned = yield* ownedLedgerDirectories(root);
   for (const entry of owned.slice(0, Math.max(0, owned.length - MAX_RETAINED_LEDGERS + 1)))
     yield* diagnosticIo(() => fs.rm(entry.directory, { recursive: true, force: false }));
 
-  const directory = join(root, `claude-${runIdentity}-${synchronousRandomHex(8)}`);
+  const directory = nodePath.join(root, `claude-${runIdentity}-${synchronousRandomHex(8)}`);
   yield* diagnosticIo(() => fs.mkdir(directory, { mode: 0o700 }));
-  yield* diagnosticIo(() => writeExclusive(join(directory, LEDGER_FILE), ledger)).pipe(
+  yield* diagnosticIo(() => writeExclusive(nodePath.join(directory, LEDGER_FILE), ledger)).pipe(
     Effect.tapError(() =>
       diagnosticIo(() => fs.rm(directory, { recursive: true, force: true })).pipe(Effect.ignore),
     ),

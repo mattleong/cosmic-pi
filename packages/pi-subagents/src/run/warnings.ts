@@ -36,5 +36,6 @@ export const foldRunWarnings = (slots: RunWarningSlots): string | undefined => {
     const perWarningLimit = Math.max(1, Math.floor((MAX_ERROR_CHARS - labelsLength) / 2));
     return `System warning: ${sanitizeDiagnosticText(system, perWarningLimit)}\nChild warning: ${sanitizeDiagnosticText(child, perWarningLimit)}`;
   }
-  return sanitizeDiagnosticText((system ?? child)!, MAX_ERROR_CHARS);
+  const warning = system ?? child;
+  return warning === undefined ? undefined : sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
 };

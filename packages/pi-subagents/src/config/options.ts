@@ -170,31 +170,50 @@ const declaredSelection = (
   };
 };
 
+interface UltracodeSetting {
+  readonly ultracode: boolean;
+  readonly source: SubagentFeatureSource;
+}
+
+const ultracodeSetting = (
+  project: DecodedSubagentConfig | undefined,
+  global: DecodedSubagentConfig,
+): UltracodeSetting => {
+  if (project?.file.ultracode !== undefined)
+    return { ultracode: project.file.ultracode, source: "project" };
+  if (global.file.ultracode !== undefined)
+    return { ultracode: global.file.ultracode, source: "global" };
+  return { ultracode: DEFAULT_SUBAGENT_FEATURE_TOGGLES.ultracode, source: "default" };
+};
+
+const layeredPolicy = (
+  project: DecodedSubagentConfig | undefined,
+  global: DecodedSubagentConfig,
+): Pick<ResolvedSubagentConfig, "currentProfileSet" | "nesting" | "writerWorkspaceMode"> => ({
+  currentProfileSet: declaredSelection("project", project) ??
+    declaredSelection("global", global) ?? { scope: "builtin" },
+  nesting: project?.file.nesting ?? global.file.nesting ?? DEFAULT_SUBAGENT_NESTING_POLICY,
+  writerWorkspaceMode:
+    project?.file.writerWorkspaceMode ??
+    global.file.writerWorkspaceMode ??
+    DEFAULT_WRITER_WORKSPACE_MODE,
+});
+
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
   const global = resolveProfileSetLayer(input.global, "global", BUILTIN_PROFILE_LAYER);
   const effective = project ? resolveProfileSetLayer(project, "project", global) : global;
-  const ultracode = project?.file.ultracode ?? input.global.file.ultracode;
+  const { ultracode, source } = ultracodeSetting(project, input.global);
+  const policy = layeredPolicy(project, input.global);
   return freezeSnapshot({
-    ultracode: ultracode ?? DEFAULT_SUBAGENT_FEATURE_TOGGLES.ultracode,
-    featureSources: {
-      ultracode:
-        ultracode === undefined
-          ? "default"
-          : project?.file.ultracode === undefined
-            ? "global"
-            : "project",
-    },
+    ultracode,
+    featureSources: { ultracode: source },
     globalConfigPath: input.globalConfigPath,
     projectConfigPath: input.projectConfigPath,
     fallbackProfile: "generalist",
-    currentProfileSet: declaredSelection("project", project) ??
-      declaredSelection("global", input.global) ?? { scope: "builtin" },
-    nesting: project?.file.nesting ?? input.global.file.nesting ?? DEFAULT_SUBAGENT_NESTING_POLICY,
-    writerWorkspaceMode:
-      project?.file.writerWorkspaceMode ??
-      input.global.file.writerWorkspaceMode ??
-      DEFAULT_WRITER_WORKSPACE_MODE,
+    currentProfileSet: policy.currentProfileSet,
+    nesting: policy.nesting,
+    writerWorkspaceMode: policy.writerWorkspaceMode,
     profiles: effective.profiles,
     profileSources: effective.profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],

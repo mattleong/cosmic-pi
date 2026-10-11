@@ -16,13 +16,12 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 import { workspaceReceiptLine } from "./compact-workspace-summary.ts";
 import {
   WorkspaceToolDetailsSchema,
-  decodeCompactToolDetails,
-  decodeStartAwaitCardDetails,
   type CompactSubagentToolDetails,
   type SubagentAwaitDetails,
   type SubagentStartAwaitCardDetails,
   type WorkspaceToolDetails,
 } from "./details-schema.ts";
+import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 import { boundToolOutput } from "./format.ts";
 import { renderCompactResultComponent, renderProfileRoutesComponent } from "./render-management.ts";
 import { formatAwaitCounters, renderAwaitProgressComponent } from "./render-await.ts";
@@ -210,6 +209,28 @@ const renderWorkspacePreview = (
   });
 };
 
+const renderExpandedRunCards = (
+  projection: SubagentAwaitDetails | Exclude<CompactSubagentToolDetails, { action: "models" }>,
+  theme: Theme,
+): Component => {
+  const scope = projection.action === "await" ? awaitScope(projection) : undefined;
+  const sections = expandedRunReportSections(scope?.targets ?? projection.cards).filter(
+    (section) => section.kind === "report",
+  );
+  const container = new Container();
+  appendReportSections(container, sections, theme);
+  container.addChild(
+    runOverviewComponent(projection.cards, theme, {
+      expanded: true,
+      reportSections: [],
+      showContextOmission: false,
+      contentOnly: true,
+      hierarchy: scope?.hierarchy,
+    }),
+  );
+  return container;
+};
+
 export const renderSubagentExpandedContent = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   isPartial: boolean,
@@ -229,22 +250,7 @@ export const renderSubagentExpandedContent = (
     return renderTextFallback(result.content, isPartial, true, theme, options.isError);
   if (projection.contentOmitted)
     return rawResultSection(result.content, theme) ?? renderComponent(() => []);
-  const scope = details && awaitScope(details);
-  const sections = expandedRunReportSections(scope?.targets ?? projection.cards).filter(
-    (section) => section.kind === "report",
-  );
-  const container = new Container();
-  appendReportSections(container, sections, theme);
-  container.addChild(
-    runOverviewComponent(projection.cards, theme, {
-      expanded: true,
-      reportSections: [],
-      showContextOmission: false,
-      contentOnly: true,
-      hierarchy: scope?.hierarchy,
-    }),
-  );
-  return container;
+  return renderExpandedRunCards(projection, theme);
 };
 
 export const renderSubagentResult = (

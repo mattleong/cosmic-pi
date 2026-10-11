@@ -29,7 +29,8 @@ const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
 if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
 const { mkdir, readFile, writeFile } = nodeFsModule.promises;
-const { dirname, join } = nodePathModule;
+const dirname = nodePathModule.dirname.bind(nodePathModule);
+const join = nodePathModule.join.bind(nodePathModule);
 
 const processEnv: NodeJS.ProcessEnv = process.env;
 

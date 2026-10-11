@@ -285,26 +285,51 @@ const resultProtocolEvent = (event: typeof Result.Type): ClaudeProtocolEvent => 
   };
 };
 
+const decodeSystemEvent = <ValueInput>(
+  value: ValueInput,
+): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
+  Effect.gen(function* () {
+    const system = yield* Schema.decodeUnknownEffect(SystemEvent)(value);
+    if (system.subtype === "status") return { type: "activity" };
+    if (system.subtype !== "init") return { type: "ignored" };
+    const event = yield* Schema.decodeUnknownEffect(SystemInit)(value);
+    return {
+      type: "init",
+      cwd: event.cwd,
+      sessionId: event.session_id,
+      model: event.model,
+      hasMcpServerErrors: (event.mcp_server_errors?.length ?? 0) > 0,
+      cliVersion: event.claude_code_version,
+    };
+  });
+
+const decodeControlResponseEvent = <ValueInput>(
+  value: ValueInput,
+): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
+  Effect.gen(function* () {
+    const event = yield* Schema.decodeUnknownEffect(ControlResponse)(value);
+    const requestId = event.request_id ?? event.response?.request_id;
+    if (!requestId) {
+      yield* Schema.decodeUnknownEffect(Schema.Struct({ request_id: Id }))(value);
+      return { type: "ignored" } as const;
+    }
+    return {
+      type: "control_response",
+      requestId,
+      success: event.response?.subtype === "success",
+      ...(event.response?.error && { diagnostic: event.response.error }),
+      ...(event.response?.response !== undefined && { response: event.response.response }),
+    };
+  });
+
 export const decodeClaudeProtocolEvent = <ValueInput>(
   value: ValueInput,
 ): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
   Effect.gen(function* () {
     const discriminant = yield* Schema.decodeUnknownEffect(Discriminant)(value);
     switch (discriminant.type) {
-      case "system": {
-        const system = yield* Schema.decodeUnknownEffect(SystemEvent)(value);
-        if (system.subtype === "status") return { type: "activity" };
-        if (system.subtype !== "init") return { type: "ignored" };
-        const event = yield* Schema.decodeUnknownEffect(SystemInit)(value);
-        return {
-          type: "init",
-          cwd: event.cwd,
-          sessionId: event.session_id,
-          model: event.model,
-          hasMcpServerErrors: (event.mcp_server_errors?.length ?? 0) > 0,
-          cliVersion: event.claude_code_version,
-        };
-      }
+      case "system":
+        return yield* decodeSystemEvent(value);
       case "user": {
         const event = yield* Schema.decodeUnknownEffect(User)(value);
         return userProtocolEvent(event);
@@ -320,21 +345,9 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
         const event = yield* Schema.decodeUnknownEffect(Result)(value);
         return resultProtocolEvent(event);
       }
-      case "control_response": {
-        const event = yield* Schema.decodeUnknownEffect(ControlResponse)(value);
-        const requestId = event.request_id ?? event.response?.request_id;
-        if (!requestId) {
-          yield* Schema.decodeUnknownEffect(Schema.Struct({ request_id: Id }))(value);
-          return { type: "ignored" } as const;
-        }
-        return {
-          type: "control_response",
-          requestId,
-          success: event.response?.subtype === "success",
-          ...(event.response?.error && { diagnostic: event.response.error }),
-          ...(event.response?.response !== undefined && { response: event.response.response }),
-        };
-      }
+      case "control_response":
+        return yield* decodeControlResponseEvent(value);
+      case undefined:
       default:
         return { type: "ignored" };
     }

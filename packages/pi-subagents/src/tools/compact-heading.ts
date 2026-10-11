@@ -3,13 +3,12 @@ import * as Predicate from "effect/Predicate";
 import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import {
   WorkspaceToolDetailsSchema,
-  decodeCompactToolDetails,
-  decodeStartAwaitCardDetails,
   type CompactSubagentToolDetails,
   type SubagentAwaitDetails,
   type SubagentRunCard,
   type SubagentStartDetails,
 } from "./details-schema.ts";
+import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 import { countActionFailures } from "./outcome.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 
@@ -100,6 +99,13 @@ const retrySuccessor = (
 const displayName = (card: SubagentRunCard | undefined, ids: readonly string[]): string =>
   card && card.name !== card.id && !ids.includes(card.name) ? card.name : "";
 
+const listedSubject = (
+  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
+): string =>
+  details.action === "list" || details.action === "status"
+    ? displayName(details.cards.length === 1 ? details.cards[0] : undefined, [])
+    : "";
+
 export function projectedSubject(
   details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
   input: SummaryArguments,
@@ -115,8 +121,7 @@ export function projectedSubject(
       requested,
     );
   if (subject || phase !== "settled" || requested?.length) return subject;
-  if (details.action !== "list" && details.action !== "status") return subject;
-  return displayName(details.cards.length === 1 ? details.cards[0] : undefined, []) || subject;
+  return listedSubject(details) || subject;
 }
 
 function receiptCounter(

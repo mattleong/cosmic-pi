@@ -33,9 +33,83 @@ import { clipToWidth } from "../manager/chrome.ts";
 
 type LabeledContribution = CosmicFooterTextContribution & { readonly label: string };
 
+const isRepositoryIdentity = (entry: CosmicFooterTextContribution) =>
+  entry.id === "location" ||
+  entry.id === "branch" ||
+  entry.id === "pullRequest" ||
+  entry.id.startsWith("git");
+
+function detailLines(
+  details: readonly CosmicFooterTextContribution[],
+  width: number,
+  theme: CosmicFooterTheme,
+  compact: boolean,
+): string[] {
+  const labeledDetails = details.filter(
+    (entry): entry is LabeledContribution => entry.label !== undefined,
+  );
+  const unlabeled = details.filter((entry) => entry.label === undefined);
+  const extensionDetails = unlabeled.filter((entry) => entry.id.startsWith("extension."));
+  const otherDetails = unlabeled.filter((entry) => !entry.id.startsWith("extension."));
+  const lines: string[] = [];
+  for (const usage of labeledDetails)
+    lines.push(
+      ...renderProviderUsageLines(
+        usage.label,
+        compact && usage.compactText !== undefined ? usage.compactText : usage.text,
+        width,
+        theme,
+        compact,
+      ),
+    );
+  for (const detail of extensionDetails)
+    lines.push(renderContributionLine([detail], width, theme, compact));
+  if (!compact) {
+    for (const detail of otherDetails)
+      lines.push(renderContributionLine([detail], width, theme, false));
+  } else if (otherDetails.length && width >= 64) {
+    lines.push(renderContributionLine(otherDetails, width, theme, true));
+  }
+  return lines;
+}
+
+function footerLines(
+  text: readonly CosmicFooterTextContribution[],
+  width: number,
+  theme: CosmicFooterTheme,
+  compact: boolean,
+  currentContextUsage: FooterContextUsage,
+): string[] {
+  const identity = text.filter((entry) => entry.region === "identity");
+  const repositoryIdentity = identity.filter(isRepositoryIdentity);
+  const modelIdentity = identity.filter((entry) => !repositoryIdentity.includes(entry));
+  const metrics = text.filter((entry) => entry.region === "metrics");
+  const contextVisible = metrics.some((entry) => entry.id === "context");
+  const metricEntries = metrics.filter((entry) => entry.id !== "context");
+  const lines: string[] = [];
+  if (modelIdentity.length || contextVisible)
+    lines.push(
+      contextVisible
+        ? renderModelContextLine(modelIdentity, currentContextUsage, width, theme, compact)
+        : renderContributionLine(modelIdentity, width, theme, compact),
+    );
+  if (repositoryIdentity.length)
+    lines.push(renderContributionLine(repositoryIdentity, width, theme, compact));
+  if (metricEntries.length) lines.push(...renderMetricsLines(metricEntries, width, theme, compact));
+  lines.push(
+    ...detailLines(
+      text.filter((entry) => entry.region === "details"),
+      width,
+      theme,
+      compact,
+    ),
+  );
+  return lines;
+}
+
 export function createFooterComponent(options: {
   pi: ExtensionAPI;
-  ctx(): ExtensionContext;
+  ctx: () => ExtensionContext;
   footerData: ReadonlyFooterDataProvider;
   theme: CosmicFooterTheme;
   registry: Pick<FooterRegistry, "snapshot">;
@@ -100,54 +174,7 @@ export function createFooterComponent(options: {
         );
         const compact =
           config.footer.density === "compact" || (config.footer.density === "auto" && width < 72);
-        const identity = text.filter((entry) => entry.region === "identity");
-        const repositoryIdentity = identity.filter(
-          (entry) =>
-            entry.id === "location" ||
-            entry.id === "branch" ||
-            entry.id === "pullRequest" ||
-            entry.id.startsWith("git"),
-        );
-        const modelIdentity = identity.filter((entry) => !repositoryIdentity.includes(entry));
-        const metrics = text.filter((entry) => entry.region === "metrics");
-        const contextVisible = metrics.some((entry) => entry.id === "context");
-        const metricEntries = metrics.filter((entry) => entry.id !== "context");
-        const details = text.filter((entry) => entry.region === "details");
-        const labeledDetails = details.filter(
-          (entry): entry is LabeledContribution => entry.label !== undefined,
-        );
-        const unlabeled = details.filter((entry) => entry.label === undefined);
-        const extensionDetails = unlabeled.filter((entry) => entry.id.startsWith("extension."));
-        const otherDetails = unlabeled.filter((entry) => !entry.id.startsWith("extension."));
-        const lines: string[] = [];
-        if (modelIdentity.length || contextVisible)
-          lines.push(
-            contextVisible
-              ? renderModelContextLine(modelIdentity, currentContextUsage, width, theme, compact)
-              : renderContributionLine(modelIdentity, width, theme, compact),
-          );
-        if (repositoryIdentity.length)
-          lines.push(renderContributionLine(repositoryIdentity, width, theme, compact));
-        if (metricEntries.length)
-          lines.push(...renderMetricsLines(metricEntries, width, theme, compact));
-        for (const usage of labeledDetails)
-          lines.push(
-            ...renderProviderUsageLines(
-              usage.label,
-              compact && usage.compactText !== undefined ? usage.compactText : usage.text,
-              width,
-              theme,
-              compact,
-            ),
-          );
-        for (const detail of extensionDetails)
-          lines.push(renderContributionLine([detail], width, theme, compact));
-        if (!compact) {
-          for (const detail of otherDetails)
-            lines.push(renderContributionLine([detail], width, theme, false));
-        } else if (otherDetails.length && width >= 64) {
-          lines.push(renderContributionLine(otherDetails, width, theme, true));
-        }
+        const lines = footerLines(text, width, theme, compact, currentContextUsage);
         return lines.map((line) => clipToWidth(line, width, ""));
       }, []);
     },

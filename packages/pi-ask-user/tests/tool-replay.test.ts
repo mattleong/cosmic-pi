@@ -77,10 +77,11 @@ const answered: AskUserOutcome = {
     },
   ],
 };
+const answerContent = `${formatAskUserOutcome(answered)}\nRAW_RECOVERY /tmp/answer-recovery.txt`;
 const answerMessage: Parameters<MessageRenderer>[0] = {
   role: "custom",
   customType: ASYNC_MESSAGE_TYPE,
-  content: `${formatAskUserOutcome(answered)}\nRAW_RECOVERY /tmp/answer-recovery.txt`,
+  content: answerContent,
   details: {
     requestId: "historical-request",
     deliveryId: "historical-delivery",
@@ -174,7 +175,7 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
           const render = renderAskUserAsyncMessage;
           for (const content of [
             answerMessage.content,
-            [{ type: "text" as const, text: String(answerMessage.content) }],
+            [{ type: "text" as const, text: answerContent }],
             "",
           ]) {
             const message = { ...answerMessage, content };

@@ -11,7 +11,7 @@ const nodePath = process.getBuiltinModule("node:path");
 if (!nodeFs || !nodePath) throw new Error("Node fs/path builtins are unavailable.");
 const { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync, writeFileSync } =
   nodeFs;
-const { isAbsolute, join, normalize } = nodePath;
+const pathApi = nodePath;
 
 const MAX_SESSION_PATH_CHARS = 4_096;
 const MAX_HEADER_LINE_BYTES = 256 * 1024;
@@ -41,7 +41,7 @@ const isBoundedSessionPath = (path: string): boolean =>
   path.length > 0 &&
   path.length <= MAX_SESSION_PATH_CHARS &&
   !LINE_CONTROL.test(path) &&
-  isAbsolute(path);
+  pathApi.isAbsolute(path);
 
 const withRegularSessionDescriptor = <A>(
   path: string,
@@ -70,8 +70,8 @@ const withRegularSessionDescriptor = <A>(
 export const compareSessionFileIdentity: SessionFileIdentityComparator = (leftPath, rightPath) => {
   if (!isBoundedSessionPath(leftPath) || !isBoundedSessionPath(rightPath)) return "unavailable";
 
-  const comparison = withRegularSessionDescriptor(normalize(leftPath), (leftDescriptor) =>
-    withRegularSessionDescriptor(normalize(rightPath), (rightDescriptor) => {
+  const comparison = withRegularSessionDescriptor(pathApi.normalize(leftPath), (leftDescriptor) =>
+    withRegularSessionDescriptor(pathApi.normalize(rightPath), (rightDescriptor) => {
       const left = fstatSync(leftDescriptor, { bigint: true });
       const right = fstatSync(rightDescriptor, { bigint: true });
       return left.dev === right.dev && left.ino === right.ino ? "same" : "distinct";
@@ -123,7 +123,7 @@ const createBlankChildSessionFileAt = (
   if (
     !isBoundedSessionPath(input.sessionDir) ||
     parseHerdrBtwSessionId(input.sessionId) === undefined ||
-    !isAbsolute(input.cwd) ||
+    !pathApi.isAbsolute(input.cwd) ||
     LINE_CONTROL.test(input.cwd)
   )
     return { _tag: "invalid" };
@@ -131,7 +131,7 @@ const createBlankChildSessionFileAt = (
     if (!statSync(input.sessionDir).isDirectory()) return { _tag: "invalid" };
     const timestamp = DateTime.formatIso(DateTime.makeUnsafe(now));
     const fileTimestamp = timestamp.replace(/[:.]/gu, "-");
-    const path = join(input.sessionDir, `${fileTimestamp}_${input.sessionId}.jsonl`);
+    const path = pathApi.join(input.sessionDir, `${fileTimestamp}_${input.sessionId}.jsonl`);
     if (!isBoundedSessionPath(path)) return { _tag: "invalid" };
     const header = {
       type: "session",

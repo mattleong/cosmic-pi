@@ -146,13 +146,14 @@ const addStyledRow = (
   style: { readonly glyph: string; readonly color: "muted" | "warning" | "success" },
   text: string,
   theme: Theme,
-): void =>
-  void container.addChild(
+): void => {
+  container.addChild(
     hangingText(
       `${theme.fg(style.color, style.glyph)} `,
       theme.fg(style.color, sanitizeTerminalLine(text)),
     ),
   );
+};
 
 const addSteeringDelivery = (container: Container, run: SubagentRunView, theme: Theme): void => {
   if (run.steeringDelivery === undefined) return;
@@ -240,7 +241,9 @@ const addDetailLine = (
   body: string,
   theme: Theme,
   color: "dim" | "warning" = "dim",
-): void => void container.addChild(hangingText(theme.fg(color, prefix), theme.fg(color, body)));
+): void => {
+  container.addChild(hangingText(theme.fg(color, prefix), theme.fg(color, body)));
+};
 
 function addTechnicalDetails(container: Container, run: SubagentRunView, theme: Theme): void {
   addBlock(container, theme.fg("muted", theme.bold("Technical details")));

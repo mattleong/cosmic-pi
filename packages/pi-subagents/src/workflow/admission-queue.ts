@@ -33,8 +33,9 @@ export const makeWorkflowSlots = (concurrency: number) => {
     return { queuedAt, rank };
   };
   const grant = () => {
-    while (held < concurrency && waiting.length > 0) {
-      const next = waiting.shift()!;
+    while (held < concurrency) {
+      const next = waiting.shift();
+      if (!next) return;
       next.state = "granted";
       held += 1;
       Deferred.doneUnsafe(next.wake, Effect.void);

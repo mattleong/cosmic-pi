@@ -97,7 +97,7 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
   const ui = {
     notify: vi.fn(),
     setStatus: vi.fn(),
-    setWidget: host.ctx.ui.setWidget,
+    setWidget: host.ctx.ui.setWidget.bind(host.ctx.ui),
     custom,
   };
   const customSpy = vi.spyOn(ui, "custom");

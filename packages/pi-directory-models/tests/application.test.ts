@@ -136,7 +136,6 @@ const harness = (
     let activeModel = initial;
     let thinkingLevel: "low" | "medium" | "high" = "low";
     const notify = vi.fn();
-    let ctx!: ExtensionContext;
     const delayedThinkingEvents: ThinkingLevelSelectEvent[] = [];
     const setModel = vi.fn((next: Model): Promise<boolean> => {
       options.onSetModel?.();
@@ -182,7 +181,7 @@ const harness = (
       if (options.leafId !== undefined) return options.leafId;
       return options.entries?.at(-1)?.id ?? null;
     });
-    ctx = extensionContextFixture({
+    const ctx = extensionContextFixture({
       cwd,
       get model() {
         if (options.modelReadFailure) throw new Error("model getter failed");

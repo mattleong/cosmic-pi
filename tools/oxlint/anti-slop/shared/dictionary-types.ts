@@ -459,8 +459,18 @@ function classifyAliasBroadTarget(
 			? { kind: "open dictionary" }
 			: null;
 	}
-	if (unwrapped.type !== "TSTypeReference") return null;
-	const name = typeReferenceName(unwrapped);
+	return unwrapped.type === "TSTypeReference"
+		? classifyAliasBroadReference(unwrapped, environment, substitutions, resolvingAliases)
+		: null;
+}
+
+function classifyAliasBroadReference(
+	type: ESTree.TSTypeReference,
+	environment: TypeEnvironment,
+	substitutions: TypeAliasEnvironment,
+	resolvingAliases: ReadonlySet<string>,
+): WideningTarget | null {
+	const name = typeReferenceName(type);
 	if (name === null) return null;
 	const substitution = substitutions.get(name);
 	if (substitution !== undefined) {
@@ -474,7 +484,7 @@ function classifyAliasBroadTarget(
 				);
 	}
 	if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, environment)) {
-		const wrapped = unwrapped.typeArguments?.params[0];
+		const wrapped = type.typeArguments?.params[0];
 		return wrapped === undefined
 			? null
 			: classifyAliasBroadTarget(wrapped, environment, substitutions, resolvingAliases);
@@ -484,7 +494,7 @@ function classifyAliasBroadTarget(
 	}
 	const alias = environment.aliases.get(name);
 	if (alias === undefined || resolvingAliases.has(name)) return null;
-	const nextSubstitutions = aliasSubstitution(alias, unwrapped, substitutions);
+	const nextSubstitutions = aliasSubstitution(alias, type, substitutions);
 	if (nextSubstitutions === null) return null;
 	const nextResolving = new Set(resolvingAliases);
 	nextResolving.add(name);

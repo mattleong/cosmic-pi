@@ -30,12 +30,12 @@ const fakePort = <Outbound>() => {
       switch (behavior) {
         case "success":
           callback(null);
-          return;
+          break;
         case "error":
           callback(new Error("ambiguous write"));
-          return;
+          break;
         case "pending":
-          return;
+          break;
         case "throw":
           throw new Error("write was not dispatched");
       }

@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { WorkspaceRecord } from "../workspace/model.ts";
+import type { WorkspacePreparation, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   checkDirectory,
@@ -40,95 +40,112 @@ const checkPreimage = (root: string, name: string, expected: SnapshotEntry | und
       );
   });
 
-export const publishWorkspace = (
-  registry: string,
+export const requiredLeaseDirectories = (
   record: WorkspaceRecord,
-  before: WorkspaceSnapshot,
-  after: WorkspaceSnapshot,
+  changedPaths: ReadonlyArray<string>,
 ) =>
   Effect.gen(function* () {
-    const previous = new Map(before.entries.map((entry) => [entry.path, entry]));
-    const next = new Map(after.entries.map((entry) => [entry.path, entry]));
-    const changed = [...new Set([...previous.keys(), ...next.keys()])]
-      .filter((name) => {
-        const a = previous.get(name),
-          b = next.get(name);
-        return a?.oid !== b?.oid || a?.mode !== b?.mode;
-      })
-      .sort();
-    if (
-      changed.some(
-        (name) => previous.get(name)?.mode === "120000" || next.get(name)?.mode === "120000",
-      )
-    )
-      return yield* workspaceFailure(
-        "integrate",
-        "Symlink changes cannot be published; source files were not modified.",
-      );
-    const permissions = (name: string) => {
-      const expected = previous.get(name),
-        content = next.get(name);
-      if (!expected) return content?.mode === "100755" ? 0o755 : 0o644;
-      if (expected.mode === content?.mode) return expected.permissions;
-      return (expected.permissions & ~0o111) | (content?.mode === "100755" ? 0o111 : 0);
-    };
-    const root = record.handle.sourceRoot;
-    const directories = new Map([[root, yield* directoryIdentity(root)]]);
-    const missingDirectories = new Set<string>();
-    for (const name of changed) {
-      yield* checkDirectory(path.dirname(path.join(root, name)), true);
-      let parent = path.dirname(name);
-      while (parent !== ".") {
-        const full = path.join(root, parent);
-        if (!(yield* workspaceIOIfPresent("integrate", () => fs.lstat(full))))
-          missingDirectories.add(parent);
-        else {
-          if (!record.preparation!.leaseDirectories.includes(full))
-            return yield* workspaceFailure(
-              "integrate",
-              "Changed-file ancestors changed; prepare and test again before integration.",
-            );
-          if (!directories.has(full)) directories.set(full, yield* directoryIdentity(full));
-        }
-        parent = path.dirname(parent);
+    const directories = new Set([record.handle.sourceRoot, record.handle.sourceCwd]);
+    for (const name of changedPaths) {
+      let directory = record.handle.sourceRoot;
+      for (const part of path
+        .dirname(name)
+        .split(path.sep)
+        .filter((part) => part !== ".")) {
+        directory = path.join(directory, part);
+        const stat = yield* workspaceIOIfPresent("prepare", () => fs.lstat(directory));
+        if (!stat) break;
+        if (!stat.isDirectory() || stat.isSymbolicLink())
+          return yield* workspaceFailure(
+            "prepare",
+            "Changed-file ancestor is not a real directory.",
+          );
+        yield* checkDirectory(directory);
+        directories.add(directory);
       }
-      yield* checkPreimage(root, name, previous.get(name));
     }
-    const plannedDirectories = [...missingDirectories].sort(
-      (a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b),
-    );
-    const entries = yield* Effect.forEach(changed, (name) =>
-      Effect.gen(function* () {
-        const token = yield* newWorkspaceId;
-        const expected = previous.get(name),
-          content = next.get(name);
-        return {
-          path: name,
-          temporaryPath: path.join(path.dirname(name), `.pi-workspace-new-${token}`),
-          backupPath: path.join(path.dirname(name), `.pi-workspace-old-${token}`),
-          before: expected && {
-            oid: expected.oid,
-            mode: expected.mode,
-            permissions: expected.permissions,
-          },
-          after: content && {
-            oid: content.oid,
-            mode: content.mode,
-            permissions: permissions(name),
-          },
-        };
-      }),
-    );
-    let journal: WorkspaceRecord = {
-      ...record,
-      status: "integrating",
-      publishedCount: 0,
-      plannedDirectories,
-      createdDirectoryCount: 0,
-      journal: entries,
+    return [...directories].sort();
+  });
+
+type SnapshotEntries = ReadonlyMap<string, SnapshotEntry>;
+type DirectoryIdentity = Effect.Success<ReturnType<typeof directoryIdentity>>;
+
+const changedPaths = (previous: SnapshotEntries, next: SnapshotEntries) =>
+  [...new Set([...previous.keys(), ...next.keys()])]
+    .filter((name) => {
+      const a = previous.get(name),
+        b = next.get(name);
+      return a?.oid !== b?.oid || a?.mode !== b?.mode;
+    })
+    .sort();
+
+const publishedPermissions = (
+  expected: SnapshotEntry | undefined,
+  content: SnapshotEntry | undefined,
+) => {
+  if (!expected) return content?.mode === "100755" ? 0o755 : 0o644;
+  if (expected.mode === content?.mode) return expected.permissions;
+  return (expected.permissions & ~0o111) | (content?.mode === "100755" ? 0o111 : 0);
+};
+
+const checkAncestors = (
+  root: string,
+  name: string,
+  leaseDirectories: ReadonlyArray<string>,
+  directories: Map<string, DirectoryIdentity>,
+  missingDirectories: Set<string>,
+) =>
+  Effect.gen(function* () {
+    let parent = path.dirname(name);
+    while (parent !== ".") {
+      const full = path.join(root, parent);
+      if (!(yield* workspaceIOIfPresent("integrate", () => fs.lstat(full))))
+        missingDirectories.add(parent);
+      else {
+        if (!leaseDirectories.includes(full))
+          return yield* workspaceFailure(
+            "integrate",
+            "Changed-file ancestors changed; prepare and test again before integration.",
+          );
+        if (!directories.has(full)) directories.set(full, yield* directoryIdentity(full));
+      }
+      parent = path.dirname(parent);
+    }
+  });
+
+const journalEntry = (
+  name: string,
+  expected: SnapshotEntry | undefined,
+  content: SnapshotEntry | undefined,
+) =>
+  Effect.gen(function* () {
+    const token = yield* newWorkspaceId;
+    return {
+      path: name,
+      temporaryPath: path.join(path.dirname(name), `.pi-workspace-new-${token}`),
+      backupPath: path.join(path.dirname(name), `.pi-workspace-old-${token}`),
+      before: expected && {
+        oid: expected.oid,
+        mode: expected.mode,
+        permissions: expected.permissions,
+      },
+      after: content && {
+        oid: content.oid,
+        mode: content.mode,
+        permissions: publishedPermissions(expected, content),
+      },
     };
-    yield* saveWorkspaceRecord(registry, journal);
-    for (const name of plannedDirectories) {
+  });
+
+const createPlannedDirectories = (
+  registry: string,
+  journal: WorkspaceRecord,
+  root: string,
+  directories: Map<string, DirectoryIdentity>,
+) =>
+  Effect.gen(function* () {
+    let createdDirectoryCount = journal.createdDirectoryCount ?? 0;
+    for (const name of journal.plannedDirectories ?? []) {
       const target = path.join(root, name),
         parent = path.dirname(target);
       const identity = directories.get(parent);
@@ -140,10 +157,23 @@ export const publishWorkspace = (
         name: path.basename(target),
       });
       directories.set(target, created);
-      journal = { ...journal, createdDirectoryCount: (journal.createdDirectoryCount ?? 0) + 1 };
-      yield* saveWorkspaceRecord(registry, journal);
+      createdDirectoryCount += 1;
+      yield* saveWorkspaceRecord(registry, { ...journal, createdDirectoryCount });
     }
-    for (const entry of entries) {
+    return { ...journal, createdDirectoryCount };
+  });
+
+const publishEntries = (
+  registry: string,
+  journal: WorkspaceRecord,
+  root: string,
+  directories: ReadonlyMap<string, DirectoryIdentity>,
+  previous: SnapshotEntries,
+  next: SnapshotEntries,
+) =>
+  Effect.gen(function* () {
+    let publishedCount = journal.publishedCount ?? 0;
+    for (const entry of journal.journal ?? []) {
       const directory = path.dirname(path.join(root, entry.path));
       const identity = directories.get(directory);
       if (!identity)
@@ -157,15 +187,70 @@ export const publishWorkspace = (
         temporaryName: path.basename(entry.temporaryPath),
         backupName: path.basename(entry.backupPath),
         ...(expected && { before: { bytes: expected.bytes, mode: expected.permissions } }),
-        ...(content && { after: { bytes: content.bytes, mode: permissions(entry.path) } }),
+        ...(content && {
+          after: { bytes: content.bytes, mode: publishedPermissions(expected, content) },
+        }),
       });
       if (result.status !== "success")
         return yield* workspaceFailure(
           "integrate",
           "Publication conflict or uncertainty; inspect the retained journal, captured backup and temporary file. No automatic rollback occurred.",
         );
-      journal = { ...journal, publishedCount: (journal.publishedCount ?? 0) + 1 };
-      yield* saveWorkspaceRecord(registry, journal);
+      publishedCount += 1;
+      yield* saveWorkspaceRecord(registry, { ...journal, publishedCount });
     }
-    return journal;
+    return { ...journal, publishedCount };
+  });
+
+export const publishWorkspace = (
+  registry: string,
+  record: WorkspaceRecord,
+  before: WorkspaceSnapshot,
+  after: WorkspaceSnapshot,
+  preparation: Pick<WorkspacePreparation, "leaseDirectories">,
+) =>
+  Effect.gen(function* () {
+    const previous = new Map(before.entries.map((entry) => [entry.path, entry]));
+    const next = new Map(after.entries.map((entry) => [entry.path, entry]));
+    const changed = changedPaths(previous, next);
+    if (
+      changed.some(
+        (name) => previous.get(name)?.mode === "120000" || next.get(name)?.mode === "120000",
+      )
+    )
+      return yield* workspaceFailure(
+        "integrate",
+        "Symlink changes cannot be published; source files were not modified.",
+      );
+    const root = record.handle.sourceRoot;
+    const directories = new Map([[root, yield* directoryIdentity(root)]]);
+    const missingDirectories = new Set<string>();
+    for (const name of changed) {
+      yield* checkDirectory(path.dirname(path.join(root, name)), true);
+      yield* checkAncestors(
+        root,
+        name,
+        preparation.leaseDirectories,
+        directories,
+        missingDirectories,
+      );
+      yield* checkPreimage(root, name, previous.get(name));
+    }
+    const plannedDirectories = [...missingDirectories].sort(
+      (a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b),
+    );
+    const entries = yield* Effect.forEach(changed, (name) =>
+      journalEntry(name, previous.get(name), next.get(name)),
+    );
+    const journal: WorkspaceRecord = {
+      ...record,
+      status: "integrating",
+      publishedCount: 0,
+      plannedDirectories,
+      createdDirectoryCount: 0,
+      journal: entries,
+    };
+    yield* saveWorkspaceRecord(registry, journal);
+    const created = yield* createPlannedDirectories(registry, journal, root, directories);
+    return yield* publishEntries(registry, created, root, directories, previous, next);
   });

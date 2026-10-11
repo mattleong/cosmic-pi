@@ -709,18 +709,20 @@ describe("subagent Pi registration", () => {
 
   effectTest("fails activation visibly when subagent tool registration throws", function* () {
     const notify = vi.fn();
-    const { emit, pi } = applicationFixture({
+    const setActiveTools = vi.fn();
+    const { emit } = applicationFixture({
       registerTool: vi.fn(() => {
         throw new Error("stale extension handle");
       }),
       getActiveTools: vi.fn(() => ["read", "subagent_start", "subagent_await"]),
+      setActiveTools,
     });
 
     yield* settle(() =>
       emit("session_start", sessionContext({ hasUI: true, mode: "tui", ui: { notify } })),
     );
 
-    expect(pi.setActiveTools).toHaveBeenCalledWith(["read"]);
+    expect(setActiveTools).toHaveBeenCalledWith(["read"]);
     expect(notify).toHaveBeenCalled();
     expect(notify.mock.calls.some(([, level]) => level === "warning")).toBe(true);
   });

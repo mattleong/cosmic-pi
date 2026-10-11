@@ -31,7 +31,8 @@ import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { summarizeStart } from "./compact-start-summary.ts";
 
 function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): string[] {
-  if (cards.length === 1 && singleTarget) return [runStateLabel(cards[0]!.state)];
+  const [only] = cards;
+  if (cards.length === 1 && singleTarget && only) return [runStateLabel(only.state)];
   const counts = new Map<string, number>();
   for (const card of cards) {
     const label = runStateLabel(card.state);
@@ -86,7 +87,8 @@ function summarizeReceipt(
 }
 
 function awaitCounter(cards: readonly SubagentRunCard[], total: number, subject: string): string {
-  if (cards.length === 1 && total === 1 && subject.trim()) return runStateLabel(cards[0]!.state);
+  const [only] = cards;
+  if (cards.length === 1 && total === 1 && subject.trim() && only) return runStateLabel(only.state);
   const count = (states: readonly SubagentRunCard["state"][]) =>
     cards.filter((card) => states.includes(card.state)).length;
   const failed = count(["failed"]);
@@ -299,7 +301,7 @@ function summarizeDetails(
   summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
   const requestedPause = details.action === "interrupt";
   if (summary.outcome === "success") summary.outcome = cardOutcome(details.action, cards);
-  if (details.action === "await") awaitIssues(details, summary, issues, cards, targets!);
+  if (details.action === "await") awaitIssues(details, summary, issues, cards, targets ?? []);
   else runIssues(details, summary, issues, cards);
   const quietHistory = phase === "settled" && summary.outcome === "success" && issues.length === 0;
   issues.push(...compactRunIssues(cards, { quietHistory, requestedPause }));

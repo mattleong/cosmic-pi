@@ -210,6 +210,28 @@ const decodeToolCallMessage = <ParamsInput>(
   return { method: "tools/call", id, name: params.name, arguments: params.arguments };
 };
 
+const decodeMethodMessage = <ParamsInput>(
+  method: string,
+  params: ParamsInput,
+  id: RpcId | undefined,
+): DecodedMcpMessage | undefined => {
+  switch (method) {
+    case "initialize":
+      return decodeInitializeMessage(params, id);
+    case "notifications/initialized":
+      return decodeInitializedMessage(params, id);
+    case "notifications/cancelled":
+      return decodeCancelledMessage(params, id);
+    case "ping":
+    case "tools/list":
+      return decodeRequestMessage(method, params, id);
+    case "tools/call":
+      return decodeToolCallMessage(params, id);
+    default:
+      return { method: "unknown", ...(id !== undefined && { id }) };
+  }
+};
+
 export const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessage | undefined => {
   if (
     !exactKeys(value, ["jsonrpc", "id", "method", "params"], ["jsonrpc", "method"]) ||
@@ -222,21 +244,7 @@ export const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessa
   const rawId = value.id;
   const id = validRpcId(rawId) ? rawId : undefined;
   if (own(value, "id") && id === undefined) return undefined;
-  switch (value.method) {
-    case "initialize":
-      return decodeInitializeMessage(value.params, id);
-    case "notifications/initialized":
-      return decodeInitializedMessage(value.params, id);
-    case "notifications/cancelled":
-      return decodeCancelledMessage(value.params, id);
-    case "ping":
-    case "tools/list":
-      return decodeRequestMessage(value.method, value.params, id);
-    case "tools/call":
-      return decodeToolCallMessage(value.params, id);
-    default:
-      return { method: "unknown", ...(id !== undefined && { id }) };
-  }
+  return decodeMethodMessage(value.method, value.params, id);
 };
 
 export const toolResult = (text: string, isError = false): McpToolResult => ({

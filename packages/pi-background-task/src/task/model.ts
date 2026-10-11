@@ -71,6 +71,13 @@ const ACTIVE_TASK_STATES: ReadonlySet<BackgroundTaskState> = new Set([
 export const isActiveTaskState = (state: BackgroundTaskState): boolean =>
   ACTIVE_TASK_STATES.has(state);
 
+export const failingExitCode = (
+  task: Pick<BackgroundTaskSnapshot, "exitCode">,
+): number | undefined =>
+  task.exitCode === null || task.exitCode === undefined || task.exitCode === 0
+    ? undefined
+    : task.exitCode;
+
 export const countTaskStates = (tasks: ReadonlyArray<Pick<BackgroundTaskSnapshot, "state">>) => {
   let active = 0;
   let failed = 0;

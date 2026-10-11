@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { CompactChild, CompactSummary } from "../tools/compact-summary";
-import { layoutCompactRow } from "./compact-row";
+import { layoutCompactRow, type CompactRowInput } from "./compact-row";
 import { compactIssueLabel, renderCompactIssues, wrapHanging } from "./compact-issues";
 import { formatDuration } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -56,19 +56,7 @@ export function renderCompactChildren(
     const prefix = flat ? "" : theme.fg("dim", `  ${branch} `);
     const issueLabel = flat ? "" : compactIssueLabel(entry.issues ?? [], theme);
     const { row, issueShown } = layoutCompactRow(
-      {
-        name: entry.label,
-        phase: entry.status === "pending" || entry.status === "running" ? entry.status : "settled",
-        status: entry.status,
-        returnedCheckmark: entry.returnedCheckmark,
-        summary: { ...entry, subject: entry.subject ?? "" },
-        issueLabel: issueLabel || undefined,
-        duration: entry.durationMs === undefined ? undefined : formatDuration(entry.durationMs),
-        elapsedMs: entry.durationMs,
-        timingEnabled: options.timingEnabled ?? true,
-        animationFrame: options.animationFrame ?? 0,
-        expanded: flat,
-      },
+      childRowInput(entry, issueLabel, flat, options),
       theme,
       Math.max(0, width - visibleWidth(prefix)),
     );
@@ -81,6 +69,30 @@ export function renderCompactChildren(
   });
   if (!flat && omitted > 0) rows.push(...omissionRows(omitted, hiddenFailed, theme, width));
   return rows;
+}
+
+function childRowInput(
+  entry: CompactChild,
+  issueLabel: string,
+  flat: boolean,
+  options: {
+    readonly animationFrame?: number | undefined;
+    readonly timingEnabled?: boolean | undefined;
+  },
+): CompactRowInput {
+  return {
+    name: entry.label,
+    phase: entry.status === "pending" || entry.status === "running" ? entry.status : "settled",
+    status: entry.status,
+    returnedCheckmark: entry.returnedCheckmark,
+    summary: { ...entry, subject: entry.subject ?? "" },
+    issueLabel: issueLabel || undefined,
+    duration: entry.durationMs === undefined ? undefined : formatDuration(entry.durationMs),
+    elapsedMs: entry.durationMs,
+    timingEnabled: options.timingEnabled ?? true,
+    animationFrame: options.animationFrame ?? 0,
+    expanded: flat,
+  };
 }
 
 const calls = (count: number) => (count === 1 ? "call" : "calls");

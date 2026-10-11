@@ -4,8 +4,6 @@ import { MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { projectRunCardTree } from "../ui/run-tree-rows.ts";
 import {
   SUBAGENT_CARD_DETAILS_VERSION,
-  decodeCompactToolDetails,
-  decodeStartAwaitCardDetails,
   type CompactSubagentToolDetails,
   type CompactToolActionFailure,
   type RunDetailsAction,
@@ -15,6 +13,7 @@ import {
   type SubagentStartDetails,
   type SubagentStartEntry,
 } from "./details-schema.ts";
+import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 import {
   DENSITY_ORDER,
   omitReports,

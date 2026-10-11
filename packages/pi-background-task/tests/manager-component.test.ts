@@ -31,13 +31,14 @@ const makeManager = (
   managerTheme = plainTheme,
 ) => {
   let tasks = initial;
+  let currentHeight = height;
   const stop = vi.fn();
   const clear = vi.fn();
   const close = vi.fn();
   const component = new TaskManagerComponent({
     theme: managerTheme,
     getProjection: () => ({ tasks }),
-    getHeight: () => height,
+    getHeight: () => currentHeight,
     getNow: () => 1_000,
     requestRender: () => {},
     close,
@@ -47,7 +48,7 @@ const makeManager = (
   return {
     component,
     setHeight: (next: number) => {
-      height = next;
+      currentHeight = next;
     },
     stop,
     clear,

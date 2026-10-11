@@ -13,7 +13,7 @@ export async function workspacePackageDirectories(rootDir = resolve(import.meta.
       if (error.code !== "ENOENT") throw error;
     }
   }
-  return directories.sort();
+  return directories.sort((left, right) => (left === right ? 0 : left < right ? -1 : 1));
 }
 
 export async function workspaceManifestPaths(rootDir = resolve(import.meta.dirname, "..")) {

@@ -34,7 +34,7 @@ export const utf8Prefix = (value: string, maxBytes: number): string => {
 
 export const utf8Suffix = (value: string, maxBytes: number): string => {
   if (utf8ByteLength(value) <= maxBytes) return value;
-  const characters = [...value];
+  const characters = Array.from(value);
   let used = 0;
   let start = characters.length;
   while (start > 0) {

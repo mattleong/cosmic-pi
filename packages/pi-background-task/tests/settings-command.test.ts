@@ -61,7 +61,7 @@ const pickerHarness = (
     hasUI: true,
     signal: new AbortController().signal,
     isProjectTrusted: () => trusted,
-    ui: { custom: host.ctx.ui.custom, notify },
+    ui: { custom: host.ctx.ui.custom.bind(host.ctx.ui), notify },
   });
   const open = () => Promise.resolve(command.handler("", ctx));
   const opened = open();
@@ -243,7 +243,7 @@ describe("/tasks settings", () => {
   it.effect("does not open a picker after its originating read is retired", () =>
     Effect.gen(function* () {
       let current = true;
-      const pending = deferredPromise<{}>();
+      const pending = deferredPromise<Awaited<ReturnType<TaskSettingsActions["read"]>>>();
       const h = pickerHarness(
         true,
         () => pending.promise,

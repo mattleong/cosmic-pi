@@ -102,7 +102,11 @@ const writerPoolUnavailableMessage = (pool: WriterPoolEntry | undefined): string
       return "Shared-cwd writer-pool preparation failed and existing members are still cleaning up; retry shortly.";
     case "releasing":
       return "Shared-cwd writer ownership is still being released; retry shortly.";
-    default:
+    case undefined:
+    case "held":
+    case "paused":
+    case "pending":
+    case "preparing":
       return `New writers are paused for this cwd after a write-claim violation.${pool?.pauseReason ? ` ${pool.pauseReason}` : ""}`;
   }
 };

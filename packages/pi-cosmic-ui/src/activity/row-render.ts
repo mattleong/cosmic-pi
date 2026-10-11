@@ -46,6 +46,15 @@ const treeGuide = (continuations: readonly boolean[], levels: number): string =>
     .join("")}`;
 };
 
+const mostDroppable = (parts: readonly ActivityStatusPart[]) => {
+  let found: { readonly index: number; readonly part: ActivityStatusPart } | undefined;
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const part = parts[index];
+    if (part && (part.drop ?? 0) > (found?.part.drop ?? 0)) found = { index, part };
+  }
+  return found;
+};
+
 const fitStatus = (
   parts: readonly ActivityStatusPart[],
   separator: string,
@@ -54,18 +63,15 @@ const fitStatus = (
   const kept = parts.filter((part) => part.text.length > 0);
   const text = () => kept.map((part) => part.text).join(separator);
   while (visibleWidth(text()) > budget) {
-    let dropped = -1;
-    for (let index = kept.length - 1; index >= 0; index--)
-      if ((kept[index]!.drop ?? 0) > (dropped < 0 ? 0 : (kept[dropped]!.drop ?? 0)))
-        dropped = index;
-    if (dropped < 0) break;
-    const part = kept[dropped]!;
+    const found = mostDroppable(kept);
+    if (!found) break;
+    const { index, part } = found;
     const room = budget - (visibleWidth(text()) - visibleWidth(part.text));
     if (part.clip !== undefined && room >= part.clip) {
-      kept[dropped] = { text: clipToWidth(part.text, room, "…") };
+      kept[index] = { text: clipToWidth(part.text, room, "…") };
       break;
     }
-    kept.splice(dropped, 1);
+    kept.splice(index, 1);
   }
   return text();
 };

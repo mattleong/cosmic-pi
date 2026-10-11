@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import { CrossProcessLock } from "../../src/platform/cross-process-lock.ts";
 import { nodeLockFs } from "../../src/platform/node-builtins.ts";
 
@@ -38,13 +39,13 @@ const program =
         yield* Effect.try(() => lease.release());
       }).pipe(Effect.provide(CrossProcessLock.layer({ directory: directory! })));
 process.send?.("attempting");
-Effect.runPromise(program).then(
-  () => {
-    process.send?.("finished");
-    process.disconnect?.();
-  },
-  () => {
-    process.send?.("recovery-required");
-    process.disconnect?.();
-  },
+Effect.runFork(
+  Effect.exit(program).pipe(
+    Effect.flatMap((exit) =>
+      Effect.sync(() => {
+        process.send?.(Exit.isSuccess(exit) ? "finished" : "recovery-required");
+        process.disconnect?.();
+      }),
+    ),
+  ),
 );

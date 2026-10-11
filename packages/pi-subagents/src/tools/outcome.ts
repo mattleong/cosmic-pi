@@ -1,12 +1,11 @@
 import { isCleanupUnconfirmed, isOutcomeUncertain, type SubagentError } from "../run/errors.ts";
 import type { SteeringDeliveryState } from "../run/model.ts";
 import {
-  decodeCompactToolDetails,
-  decodeStartAwaitCardDetails,
   PENDING_DELIVERY_FAILURE_CODE,
   type CompactSubagentToolDetails,
   type SubagentStartAwaitCardDetails,
 } from "./details-schema.ts";
+import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 
 export type SubagentOutcomeDetails = SubagentStartAwaitCardDetails | CompactSubagentToolDetails;
 

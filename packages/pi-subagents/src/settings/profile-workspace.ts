@@ -132,28 +132,24 @@ export class ProfileWorkspaceComponent
       return;
     }
     const candidate = this.draft().candidates[this.candidateIndex];
-    if (!candidate) {
-      if (row.field === "model") this.performDraftAction("add");
-      return;
-    }
-    const field = row.field;
-    if (field === "model") {
-      this.openModelPicker(candidate);
-      return;
-    }
-    if (field === "effort" && candidate.runtime !== "pi") {
+    if (candidate) this.openCandidateField(candidate, row.field);
+    else if (row.field === "model") this.performDraftAction("add");
+  }
+
+  private openCandidateField(
+    candidate: ProfileCandidate,
+    field: Exclude<ProfileWorkspaceField, "reset" | "add" | "actions" | "advanced">,
+  ): void {
+    if (field === "model") this.openModelPicker(candidate);
+    else if (field === "effort" && candidate.runtime !== "pi")
       this.openCapabilityPicker(candidate, "effort");
-      return;
-    }
-    if (field === "openaiFastMode") {
-      this.openCapabilityPicker(candidate, "openaiFastMode");
-      return;
-    }
-    this.showFieldPicker(
-      candidate,
-      field,
-      candidate.runtime === "pi" ? this.options.supportedPiEfforts(candidate) : undefined,
-    );
+    else if (field === "openaiFastMode") this.openCapabilityPicker(candidate, "openaiFastMode");
+    else
+      this.showFieldPicker(
+        candidate,
+        field,
+        candidate.runtime === "pi" ? this.options.supportedPiEfforts(candidate) : undefined,
+      );
   }
 
   protected back(): void {

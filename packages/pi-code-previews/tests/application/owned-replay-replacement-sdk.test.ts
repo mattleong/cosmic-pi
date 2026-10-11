@@ -21,10 +21,10 @@ import { registerCodePreviewReplay } from "../../index";
 import { drawToolRow } from "../../testing";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { step } from "../support/effect-test";
-import { QUIET_RESOURCES } from "pi-cosmic-core/testing/sdk";
+import { QUIET_RESOURCES, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { offlineModels } from "../support/sdk-session";
-import { quietSettings } from "pi-cosmic-core/testing/sdk";
 import { setPlainPreviewSettings } from "../support/renderer-host";
+import { executeDescriptor } from "../support/tool-identity";
 
 beforeAll(() => initTheme("dark", false));
 
@@ -214,7 +214,7 @@ it.live(
                                 outcome: "returned",
                               }),
                             });
-                            assert.equal(wrapped.execute, tool.execute);
+                            assert.deepEqual(executeDescriptor(wrapped), executeDescriptor(tool));
                             assert.equal(wrapped.parameters, tool.parameters);
                             pi.registerTool(wrapped);
                             assert.ok(binding);
@@ -359,7 +359,10 @@ it.live(
       assert.equal(registered[0]?.exposure, "model-only");
       assert.equal(forked.getActiveToolNames().includes(toolName), false);
       assert.equal(forked.getCallableToolNames().includes(toolName), false);
-      assert.equal(forked.getToolDefinition(toolName)?.execute, tool.execute);
+      assert.deepEqual(
+        executeDescriptor(forked.getToolDefinition(toolName)),
+        executeDescriptor(tool),
+      );
       assert.equal(executions, 0);
       assert.deepEqual(errors, []);
       assert.equal(yield* fs.readFileString(sessionFile), resumedFile);

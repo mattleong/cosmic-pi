@@ -45,6 +45,33 @@ export interface RunEventDependencies {
   readonly onStructuredResult: RunStructuredResults;
 }
 
+type HandledBackendEvent = Exclude<
+  BackendEvent,
+  { readonly type: "usage" | "proxy_request" | "proxy_cancel" | "structured_result" }
+>;
+
+const DELEGATED_EVENT_TYPES = [
+  "backend_failure",
+  "run_started",
+  "run_settled",
+  "report",
+  "assistant_message",
+  "tool_started",
+  "supervisor_contact",
+  "protocol_error",
+  "exit",
+] as const;
+
+type DelegatedBackendEvent = Extract<
+  HandledBackendEvent,
+  { readonly type: (typeof DELEGATED_EVENT_TYPES)[number] }
+>;
+
+type ViewBackendEvent = Exclude<HandledBackendEvent, DelegatedBackendEvent>;
+
+const isDelegatedEvent = (event: HandledBackendEvent): event is DelegatedBackendEvent =>
+  DELEGATED_EVENT_TYPES.some((type) => type === event.type);
+
 export function makeRunEventHandler(dependencies: RunEventDependencies) {
   const {
     settlement,
@@ -230,17 +257,38 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           );
   };
 
-  const handleEvent = (
+  const handleDelegatedEvent = (
     record: RunRecord,
-    event: Exclude<
-      BackendEvent,
-      { readonly type: "usage" | "proxy_request" | "proxy_cancel" | "structured_result" }
-    >,
+    event: DelegatedBackendEvent,
   ): Effect.Effect<unknown, SubagentError> => {
-    if (event.type !== "exit" && isInactiveRunRecord(record))
-      return event.type === "assistant_message"
-        ? settlement.mergeLateUsage(record, event.assignmentEpoch, event.usage)
-        : Effect.void;
+    switch (event.type) {
+      case "backend_failure":
+        return settlement.failRun(record, event.error.message, event.error);
+      case "run_started":
+        return settlement.runStartedFromBackend(record, event.assignmentEpoch);
+      case "run_settled":
+        return settlement.runSettledFromBackend(record, event.assignmentEpoch, event.terminal);
+      case "report":
+        return settlement.acceptBackendReport(record, event);
+      case "assistant_message":
+        return handleAssistantMessage(record, event);
+      case "tool_started":
+        return handleToolStarted(record, event);
+      case "supervisor_contact":
+        return handleContact(record, event);
+      case "protocol_error": {
+        const error = new SubagentProtocolError({ message: event.message });
+        return settlement.failRun(record, error.message, error);
+      }
+      case "exit":
+        return handleExit(record, event);
+    }
+  };
+
+  const handleViewEvent = (
+    record: RunRecord,
+    event: ViewBackendEvent,
+  ): Effect.Effect<unknown, SubagentError> => {
     switch (event.type) {
       case "input_delivery":
         return mutateAt(record, event.assignmentEpoch, (current, now) => {
@@ -262,14 +310,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             ...(warning && recordRunWarning(record, current.sessionEvents, "system", warning, now)),
           };
         });
-      case "backend_failure":
-        return settlement.failRun(record, event.error.message, event.error);
-      case "run_started":
-        return settlement.runStartedFromBackend(record, event.assignmentEpoch);
-      case "run_settled":
-        return settlement.runSettledFromBackend(record, event.assignmentEpoch, event.terminal);
-      case "report":
-        return settlement.acceptBackendReport(record, event);
       case "activity":
         return mutateAt(record, event.assignmentEpoch, (current, now) =>
           now - current.lastActivityAt < ACTIVITY_PUBLISH_INTERVAL_MILLIS
@@ -297,10 +337,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             },
           };
         });
-      case "assistant_message":
-        return handleAssistantMessage(record, event);
-      case "tool_started":
-        return handleToolStarted(record, event);
       case "tool_finished":
         return mutateAt(record, event.assignmentEpoch, (current, now) => {
           if (current.state === "paused") return undefined;
@@ -317,8 +353,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             }),
           };
         });
-      case "supervisor_contact":
-        return handleContact(record, event);
       case "supervisor_question_cancelled":
         return settlement.mutateEventView(record, event.assignmentEpoch, (current) => {
           const waitingForQuestion =
@@ -346,13 +380,20 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           lastActivityAt: now,
         }));
       }
-      case "protocol_error": {
-        const error = new SubagentProtocolError({ message: event.message });
-        return settlement.failRun(record, error.message, error);
-      }
-      case "exit":
-        return handleExit(record, event);
     }
+  };
+
+  const handleEvent = (
+    record: RunRecord,
+    event: HandledBackendEvent,
+  ): Effect.Effect<unknown, SubagentError> => {
+    if (event.type !== "exit" && isInactiveRunRecord(record))
+      return event.type === "assistant_message"
+        ? settlement.mergeLateUsage(record, event.assignmentEpoch, event.usage)
+        : Effect.void;
+    return isDelegatedEvent(event)
+      ? handleDelegatedEvent(record, event)
+      : handleViewEvent(record, event);
   };
 
   return (record: RunRecord, event: BackendEvent, source?: BackendHandle) => {

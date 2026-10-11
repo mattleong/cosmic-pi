@@ -11,8 +11,6 @@ import {
 import { ensurePrivateDirectory } from "./harness-shared.ts";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 
-const { join } = nodePath;
-
 const MAX_FILESYSTEM_IDENTITY_CHARS = 256;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 const FILESYSTEM_IDENTITY_PATTERN = /^dev:[a-f0-9]+;ino:[a-f0-9]+$/;
@@ -116,7 +114,7 @@ export const makeWriterLease = (
   agentDirectory: string,
   lock: CrossProcessLockContract,
 ): WriterLeaseContract => {
-  const packageRoot = join(agentDirectory, "subagents");
+  const packageRoot = nodePath.join(agentDirectory, "subagents");
   const owners = new WeakMap<WriterLease, Ownership>();
 
   const denied = (reason: string) =>
@@ -228,7 +226,7 @@ export class WriterLeaseService extends Context.Service<WriterLeaseService, Writ
     ).pipe(
       Layer.provide(
         CrossProcessLock.layer({
-          directory: join(options.agentDirectory, "subagents", "writer-leases-v3"),
+          directory: nodePath.join(options.agentDirectory, "subagents", "writer-leases-v3"),
         }),
       ),
     );

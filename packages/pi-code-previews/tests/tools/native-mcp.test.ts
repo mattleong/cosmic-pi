@@ -97,7 +97,7 @@ const status = (summary: CompactSummary | undefined) =>
   summary ? compactStatus("settled", summary) : undefined;
 
 const hasControls = (row: string) =>
-  [...row.replaceAll("\u001b[0m", "")].some((character) => {
+  Array.from(row.replaceAll("\u001b[0m", "")).some((character) => {
     const code = character.codePointAt(0) ?? 0;
     return code < 0x20 || (code >= 0x7f && code <= 0x9f);
   });

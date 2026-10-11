@@ -34,11 +34,28 @@ export const modelSelector = (
   model: Pick<ModelPickerModel, "provider" | "id" | "selector">,
 ): string => model.selector ?? `${model.provider}/${model.id}`;
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 export const boundedMiddle = (value: string, maximum: number): string => {
-  const characters = [...value];
+  const characters = Array.from(graphemes.segment(value), ({ segment }) => segment);
   if (characters.length <= maximum) return value;
   const left = Math.max(1, Math.floor((maximum - 1) / 2));
   return `${characters.slice(0, left).join("")}…${characters.slice(characters.length - (maximum - left - 1)).join("")}`;
+};
+
+const labeledItem = (
+  selector: string,
+  rawLabel: string,
+  unavailableReason: string | undefined,
+  modelDescription: string | undefined,
+): SelectItem => {
+  const label = sanitizeTerminalLine(rawLabel);
+  const base = {
+    value: selector,
+    label: `${label}${unavailableReason !== undefined && !/\bunavailable\b/i.test(label) ? " (unavailable)" : ""}`,
+  };
+  const description = unavailableReason ?? modelDescription;
+  return description ? { ...base, description: sanitizeTerminalLine(description) } : base;
 };
 
 const modelItem = <M extends ModelPickerModel>(model: M, current?: string): SelectItem => {
@@ -48,15 +65,7 @@ const modelItem = <M extends ModelPickerModel>(model: M, current?: string): Sele
   const unavailableReason = unavailable
     ? sanitizeTerminalLine(model.unavailableReason ?? "Model is unavailable")
     : undefined;
-  if (model.label) {
-    const label = sanitizeTerminalLine(model.label);
-    const base = {
-      value: selector,
-      label: `${label}${unavailable && !/\bunavailable\b/i.test(label) ? " (unavailable)" : ""}`,
-    };
-    const description = unavailableReason ?? model.description;
-    return description ? { ...base, description: sanitizeTerminalLine(description) } : base;
-  }
+  if (model.label) return labeledItem(selector, model.label, unavailableReason, model.description);
   const efforts = model.supportedEfforts?.map(sanitizeTerminalLine).join(", ") || "default";
   const name =
     model.name && model.name !== model.id

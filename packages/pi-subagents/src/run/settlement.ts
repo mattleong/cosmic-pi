@@ -1,7 +1,6 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Result from "effect/Result";
 import {
   MAX_BACKEND_REPORT_EVIDENCE_CHARS,
   MAX_BACKEND_REPORT_ID_CHARS,
@@ -10,27 +9,29 @@ import {
   type BackendHandle,
   type BackendReport,
 } from "../backend/model.ts";
-import { canonicalResultJson, decodeResultText } from "../domain/result-contract.ts";
 import { processError, type SubagentError, SubagentProcessError } from "./errors.ts";
 import {
   clearRunActivity,
   commitRunPauseLocked,
   isInactiveRunRecord,
-  type PendingInitializationSettlement,
   type RunContext,
   type RunRecord,
 } from "./internal.ts";
-import { isTerminalRunState, type SubagentRunView, type SubagentUsage } from "./model.ts";
+import type { SubagentRunView, SubagentUsage } from "./model.ts";
 import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
+import { addUsage, MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
 import {
-  addUsage,
-  MAX_ERROR_CHARS,
-  sanitizeDiagnosticText,
-  sanitizeOutputText,
-  snapshotView,
-} from "./state.ts";
+  acceptedResult,
+  reportFinalText,
+  settledAssignmentLocked,
+  settledFailureMessage,
+  settledText,
+  settlementBlocked,
+  viewForSettlement,
+  type SettlementState,
+} from "./settlement-outcome.ts";
 import { foldRunWarnings, recordRunWarning } from "./warnings.ts";
 
 export interface RunSettlementDependencies extends RunContext {
@@ -46,123 +47,6 @@ export type AssignmentActivationReplay =
       readonly assignmentEpoch: number;
       readonly terminal?: BackendAssistantTerminal | undefined;
     };
-
-type SettlementState = PendingInitializationSettlement["state"];
-
-const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => {
-  switch (terminal?.stopReason) {
-    case "error":
-      return `Final provider error: ${terminal.errorMessage || "provider returned no diagnostic"}`;
-    case "aborted":
-      return "Assignment aborted without a parent stop or correlated pause.";
-    case "length":
-      return "Assignment reached its output limit without a successful final report.";
-    case "toolUse":
-      return "Assignment settled after tool use without a final report.";
-    default:
-      return "Assignment settled without a successful nonempty final report.";
-  }
-};
-
-const acceptedResult = (record: RunRecord, assignmentEpoch: number): string | undefined =>
-  record.structuredResult?.assignmentEpoch === assignmentEpoch
-    ? record.structuredResult.json
-    : undefined;
-
-const settledAssignmentLocked = (
-  record: RunRecord,
-  assignmentEpoch: number,
-  terminal: BackendAssistantTerminal | undefined,
-): "ignored" | "buffered" | "running" => {
-  if (
-    record.assignment.epoch !== assignmentEpoch ||
-    (record.pausedAssignmentEpoch === assignmentEpoch &&
-      acceptedResult(record, assignmentEpoch) === undefined) ||
-    record.assignment.phase === "preparing" ||
-    record.assignment.phase === "reported" ||
-    isInactiveRunRecord(record)
-  )
-    return "ignored";
-  if (record.assignment.phase === "issuing") {
-    record.assignment.pendingRunSettled = { terminal };
-    return "buffered";
-  }
-  return "running";
-};
-
-const settledText = (record: RunRecord, terminal?: BackendAssistantTerminal) =>
-  Effect.gen(function* () {
-    const text =
-      terminal?.stopReason === "stop" && terminal.text
-        ? sanitizeOutputText(terminal.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim()
-        : undefined;
-    const contract = record.launch.resultContract;
-    if (!contract || !text) return { text, problem: undefined };
-    const decoded = yield* Effect.result(decodeResultText(contract, text));
-    return Result.isSuccess(decoded)
-      ? { text: canonicalResultJson(decoded.success), problem: undefined }
-      : { text: undefined, problem: decoded.failure.message };
-  });
-
-const settledFailureMessage = (
-  record: RunRecord,
-  terminal: BackendAssistantTerminal | undefined,
-  problem: string | undefined,
-): string => {
-  const reason =
-    record.launch.resultContract && terminal?.stopReason === "stop"
-      ? problem
-        ? `Assignment finished without submitting its structured result, and its final text is not a valid result: ${problem}`
-        : "Assignment finished without submitting its structured result."
-      : terminalFailureMessage(terminal);
-  return `${reason} Work and writes may already exist; inspect them before an explicit retry.`;
-};
-
-const reportFinalText = (record: RunRecord, text: string) => {
-  const contract = record.launch.resultContract;
-  if (!contract)
-    return Effect.succeed(sanitizeOutputText(text, MAX_BACKEND_REPORT_TEXT_CHARS).trim());
-  return decodeResultText(contract, text).pipe(
-    Effect.mapBoth({
-      onFailure: (error) =>
-        processError(
-          "accept report from",
-          "backend_report_schema_invalid",
-          sanitizeDiagnosticText(
-            `Subagent ${record.view.id} reported a result that does not match its schema: ${error.message}`,
-            MAX_ERROR_CHARS,
-          ),
-        ),
-      onSuccess: canonicalResultJson,
-    }),
-  );
-};
-
-const settlementBlocked = (record: RunRecord, state: SettlementState): boolean =>
-  isTerminalRunState(record.view.state) ||
-  (state !== "stopped" && (record.stoppedByParent || record.view.state === "stopping"));
-
-const viewForSettlement = (
-  record: RunRecord,
-  state: SettlementState,
-  now: number,
-  finalText: string | undefined,
-  error: string | undefined,
-): SubagentRunView => ({
-  ...record.view,
-  state,
-  endedAt: now,
-  lastActivityAt: now,
-  currentTool: undefined,
-  question: undefined,
-  ...(record.view.steeringDelivery === "pending" && {
-    steeringDelivery:
-      state === "completed" ? ("report-unconfirmed" as const) : ("unresolved" as const),
-  }),
-  ...(state === "completed" && { reportGeneration: record.completionGeneration }),
-  ...(finalText && { finalText }),
-  ...(error !== undefined && { error }),
-});
 
 export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   const { ownerScope, withLock, publish, delivery, closeRecordScope, sendPeerNotices } =
@@ -246,6 +130,27 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         return view;
       }),
     );
+  const queueCompletionLocked = (
+    record: RunRecord,
+    state: SettlementState,
+    finalText: string | undefined,
+    settledError: string | undefined,
+  ) => {
+    if (
+      state === "stopped" ||
+      record.completionGenerations.size >= MAX_UNRESOLVED_REPORT_GENERATIONS
+    )
+      return;
+    const warning = foldRunWarnings(record.warningSlots);
+    delivery.insertCompletionLocked(record, {
+      outcome: state,
+      ...(finalText && { finalText }),
+      ...(state === "failed" && { error: settledError }),
+      generation: ++record.completionGeneration,
+      ...(warning && { warning }),
+    });
+  };
+
   const settle = (record: RunRecord, state: SettlementState, error?: string) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -266,19 +171,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           clearRunActivity(record);
           const finalText = state === "completed" ? record.latestAssistantText : undefined;
           const settledError = state === "failed" ? (error ?? "Run failed.") : error;
-          if (
-            state !== "stopped" &&
-            record.completionGenerations.size < MAX_UNRESOLVED_REPORT_GENERATIONS
-          ) {
-            const warning = foldRunWarnings(record.warningSlots);
-            delivery.insertCompletionLocked(record, {
-              outcome: state,
-              ...(finalText && { finalText }),
-              ...(state === "failed" && { error: settledError }),
-              generation: ++record.completionGeneration,
-              ...(warning && { warning }),
-            });
-          }
+          queueCompletionLocked(record, state, finalText, settledError);
           record.notificationGeneration += 1;
           delivery.discardQuestionLocked(record.view.id);
           record.replyPendingRequestId = undefined;

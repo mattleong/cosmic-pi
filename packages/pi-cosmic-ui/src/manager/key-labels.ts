@@ -35,10 +35,12 @@ const formatFullScreenKeyId = (value: string): string => {
   return `${modifiers}${parts.includes("shift") && base.length === 1 ? label.toUpperCase() : label}`;
 };
 
-export const fullScreenKeybindingOptions = (keybindings: {
-  matches(data: string, id: FullScreenSelectionKeybindingId): boolean;
-  getKeys?(id: FullScreenSelectionKeybindingId): ReadonlyArray<string>;
-}) => ({
+export interface HostKeybindingSource {
+  readonly matches: (data: string, id: FullScreenSelectionKeybindingId) => boolean;
+  readonly getKeys?: (id: FullScreenSelectionKeybindingId) => ReadonlyArray<string>;
+}
+
+export const fullScreenKeybindingOptions = (keybindings: HostKeybindingSource) => ({
   matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
     keybindings.matches(data, id),
   keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>

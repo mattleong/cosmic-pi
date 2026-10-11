@@ -295,8 +295,9 @@ describe("Cosmic UI host service", () => {
         const before = MutableRef.get(projection).gitStatus;
         expect(before).toBeDefined();
         armed = true;
-        const scheduler = {
-          ...paused.scheduler,
+        const scheduler: Scheduler.Scheduler = {
+          executionMode: paused.scheduler.executionMode,
+          makeDispatcher: () => paused.scheduler.makeDispatcher(),
           shouldYield: () => {
             if (!validated || stopped) return false;
             stopped = true;

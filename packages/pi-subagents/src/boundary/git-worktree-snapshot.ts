@@ -64,6 +64,43 @@ export const inspectSource = (cwd: string) =>
     return { sourceRoot, sourceCwd, subdirectory };
   });
 
+interface FileStat {
+  isFile(): boolean;
+  readonly nlink: number;
+  readonly size: number;
+  readonly mode: number;
+  readonly ino: number;
+  readonly dev: number;
+  readonly mtimeMs: number;
+  readonly ctimeMs: number;
+}
+
+const unsupportedWorkspaceFile = (stat: FileStat) =>
+  !stat.isFile() ||
+  stat.nlink !== 1 ||
+  stat.size > MAX_WORKSPACE_FILE_BYTES ||
+  (stat.mode & 0o7000) !== 0;
+
+const changedWhileReading = (before: FileStat, after: FileStat) =>
+  before.ino !== after.ino ||
+  before.dev !== after.dev ||
+  before.mtimeMs !== after.mtimeMs ||
+  before.ctimeMs !== after.ctimeMs ||
+  before.mode !== after.mode ||
+  after.nlink !== 1;
+
+const requireUtf8Text = (bytes: Uint8Array) =>
+  bytes.subarray(0, 8000).includes(0)
+    ? Effect.void
+    : Effect.try({
+        try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+        catch: () =>
+          workspaceFailure(
+            "snapshot",
+            "Non-UTF-8 text is unsupported; binary files require a NUL in the first 8000 bytes.",
+          ),
+      });
+
 export const readWorkspaceFile = (
   root: string,
   relative: string,
@@ -78,12 +115,7 @@ export const readWorkspaceFile = (
     if (!before) return undefined;
     if (before.isSymbolicLink() && snapshotPaths?.links.has(relative))
       return yield* readWorkspaceSymlink(root, relative, snapshotPaths.files);
-    if (
-      !before.isFile() ||
-      before.nlink !== 1 ||
-      before.size > MAX_WORKSPACE_FILE_BYTES ||
-      (before.mode & 0o7000) !== 0
-    )
+    if (unsupportedWorkspaceFile(before))
       return yield* workspaceFailure(
         "snapshot",
         "Symlinks, hardlinks, special files, special modes and oversized files are unsupported.",
@@ -97,24 +129,9 @@ export const readWorkspaceFile = (
         ),
       );
     const after = yield* workspaceIO("snapshot", () => fs.lstat(full));
-    if (
-      before.ino !== after.ino ||
-      before.dev !== after.dev ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs ||
-      before.mode !== after.mode ||
-      after.nlink !== 1
-    )
+    if (changedWhileReading(before, after))
       return yield* workspaceFailure("snapshot", "Workspace file changed while reading.");
-    if (!bytes.subarray(0, 8000).includes(0))
-      yield* Effect.try({
-        try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-        catch: () =>
-          workspaceFailure(
-            "snapshot",
-            "Non-UTF-8 text is unsupported; binary files require a NUL in the first 8000 bytes.",
-          ),
-      });
+    yield* requireUtf8Text(bytes);
     if (sensitiveWorkspaceContent(bytes))
       return yield* workspaceFailure(
         "snapshot",
@@ -127,6 +144,24 @@ export const readWorkspaceFile = (
     };
   });
 
+const indexStages = (stages: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const tracked: string[] = [];
+    const links = new Set<string>();
+    for (const line of stages) {
+      const match = /^(100644|100755|120000) ([a-f0-9]{40}) 0\t(.+)$/su.exec(line);
+      const name = match?.[3];
+      if (!match || name === undefined)
+        return yield* workspaceFailure(
+          "snapshot",
+          "Unmerged indexes and submodules are unsupported.",
+        );
+      tracked.push(name);
+      if (match[1] === "120000") links.add(name);
+    }
+    return { tracked, links };
+  });
+
 export const captureSnapshot = (
   root: string,
   repository: string,
@@ -135,19 +170,9 @@ export const captureSnapshot = (
   requiredPaths: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
-    const stages = yield* gitFields(root, ["ls-files", "--stage", "-z"]);
-    const tracked: string[] = [];
-    const links = new Set<string>();
-    for (const line of stages) {
-      const match = /^(100644|100755|120000) ([a-f0-9]{40}) 0\t(.+)$/su.exec(line);
-      if (!match)
-        return yield* workspaceFailure(
-          "snapshot",
-          "Unmerged indexes and submodules are unsupported.",
-        );
-      tracked.push(match[3]!);
-      if (match[1] === "120000") links.add(match[3]!);
-    }
+    const { tracked, links } = yield* indexStages(
+      yield* gitFields(root, ["ls-files", "--stage", "-z"]),
+    );
     const flags = yield* gitFields(root, ["ls-files", "-v", "-z"]);
     if (flags.some((entry) => entry[0] !== "H"))
       return yield* workspaceFailure(

@@ -102,6 +102,9 @@ interface PreparedActivation {
   readonly ultracode: boolean;
 }
 
+const missingActivityInput = (action: string): Error =>
+  new Error(`The ${action} activity action needs text input.`);
+
 const deactivateSubagentTools = (
   pi: ExtensionAPI,
   only?: ReadonlyArray<string>,
@@ -352,24 +355,24 @@ export function registerSubagentApplication(
             act: (id, action, signal, input) =>
               slot.run(
                 SubagentService.use((service) => {
-                  if (action === "message")
-                    return service.send(id, input!).pipe(
-                      Effect.catchIf(isPendingDeliveryError, () =>
-                        Effect.sync(() => {
-                          if (isCurrent())
-                            notifyAtHostBoundary(
-                              activation.ctx,
-                              "Guidance delivery is still pending",
-                              "warning",
-                            );
-                        }),
-                      ),
-                      Effect.asVoid,
-                    );
-                  if (action === "reply" || action === "rename")
-                    return service[action](id, input!).pipe(Effect.asVoid);
                   if (action === "resume") return service.resume(id, input).pipe(Effect.asVoid);
-                  return service[action](id).pipe(Effect.asVoid);
+                  if (action !== "message" && action !== "reply" && action !== "rename")
+                    return service[action](id).pipe(Effect.asVoid);
+                  if (input === undefined) return Effect.die(missingActivityInput(action));
+                  if (action !== "message") return service[action](id, input).pipe(Effect.asVoid);
+                  return service.send(id, input).pipe(
+                    Effect.catchIf(isPendingDeliveryError, () =>
+                      Effect.sync(() => {
+                        if (isCurrent())
+                          notifyAtHostBoundary(
+                            activation.ctx,
+                            "Guidance delivery is still pending",
+                            "warning",
+                          );
+                      }),
+                    ),
+                    Effect.asVoid,
+                  );
                 }),
                 signal,
               ),

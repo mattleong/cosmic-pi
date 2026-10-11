@@ -53,54 +53,71 @@ const READ_TRUNCATED: CompactIssue = {
   message: "Only part of the file was returned",
 };
 
+function oversizedFirstLineIssues(output: string): CompactIssue[] | undefined {
+  return output
+    ? [
+        {
+          severity: "warning",
+          code: "oversized-first-line",
+          message: "The first line is too large to display",
+          detail: escapeControlChars(output),
+        },
+      ]
+    : undefined;
+}
+
+function isPagedNotice(
+  notice: string,
+  truncated: boolean,
+  byLines: boolean,
+  byWholeLineBytes: boolean,
+): boolean {
+  const requestedRange =
+    !truncated && /^\d+ more lines in file\. Use offset=\d+ to continue\.$/u.test(notice);
+  const linePage =
+    truncated &&
+    byLines &&
+    /^Showing lines \d+-\d+ of \d+\. Use offset=\d+ to continue\.$/u.test(notice);
+  const bytePage =
+    truncated &&
+    byWholeLineBytes &&
+    /^Showing lines \d+-\d+ of \d+ \(\d+(?:\.\d+)?(?:B|KB|MB) limit\)\. Use offset=\d+ to continue\.$/u.test(
+      notice,
+    );
+  return requestedRange || linePage || bytePage;
+}
+
+function continuationIssue(notice: string): CompactIssue {
+  const [, page = notice, next] = /^(.*?)\.? (Use offset=\d+ to continue\.)$/u.exec(notice) ?? [];
+  return {
+    severity: "info",
+    code: "read-continuation",
+    message: escapeControlChars(page),
+    ...(next && { detail: next }),
+  };
+}
+
 export function readIssues<Details>(
   details: Details,
   output: string,
   hasLimit: boolean,
 ): CompactIssue[] | undefined {
   const truncation = getObjectValue(details, "truncation");
-  if (getObjectValue(truncation, "firstLineExceedsLimit") === true) {
-    return output
-      ? [
-          {
-            severity: "warning",
-            code: "oversized-first-line",
-            message: "The first line is too large to display",
-            detail: escapeControlChars(output),
-          },
-        ]
-      : undefined;
-  }
+  if (getObjectValue(truncation, "firstLineExceedsLimit") === true)
+    return oversizedFirstLineIssues(output);
   const truncated = isTruncated(details);
   if (!truncated && !hasLimit) return [];
   const { notice } = splitReadContinuationNotice(output);
   if (notice) {
     const lastLinePartial = getObjectValue(truncation, "lastLinePartial");
-    const requestedRange =
-      !truncated && /^\d+ more lines in file\. Use offset=\d+ to continue\.$/u.test(notice);
-    const linePage =
-      truncated &&
-      getObjectValue(truncation, "truncatedBy") === "lines" &&
-      /^Showing lines \d+-\d+ of \d+\. Use offset=\d+ to continue\.$/u.test(notice);
-    const bytePage =
-      truncated &&
-      getObjectValue(truncation, "truncatedBy") === "bytes" &&
-      lastLinePartial === false &&
-      /^Showing lines \d+-\d+ of \d+ \(\d+(?:\.\d+)?(?:B|KB|MB) limit\)\. Use offset=\d+ to continue\.$/u.test(
-        notice,
-      );
-    if (lastLinePartial !== true && (requestedRange || linePage || bytePage)) {
-      const [, page = notice, next] =
-        /^(.*?)\.? (Use offset=\d+ to continue\.)$/u.exec(notice) ?? [];
-      return [
-        {
-          severity: "info",
-          code: "read-continuation",
-          message: escapeControlChars(page),
-          ...(next && { detail: next }),
-        },
-      ];
-    }
+    const truncatedBy = truncated ? getObjectValue(truncation, "truncatedBy") : undefined;
+    const paged = isPagedNotice(
+      notice,
+      truncated,
+      truncatedBy === "lines",
+      truncatedBy === "bytes" && lastLinePartial === false,
+    );
+    if (lastLinePartial !== true && paged) return [continuationIssue(notice)];
     return [{ ...READ_TRUNCATED, detail: escapeControlChars(notice) }];
   }
   return truncated ? [READ_TRUNCATED] : [];

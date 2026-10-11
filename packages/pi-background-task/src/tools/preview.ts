@@ -6,7 +6,7 @@ import { exitStatusMeaning } from "pi-code-previews";
 import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
-import type { BackgroundTaskSnapshot } from "../task/model.ts";
+import { failingExitCode, type BackgroundTaskSnapshot } from "../task/model.ts";
 import { quotedWaitText, resultSnapshot } from "../ui/compact-summary.ts";
 import { taskDisplayName, taskStatePresentation } from "../ui/task-state.ts";
 import { backgroundLogLines, type BackgroundTaskToolDetails } from "./command.ts";
@@ -20,9 +20,10 @@ const COLLAPSED_TASK_ROWS = 8;
 
 function exitStatus(task: BackgroundTaskSnapshot): string | undefined {
   if (task.state !== "failed" && task.state !== "exited") return undefined;
-  if (task.exitCode != null && task.exitCode !== 0) {
-    const meaning = exitStatusMeaning(task.exitCode);
-    return `exit ${task.exitCode}${meaning ? `: ${meaning}` : ""}`;
+  const exitCode = failingExitCode(task);
+  if (exitCode !== undefined) {
+    const meaning = exitStatusMeaning(exitCode);
+    return `exit ${exitCode}${meaning ? `: ${meaning}` : ""}`;
   }
   if (!task.signal) return undefined;
   const meaning = exitStatusMeaning(undefined, task.signal);
@@ -94,6 +95,23 @@ const EMPTY_LISTS = {
   all: "No background tasks",
 } as const;
 
+function waitRows(
+  details: Extract<BackgroundTaskToolDetails, { readonly action: "wait" }>,
+  args: Partial<BackgroundTaskToolInput>,
+  theme: PreviewTheme,
+): Row[] {
+  const found =
+    details.wait.outcome === "matched"
+      ? Predicate.isString(args.contains) && args.contains
+        ? `Found ${quotedWaitText(args.contains)}`
+        : "Found the awaited output"
+      : undefined;
+  return [
+    { text: taskPreviewLine(details.wait.snapshot, theme) },
+    ...(found ? [{ text: theme.fg("muted", found) }] : []),
+  ];
+}
+
 function detailRows(
   details: BackgroundTaskToolDetails,
   text: string,
@@ -106,18 +124,8 @@ function detailRows(
     case "status":
     case "stop":
       return [{ text: taskPreviewLine(details.snapshot, theme) }];
-    case "wait": {
-      const found =
-        details.wait.outcome === "matched"
-          ? Predicate.isString(args.contains) && args.contains
-            ? `Found ${quotedWaitText(args.contains)}`
-            : "Found the awaited output"
-          : undefined;
-      return [
-        { text: taskPreviewLine(details.wait.snapshot, theme) },
-        ...(found ? [{ text: theme.fg("muted", found) }] : []),
-      ];
-    }
+    case "wait":
+      return waitRows(details, args, theme);
     case "list":
       return taskRows(
         details.tasks,

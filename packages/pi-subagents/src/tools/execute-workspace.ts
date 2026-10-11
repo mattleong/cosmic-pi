@@ -49,11 +49,12 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
       .join(", ");
     const more =
       paths.length > MAX_LISTED_PATHS ? ` and ${paths.length - MAX_LISTED_PATHS} more` : "";
+    const onlyPath = paths.length === 1 ? paths[0] : undefined;
     warnings.push({
       code: "worker-retained",
       message:
-        paths.length === 1
-          ? `${fileName(paths[0]!)} wasn't in the proposal, so the working copy was kept`
+        onlyPath !== undefined
+          ? `${fileName(onlyPath)} wasn't in the proposal, so the working copy was kept`
           : `${countLabel(paths.length, "file")} weren't in the proposal, so the working copy was kept`,
       detail: `The workspace snapshot did not capture these worker files, so they were neither reviewed nor integrated: ${listed}${more}. The worker tree, which these paths are relative to, was kept at ${worker} so they are not lost. Copy any you need into the parent checkout, then discard this workspace to delete the tree.`,
     });
@@ -168,6 +169,75 @@ const executeWorkspaceList = (
     );
   });
 
+type WorkspaceReceipt = Pick<WorkspaceToolDetails, "operation" | "workspaceId">;
+
+const executeWorkspaceReview = (
+  service: SubagentServiceContract,
+  operation: SubagentWorkspaceInput,
+  receipt: WorkspaceReceipt,
+  callerRunId: string,
+) =>
+  Effect.gen(function* () {
+    const workspaceId = operation.workspaceId ?? "";
+    const review = yield* service.workspaceReview(
+      workspaceId,
+      {
+        ...(operation.revisionId !== undefined && { revisionId: operation.revisionId }),
+        offset: operation.offset ?? 0,
+        limit: operation.limit ?? 16_000,
+      },
+      callerRunId,
+    );
+    const prefix = [
+      `Workspace ${workspaceId}; immutable revision ${review.revisionId}.`,
+      `Diff characters ${review.offset}..${review.offset + review.diff.length} of ${review.totalChars}.`,
+      review.nextOffset !== undefined
+        ? `Incomplete review. Call review with workspaceId=${workspaceId}, revisionId=${review.revisionId}, offset=${review.nextOffset}. Read ALL pages before prepare/integrate.`
+        : "End of diff. After reviewing every page, prepare this exact revision and run relevant tests in the returned combined cwd before integrate.",
+      "BEGIN IMMUTABLE DIFF PAGE",
+    ].join("\n");
+    return result([prefix, review.diff, "END IMMUTABLE DIFF PAGE"].join("\n"), {
+      ...receipt,
+      revisionId: review.revisionId,
+      offset: review.offset,
+      totalChars: review.totalChars,
+      displayContent: { offset: prefix.length + 1, length: review.diff.length },
+      ...(review.nextOffset !== undefined && { nextOffset: review.nextOffset }),
+    });
+  });
+
+const executeWorkspacePrepare = (
+  service: SubagentServiceContract,
+  operation: SubagentWorkspaceInput,
+  receipt: WorkspaceReceipt,
+  callerRunId: string,
+) =>
+  Effect.gen(function* () {
+    const preparation = yield* service.workspacePrepare(
+      operation.workspaceId ?? "",
+      operation.revisionId ?? "",
+      callerRunId,
+    );
+    const prefix = `Prepared revision ${preparation.revisionId}; preparationId=${preparation.preparationId}.`;
+    const cwdLine = `Combined test cwd: ${preparation.cwd}`;
+    return result(
+      [
+        prefix,
+        cwdLine,
+        "Run relevant tests in this cwd, which combines the proposal with current parent edits. Do not edit this prepared tree. After passing tests and complete diff review, integrate with this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
+      ].join("\n"),
+      {
+        ...receipt,
+        revisionId: preparation.revisionId,
+        preparationId: preparation.preparationId,
+        ...preparedCwdMetadata(preparation.cwd, {
+          offset: prefix.length + 1,
+          length: cwdLine.length,
+        }),
+      },
+    );
+  });
+
 export const executeWorkspaceAction = (
   operation: SubagentWorkspaceInput,
   callerRunId = SUBAGENT_ROOT_RUN_ID,
@@ -184,54 +254,10 @@ export const executeWorkspaceAction = (
     switch (operation.action) {
       case "list":
         return yield* executeWorkspaceList(service, callerRunId, operation.offset ?? 0);
-      case "review": {
-        const review = yield* service.workspaceReview(
-          workspaceId,
-          {
-            ...(operation.revisionId !== undefined && { revisionId: operation.revisionId }),
-            offset: operation.offset ?? 0,
-            limit: operation.limit ?? 16_000,
-          },
-          callerRunId,
-        );
-        const prefix = [
-          `Workspace ${workspaceId}; immutable revision ${review.revisionId}.`,
-          `Diff characters ${review.offset}..${review.offset + review.diff.length} of ${review.totalChars}.`,
-          review.nextOffset !== undefined
-            ? `Incomplete review. Call review with workspaceId=${workspaceId}, revisionId=${review.revisionId}, offset=${review.nextOffset}. Read ALL pages before prepare/integrate.`
-            : "End of diff. After reviewing every page, prepare this exact revision and run relevant tests in the returned combined cwd before integrate.",
-          "BEGIN IMMUTABLE DIFF PAGE",
-        ].join("\n");
-        return result([prefix, review.diff, "END IMMUTABLE DIFF PAGE"].join("\n"), {
-          ...receipt,
-          revisionId: review.revisionId,
-          offset: review.offset,
-          totalChars: review.totalChars,
-          displayContent: { offset: prefix.length + 1, length: review.diff.length },
-          ...(review.nextOffset !== undefined && { nextOffset: review.nextOffset }),
-        });
-      }
-      case "prepare": {
-        const preparation = yield* service.workspacePrepare(workspaceId, revisionId, callerRunId);
-        const prefix = `Prepared revision ${preparation.revisionId}; preparationId=${preparation.preparationId}.`;
-        const cwdLine = `Combined test cwd: ${preparation.cwd}`;
-        return result(
-          [
-            prefix,
-            cwdLine,
-            "Run relevant tests in this cwd, which combines the proposal with current parent edits. Do not edit this prepared tree. After passing tests and complete diff review, integrate with this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
-          ].join("\n"),
-          {
-            ...receipt,
-            revisionId: preparation.revisionId,
-            preparationId: preparation.preparationId,
-            ...preparedCwdMetadata(preparation.cwd, {
-              offset: prefix.length + 1,
-              length: cwdLine.length,
-            }),
-          },
-        );
-      }
+      case "review":
+        return yield* executeWorkspaceReview(service, operation, receipt, callerRunId);
+      case "prepare":
+        return yield* executeWorkspacePrepare(service, operation, receipt, callerRunId);
       case "integrate": {
         const preparationId = operation.preparationId ?? "";
         const outcome = yield* service.workspaceIntegrate(

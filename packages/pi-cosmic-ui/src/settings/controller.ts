@@ -87,8 +87,8 @@ export function registerSettingsCommand(
   pi: ExtensionAPI,
   options: {
     config(): ResolvedCosmicUiConfig;
-    updateContext(ctx: ExtensionContext): void;
-    update(ctx: ExtensionContext): void;
+    updateContext: (ctx: ExtensionContext) => void;
+    update: (ctx: ExtensionContext) => void;
     run<E>(effect: Effect.Effect<void, E, CosmicUiService>, signal?: AbortSignal): Promise<void>;
     captureAuthority: () => () => boolean;
   },

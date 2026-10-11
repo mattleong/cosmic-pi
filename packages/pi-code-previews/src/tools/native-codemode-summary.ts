@@ -20,7 +20,11 @@ import {
 import type { CompactIssue } from "./compact-issues";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { selectCompactChildren } from "../preview/compact-children";
-import { nativeArgumentPreview, safeNativeArgumentText } from "./native-codemode-args";
+import {
+  nativeArgumentPreview,
+  safeNativeArgumentText,
+  type NativeArgumentPreview,
+} from "./native-codemode-args";
 import { nativeCodemodeCallSubject } from "./native-codemode-subject";
 import { visibleDiagnosticLine } from "./native-safe-content";
 import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-truncation";
@@ -41,11 +45,13 @@ function issue(code: string, text: string): CompactIssue {
   return detail === message ? projected : { ...projected, detail };
 }
 
-function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): CompactChild {
-  const preview = nativeArgumentPreview(call.args);
-  const target = nativeCodemodeCallSubject(call.name, preview, cwd);
+function childIssues(
+  call: NativeCodemodeCall,
+  preview: NativeArgumentPreview | undefined,
+  label: string | undefined,
+): CompactIssue[] {
   const issues: CompactIssue[] = [];
-  if (target.label || call.name.startsWith("mcp__"))
+  if (label || call.name.startsWith("mcp__"))
     issues.push({
       code: "native-call-name",
       severity: "info",
@@ -65,19 +71,25 @@ function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): Comp
           ? safeNativeArgumentText(call.args)
           : "Argument preview is unavailable"),
     });
+  return issues;
+}
+
+function childStatus(call: NativeCodemodeCall, phase: CompactPhase): CompactChild["status"] {
+  if (call.status === "ok") return "returned";
+  return phase === "settled" && call.status === "running" ? "uncertain" : call.status;
+}
+
+function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): CompactChild {
+  const preview = nativeArgumentPreview(call.args);
+  const target = nativeCodemodeCallSubject(call.name, preview, cwd);
   const entry: CompactChild = {
     ...target,
     label: sanitizeDiagnosticError(target.label ?? call.name, { maximumLength: 100 }),
     showTiming: true,
     showShortTiming: true,
     subject: visibleDiagnosticLine(target.subject ?? "", 200),
-    status:
-      call.status === "ok"
-        ? "returned"
-        : phase === "settled" && call.status === "running"
-          ? "uncertain"
-          : call.status,
-    issues,
+    status: childStatus(call, phase),
+    issues: childIssues(call, preview, target.label),
   };
   if (call.status === "ok") entry.returnedCheckmark = true;
   if (call.durationMs !== undefined) entry.durationMs = call.durationMs;

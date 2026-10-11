@@ -13,6 +13,7 @@ import {
   requestSyntaxInitialize,
   requestSyntaxLanguage,
   syntaxProjection,
+  type CodePreviewSyntaxSnapshot,
   type ShikiStatus,
 } from "./projection";
 
@@ -58,6 +59,48 @@ export function renderHighlightedText(
   );
 }
 
+type ShikiTheme = typeof codePreviewSettings.shikiTheme;
+
+function readyHighlighter(
+  theme: ShikiTheme,
+  invalidate: (() => void) | undefined,
+):
+  | { readonly snapshot: CodePreviewSyntaxSnapshot; readonly highlighter: ShikiHighlighter }
+  | undefined {
+  const snapshot = syntaxProjection();
+  if (snapshot?.highlighter && snapshot.theme === theme)
+    return { snapshot, highlighter: snapshot.highlighter };
+  if (!snapshot?.failedThemes.includes(theme)) requestSyntaxInitialize(theme, invalidate);
+  return undefined;
+}
+
+function cachedRender(key: string, code: string): string[] | undefined {
+  const cached = renderCache.get(key);
+  if (!cached || cached.source !== code) return undefined;
+  renderCache.delete(key);
+  renderCache.set(key, cached);
+  return cached.value;
+}
+
+function evictRenderCache(): void {
+  for (const [oldest, entry] of renderCache) {
+    if (
+      renderCache.size <= codePreviewPerformanceConfig.cacheLimit &&
+      renderCacheChars <= codePreviewPerformanceConfig.cacheCharLimit
+    )
+      break;
+    renderCache.delete(oldest);
+    renderCacheChars -= entry.size;
+  }
+}
+
+function rememberRender(key: string, code: string, rendered: string[]): void {
+  const size = rendered.reduce((total, line) => total + line.length, 0);
+  renderCache.set(key, { source: code, value: rendered, size });
+  renderCacheChars += size;
+  evictRenderCache();
+}
+
 export function renderWithShiki(
   code: string,
   lang: string | undefined,
@@ -65,41 +108,24 @@ export function renderWithShiki(
 ): string[] | undefined {
   if (!lang || !codePreviewSettings.syntaxHighlighting || shouldSkipHighlight(code))
     return undefined;
-  const snapshot = syntaxProjection();
   const theme = codePreviewSettings.shikiTheme;
-  if (!snapshot?.highlighter || snapshot.theme !== theme) {
-    if (!snapshot?.failedThemes.includes(theme)) requestSyntaxInitialize(theme, invalidate);
-    return undefined;
-  }
+  const ready = readyHighlighter(theme, invalidate);
+  if (!ready) return undefined;
+  const { snapshot, highlighter } = ready;
   const language = normalizePreviewLanguageAlias(lang);
   if (snapshot.failedLanguages.includes(language)) return undefined;
-  claimRenderCache(snapshot.highlighter, theme);
+  claimRenderCache(highlighter, theme);
   const key = `${theme}\0${language}\0${code.length}\0${hashString(code)}`;
-  const cached = renderCache.get(key);
-  if (cached && cached.source === code) {
-    renderCache.delete(key);
-    renderCache.set(key, cached);
-    return cached.value;
-  }
+  const cached = cachedRender(key, code);
+  if (cached) return cached;
   if (!snapshot.loadedLanguages.includes(language)) requestSyntaxLanguage(language, invalidate);
   if (!isShikiLanguage(language)) return undefined;
   try {
-    const tokens = snapshot.highlighter.codeToTokensBase(code, { lang: language, theme });
+    const tokens = highlighter.codeToTokensBase(code, { lang: language, theme });
     const rendered = tokens.map((line) =>
       normalizeContrast(line.map((token) => ansiFromToken(token)).join(""), theme),
     );
-    const size = rendered.reduce((total, line) => total + line.length, 0);
-    renderCache.set(key, { source: code, value: rendered, size });
-    renderCacheChars += size;
-    for (const [oldest, entry] of renderCache) {
-      if (
-        renderCache.size <= codePreviewPerformanceConfig.cacheLimit &&
-        renderCacheChars <= codePreviewPerformanceConfig.cacheCharLimit
-      )
-        break;
-      renderCache.delete(oldest);
-      renderCacheChars -= entry.size;
-    }
+    rememberRender(key, code, rendered);
     return rendered;
   } catch {
     return undefined;

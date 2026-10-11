@@ -78,8 +78,9 @@ export function backgroundTaskActivityDetail(
   if (!task) return undefined;
   let remaining = 12_000;
   const chunks: string[] = [];
-  for (let index = task.logs.length - 1; index >= 0 && remaining > 0; index -= 1) {
-    const text = task.logs[index]!.text.slice(-remaining);
+  for (const event of [...task.logs].reverse()) {
+    if (remaining <= 0) break;
+    const text = event.text.slice(-remaining);
     chunks.push(text);
     remaining -= text.length;
   }

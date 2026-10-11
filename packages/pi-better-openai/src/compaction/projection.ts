@@ -52,34 +52,44 @@ export function findActiveOpenAICompactionCheckpoint(
     : undefined;
 }
 
+const projectedEntryMessages = (entry: SessionEntry) => {
+  if (entry.type !== "compaction" || !decodeOpenAICompactionDetails(entry.details))
+    return sessionEntryToContextMessages(entry);
+  return entry.systemMessage ? [entry.systemMessage] : [];
+};
+
+const compatFlags = (model: Model<"openai-responses">) => {
+  const compat = model.compat;
+  return {
+    supportsMidConvoSystemMessages: compat?.supportsMidConvoSystemMessages ?? false,
+    supportsOpenAIGrammarTools: compat?.supportsOpenAIGrammarTools ?? false,
+    supportsAdditionalTools: compat?.supportsAdditionalTools ?? false,
+    supportsToolSearch: compat?.supportsToolSearch ?? false,
+    supportsStrictMode: compat?.supportsStrictMode ?? false,
+  };
+};
+
 export function projectOpenAIResponseInput(
   model: Model<"openai-responses">,
   entries: readonly SessionEntry[],
 ): readonly OpenAICompactionJsonObject[] | undefined {
-  const messages = convertToLlm(
-    entries.flatMap((entry) =>
-      entry.type === "compaction" && decodeOpenAICompactionDetails(entry.details)
-        ? entry.systemMessage
-          ? [entry.systemMessage]
-          : []
-        : sessionEntryToContextMessages(entry),
-    ),
-  );
+  const flags = compatFlags(model);
+  const messages = convertToLlm(entries.flatMap(projectedEntryMessages));
   const context = resolveTranscript(
     normalizeContext({ messages }),
-    model.compat?.supportsMidConvoSystemMessages ?? false,
+    flags.supportsMidConvoSystemMessages,
   );
   const converted = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
     grammarToolInputProperties: createGrammarToolInputProperties(
       getDeclaredTools(context.messages),
-      model.compat?.supportsOpenAIGrammarTools ?? false,
+      flags.supportsOpenAIGrammarTools,
     ),
-    supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
-    supportsAdditionalTools: model.compat?.supportsAdditionalTools ?? false,
-    supportsToolSearch: model.compat?.supportsToolSearch ?? false,
+    supportsMidConvoSystemMessages: flags.supportsMidConvoSystemMessages,
+    supportsAdditionalTools: flags.supportsAdditionalTools,
+    supportsToolSearch: flags.supportsToolSearch,
     toolOptions: {
-      supportsStrictMode: model.compat?.supportsStrictMode ?? false,
-      supportsOpenAIGrammarTools: model.compat?.supportsOpenAIGrammarTools ?? false,
+      supportsStrictMode: flags.supportsStrictMode,
+      supportsOpenAIGrammarTools: flags.supportsOpenAIGrammarTools,
     },
   });
   const input = decodeUnknownOrUndefined(InputJsonSchema, encodeJson(converted));

@@ -24,8 +24,8 @@ import { BackgroundTaskConfigStore } from "../src/config/store.ts";
 import type { BackgroundTaskConfig } from "../src/config/schema.ts";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
 import { OUTPUT_FAILURE_LINE_LIMIT } from "pi-code-previews";
-import type { BackgroundTaskStatus } from "../src/task/model.ts";
 import type {
+  BackgroundTaskStatus,
   BackgroundTaskState,
   BackgroundTaskProjection,
   StartBackgroundTask,

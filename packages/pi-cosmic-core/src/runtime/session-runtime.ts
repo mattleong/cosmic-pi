@@ -105,7 +105,6 @@ export function makePiSessionRuntimeSlot<
           notifyStartFailure(input, token);
           return undefined;
         }
-        let current: Active<Input, R, RuntimeError>;
         const abort = () => {
           if (active !== current || token !== generation) return;
           ++generation;
@@ -113,7 +112,13 @@ export function makePiSessionRuntimeSlot<
           void serialize(() => removal);
         };
         const removeAbort = () => signal?.removeEventListener("abort", abort);
-        current = { input, token, runtime, removeAbort, activated: false };
+        const current: Active<Input, R, RuntimeError> = {
+          input,
+          token,
+          runtime,
+          removeAbort,
+          activated: false,
+        };
         active = current;
         try {
           signal?.addEventListener("abort", abort, { once: true });

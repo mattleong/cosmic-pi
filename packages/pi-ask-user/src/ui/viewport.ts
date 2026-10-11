@@ -27,24 +27,30 @@ export class DialogViewport {
     return true;
   }
 
-  render(lines: readonly string[], width: number, height: number, feedback?: string): string[] {
-    if (width < 1 || height < 1) return [];
-    const h = Number.isFinite(height) ? Math.floor(height) : lines.length;
-    this.height = h;
-    const bodyHeight = lines.length > h && h > 1 ? h - 1 : h;
-    const maximum = Math.max(0, lines.length - bodyHeight);
+  private applyPending(maximum: number): void {
     if (this.pending === "first") this.offset = 0;
     else if (this.pending === "last") this.offset = maximum;
     else if (this.pending !== undefined) this.offset += this.pending;
     this.pending = undefined;
     this.offset = Math.max(0, Math.min(maximum, this.offset));
+  }
+
+  private revealFocus(lines: readonly string[], bodyHeight: number): void {
     const cursor = lines.findIndex((line) => line.includes(CURSOR_MARKER));
     const selected = lines.findIndex((line) => line.includes(SELECTION_MARKER));
     const focus = cursor >= 0 ? cursor : this.followSelection ? selected : -1;
-    if (focus >= 0) {
-      if (focus < this.offset) this.offset = focus;
-      if (focus >= this.offset + bodyHeight) this.offset = focus - bodyHeight + 1;
-    }
+    if (focus < 0) return;
+    if (focus < this.offset) this.offset = focus;
+    if (focus >= this.offset + bodyHeight) this.offset = focus - bodyHeight + 1;
+  }
+
+  render(lines: readonly string[], width: number, height: number, feedback?: string): string[] {
+    if (width < 1 || height < 1) return [];
+    const h = Number.isFinite(height) ? Math.floor(height) : lines.length;
+    this.height = h;
+    const bodyHeight = lines.length > h && h > 1 ? h - 1 : h;
+    this.applyPending(Math.max(0, lines.length - bodyHeight));
+    this.revealFocus(lines, bodyHeight);
     const visible = lines.slice(this.offset, this.offset + bodyHeight);
     if (bodyHeight < h)
       visible.push(

@@ -22,10 +22,16 @@ import {
 } from "../questionnaire/reducer.ts";
 import type {
   AskUserOutcome,
+  QuestionDraft,
   QuestionnaireAction,
   QuestionnaireState,
 } from "../questionnaire/model.ts";
-import { MAX_CHOICES, type AskUserQuestion, type AskUserRequest } from "../questionnaire/schema.ts";
+import {
+  MAX_CHOICES,
+  type AskUserChoiceQuestion,
+  type AskUserQuestion,
+  type AskUserRequest,
+} from "../questionnaire/schema.ts";
 import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import { PreviewPane } from "./preview-pane.ts";
 import { DialogViewport } from "./viewport.ts";
@@ -138,17 +144,19 @@ export class AskUserDialog implements Focusable {
     this.refresh();
   }
 
+  private initialInputValue(kind: DialogInputMode["kind"], question: number): string {
+    const draft = this.state.drafts[question];
+    if (kind === "note") return draft?.note ?? "";
+    const buffered = kind === "text" ? this.textBuffers.get(question) : undefined;
+    if (buffered !== undefined) return buffered;
+    return draft?.answer?.kind === "custom" || draft?.answer?.kind === "text"
+      ? draft.answer.text
+      : "";
+  }
+
   private openInput(kind: DialogInputMode["kind"]): void {
     const question = this.state.currentTab;
-    const draft = this.state.drafts[question];
-    const value =
-      kind === "note"
-        ? (draft?.note ?? "")
-        : kind === "text" && this.textBuffers.has(question)
-          ? this.textBuffers.get(question)!
-          : draft?.answer?.kind === "custom" || draft?.answer?.kind === "text"
-            ? draft.answer.text
-            : "";
+    const value = this.initialInputValue(kind, question);
     this.input = { kind, question };
     this.inputError = undefined;
     this.editor.setText(value);
@@ -322,12 +330,12 @@ export class AskUserDialog implements Focusable {
       if (this.options.keybindings.matches(data, "tui.select.confirm")) this.openInput("text");
       return;
     }
-    for (let index = 0; index < question.choices.length; index++) {
-      const shortcut = CHOICE_SHORTCUTS[index];
-      if (shortcut && matchesKey(data, shortcut)) {
-        if (!isKeyRepeat(data)) this.activateChoice(question, index);
-        return;
-      }
+    const shortcut = CHOICE_SHORTCUTS.slice(0, question.choices.length).findIndex((key) =>
+      matchesKey(data, key),
+    );
+    if (shortcut >= 0) {
+      if (!isKeyRepeat(data)) this.activateChoice(question, shortcut);
+      return;
     }
     if (
       matchesKey(data, Key.space) &&
@@ -337,7 +345,11 @@ export class AskUserDialog implements Focusable {
       this.toggleMultiple(draft.cursor);
       return;
     }
-    if (!this.options.keybindings.matches(data, "tui.select.confirm")) return;
+    if (this.options.keybindings.matches(data, "tui.select.confirm"))
+      this.confirmQuestion(question, draft);
+  }
+
+  private confirmQuestion(question: AskUserChoiceQuestion, draft: QuestionDraft): void {
     if (draft.cursor < question.choices.length) {
       this.activateChoice(question, draft.cursor);
       return;

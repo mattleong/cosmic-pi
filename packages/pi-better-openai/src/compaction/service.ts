@@ -1,4 +1,9 @@
-import { calculateCost, getCurrentSystemPrompt, type Usage } from "@earendil-works/pi-ai";
+import {
+  calculateCost,
+  getCurrentSystemPrompt,
+  type Model,
+  type Usage,
+} from "@earendil-works/pi-ai";
 import type {
   CompactionResult,
   ContextWithSystemEvent,
@@ -15,7 +20,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
 import { FAST_SERVICE_TIER } from "../fast/models.ts";
 import type { OpenAIProjection } from "../usage/projection.ts";
-import { OpenAICompactionClient } from "../boundary/openai-compaction.ts";
+import { OpenAICompactionClient, type OpenAICompactUsage } from "../boundary/openai-compaction.ts";
 import {
   findActiveOpenAICompactionCheckpoint,
   injectOpenAICompactionCheckpoint,
@@ -26,6 +31,7 @@ import {
   OPENAI_COMPACTION_DETAILS_TYPE,
   OPENAI_COMPACTION_SUMMARY,
   type OpenAICompactionCheckpoint,
+  type OpenAICompactionJsonObject,
 } from "./protocol.ts";
 
 import { compactWithPi } from "../boundary/host-compaction.ts";
@@ -38,6 +44,40 @@ import {
   retryOmissions,
 } from "./context.ts";
 import { prepareOpenAIFallback } from "./fallback.ts";
+
+const compactionInstructions = (systemPrompt: string, guidance: string | undefined) => {
+  const customInstructions = guidance?.trim();
+  return [
+    systemPrompt.trim(),
+    customInstructions ? `Compaction guidance:\n${customInstructions}` : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
+};
+
+const checkpointedInput = (
+  active: OpenAICompactionCheckpoint | undefined,
+  restored: { readonly coverageChanged: boolean } | undefined,
+  rawInput: readonly OpenAICompactionJsonObject[],
+  covered: readonly OpenAICompactionJsonObject[] | undefined,
+) =>
+  active && !restored?.coverageChanged && covered && hasExactPrefix(rawInput, covered)
+    ? [...active.output, ...rawInput.slice(covered.length)]
+    : rawInput;
+
+const compactionUsage = (model: Model<"openai-responses">, reported: OpenAICompactUsage): Usage => {
+  const cacheRead = Math.min(reported.cachedInputTokens ?? 0, reported.inputTokens);
+  const usage: Usage = {
+    input: reported.inputTokens - cacheRead,
+    output: reported.outputTokens,
+    cacheRead,
+    cacheWrite: 0,
+    totalTokens: reported.totalTokens,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  calculateCost(model, usage);
+  return usage;
+};
 
 export class OpenAICompactionError extends Schema.TaggedError<OpenAICompactionError>()(
   "OpenAICompactionError",
@@ -118,37 +158,22 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
               "projection",
               "Unable to project the OpenAI compaction input.",
             );
-          const active = findActiveOpenAICompactionCheckpoint(current.branch, model);
-          const input =
-            active &&
-            !current.restored?.coverageChanged &&
-            projected.covered &&
-            hasExactPrefix(rawInput, projected.covered)
-              ? [...active.output, ...rawInput.slice(projected.covered.length)]
-              : rawInput;
-          const customInstructions = event.customInstructions?.trim();
-          const instructions = [
-            current.systemPrompt.trim(),
-            customInstructions ? `Compaction guidance:\n${customInstructions}` : undefined,
-          ]
-            .filter((value): value is string => Boolean(value))
-            .join("\n\n");
+          const instructions = compactionInstructions(
+            current.systemPrompt,
+            event.customInstructions,
+          );
           const result = yield* client.compact({
             model,
-            input,
+            input: checkpointedInput(
+              findActiveOpenAICompactionCheckpoint(current.branch, model),
+              current.restored,
+              rawInput,
+              projected.covered,
+            ),
             ...(instructions && { instructions }),
             ...(current.fastActive && { serviceTier: FAST_SERVICE_TIER }),
           });
-          const cacheRead = Math.min(result.usage.cachedInputTokens ?? 0, result.usage.inputTokens);
-          const usage: Usage = {
-            input: result.usage.inputTokens - cacheRead,
-            output: result.usage.outputTokens,
-            cacheRead,
-            cacheWrite: 0,
-            totalTokens: result.usage.totalTokens,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          };
-          calculateCost(model, usage);
+          const usage = compactionUsage(model, result.usage);
           const now = yield* Clock.currentTimeMillis;
           const checkpoint: OpenAICompactionCheckpoint = {
             version: 1,

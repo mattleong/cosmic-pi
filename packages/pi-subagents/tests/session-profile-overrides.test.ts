@@ -410,12 +410,12 @@ describe("session profile overrides", () => {
     "commits each edit with its best-effort handoff publication, even interrupted there",
     () =>
       Effect.gen(function* () {
-        let committing: Fiber.Fiber<unknown, unknown> | undefined;
+        const committing: Array<Fiber.Fiber<unknown, unknown>> = [];
         const published: number[] = [];
         const service = yield* makeSubagentProfileService(baseConfig(), {
           publishSessionOverrides: (seed) => {
             published.push(seed.revision);
-            committing?.interruptUnsafe();
+            committing[0]?.interruptUnsafe();
             throw new Error("hostile session publication");
           },
         });
@@ -431,8 +431,9 @@ describe("session profile overrides", () => {
           "openai/session-after-throw",
         );
 
-        committing = yield* Effect.forkChild(patch("openai/interrupted", committed.revision));
-        expect(Exit.hasInterrupts(yield* Fiber.await(committing))).toBe(true);
+        const fiber = yield* Effect.forkChild(patch("openai/interrupted", committed.revision));
+        committing.push(fiber);
+        expect(Exit.hasInterrupts(yield* Fiber.await(fiber))).toBe(true);
         expect(published).toEqual([0, 1, 2]);
         expect((yield* service.capture).revision).toBe(2);
       }),

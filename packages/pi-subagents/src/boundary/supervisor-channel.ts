@@ -46,8 +46,6 @@ import {
   type SupervisorChannelControls,
 } from "./supervisor-channel-session.ts";
 
-const { join } = nodePath;
-
 const LOOPBACK_HOST = "127.0.0.1" as const;
 const CHANNEL_ROOT = "supervisor-channels-v3";
 const CONNECTION_CONFIG_FILE = "connection.json";
@@ -194,14 +192,14 @@ const prepareStateDirectory = (
     const canonicalAgentDirectory = yield* privateStateOperation("resolve-agent-directory", () =>
       safeAgentDirectory(agentDirectory),
     );
-    const packageRoot = join(canonicalAgentDirectory, "subagents");
-    const channelRoot = join(packageRoot, CHANNEL_ROOT);
+    const packageRoot = nodePath.join(canonicalAgentDirectory, "subagents");
+    const channelRoot = nodePath.join(packageRoot, CHANNEL_ROOT);
     yield* privateStateOperation("prepare-package-root", () => ensurePrivateDirectory(packageRoot));
     yield* privateStateOperation("prepare-channel-root", () => ensurePrivateDirectory(channelRoot));
-    const stateDirectory = join(channelRoot, `${runId}-${synchronousRandomHex(12)}`);
+    const stateDirectory = nodePath.join(channelRoot, `${runId}-${synchronousRandomHex(12)}`);
     const prepared = {
       stateDirectory,
-      connectionConfigPath: join(stateDirectory, CONNECTION_CONFIG_FILE),
+      connectionConfigPath: nodePath.join(stateDirectory, CONNECTION_CONFIG_FILE),
     } satisfies PreparedStateDirectory;
     let directoryCreated = false;
     const removeLateDirectory = () =>

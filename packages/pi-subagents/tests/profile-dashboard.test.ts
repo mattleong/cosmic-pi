@@ -266,11 +266,17 @@ describe("internal dashboard dialogs", () => {
     expect(close).toHaveBeenCalledWith("q");
   });
   it.each([
-    ["submits the destination and normalized name", true, [..."  a b  "], "project", "a b"],
+    ["submits the destination and normalized name", true, Array.from("  a b  "), "project", "a b"],
     ["toggles on arrows and keeps the name", true, ["x", down, "y", up, up], "global", "xy"],
     ["never offers Project without trust", false, [up, "\t", "\u001b[Z", "x"], "global", "x"],
     ["stays open for an invalid name", true, ["\r", " ", "\r", "x"], "project", "x"],
-    ["keeps shortcuts and Tab in the input", true, [..."sumprjq", "\t"], "project", "sumprjq"],
+    [
+      "keeps shortcuts and Tab in the input",
+      true,
+      [...Array.from("sumprjq"), "\t"],
+      "project",
+      "sumprjq",
+    ],
   ] as const)("save dialog %s", (_case, projectTrusted, keys, scope, name) => {
     const close = vi.fn<(value: ProfileSetSaveDestination | undefined) => void>();
     const dialog = new ProfileDashboardDialog({
@@ -354,7 +360,7 @@ const dashboard = () => {
 const saveSnapshot = function* (f: ReturnType<typeof dashboard>) {
   f.press("s");
   yield* step(eventLoopTurn);
-  f.press(..."snapshot", "\r");
+  f.press(...Array.from("snapshot"), "\r");
   yield* step(eventLoopTurn);
 };
 
@@ -487,7 +493,7 @@ describe("persistent dashboard", () => {
       );
       press("\u001b", "\u001b[A", "\u001b", "a", "j", "j", "\r");
       yield* step(eventLoopTurn);
-      press("\u0001", "\u000b", ..."renamed", "\r");
+      press("\u0001", "\u000b", ...Array.from("renamed"), "\r");
       yield* step(eventLoopTurn);
       expect(f.calls.renameProfileSet).toHaveBeenCalledWith(
         expect.objectContaining({ nextProfileSet: "renamed" }),
@@ -658,7 +664,7 @@ describe("persistent dashboard", () => {
       expect(f.calls.createProfileSetFromSnapshot).not.toHaveBeenCalled();
       f.press("\t", "\t", "\r");
       yield* step(eventLoopTurn);
-      f.press(..."snapshot", "\r");
+      f.press(...Array.from("snapshot"), "\r");
       yield* step(eventLoopTurn);
       expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({ profileSet: "snapshot" }),
@@ -674,7 +680,7 @@ describe("persistent dashboard", () => {
     f.untrust();
     f.component.handleInput("s");
     yield* step(eventLoopTurn);
-    f.press(..."snapshot", "\u001b[A", "\u001b[B", "\r");
+    f.press(...Array.from("snapshot"), "\u001b[A", "\u001b[B", "\r");
     yield* step(eventLoopTurn);
     expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ scope: "global", profileSet: "snapshot" }),

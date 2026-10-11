@@ -387,6 +387,22 @@ const readRootField = <S extends Schema.Constraint, Fields extends object>(
   return undefined;
 };
 
+const decodeDefaultProfileSet = <Fields extends object>(
+  rawRoot: Fields,
+  scope: string,
+  diagnostics: string[],
+) => {
+  const defaultPath = `${scope}.defaultProfileSet`;
+  const defaultField = readField(rawRoot, "defaultProfileSet", defaultPath, diagnostics);
+  const defaultProfileSet =
+    Predicate.isString(defaultField.value) && isProfileSetName(defaultField.value)
+      ? defaultField.value
+      : undefined;
+  const invalidDefaultProfileSet = defaultField.present && defaultProfileSet === undefined;
+  if (invalidDefaultProfileSet) diagnostics.push(defaultPath);
+  return { defaultProfileSet, invalidDefaultProfileSet };
+};
+
 const decodeCurrentBody = <Fields extends object>(
   rawRoot: Fields,
   scope: string,
@@ -408,14 +424,11 @@ const decodeCurrentBody = <Fields extends object>(
   const decoded = setsField.present
     ? decodeProfileSets(setsField.value, `${scope}.profileSets`, diagnostics)
     : undefined;
-  const defaultPath = `${scope}.defaultProfileSet`;
-  const defaultField = readField(rawRoot, "defaultProfileSet", defaultPath, diagnostics);
-  const defaultProfileSet =
-    Predicate.isString(defaultField.value) && isProfileSetName(defaultField.value)
-      ? defaultField.value
-      : undefined;
-  const invalidDefaultProfileSet = defaultField.present && defaultProfileSet === undefined;
-  if (invalidDefaultProfileSet) diagnostics.push(defaultPath);
+  const { defaultProfileSet, invalidDefaultProfileSet } = decodeDefaultProfileSet(
+    rawRoot,
+    scope,
+    diagnostics,
+  );
   return {
     file: {
       ...(decoded && Object.keys(decoded.sets).length > 0 && { profileSets: decoded.sets }),
@@ -427,6 +440,26 @@ const decodeCurrentBody = <Fields extends object>(
     invalidProfileSets: decoded?.invalidProfileSets ?? [],
     invalidDefaultProfileSet,
   };
+};
+
+const decodeRootNesting = <Fields extends object>(
+  rawRoot: Fields,
+  scope: string,
+  supported: boolean,
+  diagnostics: string[],
+): SubagentNestingPolicy | undefined => {
+  const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
+  if (!supported || !nestingField.present) return undefined;
+  const nesting = decodeSubagentNesting(nestingField.value);
+  if (nesting === undefined) diagnostics.push(`${scope}.nesting`);
+  return nesting;
+};
+
+const declaresMissingDefault = (file: SubagentConfigFile): boolean => {
+  const defaultName = file.defaultProfileSet;
+  return (
+    defaultName !== undefined && !(file.profileSets && Object.hasOwn(file.profileSets, defaultName))
+  );
 };
 
 export function decodeSubagentConfig<InputInput>(
@@ -442,18 +475,14 @@ export function decodeSubagentConfig<InputInput>(
   if (!ownKeysAre(rawRoot, ROOT_KEYS)) diagnostics.push(`${scope}.<unknown>`);
 
   const body = version === undefined ? EMPTY_BODY : decodeCurrentBody(rawRoot, scope, diagnostics);
-  let file: SubagentConfigFile = { ...(version !== undefined && { version }), ...body.file };
-  const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
-  if (version !== undefined && nestingField.present) {
-    const nesting = decodeSubagentNesting(nestingField.value);
-    if (nesting === undefined) diagnostics.push(`${scope}.nesting`);
-    else file = { ...file, nesting };
-  }
+  const nesting = decodeRootNesting(rawRoot, scope, version !== undefined, diagnostics);
+  const file: SubagentConfigFile = {
+    ...(version !== undefined && { version }),
+    ...body.file,
+    ...(nesting !== undefined && { nesting }),
+  };
 
-  const defaultName = file.defaultProfileSet;
-  const missingDefault =
-    defaultName !== undefined &&
-    !(file.profileSets && Object.hasOwn(file.profileSets, defaultName));
+  const missingDefault = declaresMissingDefault(file);
   if (missingDefault) diagnostics.push(`${scope}.defaultProfileSet`);
   const unsupportedVersion = version === undefined;
   if (unsupportedVersion) diagnostics.push(`${scope}.version`);

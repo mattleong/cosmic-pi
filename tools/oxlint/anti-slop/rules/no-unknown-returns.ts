@@ -6,6 +6,17 @@ import { referencedAliasName, type FunctionNode } from "../shared/ast.ts";
 
 import { lexicalTypeParameterNames } from "../shared/lexical-type-parameters.ts";
 
+function isPromiseReference(type: ESTree.TSTypeReference): boolean {
+  return (
+    type.typeName.type === "Identifier" &&
+    (type.typeName.name === "Promise" || type.typeName.name === "PromiseLike")
+  );
+}
+
+function hasTypeParameters(alias: ESTree.TSTypeAliasDeclaration): boolean {
+  return alias.typeParameters !== null && alias.typeParameters !== undefined;
+}
+
 export const noUnknownReturnsRule = defineRule({
   meta: {
     type: "problem",
@@ -35,23 +46,14 @@ export const noUnknownReturnsRule = defineRule({
           resolvesToUnknown(member, shadowedAliases, visited),
         );
       }
-      if (
-        type.type === "TSTypeReference" &&
-        type.typeName.type === "Identifier" &&
-        (type.typeName.name === "Promise" || type.typeName.name === "PromiseLike")
-      ) {
+      if (type.type === "TSTypeReference" && isPromiseReference(type)) {
         const value = type.typeArguments?.params[0];
         return value !== undefined && resolvesToUnknown(value, shadowedAliases, visited);
       }
       const name = referencedAliasName(type);
       if (name === null || visited.has(name) || shadowedAliases.has(name)) return false;
       const alias = aliases.get(name);
-      if (
-        alias === undefined ||
-        (alias.typeParameters !== null && alias.typeParameters !== undefined)
-      ) {
-        return false;
-      }
+      if (alias === undefined || hasTypeParameters(alias)) return false;
       const nextVisited = new Set(visited);
       nextVisited.add(name);
       return resolvesToUnknown(alias.typeAnnotation, shadowedAliases, nextVisited);

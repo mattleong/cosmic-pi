@@ -149,7 +149,8 @@ export function makeActivityHost(
       if (current) release(current);
       current = binding;
       binding.ctx = ctx;
-      binding.sessionId = ctx.sessionManager.getSessionId();
+      const sessionId = ctx.sessionManager.getSessionId();
+      binding.sessionId = sessionId;
       binding.active = true;
       const isCurrent = () => binding.active && current === binding;
       const accept: Parameters<ActivityEvents["on"]>[1] = (data) =>
@@ -195,7 +196,7 @@ export function makeActivityHost(
         safe(() =>
           binding.cleanups.push(
             installActivityView(pi.events, {
-              sessionId: binding.sessionId!,
+              sessionId,
               hostToken: binding.nonce,
               current: () => isCurrent() && binding.installed,
               open: (section, signal) =>

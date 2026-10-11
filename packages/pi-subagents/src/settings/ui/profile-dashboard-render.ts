@@ -40,7 +40,7 @@ export function renderProfileDashboard(
   const child = state.framedChild
     ? state.rows.map((line) => sliceByColumn(line, 1, inner))
     : state.rows;
-  const footer = state.framedChild && child.length > 1 ? child.at(-1)! : "";
+  const footer = (state.framedChild && child.length > 1 && child.at(-1)) || "";
   const body = state.framedChild && child.length > 1 ? child.slice(0, -1) : child;
   return framedScreen(frame, {
     width,
@@ -57,7 +57,7 @@ export function renderProfileDashboard(
       if (state.framedChild && body.length > 0 && bodyHeight > 2) {
         rows[2] = `${frame.outer("├")}${body[0]}${frame.outer("┤")}`;
         for (let index = 1; index < body.length && index + 2 < bodyHeight; index += 1)
-          rows[index + 2] = state.rows[index]!;
+          rows[index + 2] = state.rows[index] ?? "";
       }
       return rows;
     },

@@ -3,10 +3,8 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
-import type { BackendLaunchRequest } from "../backend/model.ts";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
 import { DEFAULT_SUBAGENT_NESTING_POLICY, type SubagentNestingPolicy } from "../config/schema.ts";
-import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
 import { childSystemPrompt, taskPrompt } from "./tool-policy.ts";
@@ -16,7 +14,6 @@ import {
   type SubagentError,
   SubagentHistoryCapacityError,
   SubagentRuntimeClosedError,
-  UnsupportedSafeWriterOwnershipError,
 } from "./errors.ts";
 import {
   commitRunInitialization,
@@ -25,10 +22,8 @@ import {
   type RunOwnership,
   type RunRecord,
 } from "./internal.ts";
-import { descendantRunIds } from "./tree.ts";
 import { MAX_RETAINED_RUNS } from "./limits.ts";
 import {
-  emptyUsage,
   isActiveRunState,
   isTerminalRunState,
   SUBAGENT_ROOT_RUN_ID,
@@ -41,55 +36,21 @@ import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProcessInitializer } from "./process-lifecycle.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
-import {
-  MAX_ERROR_CHARS,
-  MAX_TASK_CHARS,
-  sanitizeDiagnosticText,
-  sanitizeName,
-  snapshotView,
-} from "./state.ts";
+import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
 import { addWriterPoolMemberLocked } from "./writer-pool.ts";
-import { failedStartRecoveryForRecord, remainingRouteCandidates } from "./retry.ts";
+import { failedStartRecoveryForRecord } from "./retry.ts";
 import { scriptOriginForStart, scriptedWriterAdmissionError } from "./launch-policy.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
+import {
+  backendLaunchRequest,
+  initialRunView,
+  isEvictionEligible,
+  validateStartRequest,
+  withWriteClaims,
+  type LaunchPlan,
+} from "./launch-records.ts";
 
 const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
-
-const validateStartRequest = (
-  request: StartSubagentRequest,
-  platform: NodeJS.Platform,
-): Effect.Effect<ReadonlyArray<string> | undefined, SubagentError> =>
-  Effect.gen(function* () {
-    if (!request.task.trim())
-      return yield* invalidRequest("task_required", "Subagent task is required.");
-    if (request.task.length > MAX_TASK_CHARS)
-      return yield* invalidRequest(
-        "task_too_large",
-        `Subagent task is too large: ${request.task.length.toLocaleString("en-US")} characters, over the ${MAX_TASK_CHARS.toLocaleString("en-US")}-character limit.`,
-      );
-    const normalizedClaims =
-      request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
-    if (normalizedClaims && !normalizedClaims.ok)
-      return yield* invalidRequest(normalizedClaims.code, normalizedClaims.message);
-    if (normalizedClaims && request.writeIntent !== "writer")
-      return yield* invalidRequest(
-        "write_claims_read_only",
-        "writes may be supplied only for a writer subagent.",
-      );
-    if (request.closeOnReport === false)
-      return yield* invalidRequest(
-        "retained_report_capability_invalid",
-        "closeOnReport=false is unsupported; local subagents close after reporting.",
-      );
-    if (request.writeIntent === "writer" && platform === "win32")
-      return yield* new UnsupportedSafeWriterOwnershipError({
-        code: "unsupported_safe_writer_ownership",
-        platform,
-        message:
-          "Writer subagents are disabled on Windows because descendant termination cannot yet be proven without Job Object ownership. Read-only subagents remain available.",
-      });
-    return normalizedClaims?.claims;
-  });
 
 export const getFailedStartRecovery = (error: SubagentError): FailedStartRecovery | undefined =>
   failedStartRecoveries.get(error);
@@ -182,17 +143,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         );
         const requestedName = sanitizeName(request.name ?? "");
         const now = yield* Clock.currentTimeMillis;
-        const evictionEligible = (record: RunRecord): boolean =>
-          !record.cleanupPending &&
-          record.process === undefined &&
-          descendantRunIds(records, record.view.id).length === 0 &&
-          writerPools
-            .get(record.canonicalWriterCwd?.digest ?? "")
-            ?.violationRunIds.has(record.view.id) !== true &&
-          record.retryClaim === undefined &&
-          record.completionClaims.size === 0 &&
-          record.completionGenerations.size === 0 &&
-          isTerminalRunState(record.view.state);
         const clearEvictionClaim = (candidate: RunRecord) =>
           withLock(
             Effect.sync(() => {
@@ -292,87 +242,16 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             return { parent, predecessor };
           });
 
-        const buildRunView = (
-          parent: RunRecord | undefined,
-          id: string,
-          name: string,
-        ): SubagentRunView => ({
-          id,
-          name,
-          task: request.task.trim(),
-          ...(request.profile && { profile: request.profile }),
-          ...(request.supersedes && { predecessorRunId: request.supersedes.runId }),
-          ...(request.routeContinuation && {
-            remainingCandidateCount: remainingRouteCandidates(request.routeContinuation),
-          }),
-          parentRunId,
-          depth: (parent?.view.depth ?? 0) + 1,
-          selection: request.selection ?? {
-            source: "profile-candidate",
-            reason: "Profile route selection.",
-            skippedCandidates: [],
-          },
-          cwd,
-          ...(request.writerWorkspaceMode && {
-            writerWorkspaceMode: request.writerWorkspaceMode,
-          }),
-          ...(request.workspace && {
-            workspaceId: request.workspace.workspaceId,
-            sourceCwd: request.workspace.sourceCwd,
-          }),
-          ...(request.workflow && { workflow: request.workflow }),
-          state: "starting",
-          context: request.context,
-          writeIntent: request.writeIntent,
-          ...(writeClaims !== undefined && {
-            writeClaims,
-            writeAudit: {
-              observedFileWrites: [],
-              violations: [],
-              bashWriteHints: 0,
-            },
-          }),
-          openaiFastMode: request.openaiFastMode,
-          host: request.host,
-          runtime: request.runtime,
-          closeOnReport: request.closeOnReport,
-          reportGeneration: 0,
-          capabilities: driver.capabilities,
-          model: request.model,
-          effort: request.effort,
-          startedAt: now,
-          lastActivityAt: now,
-          sessionEvents: [],
-          usage: emptyUsage(),
-        });
-
-        const promptRequest = (base: StartSubagentRequest): StartSubagentRequest =>
-          writeClaims === undefined ? base : { ...base, writes: writeClaims };
+        const plan: LaunchPlan = { request, parentRunId, cwd, writeClaims };
+        const promptRequest = (base: StartSubagentRequest) => withWriteClaims(base, writeClaims);
+        const evictionEligible = (record: RunRecord) =>
+          isEvictionEligible({ records, writerPools }, record);
         const releasedSystemPrompt =
           request.workflow === undefined && request.resultContract === undefined
             ? undefined
             : childSystemPrompt(
                 promptRequest({ ...request, workflow: undefined, resultContract: undefined }),
               );
-
-        const buildBackendLaunch = (id: string, name: string): BackendLaunchRequest => ({
-          runId: id,
-          name,
-          cwd,
-          context: request.context,
-          writeIntent: request.writeIntent,
-          openaiFastMode: request.openaiFastMode,
-          model: request.model,
-          effort: request.effort,
-          ...(request.runtimeApiKey && { runtimeApiKey: request.runtimeApiKey }),
-          activeTools: request.activeTools,
-          projectTrusted: request.projectTrusted,
-          parentSessionId: request.parentSessionId,
-          ...(request.parentSessionFile && { parentSessionFile: request.parentSessionFile }),
-          ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
-          systemPrompt: childSystemPrompt(promptRequest(request)),
-          ...(request.resultContract && { resultContract: request.resultContract }),
-        });
 
         const admitLocked = (
           evicted: RunRecord | undefined,
@@ -394,10 +273,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               : undefined;
             const record: RunRecord = {
               scriptOrigin: scriptOriginForStart(records, request, scriptedRoot),
-              view: buildRunView(parent, id, name),
+              view: initialRunView(plan, parent, { id, name }, driver.capabilities, now),
               scope,
               driver,
-              launch: buildBackendLaunch(id, name),
+              launch: backendLaunchRequest(plan, { id, name }),
               activeTools: new Map(),
               nativeAgents: new Set(),
               cleanupSettlement,

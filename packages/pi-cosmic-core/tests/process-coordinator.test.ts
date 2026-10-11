@@ -10,19 +10,16 @@ import { withProcessLock } from "../src/platform/process-coordinator.ts";
 it.effect("releases the keyed registry reference across interrupted admission and reuse", () =>
   Effect.gen(function* () {
     let key = "";
-    const observed = new Set<Map<unknown, unknown>>();
-    const observedRegistry = () => observed.values().next().value;
-    const set = Map.prototype.set;
-    const observer = vi
-      .spyOn(Map.prototype, "set")
-      .mockImplementation(function (this: Map<unknown, unknown>, candidate, value) {
-        if (candidate === key) observed.add(this);
-        return set.call(this, candidate, value);
-      });
+    const observer = vi.spyOn(Map.prototype, "set");
+    const observedRegistry = () => {
+      const index = observer.mock.calls.findIndex(([candidate]) => candidate === key);
+      const registry = observer.mock.contexts[index];
+      return registry instanceof Map ? registry : undefined;
+    };
     try {
       for (let checkpoint = 1; checkpoint <= 50; checkpoint++) {
         key = `process-coordinator/admission-${checkpoint}`;
-        observed.clear();
+        observer.mockClear();
         let checks = 0;
         const scheduler = interruptingScheduler(() => ++checks === checkpoint);
         const interrupted = yield* withProcessLock(key, Effect.void).pipe(

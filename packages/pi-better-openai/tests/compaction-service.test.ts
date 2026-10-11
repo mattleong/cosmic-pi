@@ -199,6 +199,47 @@ const checkpointEntry = (
   };
 };
 
+const previousTool = (round: number) => (round === 0 ? "old" : `tool-${round - 1}`);
+
+const appendRoundTail = (manager: SessionManager, round: number) => {
+  manager.appendMessage({
+    role: "system",
+    content: "",
+    sections: { rules: `updated rules ${round}` },
+    toolsRemoved: [{ name: previousTool(round) }],
+    toolsAdded: [
+      { name: `tool-${round}`, description: "new tool", parameters: { type: "object" } },
+    ],
+    timestamp: 10 + round,
+  });
+  manager.appendMessage({
+    role: "user",
+    content: `new question ${round}`,
+    timestamp: 15 + round,
+  });
+  manager.appendMessage(
+    assistantMessage(
+      [
+        {
+          type: "toolCall",
+          id: `call_${round}|fc_${round}`,
+          name: "read",
+          arguments: { path: `tail-${round}` },
+        },
+      ],
+      { stopReason: "toolUse", timestamp: 20 + round },
+    ),
+  );
+  manager.appendMessage({
+    role: "toolResult",
+    toolCallId: `call_${round}|fc_${round}`,
+    toolName: "read",
+    content: [{ type: "text", text: `result-${round}` }],
+    isError: false,
+    timestamp: 30 + round,
+  });
+};
+
 describe("OpenAICompactionClient", () => {
   it.effect("retains cached input details from decoded usage", () => {
     const layer = clientLayer({
@@ -275,90 +316,63 @@ describe("OpenAICompactionService", () => {
         });
         return Effect.gen(function* () {
           const service = yield* OpenAICompactionService;
+          const compactRound = (round: number) =>
+            Effect.gen(function* () {
+              const firstId = manager.getBranch()[0]!.id;
+              const result = commit(manager, yield* service.compact(compactEvent(firstId)));
+              expect(result.usage).toMatchObject({
+                input: 7,
+                output: 3,
+                cacheRead: 5,
+                cacheWrite: 0,
+                totalTokens: 15,
+              });
+              expect(result.usage?.cost.total).toBeCloseTo(0.000062);
+              const compactedMessages = manager.buildSessionContext().messages;
+              const compactedPrompt = getCurrentSystemPrompt(convertToLlm(compactedMessages));
+              expect(compactedPrompt.split("opaque initial content")).toHaveLength(2);
+              expect(
+                getCurrentTools(convertToLlm(compactedMessages)).map((tool) => tool.name),
+              ).toEqual([previousTool(round)]);
+              expect(compactedPrompt).toContain(
+                round === 0 ? "initial rules" : `updated rules ${round - 1}`,
+              );
+              const filteredCompacted = yield* service.filterContext(compactedMessages);
+              const compactedInput = responsesInput(
+                requestModel,
+                filteredCompacted ?? compactedMessages,
+              );
+              const compactedPayload = yield* service.inject({ input: compactedInput });
+              expect(compactedPayload?.input).toHaveLength(2);
+              expect(compactedPayload?.input[1]).toMatchObject({
+                encrypted_content: `checkpoint-${round + 1}`,
+              });
+              expect(
+                manager.buildContextEntries().filter((item) => item.type === "compaction"),
+              ).toHaveLength(1);
+              expect((yield* service.compact(compactEvent()).pipe(Effect.result))._tag).toBe(
+                "Failure",
+              );
+            });
+          const injectTail = (round: number) =>
+            Effect.gen(function* () {
+              const messages = manager.buildSessionContext().messages;
+              const filtered = yield* service.filterContext(messages);
+              const input = responsesInput(requestModel, filtered ?? messages);
+              const injected = yield* service.inject({ input });
+              expect(injected?.input).toHaveLength(supportsMidConvoSystemMessages ? 6 : 5);
+              expect(
+                serializedSnapshot(injected?.input).split(`new question ${round}`),
+              ).toHaveLength(2);
+              expect(injected?.input.slice(-2)).toEqual(input.slice(-2));
+              expect(injected?.input[1]).toMatchObject({
+                encrypted_content: `checkpoint-${round + 1}`,
+              });
+            });
           for (let round = 0; round < 4; round++) {
-            const firstId = manager.getBranch()[0]!.id;
-            const result = commit(manager, yield* service.compact(compactEvent(firstId)));
-            expect(result.usage).toMatchObject({
-              input: 7,
-              output: 3,
-              cacheRead: 5,
-              cacheWrite: 0,
-              totalTokens: 15,
-            });
-            expect(result.usage?.cost.total).toBeCloseTo(0.000062);
-            const compactedMessages = manager.buildSessionContext().messages;
-            const compactedPrompt = getCurrentSystemPrompt(convertToLlm(compactedMessages));
-            expect(compactedPrompt.split("opaque initial content")).toHaveLength(2);
-            expect(
-              getCurrentTools(convertToLlm(compactedMessages)).map((tool) => tool.name),
-            ).toEqual([round === 0 ? "old" : `tool-${round - 1}`]);
-            expect(compactedPrompt).toContain(
-              round === 0 ? "initial rules" : `updated rules ${round - 1}`,
-            );
-            const filteredCompacted = yield* service.filterContext(compactedMessages);
-            const compactedInput = responsesInput(
-              requestModel,
-              filteredCompacted ?? compactedMessages,
-            );
-            const compactedPayload = yield* service.inject({ input: compactedInput });
-            expect(compactedPayload?.input).toHaveLength(2);
-            expect(compactedPayload?.input[1]).toMatchObject({
-              encrypted_content: `checkpoint-${round + 1}`,
-            });
-            expect(
-              manager.buildContextEntries().filter((item) => item.type === "compaction"),
-            ).toHaveLength(1);
-            expect((yield* service.compact(compactEvent()).pipe(Effect.result))._tag).toBe(
-              "Failure",
-            );
-            manager.appendMessage({
-              role: "system",
-              content: "",
-              sections: { rules: `updated rules ${round}` },
-              toolsRemoved: [{ name: round === 0 ? "old" : `tool-${round - 1}` }],
-              toolsAdded: [
-                { name: `tool-${round}`, description: "new tool", parameters: { type: "object" } },
-              ],
-              timestamp: 10 + round,
-            });
-            manager.appendMessage({
-              role: "user",
-              content: `new question ${round}`,
-              timestamp: 15 + round,
-            });
-            manager.appendMessage(
-              assistantMessage(
-                [
-                  {
-                    type: "toolCall",
-                    id: `call_${round}|fc_${round}`,
-                    name: "read",
-                    arguments: { path: `tail-${round}` },
-                  },
-                ],
-                { stopReason: "toolUse", timestamp: 20 + round },
-              ),
-            );
-            manager.appendMessage({
-              role: "toolResult",
-              toolCallId: `call_${round}|fc_${round}`,
-              toolName: "read",
-              content: [{ type: "text", text: `result-${round}` }],
-              isError: false,
-              timestamp: 30 + round,
-            });
-            const messages = manager.buildSessionContext().messages;
-            const filtered = yield* service.filterContext(messages);
-            const input = responsesInput(requestModel, filtered ?? messages);
-            const injected = yield* service.inject({ input });
-            expect(injected?.input).toHaveLength(supportsMidConvoSystemMessages ? 6 : 5);
-            expect(serializedSnapshot(injected?.input).split(`new question ${round}`)).toHaveLength(
-              2,
-            );
-            expect(injected?.input.slice(-2)).toEqual(input.slice(-2));
-            expect(injected?.input[1]).toMatchObject({
-              encrypted_content: `checkpoint-${round + 1}`,
-            });
+            yield* compactRound(round);
+            appendRoundTail(manager, round);
+            yield* injectTail(round);
           }
           expect(requests[1]?.instructions).toContain("updated rules 0");
           expect(requests[1]?.input).toHaveLength(supportsMidConvoSystemMessages ? 5 : 4);

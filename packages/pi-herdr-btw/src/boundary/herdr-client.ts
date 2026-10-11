@@ -194,7 +194,7 @@ const selectHerdrEnvironment = (source: Readonly<NodeJS.ProcessEnv>): NodeJS.Pro
 
 const herdrTransportFailure = (
   request: HerdrCommandRequest,
-  failure?: BoundedProcessError | undefined,
+  failure?: BoundedProcessError,
 ): HerdrBtwError => {
   const uncertain = request.mutation && failure?.operation !== "spawn";
   return new HerdrBtwError({

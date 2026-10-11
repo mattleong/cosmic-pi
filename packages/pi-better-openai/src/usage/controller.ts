@@ -14,7 +14,6 @@ import {
 } from "pi-cosmic-core";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { prepareSettingUpdate } from "../config/options.ts";
-import { HIDDEN_USAGE_STATUS_TEXT } from "./projection.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
 import {
   modifyConfig,
@@ -31,6 +30,7 @@ import {
   type UsageSnapshot,
 } from "./format.ts";
 import {
+  HIDDEN_USAGE_STATUS_TEXT,
   initialProjection,
   isOpenAISubscriptionModel,
   synchronizedProjection,

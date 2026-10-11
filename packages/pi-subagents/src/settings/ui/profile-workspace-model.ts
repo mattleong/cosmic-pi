@@ -97,7 +97,7 @@ export const candidateFastModeAvailable = (
 
 export const candidateFastModeApplied = (
   candidate: ProfileCandidate,
-  parentModel?: string | undefined,
+  parentModel?: string,
 ): boolean =>
   candidate.openaiFastMode === true && candidateFastModeAvailable(candidate, parentModel);
 
@@ -165,7 +165,7 @@ export const candidateFieldRows = (
   candidate: ProfileCandidate,
   profile?: ProfileId,
   parentEffort: SubagentEffort = "high",
-  parentModel?: string | undefined,
+  parentModel?: string,
   advancedExpanded = false,
   candidateIndex = 0,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
@@ -327,6 +327,23 @@ export const candidateFieldChoices = (
   return [];
 };
 
+const invalidSelection = (field: SelectableCandidateField): CandidateUpdate => ({
+  error: `Invalid ${field} selection.`,
+  notices: [],
+});
+
+const selectEffort = (
+  candidate: ProfileCandidate,
+  value: string,
+  options: CandidateFieldChangeOptions,
+): CandidateUpdate => {
+  if (value === "default") return { candidate: { ...candidate, effort: "default" }, notices: [] };
+  const effort = runtimeEfforts(candidate.runtime, options.supportedEfforts).find(
+    (entry) => entry === value,
+  );
+  return effort ? { candidate: { ...candidate, effort }, notices: [] } : invalidSelection("effort");
+};
+
 export function selectCandidateField(
   candidate: ProfileCandidate,
   field: SelectableCandidateField,
@@ -334,25 +351,27 @@ export function selectCandidateField(
   options: CandidateFieldChangeOptions,
 ): CandidateUpdate {
   if (!candidateFieldChoices(candidate, field, options).some((choice) => choice.value === value))
-    return { error: `Invalid ${field} selection.`, notices: [] };
-  if (field === "runWith") {
-    const choice = runWithChoice(value);
-    return choice
-      ? updateCandidateControls(candidate, choice, {})
-      : { error: "Invalid Run with selection.", notices: [] };
+    return invalidSelection(field);
+  switch (field) {
+    case "runWith": {
+      const choice = runWithChoice(value);
+      return choice
+        ? updateCandidateControls(candidate, choice, {})
+        : { error: "Invalid Run with selection.", notices: [] };
+    }
+    case "effort":
+      return selectEffort(candidate, value, options);
+    case "context":
+      return value === "fresh" || value === "fork"
+        ? { candidate: { ...candidate, context: value }, notices: [] }
+        : invalidSelection(field);
+    case "writeIntent":
+      return value === "read-only" || value === "writer"
+        ? updateCandidateControls(candidate, { writeIntent: value }, {})
+        : invalidSelection(field);
+    case "openaiFastMode":
+      return value === "true" || value === "false"
+        ? { candidate: { ...candidate, openaiFastMode: value === "true" }, notices: [] }
+        : invalidSelection(field);
   }
-  if (field === "effort") {
-    const effort = runtimeEfforts(candidate.runtime, options.supportedEfforts).find(
-      (entry) => entry === value,
-    );
-    if (value === "default") return { candidate: { ...candidate, effort: "default" }, notices: [] };
-    if (effort) return { candidate: { ...candidate, effort }, notices: [] };
-  }
-  if (field === "context" && (value === "fresh" || value === "fork"))
-    return { candidate: { ...candidate, context: value }, notices: [] };
-  if (field === "writeIntent" && (value === "read-only" || value === "writer"))
-    return updateCandidateControls(candidate, { writeIntent: value }, {});
-  if (field === "openaiFastMode" && (value === "true" || value === "false"))
-    return { candidate: { ...candidate, openaiFastMode: value === "true" }, notices: [] };
-  return { error: `Invalid ${field} selection.`, notices: [] };
 }

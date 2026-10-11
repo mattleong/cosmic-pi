@@ -25,6 +25,58 @@ const updateDraft = (
   drafts: state.drafts.map((draft, index) => (index === question ? update(draft) : draft)),
 });
 
+type ActionOf<Type extends QuestionnaireAction["type"]> = Extract<
+  QuestionnaireAction,
+  { readonly type: Type }
+>;
+
+const selectOne = (state: QuestionnaireState, action: ActionOf<"select-one">) => {
+  const question = state.request.questions[action.question];
+  if (!question || question.mode !== "single") return state;
+  const choice = question.choices[action.choice];
+  if (!choice) return state;
+  return updateDraft(state, action.question, (draft) => ({
+    ...draft,
+    answer: { kind: "choices", values: [choice.value] },
+  }));
+};
+
+const toggleMany = (state: QuestionnaireState, action: ActionOf<"toggle-many">) => {
+  const question = state.request.questions[action.question];
+  if (!question || question.mode !== "multiple") return state;
+  const choice = question.choices[action.choice];
+  if (!choice) return state;
+  return updateDraft(state, action.question, (draft) => {
+    const selected = new Set(draft.answer?.kind === "choices" ? draft.answer.values : []);
+    if (selected.has(choice.value)) selected.delete(choice.value);
+    else selected.add(choice.value);
+    const values = question.choices
+      .filter((candidate) => selected.has(candidate.value))
+      .map((candidate) => candidate.value);
+    if (values.length > 0) return { ...draft, answer: { kind: "choices", values } };
+    return draft.note ? { cursor: draft.cursor, note: draft.note } : { cursor: draft.cursor };
+  });
+};
+
+const setAnswerText = (state: QuestionnaireState, action: ActionOf<"set-custom" | "set-text">) => {
+  const question = state.request.questions[action.question];
+  const kind = action.type === "set-text" ? "text" : "custom";
+  if (!question || (question.mode === "text") !== (kind === "text")) return state;
+  const checked = validateQuestionnaireInput(action.text, kind);
+  if (checked.error !== undefined) return state;
+  return updateDraft(state, action.question, (draft) => ({
+    ...draft,
+    answer: { kind, text: checked.value },
+  }));
+};
+
+const setNote = (state: QuestionnaireState, action: ActionOf<"set-note">) =>
+  updateDraft(state, action.question, (draft) => {
+    const note = action.note.trim();
+    if (note) return { ...draft, note };
+    return draft.answer ? { cursor: draft.cursor, answer: draft.answer } : { cursor: draft.cursor };
+  });
+
 export function reduceQuestionnaire(
   state: QuestionnaireState,
   action: QuestionnaireAction,
@@ -41,52 +93,15 @@ export function reduceQuestionnaire(
     }
     case "set-cursor":
       return updateDraft(state, action.question, (draft) => ({ ...draft, cursor: action.cursor }));
-    case "select-one": {
-      const question = state.request.questions[action.question];
-      if (!question || question.mode !== "single") return state;
-      const choice = question.choices[action.choice];
-      if (!choice) return state;
-      return updateDraft(state, action.question, (draft) => ({
-        ...draft,
-        answer: { kind: "choices", values: [choice.value] },
-      }));
-    }
-    case "toggle-many": {
-      const question = state.request.questions[action.question];
-      if (!question || question.mode !== "multiple") return state;
-      const choice = question.choices[action.choice];
-      if (!choice) return state;
-      return updateDraft(state, action.question, (draft) => {
-        const selected = new Set(draft.answer?.kind === "choices" ? draft.answer.values : []);
-        if (selected.has(choice.value)) selected.delete(choice.value);
-        else selected.add(choice.value);
-        const values = question.choices
-          .filter((candidate) => selected.has(candidate.value))
-          .map((candidate) => candidate.value);
-        if (values.length > 0) return { ...draft, answer: { kind: "choices", values } };
-        return draft.note ? { cursor: draft.cursor, note: draft.note } : { cursor: draft.cursor };
-      });
-    }
+    case "select-one":
+      return selectOne(state, action);
+    case "toggle-many":
+      return toggleMany(state, action);
     case "set-custom":
-    case "set-text": {
-      const question = state.request.questions[action.question];
-      const kind = action.type === "set-text" ? "text" : "custom";
-      if (!question || (question.mode === "text") !== (kind === "text")) return state;
-      const checked = validateQuestionnaireInput(action.text, kind);
-      if (checked.error !== undefined) return state;
-      return updateDraft(state, action.question, (draft) => ({
-        ...draft,
-        answer: { kind, text: checked.value },
-      }));
-    }
+    case "set-text":
+      return setAnswerText(state, action);
     case "set-note":
-      return updateDraft(state, action.question, (draft) => {
-        const note = action.note.trim();
-        if (note) return { ...draft, note };
-        return draft.answer
-          ? { cursor: draft.cursor, answer: draft.answer }
-          : { cursor: draft.cursor };
-      });
+      return setNote(state, action);
     case "set-review-cursor":
       return { ...state, reviewCursor: action.cursor };
   }

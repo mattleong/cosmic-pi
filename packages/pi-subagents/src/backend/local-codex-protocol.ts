@@ -410,3 +410,27 @@ export const turnInterruptRequest = (id: string, threadId: string, turnId: strin
     method: "turn/interrupt",
     params: { threadId, turnId },
   }) as const;
+
+const OUTCOME_CODES = new Map<CodexRequest["method"], string>([
+  ["turn/start", "start_outcome_uncertain"],
+  ["turn/steer", "guidance_outcome_uncertain"],
+  ["turn/interrupt", "interrupt_outcome_uncertain"],
+]);
+export const outcomeCode = (method: CodexRequest["method"]): string =>
+  OUTCOME_CODES.get(method) ?? `${method.replaceAll("/", "_")}_outcome_uncertain`;
+
+const EXECUTABLE_ITEM_TOOL_NAMES = new Map<string, string>([
+  ["commandExecution", "Bash"],
+  ["fileChange", "ApplyPatch"],
+  ["webSearch", "WebSearch"],
+]);
+
+export const executableToolName = (item: {
+  readonly type: string;
+  readonly server?: string | undefined;
+  readonly tool?: string | undefined;
+}): string | undefined => {
+  if (item.type === "mcpToolCall")
+    return `mcp:${item.server ?? "unknown"}/${item.tool ?? "unknown"}`;
+  return EXECUTABLE_ITEM_TOOL_NAMES.get(item.type);
+};

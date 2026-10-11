@@ -34,11 +34,12 @@ function settingsHarness(options: SettingsHarnessOptions = {}) {
   });
   const notify = vi.fn();
   const surface = fakeCustomSurfaceHost();
+  const surfaceUi = surface.ctx.ui;
   const ctx = extensionContextFixture({
     ...surface.ctx,
     cwd: "/tmp",
     signal: undefined,
-    ui: { custom: options.hostCustom ?? surface.ctx.ui.custom, notify },
+    ui: { custom: options.hostCustom ?? surfaceUi.custom.bind(surfaceUi), notify },
   });
   const host = recordingExtensionHost();
   const services = Layer.mergeAll(
@@ -206,8 +207,9 @@ describe("Better OpenAI settings controller", () => {
   it.effect("contains a throwing picker factory and a rejecting custom surface", () =>
     Effect.gen(function* () {
       const hostileTheme = failingTheme({ message: "host-theme-secret" });
+      const hostileUi = fakeCustomSurfaceHost({ theme: hostileTheme }).ctx.ui;
       for (const custom of [
-        fakeCustomSurfaceHost({ theme: hostileTheme }).ctx.ui.custom,
+        hostileUi.custom.bind(hostileUi),
         () => Promise.reject(new Error("host-custom-secret")),
       ]) {
         const h = settingsHarness({ hostCustom: custom });

@@ -503,7 +503,7 @@ describe("Cosmic UI extension", () => {
         });
         const second = Promise.all(
           (h.handlers.get("session_start") ?? []).map((handler) =>
-            handler({ type: "session_start", reason: "startup" }, secondContext),
+            Promise.resolve(handler({ type: "session_start", reason: "startup" }, secondContext)),
           ),
         );
         yield* Fiber.join(first);
@@ -1108,7 +1108,8 @@ describe("Cosmic UI extension", () => {
       const h = harness();
       yield* emit(h, "session_start");
       yield* emit(h, "session_shutdown");
-      const released = h.unsubscribed.mock.calls.map(([name]) => name).sort();
+      const byName = (left: string, right: string) => left.localeCompare(right);
+      const released = h.unsubscribed.mock.calls.map(([name]) => name).sort(byName);
       expect(released).toEqual(
         [
           COSMIC_UI_HOST_QUERY,
@@ -1117,7 +1118,7 @@ describe("Cosmic UI extension", () => {
           ACTIVITY_EVENT,
           ACTIVITY_DISCOVER,
           ACTIVITY_VIEW_DISCOVER,
-        ].sort(),
+        ].sort(byName),
       );
       yield* emit(h, "session_shutdown");
       expect(h.unsubscribed).toHaveBeenCalledTimes(released.length);

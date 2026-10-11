@@ -17,6 +17,7 @@ import {
   hostToolRow,
   withPresentationSettings,
 } from "../../testing";
+import { executeDescriptor } from "../support/tool-identity";
 
 beforeAll(() => initTheme("dark", false));
 const source: SourceInfo = {
@@ -122,7 +123,7 @@ for (const style of ["preview", "compact"] as const)
           const row = hostToolRow("owned", args, h.resolve(), { result });
           expect(row.render(160).join("\n")).not.toContain("OWNED_CALL");
           const wrapped = h.stage();
-          expect(wrapped.execute).toBe(h.tool.execute);
+          expect(executeDescriptor(wrapped)).toEqual(executeDescriptor(h.tool));
           h.replay.publish();
           h.replay.finishStartup();
           const frames = [true, false, true].map((expanded) => ({
@@ -227,7 +228,7 @@ it("an inert renderer registry still wraps normal definitions", () => {
   });
   const h = fixture();
   const wrapped = replay.shell(h.tool);
-  expect(wrapped.execute).toBe(h.tool.execute);
+  expect(executeDescriptor(wrapped)).toEqual(executeDescriptor(h.tool));
   replay.publish();
   replay.finishStartup();
   replay.retire();

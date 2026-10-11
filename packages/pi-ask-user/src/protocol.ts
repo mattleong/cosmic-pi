@@ -1,1 +1,17 @@
-export * from "./questionnaire/protocol.ts";
+export {
+  decodeQuestionnaireOutcome,
+  decodeQuestionnaireRequest,
+  queryQuestionnaireCapability,
+  queryQuestionnaireRelay,
+  QUESTIONNAIRE_CAPABILITY_QUERY,
+  QUESTIONNAIRE_RELAY_QUERY,
+  QuestionnaireOutcomeSchema,
+  QuestionnaireOwnerSchema,
+  QuestionnaireRequestSchema,
+  type AskUserOutcome,
+  type AskUserRequest,
+  type QuestionnaireCapability,
+  type QuestionnaireEvents,
+  type QuestionnaireOwner,
+  type QuestionnaireRelay,
+} from "./questionnaire/protocol.ts";

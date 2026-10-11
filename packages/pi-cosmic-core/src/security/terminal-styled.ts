@@ -81,6 +81,17 @@ const isSimpleSafeSgr = (code: number): boolean =>
   isBasicColor(code, 30) ||
   isBasicColor(code, 40);
 
+const extendedColorLength = (values: ReadonlyArray<number>, index: number): number | undefined => {
+  const mode = values[index + 1];
+  if (mode === 5) {
+    const color = values[index + 2];
+    return color === undefined || color > 255 ? undefined : 3;
+  }
+  if (mode !== 2) return undefined;
+  const colors = values.slice(index + 2, index + 5);
+  return colors.length !== 3 || colors.some((color) => color > 255) ? undefined : 5;
+};
+
 const parseSafeSgr = (parameters: string): ReadonlyArray<number> | undefined => {
   if (parameters.length > MAX_SAFE_SGR_PARAMETER_LENGTH || !SAFE_SGR_PARAMETERS.test(parameters))
     return undefined;
@@ -94,20 +105,9 @@ const parseSafeSgr = (parameters: string): ReadonlyArray<number> | undefined => 
       if (!isSimpleSafeSgr(code)) return undefined;
       continue;
     }
-    const mode = values[index + 1];
-    if (mode === 5) {
-      const color = values[index + 2];
-      if (color === undefined || color > 255) return undefined;
-      index += 2;
-      continue;
-    }
-    if (mode === 2) {
-      const colors = values.slice(index + 2, index + 5);
-      if (colors.length !== 3 || colors.some((color) => color > 255)) return undefined;
-      index += 4;
-      continue;
-    }
-    return undefined;
+    const length = extendedColorLength(values, index);
+    if (length === undefined) return undefined;
+    index += length - 1;
   }
   return values;
 };

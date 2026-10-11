@@ -254,8 +254,9 @@ for (const invalidation of ["context", "settings"] as const) {
       const boundary = vi
         .spyOn(subscriptionRefresh, "makeSubscriptionRefresh")
         .mockImplementation(observedRefresh);
-      const scheduler = {
-        ...paused.scheduler,
+      const scheduler: Scheduler.Scheduler = {
+        executionMode: paused.scheduler.executionMode,
+        makeDispatcher: () => paused.scheduler.makeDispatcher(),
         shouldYield: () => {
           if (!validated || stopped) return false;
           stopped = true;
@@ -355,21 +356,23 @@ it.effect("publication authority is checked adjacent to the actual host callback
     let checked = false;
     let revoked = false;
     const liveAtNotification: boolean[] = [];
-    let published: MutableRef.MutableRef<Projection> | undefined;
+    const published = MutableRef.make<MutableRef.MutableRef<Projection> | undefined>(undefined);
     const paused = pausedScheduler();
     const h = yield* fixture({
       ...fetching(Effect.succeed(42)),
       canPublish: () => {
-        if (published && MutableRef.get(published).snapshot === 42) checked = true;
+        const projection = MutableRef.get(published);
+        if (projection && MutableRef.get(projection).snapshot === 42) checked = true;
         return live;
       },
       onChange: () => {
         liveAtNotification.push(live);
       },
     });
-    published = h.projection;
-    const scheduler = {
-      ...paused.scheduler,
+    MutableRef.set(published, h.projection);
+    const scheduler: Scheduler.Scheduler = {
+      executionMode: paused.scheduler.executionMode,
+      makeDispatcher: () => paused.scheduler.makeDispatcher(),
       shouldYield: () => {
         if (!checked || revoked) return false;
         live = false;

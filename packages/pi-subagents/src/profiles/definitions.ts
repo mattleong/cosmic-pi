@@ -1,5 +1,6 @@
 import {
   mapProfileIds,
+  type ProfileCandidate,
   type ProfileDefinition,
   type ProfileId,
   type ProfileRoute,
@@ -75,21 +76,21 @@ export const PROFILE_DEFINITIONS = {
   },
 } satisfies Readonly<Record<ProfileId, ProfileDefinition>>;
 
-const builtinRoute = (id: ProfileId): ProfileRoute => {
+export const builtinProfileCandidate = (id: ProfileId): ProfileCandidate => {
   const definition = PROFILE_DEFINITIONS[id];
   return {
-    candidates: [
-      {
-        host: "local",
-        runtime: "pi",
-        model: "parent",
-        effort: "default",
-        context: definition.defaultContext,
-        writeIntent: definition.defaultWriteIntent,
-        closeOnReport: true,
-      },
-    ],
+    host: "local",
+    runtime: "pi",
+    model: "parent",
+    effort: "default",
+    context: definition.defaultContext,
+    writeIntent: definition.defaultWriteIntent,
+    closeOnReport: true,
   };
 };
+
+const builtinRoute = (id: ProfileId): ProfileRoute => ({
+  candidates: [builtinProfileCandidate(id)],
+});
 export const BUILTIN_PROFILE_ROUTES: Readonly<Record<ProfileId, ProfileRoute>> =
   mapProfileIds(builtinRoute);

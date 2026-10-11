@@ -146,7 +146,8 @@ export const runSupervisorTool = (
             ),
           ),
         );
-      default: {
+      case "progress":
+      case "warning": {
         const contact = CONTACTS[call.kind];
         yield* rpc[contact.rpc]({
           ...auth,

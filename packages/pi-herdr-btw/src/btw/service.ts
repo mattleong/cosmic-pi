@@ -41,7 +41,13 @@ const retainPaneFailure = (
 ): HerdrBtwError =>
   failure.paneId === paneId
     ? failure
-    : new HerdrBtwError({ ...failure, paneId, message: `${failure.message}; ${guidance}` });
+    : new HerdrBtwError({
+        operation: failure.operation,
+        code: failure.code,
+        outcome: failure.outcome,
+        paneId,
+        message: `${failure.message}; ${guidance}`,
+      });
 
 export interface HerdrBtwResult {
   readonly agentName: string;
@@ -279,7 +285,7 @@ const makeHerdrBtwService = (
       return { agentName: link.agentName, paneId: live.pane_id, mode: "focused" as const };
     });
 
-    const openInner = Effect.fn("HerdrBtwService.open")(function* (prompt?: string | undefined) {
+    const openInner = Effect.fn("HerdrBtwService.open")(function* (prompt?: string) {
       const { sessionFile, sessionId } = yield* validateBtwInput(prompt, input, probeSessionHeader);
       const restoration = linkStore.restore();
       if (restoration._tag === "malformed")
@@ -310,16 +316,14 @@ const makeHerdrBtwService = (
       return yield* launch({ mode: "resume", link }, prompt, sessionFile, sessionId);
     });
 
-    const openNewInner = Effect.fn("HerdrBtwService.openNew")(function* (
-      prompt?: string | undefined,
-    ) {
+    const openNewInner = Effect.fn("HerdrBtwService.openNew")(function* (prompt?: string) {
       const { sessionFile, sessionId } = yield* validateBtwInput(prompt, input, probeSessionHeader);
       return yield* openFreshCreate(prompt, sessionFile, sessionId);
     });
 
     return {
-      open: (prompt?: string | undefined) => gate.withPermit(openInner(prompt)),
-      openNew: (prompt?: string | undefined) => gate.withPermit(openNewInner(prompt)),
+      open: (prompt?: string) => gate.withPermit(openInner(prompt)),
+      openNew: (prompt?: string) => gate.withPermit(openNewInner(prompt)),
     };
   });
 

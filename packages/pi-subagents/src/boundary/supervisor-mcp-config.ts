@@ -10,7 +10,6 @@ import { boundedString } from "../supervisor/mcp-wire.ts";
 import { nodeFsConstants as constants, nodeFsPromises, nodePath } from "./node-builtins.ts";
 
 const { lstat, open } = nodeFsPromises;
-const { dirname, isAbsolute, resolve } = nodePath;
 
 export const configArgument = (argv: ReadonlyArray<string>): string | undefined => {
   const argument = argv[3];
@@ -18,11 +17,11 @@ export const configArgument = (argv: ReadonlyArray<string>): string | undefined 
     argv.length !== 4 ||
     argv[2] !== "--config" ||
     !boundedString(argument, 4096) ||
-    !isAbsolute(argument) ||
+    !nodePath.isAbsolute(argument) ||
     argument.includes("\0")
   )
     return undefined;
-  return resolve(argument);
+  return nodePath.resolve(argument);
 };
 
 class HelperConfigError extends Schema.TaggedError<HelperConfigError>()("HelperConfigError", {
@@ -40,7 +39,7 @@ export const readConfig = (
 ): Effect.Effect<SupervisorChannelConfig, HelperConfigError> =>
   Effect.gen(function* () {
     const directoryStat = yield* Effect.tryPromise({
-      try: () => lstat(dirname(path)),
+      try: () => lstat(nodePath.dirname(path)),
       catch: () => helperConfigError("unsafe-config-directory"),
     });
     if (

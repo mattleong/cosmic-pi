@@ -10,12 +10,7 @@ import {
   type PiManagedRuntime,
   type PiSessionRuntimeSlot,
 } from "../index.ts";
-import {
-  extensionApiFixture,
-  macrotask,
-  makeCapturedTracer,
-  makeLifecycleProbe,
-} from "../testing.ts";
+import { extensionApiFixture, makeCapturedTracer, makeLifecycleProbe } from "../testing.ts";
 
 const fakeRuntime = (
   run: PiManagedRuntime<never, never>["run"],
@@ -235,8 +230,12 @@ it.effect("ends captured command authority at the next lifecycle change, never r
 it.effect("rechecks ownership after reentrant activation teardown", () =>
   Effect.gen(function* () {
     let shutdown: Promise<void> | undefined;
-    let slot: PiSessionRuntimeSlot<void, never, never>;
-    slot = makePiSessionRuntimeSlot<void, never, never, never>({
+    const slot: PiSessionRuntimeSlot<void, never, never> = makePiSessionRuntimeSlot<
+      void,
+      never,
+      never,
+      never
+    >({
       makeRuntime: () => hostRuntime(Layer.empty),
       startup: () => Effect.void,
       onActivated: () => {
@@ -366,24 +365,24 @@ it.effect("shutdown interrupts a stalled startup once without activation or fail
   }),
 );
 
-it.effect("contains slot hooks that return rejected thenables", () =>
+it.effect("contains slot hooks that throw", () =>
   Effect.gen(function* () {
-    let unhandled = 0;
-    const record = () => void unhandled++;
-    process.on("unhandledRejection", record);
-    const rejected = () => Promise.reject(new Error("host hook rejected"));
+    let calls = 0;
+    const failing = (): never => {
+      calls += 1;
+      throw new Error("host hook failed");
+    };
     const slot = makePiSessionRuntimeSlot<void, never, never, never>({
       makeRuntime: () => hostRuntime(Layer.empty),
       startup: () => Effect.void,
-      onActivated: rejected,
-      onDeactivated: rejected,
+      onActivated: failing,
+      onDeactivated: failing,
     });
     yield* Effect.promise(() => slot.start(undefined));
     expect(slot.isActive()).toBe(true);
     yield* Effect.promise(() => slot.shutdown());
-    yield* macrotask;
-    process.off("unhandledRejection", record);
-    expect(unhandled).toBe(0);
+    expect(slot.isActive()).toBe(false);
+    expect(calls).toBe(2);
   }),
 );
 

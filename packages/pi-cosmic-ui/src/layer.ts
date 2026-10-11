@@ -37,7 +37,7 @@ export const makeCosmicUiApplicationLayer = (
       CosmicUiService.make({
         context,
         cwd,
-        exec: makePiExec(pi.exec),
+        exec: makePiExec((command, args, execOptions) => pi.exec(command, args, execOptions)),
         initialTotals,
         projection: options.projection,
         projectTrusted,

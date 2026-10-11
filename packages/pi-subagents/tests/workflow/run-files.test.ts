@@ -248,7 +248,11 @@ describe("a run's results journal", () => {
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(stopping);
       const lines = journalLines(runFiles, memoryRunPaths(resumed.id).journal);
-      expect(lines.map((line) => line["label"]).sort()).toEqual(["one", "two"]);
+      expect(
+        lines
+          .map((line) => line["label"])
+          .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+      ).toEqual(["one", "two"]);
       expect(lines.every((line) => line["reused"] === true)).toBe(true);
     });
   });

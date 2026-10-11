@@ -63,14 +63,9 @@ export const activitySectionId = (section: Section): string => `section:${sectio
 export const phaseRowId = (workflowKey: string, title: string): string =>
   `phase:${JSON.stringify([workflowKey, title])}`;
 
-interface Node {
+interface NodeState {
   readonly id: string;
   readonly title: string;
-  readonly type: GroupedActivityRow["type"];
-  readonly row?: ActivityRow;
-  readonly workflow?: ActivityRow;
-  readonly phase?: ActivityPhase;
-  readonly index?: number;
   readonly children: Node[];
   section: Section;
   parentId: string | undefined;
@@ -78,24 +73,26 @@ interface Node {
   total: GroupSummary;
   summary: GroupSummary;
   history: boolean;
-  state?: PhaseState;
 }
-const SECTIONS = [
-  ["workflows", "Workflows"],
-  ["subagents", "Subagents"],
-  ["tasks", "Tasks"],
-  ["attention", "Attention"],
-] as const;
+type SectionNode = NodeState & { readonly type: "section" };
+type RowNode = NodeState & { readonly type: "workflow" | "member"; readonly row: ActivityRow };
+type PhaseNode = NodeState & {
+  readonly type: "phase";
+  readonly workflow: ActivityRow;
+  readonly phase: ActivityPhase;
+  readonly index: number;
+};
+type Node = SectionNode | RowNode | PhaseNode;
+
 const ROOT_SECTIONS = {
   workflow: "workflows",
   agent: "subagents",
   command: "tasks",
   question: "attention",
 } as const satisfies Record<ActivityRow["kind"], Section>;
-const blankNode = (id: string, title: string, type: Node["type"]): Node => ({
+const blankNode = (id: string, title: string): NodeState => ({
   id,
   title,
-  type,
   children: [],
   section: "attention",
   parentId: undefined,
@@ -104,6 +101,25 @@ const blankNode = (id: string, title: string, type: Node["type"]): Node => ({
   summary: emptyGroupSummary,
   history: false,
 });
+const sectionNode = (section: Section, title: string): SectionNode => ({
+  ...blankNode(activitySectionId(section), title),
+  type: "section",
+  section,
+});
+const makeSections = () => {
+  const byName = {
+    workflows: sectionNode("workflows", "Workflows"),
+    subagents: sectionNode("subagents", "Subagents"),
+    tasks: sectionNode("tasks", "Tasks"),
+    attention: sectionNode("attention", "Attention"),
+  } satisfies Record<Section, SectionNode>;
+  return {
+    byName,
+    ordered: [byName.workflows, byName.subagents, byName.tasks, byName.attention],
+  };
+};
+const nodeRow = (node: Node): ActivityRow | undefined =>
+  node.type === "workflow" || node.type === "member" ? node.row : undefined;
 
 interface GroupedActivityTreeOptions {
   readonly collapsed?: ReadonlySet<string>;
@@ -113,12 +129,10 @@ interface GroupedActivityTreeOptions {
   readonly liveFailures?: number;
 }
 
-export function groupedActivityTree(
-  rows: readonly ActivityRow[],
-  options: GroupedActivityTreeOptions = {},
-): readonly GroupedActivityRow[] {
-  const byKey = new Map(rows.map((row) => [row.key, row]));
-  const { parents } = resolveActivityOwnership(byKey);
+const rowContext = (
+  byKey: ReadonlyMap<string, ActivityRow>,
+  parents: ReadonlyMap<string, string>,
+): ((row: ActivityRow) => readonly ActivityRow[]) => {
   const contexts = new Map<string, readonly ActivityRow[]>();
   const context = (row: ActivityRow): readonly ActivityRow[] => {
     const cached = contexts.get(row.key);
@@ -129,85 +143,121 @@ export function groupedActivityTree(
     contexts.set(row.key, value);
     return value;
   };
-  const sections: Node[] = SECTIONS.map(([section, title]) => ({
-    ...blankNode(activitySectionId(section), title, "section"),
-    section,
-  }));
-  const sectionNodes = new Map(sections.map((node) => [node.section, node]));
-  const nodes = new Map<string, Node>(sections.map((node) => [node.id, node]));
-  const phases = new Map<string, Map<string, Node>>();
+  return context;
+};
+
+const phaseNodes = (
+  row: ActivityRow,
+  node: RowNode,
+  nodes: Map<string, Node>,
+): Map<string, PhaseNode> => {
+  const byTitle = new Map<string, PhaseNode>();
+  row.phases?.forEach((phase, index) => {
+    if (byTitle.has(phase.title)) return;
+    const branch: PhaseNode = {
+      ...blankNode(phaseRowId(row.key, phase.title), phase.title),
+      type: "phase",
+      workflow: row,
+      phase,
+      index,
+      parentId: row.key,
+    };
+    byTitle.set(phase.title, branch);
+    nodes.set(branch.id, branch);
+    node.children.push(branch);
+  });
+  return byTitle;
+};
+
+function buildNodes(rows: readonly ActivityRow[], parents: ReadonlyMap<string, string>) {
+  const { byName, ordered } = makeSections();
+  const nodes = new Map<string, Node>(ordered.map((node) => [node.id, node]));
+  const phases = new Map<string, Map<string, PhaseNode>>();
   for (const row of rows) {
-    const node: Node = {
-      ...blankNode(row.key, row.title, row.kind === "workflow" ? "workflow" : "member"),
+    const node: RowNode = {
+      ...blankNode(row.key, row.title),
+      type: row.kind === "workflow" ? "workflow" : "member",
       row,
     };
     nodes.set(row.key, node);
-    if (row.kind !== "workflow") continue;
-    const byTitle = new Map<string, Node>();
-    row.phases?.forEach((phase, index) => {
-      if (byTitle.has(phase.title)) return;
-      const branch: Node = {
-        ...blankNode(phaseRowId(row.key, phase.title), phase.title, "phase"),
-        workflow: row,
-        phase,
-        index,
-        parentId: row.key,
-      };
-      byTitle.set(phase.title, branch);
-      nodes.set(branch.id, branch);
-      node.children.push(branch);
-    });
-    phases.set(row.key, byTitle);
+    if (row.kind === "workflow") phases.set(row.key, phaseNodes(row, node, nodes));
   }
   for (const row of rows) {
-    const node = nodes.get(row.key)!;
+    const node = nodes.get(row.key);
+    if (!node) continue;
     const parent = parents.get(row.key);
     const owner = parent ? nodes.get(parent) : undefined;
     const phase =
       owner?.type === "workflow" && row.phase !== undefined
         ? phases.get(owner.id)?.get(row.phase)
         : undefined;
-    const branch = phase ?? owner ?? sectionNodes.get(ROOT_SECTIONS[row.kind])!;
+    const branch = phase ?? owner ?? byName[ROOT_SECTIONS[row.kind]];
     node.parentId = branch.id;
     branch.children.push(node);
   }
+  return { sections: ordered, nodes };
+}
+
+const phaseNodeState = (node: PhaseNode): PhaseState => {
+  const { workflow } = node;
+  const current = workflow.phases?.findIndex((phase) => phase.title === workflow.phase);
+  return phaseState(
+    workflow,
+    node.index,
+    current === undefined || current < 0 ? undefined : current,
+    node.total,
+  );
+};
+
+const sumSummaries = (
+  nodes: readonly Node[],
+  pick: (node: Node) => GroupSummary,
+  own: GroupSummary,
+): GroupSummary => nodes.reduce((sum, child) => addGroupSummaries(sum, pick(child)), own);
+
+const nodeHistory = (node: Node, settled: boolean): boolean => {
+  if (node.type === "phase") return settled && phaseFinished(phaseNodeState(node));
+  return node.type !== "section" && settled;
+};
+
+function completeNode(node: Node, section: Section, hideHistory: boolean): void {
+  node.section = section;
+  for (const child of node.children) completeNode(child, section, hideHistory);
+  const row = nodeRow(node);
+  const own = row && row.kind !== "workflow" ? summarizeGroup([row]) : emptyGroupSummary;
+  node.visible = sumSummaries(node.children, (child) => child.visible, own);
+  node.total = withProducerCounts(
+    node,
+    sumSummaries(node.children, (child) => child.total, own),
+  );
+  node.summary =
+    hideHistory && node.type !== "workflow" && node.type !== "phase"
+      ? sumSummaries(
+          node.children.filter((child) => !child.history),
+          (child) => child.summary,
+          own,
+        )
+      : node.total;
+  const settled =
+    node.visible.terminal === node.visible.items &&
+    node.visible.awaited === 0 &&
+    (!row || (isFinished(row) && !row.awaited));
+  node.history = nodeHistory(node, settled);
+}
+
+export function groupedActivityTree(
+  rows: readonly ActivityRow[],
+  options: GroupedActivityTreeOptions = {},
+): readonly GroupedActivityRow[] {
+  const byKey = new Map(rows.map((row) => [row.key, row]));
+  const { parents } = resolveActivityOwnership(byKey);
+  const context = rowContext(byKey, parents);
+  const { sections, nodes } = buildNodes(rows, parents);
   const failures =
     options.hideHistory && options.liveFailures !== undefined
       ? liveFailures(nodes.values(), options.liveFailures)
       : { pinned: new Set<string>(), hidden: new Map<string, number>() };
-  const complete = (node: Node, section: Section): void => {
-    node.section = section;
-    for (const child of node.children) complete(child, section);
-    const row = node.row;
-    const own = row && row.kind !== "workflow" ? summarizeGroup([row]) : emptyGroupSummary;
-    node.visible = node.children.reduce((sum, child) => addGroupSummaries(sum, child.visible), own);
-    node.total = withProducerCounts(
-      node,
-      node.children.reduce((sum, child) => addGroupSummaries(sum, child.total), own),
-    );
-    node.summary =
-      options.hideHistory && node.type !== "workflow" && node.type !== "phase"
-        ? node.children
-            .filter((child) => !child.history)
-            .reduce((sum, child) => addGroupSummaries(sum, child.summary), own)
-        : node.total;
-    const settled =
-      node.visible.terminal === node.visible.items &&
-      node.visible.awaited === 0 &&
-      (!row || (isFinished(row) && !row.awaited));
-    if (node.type === "phase") {
-      const workflow = node.workflow!;
-      const current = workflow.phases?.findIndex((phase) => phase.title === workflow.phase);
-      node.state = phaseState(
-        workflow,
-        node.index!,
-        current === undefined || current < 0 ? undefined : current,
-        node.total,
-      );
-      node.history = settled && phaseFinished(node.state);
-    } else node.history = node.type !== "section" && settled;
-  };
-  for (const section of sections) complete(section, section.section);
+  for (const section of sections) completeNode(section, section.section, !!options.hideHistory);
   const pinned = (node: Node) => node.type === "phase" || failures.pinned.has(node.id);
   const visible = (node: Node) => !options.hideHistory || !node.history || pinned(node);
   const result: GroupedActivityRow[] = [];
@@ -242,7 +292,7 @@ export function groupedActivityTree(
     const rank = (child: Node) =>
       child.type === "phase"
         ? 0
-        : 1 + 2 * Number(child.row?.planned === true) + Number(child.history);
+        : 1 + 2 * Number(nodeRow(child)?.planned === true) + Number(child.history);
     const ordered = [...children].sort((left, right) => rank(left) - rank(right));
     ordered.forEach((child, index) =>
       visit(child, [...continuations, index < ordered.length - 1], base.breadcrumbs),
@@ -254,37 +304,36 @@ export function groupedActivityTree(
   return result;
 }
 
-const unphasedPlanned = (node: Node) => {
-  const visible = summarizeGroup(
-    node.children.flatMap((child) =>
-      child.type === "member" && activityPlanned(child.row!) ? [child.row!] : [],
-    ),
-  );
-  return { visible, declared: declaredPlanned(node.row!, node.row!.unphasedPlanned, visible) };
+const memberRows = (node: Node): ActivityRow[] =>
+  node.children.flatMap((child) => (child.type === "member" ? [child.row] : []));
+
+const unphasedPlanned = (node: RowNode) => {
+  const visible = summarizeGroup(memberRows(node).filter((row) => activityPlanned(row)));
+  return { visible, declared: declaredPlanned(node.row, node.row.unphasedPlanned, visible) };
 };
 
 function liveFailures(nodes: Iterable<Node>, limit: number) {
   const pinned = new Set<string>();
   const hidden = new Map<string, number>();
   for (const node of nodes) {
-    if (node.type !== "workflow" || isFinished(node.row!)) continue;
+    if (node.type !== "workflow" || isFinished(node.row)) continue;
     const failed = [node, ...node.children.filter((child) => child.type === "phase")]
       .flatMap((branch) => branch.children)
-      .filter((child) => child.type === "member" && child.row!.status === "failed")
-      .sort((left, right) => (right.row!.endedAt ?? 0) - (left.row!.endedAt ?? 0));
+      .flatMap((child) => (child.type === "member" && child.row.status === "failed" ? [child] : []))
+      .sort((left, right) => (right.row.endedAt ?? 0) - (left.row.endedAt ?? 0));
     for (const child of failed.slice(0, limit)) pinned.add(child.id);
-    for (const child of failed.slice(limit))
-      hidden.set(child.parentId!, (hidden.get(child.parentId!) ?? 0) + 1);
+    for (const { parentId } of failed.slice(limit))
+      if (parentId !== undefined) hidden.set(parentId, (hidden.get(parentId) ?? 0) + 1);
   }
   return { pinned, hidden };
 }
 
 function withProducerCounts(node: Node, total: GroupSummary): GroupSummary {
   if (node.type === "phase") {
-    const work = node.phase!.work;
+    const work = node.phase.work;
     return {
       ...total,
-      ...declaredPlanned(node.workflow!, node.phase!.planned, total),
+      ...declaredPlanned(node.workflow, node.phase.planned, total),
       ...(work && {
         items: work.items,
         terminal: work.finished,
@@ -316,14 +365,14 @@ const groupedEntry = (
     return {
       ...base,
       type: "phase",
-      workflow: node.workflow!,
-      phase: node.phase!,
-      index: node.index!,
-      state: node.state!,
-      members: node.children.flatMap((child) => (child.type === "member" ? [child.row!] : [])),
+      workflow: node.workflow,
+      phase: node.phase,
+      index: node.index,
+      state: phaseNodeState(node),
+      members: memberRows(node),
       hiddenFailures,
     };
-  const row = node.row!;
+  const row = node.row;
   if (node.type === "member") return { ...base, type: "member", row, context: context(row) };
   return {
     ...base,
@@ -331,7 +380,7 @@ const groupedEntry = (
     row,
     context: context(row),
     phaseCounts: countPhases(
-      node.children.flatMap((child) => (child.type === "phase" ? [child.state!] : [])),
+      node.children.flatMap((child) => (child.type === "phase" ? [phaseNodeState(child)] : [])),
     ),
     unphased: unphasedPlanned(node).declared,
     hiddenFailures,

@@ -52,7 +52,6 @@ const decodeConnectionConfig = Schema.decodeUnknownSync(
 );
 
 const { mkdir, readFile, readdir, stat, symlink, writeFile } = nodeFsPromises;
-const { join } = nodePath;
 
 const children: ChildProcessWithoutNullStreams[] = [];
 const scopes: Scope.Closeable[] = [];
@@ -102,7 +101,7 @@ const stageAgentHome = (prefix: string) =>
       const directory = yield* Scope.make();
       directories.push(directory);
       const root = yield* Scope.provide(directory)(temporaryDirectory(prefix));
-      const agentDirectory = join(root, "agent-home");
+      const agentDirectory = nodePath.join(root, "agent-home");
       yield* step(() => mkdir(agentDirectory, { mode: 0o700 }));
       const scope = yield* Scope.make();
       scopes.push(scope);
@@ -126,9 +125,11 @@ const openChannel = (
   resultContract?: ResultContract,
 ): Promise<OpenTestChannel> =>
   stageAgentHome("pi-subagents-supervisor-").then(({ root, agentDirectory, scope }) => {
-    const projectDirectory = join(root, "project");
+    const projectDirectory = nodePath.join(root, "project");
     return mkdir(projectDirectory, { mode: 0o700 })
-      .then(() => writeFile(join(projectDirectory, "marker.txt"), "project-only\n", "utf8"))
+      .then(() =>
+        writeFile(nodePath.join(projectDirectory, "marker.txt"), "project-only\n", "utf8"),
+      )
       .then(() =>
         Effect.runPromise(openIn(scope, { agentDirectory, ...options }, runId, resultContract)),
       )
@@ -155,7 +156,10 @@ class RpcClient {
         this.#buffer = this.#buffer.slice(newline + 1);
         const value = decodeJsonLine(line);
         this.messages.push(value);
-        if (value && hasObjectRuntimeType(value) && "id" in value) {
+        if (
+          Predicate.isObject(value) &&
+          (Predicate.isString(value.id) || Predicate.isNumber(value.id))
+        ) {
           const key = `${runtimeTypeName(value.id)}:${String(value.id)}`;
           const resolve = this.#pending.get(key);
           if (resolve) {
@@ -395,7 +399,7 @@ describe("private supervisor channel", () => {
       );
 
       if (process.platform !== "win32") {
-        const linkedAgentDirectory = join(root, "linked-agent-home");
+        const linkedAgentDirectory = nodePath.join(root, "linked-agent-home");
         yield* step(() => symlink(agentDirectory, linkedAgentDirectory, "dir"));
         yield* step(() =>
           expect(
@@ -572,7 +576,7 @@ describe("private supervisor channel", () => {
 
   liveTest("fails scope release when private state cleanup cannot be confirmed", function* () {
     const opened = yield* step(() => openChannel("agent-supervisor-close-failure"));
-    const obstruction = join(opened.handle.metadata.stateDirectory, "unexpected-entry");
+    const obstruction = nodePath.join(opened.handle.metadata.stateDirectory, "unexpected-entry");
     yield* step(() => writeFile(obstruction, "retain cleanup failure\n", "utf8"));
     yield* step(() =>
       expect(Effect.runPromise(Scope.close(opened.scope, Exit.void))).rejects.toMatchObject({

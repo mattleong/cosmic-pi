@@ -10,10 +10,7 @@ import {
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { hasCustomSurface, openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
-import {
-  makeAdaptiveHostRefreshTicker,
-  type AdaptiveHostRefreshTicker,
-} from "../boundary/host-refresh-ticker.ts";
+import { makeAdaptiveHostRefreshTicker } from "../boundary/host-refresh-ticker.ts";
 import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
@@ -110,7 +107,6 @@ function openFleetManager(
     placement: "screen",
     create: ({ tui, theme, keybindings, getHeight, finish }) => {
       let unsubscribe = () => {};
-      let refreshTicker: AdaptiveHostRefreshTicker | undefined;
       const manager = new SubagentFleetComponent({
         theme,
         getProjection: bridge.get,
@@ -120,7 +116,7 @@ function openFleetManager(
         requestRender: () => tui.requestRender(),
         close: () => finish(undefined),
         onDispose: () => {
-          refreshTicker?.dispose();
+          refreshTicker.dispose();
           unsubscribe();
         },
         actions: {
@@ -134,16 +130,16 @@ function openFleetManager(
           rename: actions.rename,
         },
       });
-      unsubscribe = bridge.subscribe(() => {
-        manager.invalidate();
-        refreshTicker?.sync();
-        tui.requestRender();
-      });
-      refreshTicker = makeAdaptiveHostRefreshTicker({
+      const refreshTicker = makeAdaptiveHostRefreshTicker({
         getCadence: () =>
           subagentUiRefreshCadence(bridge.get().runs, { includeTerminalAges: true }),
         startTicker: startHostUiTicker,
         requestRender: () => tui.requestRender(),
+      });
+      unsubscribe = bridge.subscribe(() => {
+        manager.invalidate();
+        refreshTicker.sync();
+        tui.requestRender();
       });
       return manager;
     },

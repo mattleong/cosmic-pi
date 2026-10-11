@@ -5,7 +5,7 @@ import { STEERING_DELIVERY_STATES } from "../../src/run/model.ts";
 import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
-} from "../../src/tools/details-schema.ts";
+} from "../../src/tools/details-decode.ts";
 import { actionFailureDisposition, marksSubagentToolError } from "../../src/tools/outcome.ts";
 import { containedWriter } from "../fixtures/run-view.ts";
 import { view } from "./fixtures/tool-harness.ts";

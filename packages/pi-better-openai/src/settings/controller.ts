@@ -37,17 +37,17 @@ import { OpenAIUsageService } from "../usage/controller.ts";
 export function registerSettingsController(
   command: ExtensionCommand,
   options: {
-    config(): ResolvedConfig | undefined;
-    updateContext(ctx: ExtensionContext): void;
-    updateFooter(ctx: ExtensionContext): void;
-    formatDebugStatus(ctx: ExtensionContext): string;
-    fastProjection: MutableRef.MutableRef<FastSnapshot>;
-    resetFastRoutingTransport(ctx: ExtensionContext): void;
-    captureAuthority: () => () => boolean;
-    run<A, E>(
+    readonly config: () => ResolvedConfig | undefined;
+    readonly updateContext: (ctx: ExtensionContext) => void;
+    readonly updateFooter: (ctx: ExtensionContext) => void;
+    readonly formatDebugStatus: (ctx: ExtensionContext) => string;
+    readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
+    readonly resetFastRoutingTransport: (ctx: ExtensionContext) => void;
+    readonly captureAuthority: () => () => boolean;
+    readonly run: <A, E>(
       effect: Effect.Effect<A, E, OpenAIUsageService | FastModeService>,
       signal?: AbortSignal,
-    ): Promise<A>;
+    ) => Promise<A>;
   },
 ): void {
   const {

@@ -159,17 +159,36 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
         response: { subtype: "success", request_id: outbound.request_id },
       });
     };
-    const offerScenarioFrames = (outbound: ClaudeUserFrame) => {
-      if (scenario === "forwarded-user")
-        offerChild({
-          type: "user",
-          uuid: "forwarded-user-uuid",
-          parent_tool_use_id: "native-agent-tool-use",
-          isSynthetic: true,
-          origin: { kind: "unclassified" },
-          session_id: "claude-replay-session",
-          message: { role: "user", content: "Forwarded native-agent text." },
-        });
+    const queuedNotificationScenarios: ReadonlyArray<ReplayScenario> = [
+      "queued-task-notification",
+      "queued-task-notification-duplicate",
+      "queued-task-notification-cross-session",
+      "tagged-task-notification-nonreplay",
+      "tagged-task-notification-channel",
+    ];
+    const offerQueuedNotification = () => {
+      if (!queuedNotificationScenarios.includes(scenario)) return;
+      const notification: ClaudeInboundFrame = {
+        type: "user",
+        uuid: "claude-queued-notification-uuid",
+        ...(scenario !== "tagged-task-notification-nonreplay" && { isReplay: true }),
+        session_id:
+          scenario === "queued-task-notification-cross-session"
+            ? "different-claude-session"
+            : "claude-replay-session",
+        ...(scenario === "tagged-task-notification-channel" && {
+          origin: { kind: "channel" },
+        }),
+        message: {
+          role: "user",
+          content:
+            "<task-notification><task-id>native-task</task-id><status>completed</status><summary>Native task completed.</summary></task-notification>",
+        },
+      };
+      offerChild(notification);
+      if (scenario === "queued-task-notification-duplicate") offerChild(notification);
+    };
+    const offerNotificationFrames = () => {
       if (scenario === "uuidless-task-notification") {
         offerChild({
           type: "user",
@@ -204,6 +223,19 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           session_id: "claude-replay-session",
           message: { role: "user", content: "Untrusted task-shaped input." },
         });
+      offerQueuedNotification();
+    };
+    const offerReplayFrames = (outbound: ClaudeUserFrame) => {
+      if (scenario === "forwarded-user")
+        offerChild({
+          type: "user",
+          uuid: "forwarded-user-uuid",
+          parent_tool_use_id: "native-agent-tool-use",
+          isSynthetic: true,
+          origin: { kind: "unclassified" },
+          session_id: "claude-replay-session",
+          message: { role: "user", content: "Forwarded native-agent text." },
+        });
       if (scenario === "accepted-report-foreign-replay" && acceptedReport)
         Queue.offerUnsafe(supervisorEvents, { type: "report", ...acceptedReport });
       if (scenario === "foreign-replay" || scenario === "accepted-report-foreign-replay")
@@ -214,33 +246,6 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           session_id: "claude-replay-session",
           message: { role: "user", content: "Foreign injected input." },
         });
-      if (
-        scenario === "queued-task-notification" ||
-        scenario === "queued-task-notification-duplicate" ||
-        scenario === "queued-task-notification-cross-session" ||
-        scenario === "tagged-task-notification-nonreplay" ||
-        scenario === "tagged-task-notification-channel"
-      ) {
-        const notification: ClaudeInboundFrame = {
-          type: "user",
-          uuid: "claude-queued-notification-uuid",
-          ...(scenario !== "tagged-task-notification-nonreplay" && { isReplay: true }),
-          session_id:
-            scenario === "queued-task-notification-cross-session"
-              ? "different-claude-session"
-              : "claude-replay-session",
-          ...(scenario === "tagged-task-notification-channel" && {
-            origin: { kind: "channel" },
-          }),
-          message: {
-            role: "user",
-            content:
-              "<task-notification><task-id>native-task</task-id><status>completed</status><summary>Native task completed.</summary></task-notification>",
-          },
-        };
-        offerChild(notification);
-        if (scenario === "queued-task-notification-duplicate") offerChild(notification);
-      }
       if (scenario === "same-content-foreign-replay")
         offerChild({
           type: "user",
@@ -257,6 +262,10 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           session_id: "different-claude-session",
           message: outbound.message,
         });
+    };
+    const offerScenarioFrames = (outbound: ClaudeUserFrame) => {
+      offerReplayFrames(outbound);
+      offerNotificationFrames();
     };
     const offerTurnResult = (outbound: ClaudeUserFrame) => {
       const result: ClaudeInboundFrame = {

@@ -95,15 +95,16 @@ function allocateWidgetRows(
     return { entries: rows.slice(0, budget), narrators: new Set(), failureOverflow: new Map() };
   const selected = new Set(roots.slice(0, budget).map((row) => row.id));
   const share = (branches: readonly (readonly WidgetSlot[])[]) => {
-    const offsets = branches.map(() => 0);
+    const cursors = branches.map((slots) => ({ slots, offset: 0 }));
     while (selected.size < budget) {
       let changed = false;
-      for (let index = 0; index < branches.length && selected.size < budget; index++) {
-        const row = branches[index]![offsets[index]!];
+      for (const cursor of cursors) {
+        if (selected.size >= budget) break;
+        const row = cursor.slots[cursor.offset];
         if (!row) continue;
         if (row.parentId && !selected.has(row.parentId)) continue;
         selected.add(row.id);
-        offsets[index]!++;
+        cursor.offset++;
         changed = true;
       }
       if (!changed) break;
@@ -192,37 +193,39 @@ export function activityWidgetSections(
     if (entry.type === "phase") return [{ ...entry, expanded: false, hiddenFailures: 0 }];
     return [{ ...entry, expanded: false }];
   });
-  const sections = tree.filter((entry) => entry.type === "section");
-  const candidates = sections.map((section) =>
-    tree.filter((entry) => entry.type !== "section" && entry.section === section.section),
-  );
-  const available = sections.map((section) =>
-    all.filter((entry) => entry.type !== "section" && entry.section === section.section),
-  );
-  const capacity = candidates.map((entries) => entries.length + extraLines(entries));
-  const total = available.map((entries) => entries.length + extraLines(entries));
-  const allocated = sections.map(() => 0);
+  const inSection = (heading: GroupedActivityRow) => (entry: GroupedActivityRow) =>
+    entry.type !== "section" && entry.section === heading.section;
+  const slots = tree
+    .filter((entry) => entry.type === "section")
+    .map((heading) => {
+      const candidates = tree.filter(inSection(heading));
+      const offered = all.filter(inSection(heading));
+      return {
+        heading,
+        candidates,
+        offered,
+        capacity: candidates.length + extraLines(candidates),
+        total: offered.length + extraLines(offered),
+        allocated: 0,
+      };
+    });
   const budget = Math.max(0, maxRows - Number(needsYou(rows).length > 0));
-  let used = available.filter((entries) => entries.length > 0).length;
+  let used = slots.filter((slot) => slot.offered.length > 0).length;
   while (true) {
     let changed = false;
-    for (let index = 0; index < sections.length; index++) {
-      const next = allocated[index]! + 1;
-      if (next > capacity[index]!) continue;
-      const cost = next === total[index]! ? 0 : 1;
+    for (const slot of slots) {
+      const next = slot.allocated + 1;
+      if (next > slot.capacity) continue;
+      const cost = next === slot.total ? 0 : 1;
       if (used + cost > budget) continue;
-      allocated[index] = next;
+      slot.allocated = next;
       used += cost;
       changed = true;
     }
     if (!changed) break;
   }
-  return sections.map((heading, index) => {
-    const { entries, narrators, failureOverflow } = allocateWidgetRows(
-      candidates[index]!,
-      allocated[index]!,
-    );
-    const offered = available[index]!;
+  return slots.map(({ heading, candidates, offered, allocated }) => {
+    const { entries, narrators, failureOverflow } = allocateWidgetRows(candidates, allocated);
     const hiddenFailures =
       sum(failureSlots(offered).map((slot) => slot.count)) - sum([...failureOverflow.values()]);
     return {

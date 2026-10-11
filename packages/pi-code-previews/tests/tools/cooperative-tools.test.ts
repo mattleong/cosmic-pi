@@ -19,6 +19,7 @@ import type { CodePreviewSettings } from "../../src/config/schema";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { plainTheme as theme, renderComponent, textResult } from "../support/render";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
+import { executeDescriptor } from "../support/tool-identity";
 
 const compactProvider = () => ({ subject: "compact-subject", outcome: "success" as const });
 const previewShellOptions = { name: "read", compactSummary: () => undefined };
@@ -119,7 +120,7 @@ test("cooperative wrapper keeps self shells by identity unless override is reque
   });
   assert.notEqual(overridden, selfShell);
   assert.equal(overridden.renderShell, "default");
-  assert.equal(overridden.execute, selfShell.execute);
+  assert.deepEqual(executeDescriptor(overridden), executeDescriptor(selfShell));
 });
 
 test("cooperative wrapper captures mode and shell modes match on, off, and border", () => {
@@ -282,10 +283,10 @@ test("compact style is captured and wraps self shells without changing execution
   const self = { ...base, renderShell: "self" as const };
   const wrappedSelf = withCodePreviewShell(self, { compactSummary: compactProvider });
   assert.notEqual(wrappedSelf, self);
-  assert.equal(wrappedSelf.execute, self.execute);
+  assert.deepEqual(executeDescriptor(wrappedSelf), executeDescriptor(self));
   assert.equal(preview.renderShell, "default");
   assert.equal(compact.renderShell, "self");
-  assert.equal(compact.execute, base.execute);
+  assert.deepEqual(executeDescriptor(compact), executeDescriptor(base));
   assert.equal(compact.parameters, base.parameters);
   settings({ toolCallCollapsedStyle: "preview" });
   const context = renderContextFixture({ args: { path: "file" } });
@@ -375,7 +376,7 @@ test("a display name heads compact rows without changing the registered tool nam
     compactSummary: compactProvider,
   });
   assert.equal(tool.name, "registered_model_name");
-  assert.equal(tool.execute, base.execute);
+  assert.deepEqual(executeDescriptor(tool), executeDescriptor(base));
   const h = createToolPresentationHarness(tool);
   h.call({ path: "file" });
   h.result(textResult("done"));
@@ -427,7 +428,7 @@ test("fallback rendering preserves expanded input and attachments without taking
               assert.equal(text.includes("unchanged-by-rendering"), false);
             }
             assert.equal(JSON.stringify(value), before);
-            assert.equal(tool.execute, source.execute);
+            assert.deepEqual(executeDescriptor(tool), executeDescriptor(source));
           }
         }
       }

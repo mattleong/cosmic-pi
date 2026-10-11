@@ -15,6 +15,48 @@ interface SettingsCompletionChoice {
   readonly description: string;
 }
 
+const nonEmpty = (matches: SettingsCompletionChoice[]): SettingsCompletionChoice[] | null =>
+  matches.length > 0 ? matches : null;
+
+const completeSettingIds = (
+  head: string,
+  descriptors: ReadonlyArray<SettingsCompletionDescriptor>,
+  extras: ReadonlyArray<SettingsCompletionChoice>,
+  scopes: ReadonlyArray<SettingsCompletionChoice>,
+): SettingsCompletionChoice[] | null => {
+  const query = head.toLowerCase();
+  const choices = [
+    ...descriptors.map((descriptor) => ({
+      value: descriptor.id,
+      label: descriptor.id,
+      description: descriptor.description,
+    })),
+    ...scopes,
+    ...extras,
+  ];
+  return nonEmpty(choices.filter((choice) => choice.value.toLowerCase().startsWith(query)));
+};
+
+const completeSettingValues = (
+  head: string,
+  valuePrefix: string,
+  descriptors: ReadonlyArray<SettingsCompletionDescriptor>,
+): SettingsCompletionChoice[] | null => {
+  const headId = head.toLowerCase();
+  const descriptor = descriptors.find((entry) => entry.id.toLowerCase() === headId);
+  if (!descriptor) return null;
+  const query = valuePrefix.toLowerCase();
+  return nonEmpty(
+    (descriptor.values ?? [])
+      .filter((value) => value.toLowerCase().startsWith(query))
+      .map((value) => ({
+        value: `${descriptor.id} ${value}`,
+        label: `${descriptor.id} ${value}`,
+        description: descriptor.description,
+      })),
+  );
+};
+
 export const completeSettingsArguments = (
   prefix: string,
   descriptors: ReadonlyArray<SettingsCompletionDescriptor>,
@@ -35,32 +77,9 @@ export const completeSettingsArguments = (
     );
   }
   const [head = "", ...rest] = normalized.split(/\s+/);
-  if (rest.length === 0 && !/\s$/.test(normalized)) {
-    const query = head.toLowerCase();
-    const choices = [
-      ...descriptors.map((descriptor) => ({
-        value: descriptor.id,
-        label: descriptor.id,
-        description: descriptor.description,
-      })),
-      ...scopes,
-      ...extras,
-    ];
-    const matches = choices.filter((choice) => choice.value.toLowerCase().startsWith(query));
-    return matches.length > 0 ? matches : null;
-  }
-  const headId = head.toLowerCase();
-  const descriptor = descriptors.find((entry) => entry.id.toLowerCase() === headId);
-  if (!descriptor) return null;
-  const valuePrefix = (rest[0] ?? "").toLowerCase();
-  const matches = (descriptor.values ?? [])
-    .filter((value) => value.toLowerCase().startsWith(valuePrefix))
-    .map((value) => ({
-      value: `${descriptor.id} ${value}`,
-      label: `${descriptor.id} ${value}`,
-      description: descriptor.description,
-    }));
-  return matches.length > 0 ? matches : null;
+  return rest.length === 0 && !/\s$/.test(normalized)
+    ? completeSettingIds(head, descriptors, extras, scopes)
+    : completeSettingValues(head, rest[0] ?? "", descriptors);
 };
 
 export const sectionSettingValue =

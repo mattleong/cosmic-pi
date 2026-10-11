@@ -15,7 +15,7 @@ import {
   SUBAGENT_TOOL_NAMES,
   type SubagentToolName,
 } from "../run/tool-policy.ts";
-import { decodeStartAwaitCardDetails } from "./details-schema.ts";
+import { decodeStartAwaitCardDetails } from "./details-decode.ts";
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
 import { hasReturnedFailureEvidence } from "./outcome.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";

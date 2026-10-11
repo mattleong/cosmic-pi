@@ -337,33 +337,35 @@ describe("subagent compact semantic policy", () => {
     ).toBeUndefined();
   });
 
+  const expectAcceptedCount = (action: "send" | "reply", accepted: number) => {
+    const runs = Array.from({ length: accepted }, (_, index) =>
+      view({ id: `accepted-${index}`, state: "running" }),
+    );
+    const details = makeCompactToolDetails({
+      action,
+      runs,
+      actionFailures: [{ id: "missing", code: "run_not_found", message: "Run not found" }],
+    });
+    const summary = summarize(action, details);
+    const receipt = summary?.counters?.join(" ");
+    const word = action === "send" ? "sent" : "replied";
+    if (accepted > 0) expect(receipt).toContain(`${accepted} ${word}`);
+    else expect(receipt).not.toContain(word);
+    expect(receipt).toContain("1 failed");
+    expect(summary?.outcome).toBe("error");
+    expect(
+      summary?.issues?.some(
+        (issue) => issue.severity === "error" && issue.detail?.includes("missing"),
+      ),
+    ).toBe(true);
+    const live = summarize(action, details, "running");
+    expect(live?.counters?.join(" ")).not.toMatch(/sent|replied/);
+  };
+
   it.each(["send", "reply"] as const)(
     "counts only accepted %s operations and retains failures",
     (action) => {
-      for (const accepted of [0, 1, 2]) {
-        const runs = Array.from({ length: accepted }, (_, index) =>
-          view({ id: `accepted-${index}`, state: "running" }),
-        );
-        const details = makeCompactToolDetails({
-          action,
-          runs,
-          actionFailures: [{ id: "missing", code: "run_not_found", message: "Run not found" }],
-        });
-        const summary = summarize(action, details);
-        const receipt = summary?.counters?.join(" ");
-        const word = action === "send" ? "sent" : "replied";
-        if (accepted > 0) expect(receipt).toContain(`${accepted} ${word}`);
-        else expect(receipt).not.toContain(word);
-        expect(receipt).toContain("1 failed");
-        expect(summary?.outcome).toBe("error");
-        expect(
-          summary?.issues?.some(
-            (issue) => issue.severity === "error" && issue.detail?.includes("missing"),
-          ),
-        ).toBe(true);
-        const live = summarize(action, details, "running");
-        expect(live?.counters?.join(" ")).not.toMatch(/sent|replied/);
-      }
+      for (const accepted of [0, 1, 2]) expectAcceptedCount(action, accepted);
       const success = summarize(action, makeCompactToolDetails({ action, runs: [view()] }));
       expect(success?.outcome).toBe("success");
       const bounded = summarize(action, {
@@ -380,42 +382,54 @@ describe("subagent compact semantic policy", () => {
     },
   );
 
+  const unconfirmedCounter = (action: "send" | "reply", confirmed: number) =>
+    confirmed ? `1 ${action === "send" ? "sent" : "replied"}, 1 unconfirmed` : "1 unconfirmed";
+
+  const expectMixedFailuresError = (
+    action: "send" | "reply" | "resume" | "stop",
+    tool: "send" | "reply" | "lifecycle",
+    code: string,
+  ) => {
+    const mixed = makeCompactToolDetails({
+      action,
+      runs: [],
+      actionFailures: [
+        { id: "uncertain", code, message: "Native evidence" },
+        { id: "definite", code: "not_running", message: "Worker is not running" },
+      ],
+    });
+    const errors = summarize(tool, mixed, "settled", { action }, true);
+    expect(errors?.outcome).toBe("error");
+    expect(compactIssueSeverity(errors?.issues)).toBe("error");
+  };
+
+  const expectUncertainFailure = (
+    action: "send" | "reply" | "resume" | "stop",
+    code: string,
+    confirmed: number,
+  ) => {
+    const projected = makeCompactToolDetails({
+      action,
+      runs: confirmed ? [view({ id: "confirmed" })] : [],
+      actionFailures: [{ id: "uncertain", code, message: "Native evidence. Do not resend." }],
+    });
+    const tool = action === "resume" || action === "stop" ? "lifecycle" : action;
+    const summary = summarize(tool, projected, "settled", { action }, true);
+    expect(summary?.outcome).toBe("uncertain");
+    expect(compactIssueSeverity(summary?.issues)).toBe("warning");
+    expect(details(summary?.issues)).toContain(code);
+    expect(details(summary?.issues)).toContain("Do not resend");
+    expect(messages(summary?.issues)).not.toContain("Do not resend");
+    if (action === "send" || action === "reply")
+      expect(summary?.counters?.join(" ")).toContain(unconfirmedCounter(action, confirmed));
+    expectMixedFailuresError(action, tool, code);
+  };
+
   it.each(["send", "reply", "resume", "stop"] as const)(
     "keeps uncertain %s failures distinct from definite errors, even with Pi isError",
     (action) => {
-      for (const code of ["claude_steering_outcome_uncertain", "stop_cleanup_unconfirmed"]) {
-        for (const confirmed of [0, 1]) {
-          const projected = makeCompactToolDetails({
-            action,
-            runs: confirmed ? [view({ id: "confirmed" })] : [],
-            actionFailures: [{ id: "uncertain", code, message: "Native evidence. Do not resend." }],
-          });
-          const tool = action === "resume" || action === "stop" ? "lifecycle" : action;
-          const summary = summarize(tool, projected, "settled", { action }, true);
-          expect(summary?.outcome).toBe("uncertain");
-          expect(compactIssueSeverity(summary?.issues)).toBe("warning");
-          expect(details(summary?.issues)).toContain(code);
-          expect(details(summary?.issues)).toContain("Do not resend");
-          expect(messages(summary?.issues)).not.toContain("Do not resend");
-          if (action === "send" || action === "reply")
-            expect(summary?.counters?.join(" ")).toContain(
-              confirmed
-                ? `1 ${action === "send" ? "sent" : "replied"}, 1 unconfirmed`
-                : "1 unconfirmed",
-            );
-          const mixed = makeCompactToolDetails({
-            action,
-            runs: [],
-            actionFailures: [
-              { id: "uncertain", code, message: "Native evidence" },
-              { id: "definite", code: "not_running", message: "Worker is not running" },
-            ],
-          });
-          const errors = summarize(tool, mixed, "settled", { action }, true);
-          expect(errors?.outcome).toBe("error");
-          expect(compactIssueSeverity(errors?.issues)).toBe("error");
-        }
-      }
+      for (const code of ["claude_steering_outcome_uncertain", "stop_cleanup_unconfirmed"])
+        for (const confirmed of [0, 1]) expectUncertainFailure(action, code, confirmed);
     },
   );
 
@@ -769,7 +783,7 @@ describe("subagent compact semantic policy", () => {
     expect(details(summary?.issues)).toContain("subagent_status");
   });
 
-  it("preserves workspace pagination, orphan recovery and exact test gates", () => {
+  it("preserves workspace pagination and exact test gates", () => {
     const summary = workspace("review", {
       workspaceId: "w",
       revisionId: "r",
@@ -795,6 +809,9 @@ describe("subagent compact semantic policy", () => {
       "preparationId",
     ])
       expect(text).toContain(required);
+  });
+
+  it("keeps orphan recovery, the prepared cwd and revise successors in expanded detail", () => {
     const list = workspace("list", { workspaceCount: 10, listedCount: 8, nextOffset: 8 });
     expect(details(list?.issues)).toContain("Do not auto-adopt or delete an orphan");
     expect(
@@ -1028,18 +1045,20 @@ describe("subagent compact semantic policy", () => {
     expect(clean?.issues).toEqual([]);
     expect(clean?.counters?.[0]).toContain("1 statically eligible");
     expect(clean?.counters?.[0]).toContain("1 disabled");
-    for (const unavailable of [
-      { ...profile, candidates: [{ ...candidate, status: "skipped" }] },
-      { ...profile, source: "global-invalid", candidates: [] },
-      { ...profile, source: "project-invalid" },
-    ]) {
+    const expectUnavailable = (unavailable: typeof profile) => {
       const summary = discovery([unavailable]);
       expect(summary?.outcome).toBe("warning");
       expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["warning"]);
       expect(summary?.counters?.join(" ")).toContain("1 unavailable");
       expect(summary?.counters?.join(" ")).toContain("0 statically eligible");
       expect(summary?.counters?.join(" ")).not.toContain("1 eligible");
-    }
+    };
+    for (const unavailable of [
+      { ...profile, candidates: [{ ...candidate, status: "skipped" }] },
+      { ...profile, source: "global-invalid", candidates: [] },
+      { ...profile, source: "project-invalid" },
+    ])
+      expectUnavailable(unavailable);
     expect(discovery([{ ...profile, candidates: [] }])?.counters).toEqual([
       "0 statically eligible, 1 disabled profile",
     ]);

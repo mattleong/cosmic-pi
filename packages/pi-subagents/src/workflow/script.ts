@@ -5,6 +5,7 @@ import {
   type Literal,
   type Node,
   type ObjectExpression,
+  type Program,
   type Property,
   type UnaryExpression,
 } from "acorn";
@@ -163,7 +164,24 @@ function objectLiteral(node: ObjectExpression): Evaluated {
   return Object.fromEntries(entries);
 }
 
+const LITERAL_EXPRESSION_TYPES = [
+  "Literal",
+  "TemplateLiteral",
+  "UnaryExpression",
+  "ArrayExpression",
+  "ObjectExpression",
+] as const;
+
+type LiteralExpression = Extract<
+  Expression,
+  { readonly type: (typeof LITERAL_EXPRESSION_TYPES)[number] }
+>;
+
+const isLiteralExpression = (node: Expression): node is LiteralExpression =>
+  LITERAL_EXPRESSION_TYPES.some((type) => type === node.type);
+
 function literalValue(node: Expression): Evaluated {
+  if (!isLiteralExpression(node)) return NOT_LITERAL;
   switch (node.type) {
     case "Literal":
       return scalarLiteral(node);
@@ -177,8 +195,6 @@ function literalValue(node: Expression): Evaluated {
       return arrayLiteral(node);
     case "ObjectExpression":
       return objectLiteral(node);
-    default:
-      return NOT_LITERAL;
   }
 }
 
@@ -222,6 +238,22 @@ const syntaxError = (
   });
 };
 
+const metaInitializer = (first: Program["body"][number] | undefined) => {
+  const declaration =
+    first?.type === "ExportNamedDeclaration" && first.declaration?.type === "VariableDeclaration"
+      ? first.declaration
+      : undefined;
+  const declarator = declaration?.kind === "const" ? declaration.declarations[0] : undefined;
+  if (
+    !declarator ||
+    declaration?.declarations.length !== 1 ||
+    declarator.id.type !== "Identifier" ||
+    declarator.id.name !== "meta"
+  )
+    return undefined;
+  return declarator.init ?? undefined;
+};
+
 export const parseWorkflowScript = (
   source: string,
 ): Effect.Effect<WorkflowScript, WorkflowScriptError> =>
@@ -247,26 +279,15 @@ export const parseWorkflowScript = (
         ),
     });
     const [first, ...rest] = program.body;
-    const declaration =
-      first?.type === "ExportNamedDeclaration" && first.declaration?.type === "VariableDeclaration"
-        ? first.declaration
-        : undefined;
-    const declarator = declaration?.kind === "const" ? declaration.declarations[0] : undefined;
-    if (
-      !first ||
-      !declarator ||
-      declaration?.declarations.length !== 1 ||
-      declarator.id.type !== "Identifier" ||
-      declarator.id.name !== "meta" ||
-      !declarator.init
-    )
+    const metaInit = metaInitializer(first);
+    if (!first || !metaInit)
       return yield* new WorkflowScriptError({ message: META_DECLARATION_REQUIRED });
     if (rest.some(isModuleDeclaration))
       return yield* new WorkflowScriptError({
         message:
           "Only `export const meta` is allowed; workflow scripts can't import or export anything else.",
       });
-    const raw = literalValue(declarator.init);
+    const raw = literalValue(metaInit);
     if (raw === NOT_LITERAL)
       return yield* new WorkflowScriptError({
         message:

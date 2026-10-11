@@ -127,6 +127,26 @@ function knownHelper(
   );
 }
 
+function constructorParameters(declaration: ESTree.Class): readonly ESTree.ParamPattern[] {
+  for (const member of declaration.body.body) {
+    if (member.type === "MethodDefinition" && member.kind === "constructor")
+      return member.value.params;
+  }
+  return [];
+}
+
+function variableParameters(
+  declaration: ESTree.VariableDeclaration,
+  name: string,
+): { readonly params: readonly ESTree.ParamPattern[] | null } | null {
+  for (const declarator of declaration.declarations) {
+    if (declarator.id.type !== "Identifier" || declarator.id.name !== name) continue;
+    const init = declarator.init === null ? null : unwrapExpression(declarator.init);
+    return { params: init !== null && isRuntimeFunction(init) ? init.params : null };
+  }
+  return null;
+}
+
 function declaredParameters(
   program: ESTree.Program,
   name: string,
@@ -137,19 +157,11 @@ function declaredParameters(
     if (declaration === null) continue;
     if (declaration.type === "FunctionDeclaration" && declaration.id?.name === name)
       return declaration.params;
-    if (declaration.type === "ClassDeclaration" && declaration.id?.name === name) {
-      for (const member of declaration.body.body) {
-        if (member.type === "MethodDefinition" && member.kind === "constructor")
-          return member.value.params;
-      }
-      return [];
-    }
+    if (declaration.type === "ClassDeclaration" && declaration.id?.name === name)
+      return constructorParameters(declaration);
     if (declaration.type !== "VariableDeclaration") continue;
-    for (const declarator of declaration.declarations) {
-      if (declarator.id.type !== "Identifier" || declarator.id.name !== name) continue;
-      const init = declarator.init === null ? null : unwrapExpression(declarator.init);
-      return init !== null && isRuntimeFunction(init) ? init.params : null;
-    }
+    const declared = variableParameters(declaration, name);
+    if (declared !== null) return declared.params;
   }
   return null;
 }

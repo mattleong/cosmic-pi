@@ -4,7 +4,7 @@ import { notifyHerdrBtw } from "../boundary/host-notifier.ts";
 import { HerdrBtwError } from "./errors.ts";
 import { HERDR_BTW_COMMAND, HERDR_BTW_NEW_SUBCOMMAND, type HerdrBtwResult } from "./service.ts";
 
-type SideSessionRun = (prompt?: string | undefined) => Promise<HerdrBtwResult>;
+type SideSessionRun = (prompt?: string) => Promise<HerdrBtwResult>;
 
 const SUCCESS_MESSAGES = {
   focused: "Switched to your BTW side session",

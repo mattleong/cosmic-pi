@@ -78,49 +78,56 @@ const inspect = (name: string) => {
   }
 };
 
-const capturedMatches = (
-  backupName: string,
-  before: NonNullable<PublicationWireRequest["before"]>,
-) => {
-  const stat = fs.lstatSync(backupName);
-  let matches = false;
-  if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1) {
-    const file = fs.openSync(
-      backupName,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    try {
-      const opened = fs.fstatSync(file);
-      if (
-        opened.isFile() &&
-        opened.nlink === 1 &&
-        opened.dev === stat.dev &&
-        opened.ino === stat.ino &&
-        opened.size === Buffer.from(before.bytes, "base64").length
-      ) {
-        const bytes = Buffer.alloc(opened.size);
-        let offset = 0;
-        while (offset < bytes.length) {
-          const count = fs.readSync(file, bytes, offset, bytes.length - offset, offset);
-          if (count === 0) break;
-          offset += count;
-        }
-        const final = fs.fstatSync(file);
-        matches =
-          offset === bytes.length &&
-          final.size === opened.size &&
-          bytes.equals(Buffer.from(before.bytes, "base64")) &&
-          (final.mode & 0o7777) === before.mode &&
-          final.nlink === 1 &&
-          final.mtimeMs === opened.mtimeMs &&
-          final.ctimeMs === opened.ctimeMs;
-        fs.fsyncSync(file);
-      }
-    } finally {
-      fs.closeSync(file);
-    }
+type PublicationImage = NonNullable<PublicationWireRequest["before"]>;
+type FileStat = ReturnType<typeof fs.fstatSync>;
+
+const readFully = (file: number, size: number) => {
+  const bytes = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < bytes.length) {
+    const count = fs.readSync(file, bytes, offset, bytes.length - offset, offset);
+    if (count === 0) break;
+    offset += count;
   }
-  return { stat, matches };
+  return { bytes, offset };
+};
+
+const openedCaptureMatches = (file: number, stat: FileStat, before: PublicationImage) => {
+  const opened = fs.fstatSync(file);
+  if (
+    !opened.isFile() ||
+    opened.nlink !== 1 ||
+    opened.dev !== stat.dev ||
+    opened.ino !== stat.ino ||
+    opened.size !== Buffer.from(before.bytes, "base64").length
+  )
+    return false;
+  const { bytes, offset } = readFully(file, opened.size);
+  const final = fs.fstatSync(file);
+  const matches =
+    offset === bytes.length &&
+    final.size === opened.size &&
+    bytes.equals(Buffer.from(before.bytes, "base64")) &&
+    (final.mode & 0o7777) === before.mode &&
+    final.nlink === 1 &&
+    final.mtimeMs === opened.mtimeMs &&
+    final.ctimeMs === opened.ctimeMs;
+  fs.fsyncSync(file);
+  return matches;
+};
+
+const capturedMatches = (backupName: string, before: PublicationImage) => {
+  const stat = fs.lstatSync(backupName);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) return { stat, matches: false };
+  const file = fs.openSync(
+    backupName,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    return { stat, matches: openedCaptureMatches(file, stat, before) };
+  } finally {
+    fs.closeSync(file);
+  }
 };
 
 const anchorMatches = (r: Anchor) => {
@@ -144,6 +151,41 @@ const eligibleTarget = (r: PublicationWireRequest) => {
 };
 const artifactsExist = (r: PublicationWireRequest) =>
   Boolean(inspect(r.backupName) || inspect(r.temporaryName));
+const writeTemporary = (name: string, after: PublicationImage) => {
+  const temporary = fs.openSync(name, "wx", 0o600);
+  try {
+    fs.writeFileSync(temporary, Buffer.from(after.bytes, "base64"));
+    fs.fchmodSync(temporary, after.mode);
+    fs.fsyncSync(temporary);
+  } finally {
+    fs.closeSync(temporary);
+  }
+};
+const restoreUnmatchedCapture = (r: PublicationWireRequest, stat: FileStat) => {
+  if (stat.isFile() && !stat.isSymbolicLink()) {
+    try {
+      fs.linkSync(r.backupName, r.name);
+    } catch {}
+  }
+  syncDirectory();
+};
+const installPublished = (r: PublicationWireRequest): "published" | "destination-exists" => {
+  if (r.after !== undefined) {
+    try {
+      fs.linkSync(r.temporaryName, r.name);
+      fs.unlinkSync(r.temporaryName);
+    } catch (error) {
+      syncDirectory();
+      if (exists(error)) return "destination-exists";
+      throw error;
+    }
+  } else if (inspect(r.name)) {
+    syncDirectory();
+    return "destination-exists";
+  }
+  syncDirectory();
+  return "published";
+};
 
 export const executePublication = (
   r: PublicationWireRequest,
@@ -165,16 +207,7 @@ export const executePublication = (
         hooks?.anchored?.();
         if (!eligibleTarget(r)) return result("conflict", "target-changed");
         if (artifactsExist(r)) return result("conflict", "destination-exists");
-        if (r.after !== undefined) {
-          const temporary = fs.openSync(r.temporaryName, "wx", 0o600);
-          try {
-            fs.writeFileSync(temporary, Buffer.from(r.after.bytes, "base64"));
-            fs.fchmodSync(temporary, r.after.mode);
-            fs.fsyncSync(temporary);
-          } finally {
-            fs.closeSync(temporary);
-          }
-        }
+        if (r.after !== undefined) writeTemporary(r.temporaryName, r.after);
         if (r.before !== undefined) {
           const reservation = fs.openSync(r.backupName, "wx", 0o600);
           fs.closeSync(reservation);
@@ -183,31 +216,14 @@ export const executePublication = (
           syncDirectory();
           const { stat, matches } = capturedMatches(r.backupName, r.before);
           if (!matches) {
-            if (stat.isFile() && !stat.isSymbolicLink()) {
-              try {
-                fs.linkSync(r.backupName, r.name);
-              } catch {}
-            }
-            syncDirectory();
+            restoreUnmatchedCapture(r, stat);
             return result("conflict", "target-changed");
           }
           hooks?.captured?.();
         }
-        if (r.after !== undefined) {
-          try {
-            fs.linkSync(r.temporaryName, r.name);
-            fs.unlinkSync(r.temporaryName);
-          } catch (error) {
-            syncDirectory();
-            if (exists(error)) return result("conflict", "destination-exists");
-            throw error;
-          }
-        } else if (inspect(r.name)) {
-          syncDirectory();
-          return result("conflict", "destination-exists");
-        }
-        syncDirectory();
-        return result("success", "published");
+        return installPublished(r) === "published"
+          ? result("success", "published")
+          : result("conflict", "destination-exists");
       } catch {
         return result("uncertain", "io-failure");
       }

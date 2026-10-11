@@ -43,15 +43,17 @@ it.effect.each([undefined, "0", "true"])(
         const { default: extension } = yield* Effect.tryPromise(
           () => import("../src/extension.ts"),
         );
+        const on = vi.fn();
+        const registerCommand = vi.fn();
         const pi = extensionApiFixture({
-          on: vi.fn(),
-          registerCommand: vi.fn(),
+          on,
+          registerCommand,
           registerMessageRenderer: vi.fn(),
         });
         yield* Effect.tryPromise(() => Promise.resolve(extension(pi)));
-        expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
-        expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
-        expect(pi.registerCommand).toHaveBeenCalledWith(
+        expect(on).toHaveBeenCalledWith("session_start", expect.any(Function));
+        expect(on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
+        expect(registerCommand).toHaveBeenCalledWith(
           "subagents",
           expect.objectContaining({ handler: expect.any(Function) }),
         );

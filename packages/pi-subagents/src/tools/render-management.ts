@@ -45,6 +45,42 @@ const PROFILE_SOURCE_LABELS = {
   builtin: "built-in",
 } as const satisfies Record<SubagentProfileRouteCard["source"], string>;
 
+const profileRouteSummary = (profile: SubagentProfileRouteCard, theme: Theme): string => {
+  const eligible = profile.candidates.filter((candidate) => candidate.status === "eligible").length;
+  const invalid = profile.source.endsWith("-invalid");
+  const color = invalid || eligible === 0 ? "warning" : "success";
+  const firstCandidate = profile.candidates[0];
+  const first = firstCandidate ? formattedCandidateRoute(firstCandidate) : undefined;
+  return theme.fg(
+    color,
+    `• ${profile.id}${profile.isDefault ? " · fallback" : ""} · ${PROFILE_SOURCE_LABELS[profile.source]} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
+  );
+};
+
+const profileRouteLines = (
+  profile: SubagentProfileRouteCard,
+  expanded: boolean,
+  theme: Theme,
+): string[] => {
+  const summary = profileRouteSummary(profile, theme);
+  if (!expanded) return [summary];
+  return [
+    summary,
+    theme.fg("dim", `  ${profile.description}`),
+    theme.fg(
+      "dim",
+      `  Defaults · ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${profile.defaultEffort ?? "inherit effort"}`,
+    ),
+    ...profile.candidates.flatMap((candidate, index) => [
+      theme.fg(
+        candidate.status === "eligible" ? "success" : "warning",
+        `  ${candidate.status === "eligible" ? "✓" : "–"} ${index + 1}. ${formattedCandidateRoute(candidate)}`,
+      ),
+      theme.fg("dim", `     ${candidate.reason}`),
+    ]),
+  ];
+};
+
 export const renderProfileRoutesComponent = (
   details: ModelsToolDetails,
   expanded: boolean,
@@ -64,38 +100,7 @@ export const renderProfileRoutesComponent = (
         ];
     if (contentOnly && details.fallbackProfile)
       lines.push(theme.fg("dim", `Fallback profile: ${details.fallbackProfile}`));
-    for (const profile of profiles) {
-      const eligible = profile.candidates.filter(
-        (candidate) => candidate.status === "eligible",
-      ).length;
-      const invalid = profile.source.endsWith("-invalid");
-      const color = invalid || eligible === 0 ? "warning" : "success";
-      const firstCandidate = profile.candidates[0];
-      const first = firstCandidate ? formattedCandidateRoute(firstCandidate) : undefined;
-      lines.push(
-        theme.fg(
-          color,
-          `• ${profile.id}${profile.isDefault ? " · fallback" : ""} · ${PROFILE_SOURCE_LABELS[profile.source]} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
-        ),
-      );
-      if (!expanded) continue;
-      lines.push(theme.fg("dim", `  ${profile.description}`));
-      lines.push(
-        theme.fg(
-          "dim",
-          `  Defaults · ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${profile.defaultEffort ?? "inherit effort"}`,
-        ),
-      );
-      for (const [index, candidate] of profile.candidates.entries()) {
-        lines.push(
-          theme.fg(
-            candidate.status === "eligible" ? "success" : "warning",
-            `  ${candidate.status === "eligible" ? "✓" : "–"} ${index + 1}. ${formattedCandidateRoute(candidate)}`,
-          ),
-        );
-        lines.push(theme.fg("dim", `     ${candidate.reason}`));
-      }
-    }
+    for (const profile of profiles) lines.push(...profileRouteLines(profile, expanded, theme));
     if (profiles.length === 0)
       lines.push(theme.fg("muted", "No profile route details were persisted."));
     if (details.contentOmitted && !contentOnly)
@@ -139,7 +144,8 @@ const primaryCount = (details: RunToolDetails, count: number): string => {
       return `${countLabel(count, "retry", "retries")} started`;
     case "claims":
       return countLabel(count, "subagent");
-    default:
+    case "resume":
+    case "stop":
       return `${count} updated`;
   }
 };

@@ -5,8 +5,6 @@ import { homedir } from "node:os";
 import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
-const { isAbsolute, join, resolve } = nodePath;
-
 const MAX_AUTH_BYTES = 64 * 1024;
 const MAX_PATH_CHARS = 4_096;
 
@@ -37,19 +35,22 @@ export const writeExclusive = (path: string, source: string): Promise<void> => {
       handle
         .writeFile(source, { encoding: "utf8" })
         .then(() => handle.sync())
-        .finally(() => handle.close()),
+        .then(
+          () => handle.close(),
+          (error) => handle.close().then(() => Promise.reject(error)),
+        ),
     )
     .then(() => fs.chmod(path, 0o600));
 };
 
 export const safeAgentDirectory = (agentDirectory: string): Promise<string> => {
   if (
-    !isAbsolute(agentDirectory) ||
+    !nodePath.isAbsolute(agentDirectory) ||
     agentDirectory.length > MAX_PATH_CHARS ||
     hasControlCharacter(agentDirectory)
   )
     return Promise.reject(new Error("invalid-agent-directory"));
-  const requested = resolve(agentDirectory);
+  const requested = nodePath.resolve(agentDirectory);
   return fs
     .lstat(requested)
     .then((requestedStat) => {
@@ -90,7 +91,7 @@ const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): boolean => 
 };
 
 const readValidatedCodexAuthFromHome = (sourceHome: string): Promise<string | undefined> => {
-  const path = join(sourceHome, "auth.json");
+  const path = nodePath.join(sourceHome, "auth.json");
   return fs
     .lstat(path)
     .then((stat) =>
@@ -115,5 +116,5 @@ export const readValidatedCodexAuth = (
   sourceEnvironment: NodeJS.ProcessEnv,
 ): Promise<string | undefined> =>
   safeAgentDirectory(
-    sourceEnvironment.CODEX_HOME ?? join(sourceEnvironment.HOME || homedir(), ".codex"),
+    sourceEnvironment.CODEX_HOME ?? nodePath.join(sourceEnvironment.HOME || homedir(), ".codex"),
   ).then(readValidatedCodexAuthFromHome, () => undefined);

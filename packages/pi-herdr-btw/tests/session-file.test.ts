@@ -23,17 +23,18 @@ const {
   writeFileSync,
 } = nodeFs;
 const { tmpdir } = nodeOs;
-const { join, sep } = nodePath;
+const pathApi = nodePath;
+const { sep } = nodePath;
 
 const PARENT_FILE = "/sessions/parent.jsonl";
 const FIRST_TIMESTAMP = "2026-08-26T01:02:03.004Z";
 const SECOND_TIMESTAMP = "2026-08-26T02:00:00.000Z";
 
-const dir = mkdtempSync(join(tmpdir(), "pi-herdr-btw-session-"));
+const dir = mkdtempSync(pathApi.join(tmpdir(), "pi-herdr-btw-session-"));
 afterAll(() => rmSync(dir, { force: true, recursive: true }));
 
 const writeSession = (name: string, firstLine: string, rest = ""): string => {
-  const path = join(dir, name);
+  const path = pathApi.join(dir, name);
   writeFileSync(path, `${firstLine}\n${rest}`);
   return path;
 };
@@ -69,11 +70,11 @@ describe("session-file validation", () => {
   });
 
   it("rejects missing files, directories, and symlinks", () => {
-    const missing = join(dir, "missing.jsonl");
-    const nested = join(dir, "a-directory");
+    const missing = pathApi.join(dir, "missing.jsonl");
+    const nested = pathApi.join(dir, "a-directory");
     mkdirSync(nested);
     const target = writeHeader("symlink-target.jsonl", "linked-id");
-    const link = join(dir, "link.jsonl");
+    const link = pathApi.join(dir, "link.jsonl");
     symlinkSync(target, link);
 
     for (const path of [missing, nested, link]) {
@@ -96,7 +97,7 @@ describe("session-file validation", () => {
   });
 
   it("rejects an unbounded first line instead of reading it fully", () => {
-    const path = join(dir, "huge.jsonl");
+    const path = pathApi.join(dir, "huge.jsonl");
     writeFileSync(path, `{"type":"session","id":"huge","pad":"${"x".repeat(300 * 1024)}"}\n`);
     expect(probeSessionHeader(path)).toEqual({ _tag: "invalid" });
   });
@@ -112,7 +113,7 @@ describe("session-file identity", () => {
   it("matches normalized lexical aliases and descriptor-identical hardlinks", () => {
     const original = writeHeader("identity-original.jsonl", "identity");
     const lexicalAlias = `${dir}${sep}.${sep}identity-original.jsonl`;
-    const hardlink = join(dir, "identity-hardlink.jsonl");
+    const hardlink = pathApi.join(dir, "identity-hardlink.jsonl");
     linkSync(original, hardlink);
 
     expect(compareSessionFileIdentity(original, lexicalAlias)).toBe("same");
@@ -128,9 +129,9 @@ describe("session-file identity", () => {
 
   it("treats symlinks, missing files, and invalid paths as unavailable", () => {
     const target = writeHeader("identity-target.jsonl", "target");
-    const symlink = join(dir, "identity-symlink.jsonl");
+    const symlink = pathApi.join(dir, "identity-symlink.jsonl");
     symlinkSync(target, symlink);
-    const missing = join(dir, "identity-missing.jsonl");
+    const missing = pathApi.join(dir, "identity-missing.jsonl");
 
     for (const unavailable of [symlink, missing, "relative.jsonl", `${dir}/bad\npath`]) {
       expect(compareSessionFileIdentity(target, unavailable)).toBe("unavailable");
@@ -177,7 +178,7 @@ describe("createBlankChildSessionFile", () => {
       expect(
         yield* createBlankChildSessionFile({
           ...input,
-          sessionDir: join(dir, "missing-directory"),
+          sessionDir: pathApi.join(dir, "missing-directory"),
         }),
       ).toEqual({ _tag: "invalid" });
       for (const sessionId of ["x/../escape", "a".repeat(129)])

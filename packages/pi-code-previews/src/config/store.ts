@@ -57,7 +57,7 @@ export function loadCodePreviewSettings(
   const settle = () => {
     if (inFlightLoads.get(key) === load) inFlightLoads.delete(key);
   };
-  load.then(settle, settle);
+  void load.then(settle, settle);
   return load.then(cloneCodePreviewSettings);
 }
 

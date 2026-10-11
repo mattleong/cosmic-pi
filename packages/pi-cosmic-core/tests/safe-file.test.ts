@@ -13,17 +13,16 @@ import {
   temporaryDirectory,
 } from "../testing.ts";
 
-const { mkdir, realpath, symlink, writeFile } = nodeFsPromises;
-const { join } = nodePath;
+const fs = nodeFsPromises;
 const fixtureRoot = temporaryDirectory("cosmic-safe-file-").pipe(
-  Effect.flatMap((directory) => Effect.promise(() => realpath(directory))),
+  Effect.flatMap((directory) => Effect.promise(() => fs.realpath(directory))),
 );
 
 const openedFile = (content = "safe") =>
   Effect.gen(function* () {
     const root = yield* fixtureRoot;
-    const file = join(root, "input.txt");
-    yield* Effect.promise(() => writeFile(file, content));
+    const file = nodePath.join(root, "input.txt");
+    yield* Effect.promise(() => fs.writeFile(file, content));
     const handle = yield* Effect.acquireRelease(
       Effect.promise(() => nodeFsPromises.open(file, "r")),
       (handle) => Effect.promise(() => handle.close()),
@@ -67,15 +66,15 @@ for (const change of ["growth", "shrink", "growth after EOF", "read failure"])
             if (!firstRead) return undefined;
             firstRead = false;
             if (change === "read failure") throw new Error(`Sensitive failure: ${file}`);
-            if (change === "growth") return writeFile(file, "safe but now oversized");
-            if (change === "shrink") return writeFile(file, "sa");
+            if (change === "growth") return fs.writeFile(file, "safe but now oversized");
+            if (change === "shrink") return fs.writeFile(file, "sa");
             return undefined;
           })
           .then(() => read(options))
           .then((result) => {
             transferred += result.bytesRead;
             return change === "growth after EOF" && result.bytesRead === 0
-              ? writeFile(file, "safe but now oversized").then(() => result)
+              ? fs.writeFile(file, "safe but now oversized").then(() => result)
               : result;
           }),
       );
@@ -114,8 +113,8 @@ it.live("reads a stable file and captures a path-free resource span", () => {
   const captured = makeCapturedTracer();
   return Effect.gen(function* () {
     const root = yield* fixtureRoot;
-    const file = join(root, "input.txt");
-    yield* Effect.promise(() => writeFile(file, "safe"));
+    const file = nodePath.join(root, "input.txt");
+    yield* Effect.promise(() => fs.writeFile(file, "safe"));
     const safeFile = yield* SafeFile;
     const result = yield* safeFile.readContainedRegularFile(file, root, 32);
     expect(new TextDecoder().decode(result.bytes)).toBe("safe");
@@ -134,8 +133,8 @@ it.live("reads a stable file and captures a path-free resource span", () => {
 it.live("fails safely when the file exceeds the configured limit", () =>
   Effect.gen(function* () {
     const root = yield* fixtureRoot;
-    const file = join(root, "large.txt");
-    yield* Effect.promise(() => writeFile(file, "too large"));
+    const file = nodePath.join(root, "large.txt");
+    yield* Effect.promise(() => fs.writeFile(file, "too large"));
     const safeFile = yield* SafeFile;
     const result = yield* Effect.result(safeFile.readContainedRegularFile(file, root, 2));
     expect(result._tag).toBe("Failure");
@@ -146,16 +145,16 @@ it.live("fails safely when the file exceeds the configured limit", () =>
 it.live("rejects symlinked roots, leaf symlinks, and files outside the containment root", () =>
   Effect.gen(function* () {
     const root = yield* fixtureRoot;
-    const workspace = join(root, "workspace");
-    const outside = join(root, "outside.txt");
-    const file = join(workspace, "input.txt");
-    const leafLink = join(workspace, "leaf-link.txt");
-    const rootLink = join(root, "workspace-link");
-    yield* Effect.promise(() => mkdir(workspace));
-    yield* Effect.promise(() => writeFile(file, "safe"));
-    yield* Effect.promise(() => writeFile(outside, "outside"));
-    yield* Effect.promise(() => symlink(file, leafLink));
-    yield* Effect.promise(() => symlink(workspace, rootLink, "dir"));
+    const workspace = nodePath.join(root, "workspace");
+    const outside = nodePath.join(root, "outside.txt");
+    const file = nodePath.join(workspace, "input.txt");
+    const leafLink = nodePath.join(workspace, "leaf-link.txt");
+    const rootLink = nodePath.join(root, "workspace-link");
+    yield* Effect.promise(() => fs.mkdir(workspace));
+    yield* Effect.promise(() => fs.writeFile(file, "safe"));
+    yield* Effect.promise(() => fs.writeFile(outside, "outside"));
+    yield* Effect.promise(() => fs.symlink(file, leafLink));
+    yield* Effect.promise(() => fs.symlink(workspace, rootLink, "dir"));
     const safeFile = yield* SafeFile;
 
     for (const attempt of [

@@ -119,10 +119,11 @@ export function readLogBuffer(
   state: BackgroundTaskState,
   options: { readonly afterCursor?: number; readonly tailLines?: number },
 ): BackgroundLogSlice {
+  const afterCursor = options.afterCursor;
   const filtered =
-    options.afterCursor === undefined
+    afterCursor === undefined
       ? tailEvents(buffer.events, options.tailLines ?? 200)
-      : buffer.events.filter((event) => event.cursor > options.afterCursor!);
+      : buffer.events.filter((event) => event.cursor > afterCursor);
   return Object.freeze({
     id,
     events: Object.freeze(filtered),

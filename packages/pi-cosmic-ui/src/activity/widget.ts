@@ -119,6 +119,63 @@ const hiddenFailuresLine = (
   return theme?.fg("warning", line) ?? line;
 };
 
+const overflowLine = (
+  sections: readonly ActivityWidgetSection[],
+  width: number,
+  style: (text: string) => string,
+): string => {
+  const total = sections
+    .map(({ heading }) => heading.summary)
+    .reduce(addGroupSummaries, emptyGroupSummary);
+  const sum = (count: (section: ActivityWidgetSection) => number) =>
+    sections.reduce((total, section) => total + count(section), 0);
+  const shown = (matches: (entry: GroupedActivityRow) => boolean) =>
+    sum((section) => section.entries.filter(matches).length);
+  const hidden = (type: GroupedActivityRow["type"]) => shown((entry) => entry.type === type);
+  const shownPlanned = shown(isPlannedEntry);
+  const countedFailures = sum((section) =>
+    [...section.failureOverflow.values()].reduce((total, count) => total + count, 0),
+  );
+  return style(
+    widgetGroupLine(
+      total,
+      width,
+      omissionLabels({
+        hiddenSources:
+          sum((section) => section.hiddenSources) +
+          hidden("member") -
+          shownPlanned +
+          countedFailures,
+        hiddenPhases: sum((section) => section.hiddenPhases) + hidden("phase"),
+        hiddenWorkflows: sum((section) => section.hiddenWorkflows) + hidden("workflow"),
+        hiddenPlanned: sum((section) => section.hiddenPlanned) + shownPlanned,
+      }),
+    ),
+  );
+};
+
+const sectionLines = (
+  section: ActivityWidgetSection,
+  width: number,
+  options: WidgetOptions,
+  style: (text: string) => string,
+): string[] => {
+  const lines: string[] = [];
+  for (const [index, entry] of section.entries.entries()) {
+    if (entry.type === "member") lines.push(groupedMemberLine(entry, width, options, "widget"));
+    else if (entry.type === "workflow" || entry.type === "phase")
+      lines.push(workflowRowLine(entry, width, options));
+    const continues = section.entries[index + 1]?.parentId === entry.id;
+    const narrator = section.narrators.has(entry.id) ? workflowNarrator(entry) : undefined;
+    if (narrator !== undefined) lines.push(narratorLine(narrator, width, continues, options.theme));
+    const failures = section.failureOverflow.get(entry.id);
+    if (failures) lines.push(hiddenFailuresLine(entry, failures, width, continues, options.theme));
+  }
+  if (section.omittedRows)
+    lines.push(style(widgetGroupLine(section.heading.summary, width, omissionLabels(section))));
+  return lines;
+};
+
 export function renderActivityWidget(
   rows: readonly ActivityRow[],
   width: number,
@@ -130,61 +187,17 @@ export function renderActivityWidget(
   const urgent = needsYou(rows);
   const style = (text: string) => options.theme?.fg("muted", text) ?? text;
   const lines: string[] = [];
-  if (urgent.length)
+  const first = urgent[0];
+  if (first)
     lines.push(
       style(
-        `Needs you (${urgent.length}): ${activityOwnerLabel(rows, urgent[0]!, Math.max(0, width - 16))}`,
+        `Needs you (${urgent.length}): ${activityOwnerLabel(rows, first, Math.max(0, width - 16))}`,
       ),
     );
-  if (sections.length > maxRows - lines.length) {
-    const total = sections
-      .map(({ heading }) => heading.summary)
-      .reduce(addGroupSummaries, emptyGroupSummary);
-    const sum = (count: (section: ActivityWidgetSection) => number) =>
-      sections.reduce((total, section) => total + count(section), 0);
-    const shown = (matches: (entry: GroupedActivityRow) => boolean) =>
-      sum((section) => section.entries.filter(matches).length);
-    const hidden = (type: GroupedActivityRow["type"]) => shown((entry) => entry.type === type);
-    const shownPlanned = shown(isPlannedEntry);
-    const countedFailures = sum((section) =>
-      [...section.failureOverflow.values()].reduce((total, count) => total + count, 0),
-    );
-    return [
-      style(
-        widgetGroupLine(
-          total,
-          width,
-          omissionLabels({
-            hiddenSources:
-              sum((section) => section.hiddenSources) +
-              hidden("member") -
-              shownPlanned +
-              countedFailures,
-            hiddenPhases: sum((section) => section.hiddenPhases) + hidden("phase"),
-            hiddenWorkflows: sum((section) => section.hiddenWorkflows) + hidden("workflow"),
-            hiddenPlanned: sum((section) => section.hiddenPlanned) + shownPlanned,
-          }),
-        ),
-      ),
-    ];
-  }
-  for (const section of sections) {
-    for (const [index, entry] of section.entries.entries()) {
-      if (entry.type === "member") lines.push(groupedMemberLine(entry, width, options, "widget"));
-      else if (entry.type === "workflow" || entry.type === "phase")
-        lines.push(workflowRowLine(entry, width, options));
-      const continues = section.entries[index + 1]?.parentId === entry.id;
-      const narrator = section.narrators.has(entry.id) ? workflowNarrator(entry) : undefined;
-      if (narrator !== undefined)
-        lines.push(narratorLine(narrator, width, continues, options.theme));
-      const failures = section.failureOverflow.get(entry.id);
-      if (failures)
-        lines.push(hiddenFailuresLine(entry, failures, width, continues, options.theme));
-    }
-    if (section.omittedRows)
-      lines.push(style(widgetGroupLine(section.heading.summary, width, omissionLabels(section))));
-  }
-  if (!lines.length && (options.starting ?? 0) > 0)
-    lines.push(style(`Subagents ${activityStartupGlyph(rows, options.starting!, options.now)}`));
+  if (sections.length > maxRows - lines.length) return [overflowLine(sections, width, style)];
+  for (const section of sections) lines.push(...sectionLines(section, width, options, style));
+  const starting = options.starting ?? 0;
+  if (!lines.length && starting > 0)
+    lines.push(style(`Subagents ${activityStartupGlyph(rows, starting, options.now)}`));
   return lines.slice(0, maxRows).map((line) => clipToWidth(line, width, ""));
 }

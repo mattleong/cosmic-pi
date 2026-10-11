@@ -98,21 +98,28 @@ function globalReference(sourceCode: SourceCode, node: ESTree.IdentifierReferenc
 
 const fsSources = new Set(["node:fs", "fs", "node:fs/promises", "fs/promises"]);
 
+function filesystemNamespace(sourceCode: SourceCode, node: ESTree.IdentifierReference): boolean {
+  const binding = importedMember(sourceCode, node);
+  return (
+    binding !== null &&
+    fsSources.has(binding.source) &&
+    (binding.name === "*" || binding.name === "default")
+  );
+}
+
 function filesystem(sourceCode: SourceCode, expression: ESTree.Expression, depth = 0): boolean {
   if (depth > 8) return false;
   const node = unwrapExpression(expression);
   if (node.type === "Identifier") {
-    const binding = importedMember(sourceCode, node);
-    if (
-      binding !== null &&
-      fsSources.has(binding.source) &&
-      (binding.name === "*" || binding.name === "default")
-    )
-      return true;
+    if (filesystemNamespace(sourceCode, node)) return true;
     const value = constValue(sourceCode, node);
     return value !== null && filesystem(sourceCode, value, depth + 1);
   }
-  if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression") return false;
+  return node.type === "CallExpression" && builtinFilesystemModule(sourceCode, node);
+}
+
+function builtinFilesystemModule(sourceCode: SourceCode, node: ESTree.CallExpression): boolean {
+  if (node.callee.type !== "MemberExpression") return false;
   const { object } = node.callee;
   const module = node.arguments[0];
   return (
@@ -158,26 +165,30 @@ function pathText(
   if (isStringLiteral(node)) return node.value;
   if (node.type === "TemplateLiteral" && node.expressions.length === 0)
     return node.quasis[0]?.value.cooked ?? null;
+  const source = pathSource(sourceCode, node, substitutions);
+  return source === null ? null : pathText(sourceCode, source, substitutions, depth + 1);
+}
+
+function pathSource(
+  sourceCode: SourceCode,
+  node: ESTree.Expression,
+  substitutions: Substitutions,
+): ESTree.Expression | null {
   if (node.type === "Identifier") {
     const variable = resolveVariable(sourceCode, node);
-    const value =
-      variable === null ? null : (substitutions.get(variable) ?? constValue(sourceCode, node));
-    return value === null || value === undefined
+    return variable === null
       ? null
-      : pathText(sourceCode, value, substitutions, depth + 1);
+      : (substitutions.get(variable) ?? constValue(sourceCode, node));
   }
   if (
-    node.type === "NewExpression" &&
-    node.callee.type === "Identifier" &&
-    node.callee.name === "URL" &&
-    globalReference(sourceCode, node.callee)
-  ) {
-    const path = node.arguments[0];
-    return path !== undefined && path.type !== "SpreadElement"
-      ? pathText(sourceCode, path, substitutions, depth + 1)
-      : null;
-  }
-  return null;
+    node.type !== "NewExpression" ||
+    node.callee.type !== "Identifier" ||
+    node.callee.name !== "URL" ||
+    !globalReference(sourceCode, node.callee)
+  )
+    return null;
+  const path = node.arguments[0];
+  return path !== undefined && path.type !== "SpreadElement" ? path : null;
 }
 
 function productionPath(path: string | null): boolean {
@@ -215,6 +226,19 @@ function parameterBindings(
   return bindings;
 }
 
+function readsProductionPath(
+  sourceCode: SourceCode,
+  call: ESTree.CallExpression,
+  substitutions: Substitutions,
+): boolean {
+  const path = call.arguments[0];
+  return (
+    path !== undefined &&
+    path.type !== "SpreadElement" &&
+    productionPath(pathText(sourceCode, path, substitutions))
+  );
+}
+
 function sourceText(
   sourceCode: SourceCode,
   expression: ESTree.Expression,
@@ -231,14 +255,7 @@ function sourceText(
     return value !== null && sourceText(sourceCode, value, substitutions, depth + 1, wrappers);
   }
   if (node.type !== "CallExpression") return false;
-  if (reader(sourceCode, node.callee)) {
-    const path = node.arguments[0];
-    return (
-      path !== undefined &&
-      path.type !== "SpreadElement" &&
-      productionPath(pathText(sourceCode, path, substitutions))
-    );
-  }
+  if (reader(sourceCode, node.callee)) return readsProductionPath(sourceCode, node, substitutions);
   if (wrappers === 0 || node.callee.type !== "Identifier") return false;
   const fn = resolveFunction(sourceCode, node.callee);
   if (fn === null) return false;

@@ -251,31 +251,51 @@ const selectCandidate = (
   cwd: string,
 ) =>
   Effect.gen(function* () {
-    let skipped = input.priorSkippedCandidates;
+    const skipped = [...input.priorSkippedCandidates];
     for (const attempt of input.plan.attempts) {
-      skipped = [...skipped, ...(attempt.skippedBefore ?? [])];
+      skipped.push(...(attempt.skippedBefore ?? []));
       if (writesClaimed && attempt.writeIntent !== "writer") {
         const configuredCandidate = input.routeCandidates[attempt.candidateIndex];
-        skipped = [
-          ...skipped,
-          {
-            candidateIndex: attempt.candidateIndex,
-            candidate: configuredCandidate
-              ? profileCandidateLabel(configuredCandidate)
-              : routeLabel(attempt),
-            code: "write_claims_read_only",
-            reason: "writes may be supplied only for a writer profile candidate.",
-          },
-        ];
+        skipped.push({
+          candidateIndex: attempt.candidateIndex,
+          candidate: configuredCandidate
+            ? profileCandidateLabel(configuredCandidate)
+            : routeLabel(attempt),
+          code: "write_claims_read_only",
+          reason: "writes may be supplied only for a writer profile candidate.",
+        });
         continue;
       }
       const outcome = yield* Effect.result(resolveConcreteModel(attempt, ctx, cwd));
       if (Result.isSuccess(outcome)) return { attempt, resolved: outcome.success, skipped };
       if (isCleanupUnconfirmed(outcome.failure) || isOutcomeUncertain(outcome.failure))
         return yield* outcome.failure;
-      skipped = [...skipped, dynamicCandidateSkip(attempt, outcome.failure)];
+      skipped.push(dynamicCandidateSkip(attempt, outcome.failure));
     }
     return yield* exhaustedRoute(input, [...skipped, ...input.plan.trailingSkippedCandidates]);
+  });
+
+const validatedStartInput = (rawInput: SubagentProfileStartSpec) =>
+  Effect.gen(function* () {
+    const task = rawInput.task.trim();
+    if (!task)
+      return yield* new InvalidSubagentRequestError({
+        code: "task_required",
+        message: "subagent_start requires every agent to have a task.",
+      });
+    const disallowedField = firstDisallowedLaunchOverride(rawInput);
+    if (disallowedField)
+      return yield* new InvalidSubagentRequestError({
+        code: "launch_override_not_allowed",
+        message: disallowedLaunchOverrideMessage(disallowedField),
+      });
+    const normalizedClaims = rawInput.writes ? normalizeWriteClaims(rawInput.writes) : undefined;
+    if (normalizedClaims && !normalizedClaims.ok)
+      return yield* new InvalidSubagentRequestError({
+        code: normalizedClaims.code,
+        message: normalizedClaims.message,
+      });
+    return { task, normalizedClaims };
   });
 
 const resolvePlannedStart = (
@@ -285,27 +305,7 @@ const resolvePlannedStart = (
   environment: SubagentSessionEnvironment,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentBackendRegistry> =>
   Effect.gen(function* () {
-    const task = input.rawInput.task.trim();
-    if (!task)
-      return yield* new InvalidSubagentRequestError({
-        code: "task_required",
-        message: "subagent_start requires every agent to have a task.",
-      });
-    const disallowedField = firstDisallowedLaunchOverride(input.rawInput);
-    if (disallowedField)
-      return yield* new InvalidSubagentRequestError({
-        code: "launch_override_not_allowed",
-        message: disallowedLaunchOverrideMessage(disallowedField),
-      });
-    const normalizedClaims = input.rawInput.writes
-      ? normalizeWriteClaims(input.rawInput.writes)
-      : undefined;
-    if (normalizedClaims && !normalizedClaims.ok)
-      return yield* new InvalidSubagentRequestError({
-        code: normalizedClaims.code,
-        message: normalizedClaims.message,
-      });
-
+    const { task, normalizedClaims } = yield* validatedStartInput(input.rawInput);
     const { attempt, resolved, skipped } = yield* selectCandidate(
       input,
       normalizedClaims !== undefined,

@@ -221,7 +221,10 @@ const unsupportedCapabilityMessage = (
       return `${backend} subagents do not support interruption. Stop with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with subagent_await.`;
     case "parent-contact":
       return `${backend} subagents do not support parent questions or subagent_reply; use subagent_await or subagent_status instead.`;
-    default:
+    case "native-fork":
+    case "peer-notice":
+    case "rename-display":
+    case "resume":
       return `${backend} subagents do not support ${capability}. Inspect supported operations with subagent_status({ runIds: ["${id}"] }).`;
   }
 };

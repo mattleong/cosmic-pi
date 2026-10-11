@@ -8,7 +8,7 @@ import {
   workspacePackageDirectories,
 } from "./workspace-manifest-paths.mjs";
 
-test("workspace checks ignore manifest-less retired residue but include real packages", async (t) => {
+await test("workspace checks ignore manifest-less retired residue but include real packages", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "cosmic-manifests-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const current = join(root, "packages", "current");

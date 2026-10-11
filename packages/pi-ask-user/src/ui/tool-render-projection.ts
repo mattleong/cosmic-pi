@@ -139,22 +139,31 @@ export function fallbackText<Content>(content: Content, allowString = false): st
 
 export type QuestionnaireState = "waiting" | "queued" | "answered" | "cancelled" | "failed";
 
-export function questionnaireState(
-  row: Pick<ReplayedSnapshot, "status" | "delivery" | "presentation" | "outcome">,
+type StateRow = Pick<ReplayedSnapshot, "status" | "delivery" | "presentation" | "outcome">;
+
+function pendingState(row: StateRow): QuestionnaireState | undefined {
+  if (row.outcome || row.delivery !== "pending" || row.presentation === "settled") return undefined;
+  return row.presentation === "queued" ? "queued" : "waiting";
+}
+
+function finishedState(
+  row: StateRow,
+  status: "submitted" | "cancelled",
 ): QuestionnaireState | undefined {
+  if (row.outcome && row.outcome.outcome !== status) return undefined;
+  if (row.outcome?.outcome === "submitted" && row.outcome.answers.length === 0) return undefined;
+  return status === "submitted" ? "answered" : "cancelled";
+}
+
+export function questionnaireState(row: StateRow): QuestionnaireState | undefined {
   switch (row.status) {
     case "pending":
-      if (row.outcome || row.delivery !== "pending" || row.presentation === "settled")
-        return undefined;
-      return row.presentation === "queued" ? "queued" : "waiting";
+      return pendingState(row);
     case "failed":
       return row.outcome ? undefined : "failed";
     case "submitted":
     case "cancelled":
-      if (row.outcome && row.outcome.outcome !== row.status) return undefined;
-      if (row.outcome?.outcome === "submitted" && row.outcome.answers.length === 0)
-        return undefined;
-      return row.status === "submitted" ? "answered" : "cancelled";
+      return finishedState(row, row.status);
   }
 }
 

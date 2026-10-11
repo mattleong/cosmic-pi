@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as JsonSchema from "effect/JsonSchema";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
@@ -99,43 +100,36 @@ const children = (key: string, value: Schema.Json): ReadonlyArray<Schema.Json> =
 };
 
 const isScalarType = Schema.is(Schema.Literals(["string", "number", "integer", "boolean", "null"]));
-const isString = Schema.is(Schema.String);
 const decodeStrings = Schema.decodeUnknownOption(Schema.Array(Schema.String));
 const isSchemaNode = (value: Schema.Json | undefined): boolean =>
   Option.isSome(decodeJsonRecord(value));
 
+const isStrictObjectNode = (node: JsonRecord): boolean =>
+  node.additionalProperties === false &&
+  node.items === undefined &&
+  Option.exists(decodeJsonRecord(node.properties), (properties) =>
+    Object.values(properties).every(isSchemaNode),
+  );
+
 const isStrictNode = (node: JsonRecord): boolean => {
   if (!Object.keys(node).every((key) => STRICT_KEYWORDS.has(key))) return false;
+  if (node.type === "object") return isStrictObjectNode(node);
   const objectKeywords =
     node.properties !== undefined ||
     node.required !== undefined ||
     node.additionalProperties !== undefined;
-  switch (node.type) {
-    case "object":
-      return (
-        node.additionalProperties === false &&
-        node.items === undefined &&
-        Option.exists(decodeJsonRecord(node.properties), (properties) =>
-          Object.values(properties).every(isSchemaNode),
-        )
-      );
-    case "array":
-      return !objectKeywords && isSchemaNode(node.items);
-    case undefined:
-      return (
-        !objectKeywords &&
-        node.items === undefined &&
-        (node.enum !== undefined || node.const !== undefined)
-      );
-    default:
-      return !objectKeywords && node.items === undefined && isScalarType(node.type);
-  }
+  if (objectKeywords) return false;
+  if (node.type === "array") return isSchemaNode(node.items);
+  if (node.items !== undefined) return false;
+  return node.type === undefined
+    ? node.enum !== undefined || node.const !== undefined
+    : isScalarType(node.type);
 };
 
 const PATTERN_DISPLAY_MAX_CHARS = 120;
 
 const patternProblem = (source: Schema.Json): string | undefined => {
-  if (!isString(source)) return "patterns must be strings.";
+  if (!Predicate.isString(source)) return "patterns must be strings.";
   const shown =
     source.length > PATTERN_DISPLAY_MAX_CHARS
       ? `${source.slice(0, PATTERN_DISPLAY_MAX_CHARS - 1)}…`

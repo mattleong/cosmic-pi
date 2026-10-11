@@ -106,6 +106,7 @@ const sampleOfType = (node: JsonRecord, answers: StubAnswers): Schema.Json => {
       return 1;
     case "boolean":
       return answers.flag;
+    case undefined:
     default:
       return null;
   }

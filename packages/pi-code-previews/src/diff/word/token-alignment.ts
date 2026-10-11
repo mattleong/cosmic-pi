@@ -24,11 +24,15 @@ export function changedTokenGaps(before: WordEmphasisToken[], after: WordEmphasi
   }
 
   function collect(
-    beforeStart: number,
-    beforeEnd: number,
-    afterStart: number,
-    afterEnd: number,
+    rangeBeforeStart: number,
+    rangeBeforeEnd: number,
+    rangeAfterStart: number,
+    rangeAfterEnd: number,
   ): WordChangeConfidence {
+    let beforeStart = rangeBeforeStart;
+    let beforeEnd = rangeBeforeEnd;
+    let afterStart = rangeAfterStart;
+    let afterEnd = rangeAfterEnd;
     while (
       beforeStart < beforeEnd &&
       afterStart < afterEnd &&

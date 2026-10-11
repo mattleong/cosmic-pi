@@ -29,30 +29,45 @@ const invalid = (code: string, message: string) =>
 export const remainingRouteCandidates = (continuation: ProfileRouteContinuation): number =>
   Math.max(0, continuation.candidates.length - continuation.selectedCandidateIndex - 1);
 
+const retryBlockedByHistory = (record: RunRecord): boolean =>
+  record.view.supersededByRunId !== undefined ||
+  record.assignment.outcomeUncertain ||
+  hasUnresolvedSteeringDelivery(record.view) ||
+  record.cleanupDisposition === "quarantined" ||
+  record.view.retryBlocked === true;
+
+const retryCleanupPending = (record: RunRecord): boolean =>
+  record.cleanupPending ||
+  record.cleanupDisposition === "pending" ||
+  record.runStateReclaimState === "running";
+
+const retryResourcesHeld = (record: RunRecord): boolean =>
+  record.process !== undefined ||
+  record.writerPool !== undefined ||
+  record.evictionClaim !== undefined ||
+  record.retryClaim !== undefined;
+
+const retryDispositionFor = (
+  record: RunRecord,
+  hasContinuation: boolean,
+  hasRemainingCandidate: boolean,
+): FailedStartRecovery["retryDisposition"] => {
+  if (!hasContinuation) return "unavailable";
+  if (record.view.retryExhausted === true || !hasRemainingCandidate) return "exhausted";
+  if (retryBlockedByHistory(record)) return "blocked";
+  if (retryCleanupPending(record)) return "pending";
+  return retryResourcesHeld(record) ? "blocked" : "eligible";
+};
+
 export const failedStartRecoveryForRecord = (record: RunRecord): FailedStartRecovery => {
   const continuation = record.routeContinuation;
   const remainingCandidateCount = continuation ? remainingRouteCandidates(continuation) : 0;
   const hasRemainingCandidate = remainingCandidateCount > 0;
-  const retryDisposition: FailedStartRecovery["retryDisposition"] = !continuation
-    ? "unavailable"
-    : record.view.retryExhausted === true || !hasRemainingCandidate
-      ? "exhausted"
-      : record.view.supersededByRunId !== undefined ||
-          record.assignment.outcomeUncertain ||
-          hasUnresolvedSteeringDelivery(record.view) ||
-          record.cleanupDisposition === "quarantined" ||
-          record.view.retryBlocked === true
-        ? "blocked"
-        : record.cleanupPending ||
-            record.cleanupDisposition === "pending" ||
-            record.runStateReclaimState === "running"
-          ? "pending"
-          : record.process !== undefined ||
-              record.writerPool !== undefined ||
-              record.evictionClaim !== undefined ||
-              record.retryClaim !== undefined
-            ? "blocked"
-            : "eligible";
+  const retryDisposition = retryDispositionFor(
+    record,
+    continuation !== undefined,
+    hasRemainingCandidate,
+  );
   return Object.freeze({
     runId: record.view.id,
     cleanupDisposition: record.cleanupDisposition,
@@ -60,6 +75,82 @@ export const failedStartRecoveryForRecord = (record: RunRecord): FailedStartReco
     remainingCandidateCount,
     hasRemainingCandidate,
   });
+};
+
+const retrySourceFailure = (
+  record: RunRecord,
+  id: string,
+): InvalidSubagentRequestError | undefined => {
+  if (record.view.state !== "failed")
+    return invalid(
+      "retry_source_not_failed",
+      `Subagent ${id} must be failed before its next profile candidate can be tried.`,
+    );
+  if (record.view.reportGeneration > 0)
+    return invalid(
+      "retry_assignment_not_initial",
+      `Subagent ${id} failed after a later assignment; its launch-time task cannot be replayed safely on another candidate.`,
+    );
+  return undefined;
+};
+
+const retryRouteFailure = (
+  record: RunRecord,
+  id: string,
+  continuation: ProfileRouteContinuation,
+): InvalidSubagentRequestError | undefined => {
+  if (record.view.retryExhausted === true || remainingRouteCandidates(continuation) === 0)
+    return invalid(
+      "retry_route_exhausted",
+      `Profile ${continuation.profile} has no configured candidate after candidate ${continuation.selectedCandidateIndex + 1}. Only now may the parent choose a generalist replacement.`,
+    );
+  if (record.view.supersededByRunId)
+    return invalid(
+      "retry_already_superseded",
+      `Subagent ${id} was already continued as ${record.view.supersededByRunId}.`,
+    );
+  if (record.assignment.outcomeUncertain || hasUnresolvedSteeringDelivery(record.view))
+    return invalid(
+      "retry_outcome_uncertain",
+      `Subagent ${id} may have accepted or executed its task; automatic next-candidate continuation is blocked. Inspect the run before deciding how to recover.`,
+    );
+  return undefined;
+};
+
+const retryResourceFailure = (
+  record: RunRecord,
+  id: string,
+): InvalidSubagentRequestError | undefined => {
+  if (
+    record.cleanupDisposition !== "confirmed" ||
+    record.process !== undefined ||
+    record.writerPool !== undefined
+  )
+    return invalid(
+      "retry_cleanup_unconfirmed",
+      `Subagent ${id} still owns backend or writer resources; next-candidate continuation fails closed.`,
+    );
+  if (record.view.retryBlocked)
+    return invalid(
+      "retry_blocked",
+      `Subagent ${id} continuation encountered ownership uncertainty and remains fail-closed.`,
+    );
+  if (record.runStateReclaimState === "running")
+    return invalid(
+      "retry_cleanup_pending",
+      `Subagent ${id} is still reclaiming private run state; retry after cleanup finishes.`,
+    );
+  if (record.evictionClaim)
+    return invalid(
+      "retry_record_claimed",
+      `Subagent ${id} is already claimed by history reclamation; refresh run state before retrying.`,
+    );
+  if (record.retryClaim)
+    return invalid(
+      "retry_claim_conflict",
+      `Subagent ${id} already has a next-candidate continuation in progress.`,
+    );
+  return undefined;
 };
 
 export function makeRunRetry(
@@ -75,67 +166,19 @@ export function makeRunRetry(
         const record = yield* requireRecord(id);
         const ownedFailure = workflowOwnedRunError(record, "be retried");
         if (ownedFailure) return yield* ownedFailure;
-        if (record.view.state !== "failed")
-          return yield* invalid(
-            "retry_source_not_failed",
-            `Subagent ${id} must be failed before its next profile candidate can be tried.`,
-          );
-        if (record.view.reportGeneration > 0)
-          return yield* invalid(
-            "retry_assignment_not_initial",
-            `Subagent ${id} failed after a later assignment; its launch-time task cannot be replayed safely on another candidate.`,
-          );
+        const sourceFailure = retrySourceFailure(record, id);
+        if (sourceFailure) return yield* sourceFailure;
         const continuation = record.routeContinuation;
         if (!continuation)
           return yield* invalid(
             "retry_route_unavailable",
             `Subagent ${id} has no launch-time route continuation. Start a new profiled run instead.`,
           );
-        if (record.view.retryExhausted === true || remainingRouteCandidates(continuation) === 0)
-          return yield* invalid(
-            "retry_route_exhausted",
-            `Profile ${continuation.profile} has no configured candidate after candidate ${continuation.selectedCandidateIndex + 1}. Only now may the parent choose a generalist replacement.`,
-          );
-        if (record.view.supersededByRunId)
-          return yield* invalid(
-            "retry_already_superseded",
-            `Subagent ${id} was already continued as ${record.view.supersededByRunId}.`,
-          );
-        if (record.assignment.outcomeUncertain || hasUnresolvedSteeringDelivery(record.view))
-          return yield* invalid(
-            "retry_outcome_uncertain",
-            `Subagent ${id} may have accepted or executed its task; automatic next-candidate continuation is blocked. Inspect the run before deciding how to recover.`,
-          );
+        const routeFailure = retryRouteFailure(record, id, continuation);
+        if (routeFailure) return yield* routeFailure;
         if (record.cleanupPending) return { waitForCleanup: record.cleanupSettlement } as const;
-        if (
-          record.cleanupDisposition !== "confirmed" ||
-          record.process !== undefined ||
-          record.writerPool !== undefined
-        )
-          return yield* invalid(
-            "retry_cleanup_unconfirmed",
-            `Subagent ${id} still owns backend or writer resources; next-candidate continuation fails closed.`,
-          );
-        if (record.view.retryBlocked)
-          return yield* invalid(
-            "retry_blocked",
-            `Subagent ${id} continuation encountered ownership uncertainty and remains fail-closed.`,
-          );
-        if (record.runStateReclaimState === "running")
-          return yield* invalid(
-            "retry_cleanup_pending",
-            `Subagent ${id} is still reclaiming private run state; retry after cleanup finishes.`,
-          );
-        if (record.evictionClaim)
-          return yield* invalid(
-            "retry_record_claimed",
-            `Subagent ${id} is already claimed by history reclamation; refresh run state before retrying.`,
-          );
-        if (record.retryClaim)
-          return yield* invalid(
-            "retry_claim_conflict",
-            `Subagent ${id} already has a next-candidate continuation in progress.`,
-          );
+        const resourceFailure = retryResourceFailure(record, id);
+        if (resourceFailure) return yield* resourceFailure;
         const claimToken = allocateClaimToken();
         record.retryClaim = { token: claimToken };
         return {

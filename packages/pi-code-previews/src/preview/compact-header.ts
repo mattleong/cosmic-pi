@@ -19,8 +19,8 @@ export function middleElide(text: string, width: number): string {
   let tailWidth = 0;
   while (left < right) {
     const fromLeft = headWidth <= tailWidth;
-    const part = parts[fromLeft ? left : right - 1]!;
-    if (part.width > remaining) break;
+    const part = parts[fromLeft ? left : right - 1];
+    if (!part || part.width > remaining) break;
     remaining -= part.width;
     if (fromLeft) {
       head += part.text;
@@ -38,13 +38,13 @@ export function middleElide(text: string, width: number): string {
 export function layoutCompactHeader(
   identity: string,
   subject: string,
-  counters: readonly string[],
+  candidateCounters: readonly string[],
   optional: readonly (string | undefined)[],
   width: number,
   separator = " · ",
   timing?: string,
 ) {
-  counters = counters.filter((value) => value.trim());
+  const counters = candidateCounters.filter((value) => value.trim());
   const extra = counters.length ? undefined : optional.find((value) => value?.trim());
   const remaining = width - visibleWidth(identity);
   if (remaining <= 0) return { row: clipToWidth(identity, width, ""), counter: undefined };

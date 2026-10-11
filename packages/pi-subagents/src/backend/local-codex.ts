@@ -22,6 +22,8 @@ import {
   turnStartRequest,
   turnSteerRequest,
   TurnSteerResult,
+  executableToolName,
+  outcomeCode,
   type CodexNotification,
   type CodexRequest,
 } from "./local-codex-protocol.ts";
@@ -41,30 +43,6 @@ interface PendingResponse {
 interface PendingInterrupt extends LocalCliInterrupt {
   readonly turnId: string;
 }
-
-const OUTCOME_CODES = new Map<CodexRequest["method"], string>([
-  ["turn/start", "start_outcome_uncertain"],
-  ["turn/steer", "guidance_outcome_uncertain"],
-  ["turn/interrupt", "interrupt_outcome_uncertain"],
-]);
-const outcomeCode = (method: CodexRequest["method"]): string =>
-  OUTCOME_CODES.get(method) ?? `${method.replaceAll("/", "_")}_outcome_uncertain`;
-
-const EXECUTABLE_ITEM_TOOL_NAMES = new Map<string, string>([
-  ["commandExecution", "Bash"],
-  ["fileChange", "ApplyPatch"],
-  ["webSearch", "WebSearch"],
-]);
-
-const executableToolName = (item: {
-  readonly type: string;
-  readonly server?: string | undefined;
-  readonly tool?: string | undefined;
-}): string | undefined => {
-  if (item.type === "mcpToolCall")
-    return `mcp:${item.server ?? "unknown"}/${item.tool ?? "unknown"}`;
-  return EXECUTABLE_ITEM_TOOL_NAMES.get(item.type);
-};
 
 type CodexUsage = Extract<CodexNotification, { readonly type: "usage" }>;
 type CodexItemEvent = Extract<CodexNotification, { type: "item_started" | "item_completed" }>;
@@ -228,6 +206,10 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     );
   };
 
+  const isForeignNotification = (event: CodexNotification): boolean =>
+    ("threadId" in event && Boolean(threadId) && event.threadId !== threadId) ||
+    ("turnId" in event && event.type !== "turn_started" && event.turnId !== activeTurnId);
+
   const consumeNotification = <ParamsInput>(
     raw: LocalCliWireEvent,
     method: string,
@@ -238,9 +220,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         if (event.type === "ignored") return release(raw);
         if (event.type === "warning")
           return offer({ type: "warning", message: event.message }, raw);
-        if ("threadId" in event && threadId && event.threadId !== threadId) return release(raw);
-        if ("turnId" in event && event.type !== "turn_started" && event.turnId !== activeTurnId)
-          return release(raw);
+        if (isForeignNotification(event)) return release(raw);
         switch (event.type) {
           case "turn_started":
             return markTurnStarted(event.turnId, assignmentEpoch, raw);

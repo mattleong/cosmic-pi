@@ -24,7 +24,10 @@ it.effect("settings edits wait until a session has loaded the settings they chan
     const ctx = extensionContextFixture({
       mode: "tui",
       hasUI: true,
-      ui: { custom: host.ctx.ui.custom, notify: (message: string) => notifications.push(message) },
+      ui: {
+        custom: host.ctx.ui.custom.bind(host.ctx.ui),
+        notify: (message: string) => notifications.push(message),
+      },
     });
 
     yield* step(() => Promise.resolve(settings.handler("readCollapsedLines 20", ctx)));

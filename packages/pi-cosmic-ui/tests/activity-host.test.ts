@@ -82,7 +82,7 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
         if (mode !== "deferred") mountWidget();
         if (mode === "throws-after-factory") throw new Error("installation failed after factory");
       },
-      custom: surface.ctx.ui.custom,
+      custom: surface.custom,
       notify() {},
     },
   });

@@ -51,6 +51,8 @@ import {
   claimsOperationError,
   lifecycleMessageError,
   subagentToolAction,
+  type SubagentClaimsInput,
+  type SubagentLifecycleInput,
   type SubagentToolAction,
   type SubagentToolInput,
 } from "./schema.ts";
@@ -261,61 +263,8 @@ export const executeSubagentActionEffect = (
         Effect.map(({ result }) => result),
       );
 
-    switch (input.tool) {
-      case SUBAGENT_TOOL_NAME.start: {
-        const result = yield* executeStartBatch({
-          agents: input.args.agents,
-          pi,
-          ctx,
-          environment,
-          startOwned,
-          onUpdate,
-          readOnly: scripted,
-        });
-        return present({
-          ...result,
-          contract: startContract(input.args.agents, result.startOutcomes),
-        });
-      }
-      case SUBAGENT_TOOL_NAME.list: {
-        const runs = yield* callerRunId ? service.visibleList(callerRunId) : service.list;
-        return present({ runs, contract: listContract(runs) });
-      }
-      case SUBAGENT_TOOL_NAME.status:
-        return yield* finishStatus(yield* requiredTargetIds(action, input.args.runIds));
-      case SUBAGENT_TOOL_NAME.await: {
-        const ids = yield* requiredTargetIds(action, input.args.runIds);
-        yield* authorize(ids);
-        const state = awaitState!;
-        return yield* service
-          .withAwaitTerminalObservations(
-            ids,
-            input.args.until,
-            state.update,
-            (observations) =>
-              completeObservations(
-                observations,
-                [state.progressText(observations.map((observation) => observation.run))],
-                () => ({ awaitContextRuns: state.contextRuns() }),
-              ),
-            (outcome) => outcome.fullyRenderedIds,
-          )
-          .pipe(Effect.map(({ result }) => result));
-      }
-      case SUBAGENT_TOOL_NAME.send: {
-        const ids = yield* requiredTargetIds(action, input.args.runIds);
-        const message = yield* required(action, "message", input.args.message);
-        yield* authorize(ids);
-        return present(yield* forEachOutcome(ids, (id) => service.send(id, message), true));
-      }
-      case SUBAGENT_TOOL_NAME.reply: {
-        const id = yield* required(action, "runId", input.args.runId);
-        const message = yield* required(action, "message", input.args.message);
-        yield* authorize([id]);
-        return present(yield* forEachOutcome([id], (runId) => service.reply(runId, message)));
-      }
-      case SUBAGENT_TOOL_NAME.lifecycle: {
-        const { args } = input;
+    const executeLifecycle = (args: SubagentLifecycleInput) =>
+      Effect.gen(function* () {
         if (scripted && args.action !== "stop")
           return yield* invalidRequest(
             "scripted_lifecycle_not_supported",
@@ -378,17 +327,9 @@ export const executeSubagentActionEffect = (
                 : service.stop(id),
           ),
         );
-      }
-      case SUBAGENT_TOOL_NAME.rename: {
-        const id = yield* required(action, "runId", input.args.runId);
-        yield* authorize([id]);
-        const result = yield* forEachOutcome([id], (runId) =>
-          service.rename(runId, input.args.name.trim()),
-        );
-        return present({ ...result, contract: renameContract(result.outcomes[0]!) });
-      }
-      case SUBAGENT_TOOL_NAME.claims: {
-        const operation = input.args;
+      });
+    const executeClaims = (operation: SubagentClaimsInput) =>
+      Effect.gen(function* () {
         const operationError = claimsOperationError(operation);
         if (operationError !== undefined)
           return yield* invalidRequest("claims_input_invalid", operationError);
@@ -405,7 +346,77 @@ export const executeSubagentActionEffect = (
                 : service.resumeWriterAdmission(runId),
           ),
         );
+      });
+
+    switch (input.tool) {
+      case SUBAGENT_TOOL_NAME.start: {
+        const result = yield* executeStartBatch({
+          agents: input.args.agents,
+          pi,
+          ctx,
+          environment,
+          startOwned,
+          onUpdate,
+          readOnly: scripted,
+        });
+        return present({
+          ...result,
+          contract: startContract(input.args.agents, result.startOutcomes),
+        });
       }
+      case SUBAGENT_TOOL_NAME.list: {
+        const runs = yield* callerRunId ? service.visibleList(callerRunId) : service.list;
+        return present({ runs, contract: listContract(runs) });
+      }
+      case SUBAGENT_TOOL_NAME.status:
+        return yield* finishStatus(yield* requiredTargetIds(action, input.args.runIds));
+      case SUBAGENT_TOOL_NAME.await: {
+        const ids = yield* requiredTargetIds(action, input.args.runIds);
+        yield* authorize(ids);
+        const state =
+          awaitState ?? (yield* Effect.die(new Error("Await execution state is missing.")));
+        return yield* service
+          .withAwaitTerminalObservations(
+            ids,
+            input.args.until,
+            state.update,
+            (observations) =>
+              completeObservations(
+                observations,
+                [state.progressText(observations.map((observation) => observation.run))],
+                () => ({ awaitContextRuns: state.contextRuns() }),
+              ),
+            (outcome) => outcome.fullyRenderedIds,
+          )
+          .pipe(Effect.map(({ result }) => result));
+      }
+      case SUBAGENT_TOOL_NAME.send: {
+        const ids = yield* requiredTargetIds(action, input.args.runIds);
+        const message = yield* required(action, "message", input.args.message);
+        yield* authorize(ids);
+        return present(yield* forEachOutcome(ids, (id) => service.send(id, message), true));
+      }
+      case SUBAGENT_TOOL_NAME.reply: {
+        const id = yield* required(action, "runId", input.args.runId);
+        const message = yield* required(action, "message", input.args.message);
+        yield* authorize([id]);
+        return present(yield* forEachOutcome([id], (runId) => service.reply(runId, message)));
+      }
+      case SUBAGENT_TOOL_NAME.lifecycle:
+        return yield* executeLifecycle(input.args);
+      case SUBAGENT_TOOL_NAME.rename: {
+        const id = yield* required(action, "runId", input.args.runId);
+        yield* authorize([id]);
+        const result = yield* forEachOutcome([id], (runId) =>
+          service.rename(runId, input.args.name.trim()),
+        );
+        const [outcome] = result.outcomes;
+        if (outcome === undefined)
+          return yield* Effect.die(new Error("Rename produced no outcome."));
+        return present({ ...result, contract: renameContract(outcome) });
+      }
+      case SUBAGENT_TOOL_NAME.claims:
+        return yield* executeClaims(input.args);
     }
   });
 };

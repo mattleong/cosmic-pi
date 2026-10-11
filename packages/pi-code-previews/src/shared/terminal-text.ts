@@ -59,6 +59,42 @@ function isTruncationSafe(row: string): boolean {
 }
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
+interface RangeCursor {
+  visible: number;
+  out: string;
+  active: boolean;
+  rangeIndex: number;
+}
+
+function closePassedRanges(
+  cursor: RangeCursor,
+  sorted: ReadonlyArray<readonly [number, number]>,
+  close: string,
+): void {
+  while (
+    cursor.rangeIndex < sorted.length &&
+    cursor.visible >= (sorted[cursor.rangeIndex]?.[1] ?? Infinity)
+  ) {
+    if (cursor.active) {
+      cursor.out += close;
+      cursor.active = false;
+    }
+    cursor.rangeIndex++;
+  }
+}
+
+function openCurrentRange(
+  cursor: RangeCursor,
+  sorted: ReadonlyArray<readonly [number, number]>,
+  open: string,
+): void {
+  const range = sorted[cursor.rangeIndex];
+  if (!cursor.active && range && cursor.visible >= range[0] && cursor.visible < range[1]) {
+    cursor.out += open;
+    cursor.active = true;
+  }
+}
+
 export function injectVisibleRanges(
   ansi: string,
   ranges: Array<[number, number]>,
@@ -68,35 +104,98 @@ export function injectVisibleRanges(
     reopenAfterSgr?: (sequence: string) => boolean;
   },
 ): string {
-  let visible = 0;
-  let out = "";
-  let active = false;
-  let rangeIndex = 0;
+  const cursor: RangeCursor = { visible: 0, out: "", active: false, rangeIndex: 0 };
   const sorted = ranges.filter(([start, end]) => end > start).toSorted((a, b) => a[0] - b[0]);
   for (let i = 0; i < ansi.length; i++) {
     const sgr = matchSgrSequence(ansi, i);
     if (sgr) {
-      out += active && options.reopenAfterSgr?.(sgr) ? `${sgr}${options.open}` : sgr;
+      cursor.out += cursor.active && options.reopenAfterSgr?.(sgr) ? `${sgr}${options.open}` : sgr;
       i += sgr.length - 1;
       continue;
     }
-    while (rangeIndex < sorted.length && visible >= (sorted[rangeIndex]?.[1] ?? Infinity)) {
-      if (active) {
-        out += options.close;
-        active = false;
-      }
-      rangeIndex++;
-    }
-    const range = sorted[rangeIndex];
-    if (!active && range && visible >= range[0] && visible < range[1]) {
-      out += options.open;
-      active = true;
-    }
-    out += ansi[i];
-    visible++;
+    closePassedRanges(cursor, sorted, options.close);
+    openCurrentRange(cursor, sorted, options.open);
+    cursor.out += ansi[i];
+    cursor.visible++;
   }
-  if (active) out += options.close;
-  return out;
+  if (cursor.active) cursor.out += options.close;
+  return cursor.out;
+}
+
+class AnsiWrapper {
+  readonly rows: string[] = [];
+  private row = "";
+  private rowWidth = 0;
+  private state = "";
+  private readonly width: number;
+  private readonly maxRows: number;
+  private readonly continuationPrefix: string;
+  private readonly continuationWidth: number;
+
+  constructor(width: number, maxRows: number, continuationPrefix: string) {
+    this.width = width;
+    this.maxRows = maxRows;
+    this.continuationPrefix = continuationPrefix;
+    this.continuationWidth = visibleWidth(continuationPrefix);
+  }
+
+  appendSgr(sequence: string): void {
+    this.row += sequence;
+    this.state = updateAnsiState(this.state, sequence);
+  }
+
+  appendPlain(plain: string): boolean {
+    if (plain.length <= this.width - this.rowWidth && PRINTABLE_ASCII_RE.test(plain)) {
+      this.row += plain;
+      this.rowWidth += plain.length;
+      return true;
+    }
+    for (const { segment } of segmenter.segment(plain))
+      if (!this.appendSegment(segment)) return false;
+    return true;
+  }
+
+  finish(): string[] {
+    this.rows.push(truncateWrappedRow(this.row, this.rowWidth, this.width));
+    if (this.rows.length > this.maxRows)
+      return truncateLastRow(this.rows.slice(0, this.maxRows), this.width);
+    return this.rows;
+  }
+
+  private overflows(segmentWidth: number): boolean {
+    return this.rowWidth > 0 && this.rowWidth + segmentWidth > this.width;
+  }
+
+  private appendSegment(segment: string): boolean {
+    const segmentWidth = visibleWidth(segment);
+    if (this.overflows(segmentWidth) && !this.pushRow()) return false;
+    if (this.overflows(segmentWidth)) {
+      this.row = this.state;
+      this.rowWidth = 0;
+    }
+    if (segmentWidth > this.width && this.rowWidth === 0) {
+      const clipped = clipToWidth(segment, this.width, "");
+      if (clipped) {
+        this.row += clipped;
+        this.rowWidth += visibleWidth(clipped);
+      }
+      return this.pushRow();
+    }
+    this.row += segment;
+    this.rowWidth += segmentWidth;
+    return true;
+  }
+
+  private pushRow(): boolean {
+    this.rows.push(truncateWrappedRow(this.row, this.rowWidth, this.width));
+    if (this.rows.length >= this.maxRows) {
+      truncateLastRow(this.rows, this.width);
+      return false;
+    }
+    this.row = this.continuationPrefix ? this.state + this.continuationPrefix : this.state;
+    this.rowWidth = this.continuationWidth;
+    return true;
+  }
 }
 
 export function wrapAnsiToWidth(
@@ -106,67 +205,21 @@ export function wrapAnsiToWidth(
   continuationPrefix = "",
 ): string[] {
   if (width <= 0) return [""];
-  const rows: string[] = [];
-  let row = "";
-  let rowWidth = 0;
+  const wrapper = new AnsiWrapper(width, maxRows, continuationPrefix);
   let index = 0;
-  let state = "";
-  const continuationWidth = visibleWidth(continuationPrefix);
-
-  function pushRow(): boolean {
-    rows.push(truncateWrappedRow(row, rowWidth, width));
-    if (rows.length >= maxRows) {
-      truncateLastRow(rows, width);
-      return false;
-    }
-    row = continuationPrefix ? state + continuationPrefix : state;
-    rowWidth = continuationWidth;
-    return true;
-  }
-
   while (index < text.length) {
     const ansi = matchSgrSequence(text, index);
     if (ansi) {
-      row += ansi;
-      state = updateAnsiState(state, ansi);
+      wrapper.appendSgr(ansi);
       index += ansi.length;
       continue;
     }
-
     const nextAnsi = text.indexOf("\x1b", index + 1);
     const plainEnd = nextAnsi >= 0 ? nextAnsi : text.length;
-    const plain = escapeControlChars(text.slice(index, plainEnd));
-    const remainingWidth = width - rowWidth;
-    if (plain.length <= remainingWidth && PRINTABLE_ASCII_RE.test(plain)) {
-      row += plain;
-      rowWidth += plain.length;
-    } else {
-      for (const { segment } of segmenter.segment(plain)) {
-        const segmentWidth = visibleWidth(segment);
-        if (rowWidth > 0 && rowWidth + segmentWidth > width && !pushRow()) return rows;
-        if (rowWidth > 0 && rowWidth + segmentWidth > width) {
-          row = state;
-          rowWidth = 0;
-        }
-        if (segmentWidth > width && rowWidth === 0) {
-          const clipped = clipToWidth(segment, width, "");
-          if (clipped) {
-            row += clipped;
-            rowWidth += visibleWidth(clipped);
-          }
-          if (!pushRow()) return rows;
-          continue;
-        }
-        row += segment;
-        rowWidth += segmentWidth;
-      }
-    }
+    if (!wrapper.appendPlain(escapeControlChars(text.slice(index, plainEnd)))) return wrapper.rows;
     index = plainEnd;
   }
-
-  rows.push(truncateWrappedRow(row, rowWidth, width));
-  if (rows.length > maxRows) return truncateLastRow(rows.slice(0, maxRows), width);
-  return rows;
+  return wrapper.finish();
 }
 
 function truncateWrappedRow(row: string, rowWidth: number, width: number): string {

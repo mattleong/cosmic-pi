@@ -75,10 +75,10 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
           yield* Deferred.succeed(gate.release, undefined);
           yield* invoke(pending);
           yield* Fiber.join(shutdown);
-          expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+          expect(h.notify).not.toHaveBeenCalled();
           h.setStatus.mockClear();
           yield* h.emit("agent_start");
-          expect(h.ctx.ui.setStatus).not.toHaveBeenCalled();
+          expect(h.setStatus).not.toHaveBeenCalled();
           const requestHook = h.handlers.get("before_provider_request")?.[0];
           const injection = () =>
             Effect.promise(() =>
@@ -122,7 +122,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* Fiber.join(replacement);
       h.setStatus.mockClear();
       yield* h.emit("agent_start");
-      expect(h.ctx.ui.setStatus).not.toHaveBeenCalled();
+      expect(h.setStatus).not.toHaveBeenCalled();
       yield* h.emit("session_shutdown");
     }),
   );
@@ -238,7 +238,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       expect(h.tools).toHaveLength(1);
       h.notify.mockClear();
       yield* invoke(h.commands.get("openai")?.handler("usage", h.ctx));
-      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
     }),
   );
@@ -259,7 +259,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
       yield* invoke(h.commands.get("openai")?.handler("fast", h.ctx));
 
-      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
     }),
   );
@@ -275,7 +275,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
       yield* invoke(h.commands.get("openai")?.handler("image cancelled prompt", h.ctx));
 
-      expect(h.ctx.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
     }),
   );
@@ -298,7 +298,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       );
       yield* invoke(h.commands.get("openai")?.handler("usage", selected));
 
-      expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown", selected);
     }),
   );
@@ -324,14 +324,14 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         COSMIC_UI_FOOTER_UPSERT,
         expect.objectContaining({ contribution: expect.objectContaining({ id: "openai.fast" }) }),
       );
-      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
+      expect(h.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
 
       active = false;
       publish();
-      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", expect.any(String));
+      expect(h.setStatus).toHaveBeenLastCalledWith("better-openai", expect.any(String));
       hidden = ["openai.fast"];
       publish();
-      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
+      expect(h.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
       expect(h.eventsEmit).toHaveBeenCalledWith(
         COSMIC_UI_FOOTER_REMOVE,
         expect.objectContaining({ id: "openai.fast" }),
@@ -339,10 +339,10 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
       hidden = [];
       publish();
-      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", expect.any(String));
+      expect(h.setStatus).toHaveBeenLastCalledWith("better-openai", expect.any(String));
       yield* h.emit("session_shutdown", ctx);
-      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
-      expect(ctx.ui.setFooter).not.toHaveBeenCalled();
+      expect(h.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
+      expect(h.setFooter).not.toHaveBeenCalled();
     }),
   );
 
@@ -357,7 +357,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       });
 
       yield* h.emit("session_start");
-      expect(h.ctx.ui.setFooter).not.toHaveBeenCalled();
+      expect(h.setFooter).not.toHaveBeenCalled();
       yield* invoke(
         h.commands.get("openai")?.handler("settings usage.showResetTimes false", h.ctx),
       );
@@ -394,7 +394,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
       expect(h.tools).toHaveLength(0);
-      expect(h.ctx.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 
@@ -405,7 +405,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       controller.abort(new Error("already gone"));
       h.ctx.signal = controller.signal;
       yield* h.emit("session_start");
-      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       expect(h.tools).toHaveLength(0);
     }),
   );
@@ -427,7 +427,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
         yield* h.emit("session_start", replacement);
 
-        expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+        expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
         yield* Effect.promise(() =>
           expect(
             h.tools.at(-1)!.execute("call", { prompt: "x" }, undefined, undefined, h.ctx),

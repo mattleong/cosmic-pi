@@ -71,7 +71,7 @@ const entryName = (spec: SubagentStartSpec, index: number): string =>
 
 const routeFields = (
   source: Pick<StartSubagentRequest, "host" | "runtime" | "model" | "effort" | "openaiFastMode">,
-  selection?: Pick<SubagentSelectionProvenance, "candidateIndex" | "warning"> | undefined,
+  selection?: Pick<SubagentSelectionProvenance, "candidateIndex" | "warning">,
 ) => ({
   host: source.host,
   runtime: source.runtime,

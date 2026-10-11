@@ -59,25 +59,35 @@ export function renderCompactRow(input: CompactRowInput, theme: Theme, width: nu
   return layoutCompactRow(input, theme, width).row;
 }
 
+function compactRowDuration(input: CompactRowInput): string | undefined {
+  const { elapsedMs } = input;
+  const visible =
+    input.timingEnabled !== false &&
+    input.phase !== "pending" &&
+    elapsedMs !== undefined &&
+    Number.isFinite(elapsedMs) &&
+    elapsedMs >= 0 &&
+    (input.summary.showShortTiming || elapsedMs >= TIMING_VISIBLE_MS);
+  return visible ? compactSingleLine(input.duration ?? "") : undefined;
+}
+
+function compactRowPrefix(input: CompactRowInput, theme: Theme): string {
+  const status = input.status ?? compactStatus(input.phase, input.summary);
+  const icon = compactStatusIcon(status, theme, input.animationFrame, input.returnedCheckmark);
+  const action = compactSingleLine(input.summary.action ?? "");
+  return `${icon} ${theme.fg("accent", compactSingleLine(input.name))}${action ? ` ${action}` : ""}`;
+}
+
+function compactRowSubject({ expanded, summary }: CompactRowInput): string {
+  return compactSingleLine(
+    !expanded ? (summary.compactSubject ?? summary.subject) : summary.subject,
+  );
+}
+
 export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: number) {
   if (width <= 0) return { row: "", issueShown: false };
-  const { phase, summary } = input;
-  const status = input.status ?? compactStatus(phase, summary);
-  const icon = compactStatusIcon(status, theme, input.animationFrame, input.returnedCheckmark);
-  const action = compactSingleLine(summary.action ?? "");
-  const prefix = `${icon} ${theme.fg("accent", compactSingleLine(input.name))}${action ? ` ${action}` : ""}`;
-  const subject = compactSingleLine(
-    !input.expanded ? (summary.compactSubject ?? summary.subject) : summary.subject,
-  );
-  const duration =
-    input.timingEnabled !== false &&
-    phase !== "pending" &&
-    input.elapsedMs !== undefined &&
-    Number.isFinite(input.elapsedMs) &&
-    input.elapsedMs >= 0 &&
-    (summary.showShortTiming || input.elapsedMs >= TIMING_VISIBLE_MS)
-      ? compactSingleLine(input.duration ?? "")
-      : undefined;
+  const { summary } = input;
+  const duration = compactRowDuration(input);
   const timing = duration ? theme.fg("dim", duration) : undefined;
   const muted = (values: readonly string[] | undefined) =>
     values
@@ -85,8 +95,8 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
       .filter(Boolean)
       .map((text) => theme.fg("muted", text)) ?? [];
   const { row, counter } = layoutCompactHeader(
-    prefix,
-    subject,
+    compactRowPrefix(input, theme),
+    compactRowSubject(input),
     input.issueLabel ? [input.issueLabel] : muted(summary.counters),
     [...muted(summary.metadata), summary.showTiming ? undefined : timing],
     width,

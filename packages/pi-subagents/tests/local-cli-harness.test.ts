@@ -16,14 +16,13 @@ import * as localCliTransport from "../src/boundary/local-cli-transport.ts";
 import { backendLaunch, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
-const { join } = nodePath;
 const executable = fileURLToPath(new URL("./fixtures/local-cli-fixture.mjs", import.meta.url));
 const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
 
 const setup = Effect.gen(function* () {
   const directory = yield* temporaryDirectory("pi-subagents-local-cli-harness-");
-  const agentDirectory = join(directory, "agent");
-  const home = join(directory, "home");
+  const agentDirectory = nodePath.join(directory, "agent");
+  const home = nodePath.join(directory, "home");
   yield* Effect.promise(() => fs.mkdir(agentDirectory, { mode: 0o700 }));
   yield* Effect.promise(() => fs.mkdir(home, { mode: 0o700 }));
   return {
@@ -35,14 +34,14 @@ const setup = Effect.gen(function* () {
 
 const supervisor = (directory: string) =>
   supervisorMetadata({
-    stateDirectory: join(directory, "supervisor"),
-    connectionConfigPath: join(directory, "supervisor", "connection.json"),
+    stateDirectory: nodePath.join(directory, "supervisor"),
+    connectionConfigPath: nodePath.join(directory, "supervisor", "connection.json"),
     args: ["/private/helper.mjs", "--config", "/private/connection.json"],
   });
 
 const harnessEntries = (agentDirectory: string) =>
   fs
-    .readdir(join(agentDirectory, "subagents", "local-cli-v1"))
+    .readdir(nodePath.join(agentDirectory, "subagents", "local-cli-v1"))
     .catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
       throw error;

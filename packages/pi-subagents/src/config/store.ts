@@ -15,16 +15,17 @@ import {
 import {
   isProfileId,
   PROFILE_IDS,
-  type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
   type ProfileId,
   type ProfileRoute,
 } from "../profiles/model.ts";
 import { resolveSubagentConfig, type ResolvedSubagentConfig } from "./options.ts";
 import {
+  candidateJson,
   captureProfilePatchRoute,
   captureRestoreDeclaration,
   isRecord,
+  routeJson,
   stableJson,
 } from "./profile-restore.ts";
 import {
@@ -193,24 +194,6 @@ const decodeDocument = (
         ),
       )
     : Effect.succeed(decoded);
-};
-
-const candidateJson = (value: DeclaredProfileCandidate): JsonObject => ({
-  host: value.host,
-  runtime: value.runtime,
-  model: value.model,
-  effort: value.effort,
-  context: value.context,
-  writeIntent: value.writeIntent,
-  ...(value.openaiFastMode === true && { openaiFastMode: true }),
-  ...(value.closeOnReport !== undefined && { closeOnReport: value.closeOnReport }),
-});
-
-const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
-  if (route === "disabled") return route;
-  return "host" in route
-    ? candidateJson(route)
-    : route.map((candidate) => candidateJson(candidate));
 };
 
 const withEntry = (

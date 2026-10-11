@@ -88,9 +88,8 @@ const askSingleQuestion = (
       if (selected === undefined) return undefined;
       const index = options.indexOf(selected);
       if (index < 0) return undefined;
-      if (index < question.choices.length) {
-        return choiceDraft([question.choices[index]!]);
-      }
+      const choice = question.choices[index];
+      if (choice !== undefined) return choiceDraft([choice]);
       const text = yield* boundedInput(ui, `${title}\n\nWrite your answer:`, "Your answer");
       if (text !== undefined) return { kind: "custom", text };
       yield* notifyBestEffort(
@@ -157,7 +156,12 @@ const askMultipleQuestion = (
           );
           continue;
         }
-        return choiceDraft(indices.map((index) => question.choices[index]!));
+        return choiceDraft(
+          indices.flatMap((index) => {
+            const choice = question.choices[index];
+            return choice === undefined ? [] : [choice];
+          }),
+        );
       }
     }
   });
@@ -228,6 +232,14 @@ const answerSummary = (answer: AskUserAnswer): string => {
   return `${stripTerminalControls(value).slice(0, 120)}${note}`;
 };
 
+const answeredQuestions = (request: AskUserRequest, drafts: readonly AskUserAnswerDraft[]) =>
+  request.questions.flatMap((question, index) => {
+    const draft = drafts[index];
+    return draft === undefined
+      ? []
+      : [{ question, answer: finalizeAskUserAnswer(question, draft) }];
+  });
+
 const runRpc = (
   ctx: ExtensionContext,
   request: AskUserRequest,
@@ -243,10 +255,10 @@ const runRpc = (
     while (true) {
       const reviewTitle = [
         "Review answers",
-        ...drafts.map((draft, index) => {
-          const question = request.questions[index]!;
-          return `${index + 1}. [${stripTerminalControls(question.title)}] ${answerSummary(finalizeAskUserAnswer(question, draft))}`;
-        }),
+        ...answeredQuestions(request, drafts).map(
+          ({ question, answer }, index) =>
+            `${index + 1}. [${stripTerminalControls(question.title)}] ${answerSummary(answer)}`,
+        ),
       ].join("\n");
       const editOptions = request.questions.map(
         (question, index) => `Edit ${index + 1}. ${stripTerminalControls(question.title)}`,
@@ -261,14 +273,12 @@ const runRpc = (
       if (selected === options[0]) {
         return {
           outcome: "submitted",
-          answers: drafts.map((draft, index) =>
-            finalizeAskUserAnswer(request.questions[index]!, draft),
-          ),
+          answers: answeredQuestions(request, drafts).map(({ answer }) => answer),
         };
       }
       const editIndex = editOptions.indexOf(selected);
-      if (editIndex < 0) return cancelQuestionnaire();
-      const question = request.questions[editIndex]!;
+      const question = request.questions[editIndex];
+      if (question === undefined) return cancelQuestionnaire();
       const replacement = yield* askRpcQuestion(ctx.ui, question, drafts[editIndex]?.note);
       if (!replacement) return cancelQuestionnaire();
       drafts[editIndex] = replacement;

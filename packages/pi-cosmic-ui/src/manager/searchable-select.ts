@@ -309,81 +309,85 @@ export class SearchableSelectPage<A> implements Component, Focusable {
           ]);
   }
 
+  private compactBody(height: number, inner: number, activeNotice: string | undefined): string[] {
+    const theme = this.options.theme;
+    const bodyHeight = Math.max(0, height - 2);
+    const noticeLine = activeNotice
+      ? theme.fg("warning", clipToWidth(activeNotice, inner, "…"))
+      : undefined;
+    const inputLine = this.searchMode
+      ? this.input
+          .render(Math.max(1, inner))
+          .slice(0, 1)
+          .map((line) => focusedField(theme, line))[0]
+      : undefined;
+    if (bodyHeight === 1) {
+      const single = inputLine ?? noticeLine;
+      if (single) return [single];
+      this.resizeList(1);
+      return this.list.render(inner).slice(0, 1);
+    }
+    if (bodyHeight <= 1) return [];
+    const compactHeader = [
+      ...(inputLine ? [inputLine] : []),
+      ...(noticeLine ? [noticeLine] : []),
+      ...(bodyHeight > 3 ? [theme.fg("accent", theme.bold(this.options.title))] : []),
+    ].slice(0, bodyHeight - 1);
+    const listRows = Math.max(1, bodyHeight - compactHeader.length);
+    this.resizeList(listRows);
+    return [...compactHeader, ...this.list.render(inner).slice(0, listRows)];
+  }
+
+  private fullBody(height: number, inner: number, activeNotice: string | undefined): string[] {
+    const theme = this.options.theme;
+    const limitedWrap = (value: string, maximumLines: number): ReadonlyArray<string> => {
+      const lines = wrapTextWithAnsi(value, Math.max(1, inner));
+      if (lines.length <= maximumLines) return lines;
+      const shown = lines.slice(0, maximumLines);
+      shown[maximumLines - 1] = clipToWidth(`${shown[maximumLines - 1] ?? ""}…`, inner, "");
+      return shown;
+    };
+    const bodyHeight = Math.max(0, height - 2);
+    const noticeLines = activeNotice
+      ? limitedWrap(activeNotice, 2).map((line) => theme.fg("warning", line))
+      : [];
+    const subtitleLines = limitedWrap(this.options.subtitle, 1).map((line) =>
+      theme.fg("dim", line),
+    );
+    const searchLines = this.searchMode
+      ? [
+          theme.fg(
+            "dim",
+            `Type to filter · ${this.keys().key("tui.select.confirm", "Enter")} Select · ${this.searchCancel()}`,
+          ),
+          ...this.input.render(Math.max(1, inner)).map((line) => focusedField(theme, line)),
+        ]
+      : [];
+    const header = [
+      theme.fg("accent", theme.bold(this.options.title)),
+      ...subtitleLines,
+      ...noticeLines,
+      ...searchLines,
+      "",
+    ];
+    const desiredListHeight = Math.max(1, bodyHeight - header.length);
+    this.resizeList(desiredListHeight);
+    return [...header, ...this.list.render(inner).slice(0, desiredListHeight)];
+  }
+
   render(width: number): string[] {
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
     if (safeWidth < 4) return Array.from({ length: height }, () => " ".repeat(safeWidth));
-    const theme = this.options.theme;
     const inner = safeWidth - 2;
     const title = clipToWidth(` ${this.options.breadcrumb} `, inner, "");
-    const frame = listDetailFrame(theme, "list");
+    const frame = listDetailFrame(this.options.theme, "list");
     const activeNotice = this.feedback ?? this.options.notice;
-    const body: string[] = [];
-    if (height < 10) {
-      const bodyHeight = Math.max(0, height - 2);
-      const noticeLine = activeNotice
-        ? theme.fg("warning", clipToWidth(activeNotice, inner, "…"))
-        : undefined;
-      const inputLine = this.searchMode
-        ? this.input
-            .render(Math.max(1, inner))
-            .slice(0, 1)
-            .map((line) => focusedField(theme, line))[0]
-        : undefined;
-      if (bodyHeight === 1) {
-        const single = inputLine ?? noticeLine;
-        if (single) body.push(single);
-        else {
-          this.resizeList(1);
-          body.push(...this.list.render(inner).slice(0, 1));
-        }
-      } else if (bodyHeight > 1) {
-        const compactHeader = [
-          ...(inputLine ? [inputLine] : []),
-          ...(noticeLine ? [noticeLine] : []),
-          ...(bodyHeight > 3 ? [theme.fg("accent", theme.bold(this.options.title))] : []),
-        ].slice(0, bodyHeight - 1);
-        const listRows = Math.max(1, bodyHeight - compactHeader.length);
-        this.resizeList(listRows);
-        body.push(...compactHeader, ...this.list.render(inner).slice(0, listRows));
-      }
-    } else {
-      const limitedWrap = (value: string, maximumLines: number): ReadonlyArray<string> => {
-        const lines = wrapTextWithAnsi(value, Math.max(1, inner));
-        if (lines.length <= maximumLines) return lines;
-        const shown = lines.slice(0, maximumLines);
-        shown[maximumLines - 1] = clipToWidth(`${shown[maximumLines - 1] ?? ""}…`, inner, "");
-        return shown;
-      };
-      const bodyHeight = Math.max(0, height - 2);
-      const noticeLines = activeNotice
-        ? limitedWrap(activeNotice, 2).map((line) => theme.fg("warning", line))
-        : [];
-      const subtitleLines = limitedWrap(this.options.subtitle, 1).map((line) =>
-        theme.fg("dim", line),
-      );
-      const searchLines = this.searchMode
-        ? [
-            theme.fg(
-              "dim",
-              `Type to filter · ${this.keys().key("tui.select.confirm", "Enter")} Select · ${this.searchCancel()}`,
-            ),
-            ...this.input.render(Math.max(1, inner)).map((line) => focusedField(theme, line)),
-          ]
-        : [];
-      const header = [
-        theme.fg("accent", theme.bold(this.options.title)),
-        ...subtitleLines,
-        ...noticeLines,
-        ...searchLines,
-        "",
-      ];
-      const desiredListHeight = Math.max(1, bodyHeight - header.length);
-      this.resizeList(desiredListHeight);
-      body.push(...header, ...this.list.render(inner).slice(0, desiredListHeight));
-    }
-
+    const body =
+      height < 10
+        ? this.compactBody(height, inner, activeNotice)
+        : this.fullBody(height, inner, activeNotice);
     return framedScreen(frame, {
       width: safeWidth,
       height,

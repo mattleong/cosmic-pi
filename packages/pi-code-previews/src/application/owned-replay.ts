@@ -1,6 +1,5 @@
 import { defineTool, type ExtensionAPI, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { invokeHostCallback } from "pi-cosmic-core";
-import * as Predicate from "effect/Predicate";
 import { capturePreviewHostTools } from "../boundary/host-tool-renderers";
 import { withCodePreviewShell } from "../tools/cooperative-tools";
 import { isSameExtensionSource } from "../tools/preview-admission";
@@ -26,15 +25,16 @@ export function registerCodePreviewReplay(
   const staged = new Map<string, ToolRenderers>();
   const selected = new Map<string, ToolRenderers>();
   const gate = new RetainedRendererGate();
-  if (Predicate.isFunction(pi.registerToolRenderer))
-    pi.registerToolRenderer((name, next) => {
+  const registerToolRenderer = pi.registerToolRenderer?.bind(pi);
+  if (registerToolRenderer)
+    registerToolRenderer((name, next) => {
       const downstream = rendererFields(next());
       if (!gate.live || gate.ready || !names.has(name) || downstream) return downstream;
       return retainedCodePreviewRenderers(name, undefined, gate, () => selected.get(name));
     });
   else gate.retire();
 
-  const shell: typeof withCodePreviewShell = (tool, shellOptions = {}) => {
+  const shell: typeof withCodePreviewShell = (tool, shellOptions) => {
     const wrapped = withCodePreviewShell(tool, shellOptions);
     if (gate.live && !gate.ready && names.has(tool.name)) {
       const replay = withCodePreviewShell(tool, { ...shellOptions, selfShell: true });

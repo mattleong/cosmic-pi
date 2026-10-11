@@ -21,6 +21,26 @@ const isBlockingClaimQuestionTool = (toolName: string): boolean => {
   );
 };
 
+type WriterPool = NonNullable<RunRecord["writerPool"]>;
+
+const claimChangeWaiting = (record: RunRecord, pool: WriterPool, id: string): boolean => {
+  const hasOtherActiveTool = [...record.activeTools.values()].some(
+    (toolName) => !isBlockingClaimQuestionTool(toolName),
+  );
+  const waitingForParentClaimDecision =
+    record.view.state === "waiting_for_parent" && !pool.admissionPaused && !hasOtherActiveTool;
+  const confirmedPausedViolationOffender =
+    record.view.state === "paused" &&
+    pool.state === "held" &&
+    pool.admissionPaused &&
+    pool.violationRunIds.has(id) &&
+    record.activeTools.size === 0 &&
+    !record.pauseRequested &&
+    record.pauseOutcome === undefined &&
+    record.pausedAssignmentEpoch === record.assignment.epoch;
+  return waitingForParentClaimDecision || confirmedPausedViolationOffender;
+};
+
 export function makeRunWriteClaimControl(dependencies: RunContext) {
   const { records, writerPools, withLock, publish, requireRecord, sendPeerNotices } = dependencies;
 
@@ -45,21 +65,7 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
           "exclusive_writer_claims_immutable",
           `Subagent ${id} was launched as an exclusive writer; stop it and relaunch with writes to use cooperative claims.`,
         );
-      const hasOtherActiveTool = [...record.activeTools.values()].some(
-        (toolName) => !isBlockingClaimQuestionTool(toolName),
-      );
-      const waitingForParentClaimDecision =
-        record.view.state === "waiting_for_parent" && !pool.admissionPaused && !hasOtherActiveTool;
-      const confirmedPausedViolationOffender =
-        record.view.state === "paused" &&
-        pool.state === "held" &&
-        pool.admissionPaused &&
-        pool.violationRunIds.has(id) &&
-        record.activeTools.size === 0 &&
-        !record.pauseRequested &&
-        record.pauseOutcome === undefined &&
-        record.pausedAssignmentEpoch === record.assignment.epoch;
-      if (!waitingForParentClaimDecision && !confirmedPausedViolationOffender)
+      if (!claimChangeWaiting(record, pool, id))
         return yield* invalid(
           "write_claim_change_not_waiting",
           `Subagent ${id} must be blocked on a parent claim question or be the confirmed paused claim-violation offender, with no other active tool, before its claims can change.`,
@@ -133,6 +139,49 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
       }),
     );
 
+  const resumeAdmissionFailure = (pool: WriterPool) => {
+    if (pool.state === "failed" || pool.state === "quarantined" || pool.state === "releasing")
+      return invalid(
+        "writer_pool_quarantined",
+        "Writer admission cannot resume while cleanup or lease ownership is uncertain.",
+      );
+    if (!pool.admissionPaused)
+      return invalid("writer_admission_not_paused", "Writer admission is not paused for this cwd.");
+    const uncontained = [...pool.violationRunIds]
+      .map((runId) => records.get(runId))
+      .find(
+        (offender) =>
+          offender !== undefined &&
+          (offender.cleanupPending ||
+            (offender.view.state !== "paused" && !isTerminalRunState(offender.view.state))),
+      );
+    return uncontained
+      ? invalid(
+          "write_violation_containment_pending",
+          `Writer ${uncontained.view.id} has not confirmed interruption or cleanup yet.`,
+        )
+      : undefined;
+  };
+
+  const reopenWriterAdmissionLocked = (pool: WriterPool) => {
+    pool.admissionPaused = false;
+    pool.violationRunIds.clear();
+    pool.pauseReason = undefined;
+    for (const member of records.values()) {
+      if (member.canonicalWriterCwd?.digest !== pool.cwd.digest) continue;
+      member.writeViolationContainmentStarted = false;
+      if (member.view.writeAdmissionPaused || member.view.writeViolationOffender)
+        member.view = {
+          ...member.view,
+          writeAdmissionPaused: undefined,
+          writeViolationOffender: undefined,
+        };
+    }
+    if (pool.state === "paused" && pool.members.size === 0) {
+      if (writerPools.get(pool.cwd.digest) === pool) writerPools.delete(pool.cwd.digest);
+    }
+  };
+
   const resumeAdmission = (id: string): Effect.Effect<SubagentRunView, SubagentError> =>
     withLock(
       Effect.gen(function* () {
@@ -145,45 +194,9 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
             "writer_pool_unavailable",
             `Subagent ${id} has no paused writer-pool admission for its cwd.`,
           );
-        if (pool.state === "failed" || pool.state === "quarantined" || pool.state === "releasing")
-          return yield* invalid(
-            "writer_pool_quarantined",
-            "Writer admission cannot resume while cleanup or lease ownership is uncertain.",
-          );
-        if (!pool.admissionPaused)
-          return yield* invalid(
-            "writer_admission_not_paused",
-            "Writer admission is not paused for this cwd.",
-          );
-        const uncontained = [...pool.violationRunIds]
-          .map((runId) => records.get(runId))
-          .find(
-            (offender) =>
-              offender !== undefined &&
-              (offender.cleanupPending ||
-                (offender.view.state !== "paused" && !isTerminalRunState(offender.view.state))),
-          );
-        if (uncontained)
-          return yield* invalid(
-            "write_violation_containment_pending",
-            `Writer ${uncontained.view.id} has not confirmed interruption or cleanup yet.`,
-          );
-        pool.admissionPaused = false;
-        pool.violationRunIds.clear();
-        pool.pauseReason = undefined;
-        for (const member of records.values()) {
-          if (member.canonicalWriterCwd?.digest !== pool.cwd.digest) continue;
-          member.writeViolationContainmentStarted = false;
-          if (member.view.writeAdmissionPaused || member.view.writeViolationOffender)
-            member.view = {
-              ...member.view,
-              writeAdmissionPaused: undefined,
-              writeViolationOffender: undefined,
-            };
-        }
-        if (pool.state === "paused" && pool.members.size === 0) {
-          if (writerPools.get(pool.cwd.digest) === pool) writerPools.delete(pool.cwd.digest);
-        }
+        const failure = resumeAdmissionFailure(pool);
+        if (failure) return yield* failure;
+        reopenWriterAdmissionLocked(pool);
         yield* publish;
         return snapshotView(record.view);
       }),

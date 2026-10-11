@@ -19,7 +19,7 @@ import {
 const nodePathModule = process.getBuiltinModule("node:path");
 const childProcessModule = process.getBuiltinModule("node:child_process");
 if (!nodePathModule || !childProcessModule) throw new Error("Node builtins are unavailable.");
-const { join } = nodePathModule;
+const join = nodePathModule.join.bind(nodePathModule);
 
 const previewFileLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer);
 

@@ -87,7 +87,7 @@ const keptWithinHistoryLimit = (
     evictionOrder.slice(0, Math.max(0, history.length - HISTORY_ROOT_LIMIT)).map((row) => row.key),
   );
   return new Set(
-    rows.filter((row) => !evictedRoots.has(roots.get(row.key)!)).map((row) => row.key),
+    rows.filter((row) => !evictedRoots.has(roots.get(row.key) ?? row.key)).map((row) => row.key),
   );
 };
 
@@ -106,7 +106,7 @@ const completedCounts = (
     if (parent) childCounts.set(parent, (childCounts.get(parent) ?? 0) + 1);
     if (isFinished(row) && !protectedKeys.has(row.key)) {
       completed++;
-      const root = roots.get(row.key)!;
+      const root = roots.get(row.key) ?? row.key;
       branchCounts.set(root, (branchCounts.get(root) ?? 0) + 1);
     }
   }
@@ -137,9 +137,8 @@ const trimCompleted = (
       Number(left.planned !== true) - Number(right.planned !== true) ||
       endedAt(left) - endedAt(right),
   );
-  for (let index = 0; index < queue.length; index++) {
-    const row = queue[index]!;
-    const root = roots.get(row.key)!;
+  for (const row of queue) {
+    const root = roots.get(row.key) ?? row.key;
     if (
       completed <= COMPLETED_TOTAL_LIMIT &&
       (branchCounts.get(root) ?? 0) <= COMPLETED_BRANCH_LIMIT
@@ -152,8 +151,8 @@ const trimCompleted = (
     const parent = parents.get(row.key);
     if (parent) {
       childCounts.set(parent, (childCounts.get(parent) ?? 1) - 1);
-      const owner = byKey.get(parent)!;
-      if (!childCounts.get(parent) && isFinished(owner) && !protectedKeys.has(parent))
+      const owner = byKey.get(parent);
+      if (owner && !childCounts.get(parent) && isFinished(owner) && !protectedKeys.has(parent))
         queue.push(owner);
     }
   }

@@ -124,15 +124,15 @@ const boundedCompletion = (
 const completionChunks = (
   runs: ReadonlyArray<SubagentCompletionNotification>,
 ): ReadonlyArray<CompletionChunk> => {
-  if (runs.length === 1) {
-    const run = runs[0]!;
+  const [single] = runs;
+  if (runs.length === 1 && single !== undefined) {
     const prefix =
-      run.outcome === "failed"
-        ? `Background subagent ${run.name} (${run.id}) failed.`
-        : `Background subagent ${run.name} (${run.id}) completed.`;
+      single.outcome === "failed"
+        ? `Background subagent ${single.name} (${single.id}) failed.`
+        : `Background subagent ${single.name} (${single.id}) completed.`;
     const maximumBodyLength = Math.max(0, MAX_NOTIFICATION_CHARS - prefix.length - 2);
-    const content = `${prefix}\n\n${boundedCompletion(run, completionBody(run), maximumBodyLength)}`;
-    return [{ content: clip(content), runs: [run] }];
+    const content = `${prefix}\n\n${boundedCompletion(single, completionBody(single), maximumBodyLength)}`;
+    return [{ content: clip(content), runs: [single] }];
   }
 
   const chunks: CompletionChunk[] = [];
@@ -248,7 +248,8 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
             total: chunk.runs.length,
             failed: chunk.runs.filter((run) => run.outcome === "failed").length,
             warnings: chunk.runs.filter((run) => Boolean(run.warning?.trim())).length,
-            ...(chunk.runs.length === 1 && { name: displayName(chunk.runs[0]!.name) }),
+            ...(chunk.runs.length === 1 &&
+              chunk.runs[0] !== undefined && { name: displayName(chunk.runs[0].name) }),
           },
         });
         if (!accepted) break;

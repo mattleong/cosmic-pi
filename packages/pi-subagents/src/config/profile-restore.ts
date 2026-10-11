@@ -1,33 +1,52 @@
 import { invokeHostCallback, type JsonObject } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
-import { MAX_PROFILE_CANDIDATES, type DeclaredProfileRoute } from "../profiles/model.ts";
+import {
+  MAX_PROFILE_CANDIDATES,
+  type DeclaredProfileCandidate,
+  type DeclaredProfileRoute,
+} from "../profiles/model.ts";
 import { decodeDeclaredProfileCandidate, ownDenseArray } from "./schema.ts";
 
 const MAX_CANDIDATE_KEYS = 8;
+const OPTIONAL_CANDIDATE_FIELDS = new Set(["openaiFastMode", "closeOnReport"]);
+
+type CopiedField =
+  | { readonly omit: true }
+  | { readonly omit: false; readonly key: string; readonly value: string | boolean };
+
+const copyField = (
+  key: string,
+  field: PropertyDescriptor | undefined,
+  omitUndefinedOptionals: boolean,
+): CopiedField | undefined => {
+  if (!field || !field.enumerable || !("value" in field)) return undefined;
+  const value: unknown = field.value;
+  if (omitUndefinedOptionals && value === undefined && OPTIONAL_CANDIDATE_FIELDS.has(key))
+    return { omit: true };
+  return Predicate.isString(value) || Predicate.isBoolean(value)
+    ? { omit: false, key, value }
+    : undefined;
+};
 
 const copyCandidate = <CandidateInput>(
   input: CandidateInput,
   omitUndefinedOptionals: boolean,
 ): JsonObject | undefined => {
   if (!Predicate.isObject(input)) return undefined;
-  if (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)
-    return undefined;
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
   const keys = Reflect.ownKeys(input);
   if (keys.length > MAX_CANDIDATE_KEYS) return undefined;
   const copy: JsonObject = {};
   for (const key of keys) {
     if (!Predicate.isString(key) || key === "__proto__") return undefined;
-    const field = Object.getOwnPropertyDescriptor(input, key);
-    if (!field || !field.enumerable || !("value" in field)) return undefined;
-    const value: unknown = field.value;
-    if (
-      omitUndefinedOptionals &&
-      value === undefined &&
-      (key === "openaiFastMode" || key === "closeOnReport")
-    )
-      continue;
-    if (!Predicate.isString(value) && !Predicate.isBoolean(value)) return undefined;
-    copy[key] = value;
+    const field = copyField(
+      key,
+      Object.getOwnPropertyDescriptor(input, key),
+      omitUndefinedOptionals,
+    );
+    if (!field) return undefined;
+    if (!field.omit) copy[field.key] = field.value;
   }
   return copy;
 };
@@ -68,6 +87,24 @@ export const captureProfilePatchRoute = <ValueInput>(
   );
   if (!captured) return undefined;
   return { route: "single" in captured ? captured.single : captured.list };
+};
+
+export const candidateJson = (value: DeclaredProfileCandidate): JsonObject => ({
+  host: value.host,
+  runtime: value.runtime,
+  model: value.model,
+  effort: value.effort,
+  context: value.context,
+  writeIntent: value.writeIntent,
+  ...(value.openaiFastMode === true && { openaiFastMode: true }),
+  ...(value.closeOnReport !== undefined && { closeOnReport: value.closeOnReport }),
+});
+
+export const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
+  if (route === "disabled") return route;
+  return "host" in route
+    ? candidateJson(route)
+    : route.map((candidate) => candidateJson(candidate));
 };
 
 export const isRecord = (value: JsonObject[string] | undefined): value is JsonObject =>

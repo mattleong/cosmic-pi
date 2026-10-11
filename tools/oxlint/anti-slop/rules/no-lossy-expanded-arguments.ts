@@ -49,23 +49,20 @@ function destructiveSanitizer(
   return binding?.source === CORE && DESTRUCTIVE.has(binding.name) ? binding.name : null;
 }
 
+const VALUE_WRAPPERS = new Set([
+  "ParenthesizedExpression",
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "TSTypeAssertion",
+]);
+
 function passesValue(parent: ESTree.Node, child: ESTree.Node): boolean {
-  switch (parent.type) {
-    case "ParenthesizedExpression":
-    case "TSAsExpression":
-    case "TSSatisfiesExpression":
-    case "TSNonNullExpression":
-    case "TSTypeAssertion":
-      return true;
-    case "ConditionalExpression":
-      return parent.test !== child;
-    case "LogicalExpression":
-      return parent.operator !== "&&" || parent.right === child;
-    case "SequenceExpression":
-      return parent.expressions.at(-1) === child;
-    default:
-      return false;
-  }
+  if (VALUE_WRAPPERS.has(parent.type)) return true;
+  if (parent.type === "ConditionalExpression") return parent.test !== child;
+  if (parent.type === "LogicalExpression")
+    return parent.operator !== "&&" || parent.right === child;
+  return parent.type === "SequenceExpression" && parent.expressions.at(-1) === child;
 }
 
 function carriesText(parent: ESTree.Node, child: ESTree.Node): boolean {
@@ -128,6 +125,15 @@ function insideRenderer(sourceCode: SourceCode, node: ESTree.Node): boolean {
   return false;
 }
 
+function nullFallbackSource(node: ESTree.Expression): ESTree.Expression | null {
+  return node.type === "LogicalExpression" &&
+    node.operator === "??" &&
+    node.right.type === "Literal" &&
+    node.right.value === null
+    ? node.left
+    : null;
+}
+
 function exactArguments(
   sourceCode: SourceCode,
   expression: ESTree.Expression,
@@ -136,17 +142,21 @@ function exactArguments(
 ): boolean {
   if (depth > MAX_DEPTH) return false;
   const node = unwrapExpression(expression);
-  if (
-    node.type === "LogicalExpression" &&
-    node.operator === "??" &&
-    node.right.type === "Literal" &&
-    node.right.value === null
-  ) {
-    return exactArguments(sourceCode, node.left, depth + 1, helpers);
-  }
+  const fallbackSource = nullFallbackSource(node);
+  if (fallbackSource !== null)
+    return exactArguments(sourceCode, fallbackSource, depth + 1, helpers);
   if (node.type !== "Identifier") return false;
   const initializer = constValue(sourceCode, node);
   if (initializer !== null) return exactArguments(sourceCode, initializer, depth + 1, helpers);
+  return exactParameter(sourceCode, node, depth, helpers);
+}
+
+function exactParameter(
+  sourceCode: SourceCode,
+  node: ESTree.IdentifierReference,
+  depth: number,
+  helpers: number,
+): boolean {
   const variable = resolveVariable(sourceCode, node);
   if (variable === null || !isImmutable(variable)) return false;
   const parameter = variable.defs.find((definition) => definition.type === "Parameter");
@@ -279,26 +289,24 @@ function sinkStep(
   depth: number,
 ): Step {
   if (carriesText(parent, child)) return "next";
-  switch (parent.type) {
-    case "CallExpression":
-      return styledSink(sourceCode, parent, child);
-    case "NewExpression":
-      return (
-        exact &&
-        parent.arguments.some((argument) => argument === child) &&
-        imported(sourceCode, parent.callee, "@earendil-works/pi-tui", "Text")
-      );
-    case "ReturnStatement": {
-      const owner = enclosingFunction(parent);
-      return exact && owner !== null && rendererRole(sourceCode, owner) === "renderCall";
-    }
-    case "ArrowFunctionExpression":
-      return exact && parent.body === child && rendererRole(sourceCode, parent) === "renderCall";
-    case "VariableDeclarator":
-      return parent.init === child && bindingSink(sourceCode, parent, exact, depth);
-    default:
-      return false;
+  if (parent.type === "CallExpression") return styledSink(sourceCode, parent, child);
+  if (parent.type === "NewExpression")
+    return (
+      exact &&
+      parent.arguments.some((argument) => argument === child) &&
+      imported(sourceCode, parent.callee, "@earendil-works/pi-tui", "Text")
+    );
+  if (parent.type === "ReturnStatement") {
+    const owner = enclosingFunction(parent);
+    return exact && owner !== null && rendererRole(sourceCode, owner) === "renderCall";
   }
+  if (parent.type === "ArrowFunctionExpression")
+    return exact && parent.body === child && rendererRole(sourceCode, parent) === "renderCall";
+  return (
+    parent.type === "VariableDeclarator" &&
+    parent.init === child &&
+    bindingSink(sourceCode, parent, exact, depth)
+  );
 }
 
 function reachesSink(

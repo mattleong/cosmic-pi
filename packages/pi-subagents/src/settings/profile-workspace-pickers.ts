@@ -58,9 +58,9 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
   protected showFieldPicker(
     candidate: ProfileCandidate,
     field: SelectableCandidateField,
-    supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined,
-    fastModeAvailable?: boolean | undefined,
-    notice?: string | undefined,
+    supportedEfforts?: ReadonlyArray<SubagentEffort>,
+    fastModeAvailable?: boolean,
+    notice?: string,
   ): void {
     const candidateIndex = this.candidateIndex;
     this.showSelectPage(

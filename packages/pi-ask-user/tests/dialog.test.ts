@@ -9,6 +9,8 @@ import {
 import { cancelled, submitted } from "./support/questionnaire.ts";
 import { expectWithin, pageViews } from "./support/viewport.ts";
 import { CURSOR_MARKER, type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import { it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
@@ -37,20 +39,19 @@ const request = (mode: "single" | "multiple" = "single") =>
     ],
   }) satisfies AskUserRequest;
 
-interface KeybindingFixture extends Readonly<Record<string, KeyId | undefined>> {}
-const KEY_BINDINGS: KeybindingFixture = {
-  "tui.select.up": "up",
-  "tui.select.down": "down",
-  "tui.select.pageUp": "pageUp",
-  "tui.select.pageDown": "pageDown",
-  "tui.select.confirm": "enter",
-  "tui.select.cancel": "escape",
-  "app.editor.external": "ctrl+g",
-};
+const KEY_BINDINGS = new Map<string, KeyId>([
+  ["tui.select.up", "up"],
+  ["tui.select.down", "down"],
+  ["tui.select.pageUp", "pageUp"],
+  ["tui.select.pageDown", "pageDown"],
+  ["tui.select.confirm", "enter"],
+  ["tui.select.cancel", "escape"],
+  ["app.editor.external", "ctrl+g"],
+]);
 
 const keybindings = keybindingsFixture({
   matches(data, id) {
-    const key = KEY_BINDINGS[id];
+    const key = KEY_BINDINGS.get(id);
     return key !== undefined && matchesKey(data, key);
   },
 });
@@ -128,30 +129,33 @@ describe("AskUserDialog", () => {
     );
   });
 
-  it("retries blank and over-limit text without truncation and accepts the exact bound", () => {
-    const replacement = "x".repeat(4001);
-    const { dialog, done } = makeDialog(
-      textRequest,
-      () => Promise.resolve(replacement),
-      () => 5,
-    );
-    dialog.focused = true;
-    dialog.handleInput(ENTER);
-    expect(dialog.render(30).join("\n")).toContain(CURSOR_MARKER);
-    dialog.handleInput(EXTERNAL_EDITOR);
-    return Promise.resolve().then(() => {
-      dialog.handleInput(ENTER);
-      expect(done).not.toHaveBeenCalled();
-      expect(dialog.render(30).join("\n")).toContain(CURSOR_MARKER);
-      dialog.handleInput("\x7f");
-      dialog.handleInput(ENTER);
-      expect(done).not.toHaveBeenCalled();
-      dialog.handleInput(ENTER);
-      expect(done).toHaveBeenCalledWith(
-        submitted({ key: "details", kind: "text", text: replacement.slice(0, 4000) }),
-      );
-    });
-  });
+  effectIt.effect(
+    "retries blank and over-limit text without truncation and accepts the exact bound",
+    () =>
+      Effect.gen(function* () {
+        const replacement = "x".repeat(4001);
+        const { dialog, done } = makeDialog(
+          textRequest,
+          () => Promise.resolve(replacement),
+          () => 5,
+        );
+        dialog.focused = true;
+        dialog.handleInput(ENTER);
+        expect(dialog.render(30).join("\n")).toContain(CURSOR_MARKER);
+        dialog.handleInput(EXTERNAL_EDITOR);
+        yield* Effect.promise(() => Promise.resolve());
+        dialog.handleInput(ENTER);
+        expect(done).not.toHaveBeenCalled();
+        expect(dialog.render(30).join("\n")).toContain(CURSOR_MARKER);
+        dialog.handleInput("\x7f");
+        dialog.handleInput(ENTER);
+        expect(done).not.toHaveBeenCalled();
+        dialog.handleInput(ENTER);
+        expect(done).toHaveBeenCalledWith(
+          submitted({ key: "details", kind: "text", text: replacement.slice(0, 4000) }),
+        );
+      }),
+  );
 
   it("enters a later text question directly and discards text on cancellation", () => {
     const { dialog, done } = makeDialog({
@@ -310,30 +314,33 @@ describe("AskUserDialog", () => {
     expect(done).toHaveBeenCalledWith(submitted({ key: "approach", kind: "custom", text: "q" }));
   });
 
-  it("suppresses concurrent external editors and ignores a result for a replaced input", () => {
-    const external = deferredPromise<string | undefined>();
-    const editExternally = vi.fn(() => external.promise);
-    const { dialog, done } = makeDialog(request(), editExternally);
-    openCustomInput(dialog);
+  effectIt.effect(
+    "suppresses concurrent external editors and ignores a result for a replaced input",
+    () =>
+      Effect.gen(function* () {
+        const external = deferredPromise<string | undefined>();
+        const editExternally = vi.fn(() => external.promise);
+        const { dialog, done } = makeDialog(request(), editExternally);
+        openCustomInput(dialog);
 
-    dialog.handleInput(EXTERNAL_EDITOR);
-    dialog.handleInput(EXTERNAL_EDITOR);
-    expect(editExternally).toHaveBeenCalledOnce();
+        dialog.handleInput(EXTERNAL_EDITOR);
+        dialog.handleInput(EXTERNAL_EDITOR);
+        expect(editExternally).toHaveBeenCalledOnce();
 
-    dialog.handleInput(ESCAPE);
-    openCustomInput(dialog);
-    typeText(dialog, "fresh");
-    external.resolve("stale");
+        dialog.handleInput(ESCAPE);
+        openCustomInput(dialog);
+        typeText(dialog, "fresh");
+        external.resolve("stale");
 
-    return external.promise.then(() => {
-      dialog.handleInput(ENTER);
-      dialog.handleInput(ENTER);
+        yield* Effect.promise(() => external.promise);
+        dialog.handleInput(ENTER);
+        dialog.handleInput(ENTER);
 
-      expect(done).toHaveBeenCalledWith(
-        submitted({ key: "approach", kind: "custom", text: "fresh" }),
-      );
-    });
-  });
+        expect(done).toHaveBeenCalledWith(
+          submitted({ key: "approach", kind: "custom", text: "fresh" }),
+        );
+      }),
+  );
 
   it("submits multi-select values in authored order and retains the note", () => {
     const { dialog, done } = makeDialog(request("multiple"));

@@ -45,7 +45,10 @@ export class OwnedSurfaceError extends Schema.TaggedError<OwnedSurfaceError>()(
   { reason: Schema.Literals(["blocked", "failed"]) },
 ) {}
 
-export const hasCustomSurface = (ctx: Pick<ExtensionContext, "mode" | "ui">): boolean =>
+export const hasCustomSurface = (ctx: {
+  readonly mode: ExtensionContext["mode"];
+  readonly ui: { readonly custom: unknown };
+}): boolean =>
   invokeHostCallback(() => ctx.mode === "tui" && Predicate.isFunction(ctx.ui.custom), false);
 
 const inert = (): OwnedSurfaceComponent => ({ render: () => [], invalidate() {} });

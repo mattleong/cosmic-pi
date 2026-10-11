@@ -183,24 +183,28 @@ const UNOBSERVED_LAUNCH: SubagentStartFailure = {
   message: "Launch outcome was not observed.",
 };
 
-const projectLaunch = (
+const startedLaunch = (
   spec: SubagentStartSpec,
   index: number,
-  outcome: SubagentStartOutcome | undefined,
+  run: SubagentRunView,
 ): ContractStartLaunch => {
-  if (outcome !== undefined && "run" in outcome) {
-    const { run } = outcome;
-    const profile = knownProfile(run.profile ?? spec.profile);
-    return {
-      index,
-      status: "started",
-      runId: run.id,
-      name: projectName(run.name) || projectName(spec.name ?? "") || `launch ${index + 1}`,
-      ...(profile !== undefined && { profile }),
-      state: run.state,
-      writeIntent: run.writeIntent,
-    };
-  }
+  const profile = knownProfile(run.profile ?? spec.profile);
+  return {
+    index,
+    status: "started",
+    runId: run.id,
+    name: projectName(run.name) || projectName(spec.name ?? "") || `launch ${index + 1}`,
+    ...(profile !== undefined && { profile }),
+    state: run.state,
+    writeIntent: run.writeIntent,
+  };
+};
+
+const failedLaunch = (
+  spec: SubagentStartSpec,
+  index: number,
+  outcome: Extract<SubagentStartOutcome, { readonly failure: unknown }> | undefined,
+): ContractStartLaunch => {
   const failure = outcome?.failure ?? UNOBSERVED_LAUNCH;
   const name = projectName(spec.name ?? "");
   const profile = knownProfile(outcome?.resolvedRoute?.profile ?? spec.profile);
@@ -216,6 +220,15 @@ const projectLaunch = (
     }),
   };
 };
+
+const projectLaunch = (
+  spec: SubagentStartSpec,
+  index: number,
+  outcome: SubagentStartOutcome | undefined,
+): ContractStartLaunch =>
+  outcome !== undefined && "run" in outcome
+    ? startedLaunch(spec, index, outcome.run)
+    : failedLaunch(spec, index, outcome);
 
 export const startContract = (
   specs: ReadonlyArray<SubagentStartSpec>,

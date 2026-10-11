@@ -223,17 +223,15 @@ const renderRunRoute = (
     : `${theme.fg("muted", profile)} ${theme.fg("toolOutput", `${hostRuntime} ${model}`)}`;
 };
 
-const renderActivityRow = (
+const activityIdentity = (
   row: FleetTreeRow,
   panel: SubagentActivityPanelProjection,
-  width: number,
-  tier: ManagerLayoutTier,
   theme: Theme,
   now: number,
   duplicates: ReadonlySet<string>,
+  ancestorOnly: boolean,
 ): string => {
   const { run } = row;
-  const ancestorOnly = !panel.trackedRunIds.has(run.id);
   const identityColor = ancestorOnly ? "dim" : runStateColor(run.state);
   const branch = runTreeBranch(row);
   const awaited = panel.awaitedRunIds.has(run.id) ? "◎ " : "";
@@ -245,17 +243,23 @@ const renderActivityRow = (
         shortRunId(sanitizeTerminalLine(run.id)),
       )}`
     : "";
-  const identity = `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}`;
-  const route = renderRunRoute(run, theme, tier === "wide" ? "full" : "model", ancestorOnly);
-  const compactRoute =
-    tier === "wide" ? renderRunRoute(run, theme, "compact", ancestorOnly) : route;
+  return `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}`;
+};
+
+const activityMetadataVariants = (
+  run: FleetTreeRow["run"],
+  route: string,
+  theme: Theme,
+  now: number,
+  ancestorOnly: boolean,
+  separator: string,
+): string[] => {
   const activity = ancestorOnly ? "" : runActivity(run);
   const attention = run.state === "waiting_for_parent" || run.state === "paused";
   const themedActivity = activity ? theme.fg(attention ? "warning" : "accent", activity) : "";
   const elapsed = ancestorOnly ? "" : runElapsed(run, now);
   const themedElapsed = elapsed ? theme.fg("dim", elapsed) : "";
-  const separator = theme.fg("dim", " · ");
-  const metadataVariants = [
+  return [
     [route, themedActivity, themedElapsed],
     [route, themedActivity],
     [route, themedElapsed],
@@ -263,12 +267,15 @@ const renderActivityRow = (
   ]
     .map((parts) => parts.filter(Boolean).join(separator))
     .filter(Boolean);
+};
 
-  for (const metadata of metadataVariants) {
-    const combined = `${identity}${separator}${metadata}`;
-    if (visibleWidth(combined) <= width) return combined;
-  }
-
+const clippedActivityRow = (
+  identity: string,
+  compactRoute: string,
+  width: number,
+  tier: ManagerLayoutTier,
+  separator: string,
+): string => {
   if (width < 12) return clipToWidth(identity, width, "");
   const minimumIdentityWidth = tier === "narrow" ? 6 : 8;
   const maximumRouteWidth = width - minimumIdentityWidth - visibleWidth(separator);
@@ -276,6 +283,36 @@ const renderActivityRow = (
   const routeWidth = Math.min(visibleWidth(compactRoute), maximumRouteWidth);
   const identityWidth = width - routeWidth - visibleWidth(separator);
   return `${clipToWidth(identity, identityWidth, "")}${separator}${clipToWidth(compactRoute, routeWidth, "")}`;
+};
+
+const renderActivityRow = (
+  row: FleetTreeRow,
+  panel: SubagentActivityPanelProjection,
+  width: number,
+  tier: ManagerLayoutTier,
+  theme: Theme,
+  now: number,
+  duplicates: ReadonlySet<string>,
+): string => {
+  const { run } = row;
+  const ancestorOnly = !panel.trackedRunIds.has(run.id);
+  const identity = activityIdentity(row, panel, theme, now, duplicates, ancestorOnly);
+  const route = renderRunRoute(run, theme, tier === "wide" ? "full" : "model", ancestorOnly);
+  const compactRoute =
+    tier === "wide" ? renderRunRoute(run, theme, "compact", ancestorOnly) : route;
+  const separator = theme.fg("dim", " · ");
+  for (const metadata of activityMetadataVariants(
+    run,
+    route,
+    theme,
+    now,
+    ancestorOnly,
+    separator,
+  )) {
+    const combined = `${identity}${separator}${metadata}`;
+    if (visibleWidth(combined) <= width) return combined;
+  }
+  return clippedActivityRow(identity, compactRoute, width, tier, separator);
 };
 
 export const renderProjectedSubagentActivityPanel = (

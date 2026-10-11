@@ -85,6 +85,16 @@ const resolveSaveTarget = (
   return directory === undefined ? undefined : { directory, root: undefined };
 };
 
+const requestOptions = (params: ToolParams, cfg: ResolvedConfig) => ({
+  imageModel: params.imageModel ?? DEFAULT_IMAGE_MODEL,
+  action: params.action ?? "auto",
+  outputFormat: params.outputFormat ?? cfg.image.outputFormat,
+  save: params.save ?? cfg.image.defaultSave,
+});
+
+const customDirectory = (params: ToolParams, configured: Option.Option<string>) =>
+  params.saveDir?.trim() || Option.getOrUndefined(configured)?.trim();
+
 interface OpenAIImageServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly projection: MutableRef.MutableRef<OpenAIProjection>;
@@ -126,15 +136,12 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
             try: () => resolveModel(params, ctx, cfg),
             catch: failWith("context", "Unable to read the Pi model context."),
           });
-          const imageModel = params.imageModel ?? DEFAULT_IMAGE_MODEL;
-          const action = params.action ?? "auto";
-          const outputFormat = params.outputFormat ?? cfg.image.outputFormat;
-          const save = params.save ?? cfg.image.defaultSave;
+          const { imageModel, action, outputFormat, save } = requestOptions(params, cfg);
           const output = imageOutputMetadata(outputFormat);
           const saveTarget = resolveSaveTarget(path, save, {
             cwd,
             agentDir,
-            custom: params.saveDir?.trim() || Option.getOrUndefined(customSaveDir)?.trim(),
+            custom: customDirectory(params, customSaveDir),
             home: Option.getOrUndefined(homeDirectory),
           });
           if (save === "custom" && !saveTarget)

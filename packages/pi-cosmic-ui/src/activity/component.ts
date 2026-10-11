@@ -159,47 +159,55 @@ export class ActivityComponent {
       entries.map((entry) => entry.id),
     );
   }
+  private initialEntry(): GroupedActivityRow | undefined {
+    const all = this.allEntries();
+    const section = this.options.initialSection;
+    if (!section)
+      return this.shell.state.selectedId
+        ? undefined
+        : all.find((entry) => entry.type === "workflow" || entry.type === "member");
+    const matching = (entry: GroupedActivityRow) =>
+      section === "workflows"
+        ? entry.type === "workflow"
+        : source(entry)?.kind === (section === "tasks" ? "command" : "agent");
+    return (
+      all.find((entry) => entry.section === section && matching(entry)) ??
+      all.find(matching) ??
+      all.find((entry) => entry.id === activitySectionId(section))
+    );
+  }
+  private selectableEntries(): readonly GroupedActivityRow[] {
+    const entries = this.entries();
+    const id = this.shell.state.selectedId;
+    if (!id || entries.some((entry) => entry.id === id)) return entries;
+    for (const ancestor of groupedActivityPath(this.allEntries(), id))
+      if (ancestor.history) this.presentation.expandedHistory.add(ancestor.id);
+    return this.entries();
+  }
+  private resetSelectionState(identity: string | undefined): void {
+    this.selectedIdentity = identity;
+    this.follow = false;
+    this.actionPage = 0;
+    this.preserveDetailPosition = false;
+    this.openAtTop = true;
+    this.anchored = false;
+    this.cancellationPending ||= this.requested !== undefined;
+    this.requested = undefined;
+    this.detailRequestSequence++;
+    this.shell.resetDetailWindow();
+  }
   private selected() {
     if (!this.initialized) {
       this.initialized = true;
-      const all = this.allEntries();
-      const section = this.options.initialSection;
-      const matching = (entry: GroupedActivityRow) =>
-        section === "workflows"
-          ? entry.type === "workflow"
-          : source(entry)?.kind === (section === "tasks" ? "command" : "agent");
-      const initial = section
-        ? (all.find((entry) => entry.section === section && matching(entry)) ??
-          all.find(matching) ??
-          all.find((entry) => entry.id === activitySectionId(section)))
-        : !this.shell.state.selectedId
-          ? all.find((entry) => entry.type === "workflow" || entry.type === "member")
-          : undefined;
+      const initial = this.initialEntry();
       if (initial) this.reveal(initial.id);
     }
-    let entries = this.entries();
-    const id = this.shell.state.selectedId;
-    if (id && !entries.some((entry) => entry.id === id)) {
-      for (const ancestor of groupedActivityPath(this.allEntries(), id))
-        if (ancestor.history) this.presentation.expandedHistory.add(ancestor.id);
-      entries = this.entries();
-    }
+    const entries = this.selectableEntries();
     this.shell.reconcile(entries.map((entry) => entry.id));
     const selected = entries[this.shell.state.selected];
     const row = source(selected);
     const identity = row ? JSON.stringify([row.key, row.generation]) : selected?.id;
-    if (identity !== this.selectedIdentity) {
-      this.selectedIdentity = identity;
-      this.follow = false;
-      this.actionPage = 0;
-      this.preserveDetailPosition = false;
-      this.openAtTop = true;
-      this.anchored = false;
-      this.cancellationPending ||= this.requested !== undefined;
-      this.requested = undefined;
-      this.detailRequestSequence++;
-      this.shell.resetDetailWindow();
-    }
+    if (identity !== this.selectedIdentity) this.resetSelectionState(identity);
     this.shell.ensureSelectionPane(
       !!selected && !(selected.type === "section" && selected.children === 0),
     );
@@ -367,12 +375,17 @@ export class ActivityComponent {
     if (key === "w") this.revealNextWaiting(row);
     else if (key === "a")
       this.actionPage = (this.actionPage + 1) % activityActionPages(row?.actions);
-    else if (key === "r" && row) this.loadDetails(row, !this.follow);
-    else if (key === "t" && row) this.technical = !this.technical;
-    else if (key === "f" && row && !row.retained) this.toggleFollow(row);
     else if (key === "z")
       this.presentation.focus = this.presentation.focus ? undefined : selected?.id;
-    else if (row && !row.retained) this.invokeShortcutAction(key, row);
+    else if (row) this.handleRowShortcut(key, row);
+  }
+  private handleRowShortcut(key: string, row: ActivityRow): void {
+    if (key === "r") this.loadDetails(row, !this.follow);
+    else if (key === "t") this.technical = !this.technical;
+    else if (!row.retained) {
+      if (key === "f") this.toggleFollow(row);
+      else this.invokeShortcutAction(key, row);
+    }
   }
   private revealNextWaiting(row: ActivityRow | undefined): void {
     const waiting = needsYou(this.options.snapshot());

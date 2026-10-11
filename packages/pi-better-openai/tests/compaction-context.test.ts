@@ -79,10 +79,15 @@ describe("owned checkpoint reconstruction", () => {
       ...extensionContextFixture({ abort, ui: { notify } }),
       sessionManager: history(),
     };
-    handlers.get("context_with_system")![0]!(
-      { type: "context_with_system", messages: ctx.sessionManager.buildSessionContext().messages },
-      ctx,
-    );
+    expect(
+      handlers.get("context_with_system")[0]!(
+        {
+          type: "context_with_system",
+          messages: ctx.sessionManager.buildSessionContext().messages,
+        },
+        ctx,
+      ),
+    ).toBeUndefined();
     expect(abort).toHaveBeenCalledOnce();
     expect(notify).toHaveBeenCalled();
     expect(

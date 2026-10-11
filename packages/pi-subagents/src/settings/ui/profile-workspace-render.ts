@@ -226,40 +226,12 @@ const editorLines = (
     const section = row.scope === "candidate" ? `candidate:${row.candidateIndex}` : row.scope;
     if (section !== previousSection) {
       if (previousSection !== undefined) lines.push("");
-      if (row.scope === "candidate") {
-        const candidate = state.draft.candidates[row.candidateIndex]!;
-        const label = profileRouteOptionLabel(row.candidateIndex);
-        lines.push(
-          theme.fg(
-            "muted",
-            theme.bold(
-              `${label}  ${workspaceCandidateSummary(candidate, profile, state.parentEffort, Math.max(0, width - visibleWidth(label) - 2), state.parentModel, theme)}`,
-            ),
-          ),
-        );
-      } else {
-        lines.push(
-          theme.fg("muted", "Profile: ") + theme.fg(managerTone.identity, theme.bold(profile)),
-        );
-      }
+      lines.push(sectionHeading(state, theme, row, profile, width));
       previousSection = section;
     }
     if (index === state.fieldIndex) selectedLine = lines.length;
     const selected = index === state.fieldIndex && state.pane !== "profiles";
-    const value = row.value
-      ? `${" ".repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2)}${selected && !row.fixed ? row.value : fieldValue(state, theme, row)}`
-      : "";
-    const text = clipToWidth(
-      `${selected ? ">" : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
-      width,
-    );
-    lines.push(
-      selected && !row.fixed
-        ? focusedField(theme, text)
-        : row.fixed
-          ? theme.fg("muted", text)
-          : text,
-    );
+    lines.push(fieldLine(state, theme, row, { selected, labelWidth, width }));
   });
   const limit = Math.max(0, height - 1);
   const start = listWindowStart(lines.length, selectedLine, limit);
@@ -267,6 +239,49 @@ const editorLines = (
     listDetailHeading(theme, profile, state.pane !== "profiles", managerTone.identity),
     ...lines.slice(start, start + limit),
   ];
+};
+
+const sectionHeading = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+  row: ProfileWorkspaceRow,
+  profile: ProfileId,
+  width: number,
+): string => {
+  if (row.scope !== "candidate")
+    return theme.fg("muted", "Profile: ") + theme.fg(managerTone.identity, theme.bold(profile));
+  const label = profileRouteOptionLabel(row.candidateIndex);
+  const candidate = state.draft.candidates[row.candidateIndex];
+  const summary =
+    candidate === undefined
+      ? ""
+      : workspaceCandidateSummary(
+          candidate,
+          profile,
+          state.parentEffort,
+          Math.max(0, width - visibleWidth(label) - 2),
+          state.parentModel,
+          theme,
+        );
+  return theme.fg("muted", theme.bold(`${label}  ${summary}`));
+};
+
+const fieldLine = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+  row: ProfileWorkspaceRow,
+  layout: { readonly selected: boolean; readonly labelWidth: number; readonly width: number },
+): string => {
+  const { selected, labelWidth, width } = layout;
+  const value = row.value
+    ? `${" ".repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2)}${selected && !row.fixed ? row.value : fieldValue(state, theme, row)}`
+    : "";
+  const text = clipToWidth(
+    `${selected ? ">" : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
+    width,
+  );
+  if (selected && !row.fixed) return focusedField(theme, text);
+  return row.fixed ? theme.fg("muted", text) : text;
 };
 
 const compactLines = (
@@ -337,6 +352,31 @@ export const profileWorkspaceHelpLines = (
     `${keys.cancel} or ? closes help`,
   ].flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
 };
+const workspaceFooter = (
+  state: ProfileWorkspaceRenderState,
+  keybindingLabel: ProfileWorkspaceRenderOptions["keybindingLabel"],
+  width: number,
+): string => {
+  const keys = profileWorkspaceKeys(
+    keybindingLabel,
+    Boolean(state.pendingConfirmation) || state.busy,
+  );
+  if (state.pendingConfirmation) return `${keys.confirm} Confirm · ${keys.cancel} Cancel`;
+  if (state.helpOpen) return `↑/↓ Scroll help · ${keys.cancel} Close help`;
+  if (state.busy) return state.cancellableBusy ? `${keys.cancel} Cancel loading` : "Saving…";
+  const back =
+    state.pane === "profiles"
+      ? state.target.kind === "session"
+        ? "Close"
+        : "Saved profiles"
+      : "Profiles";
+  const tab = state.target.kind === "session" ? "Tab Saved profiles" : "Tab Current Session";
+  return renderResponsiveManagerFooter(width, [
+    [`${keys.confirm} Open`, tab, "m Model · a Manage · ? Help", `${keys.cancel} ${back}`],
+    [tab, "? Help", `${keys.cancel} ${back}`],
+  ]);
+};
+
 export const renderProfileWorkspace = (
   state: ProfileWorkspaceRenderState,
   options: ProfileWorkspaceRenderOptions,
@@ -348,41 +388,11 @@ export const renderProfileWorkspace = (
   const inner = width - 2;
   const { theme } = options;
   const frame = listDetailFrame(theme, state.pane === "profiles" ? "list" : "detail");
-  const keys = profileWorkspaceKeys(
-    options.keybindingLabel,
-    Boolean(state.pendingConfirmation) || state.busy,
-  );
-  const back =
-    state.pane === "profiles"
-      ? state.target.kind === "session"
-        ? "Close"
-        : "Saved profiles"
-      : "Profiles";
   const context =
     state.target.kind === "session"
       ? "Current Session"
       : qualifiedProfileSetLabel(state.target.set);
-  const bottom = state.pendingConfirmation
-    ? `${keys.confirm} Confirm · ${keys.cancel} Cancel`
-    : state.helpOpen
-      ? `↑/↓ Scroll help · ${keys.cancel} Close help`
-      : state.busy
-        ? state.cancellableBusy
-          ? `${keys.cancel} Cancel loading`
-          : "Saving…"
-        : renderResponsiveManagerFooter(inner, [
-            [
-              `${keys.confirm} Open`,
-              state.target.kind === "session" ? "Tab Saved profiles" : "Tab Current Session",
-              "m Model · a Manage · ? Help",
-              `${keys.cancel} ${back}`,
-            ],
-            [
-              state.target.kind === "session" ? "Tab Saved profiles" : "Tab Current Session",
-              "? Help",
-              `${keys.cancel} ${back}`,
-            ],
-          ]);
+  const bottom = workspaceFooter(state, options.keybindingLabel, inner);
   return framedScreen(frame, {
     width,
     height,

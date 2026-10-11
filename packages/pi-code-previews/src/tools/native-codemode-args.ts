@@ -71,143 +71,175 @@ function fieldValue(
   return Predicate.isString(scalar) ? safeNativeArgumentText(scalar, !complete) : scalar;
 }
 
-export function nativeArgumentPreview(raw: string): NativeArgumentPreview | undefined {
-  if (!raw || raw.length > 4096) return undefined;
-  const decoded = decodeUnknownOrUndefined(Args, raw);
-  const truncated = decoded === undefined && raw.length === PREVIEW_LENGTH && raw.endsWith("...");
-  if (decoded === undefined && !truncated) return undefined;
-  const source = truncated ? raw.slice(0, -3) : raw;
-  let cursor = 0;
-  const fields = new Map<string, NativeArgumentScalar>();
-  const partialFields = new Set<string>();
-  const redactions: Redaction[] = [];
-  const skipWhitespace = () => {
-    while (whitespace(source[cursor])) cursor++;
-  };
-  function string(isKey = false): Value | undefined {
-    const start = cursor++;
+type EscapeRead =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "end" }
+  | undefined;
+
+class ArgumentParser {
+  private cursor = 0;
+  readonly fields = new Map<string, NativeArgumentScalar>();
+  readonly partialFields = new Set<string>();
+  readonly redactions: Redaction[] = [];
+  private readonly source: string;
+  private readonly truncated: boolean;
+
+  constructor(source: string, truncated: boolean) {
+    this.source = source;
+    this.truncated = truncated;
+  }
+
+  atEnd(): boolean {
+    return this.cursor === this.source.length;
+  }
+
+  skipWhitespace(): void {
+    while (whitespace(this.source[this.cursor])) this.cursor++;
+  }
+
+  root(): Value | undefined {
+    this.skipWhitespace();
+    if (this.source[this.cursor] !== "{") return undefined;
+    const root = this.container(0, "}");
+    this.skipWhitespace();
+    return root;
+  }
+
+  private string(isKey = false): Value | undefined {
+    const start = this.cursor++;
     let value = "";
-    while (cursor < source.length) {
-      const character = source[cursor++]!;
-      if (character === '"') {
-        if (!isKey && credentialStart(value, false) !== undefined)
-          redactions.push({ start, end: cursor });
-        return { complete: true, scalar: value };
-      }
+    while (this.cursor < this.source.length) {
+      const character = this.source.charAt(this.cursor++);
+      if (character === '"') return this.closedString(value, start, isKey);
       if (character.charCodeAt(0) < 32) return undefined;
       if (character !== "\\") {
         value += character;
         continue;
       }
-      if (cursor === source.length) break;
-      const escape = source[cursor++]!;
-      if (escape === "u") {
-        const hex = source.slice(cursor, cursor + 4);
-        if (!/^[0-9a-f]{0,4}$/iu.test(hex)) return undefined;
-        if (hex.length < 4) {
-          cursor = source.length;
-          break;
-        }
-        value += String.fromCharCode(Number.parseInt(hex, 16));
-        cursor += 4;
-      } else {
-        const decodedEscape = stringEscapes.get(escape);
-        if (decodedEscape === undefined) return undefined;
-        value += decodedEscape;
-      }
+      if (this.atEnd()) break;
+      const escaped = this.escape();
+      if (escaped === undefined) return undefined;
+      if (escaped.kind === "end") break;
+      value += escaped.text;
     }
-    if (!truncated) return undefined;
-    const last = value.charCodeAt(value.length - 1);
-    if (last >= 0xd800 && last <= 0xdbff) value = value.slice(0, -1);
+    return this.unterminatedString(value, start, isKey);
+  }
+
+  private escape(): EscapeRead {
+    const escape = this.source.charAt(this.cursor++);
+    if (escape !== "u") {
+      const decodedEscape = stringEscapes.get(escape);
+      return decodedEscape === undefined ? undefined : { kind: "text", text: decodedEscape };
+    }
+    const hex = this.source.slice(this.cursor, this.cursor + 4);
+    if (!/^[0-9a-f]{0,4}$/iu.test(hex)) return undefined;
+    if (hex.length < 4) {
+      this.cursor = this.source.length;
+      return { kind: "end" };
+    }
+    this.cursor += 4;
+    return { kind: "text", text: String.fromCharCode(Number.parseInt(hex, 16)) };
+  }
+
+  private closedString(value: string, start: number, isKey: boolean): Value {
+    if (!isKey && credentialStart(value, false) !== undefined)
+      this.redactions.push({ start, end: this.cursor });
+    return { complete: true, scalar: value };
+  }
+
+  private unterminatedString(text: string, start: number, isKey: boolean): Value | undefined {
+    if (!this.truncated) return undefined;
+    const last = text.charCodeAt(text.length - 1);
+    const value = last >= 0xd800 && last <= 0xdbff ? text.slice(0, -1) : text;
     if (!isKey && credentialStart(value, true) !== undefined)
-      redactions.push({ start, end: cursor });
+      this.redactions.push({ start, end: this.cursor });
     return { complete: false, scalar: value };
   }
 
-  function objectKey(keys: Set<string>): string | Value | undefined {
-    if (source[cursor] !== '"') return undefined;
-    const parsed = string(true);
+  private objectKey(keys: Set<string>): string | Value | undefined {
+    if (this.source[this.cursor] !== '"') return undefined;
+    const parsed = this.string(true);
     if (!parsed) return undefined;
     if (!parsed.complete) return unfinished();
     if (!Predicate.isString(parsed.scalar) || keys.has(parsed.scalar)) return undefined;
     keys.add(parsed.scalar);
-    skipWhitespace();
-    if (cursor === source.length) return unfinished();
-    if (source[cursor++] !== ":") return undefined;
-    skipWhitespace();
+    this.skipWhitespace();
+    if (this.atEnd()) return unfinished();
+    if (this.source[this.cursor++] !== ":") return undefined;
+    this.skipWhitespace();
     return parsed.scalar;
   }
 
-  function recordField(key: string | undefined, depth: number, start: number, item: Value) {
+  private recordField(key: string | undefined, depth: number, start: number, item: Value): void {
     if (key === undefined) return;
-    if (isSensitiveDiagnosticKey(key)) redactions.push({ start, end: cursor });
+    if (isSensitiveDiagnosticKey(key)) this.redactions.push({ start, end: this.cursor });
     if (depth !== 0 || item.scalar === undefined) return;
-    fields.set(key, fieldValue(key, item.scalar, item.complete));
-    if (!item.complete) partialFields.add(key);
+    this.fields.set(key, fieldValue(key, item.scalar, item.complete));
+    if (!item.complete) this.partialFields.add(key);
   }
 
-  function container(depth: number, close: "}" | "]"): Value | undefined {
-    cursor++;
+  private container(depth: number, close: "}" | "]"): Value | undefined {
+    this.cursor++;
     const keys = new Set<string>();
-    skipWhitespace();
-    if (source[cursor] === close) {
-      cursor++;
+    this.skipWhitespace();
+    if (this.source[this.cursor] === close) {
+      this.cursor++;
       return { complete: true };
     }
-    while (cursor < source.length) {
+    while (this.cursor < this.source.length) {
       let key: string | undefined;
       if (close === "}") {
-        const parsedKey = objectKey(keys);
+        const parsedKey = this.objectKey(keys);
         if (!Predicate.isString(parsedKey)) return parsedKey;
         key = parsedKey;
       }
-      const start = cursor;
-      const item = parseValue(depth + 1);
+      const start = this.cursor;
+      const item = this.parseValue(depth + 1);
       if (!item) return undefined;
-      recordField(key, depth, start, item);
+      this.recordField(key, depth, start, item);
       if (!item.complete) return unfinished();
-      skipWhitespace();
-      if (cursor === source.length) return unfinished();
-      const delimiter = source[cursor++];
+      this.skipWhitespace();
+      if (this.atEnd()) return unfinished();
+      const delimiter = this.source[this.cursor++];
       if (delimiter === close) return { complete: true };
       if (delimiter !== ",") return undefined;
-      skipWhitespace();
-      if (source[cursor] === close) return undefined;
+      this.skipWhitespace();
+      if (this.source[this.cursor] === close) return undefined;
     }
     return unfinished();
   }
 
-  function parseValue(depth: number): Value | undefined {
+  private parseValue(depth: number): Value | undefined {
     if (depth > MAX_DEPTH) return undefined;
-    skipWhitespace();
-    if (cursor === source.length) return unfinished();
-    const character = source[cursor];
-    if (character === '"') return string();
+    this.skipWhitespace();
+    if (this.atEnd()) return unfinished();
+    const character = this.source[this.cursor];
+    if (character === '"') return this.string();
     if (character === "{" || character === "[")
-      return container(depth, character === "{" ? "}" : "]");
-    const start = cursor;
+      return this.container(depth, character === "{" ? "}" : "]");
+    return this.scalar();
+  }
+
+  private scalar(): Value | undefined {
+    const start = this.cursor;
     while (
-      cursor < source.length &&
-      !whitespace(source[cursor]) &&
-      ![",", "}", "]"].includes(source[cursor]!)
+      this.cursor < this.source.length &&
+      !whitespace(this.source[this.cursor]) &&
+      ![",", "}", "]"].includes(this.source.charAt(this.cursor))
     )
-      cursor++;
-    if (cursor === source.length && truncated) {
-      const token = source.slice(start, cursor);
+      this.cursor++;
+    if (this.atEnd() && this.truncated) {
+      const token = this.source.slice(start, this.cursor);
       const literal = ["true", "false", "null"].some((word) => word.startsWith(token));
       const number = /^-$|^-?(?:0|[1-9]\d*)(?:(?:\.\d+)?(?:[eE][+-]?\d*)?|\.\d*)$/u.test(token);
       return literal || number ? unfinished() : undefined;
     }
-    const scalar = decodeUnknownOrUndefined(Scalar, source.slice(start, cursor));
+    const scalar = decodeUnknownOrUndefined(Scalar, this.source.slice(start, this.cursor));
     return scalar === undefined ? undefined : { complete: true, scalar };
   }
+}
 
-  skipWhitespace();
-  if (source[cursor] !== "{") return undefined;
-  const root = container(0, "}");
-  skipWhitespace();
-  if (!root || cursor !== source.length || root.complete === truncated) return undefined;
-
+function mergedRedactions(redactions: readonly Redaction[]): Redaction[] {
   const spans: Redaction[] = [];
   for (const span of redactions.toSorted((left, right) => left.start - right.start)) {
     const previous = spans.at(-1);
@@ -215,13 +247,28 @@ export function nativeArgumentPreview(raw: string): NativeArgumentPreview | unde
       spans[spans.length - 1] = { start: previous.start, end: Math.max(previous.end, span.end) };
     else spans.push(span);
   }
+  return spans;
+}
+
+function redactedText(raw: string, redactions: readonly Redaction[]): string {
   let text = raw;
-  for (const span of spans.toReversed())
+  for (const span of mergedRedactions(redactions).toReversed())
     text = `${text.slice(0, span.start)}"[REDACTED]"${text.slice(span.end)}`;
+  return text;
+}
+
+export function nativeArgumentPreview(raw: string): NativeArgumentPreview | undefined {
+  if (!raw || raw.length > 4096) return undefined;
+  const decoded = decodeUnknownOrUndefined(Args, raw);
+  const truncated = decoded === undefined && raw.length === PREVIEW_LENGTH && raw.endsWith("...");
+  if (decoded === undefined && !truncated) return undefined;
+  const parser = new ArgumentParser(truncated ? raw.slice(0, -3) : raw, truncated);
+  const root = parser.root();
+  if (!root || !parser.atEnd() || root.complete === truncated) return undefined;
   return {
-    values: Object.fromEntries(fields),
-    partialFields,
+    values: Object.fromEntries(parser.fields),
+    partialFields: parser.partialFields,
     complete: !truncated,
-    text: sanitizeDiagnosticContent(text, { maximumLength: 4096 }),
+    text: sanitizeDiagnosticContent(redactedText(raw, parser.redactions), { maximumLength: 4096 }),
   };
 }

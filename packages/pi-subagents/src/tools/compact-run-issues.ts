@@ -139,6 +139,38 @@ function outsideClaims(card: SubagentRunCard): string {
   return `${shown}${paths.length > 1 ? ` and ${paths.length - 1} more` : ""} outside its file claims`;
 }
 
+function containmentIssues(card: SubagentRunCard, label: string, id: string, add: AddIssue): void {
+  const terminal = isTerminalRunState(card.state);
+  const pausing = card.state !== "paused" && !terminal;
+  add(
+    "warning",
+    "containment-audit",
+    `${label} wrote to ${outsideClaims(card)}${card.state === "paused" ? "; paused" : pausing ? "; waiting for it to pause" : ""}`,
+    [
+      "Claim containment. Review the full audit and shared tree with subagent_status; projected paths may be omitted. Do not use subagent_reply for containment.",
+      ...(pausing
+        ? [
+            "Wait for containment to reach paused or terminal, then inspect status. If still active, check again; do not issue a duplicate stop solely because pause has not published.",
+          ]
+        : []),
+    ].join("\n"),
+  );
+  if (!terminal && card.capabilities.includes("resume"))
+    add(
+      "info",
+      "containment-resume",
+      `${label} can resume once its claims are reviewed`,
+      `Once confirmed paused, if the full audit proves all writes workspace-relative, grant only reviewed, intended, conflict-free missing claims with subagent_claims. Then subagent_claims({ action: "resume_admission", runId: ${id} }), then subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue only within the authoritative claims returned by subagent_claims." }), then subagent_await. If containment instead reaches terminal, confirm process and writer cleanup before reopening admission and launching and awaiting a corrected replacement. If any write is outside the workspace, stop and confirm process and writer cleanup before reopening admission and launching and awaiting a corrected replacement with exact safe claims.`,
+    );
+  else
+    add(
+      "info",
+      "containment-stop",
+      `${label} must be stopped and replaced`,
+      `Once containment reaches paused or terminal, if paused, stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }). Confirm process and writer cleanup before subagent_claims({ action: "resume_admission", runId: ${id} }); then launch a corrected replacement with reviewed exact workspace-relative claims and await its run ID.`,
+    );
+}
+
 function attentionIssues(
   card: SubagentRunCard,
   label: string,
@@ -148,38 +180,11 @@ function attentionIssues(
   const id = JSON.stringify(card.id);
   const attention = runAttention(card);
   switch (attention?.kind) {
-    case "containment": {
-      const terminal = isTerminalRunState(card.state);
-      const pausing = card.state !== "paused" && !terminal;
-      add(
-        "warning",
-        "containment-audit",
-        `${label} wrote to ${outsideClaims(card)}${card.state === "paused" ? "; paused" : pausing ? "; waiting for it to pause" : ""}`,
-        [
-          "Claim containment. Review the full audit and shared tree with subagent_status; projected paths may be omitted. Do not use subagent_reply for containment.",
-          ...(pausing
-            ? [
-                "Wait for containment to reach paused or terminal, then inspect status. If still active, check again; do not issue a duplicate stop solely because pause has not published.",
-              ]
-            : []),
-        ].join("\n"),
-      );
-      if (!terminal && card.capabilities.includes("resume"))
-        add(
-          "info",
-          "containment-resume",
-          `${label} can resume once its claims are reviewed`,
-          `Once confirmed paused, if the full audit proves all writes workspace-relative, grant only reviewed, intended, conflict-free missing claims with subagent_claims. Then subagent_claims({ action: "resume_admission", runId: ${id} }), then subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue only within the authoritative claims returned by subagent_claims." }), then subagent_await. If containment instead reaches terminal, confirm process and writer cleanup before reopening admission and launching and awaiting a corrected replacement. If any write is outside the workspace, stop and confirm process and writer cleanup before reopening admission and launching and awaiting a corrected replacement with exact safe claims.`,
-        );
-      else
-        add(
-          "info",
-          "containment-stop",
-          `${label} must be stopped and replaced`,
-          `Once containment reaches paused or terminal, if paused, stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }). Confirm process and writer cleanup before subagent_claims({ action: "resume_admission", runId: ${id} }); then launch a corrected replacement with reviewed exact workspace-relative claims and await its run ID.`,
-        );
+    case undefined:
       return;
-    }
+    case "containment":
+      containmentIssues(card, label, id, add);
+      return;
     case "admission-paused":
       add(
         "warning",
@@ -213,9 +218,6 @@ function attentionIssues(
         `${label} is waiting for a reply, but its question is unavailable`,
         "Waiting for parent, but no question is projected. Inspect full subagent_status before choosing recovery; do not invent a reply.",
       );
-      return;
-    default:
-      return;
   }
 }
 

@@ -14,9 +14,22 @@ const ACTIVITY_ACTION_KEYS: ReadonlyArray<readonly [string, ReadonlyArray<string
 ];
 
 export const activityShortcuts: ReadonlySet<string> = new Set([
-  ..."arwzft",
+  "a",
+  "r",
+  "w",
+  "z",
+  "f",
+  "t",
   ...ACTIVITY_ACTION_KEYS.map(([key]) => key),
-  ..."123456789",
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
 ]);
 
 export const activityActionForKey = (

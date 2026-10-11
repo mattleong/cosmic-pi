@@ -80,7 +80,11 @@ export const normalizeRpcEvent = (
         type: "warning",
         message: envelope.error,
       });
-    default:
+    case "agent_end":
+    case "extension_ui_request":
+    case "ignored":
+    case "message_start":
+    case "response":
       return Effect.undefined;
   }
 };

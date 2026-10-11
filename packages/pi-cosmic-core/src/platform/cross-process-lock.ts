@@ -114,42 +114,40 @@ const cleanReleased = (directory: string, owner: Owner) => {
   } catch {}
 };
 
-export const acquireNativeLock = (
-  namespace: string,
-  options: CrossProcessLockOptions,
-  retryAfterRetire = false,
-): CrossProcessLease | undefined => {
-  const root = options.directory;
+const ensurePrivateRoot = (root: string): void => {
   try {
     fs.mkdirSync(root, { mode: 0o700 });
   } catch (error) {
     if (!code("EEXIST")(error)) throw error;
   }
   privateDirectory(root, root);
-  const directory = path.join(root, sha256Text(namespace));
-  let previous: Owner | undefined;
+};
+
+const readPreviousOwner = (directory: string): Owner | undefined => {
   try {
-    previous = readOwner(directory);
+    return readOwner(directory);
   } catch (error) {
     if (!code("ENOENT")(error)) throw recovery(directory);
-    try {
-      fs.lstatSync(directory);
-      throw recovery(directory);
-    } catch (statError) {
-      if (!code("ENOENT")(statError)) throw statError;
-    }
   }
-  if (previous) {
-    if (!dead(previous.pid)) return undefined;
-    if (previous.phase === "native-pending") throw recovery(directory);
-    try {
-      retire(directory, previous, root);
-    } catch (retireError) {
-      if (!code("ENOENT", "ENOTEMPTY", "EEXIST")(retireError)) throw retireError;
-    }
-    return retryAfterRetire ? acquireNativeLock(namespace, options) : undefined;
+  try {
+    fs.lstatSync(directory);
+  } catch (statError) {
+    if (code("ENOENT")(statError)) return undefined;
+    throw statError;
   }
-  const owner: Owner = { version: 1, token: randomToken(), pid: process.pid, phase: "quiescent" };
+  throw recovery(directory);
+};
+
+const retireDeadOwner = (directory: string, previous: Owner, root: string): void => {
+  if (previous.phase === "native-pending") throw recovery(directory);
+  try {
+    retire(directory, previous, root);
+  } catch (retireError) {
+    if (!code("ENOENT", "ENOTEMPTY", "EEXIST")(retireError)) throw retireError;
+  }
+};
+
+const publishOwner = (root: string, directory: string, owner: Owner): boolean => {
   const candidate = path.join(root, `.candidate-${owner.token}`);
   fs.mkdirSync(candidate, { mode: 0o700 });
   writeOwner(candidate, owner);
@@ -158,7 +156,7 @@ export const acquireNativeLock = (
   } catch (error) {
     fs.unlinkSync(path.join(candidate, "owner.json"));
     fs.rmdirSync(candidate);
-    if (code("EEXIST", "ENOTEMPTY")(error)) return undefined;
+    if (code("EEXIST", "ENOTEMPTY")(error)) return false;
     throw error;
   }
   try {
@@ -171,6 +169,10 @@ export const acquireNativeLock = (
     }
     throw error;
   }
+  return true;
+};
+
+const ownedLease = (root: string, directory: string, owner: Owner): CrossProcessLease => {
   let pending = false;
   let releaseRequested = false;
   let released = false;
@@ -212,6 +214,24 @@ export const acquireNativeLock = (
     },
     release,
   };
+};
+
+export const acquireNativeLock = (
+  namespace: string,
+  options: CrossProcessLockOptions,
+  retryAfterRetire = false,
+): CrossProcessLease | undefined => {
+  const root = options.directory;
+  ensurePrivateRoot(root);
+  const directory = path.join(root, sha256Text(namespace));
+  const previous = readPreviousOwner(directory);
+  if (previous) {
+    if (!dead(previous.pid)) return undefined;
+    retireDeadOwner(directory, previous, root);
+    return retryAfterRetire ? acquireNativeLock(namespace, options) : undefined;
+  }
+  const owner: Owner = { version: 1, token: randomToken(), pid: process.pid, phase: "quiescent" };
+  return publishOwner(root, directory, owner) ? ownedLease(root, directory, owner) : undefined;
 };
 
 const failure = (cause: unknown) =>

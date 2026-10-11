@@ -41,6 +41,42 @@ const readStep = <Value>(evaluate: () => PromiseLike<Value>) =>
   nodePromise("read", READ_FAILURE, evaluate);
 const failRead = () => Effect.fail(safeFileError("read", READ_FAILURE)());
 
+type OpenedFile = Awaited<ReturnType<typeof fs.open>>;
+
+interface FileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+const sameFile = (left: FileIdentity, right: FileIdentity): boolean =>
+  left.dev === right.dev && left.ino === right.ino;
+
+const readExactly = (handle: OpenedFile, size: bigint) =>
+  Effect.gen(function* () {
+    const bytes = yield* Effect.try({
+      try: () => new Uint8Array(Number(size)),
+      catch: safeFileError("read", READ_FAILURE),
+    });
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const { bytesRead } = yield* readStep(() =>
+        handle.read({
+          buffer: bytes,
+          offset,
+          length: bytes.byteLength - offset,
+          position: offset,
+        }),
+      );
+      if (bytesRead === 0) return yield* failRead();
+      offset += bytesRead;
+    }
+    const extra = yield* readStep(() =>
+      handle.read({ buffer: new Uint8Array(1), position: bytes.byteLength }),
+    );
+    if (extra.bytesRead !== 0) return yield* failRead();
+    return bytes;
+  });
+
 const readContainedRegularFile = (paths: Path.Path) =>
   Effect.fn("SafeFile.readContainedRegularFile")(function* (
     path: string,
@@ -63,12 +99,7 @@ const readContainedRegularFile = (paths: Path.Path) =>
       (handle) =>
         Effect.gen(function* () {
           const opened = yield* readStep(() => handle.stat({ bigint: true }));
-          if (
-            !opened.isFile() ||
-            opened.size > maximumSize ||
-            before.dev !== opened.dev ||
-            before.ino !== opened.ino
-          )
+          if (!opened.isFile() || opened.size > maximumSize || !sameFile(before, opened))
             return yield* failRead();
 
           const [resolvedPath, resolvedRoot] = yield* Effect.all(
@@ -85,33 +116,11 @@ const readContainedRegularFile = (paths: Path.Path) =>
             return yield* failRead();
 
           const visible = yield* readStep(() => fs.stat(resolvedPath, { bigint: true }));
-          if (!visible.isFile() || visible.dev !== opened.dev || visible.ino !== opened.ino)
-            return yield* failRead();
+          if (!visible.isFile() || !sameFile(visible, opened)) return yield* failRead();
 
-          const bytes = yield* Effect.try({
-            try: () => new Uint8Array(Number(opened.size)),
-            catch: safeFileError("read", READ_FAILURE),
-          });
-          let offset = 0;
-          while (offset < bytes.byteLength) {
-            const { bytesRead } = yield* readStep(() =>
-              handle.read({
-                buffer: bytes,
-                offset,
-                length: bytes.byteLength - offset,
-                position: offset,
-              }),
-            );
-            if (bytesRead === 0) return yield* failRead();
-            offset += bytesRead;
-          }
-          const extra = yield* readStep(() =>
-            handle.read({ buffer: new Uint8Array(1), position: bytes.byteLength }),
-          );
-          if (extra.bytesRead !== 0) return yield* failRead();
+          const bytes = yield* readExactly(handle, opened.size);
           const after = yield* readStep(() => handle.stat({ bigint: true }));
-          if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size)
-            return yield* failRead();
+          if (!sameFile(after, opened) || after.size !== opened.size) return yield* failRead();
           return { path: resolvedPath, bytes } satisfies SafeFileResult;
         }),
       (handle) =>

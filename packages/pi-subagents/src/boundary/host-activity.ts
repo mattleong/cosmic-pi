@@ -62,7 +62,7 @@ export const promptSubagentActivityInput = (
       const title = sanitizeDiagnosticContent(run.name, { maximumLength: 160 });
       const question = action === "reply" ? run.question?.message : undefined;
       return ctx.ui.input(
-        `${action[0]!.toUpperCase()}${action.slice(1)}: ${title}`,
+        `${action.charAt(0).toUpperCase()}${action.slice(1)}: ${title}`,
         question
           ? sanitizeDiagnosticContent(question, { maximumLength: 2000 })
           : action === "resume"

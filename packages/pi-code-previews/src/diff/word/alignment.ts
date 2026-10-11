@@ -18,8 +18,8 @@ export function suffixAlignedPairs(
     const rowOffset = i * columns;
     const nextRowOffset = rowOffset + columns;
     for (let j = afterLength - 1; j >= 0; j--) {
-      const align = dp[nextRowOffset + j + 1]! + scoreAt(i, j);
-      dp[rowOffset + j] = Math.max(align, dp[nextRowOffset + j]!, dp[rowOffset + j + 1]!);
+      const align = (dp[nextRowOffset + j + 1] ?? 0) + scoreAt(i, j);
+      dp[rowOffset + j] = Math.max(align, dp[nextRowOffset + j] ?? 0, dp[rowOffset + j + 1] ?? 0);
     }
   }
 
@@ -29,11 +29,13 @@ export function suffixAlignedPairs(
   while (i < beforeLength && j < afterLength) {
     const rowOffset = i * columns;
     const nextRowOffset = rowOffset + columns;
-    if (sameAlignmentScore(dp[rowOffset + j]!, dp[nextRowOffset + j + 1]! + scoreAt(i, j))) {
+    if (
+      sameAlignmentScore(dp[rowOffset + j] ?? 0, (dp[nextRowOffset + j + 1] ?? 0) + scoreAt(i, j))
+    ) {
       pairs.push([i, j]);
       i++;
       j++;
-    } else if (dp[nextRowOffset + j]! >= dp[rowOffset + j + 1]!) {
+    } else if ((dp[nextRowOffset + j] ?? 0) >= (dp[rowOffset + j + 1] ?? 0)) {
       i++;
     } else {
       j++;
@@ -65,10 +67,10 @@ export function suffixAlignmentScore(
   for (let i = beforeLength - 1; i >= 0; i--) {
     current[afterLength] = 0;
     for (let j = afterLength - 1; j >= 0; j--) {
-      current[j] = Math.max(next[j + 1]! + scoreAt(i, j), next[j]!, current[j + 1]!);
+      current[j] = Math.max((next[j + 1] ?? 0) + scoreAt(i, j), next[j] ?? 0, current[j + 1] ?? 0);
     }
     [next, current] = [current, next];
   }
 
-  return next[0]!;
+  return next[0] ?? 0;
 }

@@ -15,6 +15,7 @@ import { step } from "../support/effect-test";
 import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { drawToolRow, hostToolRow } from "../../testing";
+import { executeDescriptor } from "../support/tool-identity";
 
 beforeAll(() => initTheme("dark", false));
 
@@ -96,7 +97,7 @@ for (const order of ["native-first", "previews-first"] as const)
           const definition = session.getToolDefinition("tool_search");
           assert.ok(definition);
           const original = {
-            execute: definition.execute,
+            execute: executeDescriptor(definition),
             parameters: definition.parameters,
             exposure: definition.exposure,
             defaultActive: definition.defaultActive,
@@ -141,7 +142,7 @@ for (const order of ["native-first", "previews-first"] as const)
           assert.equal(session.getToolDefinition("tool_search"), definition);
           assert.deepEqual(
             {
-              execute: definition.execute,
+              execute: executeDescriptor(definition),
               parameters: definition.parameters,
               exposure: definition.exposure,
               defaultActive: definition.defaultActive,

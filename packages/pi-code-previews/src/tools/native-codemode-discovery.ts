@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { isNativeMcpName } from "./native-mcp-identity";
 import { ownData } from "./native-safe-content";
-import { syntaxChildren } from "./native-codemode-syntax";
+import { syntaxChildren, syntaxNodeGuard, unhandledSyntax } from "./native-codemode-syntax";
 
 const MAX_SOURCE_CHARS = 32768;
 const MAX_NODES = 4096;
@@ -86,7 +86,17 @@ function memberBindings(pattern: MemberExpression): readonly string[] {
   return isGlobalThis(object) ? globalThisBindings(pattern) : [];
 }
 
+const isBindingNode = syntaxNodeGuard([
+  "Identifier",
+  "ArrayPattern",
+  "ObjectPattern",
+  "AssignmentPattern",
+  "RestElement",
+  "MemberExpression",
+] as const);
+
 function bindings(pattern: Pattern | Expression): readonly string[] {
+  if (!isBindingNode(pattern)) return [];
   switch (pattern.type) {
     case "Identifier":
       return [pattern.name];
@@ -102,9 +112,8 @@ function bindings(pattern: Pattern | Expression): readonly string[] {
       return bindings(pattern.argument);
     case "MemberExpression":
       return memberBindings(pattern);
-    default:
-      return [];
   }
+  return unhandledSyntax(pattern);
 }
 
 function plumbing(call: CallExpression, shadowed: ReadonlySet<string>): boolean {
@@ -167,20 +176,33 @@ function parseProgram(source: string): AnyNode {
   });
 }
 
+const isNamedDeclaration = syntaxNodeGuard([
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+  "ClassDeclaration",
+  "ClassExpression",
+] as const);
+
 function declaredName(node: AnyNode): string | undefined {
-  switch (node.type) {
-    case "FunctionDeclaration":
-    case "FunctionExpression":
-    case "ArrowFunctionExpression":
-    case "ClassDeclaration":
-    case "ClassExpression":
-      return node.id?.name;
-    default:
-      return undefined;
-  }
+  return isNamedDeclaration(node) ? node.id?.name : undefined;
 }
 
+const isReassigningNode = syntaxNodeGuard([
+  "VariableDeclarator",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+  "CatchClause",
+  "AssignmentExpression",
+  "UpdateExpression",
+  "UnaryExpression",
+  "ForInStatement",
+  "ForOfStatement",
+] as const);
+
 function reassignedPatterns(node: AnyNode): readonly (Pattern | Expression)[] {
+  if (!isReassigningNode(node)) return [];
   switch (node.type) {
     case "VariableDeclarator":
       return [node.id];
@@ -199,9 +221,8 @@ function reassignedPatterns(node: AnyNode): readonly (Pattern | Expression)[] {
     case "ForInStatement":
     case "ForOfStatement":
       return node.left.type === "VariableDeclaration" ? [] : [node.left];
-    default:
-      return [];
   }
+  return unhandledSyntax(node);
 }
 
 function recordShadowing(node: AnyNode, shadowed: Set<string>): void {
@@ -216,16 +237,10 @@ function calleeNamed(node: CallExpression | NewExpression, names: readonly strin
 }
 
 function forbidden(node: AnyNode): boolean {
-  switch (node.type) {
-    case "WithStatement":
-      return true;
-    case "CallExpression":
-      return calleeNamed(node, ["eval", "Function"]);
-    case "NewExpression":
-      return calleeNamed(node, ["Function"]);
-    default:
-      return false;
-  }
+  if (node.type === "WithStatement") return true;
+  if (node.type === "CallExpression") return calleeNamed(node, ["eval", "Function"]);
+  if (node.type === "NewExpression") return calleeNamed(node, ["Function"]);
+  return false;
 }
 
 function breaksExclusivity(node: AnyNode): boolean {

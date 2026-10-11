@@ -16,7 +16,6 @@ import {
   oid,
   workspaceFailure,
   workspaceIO,
-  workspaceIOIfPresent,
 } from "./git-worktree-process.ts";
 import {
   captureSnapshot,
@@ -35,7 +34,7 @@ import {
   withWorkspaceStoreLock,
 } from "./git-worktree-store.ts";
 import { listWorkspaceRecords, removeWorkspaceTrees } from "./git-worktree-recovery.ts";
-import { publishWorkspace } from "./git-worktree-integration.ts";
+import { publishWorkspace, requiredLeaseDirectories } from "./git-worktree-integration.ts";
 
 const treeOf = (repository: string, revision: string) =>
   git(repository, ["rev-parse", `${revision}^{tree}`]).pipe(Effect.flatMap(oid));
@@ -47,30 +46,6 @@ interface CreateWorkspaceInput {
   readonly ownerId: string;
   readonly onAcquired?: WorkspaceAcquired | undefined;
 }
-
-const requiredLeaseDirectories = (record: WorkspaceRecord) =>
-  Effect.gen(function* () {
-    const directories = new Set([record.handle.sourceRoot, record.handle.sourceCwd]);
-    for (const name of record.revision!.changedPaths) {
-      let directory = record.handle.sourceRoot;
-      for (const part of path
-        .dirname(name)
-        .split(path.sep)
-        .filter((part) => part !== ".")) {
-        directory = path.join(directory, part);
-        const stat = yield* workspaceIOIfPresent("prepare", () => fs.lstat(directory));
-        if (!stat) break;
-        if (!stat.isDirectory() || stat.isSymbolicLink())
-          return yield* workspaceFailure(
-            "prepare",
-            "Changed-file ancestor is not a real directory.",
-          );
-        yield* checkDirectory(directory);
-        directories.add(directory);
-      }
-    }
-    return [...directories].sort();
-  });
 
 export const makeGitWorkspaceEngine = (agentDirectory: string) =>
   Effect.sync(() => {
@@ -129,10 +104,12 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         : Effect.fail(
             workspaceFailure("cleanup", "Process cleanup must be independently confirmed."),
           );
-    const revision = (record: WorkspaceRecord, id: string) =>
-      record.revision?.revisionId === id
-        ? Effect.void
+    const revision = (record: WorkspaceRecord, id: string) => {
+      const current = record.revision;
+      return current?.revisionId === id
+        ? Effect.succeed(current)
         : Effect.fail(workspaceFailure("revision", "Reviewed revision is stale or unknown."));
+    };
     const locked = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       withWorkspaceStoreLock(registry, effect);
 
@@ -300,7 +277,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
       target: WorkspaceRevisionTarget,
     ) {
       const record = yield* checked(target);
-      yield* revision(record, target.revisionId);
+      const reviewed = yield* revision(record, target.revisionId);
       if (record.status !== "frozen" && record.status !== "prepared")
         return yield* workspaceFailure("prepare", "Workspace is not awaiting integration.");
       const workerTree = yield* capture(record, worker(record), "verify-worker");
@@ -314,7 +291,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
       const parent = yield* capture(record, record.handle.sourceRoot, "parent");
       if (
         parent.entries.some(
-          (entry) => entry.mode === "120000" && record.revision!.changedPaths.includes(entry.path),
+          (entry) => entry.mode === "120000" && reviewed.changedPaths.includes(entry.path),
         )
       )
         return yield* workspaceFailure(
@@ -324,15 +301,15 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
       const preparationId = yield* newWorkspaceId;
       const preparedRoot = path.join(directory(record), `prepare-${preparationId}`);
       yield* git(repository(record), ["worktree", "add", "--detach", preparedRoot, parent.commit]);
-      if (record.revision!.diff.length > 0) {
-        const stdin = new TextEncoder().encode(record.revision!.diff);
+      if (reviewed.diff.length > 0) {
+        const stdin = new TextEncoder().encode(reviewed.diff);
         yield* git(preparedRoot, ["apply", "--check", "--binary", "--whitespace=nowarn", "-"], {
           stdin,
         });
         yield* git(preparedRoot, ["apply", "--binary", "--whitespace=nowarn", "-"], { stdin });
       }
       const combined = yield* capture(record, preparedRoot, `prepared-${preparationId}`);
-      const leaseDirectories = yield* requiredLeaseDirectories(record);
+      const leaseDirectories = yield* requiredLeaseDirectories(record, reviewed.changedPaths);
       const result = {
         preparationId,
         revisionId: target.revisionId,
@@ -357,10 +334,12 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
     ) {
       yield* settled(target);
       const record = yield* checked(target);
-      yield* revision(record, target.revisionId);
+      const reviewed = yield* revision(record, target.revisionId);
+      const preparation = record.preparation;
       if (
         record.status !== "prepared" ||
-        record.preparation?.preparationId !== target.preparationId ||
+        preparation === undefined ||
+        preparation.preparationId !== target.preparationId ||
         !validWorkspaceId(target.preparationId)
       )
         return yield* workspaceFailure("integrate", "Tested preparation is stale or unknown.");
@@ -381,13 +360,13 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           "integrate",
           "Worker, test tree, source, branch or index changed; review and test again.",
         );
-      const required = yield* requiredLeaseDirectories(record);
-      if (required.some((directory) => !record.preparation!.leaseDirectories.includes(directory)))
+      const required = yield* requiredLeaseDirectories(record, reviewed.changedPaths);
+      if (required.some((directory) => !preparation.leaseDirectories.includes(directory)))
         return yield* workspaceFailure(
           "integrate",
           "Changed-file ancestors changed; prepare and test again before integration.",
         );
-      const result = yield* publishWorkspace(registry, record, before, prepared);
+      const result = yield* publishWorkspace(registry, record, before, prepared, preparation);
       const after = yield* sourceIdentity(record.handle.sourceRoot);
       if (after.head !== identity.head || after.index !== identity.index)
         return yield* workspaceFailure(

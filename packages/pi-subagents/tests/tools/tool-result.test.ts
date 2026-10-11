@@ -33,7 +33,7 @@ import {
   makeCompactToolDetails,
   makeStartDetails,
 } from "../../src/tools/details.ts";
-import { decodeCompactToolDetails } from "../../src/tools/details-schema.ts";
+import { decodeCompactToolDetails } from "../../src/tools/details-decode.ts";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
@@ -97,7 +97,7 @@ function host() {
       let current = event;
       for (const handler of hooks.get("tool_result") ?? []) {
         const patch = yield* step(() => Promise.resolve(handler(current, ctx)));
-        if (patch !== undefined) current = { ...current, ...patch };
+        if (patch !== undefined) current = Object.assign({}, current, patch);
       }
       return current;
     });

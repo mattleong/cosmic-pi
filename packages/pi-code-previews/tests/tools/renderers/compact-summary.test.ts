@@ -54,16 +54,17 @@ afterEach(() => setCodePreviewPerformanceConfig(originalPerformance));
 function summary(
   tool: BuiltinCompactTool,
   args: Args = { path: "src/example.ts" },
-  resultValue: AgentToolResult<unknown> | undefined = undefined,
+  resultValue?: AgentToolResult<unknown>,
   phase: CompactPhase = resultValue ? "settled" : "pending",
-  overrides: Partial<ToolRenderContext<{}, Args>> = {},
+  overrides: Partial<ToolRenderContext<RendererState, Args>> = {},
 ): CompactSummary | undefined {
   return createBuiltinCompactSummary(tool, {
     phase,
     args,
     result: resultValue,
-    context: renderContextFixture({
+    context: renderContextFixture<Args, RendererState>({
       args,
+      state: {},
       toolCallId: "compact-summary-test",
       argsComplete: phase !== "pending",
       executionStarted: phase === "running",

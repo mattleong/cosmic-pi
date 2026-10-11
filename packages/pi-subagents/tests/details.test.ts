@@ -11,10 +11,12 @@ import { projectSubagentRunCard } from "../src/tools/details-projection.ts";
 import type { ProfileCandidateDiscovery as ProfileCandidateDetailsInput } from "../src/tools/model.ts";
 import {
   SUBAGENT_CARD_DETAILS_VERSION,
-  decodeCompactToolDetails,
-  decodeStartAwaitCardDetails,
   type SubagentStartEntry,
 } from "../src/tools/details-schema.ts";
+import {
+  decodeCompactToolDetails,
+  decodeStartAwaitCardDetails,
+} from "../src/tools/details-decode.ts";
 import { view } from "./fixtures/run-view.ts";
 
 const run = (index = 1, cost?: number): SubagentRunView =>

@@ -153,13 +153,15 @@ export const makeLocalPiChildIpcChannel = (
     ),
 });
 
+const processSend = () => process.send?.bind(process);
+
 export const openLocalPiChildIpc = (): LocalPiChildIpcChannel =>
   makeLocalPiChildIpcChannel({
     events: process,
-    connected: () => process.send !== undefined && process.connected,
+    connected: () => processSend() !== undefined && process.connected,
     send: (message, callback) => {
-      const send = process.send;
+      const send = processSend();
       if (!send) throw new Error("Node IPC is unavailable.");
-      send.call(process, message, callback);
+      send(message, callback);
     },
   });

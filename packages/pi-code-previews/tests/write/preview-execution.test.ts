@@ -20,7 +20,7 @@ const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
 if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
 const { lstat } = nodeFsModule.promises;
-const { join } = nodePathModule;
+const join = nodePathModule.join.bind(nodePathModule);
 
 const isSymlink = (path: string) =>
   Effect.promise(() => lstat(path).then((stats) => stats.isSymbolicLink()));

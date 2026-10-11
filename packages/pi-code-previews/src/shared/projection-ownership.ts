@@ -16,7 +16,7 @@ export function ownedProjectionSlot<Fields extends object>() {
   let fields: Partial<Fields> = {};
   return {
     read: (): Partial<Fields> => fields,
-    write(claimant: ProjectionOwnership, update: Partial<Fields>): void {
+    write: (claimant: ProjectionOwnership, update: Partial<Fields>): void => {
       if (owner?.key !== claimant.key) {
         if (claimant.generation <= newestGeneration) return;
         newestGeneration = claimant.generation;
@@ -25,7 +25,7 @@ export function ownedProjectionSlot<Fields extends object>() {
       }
       fields = { ...fields, ...update };
     },
-    clear(claimant: ProjectionOwnership): void {
+    clear: (claimant: ProjectionOwnership): void => {
       if (owner?.key !== claimant.key) return;
       owner = undefined;
       fields = {};

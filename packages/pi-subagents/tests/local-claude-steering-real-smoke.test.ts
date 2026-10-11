@@ -15,6 +15,7 @@ import {
   makeLocalCliProcess,
   type LocalCliProcessContract,
 } from "../src/boundary/local-cli-process.ts";
+import type { LocalClaudeDebugEntry } from "../src/boundary/local-claude-debug.ts";
 import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../src/run/errors.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
@@ -123,6 +124,78 @@ interface ProbeObservation {
   }>;
 }
 
+const isSteerReplayDecision = (entry: LocalClaudeDebugEntry): boolean =>
+  entry.kind === "user-decision" &&
+  entry.decision === "pending-confirmation" &&
+  entry.pending === "steer" &&
+  entry.epoch === 1 &&
+  entry.session === "match" &&
+  entry.uuid === "pending";
+
+const traceDebugEntry = (
+  observation: ProbeObservation,
+  entry: LocalClaudeDebugEntry,
+  atMs: number,
+) => {
+  if (entry.kind !== "outbound-user" && entry.kind !== "user-decision") return;
+  if (observation.trace.length === 96) observation.traceDropped += 1;
+  else
+    observation.trace.push({
+      atMs,
+      kind: entry.kind,
+      operation: entry.kind === "outbound-user" ? entry.operation : entry.pending,
+      ...(entry.kind === "user-decision" && { decision: entry.decision }),
+    });
+};
+
+const observeDebugEntry = (
+  observation: ProbeObservation,
+  entry: LocalClaudeDebugEntry,
+  atMs: number,
+) => {
+  if (entry.kind === "outbound-user" && entry.operation === "steer")
+    observation.steerOutboundPreparedAtMs = atMs;
+  if (isSteerReplayDecision(entry)) {
+    observation.steerReplayAtMs = atMs;
+    observation.steerReplayAfterUncertainCall =
+      observation.steerOutcome === "steer_outcome_uncertain";
+  }
+  traceDebugEntry(observation, entry, atMs);
+};
+
+const classifySteering = (observation: ProbeObservation, failed: string | undefined) => {
+  const replayDelayMs =
+    observation.steerReplayAtMs !== undefined && observation.steerOutboundPreparedAtMs !== undefined
+      ? observation.steerReplayAtMs - observation.steerOutboundPreparedAtMs
+      : undefined;
+  const inconclusive =
+    !failed &&
+    observation.reportReceived &&
+    observation.protocolErrors === 0 &&
+    observation.steerCalls === 0;
+  const acceptedReport =
+    observation.reportReceived && observation.reportEpochValid && observation.reportNonempty;
+  const lateReplayAfterUncertainty =
+    observation.steerOutcome === "steer_outcome_uncertain" &&
+    observation.steerReplayAfterUncertainCall;
+  const replayAndReportObserved =
+    acceptedReport &&
+    observation.steerReplayAtMs !== undefined &&
+    (observation.steerOutcome === "confirmed" || lateReplayAfterUncertainty);
+  const completedWithUnconfirmedGuidance =
+    acceptedReport &&
+    observation.steerOutcome === "steer_outcome_uncertain" &&
+    observation.steerReplayAtMs === undefined &&
+    observation.steeringDelivery === "report-unconfirmed";
+  return {
+    replayDelayMs,
+    inconclusive,
+    lateReplayAfterUncertainty,
+    replayAndReportObserved,
+    completedWithUnconfirmedGuidance,
+  };
+};
+
 describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
   it("observes requested activity before classifying steering replay and report evidence", () => {
     const model = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_MODEL;
@@ -190,32 +263,7 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
               claudeDebug: {
                 record: (entry) =>
                   Effect.gen(function* () {
-                    const atMs = yield* elapsed;
-                    if (entry.kind === "outbound-user" && entry.operation === "steer")
-                      observation.steerOutboundPreparedAtMs = atMs;
-                    if (
-                      entry.kind === "user-decision" &&
-                      entry.decision === "pending-confirmation" &&
-                      entry.pending === "steer" &&
-                      entry.epoch === 1 &&
-                      entry.session === "match" &&
-                      entry.uuid === "pending"
-                    ) {
-                      observation.steerReplayAtMs = atMs;
-                      observation.steerReplayAfterUncertainCall =
-                        observation.steerOutcome === "steer_outcome_uncertain";
-                    }
-                    if (entry.kind === "outbound-user" || entry.kind === "user-decision") {
-                      if (observation.trace.length === 96) observation.traceDropped += 1;
-                      else
-                        observation.trace.push({
-                          atMs,
-                          kind: entry.kind,
-                          operation:
-                            entry.kind === "outbound-user" ? entry.operation : entry.pending,
-                          ...(entry.kind === "user-decision" && { decision: entry.decision }),
-                        });
-                    }
+                    observeDebugEntry(observation, entry, yield* elapsed);
                     yield* child.claudeDebug?.record(entry) ?? Effect.void;
                   }),
               },
@@ -376,32 +424,13 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
         Effect.flatMap((exit) =>
           Effect.gen(function* () {
             const failed = Exit.isFailure(exit) ? failureCode(exit.cause) : undefined;
-            const replayDelayMs =
-              observation.steerReplayAtMs !== undefined &&
-              observation.steerOutboundPreparedAtMs !== undefined
-                ? observation.steerReplayAtMs - observation.steerOutboundPreparedAtMs
-                : undefined;
-            const inconclusive =
-              !failed &&
-              observation.reportReceived &&
-              observation.protocolErrors === 0 &&
-              observation.steerCalls === 0;
-            const acceptedReport =
-              observation.reportReceived &&
-              observation.reportEpochValid &&
-              observation.reportNonempty;
-            const lateReplayAfterUncertainty =
-              observation.steerOutcome === "steer_outcome_uncertain" &&
-              observation.steerReplayAfterUncertainCall;
-            const replayAndReportObserved =
-              acceptedReport &&
-              observation.steerReplayAtMs !== undefined &&
-              (observation.steerOutcome === "confirmed" || lateReplayAfterUncertainty);
-            const completedWithUnconfirmedGuidance =
-              acceptedReport &&
-              observation.steerOutcome === "steer_outcome_uncertain" &&
-              observation.steerReplayAtMs === undefined &&
-              observation.steeringDelivery === "report-unconfirmed";
+            const {
+              replayDelayMs,
+              inconclusive,
+              lateReplayAfterUncertainty,
+              replayAndReportObserved,
+              completedWithUnconfirmedGuidance,
+            } = classifySteering(observation, failed);
             const metadata = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
               ...observation,
               failure: failed,

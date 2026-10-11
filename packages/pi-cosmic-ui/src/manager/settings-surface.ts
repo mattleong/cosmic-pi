@@ -99,7 +99,9 @@ class SettingsGroupSubmenu extends Container {
   private change(id: string, value: string): void {
     const reconcile = (): void => this.reconcile();
     try {
-      Promise.resolve(this.options.onChange(id, value)).then(reconcile, reconcile);
+      Promise.resolve(this.options.onChange(id, value))
+        .then(reconcile, reconcile)
+        .catch(() => undefined);
     } catch {
       reconcile();
     }

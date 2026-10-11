@@ -36,20 +36,23 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
   }
 }
 
-function validPagination(details: WorkspaceToolDetails): boolean {
+function validListCounts(details: WorkspaceToolDetails): boolean {
   if (
     details.workspaceCount !== undefined &&
     details.listedCount !== undefined &&
     details.listedCount > details.workspaceCount
   )
     return false;
-  if (
-    details.unavailableCount !== undefined &&
-    (details.operation !== "list" ||
-      details.workspaceCount === undefined ||
-      details.unavailableCount > details.workspaceCount)
-  )
-    return false;
+  return (
+    details.unavailableCount === undefined ||
+    (details.operation === "list" &&
+      details.workspaceCount !== undefined &&
+      details.unavailableCount <= details.workspaceCount)
+  );
+}
+
+function validPagination(details: WorkspaceToolDetails): boolean {
+  if (!validListCounts(details)) return false;
   if (details.nextOffset !== undefined && details.nextOffset <= (details.offset ?? 0)) return false;
   if (details.operation !== "review") return true;
   return (

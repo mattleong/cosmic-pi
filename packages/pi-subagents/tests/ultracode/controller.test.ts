@@ -15,16 +15,18 @@ const SECTION = "subagents_ultracode";
 const controllerFixture = () => {
   let active: ReadonlyArray<string> = [...OTHERS];
   const userMessages: string[] = [];
+  const setActiveTools = vi.fn((names: ReadonlyArray<string>) => {
+    active = [...names];
+  });
+  const sendUserMessage = vi.fn((message: string) => {
+    userMessages.push(message);
+  });
   const { pi, emit } = recordingExtensionHost(
     {},
     {
       getActiveTools: vi.fn(() => [...active]),
-      setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
-        active = [...names];
-      }),
-      sendUserMessage: vi.fn((message: string) => {
-        userMessages.push(message);
-      }),
+      setActiveTools,
+      sendUserMessage,
     },
   );
   const controller = registerUltracodeController(pi);
@@ -54,6 +56,8 @@ const controllerFixture = () => {
     controller,
     ctx,
     pi,
+    setActiveTools,
+    sendUserMessage,
     setStatus,
     userMessages,
     promptRun,
@@ -143,7 +147,7 @@ describe("ultracode tool activation", () => {
     yield* fixture.promptRun("work on something");
     fixture.setIdle(false);
     yield* step(() => fixture.controller.send(fixture.ctx, { task: "review the parser" }));
-    expect(fixture.pi.sendUserMessage).toHaveBeenCalledWith(expect.any(String), {
+    expect(fixture.sendUserMessage).toHaveBeenCalledWith(expect.any(String), {
       deliverAs: "followUp",
     });
     expect(fixture.workflowActive()).toBe(true);
@@ -213,7 +217,7 @@ describe("ultracode tool activation", () => {
     fixture.restore([WORKFLOW, "mcp__late__tool"]);
     fixture.controller.activate(fixture.ctx, true);
     fixture.controller.setEnabled(false);
-    expect(fixture.pi.setActiveTools).not.toHaveBeenCalled();
+    expect(fixture.setActiveTools).not.toHaveBeenCalled();
     expect(fixture.workflowActive()).toBe(true);
     yield* fixture.agentStarted();
     expect(fixture.workflowActive()).toBe(false);

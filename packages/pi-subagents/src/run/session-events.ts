@@ -23,6 +23,13 @@ const toolTarget = <ArgsInput>(toolName: string, args: ArgsInput): string | unde
   const input = asObject(args);
   const path =
     stringField(input, "path") ?? stringField(input, "file_path") ?? stringField(input, "cwd");
+  const fallbackTarget = () =>
+    path ??
+    stringField(input, "query") ??
+    stringField(input, "id") ??
+    stringField(input, "name") ??
+    stringField(input, "message") ??
+    stringField(input, "command");
   switch (toolName.toLowerCase()) {
     case "bash":
       return stringField(input, "command");
@@ -41,14 +48,7 @@ const toolTarget = <ArgsInput>(toolName: string, args: ArgsInput): string | unde
     case "contact_parent":
       return [stringField(input, "kind"), stringField(input, "message")].filter(Boolean).join(": ");
     default:
-      return (
-        path ??
-        stringField(input, "query") ??
-        stringField(input, "id") ??
-        stringField(input, "name") ??
-        stringField(input, "message") ??
-        stringField(input, "command")
-      );
+      return fallbackTarget();
   }
 };
 

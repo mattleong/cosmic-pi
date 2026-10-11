@@ -125,10 +125,12 @@ export const recordingExtensionHost = (
     overrides,
   );
   const resolve = (name: string, base?: ToolRenderers): ToolRenderers | undefined => {
-    const next = (index: number): ToolRenderers | undefined =>
-      index < toolRenderers.length
-        ? toolRenderers[index]!(name, () => next(index + 1))
-        : (base ?? tools.get(name));
+    const next = (index: number): ToolRenderers | undefined => {
+      const resolver = toolRenderers[index];
+      return resolver === undefined
+        ? (base ?? tools.get(name))
+        : resolver(name, () => next(index + 1));
+    };
     return next(0);
   };
   const emit: RecordedEmit = <Name extends ExtensionEventName>(

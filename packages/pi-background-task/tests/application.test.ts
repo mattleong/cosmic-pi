@@ -114,7 +114,7 @@ function tasksCommandHarness(
     keybindings: piKeybindingsFixture({ matches: () => false }),
   });
   const notify = vi.fn();
-  const ui = { notify, custom: host.ctx.ui.custom };
+  const ui = { notify, custom: host.ctx.ui.custom.bind(host.ctx.ui) };
   const custom = vi.spyOn(ui, "custom");
   const ctx = extensionContextFixture({
     cwd: "/tmp",
@@ -196,7 +196,7 @@ describe("background-task Pi lifecycle", () => {
           rows: 8,
           keybindings: piKeybindingsFixture({ matches: () => false }),
         });
-        const ui = { notify: vi.fn(), custom: surface.ctx.ui.custom };
+        const ui = { notify: vi.fn(), custom: surface.ctx.ui.custom.bind(surface.ctx.ui) };
         const custom = vi.spyOn(ui, "custom");
         const standalone = outcome === "absent" || outcome === "unavailable";
         const ctx = extensionContextFixture({

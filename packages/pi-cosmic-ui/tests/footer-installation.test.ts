@@ -42,9 +42,8 @@ function installation() {
   const instance = (requestRender: () => void, factory = factories.at(-1)) => {
     if (!factory) throw new Error("Expected an installed footer factory.");
     const component = factory(tuiFixture({ requestRender }), plainTheme, footerDataFixture());
-    const { dispose } = component;
-    if (!dispose) throw new Error("Expected a disposable footer.");
-    return { dispose: () => dispose.call(component) };
+    if (!component.dispose) throw new Error("Expected a disposable footer.");
+    return { dispose: () => component.dispose?.() };
   };
   return { footer, context, instance, factories };
 }

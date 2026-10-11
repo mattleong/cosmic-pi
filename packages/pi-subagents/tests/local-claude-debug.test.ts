@@ -7,11 +7,9 @@ import {
 } from "../src/boundary/local-claude-debug.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
-const { join } = nodePath;
-
 const setup = () =>
   temporaryDirectory("pi-subagents-claude-debug-").pipe(
-    Effect.map((directory) => join(directory, "agent")),
+    Effect.map((directory) => nodePath.join(directory, "agent")),
     Effect.tap((agentDirectory) => Effect.promise(() => fs.mkdir(agentDirectory, { mode: 0o700 }))),
   );
 
@@ -42,10 +40,10 @@ const recordTail = (
 
 const readLedger = (agentDirectory: string) =>
   Effect.gen(function* () {
-    const root = join(agentDirectory, "subagents", "local-claude-debug-v1");
+    const root = nodePath.join(agentDirectory, "subagents", "local-claude-debug-v1");
     const [directoryName = ""] = yield* Effect.promise(() => fs.readdir(root));
-    const directory = join(root, directoryName);
-    const ledger = join(directory, "replay-ledger.ndjson");
+    const directory = nodePath.join(root, directoryName);
+    const ledger = nodePath.join(directory, "replay-ledger.ndjson");
     const [rootStat, directoryStat, ledgerStat, content] = yield* Effect.promise(() =>
       Promise.all([
         fs.lstat(root),
@@ -70,7 +68,7 @@ describe("local Claude debug ledger", () => {
   ] as const)("%s", ([, environment, subdirectory, entries, acquired]) =>
     Effect.gen(function* () {
       const agentDirectory = yield* setup();
-      const target = join(agentDirectory, subdirectory);
+      const target = nodePath.join(agentDirectory, subdirectory);
       expect(yield* recordTail(target, "secret-run", entries, environment)).toBe(acquired);
       expect(yield* Effect.promise(() => fs.readdir(agentDirectory))).toEqual([]);
     }),
@@ -130,11 +128,11 @@ describe("local Claude debug ledger", () => {
   it.effect("prunes incomplete package-owned directories within the retention bound", () =>
     Effect.gen(function* () {
       const agentDirectory = yield* setup();
-      const root = join(agentDirectory, "subagents", "local-claude-debug-v1");
+      const root = nodePath.join(agentDirectory, "subagents", "local-claude-debug-v1");
       yield* Effect.promise(() => fs.mkdir(root, { recursive: true, mode: 0o700 }));
       for (let index = 0; index < 9; index += 1)
         yield* Effect.promise(() =>
-          fs.mkdir(join(root, `claude-orphan-${index}`), { mode: 0o700 }),
+          fs.mkdir(nodePath.join(root, `claude-orphan-${index}`), { mode: 0o700 }),
         );
 
       yield* recordTail(agentDirectory, "replacement-run", 1);
@@ -144,7 +142,7 @@ describe("local Claude debug ledger", () => {
         Promise.all(
           entries.map((entry) =>
             fs
-              .lstat(join(root, entry, "replay-ledger.ndjson"))
+              .lstat(nodePath.join(root, entry, "replay-ledger.ndjson"))
               .then((stat) => stat.isFile())
               .catch(() => false),
           ),
@@ -159,7 +157,7 @@ describe("local Claude debug ledger", () => {
       const agentDirectory = yield* setup();
       for (let index = 0; index < 10; index += 1)
         yield* recordTail(agentDirectory, `run-${index}`, 1);
-      const root = join(agentDirectory, "subagents", "local-claude-debug-v1");
+      const root = nodePath.join(agentDirectory, "subagents", "local-claude-debug-v1");
       const entries = yield* Effect.promise(() => fs.readdir(root));
       expect(entries).toHaveLength(8);
     }),

@@ -69,7 +69,14 @@ export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencie
         ? Effect.fail(questionnaire)
         : questionnaire && executeQuestionnaire
           ? executeQuestionnaire(record, event.requestId, questionnaire)
-          : executeProxy!(record.view.id, event);
+          : executeProxy
+            ? executeProxy(record.view.id, event)
+            : Effect.fail(
+                new InvalidSubagentRequestError({
+                  code: "proxy_caller_disconnected",
+                  message: "Nested Pi coordinator access is unavailable for this run.",
+                }),
+              );
     const execute = dispatch.pipe(
       Effect.matchEffect({
         onFailure: (error) => reject(subagentErrorCode(error), error.message),

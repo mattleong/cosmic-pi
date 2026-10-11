@@ -40,6 +40,31 @@ export interface RunCompletionObservationDependencies extends RunContext {
   >;
 }
 
+const reportStatusOf = (finalText: string | undefined, unresolved: boolean, available: boolean) =>
+  !finalText?.trim()
+    ? ("missing" as const)
+    : !unresolved
+      ? ("delivered" as const)
+      : available
+        ? ("available" as const)
+        : ("claimed" as const);
+
+const startRecoveryOf = (record: RunRecord) =>
+  record.view.state === "failed" && record.view.reportGeneration === 0
+    ? failedStartRecoveryForRecord(record)
+    : undefined;
+
+const visibleRun = (
+  observed: SubagentRunView,
+  redacted: SubagentRunView | undefined,
+  readBack: boolean,
+): SubagentRunView =>
+  redacted === undefined
+    ? snapshotView(observed)
+    : readBack
+      ? snapshotView({ ...redacted, finalText: observed.finalText })
+      : redacted;
+
 export function makeRunCompletionObservations(dependencies: RunCompletionObservationDependencies) {
   const {
     records,
@@ -87,36 +112,20 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
         }),
       };
     const unresolved = record.completionGenerations.has(generation);
-    const owns =
-      unresolved &&
-      claimToken !== undefined &&
-      completionClaimOwner(record, generation) === claimToken;
+    const claimOwner = completionClaimOwner(record, generation);
+    const owns = unresolved && claimToken !== undefined && claimOwner === claimToken;
     const observed: SubagentRunView = {
       ...view,
-      reportStatus: !view.finalText?.trim()
-        ? "missing"
-        : !unresolved
-          ? "delivered"
-          : owns || completionClaimOwner(record, generation) === undefined
-            ? "available"
-            : "claimed",
+      reportStatus: reportStatusOf(view.finalText, unresolved, owns || claimOwner === undefined),
     };
     const readBack =
       options?.includeDeliveredReports === true &&
       observed.reportStatus === "delivered" &&
       [...record.completionClaims.values()].every((owner) => owner === claimToken);
     const redacted = owns ? undefined : redactCompletionReport(observed);
-    const recovery =
-      record.view.state === "failed" && record.view.reportGeneration === 0
-        ? failedStartRecoveryForRecord(record)
-        : undefined;
+    const recovery = startRecoveryOf(record);
     return {
-      run:
-        redacted === undefined
-          ? snapshotView(observed)
-          : readBack
-            ? snapshotView({ ...redacted, finalText: observed.finalText })
-            : redacted,
+      run: visibleRun(observed, redacted, readBack),
       ...(owns && {
         completionReceipt: {
           id: record.view.id,

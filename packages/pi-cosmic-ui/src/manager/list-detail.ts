@@ -70,58 +70,94 @@ type ListDetailMotionResult =
       readonly movedSelection: boolean;
     };
 
+type MotionFlags = Partial<{
+  resetChord: boolean;
+  scrolledDetail: boolean;
+  movedSelection: boolean;
+}>;
+
+const motionUpdate = (
+  state: ListDetailMotionState,
+  next: Partial<ListDetailMotionState>,
+  flags?: MotionFlags,
+): ListDetailMotionResult => ({
+  _tag: "Update",
+  state: { ...state, ...next },
+  resetChord: flags?.resetChord ?? false,
+  scrolledDetail: flags?.scrolledDetail ?? false,
+  movedSelection: flags?.movedSelection ?? false,
+});
+
+const scrollDetail = (
+  state: ListDetailMotionState,
+  context: ListDetailMotionContext,
+  delta: number,
+): ListDetailMotionResult =>
+  motionUpdate(
+    state,
+    { detailScroll: Math.max(0, Math.min(context.detailMaxScroll, state.detailScroll + delta)) },
+    { scrolledDetail: true },
+  );
+
+const selectRow = (
+  state: ListDetailMotionState,
+  context: ListDetailMotionContext,
+  index: number,
+): ListDetailMotionResult =>
+  motionUpdate(
+    state,
+    { selected: clampListIndex(index, context.rowCount) },
+    { movedSelection: true },
+  );
+
+const leaveDetail = (
+  state: ListDetailMotionState,
+  motion: "cancel" | "back",
+  browsingDetail: boolean,
+): ListDetailMotionResult =>
+  browsingDetail
+    ? motionUpdate(state, { pane: "list", details: false, detailScroll: 0 }, { resetChord: true })
+    : { _tag: motion === "cancel" ? "Close" : "Ignored" };
+
+const enterDetail = (
+  state: ListDetailMotionState,
+  context: ListDetailMotionContext,
+): ListDetailMotionResult =>
+  context.hasSelection
+    ? motionUpdate(
+        state,
+        { pane: "detail", details: context.layout === "narrow" ? true : state.details },
+        { resetChord: true },
+      )
+    : { _tag: "Ignored" };
+
 export const listDetailMotion = (
   state: ListDetailMotionState,
   motion: ListDetailMotion,
   context: ListDetailMotionContext,
 ): ListDetailMotionResult => {
   const browsingDetail = state.pane === "detail" || (context.layout === "narrow" && state.details);
-  const update = (
-    next: Partial<ListDetailMotionState>,
-    flags?: Partial<{ resetChord: boolean; scrolledDetail: boolean; movedSelection: boolean }>,
-  ): ListDetailMotionResult => ({
-    _tag: "Update",
-    state: { ...state, ...next },
-    resetChord: flags?.resetChord ?? false,
-    scrolledDetail: flags?.scrolledDetail ?? false,
-    movedSelection: flags?.movedSelection ?? false,
-  });
-  const scroll = (delta: number): ListDetailMotionResult =>
-    update(
-      {
-        detailScroll: Math.max(0, Math.min(context.detailMaxScroll, state.detailScroll + delta)),
-      },
-      { scrolledDetail: true },
-    );
-  const select = (index: number): ListDetailMotionResult =>
-    update({ selected: clampListIndex(index, context.rowCount) }, { movedSelection: true });
   if (isMovementMotion(motion)) {
     return browsingDetail
-      ? scroll(-movementOffset(motion, context.detailSteps))
-      : select(state.selected + movementOffset(motion, context.listSteps));
+      ? scrollDetail(state, context, -movementOffset(motion, context.detailSteps))
+      : selectRow(state, context, state.selected + movementOffset(motion, context.listSteps));
   }
   switch (motion) {
     case "cancel":
     case "back":
-      return browsingDetail
-        ? update({ pane: "list", details: false, detailScroll: 0 }, { resetChord: true })
-        : { _tag: motion === "cancel" ? "Close" : "Ignored" };
+      return leaveDetail(state, motion, browsingDetail);
     case "quit":
       return { _tag: "Close" };
     case "forward":
-      return context.hasSelection
-        ? update(
-            {
-              pane: "detail",
-              details: context.layout === "narrow" ? true : state.details,
-            },
-            { resetChord: true },
-          )
-        : { _tag: "Ignored" };
+      return enterDetail(state, context);
     case "first":
-      return browsingDetail ? scroll(context.detailMaxScroll) : select(0);
+      return browsingDetail
+        ? scrollDetail(state, context, context.detailMaxScroll)
+        : selectRow(state, context, 0);
     case "last":
-      return browsingDetail ? scroll(-context.detailMaxScroll) : select(context.rowCount - 1);
+      return browsingDetail
+        ? scrollDetail(state, context, -context.detailMaxScroll)
+        : selectRow(state, context, context.rowCount - 1);
   }
 };
 

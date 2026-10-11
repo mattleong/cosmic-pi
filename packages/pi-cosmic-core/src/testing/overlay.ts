@@ -9,8 +9,8 @@ const delegate = <Owner extends object>(
   descriptor: PropertyDescriptor,
   owner: Owner,
 ): PropertyDescriptor => {
-  const { get, set, value } = descriptor;
-  if (get === undefined && set === undefined)
+  const value: unknown = descriptor.value;
+  if (descriptor.get === undefined && descriptor.set === undefined)
     return {
       configurable: true,
       enumerable: true,
@@ -18,8 +18,8 @@ const delegate = <Owner extends object>(
       value: Predicate.isFunction(value) ? value.bind(owner) : value,
     };
   const forwarded: PropertyDescriptor = { configurable: true, enumerable: true };
-  if (get !== undefined) forwarded.get = () => get.call(owner);
-  if (set !== undefined) forwarded.set = (next) => set.call(owner, next);
+  if (descriptor.get !== undefined) forwarded.get = () => descriptor.get?.call(owner);
+  if (descriptor.set !== undefined) forwarded.set = (next) => descriptor.set?.call(owner, next);
   return forwarded;
 };
 

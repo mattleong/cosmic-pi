@@ -26,8 +26,6 @@ import {
 } from "./harness-shared.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
 
-const { join } = nodePath;
-
 const HARNESS_ROOT = "local-cli-v1";
 const CATALOG_HARNESS_ROOT = "native-model-catalog-v1";
 const MAX_PROBE_OUTPUT_BYTES = 32 * 1024;
@@ -182,9 +180,9 @@ const prepareOwnedHarness = <Harness>(
       const safeDirectory = yield* Effect.interruptible(
         prepareStep(() => safeAgentDirectory(agentDirectory)),
       );
-      const packageRoot = join(safeDirectory, "subagents");
-      const root = join(packageRoot, rootName);
-      const directory = join(root, `${namePrefix}-${synchronousRandomHex(12)}`);
+      const packageRoot = nodePath.join(safeDirectory, "subagents");
+      const root = nodePath.join(packageRoot, rootName);
+      const directory = nodePath.join(root, `${namePrefix}-${synchronousRandomHex(12)}`);
       yield* Effect.interruptible(prepareStep(() => ensurePrivateDirectory(packageRoot)));
       yield* Effect.interruptible(prepareStep(() => ensurePrivateDirectory(root)));
       yield* prepareStep(() => fs.mkdir(directory, { mode: 0o700 }));
@@ -204,13 +202,13 @@ const prepareCodexHome = (
   config: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<string> => {
-  const codexHome = join(directory, "codex-home");
+  const codexHome = nodePath.join(directory, "codex-home");
   return fs
     .mkdir(codexHome, { mode: 0o700 })
-    .then(() => writeExclusive(join(codexHome, "config.toml"), config))
+    .then(() => writeExclusive(nodePath.join(codexHome, "config.toml"), config))
     .then(() => readValidatedCodexAuth(environment))
     .then((auth) => {
-      if (auth) return writeExclusive(join(codexHome, "auth.json"), auth);
+      if (auth) return writeExclusive(nodePath.join(codexHome, "auth.json"), auth);
       if (!approvedCodexApiKey(environment)) throw new Error("codex-auth-unavailable");
       return undefined;
     })
@@ -230,9 +228,9 @@ const buildLocalCliHarness = (
     const env = sanitizeLocalCliEnvironment(sourceEnvironment, request.runtime, request.launch);
 
     if (request.runtime === "claude") {
-      const settingsPath = join(directory, "settings.json");
-      const mcpPath = join(directory, "mcp.json");
-      const promptPath = join(directory, "system-prompt.md");
+      const settingsPath = nodePath.join(directory, "settings.json");
+      const mcpPath = nodePath.join(directory, "mcp.json");
+      const promptPath = nodePath.join(directory, "system-prompt.md");
       const writerPolicy = claudeWriterCwdPolicy(request.launch.cwd);
       return writeExclusive(
         settingsPath,

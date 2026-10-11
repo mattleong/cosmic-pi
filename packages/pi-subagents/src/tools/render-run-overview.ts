@@ -245,6 +245,48 @@ const expandedRowDiagnostics = (
   ]);
 };
 
+const overviewHeaderLines = (
+  runs: ReadonlyArray<SubagentRunCard>,
+  theme: Theme,
+  options: RunOverviewOptions,
+  width: number,
+): string[] => {
+  const usage = aggregateUsage(runs);
+  const hierarchy = options.hierarchy;
+  const isAwaitHierarchy = hierarchy?.awaitedRunIds !== undefined;
+  return [
+    ...(options.counters ? [clipToWidth(theme.fg("muted", options.counters), width)] : []),
+    ...(options.showContextOmission !== false && hierarchy?.contextOmitted
+      ? [clipToWidth(theme.fg("dim", DESCENDANTS_OMITTED), width)]
+      : []),
+    ...((!isAwaitHierarchy || options.contentOnly) && usage
+      ? [clipToWidth(theme.fg("muted", `Total usage · ${usage}`), width)]
+      : []),
+  ];
+};
+
+const overviewOutcomeLines = (
+  runs: ReadonlyArray<SubagentRunCard>,
+  theme: Theme,
+  options: RunOverviewOptions,
+  width: number,
+): string[] => {
+  const hierarchy = options.hierarchy;
+  const showOutcomeDetails = options.showOutcomeDetails !== false;
+  const outcomeRuns = hierarchy?.awaitedRunIds
+    ? runs.filter((run) => hierarchy.awaitedRunIds?.has(run.id))
+    : runs;
+  return [
+    ...(showOutcomeDetails && options.showReportOutcomes !== false
+      ? reportStatusLines(outcomeRuns, width, theme)
+      : []),
+    ...(showOutcomeDetails ? nextStepLines(runs, theme, width, options) : []),
+    ...(options.reportSections.length > 0
+      ? [clipToWidth(reportAffordance(options.reportSections, options.expanded, theme), width)]
+      : []),
+  ];
+};
+
 export const runOverviewComponent = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
@@ -252,40 +294,19 @@ export const runOverviewComponent = (
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const usage = aggregateUsage(runs);
-    const hierarchy = options.hierarchy;
     const showRunRows = options.showRunRows !== false;
-    const showOutcomeDetails = options.showOutcomeDetails !== false;
-    const isAwaitHierarchy = hierarchy?.awaitedRunIds !== undefined;
-    const outcomeRuns = hierarchy?.awaitedRunIds
-      ? runs.filter((run) => hierarchy.awaitedRunIds?.has(run.id))
-      : runs;
     return [
-      ...(options.counters ? [clipToWidth(theme.fg("muted", options.counters), safeWidth)] : []),
-      ...(options.showContextOmission !== false && hierarchy?.contextOmitted
-        ? [clipToWidth(theme.fg("dim", DESCENDANTS_OMITTED), safeWidth)]
-        : []),
-      ...((!isAwaitHierarchy || options.contentOnly) && usage
-        ? [clipToWidth(theme.fg("muted", `Total usage · ${usage}`), safeWidth)]
-        : []),
+      ...overviewHeaderLines(runs, theme, options, safeWidth),
       ...(showRunRows
-        ? renderResponsiveRunRows(runs, safeWidth, theme, { fullId: options.expanded, hierarchy })
+        ? renderResponsiveRunRows(runs, safeWidth, theme, {
+            fullId: options.expanded,
+            hierarchy: options.hierarchy,
+          })
         : []),
       ...(options.expanded && showRunRows
         ? expandedRowDiagnostics(runs, safeWidth, theme, options)
         : []),
-      ...(showOutcomeDetails && options.showReportOutcomes !== false
-        ? reportStatusLines(outcomeRuns, safeWidth, theme)
-        : []),
-      ...(showOutcomeDetails ? nextStepLines(runs, theme, safeWidth, options) : []),
-      ...(options.reportSections.length > 0
-        ? [
-            clipToWidth(
-              reportAffordance(options.reportSections, options.expanded, theme),
-              safeWidth,
-            ),
-          ]
-        : []),
+      ...overviewOutcomeLines(runs, theme, options, safeWidth),
     ];
   });
 

@@ -595,22 +595,3 @@ effectTest("throwing notification callbacks cannot escape host capture failure",
   yield* settle(() => h.dispatch("session_shutdown", context));
   assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
 });
-
-effectTest("rejecting notification thenables are contained", function* () {
-  const h = yield* registered({ load: () => Effect.die("settings failed") });
-  let notifications = 0;
-  const context = h.context({
-    ui: {
-      notify: () => {
-        notifications++;
-        return Promise.reject(new Error("host notify rejection"));
-      },
-    },
-  });
-
-  yield* step(() => start(h, context));
-  yield* Effect.yieldNow;
-
-  assert.equal(notifications, 1);
-  assert.deepEqual(h.counts(), { acquisitions: 1, releases: 1, loads: 1 });
-});

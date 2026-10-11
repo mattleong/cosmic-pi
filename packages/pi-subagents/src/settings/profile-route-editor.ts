@@ -1,6 +1,6 @@
 import { resolveNamedProfileSet } from "../config/options.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../config/store.ts";
-import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
+import { builtinProfileCandidate } from "../profiles/definitions.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import {
   cloneProfileCandidates as cloneCandidates,
@@ -65,7 +65,7 @@ export interface CandidateUpdate {
 
 export const runtimeEfforts = (
   runtime: SubagentRuntime,
-  supportedModelEfforts?: ReadonlyArray<SubagentEffort> | undefined,
+  supportedModelEfforts?: ReadonlyArray<SubagentEffort>,
 ): ReadonlyArray<SubagentEffort> => {
   const supportedByRuntime = subagentRuntimeEfforts(runtime);
   return supportedModelEfforts
@@ -199,7 +199,7 @@ export const duplicateRouteCandidate = (
 };
 
 export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
-  cloneCandidate(BUILTIN_PROFILE_ROUTES[profile].candidates[0]!);
+  cloneCandidate(builtinProfileCandidate(profile));
 
 export const runtimeLabel = (runtime: SubagentRuntime): string =>
   runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude" : "Codex";
@@ -283,7 +283,7 @@ export function updateCandidateControls(
 export function updateCandidateModel(
   candidate: ProfileCandidate,
   model: string,
-  supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined,
+  supportedEfforts?: ReadonlyArray<SubagentEffort>,
   fastModeAvailable = model === "parent" || supportsSubagentFastMode(candidate.runtime, model),
 ): CandidateUpdate {
   let next = { ...candidate, model };

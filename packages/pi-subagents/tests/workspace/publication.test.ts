@@ -1,7 +1,7 @@
 const { execFileSync } = process.getBuiltinModule("node:child_process")!;
 const fs = process.getBuiltinModule("node:fs")!;
 import { tmpdir } from "node:os";
-const { join } = process.getBuiltinModule("node:path")!;
+const nodePath = process.getBuiltinModule("node:path");
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -19,7 +19,7 @@ afterEach(() => {
 });
 const image = (text: string) => ({ bytes: Buffer.from(text), mode: 0o644 });
 const setup = () => {
-  const directory = fs.mkdtempSync(join(tmpdir(), "pi-publication-"));
+  const directory = fs.mkdtempSync(nodePath.join(tmpdir(), "pi-publication-"));
   roots.push(directory);
   const stat = fs.statSync(directory);
   return {
@@ -48,20 +48,20 @@ describe("anchored workspace publication", () => {
   it.effect("updates durably, retains the captured preimage, and leaves one target link", () =>
     Effect.gen(function* () {
       const r = setup();
-      fs.writeFileSync(join(r.directory, r.name), "before", { mode: 0o644 });
+      fs.writeFileSync(nodePath.join(r.directory, r.name), "before", { mode: 0o644 });
       expect(
         (yield* publishWorkspaceFile({ ...r, before: image("before"), after: image("after") }))
           .status,
       ).toBe("success");
-      expect(fs.readFileSync(join(r.directory, r.name), "utf8")).toBe("after");
-      expect(fs.readFileSync(join(r.directory, r.backupName), "utf8")).toBe("before");
-      expect(fs.statSync(join(r.directory, r.name)).nlink).toBe(1);
+      expect(fs.readFileSync(nodePath.join(r.directory, r.name), "utf8")).toBe("after");
+      expect(fs.readFileSync(nodePath.join(r.directory, r.backupName), "utf8")).toBe("before");
+      expect(fs.statSync(nodePath.join(r.directory, r.name)).nlink).toBe(1);
     }),
   );
   it.effect("preserves private file permissions", () =>
     Effect.gen(function* () {
       const r = setup();
-      fs.writeFileSync(join(r.directory, r.name), "before", { mode: 0o600 });
+      fs.writeFileSync(nodePath.join(r.directory, r.name), "before", { mode: 0o600 });
       expect(
         (yield* publishWorkspaceFile({
           ...r,
@@ -69,8 +69,8 @@ describe("anchored workspace publication", () => {
           after: { ...image("after"), mode: 0o600 },
         })).status,
       ).toBe("success");
-      expect(fs.statSync(join(r.directory, r.name)).mode & 0o7777).toBe(0o600);
-      expect(fs.statSync(join(r.directory, r.backupName)).mode & 0o7777).toBe(0o600);
+      expect(fs.statSync(nodePath.join(r.directory, r.name)).mode & 0o7777).toBe(0o600);
+      expect(fs.statSync(nodePath.join(r.directory, r.backupName)).mode & 0o7777).toBe(0o600);
     }),
   );
   it.effect("creates an absent file and refuses an existing destination", () =>
@@ -80,18 +80,18 @@ describe("anchored workspace publication", () => {
       expect((yield* publishWorkspaceFile({ ...r, after: image("other") })).status).toBe(
         "conflict",
       );
-      expect(fs.readFileSync(join(r.directory, r.name), "utf8")).toBe("after");
+      expect(fs.readFileSync(nodePath.join(r.directory, r.name), "utf8")).toBe("after");
     }),
   );
   it.effect("deletes by retaining the captured preimage", () =>
     Effect.gen(function* () {
       const r = setup();
-      fs.writeFileSync(join(r.directory, r.name), "before");
+      fs.writeFileSync(nodePath.join(r.directory, r.name), "before");
       expect((yield* publishWorkspaceFile({ ...r, before: image("before") })).status).toBe(
         "success",
       );
-      expect(() => fs.lstatSync(join(r.directory, r.name))).toThrow();
-      expect(fs.readFileSync(join(r.directory, r.backupName), "utf8")).toBe("before");
+      expect(() => fs.lstatSync(nodePath.join(r.directory, r.name))).toThrow();
+      expect(fs.readFileSync(nodePath.join(r.directory, r.backupName), "utf8")).toBe("before");
     }),
   );
   it.effect(
@@ -99,30 +99,30 @@ describe("anchored workspace publication", () => {
     () =>
       Effect.gen(function* () {
         const r = setup();
-        fs.writeFileSync(join(r.directory, r.name), "editor");
+        fs.writeFileSync(nodePath.join(r.directory, r.name), "editor");
         expect(
           (yield* publishWorkspaceFile({ ...r, before: image("before"), after: image("after") }))
             .status,
         ).toBe("conflict");
-        expect(fs.readFileSync(join(r.directory, r.name), "utf8")).toBe("editor");
-        expect(fs.readFileSync(join(r.directory, r.backupName), "utf8")).toBe("editor");
+        expect(fs.readFileSync(nodePath.join(r.directory, r.name), "utf8")).toBe("editor");
+        expect(fs.readFileSync(nodePath.join(r.directory, r.backupName), "utf8")).toBe("editor");
       }),
   );
   it("never overwrites an editor save after capture", () => {
     const r = setup();
-    fs.writeFileSync(join(r.directory, r.name), "before");
+    fs.writeFileSync(nodePath.join(r.directory, r.name), "before");
     expect(hooked(r, `fs.writeFileSync('target','editor');`).status).toBe("conflict");
-    expect(fs.readFileSync(join(r.directory, r.name), "utf8")).toBe("editor");
-    expect(fs.readFileSync(join(r.directory, r.backupName), "utf8")).toBe("before");
+    expect(fs.readFileSync(nodePath.join(r.directory, r.name), "utf8")).toBe("editor");
+    expect(fs.readFileSync(nodePath.join(r.directory, r.backupName), "utf8")).toBe("before");
   });
   it("an ancestor swap cannot redirect leaf operations", () => {
     const root = setup();
-    const outside = join(root.directory, "outside");
-    const original = join(root.directory, "original");
+    const outside = nodePath.join(root.directory, "outside");
+    const original = nodePath.join(root.directory, "original");
     fs.mkdirSync(outside);
     fs.mkdirSync(original);
-    fs.writeFileSync(join(original, "target"), "before");
-    fs.writeFileSync(join(outside, "target"), "outside");
+    fs.writeFileSync(nodePath.join(original, "target"), "before");
+    fs.writeFileSync(nodePath.join(outside, "target"), "outside");
     const stat = fs.statSync(original);
     const r = { ...root, directory: original, directoryDev: stat.dev, directoryIno: stat.ino };
     expect(
@@ -132,14 +132,14 @@ describe("anchored workspace publication", () => {
         "anchored",
       ).status,
     ).toBe("success");
-    expect(fs.readFileSync(join(outside, "target"), "utf8")).toBe("outside");
-    expect(fs.readFileSync(join(original + "-moved", "target"), "utf8")).toBe("after");
+    expect(fs.readFileSync(nodePath.join(outside, "target"), "utf8")).toBe("outside");
+    expect(fs.readFileSync(nodePath.join(original + "-moved", "target"), "utf8")).toBe("after");
   });
   it.effect("creates directories exclusively and checks the anchor identity", () =>
     Effect.gen(function* () {
       const r = setup();
       const created = yield* createWorkspaceDirectory({ ...r, name: "new" });
-      expect(created.directoryIno).toBe(fs.statSync(join(r.directory, "new")).ino);
+      expect(created.directoryIno).toBe(fs.statSync(nodePath.join(r.directory, "new")).ino);
       expect((yield* Effect.exit(createWorkspaceDirectory({ ...r, name: "new" })))._tag).toBe(
         "Failure",
       );

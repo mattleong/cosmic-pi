@@ -334,21 +334,20 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     interrupt: controls.interrupt,
   });
 
+  const { proxyHandler, questionnaireHandler } = options;
   const handleProxyEvent = makeRunProxyExecution({
     ownerScope,
     executions: proxyRuns,
-    ...(options.proxyHandler && {
+    ...(proxyHandler && {
       executeProxy: (callerRunId, request) =>
-        options.proxyHandler!(service, callerRunId, request).pipe(
+        proxyHandler(service, callerRunId, request).pipe(
           Effect.provideService(SubagentProfileService, profileService),
           Effect.provideService(SubagentBackendRegistry, backendRegistry),
         ),
     }),
-    ...(options.questionnaireHandler && {
+    ...(questionnaireHandler && {
       executeQuestionnaire: (record, requestId, request) =>
-        questionnaires.own(record, requestId, (owner) =>
-          options.questionnaireHandler!(request, owner),
-        ),
+        questionnaires.own(record, requestId, (owner) => questionnaireHandler(request, owner)),
     }),
   });
 

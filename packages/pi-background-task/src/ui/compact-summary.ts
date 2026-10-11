@@ -22,6 +22,7 @@ import * as Predicate from "effect/Predicate";
 import {
   countTaskStates,
   discardedOutputText,
+  failingExitCode,
   type BackgroundLogMetadata,
   type BackgroundTaskSnapshot,
 } from "../task/model.ts";
@@ -43,21 +44,32 @@ export const backgroundTaskActionLabel = (action: string): string =>
 export const quotedWaitText = (text: string): string =>
   `"${clipText(sanitizeTerminalLine(text), MAX_QUOTED_CHARS)}"`;
 
+const textValue = (value: string | undefined) => (Predicate.isString(value) ? value : "");
+
+function waitSubject(args: Partial<BackgroundTaskToolInput>): string {
+  if (args.until === "exit") return "for exit";
+  return args.until === "output" && textValue(args.contains)
+    ? `for ${quotedWaitText(textValue(args.contains))}`
+    : "";
+}
+
 export function backgroundTaskCallSubject(args: Partial<BackgroundTaskToolInput>): string {
-  const text = (value: string | undefined) => (Predicate.isString(value) ? value : "");
   switch (args.action) {
     case "start":
-      return sanitizeTerminalLine(text(args.name).trim() || text(args.command));
+      return sanitizeTerminalLine(textValue(args.name).trim() || textValue(args.command));
     case "wait":
-      if (args.until === "exit") return "for exit";
-      return args.until === "output" && text(args.contains)
-        ? `for ${quotedWaitText(text(args.contains))}`
-        : "";
+      return waitSubject(args);
     case "list":
       return args.state === "active" || args.state === "completed" ? args.state : "";
-    default:
+    case "status":
+    case "logs":
+    case "stop":
+    case "stop_all":
+    case "clear":
+    case undefined:
       return "";
   }
+  return "";
 }
 
 export function resultSnapshot(
@@ -119,20 +131,20 @@ type TaskSummary = CompactSummary & {
 function stateDetail(value: BackgroundTaskSnapshot): string {
   const label = taskStateLabel(value.state);
   const endedByUs = value.state === "timed_out" || value.state === "stopped";
-  return value.exitCode != null && value.exitCode !== 0 && !endedByUs
-    ? `${label}, exit ${value.exitCode}`
-    : label;
+  const exitCode = failingExitCode(value);
+  return exitCode !== undefined && !endedByUs ? `${label}, exit ${exitCode}` : label;
 }
 
 function failureIssues(value: BackgroundTaskSnapshot, cause: string | undefined): CompactIssue[] {
   const issues: CompactIssue[] = [];
-  if (value.exitCode != null && value.exitCode !== 0) {
-    const exitCause = cause ?? exitStatusMeaning(value.exitCode);
+  const exitCode = failingExitCode(value);
+  if (exitCode !== undefined) {
+    const exitCause = cause ?? exitStatusMeaning(exitCode);
     issues.push(
       issue(
         "error",
         `${value.id}:exit-code`,
-        `Exited with code ${value.exitCode}${exitCause ? `: ${exitCause}` : ""}`,
+        `Exited with code ${exitCode}${exitCause ? `: ${exitCause}` : ""}`,
       ),
     );
   }
@@ -160,14 +172,20 @@ function failureIssues(value: BackgroundTaskSnapshot, cause: string | undefined)
   return issues;
 }
 
-function taskSummary(value: BackgroundTaskSnapshot, cause?: string): TaskSummary {
-  const nonZeroExit = value.exitCode != null && value.exitCode !== 0;
-  let outcome: CompactOutcome = "success";
-  if (value.state === "failed" || value.state === "timed_out" || value.error) outcome = "error";
-  else if (value.state === "stopped") outcome = "cancelled";
-  else if (nonZeroExit || value.signal) outcome = "error";
-  else if (value.state === "stopping" || (value.state === "exited" && value.exitCode !== 0))
-    outcome = "uncertain";
+function taskOutcome(value: BackgroundTaskSnapshot): CompactOutcome {
+  if (value.state === "failed" || value.state === "timed_out" || value.error) return "error";
+  if (value.state === "stopped") return "cancelled";
+  if (failingExitCode(value) !== undefined || value.signal) return "error";
+  if (value.state === "stopping" || (value.state === "exited" && value.exitCode !== 0))
+    return "uncertain";
+  return "success";
+}
+
+function taskIssues(
+  value: BackgroundTaskSnapshot,
+  outcome: CompactOutcome,
+  cause: string | undefined,
+): CompactIssue[] {
   const issues: CompactIssue[] = [];
   if (value.state === "timed_out")
     issues.push(
@@ -179,7 +197,7 @@ function taskSummary(value: BackgroundTaskSnapshot, cause?: string): TaskSummary
   else if (outcome === "error") issues.push(...failureIssues(value, cause));
   if (value.error) issues.push(taskErrorIssue(value.id, value.error));
   if (value.state === "stopping") issues.push(cleanupUnconfirmedIssue(value.id));
-  if (value.state === "exited" && value.exitCode == null && !value.signal)
+  if (value.state === "exited" && Predicate.isNullish(value.exitCode) && !value.signal)
     issues.push(
       issue(
         "warning",
@@ -189,7 +207,17 @@ function taskSummary(value: BackgroundTaskSnapshot, cause?: string): TaskSummary
       ),
     );
   if (value.droppedLogBytes > 0) issues.push(logLossIssue(value.id, value.droppedLogBytes));
-  return { subject: taskDisplayName(value), metadata: [stateDetail(value)], outcome, issues };
+  return issues;
+}
+
+function taskSummary(value: BackgroundTaskSnapshot, cause?: string): TaskSummary {
+  const outcome = taskOutcome(value);
+  return {
+    subject: taskDisplayName(value),
+    metadata: [stateDetail(value)],
+    outcome,
+    issues: taskIssues(value, outcome, cause),
+  };
 }
 
 function cursorIssues(value: Omit<BackgroundLogMetadata, "state">): CompactIssue[] {
@@ -401,13 +429,22 @@ export const projectBackgroundTaskCompactSummary = ({
   if (phase !== "settled") return { action, subject };
   if (isError) return { action, subject, outcome: "error", issues: [] };
   const decoded = decodeBackgroundTaskDetails(result?.details);
-  if (Option.isNone(decoded)) return undefined;
+  if (Option.isNone(decoded) || decoded.value.action !== args.action) return undefined;
   const details = decoded.value;
-  if (details.action !== args.action) return undefined;
   const causes = causesById(
     "causes" in details ? (details.causes ?? []) : [],
     Predicate.isString(result?.text) ? result.text : undefined,
   );
+  return settledSummary(details, causes, args, action, subject);
+};
+
+function settledSummary(
+  details: DecodedTaskDetails,
+  causes: ReadonlyMap<string, string>,
+  args: Partial<BackgroundTaskToolInput>,
+  action: string,
+  subject: string,
+): CompactSummary | undefined {
   switch (details.action) {
     case "start":
     case "status":
@@ -429,7 +466,7 @@ export const projectBackgroundTaskCompactSummary = ({
     case "logs":
       return logsSummary(details, action, subject);
   }
-};
+}
 
 export const backgroundTaskCompactSummary: CompactSummaryProvider<
   BackgroundTaskToolInput,

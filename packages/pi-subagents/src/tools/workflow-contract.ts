@@ -76,45 +76,40 @@ const receipt = (run: WorkflowRunView): WorkflowStartContract["run"] => ({
   }),
   ...(run.warnings !== undefined && { warnings: run.warnings.map(log) }),
 });
-const live = (run: WorkflowRunView): WorkflowLiveContract => ({
-  ...receipt(run),
-  description: diagnostic(run.description),
-  ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
-  phases: run.phases.map(phase),
-  ...(run.currentPhase !== undefined && { currentPhase: run.currentPhase }),
-  agents: run.agents.map((agent) => ({
-    callId: agent.callId,
-    runId: agent.runId,
-    label: agent.label,
-    state: agent.state,
-    queuedAt: agent.queuedAt,
-    ...(agent.phase !== undefined && { phase: agent.phase }),
-    ...(agent.profile !== undefined && { profile: agent.profile }),
-    ...(agent.startedAt !== undefined && { startedAt: agent.startedAt }),
-    ...(agent.endedAt !== undefined && { endedAt: agent.endedAt }),
-    ...(agent.workspaceId !== undefined && { workspaceId: agent.workspaceId }),
-    ...(agent.unchanged !== undefined && { unchanged: agent.unchanged }),
-    ...(agent.reason !== undefined && { reason: diagnostic(agent.reason) }),
-    ...(agent.waiting !== undefined && {
-      waiting:
-        agent.waiting.kind === "slot"
-          ? { kind: "slot" as const }
-          : {
-              kind: "writer" as const,
-              runId: agent.waiting.runId,
-              name: agent.waiting.name,
-              paused: agent.waiting.paused,
-            },
-    }),
-  })),
-  planned: run.planned.map((entry) => ({
-    runId: entry.runId,
-    phase: entry.phase,
-    label: entry.label,
-    ...(entry.profile !== undefined && { profile: entry.profile }),
-    ...(entry.workflow !== undefined && { workflow: entry.workflow }),
-    ...(entry.skippedAt !== undefined && { skippedAt: entry.skippedAt }),
-  })),
+const liveAgent = (agent: WorkflowRunView["agents"][number]) => ({
+  callId: agent.callId,
+  runId: agent.runId,
+  label: agent.label,
+  state: agent.state,
+  queuedAt: agent.queuedAt,
+  ...(agent.phase !== undefined && { phase: agent.phase }),
+  ...(agent.profile !== undefined && { profile: agent.profile }),
+  ...(agent.startedAt !== undefined && { startedAt: agent.startedAt }),
+  ...(agent.endedAt !== undefined && { endedAt: agent.endedAt }),
+  ...(agent.workspaceId !== undefined && { workspaceId: agent.workspaceId }),
+  ...(agent.unchanged !== undefined && { unchanged: agent.unchanged }),
+  ...(agent.reason !== undefined && { reason: diagnostic(agent.reason) }),
+  ...(agent.waiting !== undefined && {
+    waiting:
+      agent.waiting.kind === "slot"
+        ? { kind: "slot" as const }
+        : {
+            kind: "writer" as const,
+            runId: agent.waiting.runId,
+            name: agent.waiting.name,
+            paused: agent.waiting.paused,
+          },
+  }),
+});
+const plannedAgent = (entry: WorkflowRunView["planned"][number]) => ({
+  runId: entry.runId,
+  phase: entry.phase,
+  label: entry.label,
+  ...(entry.profile !== undefined && { profile: entry.profile }),
+  ...(entry.workflow !== undefined && { workflow: entry.workflow }),
+  ...(entry.skippedAt !== undefined && { skippedAt: entry.skippedAt }),
+});
+const reuse = (run: WorkflowRunView) => ({
   reused: run.reused,
   ...(run.reusedPhases !== undefined && {
     reusedPhases: run.reusedPhases.map((entry) => ({ title: entry.title, count: entry.count })),
@@ -125,6 +120,16 @@ const live = (run: WorkflowRunView): WorkflowLiveContract => ({
       label: entry.label,
     })),
   }),
+});
+const live = (run: WorkflowRunView): WorkflowLiveContract => ({
+  ...receipt(run),
+  description: diagnostic(run.description),
+  ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
+  phases: run.phases.map(phase),
+  ...(run.currentPhase !== undefined && { currentPhase: run.currentPhase }),
+  agents: run.agents.map(liveAgent),
+  planned: run.planned.map(plannedAgent),
+  ...reuse(run),
   workspaces: workflowWorkspaces(run).map((entry) => ({
     workspaceId: entry.workspaceId,
     label: entry.label,
@@ -181,7 +186,9 @@ const attention = (entry: WorkflowAgentAttention) => {
       return { ...base, kind: entry.kind, canResume: entry.canResume };
     case "question":
       return { ...base, kind: entry.kind, message: diagnostic(entry.message) };
-    default:
+    case "containment":
+    case "admission-paused":
+    case "question-unavailable":
       return { ...base, kind: entry.kind };
   }
 };

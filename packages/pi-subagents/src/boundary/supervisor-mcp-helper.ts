@@ -122,22 +122,22 @@ const main = Effect.gen(function* () {
             serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
           },
         });
-        return;
+        break;
       case "notifications/initialized":
-        return;
+        break;
       case "notifications/cancelled":
         void runPromise(FiberMap.remove(activeCalls, rpcKey(request.requestId)));
-        return;
+        break;
       case "ping":
         void sendRpc({ jsonrpc: "2.0", id: request.id, result: {} });
-        return;
+        break;
       case "tools/list":
         void sendRpc({
           jsonrpc: "2.0",
           id: request.id,
           result: { tools: toolDefinitions },
         });
-        return;
+        break;
       case "tools/call": {
         if ([...activeCalls].length >= MAX_CONCURRENT_CALLS) {
           void rpcError(request.id, -32000, "Bounded concurrent MCP call capacity is full.");
@@ -157,9 +157,9 @@ const main = Effect.gen(function* () {
         void runPromise(
           FiberMap.run(activeCalls, key, { onlyIfMissing: true, startImmediately: true })(call),
         );
-        return;
+        break;
       }
-      default:
+      case "unknown":
         if (request.id !== undefined) void rpcError(request.id, -32601, "Method not found.");
     }
   };

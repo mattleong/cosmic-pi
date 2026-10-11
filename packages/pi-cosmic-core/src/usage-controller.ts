@@ -263,7 +263,7 @@ export const makeUsageRefreshController = <
           if (value._tag === "Missing")
             yield* Effect.logWarning(`${logLabel} usage recovery: credentials_missing.`);
           const latest = yield* updateState((current) => {
-            const cfg = current.config!;
+            const cfg = current.config;
             if (value._tag === "Disabled" || value._tag === "Hidden")
               return mergeState(current, {
                 eligible: false,
@@ -296,7 +296,10 @@ export const makeUsageRefreshController = <
               {
                 eligible: true,
                 snapshot: value.snapshot,
-                statusLine: options.formatStatusLine(value.snapshot, cfg, value.fetchedAt),
+                statusLine:
+                  cfg === undefined
+                    ? undefined
+                    : options.formatStatusLine(value.snapshot, cfg, value.fetchedAt),
                 statusText: options.formatStatusText(value.snapshot, value.fetchedAt),
                 error: undefined,
                 updatedAt: value.fetchedAt,
@@ -351,7 +354,7 @@ export const makeUsageRefreshController = <
       getState: state.getState,
       updateState,
       installConfig,
-      withSettingsPermit: settingUpdates.withPermit,
+      withSettingsPermit: (effect) => settingUpdates.withPermit(effect),
       provideDependencies,
     };
     return controller;

@@ -49,7 +49,7 @@ ARCHITECTURE.md
 - Config has one public persistence entrypoint, `config/store.ts`, including any Promise compatibility helpers. Do not add a peer `persistence.ts` or a separate service API for the same job. Name persistence modules store/service, never repository. Existing `resolve.ts` names may remain until renamed.
 - Keep Effect resources and authoritative state in feature services. Top-level `ui/` is pure. Feature-local rendering is allowed; document it in `ARCHITECTURE.md`.
 - Boundaries contain I/O or third-party adapters, not pure helpers. Dedicated Pi adapters use the `host-*` prefix. Leave direct stateless host calls at their call site rather than wrapping them solely for placement.
-- Prefer one public entrypoint per role and small implementation files. Split before roughly 400 to 500 lines of hard logic; do not merge files merely to reduce file count. Oxlint caps `src` files at 600 non-blank lines and every function at complexity 20.
+- Prefer one public entrypoint per role and small implementation files. Split before roughly 400 to 500 lines of hard logic; do not merge files merely to reduce file count. Oxlint caps `src` files at 500 non-blank lines and every function at complexity 15.
 - Write no comments, no explicit `any`, and no type assertions other than `as const`; Oxlint rejects all three. Carry intent in names, types, and tests, and decode unknown input with Effect Schema instead of asserting its type.
 - Keep no backwards-compatibility, migration, or legacy paths. Rename and replace outright; Oxlint rejects identifiers containing "legacy" or "deprecated".
 - Put tests under package-root `tests/`, never under `src/`, and use `*.test.ts`, never `*.spec.ts`. Large packages should mirror source structure; small packages may use flat test names.
@@ -96,7 +96,7 @@ pnpm --filter <package-name> test
 pnpm validate
 ```
 
-Run both after architecture changes. TypeScript, Oxlint, the Effect language service, and tests enforce the architecture rules.
+Run both after architecture changes. TypeScript, type-aware Oxlint (`oxlint --type-aware` through `oxlint-tsgolint`), the Effect language service, and tests enforce the architecture rules.
 
 Do not commit `node_modules/`, generated `dist/` output, local `.pi/` state, credentials, or generated images.
 

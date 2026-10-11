@@ -23,6 +23,34 @@ const MCP_READY_ATTEMPTS = 100;
 const INITIALIZATION_PROBE = "pi-subagents native initialization probe";
 
 export type ClaudeInitProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "init" }>;
+
+const nativeInitializationFailure = (
+  native: ClaudeInitProtocolEvent,
+  request: Pick<BackendLaunchRequest, "model" | "cwd">,
+  resolvedModel: string,
+) => {
+  if (native.model !== request.model && native.model !== resolvedModel)
+    return processError(
+      "initialize",
+      "claude_model_mismatch",
+      `Claude Code selected model ${native.model} instead of required model ${request.model}.`,
+    );
+  if (native.cwd !== request.cwd)
+    return processError(
+      "initialize",
+      "claude_cwd_mismatch",
+      "Claude Code initialized outside the canonical assigned working directory.",
+    );
+  if (!native.sessionId || native.hasMcpServerErrors)
+    return processError(
+      "initialize",
+      "claude_native_init_invalid",
+      native.hasMcpServerErrors
+        ? "Claude Code rejected part of the mandatory private MCP configuration."
+        : "Claude Code did not provide a native session identity.",
+    );
+  return undefined;
+};
 type ClaudeControlResponseEvent = Extract<
   ClaudeProtocolEvent,
   { readonly type: "control_response" }
@@ -135,63 +163,49 @@ export const makeLocalClaudeControl = (
     const resolvedModel =
       advertised.models.find((model) => model.value === request.model)?.resolvedModel ??
       request.model;
-    if (native.model !== request.model && native.model !== resolvedModel)
-      return yield* processError(
-        "initialize",
-        "claude_model_mismatch",
-        `Claude Code selected model ${native.model} instead of required model ${request.model}.`,
-      );
-    if (native.cwd !== request.cwd)
-      return yield* processError(
-        "initialize",
-        "claude_cwd_mismatch",
-        "Claude Code initialized outside the canonical assigned working directory.",
-      );
-    if (!native.sessionId || native.hasMcpServerErrors)
-      return yield* processError(
-        "initialize",
-        "claude_native_init_invalid",
-        native.hasMcpServerErrors
-          ? "Claude Code rejected part of the mandatory private MCP configuration."
-          : "Claude Code did not provide a native session identity.",
-      );
+    const nativeFailure = nativeInitializationFailure(native, request, resolvedModel);
+    if (nativeFailure) return yield* nativeFailure;
+    return yield* awaitSupervisorMcp(native);
+  });
 
-    for (let attempt = 0; attempt < MCP_READY_ATTEMPTS; attempt += 1) {
-      const status = yield* requestControl("mcp_status", claudeMcpStatusFrame).pipe(
-        Effect.flatMap((value) =>
-          decodeClaudeMcpStatusControlResponse(value).pipe(
-            Effect.mapError(() =>
-              processError(
-                "initialize",
-                "claude_mcp_status_invalid",
-                "Claude Code returned an invalid mandatory MCP status response.",
+  const awaitSupervisorMcp = (native: ClaudeInitProtocolEvent) =>
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < MCP_READY_ATTEMPTS; attempt += 1) {
+        const status = yield* requestControl("mcp_status", claudeMcpStatusFrame).pipe(
+          Effect.flatMap((value) =>
+            decodeClaudeMcpStatusControlResponse(value).pipe(
+              Effect.mapError(() =>
+                processError(
+                  "initialize",
+                  "claude_mcp_status_invalid",
+                  "Claude Code returned an invalid mandatory MCP status response.",
+                ),
               ),
             ),
           ),
-        ),
-      );
-      const server = status.mcpServers.find(
-        (candidate) => candidate.name === SUPERVISOR_MCP_REGISTRATION,
-      );
-      if (server?.status === "connected") {
-        const inventory = new Set(server.tools?.map((tool) => tool.name) ?? []);
-        if (!SUPERVISOR_MCP_TOOL_NAMES.every((tool) => inventory.has(tool)))
-          return yield* processError(
-            "initialize",
-            "claude_supervisor_tools_missing",
-            "Claude Code connected the private supervisor MCP server without its mandatory tool inventory.",
-          );
-        return { model: native.model, effort: request.effort, sessionId: native.sessionId };
+        );
+        const server = status.mcpServers.find(
+          (candidate) => candidate.name === SUPERVISOR_MCP_REGISTRATION,
+        );
+        if (server?.status === "connected") {
+          const inventory = new Set(server.tools?.map((tool) => tool.name) ?? []);
+          if (!SUPERVISOR_MCP_TOOL_NAMES.every((tool) => inventory.has(tool)))
+            return yield* processError(
+              "initialize",
+              "claude_supervisor_tools_missing",
+              "Claude Code connected the private supervisor MCP server without its mandatory tool inventory.",
+            );
+          return { model: native.model, effort: request.effort, sessionId: native.sessionId };
+        }
+        if (server && server.status !== "pending" && server.status !== "connecting") break;
+        yield* Effect.sleep("50 millis");
       }
-      if (server && server.status !== "pending" && server.status !== "connecting") break;
-      yield* Effect.sleep("50 millis");
-    }
-    return yield* processError(
-      "initialize",
-      "claude_supervisor_mcp_unavailable",
-      "Claude Code did not connect the mandatory pi_subagents_supervisor MCP server.",
-    );
-  });
+      return yield* processError(
+        "initialize",
+        "claude_supervisor_mcp_unavailable",
+        "Claude Code did not connect the mandatory pi_subagents_supervisor MCP server.",
+      );
+    });
 
   const interruptRequest = (): Pick<PendingInterrupt, "requestId" | "response"> => {
     const requestId = `interrupt-${nextControlId++}`;

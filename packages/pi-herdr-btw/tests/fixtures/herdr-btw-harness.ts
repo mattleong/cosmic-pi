@@ -262,9 +262,8 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
   const makeService = HerdrBtwService.make({ ...input, linkStore }, serviceOptions).pipe(
     Effect.provideService(HerdrClient, client),
   );
-  const open = (prompt?: string | undefined) =>
-    Effect.flatMap(makeService, (service) => service.open(prompt));
-  const openNew = (prompt?: string | undefined) =>
+  const open = (prompt?: string) => Effect.flatMap(makeService, (service) => service.open(prompt));
+  const openNew = (prompt?: string) =>
     Effect.flatMap(makeService, (service) => service.openNew(prompt));
 
   return {

@@ -48,7 +48,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
           key: string,
           message: string,
         ): Effect.Effect<Value | undefined> =>
-          Effect.catch(effect, () => Effect.as(warnOnce(key, message), undefined));
+          effect.pipe(Effect.catch(() => Effect.as(warnOnce(key, message), undefined)));
 
         const identity = Effect.gen(function* () {
           if (cachedIdentity) return cachedIdentity;

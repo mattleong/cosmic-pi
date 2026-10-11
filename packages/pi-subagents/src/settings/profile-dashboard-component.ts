@@ -164,10 +164,9 @@ export class ProfileDashboardComponent implements Component, Focusable {
   }
   private child(): Child {
     if (this.overlay) return this.overlay;
-    if (this.tab === "saved" && !this.savedTarget) return this.library;
-    return this.editors.get(
-      keyFor(this.tab === "session" ? { kind: "session" } : this.savedTarget!),
-    )!;
+    const target: ProfileWorkspaceTarget | undefined =
+      this.tab === "session" ? { kind: "session" } : this.savedTarget;
+    return (target && this.editors.get(keyFor(target))) ?? this.library;
   }
   get focused(): boolean {
     return this._focused;
@@ -206,10 +205,10 @@ export class ProfileDashboardComponent implements Component, Focusable {
     if (!this.current()) return Promise.reject(new Error("Profile dashboard closed."));
     return this.options.actions
       .inspectProfiles(isProjectTrusted(this.options.ctx))
-      .then((next) => {
+      .then((latest) => {
         if (!this.current()) throw new Error("Profile dashboard closed.");
-        this.publish(next);
-        return next;
+        this.publish(latest);
+        return latest;
       })
       .catch((error) => {
         if (this.current()) this.blocked = true;
@@ -341,10 +340,13 @@ export class ProfileDashboardComponent implements Component, Focusable {
       if (action === "cancel" || action === "quit") this.options.workspace.close();
       return;
     }
-    if (action === "next-pane" || action === "previous-pane") this.switchTab();
-    else if (!(this.tab === "saved" && resolution?._tag === "Shortcut")) child.handleInput?.(data);
+    this.route(child, data, action, resolution?._tag === "Shortcut");
     this.focused = this._focused;
     this.renderSoon();
+  }
+  private route(child: Child, data: string, action: string | undefined, shortcut: boolean): void {
+    if (action === "next-pane" || action === "previous-pane") this.switchTab();
+    else if (!(this.tab === "saved" && shortcut)) child.handleInput?.(data);
   }
   private switchTab(): void {
     this.reconcileTargets();

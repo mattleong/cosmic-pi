@@ -10,31 +10,30 @@ import {
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
-const { join } = nodePath;
 const fixture = fileURLToPath(new URL("./fixtures/model-catalog-fixture.mjs", import.meta.url));
 const setup = Effect.gen(function* () {
   const directory = yield* temporaryDirectory("pi-subagents-catalog-");
   const home = yield* step(() => fs.realpath(directory));
-  const executable = join(home, "catalog.mjs");
+  const executable = nodePath.join(home, "catalog.mjs");
   yield* step(() => fs.copyFile(fixture, executable));
   yield* step(() => fs.chmod(executable, 0o700));
-  yield* step(() => fs.mkdir(join(home, ".claude")));
-  const cwd = join(home, "project");
-  yield* step(() => fs.mkdir(join(cwd, ".claude"), { recursive: true }));
+  yield* step(() => fs.mkdir(nodePath.join(home, ".claude")));
+  const cwd = nodePath.join(home, "project");
+  yield* step(() => fs.mkdir(nodePath.join(cwd, ".claude"), { recursive: true }));
   yield* step(() =>
-    fs.writeFile(join(cwd, ".claude", "settings.json"), '{"model":"project-model"}'),
+    fs.writeFile(nodePath.join(cwd, ".claude", "settings.json"), '{"model":"project-model"}'),
   );
   const path = yield* Config.String("PATH").pipe(Effect.orDie);
   return {
     home,
     cwd,
-    settings: join(home, ".claude", "settings.json"),
+    settings: nodePath.join(home, ".claude", "settings.json"),
     options: {
       executables: { claude: executable, codex: executable },
       environment: {
         HOME: home,
         PATH: path,
-        CLAUDE_CONFIG_DIR: join(cwd, ".claude"),
+        CLAUDE_CONFIG_DIR: nodePath.join(cwd, ".claude"),
         ANTHROPIC_API_KEY: "private-api-key",
       },
     },
@@ -113,7 +112,9 @@ describe("Claude catalog preference", () => {
         expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");
       }
       yield* step(() => fs.unlink(test.settings));
-      yield* step(() => fs.symlink(join(test.home, "missing-settings.json"), test.settings));
+      yield* step(() =>
+        fs.symlink(nodePath.join(test.home, "missing-settings.json"), test.settings),
+      );
       expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");
       yield* step(() => fs.unlink(test.settings));
       yield* step(() => fs.mkdir(test.settings));
@@ -125,7 +126,7 @@ describe("Claude catalog preference", () => {
     "follows the exact user settings symlink and rereads its regular target",
     function* () {
       const test = yield* setup;
-      const target = join(test.home, "dotfile-settings.json");
+      const target = nodePath.join(test.home, "dotfile-settings.json");
       yield* step(() => fs.writeFile(target, '{"model":"dotfile-alias[1m]"}'));
       yield* step(() => fs.symlink(target, test.settings));
       const catalog = yield* makeNativeModelCatalog(test.options);

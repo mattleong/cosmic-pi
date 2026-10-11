@@ -39,7 +39,10 @@ const inputOperators = new Set([
 ]);
 
 function isReference(node: ESTree.Node): node is ESTree.IdentifierReference {
-  return node.type === "Identifier" && node.typeAnnotation == null;
+  return (
+    node.type === "Identifier" &&
+    (node.typeAnnotation === null || node.typeAnnotation === undefined)
+  );
 }
 
 function memberIdentity(identity: Identity | null, name: string | null): Identity | null {

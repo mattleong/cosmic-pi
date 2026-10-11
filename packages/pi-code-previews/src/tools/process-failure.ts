@@ -13,8 +13,9 @@ const shortenCause = (line: string): string => {
   const location = LOCATION.exec(line);
   const rest = (location ? line.slice(location[0].length) : line).replace(SEVERITY_CODE, "");
   if (!location) return rest;
-  const file = location[1]!.split(/[\\/]/u).at(-1);
-  return `${file}:${location[2] ?? location[3]} ${rest}`;
+  const [, path = "", parenLine, colonLine] = location;
+  const file = path.split(/[\\/]/u).at(-1);
+  return `${file}:${parenLine ?? colonLine} ${rest}`;
 };
 
 export function outputFailureLine(output: readonly string[]): string | undefined {
@@ -54,6 +55,6 @@ export function exitStatusMeaning(
 ): string | undefined {
   return (
     (signal === undefined ? undefined : SIGNAL_MEANINGS.get(signal)) ??
-    (exitCode == null ? undefined : EXIT_MEANINGS.get(exitCode))
+    (exitCode === null || exitCode === undefined ? undefined : EXIT_MEANINGS.get(exitCode))
   );
 }

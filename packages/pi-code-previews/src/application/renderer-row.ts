@@ -147,32 +147,40 @@ class RetainedRendererRow {
   private refresh(through: "call" | "result" = "result"): void {
     if (!this.context || !this.theme) return;
     this.state ??= { ...this.context.state };
-    if (!this.adopted && this.owner.ready && this.owner.live) {
-      this.adopted = true;
-      const selected = this.select();
-      if (selected) {
-        this.renderers = selected;
-        this.state = { ...this.context.state };
-        this.call = undefined;
-        this.result = undefined;
-      }
-      this.stale.call = true;
-      this.stale.result = true;
-    }
+    if (!this.adopted && this.owner.ready && this.owner.live) this.adopt(this.context);
     const context = { ...this.context, state: this.state };
-    const call = this.renderers.renderCall;
-    const result = this.renderers.renderResult;
-    if (this.stale.call) {
-      this.stale.call = false;
-      if (call) this.call = call(this.args, this.theme, { ...context, lastComponent: this.call });
-    }
+    if (this.stale.call) this.redrawCall(context, this.theme);
     if (through === "call" || !this.stale.result) return;
     this.stale.result = false;
+    this.redrawResult(context, this.theme);
+  }
+
+  private adopt(context: RowContext): void {
+    this.adopted = true;
+    const selected = this.select();
+    if (selected) {
+      this.renderers = selected;
+      this.state = { ...context.state };
+      this.call = undefined;
+      this.result = undefined;
+    }
+    this.stale.call = true;
+    this.stale.result = true;
+  }
+
+  private redrawCall(context: RowContext, theme: Theme): void {
+    this.stale.call = false;
+    const call = this.renderers.renderCall;
+    if (call) this.call = call(this.args, theme, { ...context, lastComponent: this.call });
+  }
+
+  private redrawResult(context: RowContext, theme: Theme): void {
+    const result = this.renderers.renderResult;
     if (result && this.value && this.options)
       this.result = result(
         this.value,
         { ...this.options, expanded: context.expanded, isPartial: context.isPartial },
-        this.theme,
+        theme,
         { ...context, lastComponent: this.result },
       );
   }

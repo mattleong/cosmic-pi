@@ -45,8 +45,12 @@ describe("toPiToolOutputSchema", () => {
       guard(encode({ kind: "one", task: { id: "a", status: "done", children: [leaf] } })),
     ).toBe(true);
     expect(guard(encode({ kind: "many", tasks: [leaf] }))).toBe(true);
-    expect(guard({ kind: "many", tasks: [{ ...leaf, status: "running" }] })).toBe(false);
-    expect(guard({ kind: "one", task: { ...leaf, children: [{ id: "c" }] } })).toBe(false);
+    expect(guard({ kind: "many", tasks: [{ id: "b", status: "running", children: [] }] })).toBe(
+      false,
+    );
+    expect(
+      guard({ kind: "one", task: { id: "b", status: "failed", children: [{ id: "c" }] } }),
+    ).toBe(false);
     expect(guard({ kind: "other", tasks: [] })).toBe(false);
   });
 

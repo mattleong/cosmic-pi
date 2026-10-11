@@ -1085,6 +1085,9 @@ describe("subagent tool", () => {
   effectTest(
     "routes dedicated claim operations through the parent-only coordination tool",
     function* () {
+      const firstText = (
+        result: { readonly content: ReadonlyArray<{ readonly text: string }> } | undefined,
+      ) => result?.content[0]?.text;
       const grants: Array<{ readonly id: string; readonly paths: ReadonlyArray<string> }> = [];
       const claimed = view({
         id: "agent-claims",
@@ -1118,9 +1121,9 @@ describe("subagent tool", () => {
         paths: ["src/b.ts"],
       });
       expect(grants).toEqual([{ id: "agent-claims", paths: ["src/b.ts"] }]);
-      expect(result?.content[0]?.text).toContain("src/a.ts, src/b.ts");
-      expect(result?.content[0]?.text).toContain("Do not use subagent_reply for containment");
-      expect(result?.content[0]?.text).not.toContain("send the resulting authoritative claim set");
+      expect(firstText(result)).toContain("src/a.ts, src/b.ts");
+      expect(firstText(result)).toContain("Do not use subagent_reply for containment");
+      expect(firstText(result)).not.toContain("send the resulting authoritative claim set");
       expect(result?.details).toMatchObject({
         version: 2,
         action: "claims",
@@ -1128,17 +1131,15 @@ describe("subagent tool", () => {
       });
 
       const listed = yield* invokeOptionalTool(tool, { action: "list", runIds: ["agent-claims"] });
-      expect(listed?.content[0]?.text).toContain("Do not use subagent_reply for containment");
-      expect(listed?.content[0]?.text).not.toContain("send the resulting authoritative claim set");
+      expect(firstText(listed)).toContain("Do not use subagent_reply for containment");
+      expect(firstText(listed)).not.toContain("send the resulting authoritative claim set");
 
       const reopened = yield* invokeOptionalTool(tool, {
         action: "resume_admission",
         runId: "agent-claims",
       });
-      expect(reopened?.content[0]?.text).toContain("stop and replace");
-      expect(reopened?.content[0]?.text).not.toContain(
-        "send the resulting authoritative claim set",
-      );
+      expect(firstText(reopened)).toContain("stop and replace");
+      expect(firstText(reopened)).not.toContain("send the resulting authoritative claim set");
     },
   );
 

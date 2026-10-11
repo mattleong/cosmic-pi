@@ -127,6 +127,18 @@ export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
     return reconcileResultUsage(event, expectation).pipe(Effect.andThen(settleError));
   };
 
+  const isInterruptedResult = (
+    event: ClaudeResultProtocolEvent,
+    expectation: ReturnType<typeof correlation.take>,
+    interruptEpoch: number,
+  ): boolean =>
+    event.isError &&
+    event.subtype === "error_during_execution" &&
+    event.stopReason === "aborted_streaming" &&
+    ((event.userMessageUuid === undefined && expectation === undefined) ||
+      (expectation?.kind === "assignment" && expectation.epoch === interruptEpoch)) &&
+    isSameClaudeSession(event.sessionId, state.nativeSessionId);
+
   const onResult = (event: ClaudeResultProtocolEvent, raw: LocalCliWireEvent) => {
     const expectation = correlation.take(
       event.userMessageUuid,
@@ -134,15 +146,7 @@ export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
       event.originSubkind,
     );
     const interrupt = interrupts.current;
-    const interruptedResult =
-      interrupt !== undefined &&
-      event.isError &&
-      event.subtype === "error_during_execution" &&
-      event.stopReason === "aborted_streaming" &&
-      ((event.userMessageUuid === undefined && expectation === undefined) ||
-        (expectation?.kind === "assignment" && expectation.epoch === interrupt.epoch)) &&
-      isSameClaudeSession(event.sessionId, state.nativeSessionId);
-    if (interruptedResult)
+    if (interrupt !== undefined && isInterruptedResult(event, expectation, interrupt.epoch))
       return reconcileResultUsage(event, expectation).pipe(
         Effect.andThen(reports.observeNativeResult(interrupt.epoch)),
         Effect.andThen(observeInterruptEvidence(context, interrupt, "resultSeen", raw)),

@@ -114,29 +114,25 @@ describe("background task compact semantics", () => {
   });
 
   it("keeps unclassified task errors visible, with full text as expanded detail", () => {
-    const single = project({
-      action: "status",
-      snapshot: { ...snapshot, state: "failed", error: "Custom failure. Inspect state." },
-    });
+    const failed = (error: string) =>
+      project({ action: "status", snapshot: { ...snapshot, state: "failed", error } });
+    const firstIssue = (summary: ReturnType<typeof project>) => summary?.issues?.[0];
+    const single = failed("Custom failure. Inspect state.");
     expect(single?.outcome).toBe("error");
     expect(single?.issues).toEqual([
       expect.objectContaining({ severity: "error", message: "Custom failure" }),
     ]);
-    expect(single?.issues?.[0]?.detail).toBe("Custom failure. Inspect state.");
-    const error = "\u001b[31mSpawn failed\u001b[0m\nENOENT: no such file\n  at spawn";
-    const multi = project({ action: "status", snapshot: { ...snapshot, state: "failed", error } });
-    const issue = multi?.issues?.[0];
+    expect(firstIssue(single)?.detail).toBe("Custom failure. Inspect state.");
+    const multi = failed("\u001b[31mSpawn failed\u001b[0m\nENOENT: no such file\n  at spawn");
+    const issue = firstIssue(multi);
     expect(issue?.severity).toBe("error");
     expect(issue?.message).toBe("Spawn failed");
     expect(issue?.detail).toContain("ENOENT: no such file\n  at spawn");
     expect(JSON.stringify(multi)).not.toContain("\u001b");
 
-    const long = project({
-      action: "status",
-      snapshot: { ...snapshot, state: "failed", error: "x".repeat(2048) },
-    });
-    expect(long?.issues?.[0]?.message.length).toBeLessThan(2048);
-    expect(long?.issues?.[0]?.detail).toBe("x".repeat(2048));
+    const long = firstIssue(failed("x".repeat(2048)));
+    expect(long?.message.length).toBeLessThan(2048);
+    expect(long?.detail).toBe("x".repeat(2048));
   });
 
   it("never makes a task ID the subject, and names the task once its result arrives", () => {

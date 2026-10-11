@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import {
   getTextContent,
@@ -97,6 +98,17 @@ export function imageFailureIssue(text: string): CompactIssue {
 const hasNoDetails = <Value>(details: Value): boolean =>
   details === undefined || (Predicate.isObject(details) && Object.keys(details).length === 0);
 
+const textOnlyFailure = (result: AgentToolResult<unknown> | undefined): string | undefined => {
+  if (
+    !result?.content.length ||
+    !hasNoDetails(result.details) ||
+    result.content.some((part) => part.type !== "text")
+  )
+    return undefined;
+  const text = getTextContent(result.content);
+  return text.trim() ? text : undefined;
+};
+
 export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
   phase,
   args,
@@ -110,15 +122,10 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
   const record = imageRecord(result?.details);
 
   if (context.isError && record?.status !== "cancelled") {
-    if (
-      !result?.content.length ||
-      !hasNoDetails(result.details) ||
-      result.content.some((part) => part.type !== "text")
-    )
-      return undefined;
-    const text = getTextContent(result.content);
-    if (!text.trim()) return undefined;
-    return { action, subject, outcome: "error", issues: [imageFailureIssue(text)] };
+    const text = textOnlyFailure(result);
+    return text === undefined
+      ? undefined
+      : { action, subject, outcome: "error", issues: [imageFailureIssue(text)] };
   }
 
   if (!record) return undefined;

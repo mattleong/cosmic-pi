@@ -17,8 +17,8 @@
     "check": "pnpm layout:check && pnpm diagnostics:guard && pnpm typecheck && pnpm effect:diagnostics && pnpm lint && pnpm format:check",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "lint": "oxlint --deny-warnings scripts packages tools",
-    "lint:fix": "oxlint --fix scripts packages tools",
+    "lint": "oxlint --type-aware --deny-warnings scripts packages tools",
+    "lint:fix": "oxlint --type-aware --fix scripts packages tools",
     "layout:check": "node scripts/check-package-layout.mjs",
     "test": "node --test scripts/*.test.mjs && pnpm test:anti-slop && node scripts/test-packages.mjs",
     "test:anti-slop": "node --test tools/oxlint/anti-slop/rules/*.test.ts",
@@ -39,6 +39,7 @@
     "jiti": "2.7.0",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
     "typescript": "catalog:"
   },
   "engines": {

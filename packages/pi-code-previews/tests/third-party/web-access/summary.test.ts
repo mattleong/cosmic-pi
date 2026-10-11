@@ -32,15 +32,22 @@ it("counts delivered evidence without asserting operation success or claim truth
   }
 });
 
+const firstIssue = (summary: ReturnType<typeof summarize>) => summary?.issues?.[0];
+
+const assertStyledIssues = (summary: ReturnType<typeof summarize>) => {
+  for (const issue of summary?.issues ?? [])
+    assert.deepEqual(issueMessageStyleProblems(issue.message), []);
+};
+
 it("keeps partial failures, domain errors, and cancellation distinct", () => {
   const mixed = summarize("web_search", { queryCount: 3, successfulQueries: 1, totalResults: 2 });
   assert.equal(mixed?.outcome, "returned");
-  assert.equal(mixed?.issues?.[0]?.severity, "warning");
+  assert.equal(firstIssue(mixed)?.severity, "warning");
   const failure = summarize("fetch_content", {
     error: "Error: upstream unavailable\nOriginal diagnostics",
   });
   assert.equal(failure?.outcome, "error");
-  assert.match(failure?.issues?.[0]?.detail ?? "", /Original diagnostics/);
+  assert.match(firstIssue(failure)?.detail ?? "", /Original diagnostics/);
   assert.equal(
     summarize("web_search", { error: "cancelled", cancelled: true })?.outcome,
     "cancelled",
@@ -52,10 +59,8 @@ it("keeps partial failures, domain errors, and cancellation distinct", () => {
     artifact: { errors: [{ error: "Search failed" }], sources: [{ fetch_error: "Fetch failed" }] },
   });
   assert.equal(research?.outcome, "returned");
-  assert.equal(research?.issues?.[0]?.severity, "warning");
-  for (const summary of [mixed, failure, research])
-    for (const issue of summary?.issues ?? [])
-      assert.deepEqual(issueMessageStyleProblems(issue.message), []);
+  assert.equal(firstIssue(research)?.severity, "warning");
+  for (const summary of [mixed, failure, research]) assertStyledIssues(summary);
 });
 
 it("treats shortened output with a recovery reference as informational, not proof of availability", () => {

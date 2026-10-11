@@ -31,7 +31,7 @@ export const chooseFromPage = (
   shortcut: string,
   query: string,
 ): void => {
-  for (const key of [shortcut, "/", ...query, "\r"]) component.handleInput(key);
+  for (const key of [shortcut, "/", ...Array.from(query), "\r"]) component.handleInput(key);
 };
 
 export const workspaceHarness = (

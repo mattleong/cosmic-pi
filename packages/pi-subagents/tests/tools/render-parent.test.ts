@@ -53,14 +53,18 @@ describe("child compact acknowledgement policy", () => {
     expect(summarize(question, "An unrelated result")).toBeUndefined();
   });
 
-  it("preserves complete warnings while keeping child subjects bounded", () => {
+  it("preserves complete warnings in expanded detail", () => {
     const message = "Verify cleanup before retry. ".repeat(30);
-    expect(summarize({ kind: "progress", message })?.subject.length).toBeLessThanOrEqual(120);
     const summary = summarize({ kind: "warning", message }, "Parent received warning.");
     expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["warning"]);
     expect(summary?.issues?.[0]?.message.length).toBeLessThanOrEqual(120);
     expect(issueMessageStyleProblems(summary?.issues?.[0]?.message ?? "")).toEqual([]);
     expect(summary?.issues?.[0]?.detail).toBe(message);
+  });
+
+  it("keeps child subjects bounded and free of agent guidance and controls", () => {
+    const message = "Verify cleanup before retry. ".repeat(30);
+    expect(summarize({ kind: "progress", message })?.subject.length).toBeLessThanOrEqual(120);
     const guidance = summarize(
       { kind: "warning", message: "Use the fallback route before retrying." },
       "Parent received warning.",

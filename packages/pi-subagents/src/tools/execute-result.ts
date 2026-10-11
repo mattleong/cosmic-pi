@@ -12,8 +12,8 @@ import {
   formatRun,
   formatStartResult,
   joinBoundedToolText,
-  managementAcknowledgement,
 } from "./format.ts";
+import { managementAcknowledgement } from "./format-acknowledgement.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
 import { subagentToolAction, type SubagentToolInput } from "./schema.ts";
 
@@ -81,7 +81,11 @@ export const presentSubagentResult = (
       case SUBAGENT_TOOL_NAME.status:
       case SUBAGENT_TOOL_NAME.await:
         return detailedText();
-      default:
+      case SUBAGENT_TOOL_NAME.send:
+      case SUBAGENT_TOOL_NAME.reply:
+      case SUBAGENT_TOOL_NAME.lifecycle:
+      case SUBAGENT_TOOL_NAME.rename:
+      case SUBAGENT_TOOL_NAME.claims:
         return acknowledgement();
     }
   };

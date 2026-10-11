@@ -12,6 +12,8 @@ import {
   type ExtensionSubcommand,
   type SettingsOptionDescriptor,
 } from "pi-cosmic-core";
+import type { HostKeybindingSource } from "../manager/key-labels.ts";
+import type { FullScreenKeymapOptions } from "../manager/keymap.ts";
 import {
   createSettingsListSurface,
   managerSettingsTheme,
@@ -92,6 +94,14 @@ interface SettingsListContent {
   readonly onList?: ((list: SettingsList) => void) | undefined;
 }
 
+const guardedKeybindingMatcher = (
+  keybindings: HostKeybindingSource | undefined,
+): FullScreenKeymapOptions["matchesKeybinding"] => {
+  if (!keybindings || !invokeHostCallback(() => Predicate.isFunction(keybindings.matches), false))
+    return undefined;
+  return (data, id) => invokeHostCallback(() => keybindings.matches(data, id), false);
+};
+
 export const openSettingsList = (
   ctx: ExtensionContext,
   content: (host: OwnedSurfaceHost<undefined>) => SettingsListContent,
@@ -111,12 +121,7 @@ export const openSettingsList = (
           : header,
         listTheme: managerSettingsTheme(theme),
         onCancel: onCancel ?? (() => finish(undefined)),
-        matchesKeybinding: invokeHostCallback(
-          () => Predicate.isFunction(keybindings?.matches),
-          false,
-        )
-          ? (data, id) => invokeHostCallback(() => keybindings.matches(data, id), false)
-          : undefined,
+        matchesKeybinding: guardedKeybindingMatcher(keybindings),
         requestRender: () => invokeHostCallback(() => tui.requestRender(), undefined),
         dim: (text) => invokeHostCallback(() => theme.fg("dim", text), text),
         bridge: {

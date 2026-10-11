@@ -102,28 +102,39 @@ interface WebAccessEvidence {
   readonly researchErrors: number;
 }
 
-function researchErrors<Artifact>(value: Artifact): number | undefined {
-  if (!Predicate.isObject(value) || Array.isArray(value)) return undefined;
+function descriptorErrors(
+  descriptor: PropertyDescriptor | undefined,
+  field: "error" | "fetch_error",
+  optional: boolean,
+): number | undefined {
+  if (!descriptor) return 0;
+  if (!("value" in descriptor)) return undefined;
+  if (descriptor.value === undefined) return 0;
+  if (!Array.isArray(descriptor.value)) return undefined;
+  const array = arraySnapshot(descriptor.value);
+  if (!array) return undefined;
   let count = 0;
-  for (const key of ["errors", "sources"] as const) {
-    const fieldDescriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!fieldDescriptor) continue;
-    if (!("value" in fieldDescriptor)) return undefined;
-    if (fieldDescriptor.value === undefined) continue;
-    if (!Array.isArray(fieldDescriptor.value)) return undefined;
-    const array = arraySnapshot(fieldDescriptor.value);
-    if (!array) return undefined;
-    for (const entry of array) {
-      const field = key === "errors" ? "error" : "fetch_error";
-      const record = snapshot(entry, [field]);
-      if (!record) return undefined;
-      if (record[field] === undefined && key === "sources") continue;
-      const error = decodeUnknownOrUndefined(Text, record[field]);
-      if (error === undefined) return undefined;
-      if (error.trim()) count++;
-    }
+  for (const entry of array) {
+    const record = snapshot(entry, [field]);
+    if (!record) return undefined;
+    if (record[field] === undefined && optional) continue;
+    const error = decodeUnknownOrUndefined(Text, record[field]);
+    if (error === undefined) return undefined;
+    if (error.trim()) count++;
   }
   return count;
+}
+
+function researchErrors<Artifact>(value: Artifact): number | undefined {
+  if (!Predicate.isObject(value) || Array.isArray(value)) return undefined;
+  const errors = descriptorErrors(Object.getOwnPropertyDescriptor(value, "errors"), "error", false);
+  if (errors === undefined) return undefined;
+  const sources = descriptorErrors(
+    Object.getOwnPropertyDescriptor(value, "sources"),
+    "fetch_error",
+    true,
+  );
+  return sources === undefined ? undefined : errors + sources;
 }
 
 const exceeds = (part: number | undefined, whole: number | undefined): boolean =>

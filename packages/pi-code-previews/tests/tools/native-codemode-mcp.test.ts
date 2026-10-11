@@ -140,22 +140,29 @@ function assertUnfinishedCall(status: string): void {
   );
 }
 
+type SummaryChildren = NonNullable<ReturnType<typeof summarize>>["children"];
+
+function assertSummaryChildren(rows: SummaryChildren, diagnostic: string): void {
+  const row = rows?.entries[0];
+  assert.equal(row?.status, "error");
+  assert.ok(
+    row?.issues?.some((issue) => issue.severity === "error" && issue.detail === diagnostic),
+  );
+  assert.equal(
+    row?.issues?.find((issue) => issue.severity === "error")?.message.includes("Run /mcp"),
+    false,
+  );
+}
+
 test("MCP failures, cancellations and unfinished calls retain their existing classifications", () => {
   const diagnostic = "MCP server docs requires sign-in. Run /mcp to sign in.";
   const failed = completed([{ ...call("mcp__docs__lookup", "{}", "error"), error: diagnostic }]);
   const summary = summarize(failed);
   assert.equal(summary?.outcome, "warning");
   const row = summary?.children?.entries[0];
-  assert.equal(row?.status, "error");
-  assert.ok(
-    row?.issues?.some((issue) => issue.severity === "error" && issue.detail === diagnostic),
-  );
+  assertSummaryChildren(summary?.children, diagnostic);
   for (const issue of [...(summary?.issues ?? []), ...(row?.issues ?? [])])
     assert.deepEqual(issueMessageStyleProblems(issue.message), []);
-  assert.equal(
-    row?.issues?.find((issue) => issue.severity === "error")?.message.includes("Run /mcp"),
-    false,
-  );
   for (const status of ["cancelled", "running"]) assertUnfinishedCall(status);
 });
 

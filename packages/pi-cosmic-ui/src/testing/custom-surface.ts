@@ -153,6 +153,7 @@ export function fakeCustomSurfaceHost(
 
   return {
     ctx: extensionContextFixture({ mode: "tui" as const, hasUI: true, ui }),
+    custom,
     tui,
     terminal,
     resize: (columns: number, rows: number) => {

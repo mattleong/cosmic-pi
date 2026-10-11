@@ -50,7 +50,7 @@ export function normalizeSettingsWithDiagnostics<DataInput>(
 }
 
 type SettingKey = keyof CodePreviewSettings;
-type SettingCandidate = CodePreviewSettings[SettingKey] | string | undefined;
+type SettingCandidate = string | number | boolean | CodePreviewSettings["tools"] | undefined;
 
 function uiSettingCandidate(
   key: SettingKey,

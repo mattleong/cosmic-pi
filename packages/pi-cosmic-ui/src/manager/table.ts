@@ -14,18 +14,19 @@ export const managerTable = (
 ) => {
   const available = Math.max(0, Math.floor(width));
   const gap = "  ";
-  const natural = columns.map((column, index) =>
-    Math.max(column.minWidth, ...rows.map((row) => visibleWidth(row[index] ?? ""))),
-  );
   const widths = columns.map(() => 0);
   const priority = columns
-    .map((column, index) => ({ ...column, index }))
+    .map((column, index) => ({
+      ...column,
+      index,
+      natural: Math.max(column.minWidth, ...rows.map((row) => visibleWidth(row[index] ?? ""))),
+    }))
     .sort((a, b) => b.priority - a.priority || a.index - b.index);
   let remaining = available;
   let admitted = 0;
   for (const column of priority) {
     const spacing = admitted ? gap.length : 0;
-    const minimum = Math.min(natural[column.index]!, Math.max(1, column.minWidth));
+    const minimum = Math.min(column.natural, Math.max(1, column.minWidth));
     if (remaining - spacing < minimum && admitted) continue;
     const size = Math.max(0, Math.min(minimum, remaining - spacing));
     if (!size) continue;
@@ -34,9 +35,10 @@ export const managerTable = (
     admitted += 1;
   }
   for (const column of priority) {
-    if (!widths[column.index]) continue;
-    const extra = Math.min(remaining, natural[column.index]! - widths[column.index]!);
-    widths[column.index]! += extra;
+    const width = widths[column.index] ?? 0;
+    if (!width) continue;
+    const extra = Math.min(remaining, column.natural - width);
+    widths[column.index] = width + extra;
     remaining -= extra;
   }
   const cell = (text: string, column: number): string =>

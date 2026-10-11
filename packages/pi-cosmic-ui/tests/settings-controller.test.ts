@@ -29,7 +29,7 @@ function settingsHarness() {
   const ctx = extensionContextFixture({
     mode: "tui" as const,
     signal: new AbortController().signal,
-    ui: { custom: host.ctx.ui.custom, notify },
+    ui: { custom: host.custom, notify },
   });
   const pi = extensionApiFixture({
     registerCommand(_name: string, definition: Omit<RegisteredCommand, "name" | "sourceInfo">) {

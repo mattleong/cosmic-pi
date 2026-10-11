@@ -32,6 +32,7 @@ import {
   stateWords,
   type QuestionnaireState,
   type ReplayedAnswer,
+  type ReplayedOutcome,
   type ReplayedSnapshot,
 } from "./tool-render-projection.ts";
 
@@ -102,20 +103,21 @@ export function renderAsyncResult<Input>(
 ): Component {
   if (options.isPartial) return new Text(toolRunningLine(theme), 0, 0);
   const result = envelope(input);
-  const rows = decodeExpandedAsyncRows(result?.details);
-  const states = rows?.map(questionnaireState);
-  const list = !rows || rows.length !== 1 || isStatusList(context.args);
-  const [state] = states ?? [];
-  const cancelled = !list && state === "cancelled" && !context.isError;
+  const decoded = decodeExpandedAsyncRows(result?.details);
+  const rows = decoded ?? [];
+  const states = rows.flatMap((row) => {
+    const state = questionnaireState(row);
+    return state ? [state] : [];
+  });
+  const list = rows.length !== 1 || isStatusList(context.args);
   if (options.expanded) {
     const content = renderAsyncContent(input, options, theme, context);
+    const cancelled = !list && states[0] === "cancelled" && !context.isError;
     return cancelled ? stacked([cancelledLine(theme), content]) : content;
   }
   if (context.isError) return emptyBody();
-  if (!rows || !states || states.some((entry) => entry === undefined))
-    return new Text(rawText(result?.content), 0, 0);
-  const known = states.flatMap((entry) => (entry ? [entry] : []));
-  return collapsedRows(rows, known, list, theme);
+  if (!decoded || states.length !== rows.length) return new Text(rawText(result?.content), 0, 0);
+  return collapsedRows(rows, states, list, theme);
 }
 
 function collapsedRows(
@@ -148,6 +150,46 @@ function padded(parts: readonly Component[], pad: number): Component {
   };
 }
 
+function messageSubject(outcome: ReplayedOutcome | undefined): string {
+  if (!outcome) return "Questionnaire update";
+  return outcome.outcome === "cancelled" ? "Questionnaire cancelled" : "Answers submitted";
+}
+
+function compactAsyncMessage(
+  outcome: ReplayedOutcome | undefined,
+  expanded: Component,
+  options: MessageRenderOptions,
+  theme: Theme,
+): Component {
+  const subject = messageSubject(outcome);
+  const answers = outcome?.outcome === "submitted" ? outcome.answers : [];
+  const { collapsedSummary } = planCompactPresentation({
+    summary: outcome && {
+      subject,
+      outcome: outcome.outcome === "cancelled" ? "cancelled" : "success",
+      counters: answers.length ? [countLabel(answers.length, "answer")] : [],
+    },
+    phase: "settled",
+    isError: false,
+    expanded: options.expanded,
+    heading: { subject },
+  });
+  const heading = composeToolComponent((width) => [
+    renderCompactRow(
+      {
+        name: "ask_user_async",
+        phase: "settled",
+        summary: collapsedSummary,
+        expanded: options.expanded,
+      },
+      theme,
+      width,
+    ),
+    ...renderCompactIssues(collapsedSummary.issues, theme, width, options.expanded),
+  ]);
+  return padded(options.expanded ? [heading, expanded] : [heading], options.outputPad);
+}
+
 export function renderAsyncMessage<Input>(
   input: Input,
   options: MessageRenderOptions,
@@ -159,38 +201,7 @@ export function renderAsyncMessage<Input>(
   const raw = rawText(message?.content);
   const answers = outcome?.outcome === "submitted" ? outcome.answers : undefined;
   const expanded = expandedResult(raw, false, answers, NO_TITLES, theme);
-  if (compact) {
-    const subject = !outcome
-      ? "Questionnaire update"
-      : outcome.outcome === "cancelled"
-        ? "Questionnaire cancelled"
-        : "Answers submitted";
-    const { collapsedSummary } = planCompactPresentation({
-      summary: outcome && {
-        subject,
-        outcome: outcome.outcome === "cancelled" ? "cancelled" : "success",
-        counters: answers?.length ? [countLabel(answers.length, "answer")] : [],
-      },
-      phase: "settled",
-      isError: false,
-      expanded: options.expanded,
-      heading: { subject },
-    });
-    const heading = composeToolComponent((width) => [
-      renderCompactRow(
-        {
-          name: "ask_user_async",
-          phase: "settled",
-          summary: collapsedSummary,
-          expanded: options.expanded,
-        },
-        theme,
-        width,
-      ),
-      ...renderCompactIssues(collapsedSummary.issues, theme, width, options.expanded),
-    ]);
-    return padded(options.expanded ? [heading, expanded] : [heading], options.outputPad);
-  }
+  if (compact) return compactAsyncMessage(outcome, expanded, options, theme);
   if (!outcome) return new Text(raw, options.outputPad, 0);
   const cancelled = outcome.outcome === "cancelled";
   const parts: Component[] = [

@@ -99,25 +99,22 @@ export class VimSettingsAdapter implements Component, Focusable {
     return id && this.options.matchesKeybinding?.(data, id) ? data : input;
   }
 
-  handleInput(data: string): void {
-    const resolution = this.keymap.resolve(data, {
-      mode: this.mode,
-      matchesKeybinding: this.options.matchesKeybinding,
-    });
-    const action = resolution?._tag === "Action" ? resolution.action : undefined;
-    if (this.mode === "search") {
-      if (action === "cancel") {
-        this.mode = "navigation";
-        this.keymap.resetChord();
-        clearSettingsFilter(this.child);
-      } else {
-        this.child.handleInput?.((action && this.forwardSelection(data, action)) ?? data);
-        if (action === "confirm") {
-          this.mode = "navigation";
-          this.keymap.resetChord();
-        }
-      }
-    } else if (action === "help") this.helpExpanded = !this.helpExpanded;
+  private handleSearchInput(data: string, action: FullScreenAction | undefined): void {
+    if (action === "cancel") {
+      this.mode = "navigation";
+      this.keymap.resetChord();
+      clearSettingsFilter(this.child);
+      return;
+    }
+    this.child.handleInput?.((action && this.forwardSelection(data, action)) ?? data);
+    if (action === "confirm") {
+      this.mode = "navigation";
+      this.keymap.resetChord();
+    }
+  }
+
+  private handleNavigationInput(data: string, action: FullScreenAction | undefined): boolean {
+    if (action === "help") this.helpExpanded = !this.helpExpanded;
     else if (action === "search") {
       this.mode = "search";
       this.helpExpanded = false;
@@ -126,7 +123,18 @@ export class VimSettingsAdapter implements Component, Focusable {
       const translated = this.forwardSelection(data, action);
       if (translated !== undefined) this.child.handleInput?.(translated);
     } else if (decodeFullScreenPrintable(data) === " ") this.child.handleInput?.(" ");
-    else return;
+    else return false;
+    return true;
+  }
+
+  handleInput(data: string): void {
+    const resolution = this.keymap.resolve(data, {
+      mode: this.mode,
+      matchesKeybinding: this.options.matchesKeybinding,
+    });
+    const action = resolution?._tag === "Action" ? resolution.action : undefined;
+    if (this.mode === "search") this.handleSearchInput(data, action);
+    else if (!this.handleNavigationInput(data, action)) return;
     this.syncChildFocus();
     this.options.requestRender?.();
   }
