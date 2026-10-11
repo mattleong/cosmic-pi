@@ -16,6 +16,7 @@ import {
 import { defaultCodePreviewSettings } from "../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { ALL_CODE_PREVIEW_TOOLS } from "../src/tools/names";
+import { withCodePreviewRenderers } from "../src/tools/cooperative-tools";
 import { WEB_ACCESS_TOOLS, isWebAccessTool } from "../src/third-party/web-access/identity";
 import {
   CodePreviewPresentationOwner,
@@ -136,6 +137,12 @@ const scenarios: ReadonlyArray<
     readonly narrow?: true;
   }
 > = [
+  {
+    tool: "fallback",
+    title: "tool without renderers",
+    args: { query: "complete input", limit: 7 },
+    result: text("complete output"),
+  },
   {
     tool: "tool_search",
     title: "native tool search pending long query",
@@ -937,6 +944,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       try {
         for (const style of ["compact", "preview"] as const) {
           const tools = registered(style);
+          tools.set("fallback", withCodePreviewRenderers({ name: "fallback" }, {}));
           for (const scenario of scenarios)
             lines.push(
               ...withPresentationSettings({ toolCallTiming: scenario.timing ?? false }, () =>

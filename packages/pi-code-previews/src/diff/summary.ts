@@ -40,15 +40,9 @@ export function summarizeDiff(diff: string): DiffSummary {
   function flushChangeGroup() {
     if (groupAdditions === 0 && groupRemovals === 0) return;
     summary.hunks++;
-    if (groupAdditions > 0 && groupRemovals > 0) {
-      summary.replacements++;
-      summary.insertions += Math.max(0, groupAdditions - groupRemovals);
-      summary.deletions += Math.max(0, groupRemovals - groupAdditions);
-    } else if (groupAdditions > 0) {
-      summary.insertions += groupAdditions;
-    } else {
-      summary.deletions += groupRemovals;
-    }
+    if (groupAdditions > 0 && groupRemovals > 0) summary.replacements++;
+    summary.insertions += Math.max(0, groupAdditions - groupRemovals);
+    summary.deletions += Math.max(0, groupRemovals - groupAdditions);
     groupAdditions = 0;
     groupRemovals = 0;
   }

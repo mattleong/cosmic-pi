@@ -8,7 +8,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { planCompactPresentation, renderCompactIssues, renderCompactRow } from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import { countLabel } from "pi-cosmic-core";
-import { renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
+import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import {
   answersBody,
   callBody,
@@ -181,22 +181,19 @@ export function renderAsyncMessage<Input>(
       expanded: options.expanded,
       heading: { subject },
     });
-    const heading: Component = {
-      render: (width) => [
-        renderCompactRow(
-          {
-            name: "ask_user_async",
-            phase: "settled",
-            summary: collapsedSummary,
-            expanded: options.expanded,
-          },
-          theme,
-          width,
-        ),
-        ...renderCompactIssues(collapsedSummary.issues, theme, width, options.expanded),
-      ],
-      invalidate: () => undefined,
-    };
+    const heading = composeToolComponent((width) => [
+      renderCompactRow(
+        {
+          name: "ask_user_async",
+          phase: "settled",
+          summary: collapsedSummary,
+          expanded: options.expanded,
+        },
+        theme,
+        width,
+      ),
+      ...renderCompactIssues(collapsedSummary.issues, theme, width, options.expanded),
+    ]);
     return padded(options.expanded ? [heading, expanded] : [heading], options.outputPad);
   }
   if (!outcome) return new Text(raw, options.outputPad, 0);

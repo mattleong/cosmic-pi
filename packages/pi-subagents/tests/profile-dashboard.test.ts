@@ -160,8 +160,26 @@ describe("profile dashboard actions", () => {
     "does not rebase a rename onto a document changed during the name dialog",
     function* () {
       const f = fixture();
+      const changed = makeProfileSettingsInspection({
+        globalDocument: {
+          version: 6,
+          profileSets: { common: { profiles: {} }, external: { profiles: {} } },
+        },
+        projectTrusted: true,
+      });
+      let displayed = f.value;
+      const host = {
+        ...f.host,
+        inspection: () => displayed,
+        refresh: () => Promise.resolve(displayed),
+        name: () =>
+          Promise.resolve("renamed").then((name) => {
+            displayed = changed;
+            return name;
+          }),
+      };
       yield* step(() =>
-        runProfileSetAction(f.host, {
+        runProfileSetAction(host, {
           action: "rename",
           target: { scope: "global", name: "common" },
         }),
@@ -172,7 +190,11 @@ describe("profile dashboard actions", () => {
           nextProfileSet: "renamed",
         }),
       );
-      expect(f.host.renamed).toHaveBeenCalled();
+      expect(f.host.renamed).toHaveBeenCalledWith(
+        { kind: "profile-set", set: { scope: "global", name: "common" } },
+        { kind: "profile-set", set: { scope: "global", name: "renamed" } },
+        changed,
+      );
     },
   );
   effectTest("late mutation settlement cannot refresh or publish after disposal", function* () {
@@ -319,12 +341,22 @@ const dashboard = () => {
   return {
     ...f,
     component,
+    press: (...keys: string[]) => {
+      for (const key of keys) component.handleInput(key);
+    },
     close,
     saveDraft,
     setHeight: (next: number) => {
       height = next;
     },
   };
+};
+
+const saveSnapshot = function* (f: ReturnType<typeof dashboard>) {
+  f.press("s");
+  yield* step(eventLoopTurn);
+  f.press(..."snapshot", "\r");
+  yield* step(eventLoopTurn);
 };
 
 describe("persistent dashboard", () => {
@@ -346,19 +378,17 @@ describe("persistent dashboard", () => {
       checkBounds();
       f.component.handleInput("e");
       checkBounds();
-      f.component.handleInput("\u001b");
-      f.component.handleInput("\t");
+      f.press("\u001b", "\t");
       checkBounds();
       f.component.handleInput("a");
       checkBounds();
-      for (const key of ["j", "j", "\r"]) f.component.handleInput(key);
+      f.press("j", "j", "\r");
       yield* step(eventLoopTurn);
       checkBounds();
       expect(f.component.render(40).some((row) => row.includes(CURSOR_MARKER))).toBe(true);
       f.component.handleInput("\u001b");
       yield* step(eventLoopTurn);
-      f.component.handleInput("\t");
-      f.component.handleInput("s");
+      f.press("\t", "s");
       yield* step(eventLoopTurn);
       checkBounds();
       f.component.handleInput("\u001b");
@@ -385,14 +415,8 @@ describe("persistent dashboard", () => {
       },
     );
     f.calls.inspectProfiles.mockResolvedValue(latest);
-    f.component.handleInput("s");
-    yield* step(eventLoopTurn);
-    for (const letter of "snapshot") f.component.handleInput(letter);
-    f.component.handleInput("\r");
-    yield* step(eventLoopTurn);
-    f.component.handleInput("e");
-    f.component.handleInput("\u001b[A");
-    f.component.handleInput("\r");
+    yield* saveSnapshot(f);
+    f.press("e", "\u001b[A", "\r");
     yield* step(eventLoopTurn);
     expect(f.saveDraft).toHaveBeenCalledWith(
       { kind: "session" },
@@ -525,27 +549,20 @@ describe("persistent dashboard", () => {
     function* () {
       const disposed = vi.spyOn(ProfileWorkspaceComponent.prototype, "dispose");
       const f = dashboard();
-      f.component.handleInput("\t");
-      f.component.handleInput("\r");
-      f.component.handleInput("\u001b");
-      f.component.handleInput("\u001b");
+      f.press("\t", "\r", "\u001b", "\u001b");
       const deleted = makeProfileSettingsInspection({
         globalDocument: f.value.globalDocument!,
         projectDocument: { version: 6, profileSets: {} },
         projectTrusted: true,
       });
       f.calls.inspectProfiles.mockResolvedValue(deleted);
-      f.component.handleInput("\u001b[B");
-      f.component.handleInput("a");
-      f.component.handleInput("\r");
+      f.press("\u001b[B", "a", "\r");
       yield* step(eventLoopTurn);
       expect(disposed).toHaveBeenCalledTimes(1);
       f.calls.inspectProfiles.mockResolvedValue(f.value);
-      f.component.handleInput("a");
-      f.component.handleInput("\r");
+      f.press("a", "\r");
       yield* step(eventLoopTurn);
-      f.component.handleInput("\u001b[A");
-      f.component.handleInput("\r");
+      f.press("\u001b[A", "\r");
       expect(f.close).not.toHaveBeenCalled();
       f.component.dispose();
       // Session, deleted saved editor, and recreated saved editor each have a distinct lifetime.
@@ -556,12 +573,9 @@ describe("persistent dashboard", () => {
   it("trust loss retires cached project editors before the saved tab can reopen them", () => {
     const disposed = vi.spyOn(ProfileWorkspaceComponent.prototype, "dispose");
     const f = dashboard();
-    f.component.handleInput("\t");
-    f.component.handleInput("\r");
-    f.component.handleInput("\t");
+    f.press("\t", "\r", "\t");
     f.untrust();
-    f.component.handleInput("\u001b[Z");
-    f.component.handleInput("\r");
+    f.press("\u001b[Z", "\r");
     expect(disposed).toHaveBeenCalledTimes(1);
     expect(f.saveDraft).not.toHaveBeenCalled();
     f.component.dispose();
@@ -571,13 +585,9 @@ describe("persistent dashboard", () => {
   effectTest("Tab switches targets from either pane while picker Tab stays local", function* () {
     for (const paneKey of ["h", "l"]) {
       const f = dashboard();
-      f.component.handleInput(paneKey);
-      f.component.handleInput("\t"); // One press opens the saved library.
-      f.component.handleInput("\r"); // Edit its selected set.
-      f.component.handleInput("e");
-      f.component.handleInput("\t"); // This belongs to the picker, not the dashboard.
-      f.component.handleInput("j");
-      f.component.handleInput("\r");
+      // Tab opens the saved library; Enter edits its selected set.
+      f.press(paneKey, "\t", "\r", "e");
+      f.press("\t", "j", "\r"); // This Tab belongs to the picker, not the dashboard.
       yield* step(eventLoopTurn);
       expect(f.saveDraft).toHaveBeenLastCalledWith(
         { kind: "profile-set", set: { scope: "project", name: "common" } },
@@ -585,10 +595,7 @@ describe("persistent dashboard", () => {
         expect.anything(),
         undefined,
       );
-      f.component.handleInput("\u001b[Z"); // Shift+Tab returns directly to Current Session.
-      f.component.handleInput("e");
-      f.component.handleInput("k");
-      f.component.handleInput("\r");
+      f.press("\u001b[Z", "e", "k", "\r"); // Shift+Tab returns directly to Current Session.
       yield* step(eventLoopTurn);
       expect(f.saveDraft).toHaveBeenLastCalledWith(
         { kind: "session" },
@@ -604,10 +611,10 @@ describe("persistent dashboard", () => {
 
   effectTest("More deletes a saved set only after the dashboard confirmation", function* () {
     const f = dashboard();
-    for (const key of ["\t", "a", "G", "\r"]) f.component.handleInput(key);
+    f.press("\t", "a", "G", "\r");
     yield* step(eventLoopTurn);
     f.component.render(100);
-    for (const key of ["x", "\x1b[13;1:2u"]) f.component.handleInput(key);
+    f.press("x", "\x1b[13;1:2u");
     yield* step(eventLoopTurn);
     expect(f.calls.deleteProfileSet).not.toHaveBeenCalled();
     f.component.handleInput("\r");
@@ -622,16 +629,9 @@ describe("persistent dashboard", () => {
     const f = dashboard();
     const gate = deferredPromise();
     f.calls.createProfileSetFromSnapshot.mockImplementation(() => gate.promise);
-    f.component.handleInput("s");
-    yield* step(eventLoopTurn);
-    for (const letter of "snapshot") f.component.handleInput(letter);
-    f.component.handleInput("\r");
-    yield* step(eventLoopTurn);
+    yield* saveSnapshot(f);
     expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledTimes(1);
-    f.component.handleInput("s");
-    f.component.handleInput("\t");
-    f.component.handleInput("\u001b[C");
-    f.component.handleInput("\r");
+    f.press("s", "\t", "\u001b[C", "\r");
     yield* step(eventLoopTurn);
     expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledTimes(1);
     expect(f.close).not.toHaveBeenCalled();
@@ -644,15 +644,8 @@ describe("persistent dashboard", () => {
     function* () {
       const f = dashboard();
       f.calls.inspectProfiles.mockRejectedValue(new Error("unavailable"));
-      f.component.handleInput("s");
-      yield* step(eventLoopTurn);
-      for (const letter of "snapshot") f.component.handleInput(letter);
-      f.component.handleInput("\r");
-      yield* step(eventLoopTurn);
-      f.component.handleInput("s");
-      f.component.handleInput("\t");
-      f.component.handleInput("\u001b[C");
-      f.component.handleInput("\r");
+      yield* saveSnapshot(f);
+      f.press("s", "\t", "\u001b[C", "\r");
       expect(f.calls.createProfileSetFromSnapshot).not.toHaveBeenCalled();
       expect(f.saveDraft).not.toHaveBeenCalled();
       f.component.handleInput("\u001b");
@@ -664,14 +657,14 @@ describe("persistent dashboard", () => {
     "keeps the left-pane save action selected after cancellation and tab switches",
     function* () {
       const f = dashboard();
-      for (const key of ["h", "G", "\r"]) f.component.handleInput(key);
+      f.press("h", "G", "\r");
       yield* step(eventLoopTurn);
       f.component.handleInput("\u001b");
       yield* step(eventLoopTurn);
       expect(f.calls.createProfileSetFromSnapshot).not.toHaveBeenCalled();
-      for (const key of ["\t", "\t", "\r"]) f.component.handleInput(key);
+      f.press("\t", "\t", "\r");
       yield* step(eventLoopTurn);
-      for (const key of [..."snapshot", "\r"]) f.component.handleInput(key);
+      f.press(..."snapshot", "\r");
       yield* step(eventLoopTurn);
       expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({ profileSet: "snapshot" }),
@@ -688,7 +681,7 @@ describe("persistent dashboard", () => {
     f.component.handleInput("s");
     yield* step(eventLoopTurn);
     // Two toggles would return a trusted dialog to Project.
-    for (const key of [..."snapshot", "\u001b[A", "\u001b[B", "\r"]) f.component.handleInput(key);
+    f.press(..."snapshot", "\u001b[A", "\u001b[B", "\r");
     yield* step(eventLoopTurn);
     expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ scope: "global", profileSet: "snapshot" }),
@@ -701,8 +694,7 @@ describe("persistent dashboard", () => {
     f.component.handleInput("s");
     yield* step(() => Promise.resolve());
     f.component.dispose();
-    f.component.handleInput("name");
-    f.component.handleInput("\r");
+    f.press("name", "\r");
     yield* step(() => Promise.resolve());
     expect(f.calls.createProfileSetFromSnapshot).not.toHaveBeenCalled();
     expect(f.component.render(80)).toEqual([]);

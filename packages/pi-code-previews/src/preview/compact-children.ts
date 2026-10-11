@@ -25,10 +25,9 @@ export function selectCompactChildren(
     .slice(0, limit)
     .toSorted((a, b) => a.index - b.index)
     .map(({ entry }) => entry);
-  const shown = new Set(entries);
-  const hiddenFailed = children.entries.filter(
-    (entry) => !shown.has(entry) && entry.status === "error",
-  ).length;
+  const hiddenFailed =
+    children.entries.filter((entry) => entry.status === "error").length -
+    entries.filter((entry) => entry.status === "error").length;
   return { entries, omitted: Math.max(0, children.total - entries.length), hiddenFailed };
 }
 

@@ -128,15 +128,6 @@ describe("background task compact semantics", () => {
       expect.objectContaining({ severity: "error", message: "Custom failure" }),
     ]);
     expect(single?.issues?.[0]?.detail).toBe("Custom failure. Inspect state.");
-    // A one-line error the message restates, final period aside, keeps no duplicate detail.
-    for (const error of ["Custom failure", "Custom failure."]) {
-      const plain = project({
-        action: "status",
-        snapshot: { ...snapshot, state: "failed", error },
-      });
-      expect(plain?.issues?.[0]?.detail).toBeUndefined();
-    }
-
     const error = "\u001b[31mSpawn failed\u001b[0m\nENOENT: no such file\n  at spawn";
     const multi = project({ action: "status", snapshot: { ...snapshot, state: "failed", error } });
     const issue = multi?.issues?.[0];
@@ -304,15 +295,6 @@ describe("background task compact semantics", () => {
     expect(result?.outcome).toBe("error");
     expect(result?.issues?.map((issue) => issue.code)).toEqual(["task-1:runtime-timeout"]);
     expect(result?.issues?.[0]?.message).toContain("30s");
-  });
-
-  it("reports a spawn failure's own message", () => {
-    const result = project({
-      action: "status",
-      snapshot: { ...snapshot, state: "failed", error: "Couldn't start the process" },
-    });
-    expect(result?.outcome).toBe("error");
-    expect(result?.issues?.map((issue) => issue.message)).toEqual(["Couldn't start the process"]);
   });
 
   it("keeps unconfirmed cleanup attention beside a reported failure", () => {

@@ -142,7 +142,7 @@ const askMultipleQuestion = (
           break;
         }
         const tokens = value.split(/[\s,]+/).filter(Boolean);
-        if (!tokens.every((token) => /^\d+\.?$/.test(token))) {
+        if (tokens.length === 0 || !tokens.every((token) => /^\d+\.?$/.test(token))) {
           yield* notifyBestEffort(
             ui,
             'Enter only choice numbers, or go back and choose "Write a custom answer"',

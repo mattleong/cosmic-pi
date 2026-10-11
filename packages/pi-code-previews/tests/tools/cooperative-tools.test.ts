@@ -391,7 +391,7 @@ test("a display name heads compact rows without changing the registered tool nam
   assert.doesNotMatch(text, /registered_model_name/u);
 });
 
-test("fallback rendering preserves attachment evidence without taking native image ownership", () => {
+test("fallback rendering preserves expanded input and attachments without taking native image ownership", () => {
   const caps = getCapabilities();
   try {
     for (const style of ["preview", "compact"] as const) {
@@ -415,12 +415,24 @@ test("fallback rendering preserves attachment evidence without taking native ima
             };
             const before = JSON.stringify(value);
             const h = createToolPresentationHarness(tool);
-            h.call({ path: "image.png" }, { expanded: true, showImages });
-            h.result(value);
-            const text = h.render().join("\n");
-            assert.equal(text.includes("image/png"), !native || !showImages);
-            assert.equal(text.includes("attachment context"), withText);
-            assert.equal(text.includes("unchanged-by-rendering"), false);
+            const args = {
+              path: "INPUT_PATH_SENTINEL.png",
+              query: "INPUT_QUERY_SENTINEL\x1b[2J\x9b",
+              offset: 7,
+              limit: 12,
+            };
+            for (const { expanded, text } of h.cycle(args, value, {
+              overrides: () => ({ showImages }),
+            })) {
+              assert.equal(text.includes("INPUT_QUERY_SENTINEL"), expanded);
+              assert.equal(text.includes("INPUT_PATH_SENTINEL.png"), expanded);
+              if (expanded) assert.match(text, /"offset": 7,\s+"limit": 12/u);
+              assert.ok(!text.includes("\x1b") && !text.includes("\x9b"));
+              const output = expanded || style === "preview";
+              assert.equal(text.includes("image/png"), output && (!native || !showImages));
+              assert.equal(text.includes("attachment context"), output && withText);
+              assert.equal(text.includes("unchanged-by-rendering"), false);
+            }
             assert.equal(JSON.stringify(value), before);
             assert.equal(tool.execute, source.execute);
           }

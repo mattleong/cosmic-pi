@@ -1,11 +1,15 @@
 import { expect, it, layer as testLayer } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import { JsonDocumentError } from "../src/platform/errors.ts";
 import { JsonDocumentStore, type JsonObject } from "../src/platform/json-document.ts";
-import { makeInMemoryDocuments } from "../src/testing/layers.ts";
+import { makeCapturedLogger, makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { decodeTolerantFields } from "../src/config/tolerant-fields.ts";
 import {
   commitPreferredScope,
@@ -83,11 +87,13 @@ const readOnlyOptions: ScopedConfigStoreOptions<TestFile, TestResolved, TestConf
   }),
 };
 const readOnlyStore = makeScopedConfigStore(readOnlyOptions);
-const testStore = makeScopedConfigStore({ ...readOnlyOptions, defaultDocument: () => ({}) });
+const defaults = { seeded: true };
+const testStore = makeScopedConfigStore({ ...readOnlyOptions, defaultDocument: () => defaults });
 const projectDocument = "/project/.pi/extensions/config.json";
+const globalDocument = "/agent/extensions/config.json";
 const scopedDocuments = {
   [projectDocument]: { fromProject: true },
-  "/agent/extensions/config.json": { fromGlobal: true },
+  [globalDocument]: { fromGlobal: true },
 };
 const changed = (document: JsonObject): JsonObject => ({ ...document, changed: true });
 
@@ -104,6 +110,142 @@ testLayer(Path.layer)("scoped config store", (it) => {
       expect(memory.documents.size).toBe(0);
     }).pipe(Effect.provide(memory.layer));
   });
+
+  const competingDocuments: readonly (JsonObject | undefined)[] = [
+    undefined,
+    { fromConcurrent: true },
+    {},
+  ];
+  for (const document of competingDocuments) {
+    it.effect(`seeds only if still missing after inspection: ${JSON.stringify(document)}`, () =>
+      Effect.gen(function* () {
+        const memory = makeInMemoryDocuments();
+        const locked = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const seeding = yield* Deferred.make<void>();
+        const competing = yield* memory.service
+          .modifyObject(globalDocument, (current) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(locked, undefined);
+              yield* Deferred.await(release);
+              return {
+                value: undefined,
+                document: document ?? current,
+                write: document !== undefined,
+              };
+            }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(locked);
+        // Hold the competing lock while every unlocked existence check still sees absence.
+        // Both seed entrypoints signal before acquiring the lock, including an unsafe write.
+        const documents = Layer.succeed(JsonDocumentStore, {
+          ...memory.service,
+          modifyObject: (path, modify) =>
+            Deferred.succeed(seeding, undefined).pipe(
+              Effect.andThen(memory.service.modifyObject(path, modify)),
+            ),
+          writeObject: (path, value) =>
+            Deferred.succeed(seeding, undefined).pipe(
+              Effect.andThen(memory.service.writeObject(path, value)),
+            ),
+        });
+        const resolving = yield* testStore
+          .resolveConfig("/project", "/agent")
+          .pipe(Effect.provide(documents), Effect.forkScoped);
+        yield* Deferred.await(seeding);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(competing);
+        const resolved = yield* Fiber.join(resolving);
+        expect(resolved).toMatchObject({
+          configPath: globalDocument,
+          projectConfigExists: false,
+          globalConfigExists: true,
+          global: document ?? defaults,
+        });
+        expect(memory.documents.get(globalDocument)).toEqual(document ?? defaults);
+      }),
+    );
+  }
+
+  for (const operation of ["read", "decode", "preserve"]) {
+    it.effect(`never rewrites a raced global document: ${operation}`, () =>
+      Effect.gen(function* () {
+        const inspected = yield* Deferred.make<void>();
+        const committed = yield* Deferred.make<void>();
+        const logger = makeCapturedLogger();
+        const documents = JsonDocumentStore.layer.pipe(
+          Layer.provide(
+            FileSystem.layerNoop({
+              exists: () =>
+                Deferred.isDone(committed).pipe(
+                  Effect.tap(() => Deferred.succeed(inspected, undefined)),
+                  Effect.tap(() => Deferred.await(committed)),
+                ),
+              readFileString: () =>
+                operation === "read"
+                  ? Effect.fail(
+                      PlatformError.systemError({
+                        _tag: "PermissionDenied",
+                        module: "FileSystem",
+                        method: "readFileString",
+                      }),
+                    )
+                  : Effect.succeed(operation === "decode" ? "not-json" : "{}"),
+            }),
+          ),
+        );
+        const resolving = yield* testStore
+          .resolveConfig("/project", "/agent")
+          .pipe(Effect.provide(Layer.merge(documents, logger.layer)), Effect.forkScoped);
+        yield* Deferred.await(inspected);
+        yield* Deferred.succeed(committed, undefined);
+        expect(yield* Fiber.join(resolving)).toMatchObject({
+          configPath: globalDocument,
+          globalConfigExists: true,
+          global: {},
+        });
+        expect(logger.entries).toHaveLength(operation === "preserve" ? 0 : 1);
+      }),
+    );
+  }
+
+  for (const operation of ["inspect", "encode", "write"]) {
+    it.effect(`does not tolerate a default seed ${operation} failure`, () => {
+      let inspections = 0;
+      const denied = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: operation,
+      });
+      const documents = JsonDocumentStore.layer.pipe(
+        Layer.provide(
+          FileSystem.layerNoop({
+            exists: () =>
+              Effect.suspend(() =>
+                ++inspections > 1 && operation === "inspect"
+                  ? Effect.fail(denied)
+                  : Effect.succeed(false),
+              ),
+            makeDirectory: () => Effect.void,
+            makeTempFile: () => Effect.fail(denied),
+          }),
+        ),
+      );
+      const store = makeScopedConfigStore({
+        ...readOnlyOptions,
+        defaultDocument: () => (operation === "encode" ? { invalid: Number.NaN } : defaults),
+      });
+      return Effect.gen(function* () {
+        const failure = yield* Effect.flip(store.resolveConfig("/project", "/agent"));
+        expect(failure).toMatchObject({
+          _tag: "TestConfigError",
+          operation: operation === "inspect" ? "inspect" : "write",
+          path: globalDocument,
+        });
+      }).pipe(Effect.provide(documents));
+    });
+  }
 
   it.effect("an existing trusted project wins precedence even when it cannot be read", () => {
     const memory = makeInMemoryDocuments(scopedDocuments);

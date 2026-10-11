@@ -6,13 +6,18 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { fallbackArguments } from "./data/args";
 import { getFallbackResultText } from "./data/results";
 import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { createCodePreviewToolShell } from "../preview/tool-shell";
 import { escapeControlChars } from "../shared/terminal-text";
 import type { CompactAnimationScheduler, CompactSummaryProvider } from "./compact-summary";
-import type { PreviewRenderers, ToolRenderContext } from "./renderers/shared/types";
+import type {
+  PreviewRenderers,
+  RendererArguments,
+  ToolRenderContext,
+} from "./renderers/shared/types";
 
 export type AdaptableToolRenderers = {
   readonly name: string;
@@ -136,7 +141,8 @@ export function withCodePreviewRenderers<TArgs = any, TDetails = any, TState = a
     options.collapsedStyle,
   );
   const renderCall: PreviewRenderers["renderCall"] =
-    renderers.renderCall ?? ((_args, theme) => renderFallbackToolCall(identity, theme));
+    renderers.renderCall ??
+    ((args, theme, context) => renderFallbackToolCall(identity, theme, args, context.expanded));
   const renderResult: PreviewRenderers["renderResult"] =
     renderers.renderResult ?? renderFallbackToolResult;
   const { renderCall: expandedCall, renderResult: expandedResult } = options.expandedContent ?? {};
@@ -164,8 +170,14 @@ export function withCodePreviewRenderers<TArgs = any, TDetails = any, TState = a
 function renderFallbackToolCall(
   tool: { readonly name: string; readonly label?: string },
   theme: Theme,
+  args: RendererArguments,
+  expanded: boolean,
 ): Component {
-  return new Text(theme.fg("toolTitle", theme.bold(tool.label || tool.name)), 0, 0);
+  const lines = [
+    theme.fg("toolTitle", theme.bold(tool.label || tool.name)),
+    ...(expanded ? fallbackArguments(args).map((line) => theme.fg("muted", line)) : []),
+  ];
+  return new Text(lines.join("\n"), 0, 0);
 }
 
 function renderFallbackToolResult(

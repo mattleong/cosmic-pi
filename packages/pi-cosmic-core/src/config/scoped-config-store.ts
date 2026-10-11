@@ -175,12 +175,34 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
       { concurrency: 2 },
     );
     let globalExists = globalFound;
+    let globalReadable = globalFound;
     if (!projectExists && !globalExists && defaultDocument !== undefined) {
-      yield* writeConfig(paths.global, defaultDocument());
+      globalReadable = yield* JsonDocumentStore.use((documents) =>
+        documents
+          .modifyObject(paths.global, (document) =>
+            documents.exists(paths.global).pipe(
+              Effect.map((present) => ({
+                value: true,
+                document: present ? document : defaultDocument(),
+                write: !present,
+              })),
+            ),
+          )
+          .pipe(
+            // A competing document can fail the transaction's read before its callback runs.
+            Effect.catchIf(
+              (error) => error.operation === "read" || error.operation === "decode",
+              () => Effect.logWarning(warning).pipe(Effect.as(false)),
+            ),
+            Effect.mapError((error) =>
+              errorFactory(error.operation === "exists" ? "inspect" : "write", paths.global)(),
+            ),
+          ),
+      );
       globalExists = true;
     }
     const [project, global] = yield* Effect.all(
-      [readIfPresent(paths.project, projectExists), readIfPresent(paths.global, globalExists)],
+      [readIfPresent(paths.project, projectExists), readIfPresent(paths.global, globalReadable)],
       { concurrency: 2 },
     );
     return resolve(

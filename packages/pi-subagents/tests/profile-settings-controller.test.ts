@@ -1,5 +1,4 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { AutocompleteItem, Component } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { describe, expect, vi } from "vitest";
@@ -8,6 +7,7 @@ import {
   extensionContextFixture,
   opaqueFixture,
   plainTheme,
+  recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import {
   fleetManagerActionsFixture,
@@ -28,7 +28,7 @@ import {
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
 import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
 import type { FleetMessageDelivery, FleetNoticeKind } from "../src/ui/fleet.ts";
-import { extensionApiFixture, mountingCustomUi } from "./fixtures/pi-host.ts";
+import { mountingCustomUi } from "./fixtures/pi-host.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 
@@ -95,27 +95,12 @@ const setup = (
     readonly value?: ProfileSettingsInspection;
   } = {},
 ) => {
-  const handlers = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void>>();
-  let completions: ((prefix: string) => AutocompleteItem[] | null) | undefined;
+  const { pi, commands } = recordingExtensionHost();
   let projectTrusted = options.trusted ?? true;
   const overlays: DisposableComponent[] = [];
   const { custom } = mountingCustomUi(plainTheme, (component) => overlays.push(component), {
     columns: 120,
     rows: 30,
-  });
-  const pi = extensionApiFixture({
-    registerCommand: vi.fn(
-      (
-        name: string,
-        definition: {
-          handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
-          getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null;
-        },
-      ) => {
-        handlers.set(name, definition.handler);
-        if (name === "subagents") completions = definition.getArgumentCompletions;
-      },
-    ),
   });
   const managerActions = actions(options.value ?? inspection());
   // These command tests never open the fleet manager, so the bridge is never read.
@@ -132,10 +117,10 @@ const setup = (
     modelRegistry: { getAvailable: () => [] },
   });
   return {
-    command: handlers.get("subagents"),
+    command: commands.get("subagents")?.handler,
     settings: (args: string) =>
-      handlers.get("subagents")?.(`settings ${args}`, ctx) ?? Promise.resolve(),
-    completions,
+      commands.get("subagents")?.handler(`settings ${args}`, ctx) ?? Promise.resolve(),
+    completions: commands.get("subagents")?.getArgumentCompletions,
     ctx,
     overlays,
     ui,
@@ -215,12 +200,10 @@ const onNextInspection = (fixture: ReturnType<typeof setup>, sideEffect: () => v
 describe("profile settings controller", () => {
   effectTest("completes profile deep links and rejects unknown or extra arguments", function* () {
     const fixture = setup();
-    expect(fixture.completions?.("profiles wor")?.map((item) => item.value)).toEqual([
-      "profiles worker",
-    ]);
-    expect(fixture.completions?.("profiles ")?.map((item) => item.value)).toEqual(
-      PROFILE_IDS.map((id) => `profiles ${id}`),
-    );
+    const worker = yield* step(() => Promise.resolve(fixture.completions?.("profiles wor")));
+    const profiles = yield* step(() => Promise.resolve(fixture.completions?.("profiles ")));
+    expect(worker?.map((item) => item.value)).toEqual(["profiles worker"]);
+    expect(profiles?.map((item) => item.value)).toEqual(PROFILE_IDS.map((id) => `profiles ${id}`));
     for (const args of [
       "profiles unknown",
       "profiles worker extra",
@@ -281,30 +264,28 @@ describe("profile settings controller", () => {
     },
   );
 
-  effectTest("opens the first profile by default", function* () {
-    const fixture = setup();
-    const running = yield* openDashboard(fixture);
-    press(fixture, "e", "j", "\r");
-    yield* step(settleHostPromises);
-    expect(fixture.managerActions.patchSessionProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: PROFILE_IDS[0] }),
-    );
-    yield* closeDashboard(fixture, running);
-  });
-
-  effectTest("deep links edit the requested Session profile, not a saved default", function* () {
-    const fixture = setup();
-    const running = yield* openDashboard(fixture, "profiles worker");
-    press(fixture, "e");
-    yield* step(settleHostPromises);
-    press(fixture, "j", "\r");
-    yield* step(settleHostPromises);
-    expect(fixture.managerActions.patchSessionProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: "worker" }),
-    );
-    expect(fixture.managerActions.patchProfile).not.toHaveBeenCalled();
-    yield* closeDashboard(fixture, running);
-  });
+  for (const [label, args, profile] of [
+    ["opens the first profile by default", "profiles", PROFILE_IDS[0]],
+    [
+      "deep links edit the requested Session profile, not a saved default",
+      "profiles worker",
+      "worker",
+    ],
+  ] as const) {
+    effectTest(label, function* () {
+      const fixture = setup();
+      const running = yield* openDashboard(fixture, args);
+      press(fixture, "e");
+      yield* step(settleHostPromises);
+      press(fixture, "j", "\r");
+      yield* step(settleHostPromises);
+      expect(fixture.managerActions.patchSessionProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ profile }),
+      );
+      expect(fixture.managerActions.patchProfile).not.toHaveBeenCalled();
+      yield* closeDashboard(fixture, running);
+    });
+  }
 
   for (const outcome of ["settles", "fails"] as const)
     effectTest(
@@ -463,17 +444,22 @@ describe("profile settings controller", () => {
     });
   }
 
-  effectTest("makes a saved set default without replacing Session", function* () {
-    const fixture = setup();
-    const running = yield* openLibrary(fixture);
-    makeDefault(fixture);
-    yield* step(settleHostPromises);
-    expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "project", defaultProfileSet: "common" }),
-    );
-    expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-    yield* closeDashboard(fixture, running);
-  });
+  for (const [scope, navigation] of [
+    ["project", "k"],
+    ["global", "j"],
+  ] as const) {
+    effectTest(`makes only the ${scope} set default without replacing Session`, function* () {
+      const fixture = setup();
+      const running = yield* openLibrary(fixture);
+      press(fixture, navigation, "?", "\r");
+      yield* step(settleHostPromises);
+      expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalledWith(
+        expect.objectContaining({ scope, defaultProfileSet: "common" }),
+      );
+      expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
+      yield* closeDashboard(fixture, running);
+    });
+  }
 
   effectTest("blocks a refreshed default that inherits invalid Global routes", function* () {
     const fixture = setup();
@@ -484,21 +470,6 @@ describe("profile settings controller", () => {
     expect(fixture.managerActions.patchDefaultProfileSet).not.toHaveBeenCalled();
     yield* closeDashboard(fixture, running);
   });
-
-  effectTest(
-    "writes only Global when making a Global set default under a Project default",
-    function* () {
-      const fixture = setup();
-      const running = yield* openLibrary(fixture);
-      press(fixture, "j", "?", "\r");
-      yield* step(settleHostPromises);
-      expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalledWith(
-        expect.objectContaining({ scope: "global", defaultProfileSet: "common" }),
-      );
-      expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-      yield* closeDashboard(fixture, running);
-    },
-  );
 
   for (const scope of ["project", "global"] as const) {
     effectTest(`clears ${scope} default without changing saved sets or Session`, function* () {

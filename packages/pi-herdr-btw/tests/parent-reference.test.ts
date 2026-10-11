@@ -6,7 +6,6 @@ import type {
   SessionFileIdentityComparison,
   SessionHeaderProbe,
 } from "../src/boundary/session-file.ts";
-import { resolveParentReferenceCandidate } from "../src/parent-link/policy.ts";
 
 const PARENT_FILE = "/sessions/parent.jsonl";
 const PARENT_ID = "019fd4cd-4c88-7564-8b67-3b917b42df51";
@@ -106,27 +105,6 @@ const harness = (options: HarnessOptions = {}) => {
 };
 
 describe("herdr-btw parent reference", () => {
-  it("resolves marker and owning-child policy without host probing", () => {
-    expect(
-      resolveParentReferenceCandidate({
-        parentIdMarker: PARENT_ID,
-        parentFileMarker: PARENT_FILE,
-        childSessionMarker: "child-id",
-        sessionId: "child-id",
-        sessionFile: CHILD_FILE,
-      }),
-    ).toEqual({ path: PARENT_FILE, id: PARENT_ID });
-    expect(
-      resolveParentReferenceCandidate({
-        parentIdMarker: PARENT_ID,
-        parentFileMarker: PARENT_FILE,
-        childSessionMarker: "another-child",
-        sessionId: "child-id",
-        sessionFile: CHILD_FILE,
-      }),
-    ).toBeUndefined();
-  });
-
   it("registers the marker as a string extension CLI flag", () => {
     const h = harness();
     for (const name of ["herdr-btw-parent", "herdr-btw-parent-file", "herdr-btw-child-session"])

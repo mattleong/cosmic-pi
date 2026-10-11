@@ -1,11 +1,10 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import * as Predicate from "effect/Predicate";
-import { invokeHostCallback } from "pi-cosmic-core";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
+import { fallbackArguments } from "../tools/data/args";
 import { getFallbackResultText } from "../tools/data/results";
 import {
   compactStatus,
@@ -15,10 +14,7 @@ import {
   type CompactSummary,
   type CompactSummaryProvider,
 } from "../tools/compact-summary";
-import type {
-  RendererArguments,
-  ToolRenderContext as HostToolRenderContext,
-} from "../tools/renderers/shared/types";
+import type { ToolRenderContext as HostToolRenderContext } from "../tools/renderers/shared/types";
 import {
   BorderedToolCall,
   borderColorKey,
@@ -328,16 +324,6 @@ class CompactShell implements Component {
     // Retained bodies must also hear theme invalidation while the compact row hides them.
     this.slots.invalidate();
   }
-}
-
-/** Pretty JSON lines, none for empty arguments. JSON escapes C0 controls; this escapes the rest. */
-function fallbackArguments(args: RendererArguments): string[] {
-  return invokeHostCallback(() => {
-    if (args === undefined || args === null) return [];
-    if (Predicate.isObject(args) && Object.keys(args).length === 0) return [];
-    const json = JSON.stringify(args, null, 2);
-    return json === undefined ? [] : escapeControlChars(json).split("\n");
-  }, []);
 }
 
 export function createCompactToolShell(

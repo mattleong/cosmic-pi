@@ -239,5 +239,9 @@ export function orderedContributions(
         !(value.id.startsWith("git.") && config.footer.hidden.includes("git")) &&
         !(value.id.startsWith("extension.") && config.footer.hidden.includes("extensions")),
     )
-    .sort((a, b) => (order.get(a.id) ?? a.order ?? 500) - (order.get(b.id) ?? b.order ?? 500));
+    .map((value) => {
+      const configuredOrder = order.get(value.id);
+      return configuredOrder === undefined ? value : { ...value, order: configuredOrder };
+    })
+    .sort((a, b) => (a.order ?? 500) - (b.order ?? 500));
 }

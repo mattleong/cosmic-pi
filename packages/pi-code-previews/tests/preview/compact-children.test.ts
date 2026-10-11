@@ -46,6 +46,14 @@ describe("compact child selection", () => {
       omitted: 0,
       hiddenFailed: 0,
     });
+    const failed: CompactChild = { label: "read", status: "error" };
+    const repeated = Array.from({ length: 6 }, () => failed);
+    expect(selectCompactChildren({ entries: repeated, total: 6 })).toEqual({
+      entries: repeated.slice(1),
+      omitted: 1,
+      hiddenFailed: 1,
+    });
+    expect(plain(compactChildren(repeated, 80)).at(-1)).toContain("1 failed");
   });
 
   it("keeps active and problem calls ahead of recent completions, with exact hidden totals", () => {

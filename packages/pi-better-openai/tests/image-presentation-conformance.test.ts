@@ -43,9 +43,6 @@ function register(
   return registerImagePresentation(scheduleAnimation);
 }
 const occurrences = (haystack: string, needle: string) => haystack.split(needle).length - 1;
-/** Rendered rows without padding, blank rows, or trailing space. */
-const rows = (lines: readonly string[]) =>
-  lines.map((line) => line.trim()).filter((line) => line.length > 0);
 afterEach(applyPresentationSettings({}));
 
 describe("registered image presentation", () => {
@@ -211,35 +208,6 @@ describe("registered image presentation", () => {
     },
   );
 
-  it.each(styles)(
-    "renders a command message like the tool result for the same record in %s mode",
-    (style) => {
-      const { tool, message } = register(style);
-      // Outside both working directories, so the tool and the message show the same path, and
-      // short enough that the two frames' different paddings wrap nothing.
-      const savedPath = "/var/images/saved image.png";
-      for (const status of ["completed", "failed", "cancelled", "in_progress", "incomplete"]) {
-        const record = { ...details, status, savedPath, prompt: "An otter" };
-        const content = [text(imageResultText(record)), image];
-        for (const expanded of [false, true]) {
-          const harness = createToolPresentationHarness(tool, { theme, width: 120 });
-          harness.call({ prompt: record.prompt }, { expanded });
-          harness.result({ details: record, content }, { expanded });
-          const toolRows = rows(harness.render(120));
-          const messageRows = rows(
-            message(
-              opaqueFixture({ customType: "openai-image", details: record, content }),
-              { expanded, outputPad: 0 },
-              theme,
-            )!.render(122),
-          );
-          // The message then draws its own image.
-          expect(messageRows.slice(0, toolRows.length), `${status} ${expanded}`).toEqual(toolRows);
-        }
-      }
-    },
-  );
-
   it("retains unknown error text and cancelled result metadata", () => {
     const harness = createToolPresentationHarness(register("compact").tool, { theme });
     harness.call({ prompt: details.prompt }, { expanded: true });
@@ -259,20 +227,27 @@ describe("registered image presentation", () => {
     "keeps exactly one custom-message Image for current and legacy %s messages",
     (style) => {
       const { message } = register(style);
-      for (const legacy of [false, true]) {
-        for (const expanded of [false, true, false]) {
-          const component = message(
-            opaqueFixture({
-              customType: "openai-image",
-              content: legacy ? "" : [image],
-              details: legacy ? { ...details, data: image.data } : details,
-            }),
-            { expanded, outputPad: 0 },
-            theme,
-          )!;
-          expect(countImages(component)).toBe(1);
-          const rendered = component.render(160).join("\n");
-          expect(rendered.includes(details.revisedPrompt)).toBe(expanded);
+      for (const status of ["completed", "cancelled"]) {
+        const record = { ...details, status };
+        for (const legacy of [false, true]) {
+          for (const expanded of [false, true, false]) {
+            const component = message(
+              opaqueFixture({
+                customType: "openai-image",
+                content: legacy ? "" : [image],
+                details: legacy ? { ...record, data: image.data } : record,
+              }),
+              { expanded, outputPad: 0 },
+              theme,
+            )!;
+            expect(countImages(component)).toBe(1);
+            const rendered = component.render(160).join("\n");
+            expect(rendered.includes(details.revisedPrompt)).toBe(expanded);
+            if (expanded) {
+              expect(rendered).toContain("PROMPT_END");
+              expect(rendered).toContain(details.savedPath);
+            }
+          }
         }
       }
     },

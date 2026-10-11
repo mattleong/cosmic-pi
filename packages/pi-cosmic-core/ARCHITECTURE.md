@@ -49,7 +49,9 @@ A lease journals native mutation admission before an uncancellable call. Interru
 
 Every JSON-document store implements the atomic `modifyObject` alongside `exists`, `readObject`,
 and `writeObject`. The in-memory adapter uses the same codec. Feature stores own
-structural/schema validation.
+structural/schema validation. Scoped default seeding rechecks existence inside `modifyObject`,
+preserving concurrent documents (including `{}`) across same-process cooperating stores, not
+providing cross-process exclusion. Raced read/decode failures remain warning-only.
 
 ## Dependency rule
 

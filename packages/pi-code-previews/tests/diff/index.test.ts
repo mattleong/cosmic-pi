@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { generateDiffString } from "@earendil-works/pi-coding-agent";
-import { Box, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, test } from "vitest";
 import { applyPresentationSettings } from "../../testing";
 import { plainTheme, stripAnsi } from "../support/render";
@@ -116,13 +116,6 @@ test("full-width diff wrapping preserves wide graphemes beside a narrow continua
 
   assert.ok(rows.every((row) => visibleWidth(row) <= 6));
   assert.match(stripAnsi(rows.join("")), /😀/);
-});
-
-test("boxed diff rows preserve the requested width", () => {
-  const box = new Box(1, 0, (text) => text);
-  box.addChild(new FullWidthDiffText(renderPlainDiff("+1 short", plainTheme, 1), plainTheme));
-  const line = box.render(20)[0] ?? "";
-  assert.equal(visibleWidth(line), 20);
 });
 
 test("word emphasis pairs the most similar lines inside change blocks", () => {

@@ -66,7 +66,6 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
     });
   if (downstream?.renderShell === "self")
     return { renderShell: "self", renderCall: call, renderResult: result };
-  const state = rowPerState<{ call?: Component; result?: Component }>(() => ({}));
   const shell = withSelfBackground({
     renderShell: "default",
     renderCall: (context, _theme, render) => render(context),
@@ -75,20 +74,12 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
   return {
     renderShell: "self",
     renderCall: (args, theme, context) =>
-      shell.renderCall(context, theme, (current) => {
-        const cache = state(current, theme);
-        cache.call = call(args, theme, { ...current, lastComponent: cache.call });
-        return cache.call;
-      }),
+      shell.renderCall(context, theme, (current) => call(args, theme, current)),
     renderResult: (value, options, theme, context) =>
       shell.renderResult(
         context,
         theme,
-        (current) => {
-          const cache = state(current, theme);
-          cache.result = result(value, options, theme, { ...current, lastComponent: cache.result });
-          return cache.result;
-        },
+        (current) => result(value, options, theme, current),
         value,
       ),
   };

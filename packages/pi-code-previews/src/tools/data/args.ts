@@ -1,6 +1,18 @@
 import * as Predicate from "effect/Predicate";
-
+import { invokeHostCallback } from "pi-cosmic-core";
 import { getObjectValue } from "../../shared/helpers";
+import { escapeControlChars } from "../../shared/terminal-text";
+import type { RendererArguments } from "../renderers/shared/types";
+
+/** Pretty JSON lines, none for empty arguments. JSON escapes C0 controls; this escapes the rest. */
+export function fallbackArguments(args: RendererArguments): string[] {
+  return invokeHostCallback(() => {
+    if (args === undefined || args === null) return [];
+    if (Predicate.isObject(args) && Object.keys(args).length === 0) return [];
+    const json = JSON.stringify(args, null, 2);
+    return json === undefined ? [] : escapeControlChars(json).split("\n");
+  }, []);
+}
 
 export function getPathArg<ArgsInput>(args: ArgsInput): string {
   const path = getObjectValue(args, "path") ?? getObjectValue(args, "file_path");

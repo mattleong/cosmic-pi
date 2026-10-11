@@ -144,9 +144,10 @@ export function wrapAnsiToWidth(
       continue;
     }
 
-    const nextAnsi = text.indexOf("\x1b", index);
+    // An unrecognized ESC belongs to this inert span; searching past it guarantees progress.
+    const nextAnsi = text.indexOf("\x1b", index + 1);
     const plainEnd = nextAnsi >= 0 ? nextAnsi : text.length;
-    const plain = text.slice(index, plainEnd);
+    const plain = escapeControlChars(text.slice(index, plainEnd));
     const remainingWidth = width - rowWidth;
     if (plain.length <= remainingWidth && PRINTABLE_ASCII_RE.test(plain)) {
       row += plain;

@@ -214,12 +214,13 @@ describe("RPC questionnaire boundary", () => {
     });
   });
 
-  it("re-prompts mixed, nonnumeric, and out-of-range listed selections", () => {
+  it("re-prompts mixed, nonnumeric, out-of-range, and separator-only listed selections", () => {
     const input = vi
       .fn()
       .mockResolvedValueOnce("both")
       .mockResolvedValueOnce("1, custom")
       .mockResolvedValueOnce("5")
+      .mockResolvedValueOnce(",, ,")
       .mockResolvedValueOnce("1,2");
     const notify = vi.fn();
 
@@ -228,8 +229,8 @@ describe("RPC questionnaire boundary", () => {
         outcome: "submitted",
         answers: [{ key: "library", values: ["a", "b"] }],
       });
-      expect(input).toHaveBeenCalledTimes(4);
-      expect(notify).toHaveBeenCalledTimes(3);
+      expect(input).toHaveBeenCalledTimes(5);
+      expect(notify).toHaveBeenCalledTimes(4);
       for (const call of notify.mock.calls)
         expect(issueMessageStyleProblems(String(call.at(0)))).toEqual([]);
     });

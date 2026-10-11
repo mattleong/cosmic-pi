@@ -8,12 +8,14 @@ import {
 } from "pi-cosmic-core/testing";
 import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterComponent } from "../src/footer/component.ts";
+import { orderedContributions } from "../src/footer/builtin-contributions.ts";
 import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
 
 const footer = (options: {
   readonly contributions: readonly CosmicFooterTextContribution[];
   readonly config: Parameters<typeof createFooterComponent>[0]["config"];
   readonly contextUsage: ExtensionContext["getContextUsage"];
+  readonly branch?: string;
 }) => {
   const ctx = extensionContextFixture({
     model: { id: "model", provider: "provider", reasoning: false, contextWindow: 200_000 },
@@ -29,7 +31,7 @@ const footer = (options: {
     pi: extensionApiFixture({ getThinkingLevel: () => "off" }),
     ctx: () => ctx,
     footerData: opaqueFixture({
-      getGitBranch: () => null,
+      getGitBranch: () => options.branch ?? null,
       getExtensionStatuses: () => new Map(),
       getAvailableProviderCount: () => 1,
     }),
@@ -77,6 +79,49 @@ it("keeps context visibility and decorator consumption independent of its render
   expect(component.render(120)).toEqual([]);
   hidden.splice(hidden.indexOf("context"), 1);
   expect(component.render(120).join("")).not.toBe("");
+});
+
+it.each(["comfortable", "compact"] as const)(
+  "honors configured repository order in %s density",
+  (density) => {
+    const defaults = makeDefaultResolvedCosmicUiConfig();
+    const markers = { branch: "branch-marker", location: "project" };
+    for (const order of [
+      ["branch", "location"],
+      ["location", "branch"],
+    ] as const) {
+      const rendered = footer({
+        contributions: [],
+        branch: markers.branch,
+        config: () => ({ ...defaults, footer: { ...defaults.footer, density, order } }),
+        contextUsage: () => undefined,
+      })
+        .render(120)
+        .join("\n");
+      const first = rendered.indexOf(markers[order[0]]);
+      expect(first).toBeGreaterThanOrEqual(0);
+      expect(rendered.indexOf(markers[order[1]])).toBeGreaterThan(first);
+    }
+  },
+);
+
+it("copies configured orders using the last index and preserves unconfigured metadata", () => {
+  const values: CosmicFooterTextContribution[] = ["location", "branch", "custom"].map((id) => ({
+    kind: "text",
+    id,
+    region: "identity",
+    text: id,
+    ...(id !== "custom" && { order: 200 }),
+  }));
+  const originals = values.map((value) => ({ ...value }));
+  const defaults = makeDefaultResolvedCosmicUiConfig();
+  const ordered = orderedContributions(values, {
+    ...defaults,
+    footer: { ...defaults.footer, order: ["branch", "branch"] },
+  });
+  expect(ordered.map((value) => value.order)).toEqual([1, 200, undefined]);
+  expect(ordered.slice(1)).toEqual([values[0], values[2]]);
+  expect(values).toEqual(originals);
 });
 
 it("uses compact text for labeled contributions in compact mode", () => {

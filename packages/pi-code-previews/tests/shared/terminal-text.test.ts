@@ -35,6 +35,12 @@ test("ANSI wrapping preserves short printable spans exactly", () => {
   const text = "\x1b[31mconst value = 1;\x1b[39m";
 
   assert.deepEqual(wrapAnsiToWidth(text, 80), [text]);
+  for (const malformed of ["hello\x1b", "hello\x1b[31", "hello\x1b]8;;url\x07"]) {
+    const rows = wrapAnsiToWidth(malformed, 5, 20, "> ");
+    assert.equal(stripAnsi(rows.join("")).replaceAll("> ", ""), escapeControlChars(malformed));
+    assert.ok(rows.every((row) => visibleWidth(row) <= 5));
+    assert.ok(rows.every((row) => !row.includes("\x1b")));
+  }
 });
 
 test("ANSI wrapping carries active styles across rows without rewriting fitting rows", () => {

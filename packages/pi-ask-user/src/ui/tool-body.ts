@@ -8,6 +8,7 @@ import { expandedSection, previewIssuesSlot } from "pi-code-previews";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
+  composeToolComponent,
   renderExpansionAffordance,
   renderToolHeader,
   toolStatusLine,
@@ -17,11 +18,6 @@ import type { ReplayedAnswer } from "./tool-render-projection.ts";
 
 /** Pi's renderer context, without copying its runtime definition. */
 export type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
-
-const lines = (render: (width: number) => string[]): Component => ({
-  render,
-  invalidate: () => undefined,
-});
 
 /** Nothing to add: the heading and the shell's issue lines already say it. */
 export const emptyBody = (): Component => new Container();
@@ -44,7 +40,7 @@ const sentenceCase = (text: string): string => text.charAt(0).toUpperCase() + te
 
 /** Routine state in muted text: the first wording that fits the width. */
 export const mutedState = (alternatives: readonly string[], theme: Pick<Theme, "fg">): Component =>
-  lines((width) => {
+  composeToolComponent((width) => {
     const text =
       alternatives.find((entry) => visibleWidth(entry) <= width) ?? alternatives.at(-1) ?? "";
     return text ? [clipToWidth(theme.fg("muted", sentenceCase(text)), width)] : [];
@@ -93,7 +89,7 @@ export function answersBody(
       0,
       0,
     );
-  return lines((width) => {
+  return composeToolComponent((width) => {
     let cut = false;
     const fit = (prefix: string, text: string, style: (line: string) => string): string => {
       const [first = "", ...rest] = text.split(/\r?\n/u);
