@@ -12,7 +12,7 @@ import { toolRunningLine } from "pi-cosmic-ui/tool";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
 import { escapeControlChars } from "../shared/terminal-text";
-import type { ToolRenderContext } from "./renderers/shared/types";
+import type { RendererState } from "./renderers/shared/types";
 
 /** Arrays are evidence only through their length and index slots, never named properties. */
 const ARRAY_SLOT = /^(?:length|\d+)$/u;
@@ -56,10 +56,10 @@ export function plainRows(raw: string, maxRows: number): Component {
 }
 
 /** The shared running line, animated by the registering owner's scheduler. */
-export function runningLine(theme: Theme, context: ToolRenderContext<any, any>): Component {
+export function runningLine(theme: Theme, state: RendererState): Component {
   return {
     render: (width) =>
-      new Text(toolRunningLine(theme, getCodePreviewAnimationFrame(context)), 0, 0).render(width),
+      new Text(toolRunningLine(theme, getCodePreviewAnimationFrame({ state })), 0, 0).render(width),
     invalidate() {},
   };
 }

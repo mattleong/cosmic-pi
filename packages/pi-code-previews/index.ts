@@ -80,6 +80,7 @@ export {
 export { captureBuiltinCompactPolicy } from "./src/tools/builtin-compact-summary";
 
 export { selectCompactChildren, renderCompactChildren } from "./src/preview/compact-children";
-export { renderCompactRow } from "./src/preview/compact-row";
+export { compactPlainText, renderCompactRow } from "./src/preview/compact-row";
 export { expandedArguments, expandedSection } from "./src/preview/expanded-section";
+export { escapeControlChars } from "./src/shared/terminal-text";
 export { captureCodePreviewPresentationPolicy } from "./src/preview/presentation-policy";

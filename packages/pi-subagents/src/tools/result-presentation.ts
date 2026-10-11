@@ -11,6 +11,7 @@ import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
+  escapeControlChars,
   getTextContent,
   type CodePreviewShellOptions,
   type CompactSummary,
@@ -34,11 +35,7 @@ const submittedJson = <Args>(args: Args): string | undefined =>
 
 /** The whole value, indented, for expanded views; the heading shows only one bounded line. */
 const submittedValue = <Args>(args: Args, theme: Theme): Component =>
-  new Text(
-    theme.fg("toolOutput", stripTerminalControls(JSON.stringify(args ?? null, null, 2))),
-    0,
-    0,
-  );
+  new Text(theme.fg("toolOutput", escapeControlChars(JSON.stringify(args ?? null, null, 2))), 0, 0);
 
 const rejection = <Details>(result: AgentToolResult<Details>, theme: Theme): Component =>
   errorSection(theme, stripTerminalControls(getTextContent(result.content)));
@@ -74,11 +71,11 @@ export const resultCompactSummary: CompactSummaryProvider<unknown, unknown, unkn
 };
 
 /** The whole submitted value and a rejection's own text; `accepted` is the receipt. */
-export const resultExpandedContent: NonNullable<CodePreviewShellOptions["expandedContent"]> = {
-  renderCall: (args, theme) => submittedValue(args, theme),
+export const resultExpandedContent = {
+  renderCall: <Args>(args: Args, theme: Theme) => submittedValue(args, theme),
   renderResult: (result, _options, theme, context) =>
     context.isError ? rejection(result, theme) : new Container(),
-};
+} satisfies NonNullable<CodePreviewShellOptions["expandedContent"]>;
 
 /** Preview-style call and result bodies. */
 export const resultToolRenderers = {

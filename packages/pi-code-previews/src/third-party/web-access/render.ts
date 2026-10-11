@@ -49,7 +49,9 @@ export function createWebAccessRenderers(
     extra: () => Component,
     fallback: Component,
   ): Component {
-    const failed = failures.get(context.state);
+    // The returned component's closures share this scope; they keep the state, never the context.
+    const { state } = context;
+    const failed = failures.get(state);
     const prior = failed?.[slot];
     if (
       prior &&
@@ -57,8 +59,7 @@ export function createWebAccessRenderers(
       prior.every((value, index) => value === input[index])
     )
       return fallback;
-    const markFailed = () =>
-      failures.set(context.state, { ...failures.get(context.state), [slot]: input });
+    const markFailed = () => failures.set(state, { ...failures.get(state), [slot]: input });
     let original: Component | undefined;
     let body: Component;
     try {

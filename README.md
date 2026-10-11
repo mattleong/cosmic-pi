@@ -53,7 +53,7 @@ pnpm install
 pnpm validate
 ```
 
-The workspace uses TypeScript-Go for typechecking, Oxlint, and `@effect/tsgo` for dedicated Effect diagnostics. Regular `pnpm lint` runs the vendored [`anti-slop`](tools/oxlint/anti-slop/UPSTREAM.md) rules across the workspace. Pi's Jiti loader consumes every Cosmic Pi package directly from TypeScript source, so local development and published packages require no build step or generated `dist/`. The checked-in VS Code settings select the workspace TypeScript 7 native server; run `pnpm effect:diagnostics` for Effect diagnostics. See [`docs/architecture/effect-v4.md`](docs/architecture/effect-v4.md) for the Effect v4 conventions.
+The workspace uses TypeScript-Go for typechecking, Oxlint, and `@effect/tsgo` for dedicated Effect diagnostics. Regular `pnpm lint` runs the vendored [`anti-slop` rules and local regression rules](tools/oxlint/anti-slop/UPSTREAM.md) across the workspace. Pi's Jiti loader consumes every Cosmic Pi package directly from TypeScript source, so local development and published packages require no build step or generated `dist/`. The checked-in VS Code settings select the workspace TypeScript 7 native server; run `pnpm effect:diagnostics` for Effect diagnostics. See [`docs/architecture/effect-v4.md`](docs/architecture/effect-v4.md) for the Effect v4 conventions.
 
 Run a command for one package with a filter:
 

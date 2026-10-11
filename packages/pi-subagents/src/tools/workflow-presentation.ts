@@ -215,22 +215,22 @@ export const renderWorkflowCall = (
   context: WorkflowRenderContext,
 ): Component => {
   const container = new Container();
+  // The heading keeps only these, never the context: its lastComponent links prior calls.
+  const { state, executionStarted, isPartial, expanded } = context;
   // Drawn lazily: the result, rendered after the call, names the run a status call is about.
   container.addChild(
     composeToolComponent((width) => {
-      const subtitle = [workflowToolAction(args), subjectOf(args, context.state.workflowName)]
+      const subtitle = [workflowToolAction(args), subjectOf(args, state.workflowName)]
         .filter(Boolean)
         .join(" ");
       const header = new Text(renderToolHeader({ title: TITLE, subtitle }, theme), 0, 0).render(
         width,
       );
-      return context.executionStarted && context.isPartial
-        ? [...header, toolRunningLine(theme)]
-        : header;
+      return executionStarted && isPartial ? [...header, toolRunningLine(theme)] : header;
     }),
   );
   if (workflowToolAction(args) === "start" && args.script)
-    container.addChild(scriptComponent(args.script, theme, context.expanded));
+    container.addChild(scriptComponent(args.script, theme, expanded));
   return container;
 };
 

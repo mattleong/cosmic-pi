@@ -14,7 +14,7 @@ import type { CodePreviewRendererAppearance } from "../application/renderer-cont
 import type { CompactSummary } from "./compact-summary";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
-import type { ToolRenderContext } from "./renderers/shared/types";
+import type { RendererState } from "./renderers/shared/types";
 import {
   nativeCodemodeChildren,
   nativeCodemodeHeader,
@@ -59,7 +59,7 @@ function renderCallList(
   children: NonNullable<CompactSummary["children"]>,
   evidence: NativeCallEvidence,
   theme: Theme,
-  context: ToolRenderContext<any, any>,
+  state: RendererState,
 ): Component {
   const animated = children.entries.some(
     (child) => child.status === "pending" || child.status === "running",
@@ -71,7 +71,7 @@ function renderCallList(
   let cached: { readonly key: string; readonly rows: string[] } | undefined;
   return {
     render(width) {
-      const animationFrame = animated ? getCodePreviewAnimationFrame(context) : 0;
+      const animationFrame = animated ? getCodePreviewAnimationFrame({ state }) : 0;
       const timingEnabled = codePreviewSettings.toolCallTiming;
       const key = `${width}:${animationFrame}:${timingEnabled}`;
       if (cached?.key === key) return cached.rows;
@@ -121,14 +121,14 @@ export function createNativeCodemodeRenderers(
       );
       if (children.entries.length || evidence.kind === "unavailable" || !evidence.complete)
         body.addChild(
-          expandedSection(theme, "Calls", renderCallList(children, evidence, theme, context)),
+          expandedSection(theme, "Calls", renderCallList(children, evidence, theme, context.state)),
         );
       if (
         previewStyle &&
         context.isPartial &&
         !children.entries.some((child) => child.status === "running")
       )
-        body.addChild(runningLine(theme, context));
+        body.addChild(runningLine(theme, context.state));
       if (evidence.fullOutputPath && !nativeCodemodeHeader(result))
         body.addChild(
           expandedSection(
@@ -188,6 +188,7 @@ export function createNativeCodemodeRenderers(
       },
       renderResult(result, options, theme, context) {
         if (options.expanded) return renderOutput(result, options, theme, context);
+        const { state, isError } = context;
         const projected = summary({
           phase: options.isPartial ? "running" : "settled",
           args: context.args,
@@ -202,7 +203,7 @@ export function createNativeCodemodeRenderers(
         return safeContent(
           () => ({
             render(width) {
-              const animationFrame = getCodePreviewAnimationFrame(context);
+              const animationFrame = getCodePreviewAnimationFrame({ state });
               const rows = renderCompactChildren(projected.children, theme, width, {
                 animationFrame,
                 timingEnabled: codePreviewSettings.toolCallTiming,
@@ -219,7 +220,7 @@ export function createNativeCodemodeRenderers(
                 rows.push(
                   clipToWidth(
                     renderExpansionAffordance(
-                      context.isError || projected.outcome === "error" ? "error" : "output",
+                      isError || projected.outcome === "error" ? "error" : "output",
                       false,
                       theme,
                     ),

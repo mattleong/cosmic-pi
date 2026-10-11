@@ -23,7 +23,7 @@ import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
 import { escapeControlChars } from "../shared/terminal-text";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
-import type { ToolRenderContext } from "./renderers/shared/types";
+import type { RendererArguments, RendererState, ToolRenderContext } from "./renderers/shared/types";
 import {
   nativeMcpEvidence,
   nativeMcpHasRecoverableClipping,
@@ -107,13 +107,13 @@ function renderOutput(
 function renderProgress(
   result: AgentToolResult<unknown>,
   theme: Theme,
-  context: Context,
+  state: RendererState,
 ): Component {
   const progress = nativeMcpProgress(result);
   return safeContent(
     () => ({
       render(width) {
-        const frame = getCodePreviewAnimationFrame(context);
+        const frame = getCodePreviewAnimationFrame({ state });
         const line = progress
           ? toolStatusLine(theme, "running", progress, frame)
           : toolRunningLine(theme, frame);
@@ -189,17 +189,17 @@ export function createNativeMcpRenderers(
     const receipt = nativeMcpReceipt(identity, result, context.args);
     if (receipt && Predicate.isObject(context.state)) receipts.set(context.state, receipt);
   };
-  const subtitle = (context: Context): string => {
-    const receipt = Predicate.isObject(context.state) ? receipts.get(context.state) : undefined;
-    const { action, subject } = nativeMcpHeading(identity, context.args, receipt);
+  const subtitle = (state: RendererState, args: RendererArguments): string => {
+    const receipt = Predicate.isObject(state) ? receipts.get(state) : undefined;
+    const { action, subject } = nativeMcpHeading(identity, args, receipt);
     return [action, subject].filter(Boolean).join(" ");
   };
   /** Drawn plain if the host theme fails, so the issue lines placed beneath it stay visible. */
-  const heading = (theme: Theme, context: Context): Component => {
+  const heading = (theme: Theme, state: RendererState, args: RendererArguments): Component => {
     const text = new Text("", 0, 0);
     return {
       render(width) {
-        const current = subtitle(context);
+        const current = subtitle(state, args);
         try {
           text.setText(renderToolHeader({ title: DISPLAY_NAME, subtitle: current }, theme));
         } catch {
@@ -226,7 +226,7 @@ export function createNativeMcpRenderers(
     const preview =
       json.length > ARGUMENT_PREVIEW_CHARS ? `${json.slice(0, ARGUMENT_PREVIEW_CHARS)}…` : json;
     const raw = [
-      `${DISPLAY_NAME} ${subtitle(context)}`,
+      `${DISPLAY_NAME} ${subtitle(context.state, context.args)}`,
       context.expanded ? argumentsJson(args, 2) : preview,
     ]
       .filter(Boolean)
@@ -236,7 +236,7 @@ export function createNativeMcpRenderers(
         // Style before placing the issue slot: a theme failure must leave shared issues visible.
         const previewLine = preview ? theme.fg("muted", compactPlainText(preview)) : "";
         const body = new Container();
-        body.addChild(heading(theme, context));
+        body.addChild(heading(theme, context.state, context.args));
         body.addChild(previewIssuesSlot(context));
         if (context.expanded) body.addChild(renderArguments(args, theme));
         else if (preview)
@@ -266,7 +266,7 @@ export function createNativeMcpRenderers(
   ) => {
     if (options.expanded) return renderExpandedOutput(result, options, theme, context);
     recordReceipt(result, context);
-    if (options.isPartial) return renderProgress(result, theme, context);
+    if (options.isPartial) return renderProgress(result, theme, context.state);
     if (!context.isError && nativeMcpHasRecoverableClipping(identity, result, context.args))
       return safeContent(
         () => new Text(renderExpansionAffordance("output", false, theme), 0, 0),

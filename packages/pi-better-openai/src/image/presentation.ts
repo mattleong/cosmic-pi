@@ -5,14 +5,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
-import { expandedSection, getTextContent, previewIssuesSlot } from "pi-code-previews";
 import {
-  formatBytes,
-  formatDisplayPath,
-  restatesText,
-  sanitizeTerminalLine,
-  stripTerminalControls,
-} from "pi-cosmic-core";
+  compactPlainText,
+  expandedSection,
+  getTextContent,
+  previewIssuesSlot,
+} from "pi-code-previews";
+import { formatBytes, formatDisplayPath, restatesText, sanitizeTerminalLine } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
@@ -112,7 +111,7 @@ const optionLines = (args: Partial<ToolParams>, shown: ImageRequestOptions): str
     const entries: ReadonlyArray<string | undefined> = Array.isArray(value) ? value : [value];
     return entries.map(
       (entry) =>
-        `${label}: ${stripTerminalControls(Predicate.isString(entry) ? entry : String(JSON.stringify(entry)))}`,
+        `${label}: ${compactPlainText(Predicate.isString(entry) ? entry : String(JSON.stringify(entry)))}`,
     );
   });
 
@@ -131,7 +130,7 @@ export function renderImageRequest(
       expandedSection(
         theme,
         "Prompt",
-        new Text(theme.fg("toolOutput", stripTerminalControls(args.prompt)), 0, 0),
+        new Text(theme.fg("toolOutput", compactPlainText(args.prompt)), 0, 0),
       ),
     );
   const options = optionLines(args, shown);
@@ -148,10 +147,12 @@ export function renderImageCall<
 >(args: Partial<ToolParams>, theme: Theme, context: Context): Component {
   const prompt = Predicate.isString(args.prompt) ? args.prompt : "";
   const issues = previewIssuesSlot(context);
+  // The component outlives this call; its context's lastComponent would chain every prior row.
+  const { expanded } = context;
   return composeToolComponent((width) => {
     if (width <= 0) return [];
     const lines = [renderImageHeading(prompt, theme, width), ...issues.render(width)];
-    if (context.expanded)
+    if (expanded)
       lines.push(
         ...renderImageRequest(args, theme, {
           prompt: headingShowsPrompt(prompt, width),
@@ -196,7 +197,7 @@ export function renderImageBody(
     if (record.savedPath)
       facts.addChild(
         new Text(
-          `${theme.fg("muted", "Saved to")} ${theme.fg("toolOutput", stripTerminalControls(formatDisplayPath(record.savedPath, view.cwd)))}`,
+          `${theme.fg("muted", "Saved to")} ${theme.fg("toolOutput", compactPlainText(formatDisplayPath(record.savedPath, view.cwd)))}`,
           0,
           0,
         ),
@@ -210,7 +211,7 @@ export function renderImageBody(
         expandedSection(
           theme,
           "Revised prompt",
-          new Text(theme.fg("toolOutput", stripTerminalControls(record.revisedPrompt)), 0, 0),
+          new Text(theme.fg("toolOutput", compactPlainText(record.revisedPrompt)), 0, 0),
         ),
       );
     if (raw)
@@ -218,11 +219,7 @@ export function renderImageBody(
         expandedSection(
           theme,
           error ? "Error" : "Raw result",
-          new Text(
-            theme.fg(error ? "error" : "toolOutput", stripTerminalControls(raw).trimEnd()),
-            0,
-            0,
-          ),
+          new Text(theme.fg(error ? "error" : "toolOutput", compactPlainText(raw).trimEnd()), 0, 0),
         ),
       );
     return container;

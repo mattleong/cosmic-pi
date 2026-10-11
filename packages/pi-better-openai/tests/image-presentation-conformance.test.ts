@@ -117,6 +117,35 @@ describe("registered image presentation", () => {
   );
 
   it.each(styles)(
+    "keeps request and output text after terminal string controls once expanded in %s mode",
+    (style) => {
+      const harness = createToolPresentationHarness(register(style).tool, { theme, width: 240 });
+      const input = {
+        prompt: "Paint a fox\u009d AFTER_PROMPT_CONTROL",
+        save: "custom",
+        saveDir: "/project/out\u001b] AFTER_OPTION_CONTROL",
+      };
+      const record = { ...details, revisedPrompt: "Revised\u009d AFTER_REVISED_CONTROL" };
+      const cases = [
+        { result: { details: record, content: [image] }, output: "AFTER_REVISED_CONTROL" },
+        {
+          result: { details: undefined, content: [text("Failed\u009d AFTER_RAW_CONTROL")] },
+          output: "AFTER_RAW_CONTROL",
+        },
+      ];
+      for (const { result, output } of cases) {
+        harness.call(input, { expanded: true });
+        harness.result(result, { expanded: true, isError: result.details === undefined });
+        const rendered = harness.render().join("\n");
+        for (const marker of ["AFTER_PROMPT_CONTROL", "AFTER_OPTION_CONTROL", output])
+          expect(rendered).toContain(marker);
+        expect(rendered).not.toContain("\u009d");
+        expect(rendered).not.toContain("\u001b]");
+      }
+    },
+  );
+
+  it.each(styles)(
     "states each fact once when expanded, even when the raw text restates them, in %s mode",
     (style) => {
       const { tool } = register(style);

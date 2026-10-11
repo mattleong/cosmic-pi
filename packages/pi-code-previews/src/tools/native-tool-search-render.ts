@@ -73,7 +73,7 @@ export function createNativeToolSearchRenderers(
   ) => {
     if (options.expanded) return renderOutput(result, options, theme, context);
     if (options.isPartial)
-      return safeContent(() => runningLine(theme, context), plainRows("Running…", 1));
+      return safeContent(() => runningLine(theme, context.state), plainRows("Running…", 1));
     const receipt = context.isError ? undefined : nativeToolSearchReceipt(result.details);
     const label = receipt
       ? `${countLabel(receipt.loaded.length, "tool")} listed`

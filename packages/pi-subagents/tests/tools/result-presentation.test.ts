@@ -1,6 +1,12 @@
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
+import { plainTheme } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
-import { RESULT_ACCEPTED_TEXT, resultCompactSummary } from "../../src/tools/result-presentation.ts";
+import {
+  RESULT_ACCEPTED_TEXT,
+  resultCompactSummary,
+  resultExpandedContent,
+  resultToolRenderers,
+} from "../../src/tools/result-presentation.ts";
 
 interface VerdictArguments {
   readonly verdict: string;
@@ -17,6 +23,29 @@ function summarize(args: VerdictArguments, text?: string, isError = false) {
     context: renderContextFixture({ isError }),
   });
 }
+
+describe("child result expanded input", () => {
+  const render = <Args>(args: Args) => {
+    const context = renderContextFixture({ args, expanded: true });
+    return [
+      resultToolRenderers.renderCall(args, plainTheme, context).render(240).join("\n"),
+      resultExpandedContent.renderCall(args, plainTheme).render(240).join("\n"),
+    ];
+  };
+
+  it("preserves text after terminal string controls in both argument views", () => {
+    const args = { value: "before\u009dAFTER_CONTROL", next: "FOLLOWING_FIELD" };
+    for (const text of render(args)) {
+      expect(text).toContain("AFTER_CONTROL");
+      expect(text).toContain("FOLLOWING_FIELD");
+      expect(text).not.toContain("\u009d");
+    }
+  });
+
+  it.each([null, {}, [], 0, false, ""])("preserves the submitted JSON value %j", (value) => {
+    for (const text of render(value)) expect(text).toContain(JSON.stringify(value));
+  });
+});
 
 describe("child result compact summary", () => {
   it("heads the row with the submitted value and claims nothing while it is pending", () => {
