@@ -46,7 +46,7 @@ const runTarget = (run: AttentionRun): string =>
   `${sanitizeTerminalLine(run.name)} (${sanitizeTerminalLine(run.id)})`;
 
 const claimViolationPaths = (run: AttentionRun): ReadonlyArray<string> => [
-  ...new Set(run.writeAudit?.violations.map((violation) => violation.path) ?? []),
+  ...new Set(run.writeAudit?.violations.map((violation) => violation.path)),
 ];
 
 const grantableClaimPath = (path: string): string | undefined => {

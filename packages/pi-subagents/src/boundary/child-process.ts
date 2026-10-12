@@ -20,7 +20,7 @@ import {
   SUBAGENT_RESULT_TOOL_NAME,
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
-import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
+import { processCauseError as processError, type SubagentProcessError } from "../run/errors.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import {
   acquireProcessTransport,

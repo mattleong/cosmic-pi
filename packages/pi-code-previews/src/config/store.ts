@@ -1,6 +1,6 @@
 import { failureMessage, formatDisplayPath } from "pi-cosmic-core";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
+import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import {
   hasCodePreviewSessionCapability,

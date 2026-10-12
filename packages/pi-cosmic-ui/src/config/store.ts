@@ -4,7 +4,7 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
+import type * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
@@ -12,7 +12,7 @@ import {
   decodeTolerantFields,
   decodeUnknownOrUndefined,
   isJsonObject,
-  JsonDocumentStore,
+  type JsonDocumentStore,
   makeScopedConfigStore,
   type JsonObject,
   type ScopedConfigMetadata,

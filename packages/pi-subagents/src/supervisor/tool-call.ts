@@ -8,9 +8,9 @@ import * as Schema from "effect/Schema";
 import type * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
-  SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
+  type SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
-  SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
+  type SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "./mcp-contract.ts";
 import {

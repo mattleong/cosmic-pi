@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import * as Cause from "effect/Cause";
+import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Queue from "effect/Queue";

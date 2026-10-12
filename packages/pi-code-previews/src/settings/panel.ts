@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
+import { type SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import { constVoid } from "effect/Function";
 import type { CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";

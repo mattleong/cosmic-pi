@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
+import type * as Schema from "effect/Schema";
 import { decodeCodexNotification } from "../src/backend/local-codex-protocol.ts";
 
 const decode = (method: string, item: Schema.Json) =>

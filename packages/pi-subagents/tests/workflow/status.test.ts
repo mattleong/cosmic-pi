@@ -34,8 +34,7 @@ const run = (
     ...patch,
   });
 
-const namedRunIds = (text: string): ReadonlySet<string> =>
-  new Set(text.match(/\bagent-\d+\b/gu) ?? []);
+const namedRunIds = (text: string): ReadonlySet<string> => new Set(text.match(/\bagent-\d+\b/gu));
 
 describe("workflow status", () => {
   it("counts a phase whose calls were all reused as having agents", () => {

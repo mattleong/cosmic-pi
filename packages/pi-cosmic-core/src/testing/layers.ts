@@ -18,7 +18,11 @@ import {
   responseDecodeError,
   type JsonHttpRequest,
 } from "../platform/json-http.ts";
-import { JsonDocumentError, JsonHttpError, StreamingHttpError } from "../platform/errors.ts";
+import {
+  JsonDocumentError,
+  type JsonHttpError,
+  type StreamingHttpError,
+} from "../platform/errors.ts";
 import {
   StreamingHttpClient,
   type StreamingHttpRequest,

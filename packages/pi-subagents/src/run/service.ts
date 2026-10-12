@@ -18,10 +18,10 @@ import type {
 } from "../boundary/host-notifier.ts";
 import { WriterLeaseService } from "../boundary/writer-lease.ts";
 import {
-  InvalidSubagentRequestError,
+  type InvalidSubagentRequestError,
   runNotFound,
   type SubagentError,
-  SubagentNotFoundError,
+  type SubagentNotFoundError,
   SubagentRuntimeClosedError,
 } from "./errors.ts";
 import { makeQueuedWriterCheck, makeRunAdmissionSignal } from "./admission-signal.ts";

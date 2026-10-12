@@ -1,5 +1,5 @@
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
+import { type SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import {

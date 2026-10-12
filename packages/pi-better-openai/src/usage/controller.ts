@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import {
   commitPreferredScope,
   type JsonObject,
-  InvalidSettingError,
+  type InvalidSettingError,
   makeUsageRefreshController,
   timedDiagnosticResult,
 } from "pi-cosmic-core";

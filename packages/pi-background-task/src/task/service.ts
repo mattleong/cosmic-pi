@@ -19,12 +19,12 @@ import { BackgroundTaskConfigStore } from "../config/store.ts";
 import { normalizeStartRequest, validateWaitRequest } from "./admission.ts";
 import {
   BackgroundTaskCapacityError,
-  BackgroundTaskNotFoundError,
+  type BackgroundTaskNotFoundError,
   backgroundTaskNotFound,
   BackgroundRuntimeClosedError,
   BackgroundSpawnError,
   BackgroundTerminationError,
-  InvalidBackgroundCommandError,
+  type InvalidBackgroundCommandError,
   InvalidBackgroundCwdError,
   type BackgroundTaskError,
 } from "./errors.ts";

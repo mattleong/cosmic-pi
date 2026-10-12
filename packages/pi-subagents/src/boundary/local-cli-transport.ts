@@ -8,7 +8,7 @@ import type {
   ClaudeControlRequestFrame,
   ClaudeUserFrame,
 } from "../backend/local-claude-protocol.ts";
-import { processCauseError, SubagentProcessError } from "../run/errors.ts";
+import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
 import {
   acquireProcessTransport,
   MAX_PROCESS_LINE_BYTES,

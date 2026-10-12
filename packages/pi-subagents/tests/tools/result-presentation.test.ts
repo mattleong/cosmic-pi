@@ -1,6 +1,6 @@
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { plainTheme } from "pi-cosmic-core/testing";
-import * as Schema from "effect/Schema";
+import type * as Schema from "effect/Schema";
 import { assert, describe, expect, it } from "vitest";
 import {
   RESULT_ACCEPTED_TEXT,

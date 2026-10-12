@@ -1,7 +1,7 @@
-import * as Effect from "effect/Effect";
+import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Layer from "effect/Layer";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { type nodeFilePlatformLayer } from "pi-cosmic-core";
 import type { CodePreviewSettingsService } from "../config/service";
 import type { CodePreviewSyntaxService } from "../syntax/service";
 import type { CodePreviewWriteService } from "../write/service";

@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as EffectRpcClient from "effect/rpc/RpcClient";
-import * as RpcClientError from "effect/rpc/RpcClientError";
+import type * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as EffectSocket from "effect/socket/Socket";
 import { deferredPromise, temporaryDirectory } from "pi-cosmic-core/testing";

@@ -4,9 +4,9 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import * as Effect from "effect/Effect";
+import type * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
+import type * as Path from "effect/Path";
 import {
   expandedArguments,
   expandedSection,
@@ -20,7 +20,7 @@ import {
   toPiToolOutputSchema,
 } from "pi-cosmic-core";
 import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
-import { BackgroundTaskService } from "../task/service.ts";
+import { type BackgroundTaskService } from "../task/service.ts";
 import {
   backgroundTaskActionLabel,
   backgroundTaskCallSubject,

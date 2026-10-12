@@ -6,7 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
-import * as Schema from "effect/Schema";
+import type * as Schema from "effect/Schema";
 import {
   JsonDocumentStore,
   type JsonDocumentModification,

@@ -2,7 +2,7 @@ import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
 import { makeTokenVerifier, synchronousRandomHex } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
-import * as Cause from "effect/Cause";
+import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -40,7 +40,7 @@ import {
 } from "./harness-shared.ts";
 import type { ResultContract } from "../domain/result-contract.ts";
 import { makeSupervisorRpcServerProtocol } from "./supervisor-rpc-protocol.ts";
-import { channelError, SupervisorChannelError } from "./supervisor-channel-errors.ts";
+import { channelError, type SupervisorChannelError } from "./supervisor-channel-errors.ts";
 import {
   makeSupervisorChannelSession,
   type SupervisorChannelControls,

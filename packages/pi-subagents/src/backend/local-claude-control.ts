@@ -188,7 +188,7 @@ export const makeLocalClaudeControl = (
           (candidate) => candidate.name === SUPERVISOR_MCP_REGISTRATION,
         );
         if (server?.status === "connected") {
-          const inventory = new Set(server.tools?.map((tool) => tool.name) ?? []);
+          const inventory = new Set(server.tools?.map((tool) => tool.name));
           if (!SUPERVISOR_MCP_TOOL_NAMES.every((tool) => inventory.has(tool)))
             return yield* processError(
               "initialize",

@@ -105,6 +105,13 @@
         "assertionStyle": "never"
       }
     ],
+    "typescript/consistent-type-imports": [
+      "error",
+      {
+        "fixStyle": "inline-type-imports",
+        "disallowTypeAnnotations": false
+      }
+    ],
     "typescript/no-deprecated": "error",
     "typescript/no-empty-object-type": "error",
     "typescript/no-explicit-any": "error",
@@ -156,6 +163,7 @@
     "unicorn/no-instanceof-builtins": "error",
     "unicorn/no-negation-in-equality-check": "error",
     "unicorn/no-unnecessary-await": "error",
+    "unicorn/no-useless-collection-argument": "error",
     "unicorn/no-useless-fallback-in-spread": "error",
     "unicorn/no-useless-spread": "error",
     "unicorn/prefer-at": "error",

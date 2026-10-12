@@ -3,10 +3,10 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Path from "effect/Path";
+import type * as Path from "effect/Path";
 import {
   AgentDirectory,
-  JsonDocumentStore,
+  type JsonDocumentStore,
   decodeTolerantFields,
   makeScopedConfigStore,
   type JsonObject,

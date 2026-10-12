@@ -1,5 +1,5 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
-import * as Cause from "effect/Cause";
+import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -8,13 +8,13 @@ import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
-import * as Socket from "effect/socket/Socket";
-import * as SocketServer from "effect/socket/SocketServer";
+import type * as Socket from "effect/socket/Socket";
+import type * as SocketServer from "effect/socket/SocketServer";
 import { SupervisorOpenSessionRpc } from "../supervisor/protocol.ts";
 
 const MAX_CONNECTIONS = 4;
