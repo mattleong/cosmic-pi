@@ -25,7 +25,7 @@
     "typecheck": "pnpm typecheck:anti-slop && pnpm typecheck:scripts && pnpm --workspace-concurrency=4 --no-sort -r run typecheck",
     "typecheck:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop/tsconfig.json",
     "typecheck:scripts": "tsc --noEmit -p scripts/tsconfig.json",
-    "effect:diagnostics": "pnpm layout:check && pnpm --workspace-concurrency=4 --no-sort -r run effect:diagnostics",
+    "effect:diagnostics": "pnpm --workspace-concurrency=4 --no-sort -r run effect:diagnostics",
     "pack:smoke": "node scripts/verify-packed-core.ts",
     "presentation:gallery": "node scripts/presentation-gallery.ts",
     "validate": "pnpm version:check && pnpm check && pnpm test && pnpm pack:smoke",

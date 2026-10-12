@@ -25,8 +25,7 @@ export const noManualAbortListenerRule = defineRule({
   meta: {
     type: "problem",
     docs: {
-      description:
-        "Disallow manual abort listeners outside the shared abort-signal boundaries.",
+      description: "Disallow manual abort listeners outside the shared abort-signal boundaries.",
     },
     messages: {
       manualAbortListener:

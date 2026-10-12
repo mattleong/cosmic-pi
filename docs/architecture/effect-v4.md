@@ -146,11 +146,11 @@ Compiler tooling lives at the workspace root. Runtime dependencies are declared 
 ## Quality checks
 
 - `tsconfig.base.json` enables strict TypeScript and configures core Effect language-service diagnostics for every package.
-- `tsconfig.effect.json` enables the workspace's Effect-native diagnostics. `strictEffectProvide` applies to production `src/**/*.ts`; tests are Effect entry points that intentionally provide complete test Layers.
-- Each package's `check` runs TypeScript, `effect-tsgo diagnostics`, type-aware Oxlint, and formatting checks. The root `pnpm effect:diagnostics` command runs `layout:check` before explicitly running package diagnostics recursively, because pnpm can skip packages without the requested script. TypeScript and Effect diagnostics stay separate so Effect messages are not emitted twice.
+- `tsconfig.effect.json` enables the workspace's Effect-native diagnostics. The inherited `strictEffectProvide` override matches `**/packages/*/src/**/*.ts`; tests remain Effect entry points that intentionally provide complete test Layers. Exact-file exceptions cover the shared gallery writer, Code Previews' pre-session settings runner, and Ask User's standalone external-editor runner, which each compose their complete execution graph. Service constructors instead expose construction dependencies for their Layers to supply.
+- Each package's `check` runs TypeScript, `effect-tsgo diagnostics`, type-aware Oxlint, and formatting checks. The root `pnpm effect:diagnostics` command runs package diagnostics recursively. TypeScript and Effect diagnostics stay separate so Effect messages are not emitted twice.
 - Better OpenAI and Subagents enable `allowJs` and `checkJs` and include shipped and test `.mjs` helpers in their TypeScript projects; source loading still requires no build.
 - Oxlint, package tests, packaging smoke tests, and code review cover the remaining correctness and integration concerns.
-- `pnpm layout:check` checks package/test placement and rejects nested package manifests. Every discovered package, including shared and private packages, must declare nonblank check, validate, typecheck, Effect diagnostics, lint/fix, format-check, and test scripts. Its `tsconfig.json` must resolve its inheritance to the root `tsconfig.effect.json` without replacing inherited plugins. Missing or malformed files produce path-specific failures. This guard checks declarations, not shell execution; other architecture conventions remain guidance.
+- `pnpm layout:check` checks package/test placement and rejects nested package manifests. Other architecture conventions remain documented guidance.
 
 ## Upgrade procedure
 

@@ -486,7 +486,7 @@ const loadNativeModelCatalog =
 
 export const makeNativeModelCatalog = (
   options: NativeModelCatalogLayerOptions = {},
-): Effect.Effect<NativeModelCatalogContract> =>
+): Effect.Effect<NativeModelCatalogContract, never, SafeFile> =>
   Effect.gen(function* () {
     const safeFile = yield* SafeFile;
     const cache = yield* Cache.makeWith(loadNativeModelCatalog(options), {
@@ -506,7 +506,7 @@ export const makeNativeModelCatalog = (
           return yield* Cache.get(cache, new CatalogCacheKey({ runtime, cwd, probeSelector }));
         }),
     } satisfies NativeModelCatalogContract;
-  }).pipe(Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));
+  });
 
 export class NativeModelCatalog extends Context.Service<
   NativeModelCatalog,
@@ -514,5 +514,8 @@ export class NativeModelCatalog extends Context.Service<
 >()("pi-subagents/boundary/native-model-catalog/NativeModelCatalog") {
   static readonly layer = (
     options: NativeModelCatalogLayerOptions = {},
-  ): Layer.Layer<NativeModelCatalog> => Layer.effect(this, makeNativeModelCatalog(options));
+  ): Layer.Layer<NativeModelCatalog> =>
+    Layer.effect(this, makeNativeModelCatalog(options)).pipe(
+      Layer.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))),
+    );
 }

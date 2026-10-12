@@ -48,10 +48,22 @@
         },
         "overrides": [
           {
-            "include": ["src/**/*.ts"],
+            "include": ["**/packages/*/src/**/*.ts"],
             "options": {
               "diagnosticSeverity": {
                 "strictEffectProvide": "error"
+              }
+            }
+          },
+          {
+            "include": [
+              "**/packages/pi-cosmic-core/src/testing/gallery.ts",
+              "**/packages/pi-code-previews/src/boundary/settings-one-shot.ts",
+              "**/packages/pi-ask-user/src/boundary/host-external-editor.ts"
+            ],
+            "options": {
+              "diagnosticSeverity": {
+                "strictEffectProvide": "off"
               }
             }
           },

@@ -18,8 +18,7 @@ export const noCompatibilityPathNamesRule = defineRule({
   meta: {
     type: "problem",
     docs: {
-      description:
-        "Disallow names that mark legacy, deprecated, or backwards-compatibility paths.",
+      description: "Disallow names that mark legacy, deprecated, or backwards-compatibility paths.",
     },
     messages: {
       retiredPathName:

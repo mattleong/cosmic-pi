@@ -4,11 +4,15 @@ import * as Config from "effect/Config";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { describe, expect } from "vitest";
 import {
-  makeNativeModelCatalog,
+  NativeModelCatalog,
   type NativeModelCatalogContract,
+  type NativeModelCatalogLayerOptions,
 } from "../src/boundary/native-model-catalog.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+
+const makeNativeModelCatalog = (options: NativeModelCatalogLayerOptions) =>
+  Effect.provide(NativeModelCatalog, NativeModelCatalog.layer(options));
 
 const fixture = fileURLToPath(new URL("./fixtures/model-catalog-fixture.ts", import.meta.url));
 const setup = Effect.gen(function* () {

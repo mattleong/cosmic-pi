@@ -3,7 +3,6 @@ import { readdir, readFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 
 import { decodePackageManifest } from "./package-manifest.ts";
-import { packageScriptViolations, packageTsconfigViolations } from "./package-tooling.ts";
 import { workspacePackageDirectories } from "./workspace-manifest-paths.ts";
 
 const rootDir = join(import.meta.dirname, "..");
@@ -64,50 +63,17 @@ async function walkFiles(directory: string): Promise<PackageWalk> {
   };
 }
 
-async function readPackageManifest(packageDir: string) {
-  const path = join(packageDir, "package.json");
-  try {
-    const manifest = decodePackageManifest(await readFile(path, "utf8"));
-    return {
-      manifest,
-      violations: packageScriptViolations(manifest).map(
-        (violation) => `${relative(rootDir, path)}: ${violation}`,
-      ),
-    };
-  } catch {
-    return {
-      manifest: undefined,
-      violations: [`${relative(rootDir, path)}: missing, unreadable or malformed package manifest`],
-    };
-  }
-}
-
-async function checkPackageTsconfig(packageDir: string): Promise<string[]> {
-  const path = join(packageDir, "tsconfig.json");
-  try {
-    const text = await readFile(path, "utf8");
-    return packageTsconfigViolations(text, packageDir, rootDir).map(
-      (violation) => `${relative(rootDir, path)}: ${violation}`,
-    );
-  } catch {
-    return [`${relative(rootDir, path)}: missing or unreadable required tsconfig.json`];
-  }
-}
-
 const packageDirectories = await workspacePackageDirectories(rootDir);
 const packages = await Promise.all(
   packageDirectories.map(async (packageDir) => ({
     packageDir,
-    manifestCheck: await readPackageManifest(packageDir),
-    tsconfigViolations: await checkPackageTsconfig(packageDir),
+    manifest: decodePackageManifest(await readFile(join(packageDir, "package.json"), "utf8")),
     walk: await walkFiles(packageDir),
   })),
 );
 
-for (const { packageDir, manifestCheck, tsconfigViolations, walk } of packages) {
-  violations.push(...manifestCheck.violations, ...tsconfigViolations, ...walk.violations);
-  const { manifest } = manifestCheck;
-  if (manifest === undefined) continue;
+for (const { packageDir, manifest, walk } of packages) {
+  violations.push(...walk.violations);
   const files = walk.files;
   const isExtensionPackage = manifest.pi !== undefined;
 

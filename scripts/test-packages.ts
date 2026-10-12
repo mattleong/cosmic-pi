@@ -19,6 +19,7 @@ try {
       "exec",
       "vitest",
       "run",
+      "--allowOnly=false",
       `--maxWorkers=${workers}`,
       ...timeout,
     ],

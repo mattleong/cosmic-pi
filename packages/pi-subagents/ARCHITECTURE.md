@@ -159,6 +159,7 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
   Clearing a selected default keeps the saved set and restores lower-layer inheritance.
   Project trust is rechecked before every Project write.
 - Settings catalog refresh is nonblocking and cancelable.
+  Native model-catalog construction requires `SafeFile`; its service Layer supplies the file/platform dependencies, while catalog methods retain no external service requirements.
   The editor captures its originating activation before inspection and submits refresh through that session's application runner with editor cancellation.
   Replacement revokes submission and delayed inspection results.
   The registry receives an Effect-owned signal; a noncooperative Promise cannot retain the fiber or publish after interruption.

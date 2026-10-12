@@ -176,9 +176,7 @@ function pathSource(
 ): ESTree.Expression | null {
   if (node.type === "Identifier") {
     const variable = resolveVariable(sourceCode, node);
-    return variable === null
-      ? null
-      : (substitutions.get(variable) ?? constValue(sourceCode, node));
+    return variable === null ? null : (substitutions.get(variable) ?? constValue(sourceCode, node));
   }
   if (
     node.type !== "NewExpression" ||
