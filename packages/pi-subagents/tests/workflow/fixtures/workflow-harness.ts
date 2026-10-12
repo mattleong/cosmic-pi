@@ -208,12 +208,12 @@ const readMemoryScript = (path: string, source: string | undefined) =>
         ),
       );
 
+const runIdOf = (paths: { readonly directory: string }) => paths.directory.split("/").at(-1) ?? "";
+
 export const memoryStore = (
   scripts: Readonly<Record<string, string>>,
   files: MemoryRunFiles = memoryRunFiles(),
 ): WorkflowStoreContract => {
-  const runIdOf = (paths: { readonly directory: string }) =>
-    paths.directory.split("/").at(-1) ?? "";
   const written = (runId: string) =>
     Clock.currentTimeMillis.pipe(Effect.map((now) => void files.writtenAt.set(runId, now)));
   const recordFile = (runId: string, text: string) => ({
@@ -349,6 +349,8 @@ const passGate = (gate: FakeGate | undefined): Effect.Effect<void> =>
     ? Deferred.succeed(gate.entered, undefined).pipe(Effect.andThen(Deferred.await(gate.release)))
     : Effect.void;
 
+const unused = () => Effect.die(new Error("Unexpected workspace operation."));
+
 const creatingWorkspaceEngine = (
   workers: ReadonlyMap<string, FakeWorkerContents>,
   createGates: ReadonlyMap<string, FakeGate>,
@@ -356,7 +358,6 @@ const creatingWorkspaceEngine = (
 ): WorkspaceServiceContract => {
   let ordinal = 0;
   const records = new Map<string, WorkspaceRecord>();
-  const unused = () => Effect.die(new Error("Unexpected workspace operation."));
   const existing = (workspaceId: string) =>
     Effect.suspend(() => {
       const record = records.get(workspaceId);

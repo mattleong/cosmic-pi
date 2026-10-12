@@ -108,6 +108,10 @@ persistence. Health is an owned overlay, so closing cannot pop an unrelated stac
   border, issue-frame, timing-handle and preview-cache state lives in WeakMaps keyed by the
   host's renderer `state` object; only the timing start/end and animation-frame fields stay on
   that object, written and read through checked accessors.
+- Untrusted host values (tool arguments, result details, before-write snapshots) are decoded once
+  at each renderer, provider or projection entry with the Effect Schema declarations in
+  `shared/untrusted-value.ts`; helpers below that boundary take the decoded `HostObject`,
+  `HostContainer` or `HostValue` and read only own properties.
 - Native codemode evidence inspects only the latest 256 own data-property call slots, validates
   neighbors independently and reports missing coverage. Subjects use observed bounded arguments
   and unambiguous MCP aliases. `tools/native-mcp-identity.ts` also owns the argument-only

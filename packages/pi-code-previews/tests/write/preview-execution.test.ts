@@ -195,7 +195,7 @@ layer(testLayer)("session write service", (it) => {
       yield* fs.writeFileString(target, "original");
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
-      const run = Effect.runPromiseWith(yield* Effect.context<never>());
+      const run = Effect.runPromiseWith(yield* Effect.context());
       const native = createWriteTool(dir, {
         operations: {
           mkdir: () => Promise.resolve(),

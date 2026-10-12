@@ -58,16 +58,16 @@ const fixture = (options: HerdrBtwFixtureOptions = {}) =>
     ...options,
   });
 
-describe("herdr-btw link restoration", () => {
-  const linkEntry = <Data>(data: Data) => ({
-    type: "custom",
-    id: "e1",
-    parentId: null,
-    timestamp: "2026-08-26T00:00:00.000Z",
-    customType: HERDR_BTW_LINK_ENTRY_TYPE,
-    data,
-  });
+const linkEntry = (data: HerdrBtwLink | { readonly version: number } | string | undefined) => ({
+  type: "custom",
+  id: "e1",
+  parentId: null,
+  timestamp: "2026-08-26T00:00:00.000Z",
+  customType: HERDR_BTW_LINK_ENTRY_TYPE,
+  data,
+});
 
+describe("herdr-btw link restoration", () => {
   it("reports none without any link entry", () => {
     expect(
       restoreHerdrBtwLink(

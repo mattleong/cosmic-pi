@@ -75,6 +75,15 @@ export interface WindowsProcessTreeTermination {
   readonly targetExited?: (() => boolean) | undefined;
 }
 
+const attempt = (operation: () => void): boolean => {
+  try {
+    operation();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const terminateWindowsProcessTree = (
   termination: WindowsProcessTreeTermination,
 ): Effect.Effect<void, ProcessTreeError> => {
@@ -98,14 +107,6 @@ export const terminateWindowsProcessTree = (
         ),
       );
     }
-    const attempt = (operation: () => void): boolean => {
-      try {
-        operation();
-        return true;
-      } catch {
-        return false;
-      }
-    };
     let settled = false;
     let cleaned = false;
     const startFailure = (cause: unknown) =>

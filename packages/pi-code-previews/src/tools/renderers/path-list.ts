@@ -12,7 +12,7 @@ import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
-import { getObjectValue } from "../../shared/helpers";
+import { hostObject, ownField } from "../../shared/untrusted-value";
 
 const PATH_LISTS = {
   find: {
@@ -35,8 +35,9 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
   const config = PATH_LISTS[tool];
   return {
     renderCall(args, theme) {
-      const patternArg = getObjectValue(args, "pattern");
-      const pathArg = getObjectValue(args, "path");
+      const input = hostObject(args);
+      const patternArg = ownField(input, "pattern");
+      const pathArg = ownField(input, "path");
       const pattern = Predicate.isString(patternArg) ? patternArg : "";
       const path = Predicate.isString(pathArg) && pathArg ? pathArg : ".";
       const search =

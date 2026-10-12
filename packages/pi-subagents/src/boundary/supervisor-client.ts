@@ -75,6 +75,7 @@ export const openSupervisorClient = (
                 assignmentEpoch,
                 updateId: update.updateId,
               });
+              return undefined;
             }),
           ),
           Effect.ensuring(Deferred.succeed(closed, undefined)),

@@ -341,13 +341,13 @@ describe("planned workflow agents", () => {
   });
 });
 
-describe("workflow narrator line", () => {
-  const narrated = (summary: string | undefined) =>
-    workflowRow("audit", ["Map", "Review"], "running", "Map", {
-      title: "Audit",
-      ...(summary !== undefined && { summary }),
-    });
+const narrated = (summary: string | undefined) =>
+  workflowRow("audit", ["Map", "Review"], "running", "Map", {
+    title: "Audit",
+    ...(summary !== undefined && { summary }),
+  });
 
+describe("workflow narrator line", () => {
   it("shows the latest summary beneath its workflow row when space allows", () => {
     const workflow = narrated("Mapping the checkout flow");
     const rows = [workflow, memberRow("mapper", workflow, "Map")];

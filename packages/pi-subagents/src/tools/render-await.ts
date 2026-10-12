@@ -117,6 +117,8 @@ export interface SubagentToolRenderContext {
   readonly invalidate: () => void;
 }
 
+const stopNothing = (): void => undefined;
+
 export const syncAwaitProgressTicker = (
   details: SubagentStartAwaitCardDetails | undefined,
   isPartial: boolean,
@@ -134,7 +136,7 @@ export const syncAwaitProgressTicker = (
     context.state.piSubagentsAwaitInvalidate = context.invalidate;
     if (!context.state.piSubagentsAwaitTicker) {
       const weakState = new WeakRef(context.state);
-      let stopTimer = () => {};
+      let stopTimer = stopNothing;
       const cleanup = () => invokeHostCallback(stopTimer, undefined);
       stopTimer = startTicker(SPINNER_FRAME_MS, () => {
         const active = weakState.deref();

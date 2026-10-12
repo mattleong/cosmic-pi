@@ -7,6 +7,7 @@ import type { CodePreviewRendererAppearance } from "../application/renderer-cont
 import { compactPlainText } from "../preview/compact-row";
 import { expandedSection } from "../preview/expanded-section";
 import { previewIssuesSlot } from "../preview/preview-issues";
+import { hostContainer, hostValue, type HostValue } from "../shared/untrusted-value";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import type { RenderCall, RendererState, RenderResult } from "./renderers/shared/types";
 import { getFallbackResultText } from "./data/results";
@@ -19,7 +20,7 @@ import {
 
 const DISPLAY_NAME = "tool search";
 
-function argumentsText<Args>(args: Args): string {
+function argumentsText(args: HostValue | undefined): string {
   return invokeHostCallback(() => JSON.stringify(args, null, 2) ?? "", "");
 }
 
@@ -33,7 +34,7 @@ function section(theme: Theme, title: string, text: string): Component {
 export function createNativeToolSearchRenderers(
   appearance: CodePreviewRendererAppearance,
 ): ToolRenderers {
-  const renderArguments = <Args>(args: Args, theme: Theme): Component =>
+  const renderArguments = (args: HostValue | undefined, theme: Theme): Component =>
     section(theme, "Arguments", argumentsText(args));
   const renderOutput: RenderResult<unknown, unknown, RendererState> = (
     result,
@@ -47,7 +48,7 @@ export function createNativeToolSearchRenderers(
       : new Container();
   };
   const renderCall: RenderCall<unknown, RendererState> = (args, theme, context) => {
-    const subject = nativeToolSearchSubject(args);
+    const subject = nativeToolSearchSubject(hostContainer(args));
     const body = new Container();
     body.addChild(
       safeContent(
@@ -61,7 +62,7 @@ export function createNativeToolSearchRenderers(
       ),
     );
     body.addChild(previewIssuesSlot(context));
-    if (context.expanded) body.addChild(renderArguments(args, theme));
+    if (context.expanded) body.addChild(renderArguments(hostValue(args), theme));
     return body;
   };
   const renderResult: RenderResult<unknown, unknown, RendererState> = (
@@ -73,7 +74,9 @@ export function createNativeToolSearchRenderers(
     if (options.expanded) return renderOutput(result, options, theme, context);
     if (options.isPartial)
       return safeContent(() => runningLine(theme, context.state), plainRows("Running…", 1));
-    const receipt = context.isError ? undefined : nativeToolSearchReceipt(result.details);
+    const receipt = context.isError
+      ? undefined
+      : nativeToolSearchReceipt(hostContainer(result.details));
     const label = receipt
       ? `${countLabel(receipt.loaded.length, "tool")} listed`
       : context.isError
@@ -92,7 +95,10 @@ export function createNativeToolSearchRenderers(
       displayName: DISPLAY_NAME,
       compactSummary: nativeToolSearchSummary,
       animateProgress: true,
-      expandedContent: { renderCall: renderArguments, renderResult: renderOutput },
+      expandedContent: {
+        renderCall: (args, theme) => renderArguments(hostValue(args), theme),
+        renderResult: renderOutput,
+      },
     },
   );
 }

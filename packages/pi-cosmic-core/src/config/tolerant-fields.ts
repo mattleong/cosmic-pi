@@ -1,5 +1,6 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { flow, identity } from "effect/Function";
 
 const JsonRecordSchema = Schema.Record(Schema.String, Schema.MutableJson);
 
@@ -24,12 +25,21 @@ interface TolerantFieldResult<Fields extends TolerantFieldSchemas> {
   readonly diagnostics: readonly TolerantFieldDiagnostic[];
 }
 
-export const decodeTolerantFields = <Input, const Fields extends TolerantFieldSchemas>(
-  input: Input,
+export const decodeTolerantFields = <const Fields extends TolerantFieldSchemas>(
   fields: Fields,
   options: TolerantFieldOptions = {},
+) =>
+  flow(
+    identity<unknown>,
+    Schema.decodeUnknownOption(JsonRecordSchema),
+    (root): TolerantFieldResult<Fields> => collectTolerantFields(root, fields, options),
+  );
+
+const collectTolerantFields = <Fields extends TolerantFieldSchemas>(
+  root: Option.Option<Schema.MutableJsonObject>,
+  fields: Fields,
+  options: TolerantFieldOptions,
 ): TolerantFieldResult<Fields> => {
-  const root = Schema.decodeUnknownOption(JsonRecordSchema)(input);
   const raw = Option.isSome(root) ? root.value : {};
   const prefix = options.path ? `${options.path}.` : "";
   const value: TolerantFieldValues<Fields> = {};

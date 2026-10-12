@@ -1,3 +1,5 @@
+import type { JsonValue } from "pi-cosmic-core";
+
 const DISALLOWED_LAUNCH_OVERRIDE_FIELDS = [
   "execution",
   "context",
@@ -11,8 +13,12 @@ const DISALLOWED_LAUNCH_OVERRIDE_FIELDS = [
 
 export type DisallowedLaunchOverrideField = (typeof DISALLOWED_LAUNCH_OVERRIDE_FIELDS)[number];
 
-export const firstDisallowedLaunchOverride = <Value extends object>(
-  value: Value,
+export type LaunchSpecFields = Readonly<
+  { task?: JsonValue } & Partial<Record<DisallowedLaunchOverrideField, JsonValue>>
+>;
+
+export const firstDisallowedLaunchOverride = (
+  value: LaunchSpecFields,
 ): DisallowedLaunchOverrideField | undefined =>
   DISALLOWED_LAUNCH_OVERRIDE_FIELDS.find((field) => Object.hasOwn(value, field));
 

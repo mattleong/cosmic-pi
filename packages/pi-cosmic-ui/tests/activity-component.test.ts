@@ -38,6 +38,9 @@ const persistent = Array.from({ length: 80 }, (_, index) =>
 );
 const collapsedOwner = { collapsed: new Set([owner.key]) };
 
+const logs = (count: number) =>
+  Array.from({ length: count }, (_, index) => `log-${index}`).join("\n");
+
 describe("activity presentation", () => {
   it.each([
     ["long titles beside route metadata", [routed], { now: 60_000 }],
@@ -143,8 +146,6 @@ describe("activity presentation", () => {
   });
   it("keeps viewed log lines steady on refresh and freshness changes", () => {
     let current = activityRow("work");
-    const logs = (count: number) =>
-      Array.from({ length: count }, (_, index) => `log-${index}`).join("\n");
     const { component, loads } = mountActivity(() => [current], { height: 16 });
     const visibleLogs = () =>
       component
@@ -644,14 +645,14 @@ describe("grouped activity interaction", () => {
   ])("keeps the %s source shortcut revision-safe for %s", (key, actionId) => {
     const workflow = reviewWorkflow();
     let row = memberRow("member", workflow, "Find", "running", {
-      actions: [{ id: actionId!, label: "Action" }],
+      actions: [{ id: actionId, label: "Action" }],
     });
     const { component, closed } = mountGrouped(() => [workflow, row], {
       initialSection: "subagents",
     });
     component.render(120);
     row = { ...row, revision: "replacement", actions: [] };
-    component.handleInput(key!);
+    component.handleInput(key);
     expect(closed[0]).toMatchObject({ key: row.key, revision: "1", actionId });
   });
   it("never dispatches an old source generation after provider replacement", () => {

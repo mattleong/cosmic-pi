@@ -63,7 +63,7 @@ describe("installed Pi RPC input hooks", () => {
         let stderr = "";
         let buffer = "";
         let nextId = 0;
-        const runCallback = Effect.runSyncWith(yield* Effect.context<never>());
+        const runCallback = Effect.runSyncWith(yield* Effect.context());
         const pending = new Map<
           string,
           { resolve: (value: RpcResponse) => void; reject: (error: RpcFixtureError) => void }
@@ -90,7 +90,7 @@ describe("installed Pi RPC input hooks", () => {
             buffer = buffer.slice(newline + 1);
             try {
               const value = runCallback(
-                Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(line).pipe(
+                Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(line).pipe(
                   Effect.flatMap(decodeRpcEnvelope),
                 ),
               );

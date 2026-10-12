@@ -43,6 +43,13 @@ const proxyRoundTripCases: ReadonlyArray<SubagentToolInput> = [
   },
 ];
 
+const request = (count: number) => ({
+  tool: "subagent_start",
+  argumentsJson: JSON.stringify({
+    agents: Array.from({ length: count }, (_, index) => ({ task: `Task ${index + 1}` })),
+  }),
+});
+
 describe("nested Pi proxy protocol", () => {
   it("round-trips discovery and rename contracts while rejecting report-text injection", () => {
     const run = view({
@@ -248,12 +255,6 @@ describe("nested Pi proxy protocol", () => {
   });
 
   it("accepts the hard 32-item start bound and rejects a larger batch", () => {
-    const request = (count: number) => ({
-      tool: "subagent_start",
-      argumentsJson: JSON.stringify({
-        agents: Array.from({ length: count }, (_, index) => ({ task: `Task ${index + 1}` })),
-      }),
-    });
     expect(decodeSubagentProxyRequest(request(32))).not.toBeInstanceOf(InvalidSubagentRequestError);
     expect(decodeSubagentProxyRequest(request(33))).toBeInstanceOf(InvalidSubagentRequestError);
   });

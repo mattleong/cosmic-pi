@@ -5,7 +5,8 @@ import {
   type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
 } from "../profiles/model.ts";
-import { decodeDeclaredProfileCandidate, ownDenseArray } from "./schema.ts";
+import { denseElements, probeFields, probeList, type ProbedFields } from "./probe.ts";
+import { decodeDeclaredProfileCandidate } from "./schema.ts";
 
 const MAX_CANDIDATE_KEYS = 8;
 const OPTIONAL_CANDIDATE_FIELDS = new Set(["openaiFastMode", "closeOnReport"]);
@@ -14,42 +15,33 @@ type CopiedField =
   | { readonly omit: true }
   | { readonly omit: false; readonly key: string; readonly value: string | boolean };
 
-const copiedValue = <Value>(
-  key: string,
-  value: Value,
-  omitUndefinedOptionals: boolean,
-): CopiedField | undefined => {
-  if (omitUndefinedOptionals && value === undefined && OPTIONAL_CANDIDATE_FIELDS.has(key))
-    return { omit: true };
-  return Predicate.isString(value) || Predicate.isBoolean(value)
-    ? { omit: false, key, value }
-    : undefined;
-};
-
 const copyField = (
   key: string,
   field: PropertyDescriptor | undefined,
   omitUndefinedOptionals: boolean,
-): CopiedField | undefined =>
-  field && field.enumerable && "value" in field
-    ? copiedValue(key, field.value, omitUndefinedOptionals)
+): CopiedField | undefined => {
+  if (!field || !field.enumerable || !("value" in field)) return undefined;
+  if (omitUndefinedOptionals && field.value === undefined && OPTIONAL_CANDIDATE_FIELDS.has(key))
+    return { omit: true };
+  return Predicate.isString(field.value) || Predicate.isBoolean(field.value)
+    ? { omit: false, key, value: field.value }
     : undefined;
+};
 
-const copyCandidate = <CandidateInput>(
-  input: CandidateInput,
+const copyCandidate = (
+  record: ProbedFields,
   omitUndefinedOptionals: boolean,
 ): JsonObject | undefined => {
-  if (!Predicate.isObject(input)) return undefined;
-  if (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)
+  if (Object.getPrototypeOf(record) !== Object.prototype && Object.getPrototypeOf(record) !== null)
     return undefined;
-  const keys = Reflect.ownKeys(input);
+  const keys = Reflect.ownKeys(record);
   if (keys.length > MAX_CANDIDATE_KEYS) return undefined;
   const copy: JsonObject = {};
   for (const key of keys) {
     if (!Predicate.isString(key) || key === "__proto__") return undefined;
     const field = copyField(
       key,
-      Object.getOwnPropertyDescriptor(input, key),
+      Object.getOwnPropertyDescriptor(record, key),
       omitUndefinedOptionals,
     );
     if (!field) return undefined;
@@ -58,16 +50,21 @@ const copyCandidate = <CandidateInput>(
   return copy;
 };
 
-const captureCandidates = <DeclarationInput, Candidate>(
-  declaration: DeclarationInput,
-  candidate: <Input>(input: Input) => Candidate | undefined,
+const captureCandidates = <Candidate>(
+  declaration: JsonObject[string] | Exclude<DeclaredProfileRoute, "disabled">,
+  candidate: (record: ProbedFields) => Candidate | undefined,
 ): { readonly single: Candidate } | { readonly list: ReadonlyArray<Candidate> } | undefined =>
   invokeHostCallback(() => {
-    if (!Array.isArray(declaration)) {
-      const single = candidate(declaration);
+    const declared = probeList(declaration);
+    if (!declared) {
+      const record = probeFields(declaration);
+      const single = record && candidate(record);
       return single && { single };
     }
-    const list = ownDenseArray(declaration, MAX_PROFILE_CANDIDATES)?.map(candidate);
+    const list = denseElements(declared, MAX_PROFILE_CANDIDATES)?.map((element) => {
+      const record = probeFields(element);
+      return record && candidate(record);
+    });
     return list && list.length > 0 && list.every(Predicate.isNotUndefined) ? { list } : undefined;
   }, undefined);
 
@@ -76,21 +73,21 @@ export const captureRestoreDeclaration = (
 ): { readonly declaration: JsonObject[string] | undefined } | undefined => {
   if (declaration === undefined) return { declaration: undefined };
   if (declaration === "disabled") return { declaration: "disabled" };
-  const captured = captureCandidates(declaration, (input) => {
-    const copy = copyCandidate(input, false);
+  const captured = captureCandidates(declaration, (record) => {
+    const copy = copyCandidate(record, false);
     return copy && decodeDeclaredProfileCandidate(copy) ? copy : undefined;
   });
   if (!captured) return undefined;
   return { declaration: "single" in captured ? captured.single : [...captured.list] };
 };
 
-export const captureProfilePatchRoute = <ValueInput>(
-  declaration: ValueInput,
+export const captureProfilePatchRoute = (
+  declaration: DeclaredProfileRoute | undefined,
 ): { readonly route: DeclaredProfileRoute | undefined } | undefined => {
   if (declaration === undefined) return { route: undefined };
   if (declaration === "disabled") return { route: "disabled" };
-  const captured = captureCandidates(declaration, (input) =>
-    decodeDeclaredProfileCandidate(copyCandidate(input, true)),
+  const captured = captureCandidates(declaration, (record) =>
+    decodeDeclaredProfileCandidate(copyCandidate(record, true)),
   );
   if (!captured) return undefined;
   return { route: "single" in captured ? captured.single : captured.list };
@@ -117,9 +114,9 @@ export const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
 export const isRecord = (value: JsonObject[string] | undefined): value is JsonObject =>
   Predicate.isObject(value);
 
-export const stableJson = <ValueInput>(value: ValueInput): string => {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (Predicate.isObjectOrArray(value))
+export const stableJson = (value: JsonObject[string] | undefined): string => {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  if (isRecord(value))
     return `{${Object.entries(value)
       .toSorted(([left], [right]) => (left < right ? -1 : 1))
       .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)

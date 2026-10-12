@@ -1,3 +1,4 @@
+import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
 import { WORKFLOW_TOOL_NAME } from "./workflow-schema.ts";
@@ -231,7 +232,8 @@ const strict = { errors: "first", onExcessProperty: "error" } as const;
 const encode = Schema.encodeSync(Schema.toCodecJson(WorkflowContractSchema), strict);
 export const encodeWorkflowContract = (value: WorkflowContract): Schema.Json =>
   freezeSnapshot(encode(value));
-export const decodeWorkflowContract = <Input>(value: Input): WorkflowContract | undefined => {
-  const decoded = decodeUnknownOrUndefined(WorkflowContractSchema, value, strict);
-  return decoded === undefined ? undefined : freezeSnapshot(decoded);
-};
+export const decodeWorkflowContract = flow(
+  decodeUnknownOrUndefined(WorkflowContractSchema, strict),
+  (decoded): WorkflowContract | undefined =>
+    decoded === undefined ? undefined : freezeSnapshot(decoded),
+);

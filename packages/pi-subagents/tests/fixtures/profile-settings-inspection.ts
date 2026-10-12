@@ -9,8 +9,8 @@ import {
 } from "pi-cosmic-core/testing";
 import { expect, vi } from "vitest";
 import { resolveSubagentConfig } from "../../src/config/options.ts";
-import { decodeSubagentConfig } from "../../src/config/schema.ts";
-import type { ProfileId } from "../../src/profiles/model.ts";
+import { subagentConfigDecoder } from "../../src/config/schema.ts";
+import type { ProfileCandidate, ProfileId } from "../../src/profiles/model.ts";
 import {
   makeSessionProfileSnapshot,
   type SessionProfileOverrideSeed,
@@ -26,18 +26,24 @@ export const jsonObject = Schema.decodeUnknownSync(
   Schema.Record(Schema.String, Schema.MutableJson),
 );
 
-export const resolveTestConfig = <GlobalDocument, ProjectDocument>(
-  globalDocument: GlobalDocument,
-  projectDocument?: ProjectDocument,
+export type ConfigDocumentValue =
+  | Schema.Json
+  | ProfileCandidate
+  | ReadonlyArray<ConfigDocumentValue>
+  | { readonly [key: string]: ConfigDocumentValue | undefined };
+
+export const resolveTestConfig = (
+  globalDocument: ConfigDocumentValue | undefined,
+  projectDocument?: ConfigDocumentValue,
   projectTrusted = true,
 ) =>
   resolveSubagentConfig({
     globalConfigPath: "/agent/pi-subagents.json",
     projectConfigPath: "/repo/.pi/pi-subagents.json",
     projectTrusted,
-    global: decodeSubagentConfig(globalDocument, "global"),
+    global: subagentConfigDecoder("global")(globalDocument),
     project:
-      projectDocument === undefined ? undefined : decodeSubagentConfig(projectDocument, "project"),
+      projectDocument === undefined ? undefined : subagentConfigDecoder("project")(projectDocument),
   });
 
 export const makeProfileSettingsInspection = (
@@ -53,9 +59,9 @@ export const makeProfileSettingsInspection = (
   const config = resolveTestConfig(globalDocument, projectDocument, projectTrusted);
   return {
     config,
-    global: decodeSubagentConfig(globalDocument, "global"),
+    global: subagentConfigDecoder("global")(globalDocument),
     project:
-      projectDocument === undefined ? undefined : decodeSubagentConfig(projectDocument, "project"),
+      projectDocument === undefined ? undefined : subagentConfigDecoder("project")(projectDocument),
     globalDocument,
     projectDocument,
     session: makeSessionProfileSnapshot(config, seed),
@@ -82,39 +88,40 @@ export const inheritedInvalidInspection = (
     projectTrusted: true,
   });
 
+const unexpectedAction = () => Promise.reject(new Error("Unexpected action"));
+
 export const fleetManagerActionsFixture = (
   overrides: Partial<FleetManagerActions>,
 ): FleetManagerActions => {
-  const unused = () => Promise.reject(new Error("Unexpected action"));
   return {
     isAvailable: () => true,
     captureModelRefresh: () => ({
       isCurrent: () => true,
       run: (effect, signal) => Effect.runPromise(effect, { signal }),
     }),
-    stop: unused,
-    interrupt: unused,
-    resume: unused,
-    send: unused,
-    reply: unused,
-    rename: unused,
-    inspectProfiles: unused,
-    patchProfile: unused,
-    restoreProfileDeclaration: unused,
-    patchDefaultProfileSet: unused,
-    createProfileSetFromSnapshot: unused,
-    copyProfileSet: unused,
-    renameProfileSet: unused,
-    deleteProfileSet: unused,
-    patchNesting: unused,
-    patchFeatureToggle: unused,
-    patchSessionFeatureToggle: unused,
-    inspectWriterWorkspace: unused,
-    setWriterWorkspaceMode: unused,
-    patchSessionProfile: unused,
-    replaceSessionProfiles: unused,
-    patchSessionNesting: unused,
-    listNativeModels: unused,
+    stop: unexpectedAction,
+    interrupt: unexpectedAction,
+    resume: unexpectedAction,
+    send: unexpectedAction,
+    reply: unexpectedAction,
+    rename: unexpectedAction,
+    inspectProfiles: unexpectedAction,
+    patchProfile: unexpectedAction,
+    restoreProfileDeclaration: unexpectedAction,
+    patchDefaultProfileSet: unexpectedAction,
+    createProfileSetFromSnapshot: unexpectedAction,
+    copyProfileSet: unexpectedAction,
+    renameProfileSet: unexpectedAction,
+    deleteProfileSet: unexpectedAction,
+    patchNesting: unexpectedAction,
+    patchFeatureToggle: unexpectedAction,
+    patchSessionFeatureToggle: unexpectedAction,
+    inspectWriterWorkspace: unexpectedAction,
+    setWriterWorkspaceMode: unexpectedAction,
+    patchSessionProfile: unexpectedAction,
+    replaceSessionProfiles: unexpectedAction,
+    patchSessionNesting: unexpectedAction,
+    listNativeModels: unexpectedAction,
     ...overrides,
   };
 };

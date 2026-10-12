@@ -1,5 +1,5 @@
 import * as Predicate from "effect/Predicate";
-import { getObjectValue } from "../shared/helpers";
+import { ownField, ownObject, type HostObject } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getBashWarnings } from "../warnings/bash";
 import { getSecretWarnings } from "../warnings/secrets";
@@ -97,20 +97,20 @@ function continuationIssue(notice: string): CompactIssue {
   };
 }
 
-export function readIssues<Details>(
-  details: Details,
+export function readIssues(
+  details: HostObject | undefined,
   output: string,
   hasLimit: boolean,
 ): CompactIssue[] | undefined {
-  const truncation = getObjectValue(details, "truncation");
-  if (getObjectValue(truncation, "firstLineExceedsLimit") === true)
+  const truncation = ownObject(details, "truncation");
+  if (ownField(truncation, "firstLineExceedsLimit") === true)
     return oversizedFirstLineIssues(output);
   const truncated = isTruncated(details);
   if (!truncated && !hasLimit) return [];
   const { notice } = splitReadContinuationNotice(output);
   if (notice) {
-    const lastLinePartial = getObjectValue(truncation, "lastLinePartial");
-    const truncatedBy = truncated ? getObjectValue(truncation, "truncatedBy") : undefined;
+    const lastLinePartial = ownField(truncation, "lastLinePartial");
+    const truncatedBy = truncated ? ownField(truncation, "truncatedBy") : undefined;
     const paged = isPagedNotice(
       notice,
       truncated,
@@ -129,9 +129,9 @@ const LIMIT_FIELDS = {
   ls: "entryLimitReached",
 } as const;
 
-export function outputLimitProjection<Details>(
+export function outputLimitProjection(
   tool: "bash" | "grep" | "find" | "ls",
-  details: Details,
+  details: HostObject | undefined,
 ) {
   const issues: CompactIssue[] = [];
   const counters: string[] = [];
@@ -143,7 +143,7 @@ export function outputLimitProjection<Details>(
       detail: `Output truncated by ${tool}`,
     });
   if (tool === "bash") {
-    const path = getObjectValue(details, "fullOutputPath");
+    const path = ownField(details, "fullOutputPath");
     if (Predicate.isString(path) && path)
       issues.push({
         severity: "info",
@@ -153,10 +153,10 @@ export function outputLimitProjection<Details>(
     return { issues, counters };
   }
   const field = LIMIT_FIELDS[tool];
-  const limit = getObjectValue(details, field);
+  const limit = ownField(details, field);
   if (Predicate.isNumber(limit) && Number.isSafeInteger(limit) && limit > 0)
     counters.push(`limit reached: ${limit}`);
-  if (tool === "grep" && getObjectValue(details, "linesTruncated") === true)
+  if (tool === "grep" && ownField(details, "linesTruncated") === true)
     issues.push({
       severity: "warning",
       code: "grep-partial-lines",
@@ -166,8 +166,8 @@ export function outputLimitProjection<Details>(
   return { issues, counters };
 }
 
-export function writeDiffProjection<Before>(
-  before: Before,
+export function writeDiffProjection(
+  before: HostObject | undefined,
   content: string,
   policy: Omit<BuiltinCompactPolicy, "bashWarnings">,
 ) {
@@ -186,8 +186,8 @@ export function writeDiffProjection<Before>(
     } satisfies CompactIssue;
     return { issues: [skipped], metadata: [] };
   }
-  const beforeContent = getObjectValue(before, "content");
-  if (getObjectValue(before, "kind") !== "content" || !Predicate.isString(beforeContent)) {
+  const beforeContent = ownField(before, "content");
+  if (ownField(before, "kind") !== "content" || !Predicate.isString(beforeContent)) {
     const unavailable = {
       severity: "info",
       code: "write-history-unavailable",

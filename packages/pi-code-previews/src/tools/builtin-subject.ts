@@ -1,5 +1,5 @@
 import * as Predicate from "effect/Predicate";
-import { getObjectValue } from "../shared/helpers";
+import { ownField, type HostObject } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getPathArg, getReadLineRange } from "./data/args";
 import type { CORE_CODE_PREVIEW_TOOLS } from "./names";
@@ -8,14 +8,14 @@ import { formatDisplayPath } from "pi-cosmic-core";
 
 export type BuiltinCompactTool = (typeof CORE_CODE_PREVIEW_TOOLS)[number];
 
-export function stringArg<Args>(args: Args, name: string): string {
-  const value = getObjectValue(args, name);
+export function stringArg(args: HostObject | undefined, name: string): string {
+  const value = ownField(args, name);
   return Predicate.isString(value) ? value : "";
 }
 
-export function describeBuiltinCompactSubject<Args>(
+export function describeBuiltinCompactSubject(
   tool: BuiltinCompactTool,
-  args: Args,
+  args: HostObject | undefined,
   cwd: string,
 ): string {
   const path = escapeControlChars(formatDisplayPath(getPathArg(args), cwd).slice(0, 4096));

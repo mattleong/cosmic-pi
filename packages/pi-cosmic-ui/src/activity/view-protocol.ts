@@ -24,6 +24,9 @@ const ViewCapability = Schema.Struct({
 export const isActivitySection = (section: string): section is ActivitySection =>
   section === "workflows" || section === "subagents" || section === "tasks";
 
+const decodeViewCapability = decodeUnknownOrUndefined(ViewCapability);
+const decodeOpened = decodeUnknownOrUndefined(Schema.Boolean);
+
 export function discoverActivityView(
   events: ActivityEvents,
   sessionId: string,
@@ -32,8 +35,8 @@ export function discoverActivityView(
     events,
     ACTIVITY_VIEW_DISCOVER,
     { version: 1, sessionId },
-    <Candidate>(candidate: Candidate) => {
-      const decoded = decodeUnknownOrUndefined(ViewCapability, candidate);
+    (candidate) => {
+      const decoded = decodeViewCapability(candidate);
       if (!decoded || decoded.sessionId !== sessionId) return undefined;
       const open = decoded.open;
       return Object.freeze({
@@ -41,8 +44,8 @@ export function discoverActivityView(
           Promise.resolve().then(() => {
             if (!isActivitySection(section)) throw new ActivityError({ reason: "invalid" });
             if (signal?.aborted) throw new ActivityError({ reason: "stale" });
-            return Promise.resolve(open(section, signal)).then(<Output>(output: Output) => {
-              const result = decodeUnknownOrUndefined(Schema.Boolean, output);
+            return Promise.resolve(open(section, signal)).then((output) => {
+              const result = decodeOpened(output);
               if (result === undefined) throw new ActivityError({ reason: "failed" });
               return result;
             });

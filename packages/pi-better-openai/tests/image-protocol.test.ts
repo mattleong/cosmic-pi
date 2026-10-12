@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { nodePlatformLayer, provideBuiltLayer, SafeFile } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../src/boundary/sharp.ts";
@@ -12,7 +13,7 @@ import { parseImageSse } from "../src/image/stream.ts";
 import { bytes, pngSharp } from "./helpers.ts";
 
 const body = (value: string) => Stream.make(bytes(value));
-const dataEvent = <Value>(value: Value) => `data: ${JSON.stringify(value)}\n\n`;
+const dataEvent = (value: Schema.Json) => `data: ${JSON.stringify(value)}\n\n`;
 
 const fileLayer = Layer.merge(
   nodePlatformLayer,

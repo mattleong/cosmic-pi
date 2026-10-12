@@ -46,6 +46,7 @@ export function persistSettingsChange(
   return effects.queueSave(settings, loadOptions).then(() => {
     if (settings.shikiTheme !== previousTheme)
       void effects.initializeSyntax(settings.shikiTheme).catch(() => undefined);
+    return undefined;
   });
 }
 
@@ -88,6 +89,7 @@ export function createCodePreviewSettingsModel({
         if (codePreviewSettings.shikiTheme !== previousTheme)
           void effects.initializeSyntax(codePreviewSettings.shikiTheme).catch(() => undefined);
         notify("Code preview settings restored to defaults", "info");
+        return undefined;
       });
     } else {
       const next = updateSetting(draftSettings, id, value);

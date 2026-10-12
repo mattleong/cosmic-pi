@@ -147,7 +147,7 @@ export function registerSubagentActivity(options: {
       const before = options.bridge.get().runs.find((run) => run.id === item.id);
       if (!before || !options.input) throw new Error("Subagent input isn't available");
       return options.input(before, action, signal).then((input) => {
-        if (input === undefined) return;
+        if (input === undefined) return undefined;
         const after = options.bridge.get().runs.find((run) => run.id === item.id);
         if (
           disposed ||

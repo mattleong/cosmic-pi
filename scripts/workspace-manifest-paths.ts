@@ -8,18 +8,24 @@ function missingFile(error: Error): boolean {
 export async function workspacePackageDirectories(
   rootDir = resolve(import.meta.dirname, ".."),
 ): Promise<string[]> {
-  const directories: string[] = [];
-  for (const entry of await readdir(join(rootDir, "packages"), { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const directory = join(rootDir, "packages", entry.name);
-    try {
-      await access(join(directory, "package.json"));
-      directories.push(directory);
-    } catch (cause) {
-      if (!(cause instanceof Error) || !missingFile(cause)) throw cause;
-    }
-  }
-  return directories.toSorted((left, right) => (left === right ? 0 : left < right ? -1 : 1));
+  const entries = await readdir(join(rootDir, "packages"), { withFileTypes: true });
+  const candidates = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const directory = join(rootDir, "packages", entry.name);
+        try {
+          await access(join(directory, "package.json"));
+          return directory;
+        } catch (cause) {
+          if (!(cause instanceof Error) || !missingFile(cause)) throw cause;
+          return undefined;
+        }
+      }),
+  );
+  return candidates
+    .filter((directory) => directory !== undefined)
+    .toSorted((left, right) => (left === right ? 0 : left < right ? -1 : 1));
 }
 
 export async function workspaceManifestPaths(

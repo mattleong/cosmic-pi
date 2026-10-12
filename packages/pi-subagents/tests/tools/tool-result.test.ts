@@ -104,7 +104,7 @@ function host() {
   const dispatch = <Name extends ExtensionEventName>(
     name: Name,
     event: ExtensionEventNamed<Name>,
-  ) => step(() => Promise.resolve(hooks.get(name)![0]!(event, ctx)));
+  ) => step(() => Promise.resolve(hooks.get(name)[0]!(event, ctx)));
   const startCall = (
     toolCallId: string,
     extra: { readonly toolName?: string; readonly parentToolCallId?: string } = {},
@@ -414,7 +414,7 @@ effectTest(
       ["subagent_lifecycle", "stop", pendingFailure(), true],
     ] as const) {
       const details = { ...base, action, actionFailures: [entry] };
-      receipts.retain(owner, tool, "call", action, details);
+      receipts.retain(owner, tool, "call", action, { content: [], details });
       const patched = yield* result(event({ content: [], details }, tool));
       expect(patched.isError).toBe(isError);
       expect(patched.details).toBe(details);
@@ -471,8 +471,7 @@ effectTest(
     const { receipts } = h;
     let owner = h.owner;
     const response = failed();
-    const retain = (id = "call") =>
-      receipts.retain(owner, "subagent_send", id, "send", response.details);
+    const retain = (id = "call") => receipts.retain(owner, "subagent_send", id, "send", response);
     retain();
     expect(
       (yield* h.result(event({ ...response, details: structuredClone(response.details) }))).isError,
@@ -510,7 +509,7 @@ effectTest(
       { ...failed().details, action: "reply" },
       { ...failed().details, foreign: "x".repeat(48_001) },
     ]) {
-      receipts.retain(owner, "subagent_send", "call", "send", details);
+      receipts.retain(owner, "subagent_send", "call", "send", { content: [], details });
       expect((yield* result(event({ content: [], details }))).isError).toBe(false);
     }
   },

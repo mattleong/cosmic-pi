@@ -69,6 +69,8 @@ const compatFlags = (model: Model<"openai-responses">) => {
   };
 };
 
+const decodeInputJson = decodeUnknownOrUndefined(InputJsonSchema);
+
 export function projectOpenAIResponseInput(
   model: Model<"openai-responses">,
   entries: readonly SessionEntry[],
@@ -92,7 +94,7 @@ export function projectOpenAIResponseInput(
       supportsOpenAIGrammarTools: flags.supportsOpenAIGrammarTools,
     },
   });
-  const input = decodeUnknownOrUndefined(InputJsonSchema, encodeJson(converted));
+  const input = decodeInputJson(encodeJson(converted));
   return input?.slice(leadingInstructionCount(input));
 }
 

@@ -56,6 +56,14 @@ const baseConfig = (projectReviewerModel = "openai/project") =>
     },
   );
 
+const withUltracode = (ultracode: boolean) =>
+  resolveTestConfig({
+    version: 6,
+    defaultProfileSet: "default",
+    profileSets: { default: { profiles: { reviewer: candidate("openai/global") } } },
+    ultracode,
+  });
+
 describe("session profile overrides", () => {
   it.effect("rejects retired or hostile typed mutations before revision or publication", () =>
     Effect.gen(function* () {
@@ -647,13 +655,6 @@ describe("session profile overrides", () => {
 
   it.effect("keeps session edits across reload while adopting reloaded saved switches", () =>
     Effect.gen(function* () {
-      const withUltracode = (ultracode: boolean) =>
-        resolveTestConfig({
-          version: 6,
-          defaultProfileSet: "default",
-          profileSets: { default: { profiles: { reviewer: candidate("openai/global") } } },
-          ultracode,
-        });
       const initial = makeSessionProfileSnapshot(withUltracode(true));
       const edited = yield* patchSessionProfileSnapshot(initial, {
         profile: "worker",

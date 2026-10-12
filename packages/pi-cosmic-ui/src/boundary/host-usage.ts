@@ -1,3 +1,4 @@
+import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 
@@ -35,20 +36,20 @@ export type FooterTotals = typeof FooterTotalsSchema.Type;
 export type DecodedAssistantUsage = typeof AssistantUsageSchema.Type;
 export type DecodedContextUsage = typeof ContextUsageSchema.Type;
 
-export const decodeAssistantUsage = <ValueInput>(
-  value: ValueInput,
-): DecodedAssistantUsage | undefined => decodeUnknownOrUndefined(AssistantUsageSchema, value);
+export const decodeAssistantUsage = decodeUnknownOrUndefined(AssistantUsageSchema);
 
-export const decodeCompletedAssistantOutput = <MessageInput>(
-  message: MessageInput,
-): number | undefined =>
-  decodeUnknownOrUndefined(CompletedAssistantOutputSchema, message)?.usage.output;
+export const decodeCompletedAssistantOutput = flow(
+  decodeUnknownOrUndefined(CompletedAssistantOutputSchema),
+  (completed) => completed?.usage.output,
+);
+
+const decodeFooterTotals = decodeUnknownOrUndefined(FooterTotalsSchema);
 
 export const addAssistantUsage = (
   totals: FooterTotals,
   usage: DecodedAssistantUsage,
 ): FooterTotals | undefined =>
-  decodeUnknownOrUndefined(FooterTotalsSchema, {
+  decodeFooterTotals({
     input: totals.input + usage.input,
     output: totals.output + usage.output,
     cacheRead: totals.cacheRead + usage.cacheRead,
@@ -56,9 +57,6 @@ export const addAssistantUsage = (
     cost: totals.cost + usage.cost.total,
   });
 
-export const decodeContextUsage = <ValueInput>(
-  value: ValueInput,
-): DecodedContextUsage | undefined => decodeUnknownOrUndefined(ContextUsageSchema, value);
+export const decodeContextUsage = decodeUnknownOrUndefined(ContextUsageSchema);
 
-export const decodeHostCount = <ValueInput>(value: ValueInput): number | undefined =>
-  decodeUnknownOrUndefined(NonNegativeFiniteNumberSchema, value);
+export const decodeHostCount = decodeUnknownOrUndefined(NonNegativeFiniteNumberSchema);

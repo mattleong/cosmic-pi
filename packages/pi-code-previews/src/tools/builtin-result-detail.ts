@@ -1,6 +1,6 @@
 import { diffLines } from "diff";
 import * as Predicate from "effect/Predicate";
-import { getObjectValue } from "../shared/helpers";
+import { ownField, type HostObject } from "../shared/untrusted-value";
 import { exceedsWriteDiffBytes, shouldSkipWriteDiffComplexity } from "../write/diff";
 import { codePreviewPerformanceConfig } from "../config/state";
 import { getEditPreviewOperations } from "./data/args";
@@ -17,8 +17,8 @@ const writeCounts = new WeakMap<
   }
 >();
 
-export function editResultDetail<Args>(args: Args): string | undefined {
-  const edits = getObjectValue(args, "edits");
+export function editResultDetail(args: HostObject | undefined): string | undefined {
+  const edits = ownField(args, "edits");
   const count = Array.isArray(edits) ? edits.length : 1;
   if (!count || count > 64) return undefined;
   const operations = getEditPreviewOperations(args);
@@ -27,11 +27,14 @@ export function editResultDetail<Args>(args: Args): string | undefined {
   return countLabel(count, "edit");
 }
 
-export function grepResultDetail<Details>(output: string, details: Details): string | undefined {
+export function grepResultDetail(
+  output: string,
+  details: HostObject | undefined,
+): string | undefined {
   if (
     isTruncated(details) ||
-    getObjectValue(details, "linesTruncated") === true ||
-    getObjectValue(details, "matchLimitReached") !== undefined
+    ownField(details, "linesTruncated") === true ||
+    ownField(details, "matchLimitReached") !== undefined
   )
     return undefined;
   if (output.trim() === "No matches found") return "0 matching lines";
@@ -48,10 +51,13 @@ export function grepResultDetail<Details>(output: string, details: Details): str
   return count ? countLabel(count, "matching line") : undefined;
 }
 
-export function writeResultDetail<Before>(before: Before, content: string): string | undefined {
-  if (!Predicate.isObject(before)) return undefined;
+export function writeResultDetail(
+  before: HostObject | undefined,
+  content: string,
+): string | undefined {
+  if (!before) return undefined;
   const cached = writeCounts.get(before);
-  const previous = getObjectValue(before, "content");
+  const previous = ownField(before, "content");
   const policy = codePreviewPerformanceConfig;
   if (cached?.content === content && cached.previous === previous && cached.policy === policy)
     return cached.detail;
@@ -60,13 +66,13 @@ export function writeResultDetail<Before>(before: Before, content: string): stri
   return detail;
 }
 
-export function projectWriteResultDetail<Before>(
-  before: Before,
+export function projectWriteResultDetail(
+  before: HostObject | undefined,
   content: string,
   policy: { maxWriteDiffBytes: number; maxWriteDiffChangedLineCells: number },
 ): string | undefined {
-  if (!Predicate.isObject(before) || getObjectValue(before, "kind") !== "content") return undefined;
-  const previous = getObjectValue(before, "content");
+  if (ownField(before, "kind") !== "content") return undefined;
+  const previous = ownField(before, "content");
   if (
     !Predicate.isString(previous) ||
     previous.length > 64_000 ||

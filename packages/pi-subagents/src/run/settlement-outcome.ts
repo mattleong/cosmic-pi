@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import { MAX_BACKEND_REPORT_TEXT_CHARS, type BackendAssistantTerminal } from "../backend/model.ts";
@@ -14,9 +15,10 @@ import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeOutputText } from "./s
 export type SettlementState = PendingInitializationSettlement["state"];
 
 const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => {
-  switch (terminal?.stopReason) {
+  const stopReason = terminal?.stopReason;
+  switch (stopReason) {
     case "error":
-      return `Final provider error: ${(terminal.errorMessage ?? "") || "provider returned no diagnostic"}`;
+      return `Final provider error: ${(terminal?.errorMessage ?? "") || "provider returned no diagnostic"}`;
     case "aborted":
       return "Assignment aborted without a parent stop or correlated pause.";
     case "length":
@@ -27,6 +29,7 @@ const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => 
     case undefined:
       return "Assignment settled without a successful nonempty final report.";
   }
+  return absurd(stopReason);
 };
 
 export const acceptedResult = (record: RunRecord, assignmentEpoch: number): string | undefined =>

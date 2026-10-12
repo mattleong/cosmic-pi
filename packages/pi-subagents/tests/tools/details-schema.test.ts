@@ -6,6 +6,7 @@ import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
 } from "../../src/tools/details-decode.ts";
+import type { CompactSubagentToolDetails } from "../../src/tools/details-schema.ts";
 import { actionFailureDisposition, marksSubagentToolError } from "../../src/tools/outcome.ts";
 import { containedWriter } from "../fixtures/run-view.ts";
 import { view } from "./fixtures/tool-harness.ts";
@@ -22,7 +23,7 @@ const unflaggedFailure = {
   message: pendingFailure.message,
 };
 
-const actionFailuresOf = <ValueInput>(value: ValueInput) => {
+const actionFailuresOf = (value: CompactSubagentToolDetails | undefined) => {
   const decoded = decodeCompactToolDetails(value);
   if (!decoded || decoded.action === "models") return undefined;
   return decoded.actionFailures;

@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
@@ -70,6 +71,7 @@ export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsS
     case "reset":
       return scope === "global" ? "built-in default" : "default";
   }
+  return absurd(draft.kind);
 };
 
 const profileDefaultEffort = (profile: ProfileId): SubagentEffort | undefined => {
@@ -384,4 +386,5 @@ export function selectCandidateField(
         ? { candidate: { ...candidate, openaiFastMode: value === "true" }, notices: [] }
         : invalidSelection(field);
   }
+  return absurd(field);
 }

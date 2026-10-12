@@ -28,6 +28,9 @@ const render = (
     10_001,
   );
 
+const cadence = (runs: ReadonlyArray<SubagentRunView>, live = EMPTY_ACTIVITY_PRESENTATION) =>
+  subagentActivityPanelCadence(projectSubagentActivityPanel(projectionOf(runs), live));
+
 describe("persistent subagent activity panel", () => {
   it("tracks work and attention states with the ancestors needed for one hierarchy", () => {
     const parent = view({
@@ -104,9 +107,6 @@ describe("persistent subagent activity panel", () => {
   });
 
   it("derives ticker cadence only from rows with clock-dependent presentation", () => {
-    const cadence = (runs: ReadonlyArray<SubagentRunView>, live = EMPTY_ACTIVITY_PRESENTATION) =>
-      subagentActivityPanelCadence(projectSubagentActivityPanel(projectionOf(runs), live));
-
     expect(cadence([view({ state: "paused" })])).toBe(1_000);
     expect(cadence([], presentation({ starts: [{ requestedCount: 2 }] }))).toBeUndefined();
     expect(

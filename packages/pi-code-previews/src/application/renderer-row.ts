@@ -8,6 +8,7 @@ import { Container, Text, type Component, type TuiMouseEvent } from "@earendil-w
 import { invokeHostCallback } from "pi-cosmic-core";
 import { rowPerState, withSelfBackground } from "../preview/self-background";
 import { fallbackArguments } from "../tools/data/args";
+import { hostValue } from "../shared/untrusted-value";
 import { getFallbackResultText } from "../tools/data/results";
 import { escapeControlChars } from "../shared/terminal-text";
 import type { RendererState, ToolRenderContext } from "../tools/renderers/shared/types";
@@ -48,7 +49,7 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
     downstream?.renderCall ??
     ((args, theme) =>
       new Text(
-        [theme.fg("toolTitle", theme.bold(name)), ...fallbackArguments(args)].join("\n"),
+        [theme.fg("toolTitle", theme.bold(name)), ...fallbackArguments(hostValue(args))].join("\n"),
         0,
         0,
       ));
@@ -82,6 +83,7 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
 }
 
 type RowContext = ToolRenderContext<RendererState, unknown>;
+type HostRenderCall = Parameters<NonNullable<ToolRenderers["renderCall"]>>;
 
 class RetainedRendererRow {
   private renderers: ToolRenderers;
@@ -119,7 +121,7 @@ class RetainedRendererRow {
     });
   }
 
-  updateCall<Args>(args: Args, theme: Theme, context: RowContext): Component {
+  updateCall(...[args, theme, context]: HostRenderCall): Component {
     this.args = args;
     this.theme = theme;
     this.context = context;

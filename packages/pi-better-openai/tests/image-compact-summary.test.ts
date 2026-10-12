@@ -22,7 +22,7 @@ const input = (status = "completed", expanded = false): Input => ({
   context: renderContextFixture({ expanded }),
   result: { content: [{ type: "text", text: "Generated image" }, image], details: record(status) },
 });
-const errorInput = <Details>(text: string, details: Details): Input => {
+const errorInput = (text: string, details: Readonly<Record<string, string>> | undefined): Input => {
   const call = input();
   call.context.isError = true;
   call.result = { content: [{ type: "text", text }], details };

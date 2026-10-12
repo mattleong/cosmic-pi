@@ -100,6 +100,8 @@ const recordingService = (connect?: ActivityServiceOptions["connect"]) =>
       rejectsEach,
     };
   });
+const near = (limit: number) => `${"a".repeat(limit - 8)} token=x`;
+
 describe("activity service", () => {
   it.effect(
     "publishes starting counts without rows and clears stale or invalid metadata atomically",
@@ -316,7 +318,6 @@ describe("activity service", () => {
   it.effect("keeps each cleaned field within its own limit after redaction lengthens it", () =>
     Effect.gen(function* () {
       const { service, rows } = yield* recordingService();
-      const near = (limit: number) => `${"a".repeat(limit - 8)} token=x`;
       yield* service.receive(
         registration({}, undefined, [
           { ...item(), title: near(ACTIVITY_LIMITS.title), profile: near(ACTIVITY_LIMITS.profile) },
@@ -478,7 +479,7 @@ describe("activity service", () => {
     Effect.gen(function* () {
       const { service, rows } = yield* recordingService();
       let signal: AbortSignal | undefined;
-      const pending = deferredPromise<void>();
+      const pending = deferredPromise();
       yield* service.receive({
         ...registration({}),
         invoke: (_item, _action, _revision, value) => {

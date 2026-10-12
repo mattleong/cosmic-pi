@@ -1,5 +1,8 @@
-import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
+import { flow } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import { normalizeWriteClaim } from "../domain/write-claims.ts";
 
 export const MAX_OBSERVED_WRITE_PATHS = 64;
@@ -10,29 +13,31 @@ const FILE_WRITE_TOOL_NAMES = new Set(["edit", "write", "notebookedit", "applypa
 const PATH_KEYS = ["path", "file_path", "filePath"] as const;
 const MOVE_PATH_KEYS = ["move_path", "movePath"] as const;
 
-export const asObject = <ValueInput>(value: ValueInput) =>
-  Predicate.isObject(value) ? value : undefined;
+const ToolArgumentsSchema = Schema.Record(Schema.String, Schema.Unknown);
+export type ToolArguments = typeof ToolArgumentsSchema.Type;
+const decodeToolArgumentsOption = Schema.decodeUnknownOption(ToolArgumentsSchema);
 
-export const stringField = <Container>(value: Container, key: string): string | undefined => {
-  const field = Predicate.isObject(value) ? value[key] : undefined;
+export const decodeToolArguments = flow(decodeToolArgumentsOption, Option.getOrUndefined);
+
+export const stringField = (value: ToolArguments | undefined, key: string): string | undefined => {
+  const field = value?.[key];
   return Predicate.isString(field) && field.trim() ? field.trim() : undefined;
 };
 
-const pathFields = <Container>(value: Container, keys: ReadonlyArray<string>) =>
+const pathFields = (value: ToolArguments | undefined, keys: ReadonlyArray<string>) =>
   keys.flatMap((key) => stringField(value, key) ?? []);
 
-const collectKnownPaths = <ArgsInput>(args: ArgsInput): ReadonlyArray<string> => {
-  const input = asObject(args);
+const collectKnownPaths = (input: ToolArguments | undefined): ReadonlyArray<string> => {
   if (!input) return [];
   const changes = Arr.isArray(input.changes) ? input.changes : [];
   return [
     ...new Set([
       ...pathFields(input, PATH_KEYS),
       ...changes.slice(0, MAX_NATIVE_CHANGE_PATHS).flatMap((change) => {
-        const item = asObject(change);
+        const item = decodeToolArguments(change);
         return pathFields(item, PATH_KEYS)
           .slice(0, 1)
-          .concat(pathFields(asObject(item?.kind), MOVE_PATH_KEYS).slice(0, 1));
+          .concat(pathFields(decodeToolArguments(item?.kind), MOVE_PATH_KEYS).slice(0, 1));
       }),
       ...(changes.length > MAX_NATIVE_CHANGE_PATHS
         ? ["/<native-file-change-set-exceeded-observation-bound>"]
@@ -41,9 +46,9 @@ const collectKnownPaths = <ArgsInput>(args: ArgsInput): ReadonlyArray<string> =>
   ];
 };
 
-export const observeFileWrite = <ArgsInput>(
+export const observeFileWrite = (
   toolName: string,
-  args: ArgsInput,
+  args: ToolArguments | undefined,
 ): ReadonlyArray<string> | undefined =>
   FILE_WRITE_TOOL_NAMES.has(toolName.trim().toLocaleLowerCase("en-US"))
     ? collectKnownPaths(args)
@@ -57,9 +62,12 @@ const bashMutationPatterns: ReadonlyArray<RegExp> = [
   /\b(?:npm|pnpm|yarn|bun)\s+(?:add|install|remove|uninstall|update|upgrade)\b/u,
 ];
 
-export const bashCommandMayMutate = <ArgsInput>(toolName: string, args: ArgsInput): boolean => {
+export const bashCommandMayMutate = (
+  toolName: string,
+  args: ToolArguments | undefined,
+): boolean => {
   if (toolName.trim().toLocaleLowerCase("en-US") !== "bash") return false;
-  const command = stringField(asObject(args), "command");
+  const command = stringField(args, "command");
   return command !== undefined && bashMutationPatterns.some((pattern) => pattern.test(command));
 };
 

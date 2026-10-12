@@ -75,6 +75,7 @@ describe("SubagentService lifecycle stress", () => {
           expect(leases.release).toBe(leases.acquire);
           expect(fake.controls.every((control) => control.released() === 1)).toBe(true);
         }
+        return undefined;
       }),
   );
 
@@ -243,6 +244,7 @@ describe("SubagentService lifecycle stress", () => {
             expect(fake.controls.slice(offset).map((control) => control.released())).toEqual([
               1, 1, 1, 1, 1,
             ]);
+            return undefined;
           }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
         }
       });

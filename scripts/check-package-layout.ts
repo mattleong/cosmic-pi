@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 
@@ -30,32 +31,50 @@ const hasOwnManifest = async (directory: string): Promise<boolean> => {
   }
 };
 
-const walkFiles = async (directory: string): Promise<string[]> => {
-  const files: string[] = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      if (ignoredDirectories.has(entry.name)) continue;
-      const child = join(directory, entry.name);
-      if (await hasOwnManifest(child)) {
-        violations.push(
-          `${relative(rootDir, child).split(sep).join("/")}/package.json: nested package ` +
-            "manifest (remove it, or make it a top-level packages/* workspace package)",
-        );
-        continue;
-      }
-      files.push(...(await walkFiles(child)));
-    } else if (entry.isFile()) {
-      files.push(join(directory, entry.name));
-    }
+interface PackageWalk {
+  readonly files: readonly string[];
+  readonly violations: readonly string[];
+}
+
+const emptyWalk: PackageWalk = { files: [], violations: [] };
+
+async function walkEntry(directory: string, entry: Dirent): Promise<PackageWalk> {
+  if (entry.isFile()) return { files: [join(directory, entry.name)], violations: [] };
+  if (!entry.isDirectory() || ignoredDirectories.has(entry.name)) return emptyWalk;
+  const child = join(directory, entry.name);
+  if (await hasOwnManifest(child)) {
+    return {
+      files: [],
+      violations: [
+        `${relative(rootDir, child).split(sep).join("/")}/package.json: nested package ` +
+          "manifest (remove it, or make it a top-level packages/* workspace package)",
+      ],
+    };
   }
-  return files;
-};
+  return walkFiles(child);
+}
+
+async function walkFiles(directory: string): Promise<PackageWalk> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const walks = await Promise.all(entries.map((entry) => walkEntry(directory, entry)));
+  return {
+    files: walks.flatMap((walk) => walk.files),
+    violations: walks.flatMap((walk) => walk.violations),
+  };
+}
 
 const packageDirectories = await workspacePackageDirectories(rootDir);
+const packages = await Promise.all(
+  packageDirectories.map(async (packageDir) => ({
+    packageDir,
+    manifest: decodePackageManifest(await readFile(join(packageDir, "package.json"), "utf8")),
+    walk: await walkFiles(packageDir),
+  })),
+);
 
-for (const packageDir of packageDirectories) {
-  const manifest = decodePackageManifest(await readFile(join(packageDir, "package.json"), "utf8"));
-  const files = await walkFiles(packageDir);
+for (const { packageDir, manifest, walk } of packages) {
+  violations.push(...walk.violations);
+  const files = walk.files;
   const isExtensionPackage = manifest.pi !== undefined;
 
   for (const name of hostProvidedPackages) {

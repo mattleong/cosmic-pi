@@ -46,7 +46,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
   private busy = false;
   private blocked = false;
   private disposed = false;
-  private _focused = false;
+  private focusState = false;
   private message = "";
 
   private readonly options: ProfileDashboardOptions;
@@ -159,7 +159,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
       return;
     }
     this.savedTarget = undefined;
-    this.focused = this._focused;
+    this.focused = this.focusState;
     this.renderSoon();
   }
   private child(): Child {
@@ -169,10 +169,10 @@ export class ProfileDashboardComponent implements Component, Focusable {
     return (target && this.editors.get(keyFor(target))) ?? this.library;
   }
   get focused(): boolean {
-    return this._focused;
+    return this.focusState;
   }
   set focused(value: boolean) {
-    this._focused = value;
+    this.focusState = value;
     for (const editor of this.editors.values()) editor.focused = false;
     if (this.overlay) this.overlay.focused = false;
     this.child().focused = value;
@@ -189,14 +189,14 @@ export class ProfileDashboardComponent implements Component, Focusable {
         this.cancelDialog = undefined;
         resolve(value);
         if (this.current()) {
-          this.focused = this._focused;
+          this.focused = this.focusState;
           this.renderSoon();
         }
       };
       const cancel = () => close(undefined);
       this.cancelDialog = cancel;
       this.overlay = make(close);
-      this.focused = this._focused;
+      this.focused = this.focusState;
       this.renderSoon();
       return cancel;
     });
@@ -222,7 +222,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
       if (action.target.scope === "project" && !isProjectTrusted(this.options.ctx)) return;
       this.savedTarget = { kind: "profile-set", set: action.target };
       this.editor(this.savedTarget);
-      this.focused = this._focused;
+      this.focused = this.focusState;
       this.renderSoon();
       return;
     }
@@ -294,11 +294,12 @@ export class ProfileDashboardComponent implements Component, Focusable {
       action,
     )
       .catch((cause: unknown) => {
-        if (!this.current()) return;
+        if (!this.current()) return undefined;
         this.message = cause instanceof Error ? cause.message : "Could not update profiles.";
         return this.refresh().then(
           (inspection) => {
             if (this.current()) this.visit.reconcile(inspection);
+            return undefined;
           },
           () => {
             if (this.current())
@@ -311,7 +312,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
           this.renaming = undefined;
           this.publish(this.inspection);
           this.busy = false;
-          this.focused = this._focused;
+          this.focused = this.focusState;
           this.renderSoon();
         }
       });
@@ -341,7 +342,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
       return;
     }
     this.route(child, data, action, resolution?._tag === "Shortcut");
-    this.focused = this._focused;
+    this.focused = this.focusState;
     this.renderSoon();
   }
   private route(child: Child, data: string, action: string | undefined, shortcut: boolean): void {

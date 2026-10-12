@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { fallbackArguments } from "./data/args";
+import { hostValue, type HostValue } from "../shared/untrusted-value";
 import { getFallbackResultText } from "./data/results";
 import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
@@ -100,7 +101,8 @@ export function withCodePreviewRenderers<TArgs, TDetails, TState extends object>
   );
   const renderCall: RenderCall<TArgs, TState> =
     renderers.renderCall ??
-    ((args, theme, context) => renderFallbackToolCall(identity, theme, args, context.expanded));
+    ((args, theme, context) =>
+      renderFallbackToolCall(identity, theme, context.expanded ? hostValue(args) : undefined));
   const renderResult: RenderResult<TArgs, TDetails, TState> =
     renderers.renderResult ?? renderFallbackToolResult;
   const { renderCall: expandedCall, renderResult: expandedResult } = options.expandedContent ?? {};
@@ -128,15 +130,14 @@ export function withCodePreviewRenderers<TArgs, TDetails, TState extends object>
   };
 }
 
-function renderFallbackToolCall<TArgs>(
+function renderFallbackToolCall(
   tool: { readonly name: string; readonly label?: string },
   theme: Theme,
-  args: TArgs,
-  expanded: boolean,
+  expandedArgs: HostValue | undefined,
 ): Component {
   const lines = [
     theme.fg("toolTitle", theme.bold(nonEmptyText(tool.label) ?? tool.name)),
-    ...(expanded ? fallbackArguments(args).map((line) => theme.fg("muted", line)) : []),
+    ...fallbackArguments(expandedArgs).map((line) => theme.fg("muted", line)),
   ];
   return new Text(lines.join("\n"), 0, 0);
 }

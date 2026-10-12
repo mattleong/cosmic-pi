@@ -20,6 +20,7 @@ import { compactPlainText } from "../preview/compact-row";
 import { expandedSection } from "../preview/expanded-section";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
+import { hostContainer, type HostContainer } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
@@ -48,7 +49,7 @@ const ARGUMENT_PREVIEW_CHARS = 1000;
 type Context = ToolRenderContext<RendererState, unknown>;
 const unstyled: Pick<Theme, "fg"> = { fg: (_color, text) => text };
 
-function argumentsJson<Args>(args: Args, space?: number): string {
+function argumentsJson(args: HostContainer | undefined, space?: number): string {
   return invokeHostCallback(() => {
     if (!Predicate.isObject(args) || Object.keys(args).length === 0) return "";
     return JSON.stringify(args, null, space) ?? "";
@@ -66,7 +67,7 @@ function textBlock(theme: Theme, text: string, color: "toolOutput" | "error" | "
   );
 }
 
-function renderArguments<Args>(args: Args, theme: Theme): Component {
+function renderArguments(args: HostContainer | undefined, theme: Theme): Component {
   const json = argumentsJson(args, 2);
   if (!json) return new Container();
   return safeContent(
@@ -82,7 +83,7 @@ function renderOutput(
   context: Context,
 ): Component {
   const raw = getFallbackResultText(result.content, context.showImages);
-  const path = nativeMcpEvidence(result.details)?.fullOutputPath;
+  const path = nativeMcpEvidence(hostContainer(result.details))?.fullOutputPath;
   const saved = path && !raw.includes(path) ? sanitizeDiagnosticContent(path) : undefined;
   const recovery = saved === undefined ? "" : `Saved output\n${saved}`;
   return safeContent(() => {
@@ -169,15 +170,19 @@ export function createNativeMcpRenderers(
   const nativeComponents = new WeakSet<Component>();
   const receipts = new WeakMap<object, NativeMcpEvidence>();
   const recordReceipt = (result: AgentToolResult<unknown>, context: Context): void => {
-    const receipt = nativeMcpReceipt(identity, result, context.args);
+    const receipt = nativeMcpReceipt(identity, result, hostContainer(context.args));
     if (receipt && Predicate.isObject(context.state)) receipts.set(context.state, receipt);
   };
-  const subtitle = <Args>(state: RendererState, args: Args): string => {
+  const subtitle = (state: RendererState, args: HostContainer | undefined): string => {
     const receipt = Predicate.isObject(state) ? receipts.get(state) : undefined;
     const { action, subject } = nativeMcpHeading(identity, args, receipt);
     return [action, subject].filter(Boolean).join(" ");
   };
-  const heading = <Args>(theme: Theme, state: RendererState, args: Args): Component => {
+  const heading = (
+    theme: Theme,
+    state: RendererState,
+    args: HostContainer | undefined,
+  ): Component => {
     const text = new Text("", 0, 0);
     return {
       render(width) {
@@ -204,12 +209,14 @@ export function createNativeMcpRenderers(
       nativeComponents.add(body);
       return body;
     }
-    const json = identity.kind === "tool" && !context.expanded ? argumentsJson(args) : "";
+    const input = hostContainer(args);
+    const contextArgs = hostContainer(context.args);
+    const json = identity.kind === "tool" && !context.expanded ? argumentsJson(input) : "";
     const preview =
       json.length > ARGUMENT_PREVIEW_CHARS ? `${json.slice(0, ARGUMENT_PREVIEW_CHARS)}…` : json;
     const raw = [
-      `${DISPLAY_NAME} ${subtitle(context.state, context.args)}`,
-      context.expanded ? argumentsJson(args, 2) : preview,
+      `${DISPLAY_NAME} ${subtitle(context.state, contextArgs)}`,
+      context.expanded ? argumentsJson(input, 2) : preview,
     ]
       .filter(Boolean)
       .join("\n");
@@ -217,9 +224,9 @@ export function createNativeMcpRenderers(
       () => {
         const previewLine = preview ? theme.fg("muted", compactPlainText(preview)) : "";
         const body = new Container();
-        body.addChild(heading(theme, context.state, context.args));
+        body.addChild(heading(theme, context.state, contextArgs));
         body.addChild(previewIssuesSlot(context));
-        if (context.expanded) body.addChild(renderArguments(args, theme));
+        if (context.expanded) body.addChild(renderArguments(input, theme));
         else if (preview)
           body.addChild({
             render: (width) => [clipToWidth(previewLine, width)],
@@ -248,7 +255,10 @@ export function createNativeMcpRenderers(
     if (options.expanded) return renderExpandedOutput(result, options, theme, context);
     recordReceipt(result, context);
     if (options.isPartial) return renderProgress(result, theme, context.state);
-    if (!context.isError && nativeMcpHasRecoverableClipping(identity, result, context.args))
+    if (
+      !context.isError &&
+      nativeMcpHasRecoverableClipping(identity, result, hostContainer(context.args))
+    )
       return safeContent(
         () => new Text(renderExpansionAffordance("output", false, theme), 0, 0),
         plainRows("Output · expand", 1),
@@ -263,7 +273,10 @@ export function createNativeMcpRenderers(
       displayName: DISPLAY_NAME,
       compactSummary: nativeMcpSummary(identity),
       animateProgress: true,
-      expandedContent: { renderCall: renderArguments, renderResult: renderExpandedOutput },
+      expandedContent: {
+        renderCall: (args, theme) => renderArguments(hostContainer(args), theme),
+        renderResult: renderExpandedOutput,
+      },
     },
   );
 }

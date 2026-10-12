@@ -20,10 +20,9 @@ import {
 
 it("decodes valid siblings and bounds redacted diagnostics", () => {
   const decoded = decodeTolerantFields(
-    { enabled: true, interval: "bad", mode: "bad", future: { secret: "retained" } },
     { enabled: Schema.Boolean, interval: Schema.Number, mode: Schema.Literal("known") },
     { path: "usage", maxDiagnostics: 1 },
-  );
+  )({ enabled: true, interval: "bad", mode: "bad", future: { secret: "retained" } });
   expect(decoded.value).toEqual({ enabled: true });
   expect(decoded.diagnostics).toEqual([{ path: "usage.interval", issue: "invalid" }]);
   expect(JSON.stringify(decoded.diagnostics)).not.toContain("bad");
@@ -41,14 +40,15 @@ it("decodes only own __proto__ fields without prototype mutation", () => {
   const fields = { ["__proto__"]: ProtoFieldSchema };
   Object.setPrototypeOf(fields, null);
 
-  const decoded = decodeTolerantFields(input, fields);
+  const decodeFields = decodeTolerantFields(fields);
+  const decoded = decodeFields(input);
   expect(Object.hasOwn(decoded.value, "__proto__")).toBe(true);
   expect(Object.getOwnPropertyDescriptor(decoded.value, "__proto__")?.value).toEqual({
     enabled: true,
   });
   expect(Object.getPrototypeOf(decoded.value)).toBe(Object.prototype);
 
-  const missing = decodeTolerantFields({}, fields);
+  const missing = decodeFields({});
   expect(Object.hasOwn(missing.value, "__proto__")).toBe(false);
 });
 

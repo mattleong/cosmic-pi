@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import type { FleetManagerActions } from "./controller.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import {
@@ -70,6 +71,7 @@ const startActionRun = (host: ProfileSetActionHost): ActionRun => {
       guard();
       apply?.(latest);
       host.notify(message);
+      return undefined;
     });
   };
   guard();
@@ -81,7 +83,7 @@ const saveSession = ({ host, inspection, guard, finish }: ActionRun): Promise<vo
     throw new Error("Fix or disable invalid Current Session profiles before saving a set.");
   return host.save().then((destination) => {
     guard();
-    if (!destination) return;
+    if (!destination) return undefined;
     return host.refresh().then((latest) => {
       guard(destination.scope);
       if (latest.session.revision !== inspection.session.revision)
@@ -123,7 +125,7 @@ const useSet = (
       )
       .then((confirmed) => {
         guard(scope);
-        if (!confirmed) return;
+        if (!confirmed) return undefined;
         return host.actions
           .replaceSessionProfiles({
             origin: resolved.origin,
@@ -162,7 +164,7 @@ const nameSet = (
     )
     .then((name) => {
       guard(scope);
-      if (!name) return;
+      if (!name) return undefined;
       if (action.action === "copy")
         return host.actions
           .copyProfileSet({ ...base(), sourceProfileSet: source.name, profileSet: name })
@@ -194,7 +196,7 @@ const deleteSet = (
       guard(scope);
       if (!confirmed) {
         host.notify("Delete cancelled");
-        return;
+        return undefined;
       }
       return host.actions
         .deleteProfileSet({ ...base(), profileSet: action.target.name })
@@ -217,6 +219,7 @@ const actionScope = (action: PersistentAction): Scope => {
     case "delete":
       return action.target.scope;
   }
+  return absurd(action);
 };
 
 const runPersistentAction = (run: ActionRun, action: PersistentAction): Promise<void> => {
@@ -241,6 +244,7 @@ const runPersistentAction = (run: ActionRun, action: PersistentAction): Promise<
     case "delete":
       return deleteSet(scoped, action);
   }
+  return absurd(action);
 };
 
 export function runProfileSetAction(
@@ -249,7 +253,7 @@ export function runProfileSetAction(
 ): Promise<void> {
   return Promise.resolve().then(() => {
     const run = startActionRun(host);
-    if (action.action === "edit") return;
+    if (action.action === "edit") return undefined;
     if (action.action === "save-session") return saveSession(run);
     return runPersistentAction(run, action);
   });

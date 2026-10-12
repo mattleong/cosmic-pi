@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ToolResultEvent,
+} from "@earendil-works/pi-coding-agent";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { SUBAGENT_TOOL_NAMES, type SubagentToolName } from "../run/tool-policy.ts";
 import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../tools/outcome.ts";
@@ -23,7 +27,7 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
     else if (known === undefined) calls.set(event.toolCallId, "pending");
   });
   pi.on("tool_call", (event) => {
-    if (!activation || !ownedNames.has(event.toolName)) return;
+    if (!activation || !ownedNames.has(event.toolName)) return undefined;
     const known = calls.get(event.toolCallId);
     if (event.toolCallId.length > 1_024 || (known === undefined && calls.size >= 256))
       return { block: true, reason: "Too many active subagent calls" };
@@ -36,7 +40,8 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
   const apply = (event: ToolResultEvent): { readonly isError: true } | undefined => {
     calls.delete(event.toolCallId);
     const receipt = receipts.get(event.toolCallId);
-    if (!receipt || event.toolName !== receipt.tool || event.details !== receipt.details) return;
+    if (!receipt || event.toolName !== receipt.tool || event.details !== receipt.details)
+      return undefined;
     receipts.delete(event.toolCallId);
     return { isError: true };
   };
@@ -57,16 +62,17 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
     },
     isNested: (owner: symbol, callId: string): boolean =>
       owner !== activation || calls.get(callId) !== "model",
-    retain: <DetailsInput>(
+    retain: (
       owner: symbol,
       tool: SubagentToolName,
       callId: string,
       action: string,
-      details: DetailsInput,
+      result: AgentToolResult<unknown>,
     ): void => {
       if (owner !== activation || callId.length > 1_024) return;
-      const decoded = decodeSubagentOutcomeDetails(action, details);
+      const decoded = decodeSubagentOutcomeDetails(action, result);
       if (!decoded || !marksSubagentToolError(decoded)) return;
+      const { details } = result;
       try {
         if (JSON.stringify(details).length > MAX_TOOL_OUTPUT_CHARS) return;
       } catch {

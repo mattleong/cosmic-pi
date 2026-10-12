@@ -25,6 +25,7 @@ import {
   type OwnedSurfaceHost,
   type OwnedSurfaceOutcome,
 } from "./host-surface.ts";
+import { capturedHostSignal } from "./host-abort-signal.ts";
 
 interface SettingsCommandScope {
   readonly name: string;
@@ -164,12 +165,8 @@ export function settingsSubcommand<Config>(
   const invoked = (ctx: ExtensionContext) =>
     invokeHostCallback(() => options.onInvoke?.(ctx), undefined);
   const optionalSignal = options.signal === "optional";
-  const currentSignal = (ctx: ExtensionContext) => {
-    const captured = captureHostSignal(ctx);
-    return captured._tag === "Captured" ? captured.signal : undefined;
-  };
   const captureSignal = (ctx: ExtensionContext): CapturedHostSignal =>
-    optionalSignal ? { _tag: "Captured", signal: currentSignal(ctx) } : captureHostSignal(ctx);
+    optionalSignal ? { _tag: "Captured", signal: capturedHostSignal(ctx) } : captureHostSignal(ctx);
 
   const applySetting = (
     ctx: ExtensionContext,
@@ -209,13 +206,14 @@ export function settingsSubcommand<Config>(
         if (Result.isFailure(settlement)) {
           if (display(persisted() ?? before) && settlement.failure.stale !== true)
             notify(ctx, settlement.failure.message, "error");
-          return;
+          return undefined;
         }
         const current = persisted() ?? value;
         if (show) display(current);
         else
           notify(ctx, `${scopes.length > 0 && scope ? `${scope} ` : ""}${id} = ${current}`, "info");
         if (isCurrent()) invokeHostCallback(() => options.afterApply?.(ctx, id, scope), undefined);
+        return undefined;
       },
       () => {
         const current = display(persisted() ?? before);
@@ -237,7 +235,7 @@ export function settingsSubcommand<Config>(
         ctx,
         id,
         value,
-        optionalSignal ? currentSignal(ctx) : captured.signal,
+        optionalSignal ? capturedHostSignal(ctx) : captured.signal,
         show,
         scope,
       );
@@ -274,6 +272,7 @@ export function settingsSubcommand<Config>(
     return options.open(ctx, { config: () => readConfig(ctx), apply, picker }).then((outcome) => {
       if (outcome._tag === "Blocked") notify(ctx, unavailable, "warning");
       if (outcome._tag === "Failed") notify(ctx, `Couldn't open ${title} settings`, "warning");
+      return undefined;
     });
   };
 
@@ -316,6 +315,7 @@ export function settingsSubcommand<Config>(
           .then(
             (text) => {
               if (text !== undefined) notify(ctx, text, "info");
+              return undefined;
             },
             () => notify(ctx, unavailable, "warning"),
           );

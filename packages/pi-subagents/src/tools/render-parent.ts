@@ -1,10 +1,8 @@
-import type {
-  AgentToolResult,
-  Theme,
-  ToolRenderResultOptions,
-} from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { TUnknown } from "typebox";
+import { Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import {
   escapeControlChars,
@@ -24,12 +22,7 @@ import {
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 import { QUOTED_TEXT_LIMIT } from "./compact-run-issues.ts";
-import {
-  errorSection,
-  previewCall,
-  textResultBody,
-  type PreviewRenderContext,
-} from "./render-preview.ts";
+import { errorSection, previewCall, textResultBody } from "./render-preview.ts";
 
 export const CONTACT_PARENT_LABEL = "Contact Parent";
 
@@ -54,13 +47,14 @@ const ReplySchema = singleTextResult(
   ),
 );
 
-const parentReplyText = <Result>(result: Result): string | undefined =>
-  decodeUnknownOrUndefined(ReplySchema, result, { onExcessProperty: "error" })?.content[0]?.text;
+const decodeReply = decodeUnknownOrUndefined(ReplySchema, { onExcessProperty: "error" });
+const decodeReceipt = decodeUnknownOrUndefined(ReceiptSchema, { onExcessProperty: "error" });
 
-const contactRequest = <Args>(args: Args) => {
-  const request = decodeUnknownOrUndefined(ContactSchema, args);
-  return request?.message.trim() ? request : undefined;
-};
+const parentReplyText = flow(decodeReply, (reply) => reply?.content[0]?.text);
+
+const contactRequest = flow(decodeUnknownOrUndefined(ContactSchema), (request) =>
+  request?.message.trim() ? request : undefined,
+);
 
 const warningIssue = (message: string): CompactIssue => {
   const { line } = quoteText(message, { limit: QUOTED_TEXT_LIMIT });
@@ -72,7 +66,7 @@ const warningIssue = (message: string): CompactIssue => {
   };
 };
 
-export const contactParentCompactSummary: CompactSummaryProvider<unknown, unknown, unknown> = ({
+export const contactParentCompactSummary: CompactSummaryProvider = ({
   args,
   result,
   phase,
@@ -99,7 +93,7 @@ export const contactParentCompactSummary: CompactSummaryProvider<unknown, unknow
     return parentReplyText(result) === undefined
       ? undefined
       : { ...summary, counters: ["answered"], outcome: "success" };
-  const receipt = decodeUnknownOrUndefined(ReceiptSchema, result, { onExcessProperty: "error" });
+  const receipt = decodeReceipt(result);
   if (receipt?.content[0]?.text !== `Parent received ${request.kind}.`) return undefined;
   return { ...summary, counters: ["acknowledged"], outcome: warning ? "warning" : "success" };
 };
@@ -138,7 +132,7 @@ const fitsHeading = (message: string): boolean =>
 const COLLAPSED_REPLY_LINES = 4;
 
 export const contactParentRenderers = {
-  renderCall<Args>(args: Args, theme: Theme, context: PreviewRenderContext): Component {
+  renderCall(args, theme, context) {
     const request = contactRequest(args);
     const message = request && request.kind !== "warning" ? request.message : undefined;
     const subject = [request?.kind, message].filter(Boolean).join(": ");
@@ -148,12 +142,7 @@ export const contactParentRenderers = {
         : undefined;
     return previewCall(theme, context, { title: CONTACT_PARENT_LABEL, subtitle: subject }, whole);
   },
-  renderResult<Details>(
-    result: AgentToolResult<Details>,
-    options: ToolRenderResultOptions,
-    theme: Theme,
-    context: PreviewRenderContext,
-  ): Component {
+  renderResult(result, options, theme, context) {
     const text = stripTerminalControls(getTextContent(result.content));
     return textResultBody(
       theme,
@@ -162,4 +151,4 @@ export const contactParentRenderers = {
       COLLAPSED_REPLY_LINES,
     );
   },
-};
+} satisfies Required<Pick<ToolDefinition<TUnknown>, "renderCall" | "renderResult">>;

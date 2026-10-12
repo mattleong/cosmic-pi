@@ -20,7 +20,7 @@ import { eventBus } from "./support/host.ts";
 const fixture = (mode: "tui" | "rpc" = "tui") =>
   Effect.gen(function* () {
     const { events } = eventBus();
-    const run = Effect.runPromiseWith(yield* Effect.context<never>());
+    const run = Effect.runPromiseWith(yield* Effect.context());
     const surface = fakeCustomSurfaceHost({
       columns: 80,
       rows: 24,
@@ -33,7 +33,7 @@ const fixture = (mode: "tui" | "rpc" = "tui") =>
       (effect, signal) => run(effect, signal ? { signal } : undefined),
     );
     let dispose: (() => void) | undefined;
-    const opened = deferredPromise<void>();
+    const opened = deferredPromise();
     const custom: ExtensionContext["ui"]["custom"] = (factory, options) => {
       const result = surface.ctx.ui.custom(factory, options);
       opened.resolve();

@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { constVoid } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { invokeHostCallback, isProjectTrusted, notifyAtHostBoundary } from "pi-cosmic-core";
@@ -47,7 +48,7 @@ export function openProfileDashboard(
   const refreshOwner = actions.captureModelRefresh();
   return actions.inspectProfiles(projectTrusted).then(
     (initialInspection) => {
-      if (!refreshOwner.isCurrent()) return;
+      if (!refreshOwner.isCurrent()) return undefined;
       let inspection = initialInspection;
       let disposed = false;
       const isCurrent = () => !disposed && refreshOwner.isCurrent();
@@ -59,7 +60,7 @@ export function openProfileDashboard(
       const modelRefreshController = new AbortController();
       void refreshOwner.run(modelCatalog.refresh(), modelRefreshController.signal).then(
         (result) => {
-          if (!refreshOwner.isCurrent() || modelRefreshController.signal.aborted) return;
+          if (!refreshOwner.isCurrent() || modelRefreshController.signal.aborted) return undefined;
           if (result === "updated") requestWorkspaceRender?.();
           if (result === "failed")
             notifyAtHostBoundary(
@@ -67,6 +68,7 @@ export function openProfileDashboard(
               "Could not refresh Pi models. Showing the last available list.",
               "warning",
             );
+          return undefined;
         },
         () => undefined,
       );
@@ -168,7 +170,7 @@ export function openProfileDashboard(
         modelRefreshController.abort();
       };
       let dashboard: ProfileDashboardComponent | undefined;
-      let closeSurface = () => {};
+      let closeSurface: () => void = constVoid;
       return openOwnedSurfacePromise<undefined>(ctx, {
         placement: "screen",
         closedValue: undefined,
@@ -242,6 +244,7 @@ export function openProfileDashboard(
               "Could not open Subagents profile settings. Close and try again.",
               "error",
             );
+          return undefined;
         })
         .finally(release);
     },

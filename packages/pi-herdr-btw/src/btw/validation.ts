@@ -39,6 +39,7 @@ export const ensureHerdrProtocol = Effect.fn("HerdrBtw.ensureHerdrProtocol")(fun
       "herdr_upgrade_required",
       `Herdr BTW needs Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer (found ${protocol})`,
     );
+  return undefined;
 });
 
 export const ensurePiIntegration = Effect.fn("HerdrBtw.ensurePiIntegration")(function* (
@@ -50,6 +51,7 @@ export const ensurePiIntegration = Effect.fn("HerdrBtw.ensurePiIntegration")(fun
       "herdr_pi_integration_unavailable",
       "Herdr BTW needs Herdr's Pi integration; run herdr integration install pi, then try again",
     );
+  return undefined;
 });
 
 const parentSessionUnavailable = () =>
@@ -129,7 +131,7 @@ export const waitForAvailableShell = Effect.fn("HerdrBtw.waitForAvailableShell")
         "Herdr reported a different pane, so Pi wasn't started",
       );
     stableReadings = paneHasAvailableShell(processInfo) ? stableReadings + 1 : 0;
-    if (stableReadings >= REQUIRED_STABLE_SHELL_READINGS) return;
+    if (stableReadings >= REQUIRED_STABLE_SHELL_READINGS) return undefined;
     if (attempt < SHELL_READINESS_ATTEMPTS) yield* Effect.sleep(SHELL_READINESS_DELAY_MILLIS);
   }
 

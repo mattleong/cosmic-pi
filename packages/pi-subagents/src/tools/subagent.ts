@@ -23,6 +23,7 @@ import {
   renderSubagentCall,
   renderSubagentResult,
   renderSubagentExpandedContent,
+  decodeInputEvidence,
   renderSubagentInputContent,
 } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
@@ -210,6 +211,18 @@ const TOOL_SPECS: SubagentToolSpecs = {
   },
 };
 
+const settlePresentation = <A>(release: () => void, operation: () => Promise<A>): Promise<A> => {
+  const releaseSafely = () => invokeHostCallback(release, undefined);
+  let pending: Promise<A>;
+  try {
+    pending = operation();
+  } catch (error) {
+    releaseSafely();
+    throw error;
+  }
+  return pending.finally(releaseSafely);
+};
+
 export function registerSubagentTools(
   pi: ExtensionAPI,
   runtime: SubagentToolRuntime,
@@ -217,17 +230,6 @@ export function registerSubagentTools(
   shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
-  const settlePresentation = <A>(release: () => void, operation: () => Promise<A>): Promise<A> => {
-    const releaseSafely = () => invokeHostCallback(release, undefined);
-    let pending: Promise<A>;
-    try {
-      pending = operation();
-    } catch (error) {
-      releaseSafely();
-      throw error;
-    }
-    return pending.finally(releaseSafely);
-  };
   const panelOwnsHierarchy = (
     result: Parameters<typeof renderSubagentResult>[0],
     isPartial: boolean,
@@ -242,7 +244,7 @@ export function registerSubagentTools(
     return owned;
   };
 
-  const register = <N extends SubagentToolName>(name: N) => {
+  const buildTool = <N extends SubagentToolName>(name: N) => {
     const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
     const rootContract = !runtime.proxyCall && isSubagentContractTool(name);
     const scriptable = rootContract;
@@ -281,7 +283,7 @@ export function registerSubagentTools(
             name,
             id,
             subagentToolAction(input),
-            result.details,
+            result,
           );
           return result;
         });
@@ -299,7 +301,7 @@ export function registerSubagentTools(
         renderCall: (args, theme) =>
           tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Array.isArray(args.agents)
             ? renderSubagentStartCall(args.agents, theme, true, true)
-            : renderSubagentInputContent(args, theme),
+            : renderSubagentInputContent(decodeInputEvidence(args), theme),
         renderResult: (result, options, theme, context) => {
           const panelOwnsLiveHierarchy = panelOwnsHierarchy(result, options.isPartial, context);
           const summary = project({
@@ -319,7 +321,7 @@ export function registerSubagentTools(
             panelOwnsLiveHierarchy,
             isError: context.isError,
           });
-          if (!isTypedReceipt(result.details)) return content;
+          if (!isTypedReceipt(result)) return content;
           if (!context.isError && !hasReturnedFailureEvidence(result.details)) return content;
           const container = new Container();
           container.addChild(content);
@@ -340,7 +342,7 @@ export function registerSubagentTools(
         return summary;
       },
     });
-    pi.registerTool(wrapped);
+    return wrapped;
   };
-  for (const name of SUBAGENT_TOOL_NAMES) register(name);
+  for (const name of SUBAGENT_TOOL_NAMES) pi.registerTool(buildTool(name));
 }

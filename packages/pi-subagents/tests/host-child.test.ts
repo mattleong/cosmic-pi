@@ -35,6 +35,16 @@ interface HarnessOptions {
   readonly throwAtRegistration?: number;
 }
 
+const childContext = (cwd = "/child") =>
+  extensionContextFixture({
+    cwd,
+    sessionManager: { getSessionId: () => cwd },
+    signal: undefined,
+    isProjectTrusted: () => true,
+    hasUI: false,
+    mode: "rpc" as const,
+  });
+
 const makeHarness = (options: HarnessOptions = {}) => {
   const events = createEventBus();
   const tools: CapturedTool[] = [];
@@ -83,17 +93,8 @@ const makeHarness = (options: HarnessOptions = {}) => {
     loadSettings: options.loadSettings ?? (() => Promise.resolve()),
     openIpc: () => ipc,
   });
-  const context = (cwd = "/child") =>
-    extensionContextFixture({
-      cwd,
-      sessionManager: { getSessionId: () => cwd },
-      signal: undefined,
-      isProjectTrusted: () => true,
-      hasUI: false,
-      mode: "rpc" as const,
-    });
-  const start = (cwd?: string) => host.emit("session_start", context(cwd));
-  const shutdown = () => host.emit("session_shutdown", context());
+  const start = (cwd?: string) => host.emit("session_start", childContext(cwd));
+  const shutdown = () => host.emit("session_shutdown", childContext());
   const latestTool = (name: string): CapturedTool => {
     const tool = tools.findLast((candidate) => candidate.name === name);
     if (!tool) throw new Error(`Missing tool ${name}`);

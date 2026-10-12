@@ -42,7 +42,7 @@ export class ProfileDashboardDialog implements Component, Focusable {
   private offset = 0;
   private maxOffset = 0;
   private reviewed = false;
-  private _focused = false;
+  private focusState = false;
   private scope: ProfileSetSaveDestination["scope"];
   private readonly options: DialogOptions;
   constructor(options: DialogOptions) {
@@ -55,10 +55,10 @@ export class ProfileDashboardDialog implements Component, Focusable {
     this.input.setValue(options.initial ?? "");
   }
   get focused(): boolean {
-    return this._focused;
+    return this.focusState;
   }
   set focused(value: boolean) {
-    this._focused = value;
+    this.focusState = value;
     this.input.focused = value && this.options.kind === "name";
   }
   handleInput(data: string): void {

@@ -28,6 +28,7 @@ import { renderPreviewError } from "./shared/result-prelude";
 import { stateHeading } from "./shared/state-heading";
 import { countLabel } from "pi-cosmic-core";
 import { previewIssuesSlot } from "../../preview/preview-issues";
+import { hostObject } from "../../shared/untrusted-value";
 
 const COLLAPSED_EDIT_BLOCKS = 3;
 
@@ -39,8 +40,9 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
       const { state, expanded, invalidate } = renderContext;
-      const path = getPathArg(args);
-      const operations = getEditPreviewOperations(args);
+      const input = hostObject(args);
+      const path = getPathArg(input);
+      const operations = getEditPreviewOperations(input);
       const operationsSource = editOperationsSource(operations);
       if (state.editArgsPath !== path || state.editArgsExactSource !== operationsSource) {
         state.editArgsPath = path;
@@ -109,13 +111,14 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
         return renderPreviewError(theme, expanded, firstText);
       }
 
-      const diff = getEditDiff(result.details);
+      const diff = getEditDiff(hostObject(result.details));
       if (!diff) {
         renderContext.state.editSummaryText = theme.fg("muted", "no diff");
         return new Container();
       }
 
-      const filePath = getPathArg(renderContext.args);
+      const input = hostObject(renderContext.args);
+      const filePath = getPathArg(input);
       const summary = summarizeDiff(diff);
       const hidePreview = !expanded && !codePreviewSettings.editDiffPreview;
       const limit = hidePreview
@@ -127,8 +130,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
           );
       renderContext.state.editSummaryText = formatEditSummary(summary, limit, theme);
       if (hidePreview) {
-        const callHint =
-          renderContext.argsComplete && getEditPreviewOperations(renderContext.args).length > 0;
+        const callHint = renderContext.argsComplete && getEditPreviewOperations(input).length > 0;
         return callHint
           ? new Container()
           : renderHiddenPreviewExpandHint(renderContext.state, theme, "diff");

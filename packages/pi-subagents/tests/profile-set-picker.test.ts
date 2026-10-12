@@ -78,6 +78,24 @@ const makePicker = (
   return { close, component };
 };
 
+const menu = (value: ProfileSettingsInspection, key: string) => {
+  const entry = profileSetPickerEntries(value, true).find((option) => option.key === key);
+  if (entry?.kind !== "set" && entry?.kind !== "invalid-default") throw new Error(key);
+  return savedSetMenuChoices(entry).map(({ payload, enabled }) => [payload, enabled !== false]);
+};
+
+const modelInspection = (model: string) =>
+  makeProfileSettingsInspection({
+    globalDocument: {
+      version: 6,
+      profileSets: {
+        alpha: { profiles: { scout: [candidate("test/alpha-model")] } },
+        beta: { profiles: { scout: [candidate(model)] } },
+      },
+    },
+    projectTrusted: false,
+  });
+
 describe("saved profile-set library", () => {
   it("previews resolved routes with ordered models, inheritance, disabled and invalid states", () => {
     const value = makeProfileSettingsInspection({
@@ -128,19 +146,8 @@ describe("saved profile-set library", () => {
   });
 
   it("updates the preview on navigation, search and inspection refresh without activating a set", () => {
-    const value = (model: string) =>
-      makeProfileSettingsInspection({
-        globalDocument: {
-          version: 6,
-          profileSets: {
-            alpha: { profiles: { scout: [candidate("test/alpha-model")] } },
-            beta: { profiles: { scout: [candidate(model)] } },
-          },
-        },
-        projectTrusted: false,
-      });
     const { component, close } = makePicker({
-      value: value("test/beta-model"),
+      value: modelInspection("test/beta-model"),
       projectTrusted: false,
     });
     expect(component.render(150).join("\n")).toContain("test/alpha-model");
@@ -152,7 +159,7 @@ describe("saved profile-set library", () => {
     expect(component.render(150).join("\n")).toContain("test/alpha-model");
     component.handleInput("\u001b");
     component.handleInput("j");
-    component.updateInspection(value("test/refreshed-model"), false);
+    component.updateInspection(modelInspection("test/refreshed-model"), false);
     expect(component.render(180).join("\n")).toContain("test/refreshed-model");
     expect(component.render(80).join("\n")).toContain("test/refreshed-model");
     expect(close).not.toHaveBeenCalled();
@@ -206,11 +213,6 @@ describe("saved profile-set library", () => {
   });
 
   it("offers complete More actions and keeps a default set's Delete unavailable", () => {
-    const menu = (value: ProfileSettingsInspection, key: string) => {
-      const entry = profileSetPickerEntries(value, true).find((option) => option.key === key);
-      if (entry?.kind !== "set" && entry?.kind !== "invalid-default") throw new Error(key);
-      return savedSetMenuChoices(entry).map(({ payload, enabled }) => [payload, enabled !== false]);
-    };
     const common = { scope: "project", name: "common" } as const;
     expect(menu(inspection(), "project:common")).toEqual([
       [{ action: "make-default", target: common }, true],

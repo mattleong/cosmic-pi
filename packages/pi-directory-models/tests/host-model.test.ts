@@ -12,10 +12,12 @@ import { makeDirectoryModelPreference } from "../src/config/schema.ts";
 describe("directory model host capture", () => {
   it("captures model fields and contains malformed or hostile host values", () => {
     expect(
-      captureSelectedModel({ provider: "openai-codex", id: "gpt-5.6-sol", reasoning: true }),
+      captureSelectedModel(
+        modelFixture({ provider: "openai-codex", id: "gpt-5.6-sol", reasoning: true }),
+      ),
     ).toEqual({ provider: "openai-codex", id: "gpt-5.6-sol" });
     expect(captureSelectedModel({ provider: 42, id: "model" })).toBeUndefined();
-    const hostile = Object.defineProperty({}, "provider", {
+    const hostile = Object.defineProperty(modelFixture(), "provider", {
       enumerable: true,
       get() {
         throw new Error("host getter failed");

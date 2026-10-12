@@ -24,6 +24,7 @@ import type {
 import { formatAsyncSnapshot } from "../questionnaire/format.ts";
 import { asyncAskUserCompactSummary } from "../ui/compact-summary.ts";
 import { ASYNC_MESSAGE_TYPE } from "../boundary/host-delivery.ts";
+import type { QuestionnaireArgs } from "../ui/tool-body.ts";
 import {
   renderAsyncCall,
   renderAsyncResult,
@@ -65,7 +66,7 @@ export function registerAsyncAskUserTools(
   const presentation = {
     compactSummary: asyncAskUserCompactSummary,
     expandedContent: {
-      renderCall: <Args>(args: Args, theme: Theme) => expandedArguments(theme, args),
+      renderCall: (args: QuestionnaireArgs, theme: Theme) => expandedArguments(theme, args),
       renderResult: renderAsyncContent,
     },
     scheduleAnimation,

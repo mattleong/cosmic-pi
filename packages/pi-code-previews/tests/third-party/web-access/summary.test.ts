@@ -3,10 +3,11 @@ import { it } from "vitest";
 import { issueMessageStyleProblems, renderContextFixture } from "../../../testing";
 import { webAccessSummary } from "../../../src/third-party/web-access/summary";
 import type { WebAccessTool } from "../../../src/third-party/web-access/identity";
+import type { HostValue } from "../../../src/shared/untrusted-value";
 
-function summarize<Details>(
+function summarize(
   name: WebAccessTool,
-  details: Details,
+  details: HostValue | undefined,
   phase: "running" | "settled" = "settled",
 ) {
   const args = { query: "example", claim: "A claim", url: "https://example.test" };

@@ -1,3 +1,4 @@
+import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
@@ -9,6 +10,7 @@ import {
   AgentDirectory,
   commitPreferredScope,
   decodeTolerantFields,
+  decodeUnknownOrUndefined,
   isJsonObject,
   JsonDocumentStore,
   makeScopedConfigStore,
@@ -29,22 +31,23 @@ export class CosmicUiConfigError extends Schema.TaggedError<CosmicUiConfigError>
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
-const stringArray = <Candidate>(candidate: Candidate): readonly string[] | undefined =>
-  Array.isArray(candidate) ? candidate.filter(Predicate.isString) : undefined;
+const decodeStrings = flow(decodeUnknownOrUndefined(Schema.Array(Schema.Unknown)), (values) =>
+  values?.filter(Predicate.isString),
+);
+const decodeRoot = decodeTolerantFields(
+  { footer: Schema.Record(Schema.String, Schema.Unknown) },
+  { path: "config" },
+);
+const decodeFooter = decodeTolerantFields(
+  { enabled: Schema.Boolean, density: FooterDensitySchema },
+  { path: "footer" },
+);
 
-function decodeConfig<ValueInput>(value: ValueInput): CosmicUiConfigFile {
-  const root = decodeTolerantFields(
-    value,
-    { footer: Schema.Record(Schema.String, Schema.Unknown) },
-    { path: "config" },
-  ).value;
-  const footer = decodeTolerantFields(
-    root.footer,
-    { enabled: Schema.Boolean, density: FooterDensitySchema },
-    { path: "footer" },
-  ).value;
-  const order = stringArray(root.footer?.order);
-  const hidden = stringArray(root.footer?.hidden);
+function decodeConfig(value: JsonObject): CosmicUiConfigFile {
+  const root = decodeRoot(value).value;
+  const footer = decodeFooter(root.footer).value;
+  const order = decodeStrings(root.footer?.order);
+  const hidden = decodeStrings(root.footer?.hidden);
   return { footer: { ...footer, ...(order && { order }), ...(hidden && { hidden }) } };
 }
 
@@ -127,7 +130,7 @@ export const setFooterVisibility = Effect.fn("pi-cosmic-ui.config.set-visibility
     cwd,
     agentDir,
     (footer, fresh) => {
-      const hidden = new Set(stringArray(footer.hidden) ?? fresh.footer.hidden);
+      const hidden = new Set(decodeStrings(footer.hidden) ?? fresh.footer.hidden);
       if (visible) hidden.delete(id);
       else hidden.add(id);
       return { ...footer, hidden: [...hidden] };

@@ -93,6 +93,26 @@ type AwaitStep = { readonly outcome: OwnedRunOutcome } | { readonly revision: nu
 
 const STOPPED_REASON = "Stopped before reporting.";
 
+const consumeLocked = (record: RunRecord, handle: OwnedRunHandle): void => {
+  record.completionGenerations.delete(handle.generation);
+  record.completionClaims.delete(handle.generation);
+};
+
+const relinquishLocked = (record: RunRecord): void => {
+  if (!record.owner?.live) return;
+  record.owner.live = false;
+  const { resultContract: _contract, ...launch } = record.launch;
+  record.launch = {
+    ...launch,
+    ...(record.releasedSystemPrompt !== undefined && {
+      systemPrompt: record.releasedSystemPrompt,
+    }),
+  };
+};
+
+const isLive = (record: RunRecord): boolean =>
+  !record.stoppedByParent && !isTerminalRunState(record.view.state);
+
 export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
   const {
     records,
@@ -119,6 +139,7 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
           "owned_run_id_unavailable",
           `Run id ${owner.runId} was not reserved by this session or is already in use.`,
         );
+      return undefined;
     });
 
   const ownedRecordLocked = (handle: OwnedRunHandle): RunRecord | undefined => {
@@ -127,23 +148,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
       completionClaimOwner(record, handle.generation) === handle.claimToken
       ? record
       : undefined;
-  };
-
-  const consumeLocked = (record: RunRecord, handle: OwnedRunHandle): void => {
-    record.completionGenerations.delete(handle.generation);
-    record.completionClaims.delete(handle.generation);
-  };
-
-  const relinquishLocked = (record: RunRecord): void => {
-    if (!record.owner?.live) return;
-    record.owner.live = false;
-    const { resultContract: _contract, ...launch } = record.launch;
-    record.launch = {
-      ...launch,
-      ...(record.releasedSystemPrompt !== undefined && {
-        systemPrompt: record.releasedSystemPrompt,
-      }),
-    };
   };
 
   const stoppedLocked = (handle: OwnedRunHandle): boolean => {
@@ -155,9 +159,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
         record.view.state === "stopped")
     );
   };
-
-  const isLive = (record: RunRecord): boolean =>
-    !record.stoppedByParent && !isTerminalRunState(record.view.state);
 
   const releaseLocked = (handle: OwnedRunHandle): void => {
     const record = ownedRecordLocked(handle);

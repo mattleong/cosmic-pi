@@ -67,7 +67,7 @@ describe("discovery contracts", () => {
         }),
       );
       const result = yield* step(() => executeTool(tools.get("subagent_list")!, {}));
-      const contract = decodeSubagentContract("subagent_list", result.structuredContent)!;
+      const contract = decodeSubagentContract("subagent_list")(result.structuredContent)!;
       expect(contract.runs.map((run) => run.runId)).toEqual([
         "parent",
         ...children.map((run) => run.id),
@@ -86,7 +86,7 @@ describe("discovery contracts", () => {
       expect(input.at(-1)?.reportStatus).toBe("available");
       expect(listContract([]).runs).toEqual([]);
       expect(
-        decodeSubagentContract("subagent_list", {
+        decodeSubagentContract("subagent_list")({
           ...contract,
           runs: [{ ...contract.runs[0], report: { status: "read_back", text: "PRIVATE-REPORT" } }],
         }),
@@ -117,7 +117,7 @@ describe("discovery contracts", () => {
       const result = yield* step(() =>
         executeTool(rename, { runId: "parent", name: "requested-name" }),
       );
-      const contract = decodeSubagentContract("subagent_rename", result.structuredContent)!;
+      const contract = decodeSubagentContract("subagent_rename")(result.structuredContent)!;
       expect(contract).toMatchObject({
         requestedRunId: "parent",
         outcome: "succeeded",
@@ -129,7 +129,7 @@ describe("discovery contracts", () => {
         ["uncertain", "unconfirmed"],
       ]) {
         const failed = yield* step(() => executeTool(rename, { runId, name: "unused" }));
-        expect(decodeSubagentContract("subagent_rename", failed.structuredContent)).toMatchObject({
+        expect(decodeSubagentContract("subagent_rename")(failed.structuredContent)).toMatchObject({
           requestedRunId: runId,
           outcome: "failed",
           failure: { disposition },
@@ -138,7 +138,7 @@ describe("discovery contracts", () => {
       const receipt = renameContract({ runId: "parent", run: privateRun });
       if (receipt.outcome !== "succeeded") throw new Error("Expected a successful rename receipt");
       expect(
-        decodeSubagentContract("subagent_rename", {
+        decodeSubagentContract("subagent_rename")({
           ...receipt,
           target: {
             ...receipt.target,
@@ -170,12 +170,10 @@ describe("discovery contracts", () => {
         },
       });
       const models = tools.get("subagent_models")!;
-      const all = decodeSubagentContract(
-        "subagent_models",
+      const all = decodeSubagentContract("subagent_models")(
         (yield* step(() => executeTool(models, {}))).structuredContent,
       )!;
-      const filtered = decodeSubagentContract(
-        "subagent_models",
+      const filtered = decodeSubagentContract("subagent_models")(
         (yield* step(() => executeTool(models, { profile: "scout" }))).structuredContent,
       )!;
       expect(all.profiles.map((profile) => profile.id)).toEqual(PROFILE_IDS);
@@ -246,7 +244,7 @@ describe("discovery contracts", () => {
       ],
       "generalist",
     );
-    expect(decodeSubagentContract("subagent_models", contract)).toEqual(contract);
+    expect(decodeSubagentContract("subagent_models")(contract)).toEqual(contract);
     expect(JSON.stringify(contract)).not.toContain("abcdefghijklmnopqrstuvwxyz");
   });
 });

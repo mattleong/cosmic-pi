@@ -76,6 +76,10 @@ export interface OpenAIImageRegistrationOptions {
   readonly shell?: typeof withCodePreviewShell;
 }
 
+const generateEffect = (params: ToolParams) =>
+  OpenAIImageService.use((service) => service.generate(params));
+const retired = () => Promise.reject(sessionNotStarted());
+
 export function registerOpenAIImage(
   pi: ExtensionAPI,
   command: ExtensionCommand,
@@ -88,9 +92,6 @@ export function registerOpenAIImage(
     shell = withCodePreviewShell,
   }: OpenAIImageRegistrationOptions,
 ) {
-  const generateEffect = (params: ToolParams) =>
-    OpenAIImageService.use((service) => service.generate(params));
-  const retired = () => Promise.reject(sessionNotStarted());
   command.add({
     name: "image",
     arguments: "<prompt>",
@@ -124,7 +125,7 @@ export function registerOpenAIImage(
           const image = result.value;
           return Promise.resolve()
             .then(() => {
-              if (!canDeliver()) return;
+              if (!canDeliver()) return undefined;
               pi.sendMessage({
                 customType: OPENAI_IMAGE_MESSAGE,
                 content: [
@@ -134,6 +135,7 @@ export function registerOpenAIImage(
                 display: true,
                 details: imageDetails(image),
               });
+              return undefined;
             })
             .catch(() => {
               if (canDeliver())

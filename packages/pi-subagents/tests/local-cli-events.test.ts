@@ -31,6 +31,14 @@ import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import type { BackendEvent, BackendHandle } from "../src/backend/model.ts";
 import type { SubagentError } from "../src/run/errors.ts";
 
+const sessionStats = (tokens: number | undefined, cost: number | undefined) =>
+  tokens === undefined
+    ? {}
+    : {
+        tokens: { input: tokens, output: 0, cacheRead: 0, cacheWrite: 0, total: tokens },
+        cost: cost ?? 0,
+      };
+
 const rpcResponse = (
   command: RpcCommand,
   options: { readonly tokens?: number; readonly cost?: number; readonly success?: boolean } = {},
@@ -38,26 +46,15 @@ const rpcResponse = (
   type: "rpc_message",
   value: {
     type: "response",
-    id: command.id,
+    ...(command.id !== undefined && { id: command.id }),
     command: command.type,
     success: options.success ?? true,
-    data:
-      command.type === "get_state"
-        ? { sessionId: "child", thinkingLevel: "high" }
-        : command.type !== "get_session_stats"
-          ? undefined
-          : options.tokens === undefined
-            ? {}
-            : {
-                tokens: {
-                  input: options.tokens,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  total: options.tokens,
-                },
-                cost: options.cost ?? 0,
-              },
+    ...(command.type === "get_state" && {
+      data: { sessionId: "child", thinkingLevel: "high" },
+    }),
+    ...(command.type === "get_session_stats" && {
+      data: sessionStats(options.tokens, options.cost),
+    }),
   },
 });
 
@@ -186,6 +183,7 @@ it.effect(
             yield* Deferred.await(release);
           }
           yield* Queue.offer(childEvents, rpcResponse(command, { tokens: snapshot }));
+          return undefined;
         });
       const backend = yield* spawnPi(Effect.succeed(piChild(childEvents, { send }))).pipe(
         Effect.provideService(EffectScope.Scope, scope),
@@ -391,46 +389,46 @@ describe("local CLI raw event ownership", () => {
   );
 });
 
-describe("local Codex event driver raw safety", () => {
-  const withCodexEventDriver = <A>(
-    use: (harness: {
-      readonly backend: BackendHandle;
-      readonly acknowledged: ReadonlyArray<LocalCliWireEvent>;
-      readonly offerRaw: (wire: LocalCliWireEvent) => void;
-    }) => Effect.Effect<A, never, Scope>,
-  ): Effect.Effect<A, SubagentError> =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const acknowledged: LocalCliWireEvent[] = [];
-        const childEvents = yield* Queue.bounded<LocalCliWireEvent, Cause.Done>(16);
-        const supervisorEvents = yield* Queue.bounded<SupervisorEvent, Cause.Done>(16);
-        const child: LocalCliHandle = {
-          pid: 4242,
-          events: childEvents,
-          awaitExit: Effect.never,
-          send: () => Effect.void,
-          acknowledge: (raw) => void acknowledged.push(raw),
-          terminate: () => Effect.sync(() => Queue.endUnsafe(childEvents)),
-        };
-        const supervisor = backendSupervisor(
-          supervisorMetadata({ tomlFragment: "" }),
-          supervisorEvents,
-          {
-            hasAcceptedReport: () => Effect.succeed(true),
-            acceptedReportForEpoch: () => Effect.undefined,
-          },
-        );
-        const backend = yield* makeLocalCodexBackendDriver(
-          { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
-          { open: () => Effect.succeed(supervisor) },
-        ).spawn(backendLaunch());
-        const offerRaw = (wire: LocalCliWireEvent) => {
-          Queue.offerUnsafe(childEvents, wire);
-        };
-        return yield* use({ backend, acknowledged, offerRaw });
-      }),
-    );
+const withCodexEventDriver = <A>(
+  use: (harness: {
+    readonly backend: BackendHandle;
+    readonly acknowledged: ReadonlyArray<LocalCliWireEvent>;
+    readonly offerRaw: (wire: LocalCliWireEvent) => void;
+  }) => Effect.Effect<A, never, Scope>,
+): Effect.Effect<A, SubagentError> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const acknowledged: LocalCliWireEvent[] = [];
+      const childEvents = yield* Queue.bounded<LocalCliWireEvent, Cause.Done>(16);
+      const supervisorEvents = yield* Queue.bounded<SupervisorEvent, Cause.Done>(16);
+      const child: LocalCliHandle = {
+        pid: 4242,
+        events: childEvents,
+        awaitExit: Effect.never,
+        send: () => Effect.void,
+        acknowledge: (raw) => void acknowledged.push(raw),
+        terminate: () => Effect.sync(() => Queue.endUnsafe(childEvents)),
+      };
+      const supervisor = backendSupervisor(
+        supervisorMetadata({ tomlFragment: "" }),
+        supervisorEvents,
+        {
+          hasAcceptedReport: () => Effect.succeed(true),
+          acceptedReportForEpoch: () => Effect.undefined,
+        },
+      );
+      const backend = yield* makeLocalCodexBackendDriver(
+        { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
+        { open: () => Effect.succeed(supervisor) },
+      ).spawn(backendLaunch());
+      const offerRaw = (wire: LocalCliWireEvent) => {
+        Queue.offerUnsafe(childEvents, wire);
+      };
+      return yield* use({ backend, acknowledged, offerRaw });
+    }),
+  );
 
+describe("local Codex event driver raw safety", () => {
   const settle = Effect.sleep("50 millis");
 
   it.live("releases consumed raws exactly once and keeps owned raws until acknowledgement", () =>

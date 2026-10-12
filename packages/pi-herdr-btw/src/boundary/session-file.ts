@@ -22,6 +22,7 @@ const SessionHeaderSchema = Schema.Struct({
   parentSession: Schema.optional(BoundedPath),
 });
 const SessionHeaderFromJson = Schema.fromJsonString(SessionHeaderSchema);
+const decodeSessionHeader = decodeUnknownOrUndefined(SessionHeaderFromJson);
 
 export type SessionHeaderFacts = Pick<typeof SessionHeaderSchema.Type, "id" | "parentSession">;
 
@@ -97,8 +98,7 @@ const readFirstLine = (path: string): string | undefined =>
 
 export const probeSessionHeader = (path: string): SessionHeaderProbe => {
   const line = readFirstLine(path);
-  const header =
-    line === undefined ? undefined : decodeUnknownOrUndefined(SessionHeaderFromJson, line);
+  const header = line === undefined ? undefined : decodeSessionHeader(line);
   return header
     ? { _tag: "valid", header: { id: header.id, parentSession: header.parentSession } }
     : { _tag: "invalid" };

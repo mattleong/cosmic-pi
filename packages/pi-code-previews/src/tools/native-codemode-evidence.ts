@@ -1,6 +1,7 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
+import { HostContainerSchema, type HostContainer } from "../shared/untrusted-value";
 import { ownData } from "./native-safe-content";
 
 const Text = Schema.String.check(Schema.isMaxLength(4096));
@@ -16,6 +17,8 @@ const Call = Schema.Struct({
 });
 export type NativeCodemodeCall = typeof Call.Type;
 const FieldValue = Schema.Union([Text, Nonnegative, Schema.Undefined]);
+const decodeFieldValue = decodeUnknownOrUndefined(FieldValue);
+const decodeCall = decodeUnknownOrUndefined(Call);
 const MAX_CALL_RECORDS = 256;
 
 export type NativeCallEvidence = (
@@ -31,7 +34,7 @@ export type NativeCallEvidence = (
     }
 ) & { readonly fullOutputPath?: string };
 
-function callRecord<Value>(value: Value): NativeCodemodeCall | undefined {
+function callRecord(value: HostContainer | undefined): NativeCodemodeCall | undefined {
   return invokeHostCallback(() => {
     if (!Predicate.isObject(value)) return undefined;
     const input: Partial<Record<string, typeof FieldValue.Type>> = {};
@@ -39,18 +42,18 @@ function callRecord<Value>(value: Value): NativeCodemodeCall | undefined {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor) continue;
       if (!("value" in descriptor)) return undefined;
-      const decoded = decodeUnknownOrUndefined(FieldValue, descriptor.value);
+      const decoded = decodeFieldValue(descriptor.value);
       if (decoded === undefined && descriptor.value !== undefined) return undefined;
       input[key] = decoded;
     }
-    return decodeUnknownOrUndefined(Call, input);
+    return decodeCall(input);
   }, undefined);
 }
 
-export function nativeCodemodeEvidence<Value>(value: Value): NativeCallEvidence {
+export function nativeCodemodeEvidence(value: HostContainer | undefined): NativeCallEvidence {
   const fullOutputPath = ownData(value, "fullOutputPath", Text);
   const recovery = fullOutputPath?.trim() ? { fullOutputPath } : {};
-  const records = ownData(value, "calls", Schema.Unknown);
+  const records = ownData(value, "calls", HostContainerSchema);
   if (!invokeHostCallback(() => Array.isArray(records), false))
     return { kind: "unavailable", ...recovery };
   const recordCount = ownData(records, "length", Schema.Natural);
@@ -58,7 +61,7 @@ export function nativeCodemodeEvidence<Value>(value: Value): NativeCallEvidence 
   const inspected = Math.min(recordCount, MAX_CALL_RECORDS);
   const calls: NativeCodemodeCall[] = [];
   for (let index = recordCount - inspected; index < recordCount; index++) {
-    const call = callRecord(ownData(records, String(index), Schema.Unknown));
+    const call = callRecord(ownData(records, String(index), HostContainerSchema));
     if (call) calls.push(call);
   }
   const rejected = inspected - calls.length;

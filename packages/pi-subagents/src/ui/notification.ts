@@ -1,4 +1,4 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
@@ -165,8 +165,8 @@ const expansionLabel = (details: NotificationDetails | undefined): string =>
           : countLabel(details.total, "report")
         : "message";
 
-export function renderSubagentNotification<Input>(
-  input: Input,
+export function renderSubagentNotification(
+  input: Parameters<MessageRenderer>[0],
   options: { expanded: boolean; outputPad: number },
   compact: boolean,
   theme: Theme,

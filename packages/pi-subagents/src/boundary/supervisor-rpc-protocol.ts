@@ -83,6 +83,8 @@ const responseRequestId = (response: RpcMessage.FromServerEncoded): string | num
     ? response.requestId
     : undefined;
 
+const ignoreRequest = (): Effect.Effect<void> => Effect.void;
+
 export const makeSupervisorRpcServerProtocol = (
   options: SupervisorRpcServerProtocolOptions,
 ): Effect.Effect<
@@ -98,7 +100,7 @@ export const makeSupervisorRpcServerProtocol = (
     let writeRequest: (
       clientId: number,
       message: RpcMessage.FromClientEncoded,
-    ) => Effect.Effect<void> = () => Effect.void;
+    ) => Effect.Effect<void> = ignoreRequest;
 
     const protocol = yield* RpcServer.Protocol.make((write) => {
       writeRequest = write;
@@ -146,7 +148,7 @@ export const makeSupervisorRpcServerProtocol = (
               netSocket.remoteAddress !== "::ffff:127.0.0.1")
           ) {
             netSocket.destroy();
-            return;
+            return undefined;
           }
           const clientId = nextClientId;
           nextClientId += 1;
@@ -236,6 +238,7 @@ export const makeSupervisorRpcServerProtocol = (
             }),
             Effect.catchTag("SocketError", () => Effect.void),
           );
+          return undefined;
         }),
       );
 

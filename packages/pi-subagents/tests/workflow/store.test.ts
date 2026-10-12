@@ -183,11 +183,18 @@ describe("saved workflows", () => {
   );
 });
 
+const runsOf = (setup: Fixture) => setup.join(setup.agentDirectory, "subagents", "workflow-runs");
+
+const permissions = (path: string) =>
+  FileSystem.FileSystem.use((fs) => fs.stat(path)).pipe(Effect.map((info) => info.mode & 0o777));
+
+const removedOf = (left: ReadonlySet<string>, prefix: string, count: number) =>
+  Array.from({ length: count }, (_, index) => `wf-${prefix}-${index + 1}`).filter(
+    (name) => !left.has(name),
+  );
+
 describe("workflow run files", () => {
   const source = script("iterate");
-  const runsOf = (setup: Fixture) => setup.join(setup.agentDirectory, "subagents", "workflow-runs");
-  const permissions = (path: string) =>
-    FileSystem.FileSystem.use((fs) => fs.stat(path)).pipe(Effect.map((info) => info.mode & 0o777));
 
   it.effect("saves each run's script privately, never over an existing run, for scriptPath", () =>
     onDisk(function* (setup, fs) {
@@ -373,11 +380,6 @@ describe("workflow run files", () => {
         yield* fs.utimes(directory, writtenAt(ordinal), writtenAt(ordinal));
       }
     });
-
-  const removedOf = (left: ReadonlySet<string>, prefix: string, count: number) =>
-    Array.from({ length: count }, (_, index) => `wf-${prefix}-${index + 1}`).filter(
-      (name) => !left.has(name),
-    );
 
   const OLD = 1_767_225_600;
   const nowSeconds = Clock.currentTimeMillis.pipe(

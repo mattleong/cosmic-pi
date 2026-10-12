@@ -63,7 +63,7 @@ const labeledItem = (
   return description ? { ...base, description: sanitizeTerminalLine(description) } : base;
 };
 
-const modelItem = <M extends ModelPickerModel>(model: M, current?: string): SelectItem => {
+const modelItem = (model: ModelPickerModel, current?: string): SelectItem => {
   const selector = sanitizeTerminalLine(modelSelector(model));
   const unavailable = model.available === false;
   const status = `${current === selector ? " (current)" : ""}${unavailable ? " (unavailable)" : ""}`;
@@ -124,7 +124,7 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
   private readonly canScope: boolean;
   private scope: ModelPickerScope;
   private page: SearchableSelectPage<M>;
-  private _focused = false;
+  private hasFocus = false;
 
   constructor(options: ModelPickerPageOptions<M>) {
     this.options = options;
@@ -134,11 +134,11 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
   }
 
   get focused(): boolean {
-    return this._focused;
+    return this.hasFocus;
   }
 
   set focused(value: boolean) {
-    this._focused = value;
+    this.hasFocus = value;
     this.page.focused = value;
   }
 
@@ -189,7 +189,7 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
       const search = this.page.searchState;
       this.scope = this.scope === "scoped" ? "all" : "scoped";
       this.page = this.buildPage(selected, search);
-      this.page.focused = this._focused;
+      this.page.focused = this.hasFocus;
       this.options.requestRender();
       return;
     }

@@ -83,7 +83,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   private searchMode: boolean;
   private selectedIdentity: string | undefined;
   private alternateHelp = false;
-  private _focused = false;
+  private hasFocus = false;
   private readonly keymap = new FullScreenKeymap();
 
   constructor(options: SearchableSelectPageOptions<A>) {
@@ -99,7 +99,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   }
 
   get focused(): boolean {
-    return this._focused;
+    return this.hasFocus;
   }
 
   get selectedValue(): string | undefined {
@@ -111,7 +111,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   }
 
   set focused(value: boolean) {
-    this._focused = value;
+    this.hasFocus = value;
     this.input.focused = value && this.searchMode;
   }
 
@@ -262,7 +262,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     if (this.searchMode === active) return;
     this.searchMode = active;
     this.keymap.resetChord();
-    this.input.focused = this._focused && active;
+    this.input.focused = this.hasFocus && active;
     this.feedback = undefined;
   }
 

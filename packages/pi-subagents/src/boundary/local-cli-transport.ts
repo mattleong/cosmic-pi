@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
 import type {
   CodexInitializedNotification,
   CodexRequest,
@@ -16,7 +17,7 @@ import {
   type ProcessWireEvent,
 } from "./process-transport.ts";
 
-type LocalCliMessage = { readonly type: "message"; readonly value: unknown };
+type LocalCliMessage = { readonly type: "message"; readonly value: Schema.Json };
 
 export type LocalCliWireEvent = ProcessWireEvent<LocalCliMessage>;
 
@@ -36,12 +37,12 @@ export interface LocalCliTransportRequest {
   readonly platform?: NodeJS.Platform | undefined;
 }
 
-export const processError = <ErrorInput>(
+export const processError = (
   operation: string,
-  error?: ErrorInput,
+  cause?: unknown,
   code?: string,
 ): SubagentProcessError =>
-  processCauseError(operation, error, code, `Unable to ${operation} local CLI process.`);
+  processCauseError(operation, cause, code, `Unable to ${operation} local CLI process.`);
 
 export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(function* (
   request: LocalCliTransportRequest,
@@ -60,10 +61,10 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
         }),
       platform,
       label: "Local CLI",
-      error: (operation, error, code) =>
+      error: (operation, cause, code) =>
         processError(
           `${operation} local CLI`,
-          error,
+          cause,
           code ?? (operation === "spawn" ? "local_cli_spawn_failed" : undefined),
         ),
       message: (value): LocalCliWireEvent => ({ type: "message", value }),

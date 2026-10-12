@@ -105,9 +105,9 @@ describe("agent() options", () => {
   });
 });
 
-describe("workflow journal", () => {
-  const entry = (key: string, result: Schema.Json) => ({ key, result, outputTokens: 1, chars: 1 });
+const entry = (key: string, result: Schema.Json) => ({ key, result, outputTokens: 1, chars: 1 });
 
+describe("workflow journal", () => {
   it("replays results per key in call order", () => {
     const replay = makeWorkflowReplay([entry("a", 1), entry("b", 2), entry("a", 3)]);
     expect(replay.take("a")?.result).toBe(1);

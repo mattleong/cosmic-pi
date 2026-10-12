@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { codePreviewPerformanceConfig } from "../config/state";
+import type { HostObject } from "../shared/untrusted-value";
 import { formatBytes } from "pi-cosmic-core";
 
 const PreviewByteLength = Schema.Natural;
@@ -58,8 +59,8 @@ export const readExistingFileForPreviewEffect = Effect.fn("CodePreviewWrite.read
   },
 );
 
-export function getWriteDiffSkipReason<BeforeInput>(
-  before: BeforeInput,
+export function getWriteDiffSkipReason(
+  before: HostObject | undefined,
   nextContent: string,
   maxBytes = currentMaxWriteDiffBytes(),
 ): string | undefined {
@@ -73,7 +74,7 @@ export function getWriteDiffSkipReason<BeforeInput>(
   );
 }
 
-export function hasWriteDiffSizeEvidence<BeforeInput>(before: BeforeInput): boolean {
+export function hasWriteDiffSizeEvidence(before: HostObject | undefined): boolean {
   const decoded = decodeSkippedExistingFilePreview(before);
   if (Option.isNone(decoded)) return false;
   const { reason, sizeExceeded, byteLength, maxBytes } = decoded.value;

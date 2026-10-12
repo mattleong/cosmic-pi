@@ -72,6 +72,7 @@ export const registerHerdrBtwParentReference = (
       current.path,
       current.id,
     );
+    return undefined;
   });
 
   return {

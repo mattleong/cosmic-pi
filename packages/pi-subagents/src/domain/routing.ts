@@ -1,4 +1,6 @@
-import * as Predicate from "effect/Predicate";
+import { flow } from "effect/Function";
+import * as Schema from "effect/Schema";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
@@ -30,8 +32,11 @@ export const subagentRuntimeSupportsEffort = (
   effort: SubagentEffort,
 ): boolean => subagentRuntimeEfforts(runtime).includes(effort);
 
-export const decodeSubagentEffort = <ValueInput>(value: ValueInput): SubagentEffort | undefined => {
-  if (!Predicate.isString(value)) return undefined;
-  const normalized = value.trim().toLowerCase();
-  return SUBAGENT_EFFORTS.find((effort) => effort === normalized);
-};
+export const decodeSubagentEffort = flow(
+  decodeUnknownOrUndefined(Schema.String),
+  (text): SubagentEffort | undefined => {
+    if (text === undefined) return undefined;
+    const normalized = text.trim().toLowerCase();
+    return SUBAGENT_EFFORTS.find((effort) => effort === normalized);
+  },
+);

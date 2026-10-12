@@ -177,6 +177,9 @@ const hiddenCount = (
 const ofType = (type: GroupedActivityRow["type"]) => (entry: GroupedActivityRow) =>
   entry.type === type;
 
+const inSection = (heading: GroupedActivityRow) => (entry: GroupedActivityRow) =>
+  entry.type !== "section" && entry.section === heading.section;
+
 export function activityWidgetSections(
   rows: readonly ActivityRow[],
   maxRows = 8,
@@ -194,8 +197,6 @@ export function activityWidgetSections(
     if (entry.type === "phase") return [{ ...entry, expanded: false, hiddenFailures: 0 }];
     return [{ ...entry, expanded: false }];
   });
-  const inSection = (heading: GroupedActivityRow) => (entry: GroupedActivityRow) =>
-    entry.type !== "section" && entry.section === heading.section;
   const slots = tree
     .filter((entry) => entry.type === "section")
     .map((heading) => {

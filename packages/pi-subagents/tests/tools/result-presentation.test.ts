@@ -1,5 +1,6 @@
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { plainTheme } from "pi-cosmic-core/testing";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import {
   RESULT_ACCEPTED_TEXT,
@@ -24,15 +25,15 @@ function summarize(args: VerdictArguments, text?: string, isError = false) {
   });
 }
 
-describe("child result expanded input", () => {
-  const render = <Args>(args: Args) => {
-    const context = renderContextFixture({ args, expanded: true });
-    return [
-      resultToolRenderers.renderCall(args, plainTheme, context).render(240).join("\n"),
-      resultExpandedContent.renderCall(args, plainTheme).render(240).join("\n"),
-    ];
-  };
+const render = (args: Schema.Json) => {
+  const context = renderContextFixture({ args, expanded: true });
+  return [
+    resultToolRenderers.renderCall(args, plainTheme, context).render(240).join("\n"),
+    resultExpandedContent.renderCall(args, plainTheme).render(240).join("\n"),
+  ];
+};
 
+describe("child result expanded input", () => {
   it("preserves text after terminal string controls in both argument views", () => {
     const args = { value: "before\u009dAFTER_CONTROL", next: "FOLLOWING_FIELD" };
     for (const text of render(args)) {

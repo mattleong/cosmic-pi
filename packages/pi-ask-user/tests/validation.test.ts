@@ -23,6 +23,9 @@ const base = () =>
     ],
   }) satisfies AskUserRequest;
 
+type Request = ReturnType<typeof base>;
+const firstQuestion = (request: Request) => request.questions[0]!;
+
 describe("ask-user validation", () => {
   it("normalizes text prompts and applies the same fixed trimmed input bounds", () => {
     const normalized = normalizeAskUserRequest({
@@ -56,15 +59,13 @@ describe("ask-user validation", () => {
   });
 
   it("rejects blank fields before duplicate checks and collisions by position without content", () => {
-    type Request = ReturnType<typeof base>;
     const blank = " \t ";
     const [q1, c1, c2] = ["Question 1", "Question 1, choice 1", "Question 1, choice 2"];
-    const question = (request: Request) => request.questions[0]!;
     const keys = (request: Request, ...values: string[]) =>
       request.questions.splice(
         0,
         1,
-        ...values.map((key) => Object.assign({}, question(request), { key })),
+        ...values.map((key) => Object.assign({}, firstQuestion(request), { key })),
       );
     const choices = (
       request: Request,
@@ -72,13 +73,13 @@ describe("ask-user validation", () => {
       ...values: string[]
     ) =>
       values.forEach((value, i) =>
-        Object.assign(question(request).choices[i]!, { [field]: value }),
+        Object.assign(firstQuestion(request).choices[i]!, { [field]: value }),
       );
     const cases: ReadonlyArray<readonly [(request: Request) => void, string, string, ...string[]]> =
       [
         [(r) => keys(r, blank, blank), q1, "empty key"],
-        [(r) => Object.assign(question(r), { title: blank }), q1, "empty title"],
-        [(r) => Object.assign(question(r), { prompt: blank }), q1, "empty prompt"],
+        [(r) => Object.assign(firstQuestion(r), { title: blank }), q1, "empty title"],
+        [(r) => Object.assign(firstQuestion(r), { prompt: blank }), q1, "empty prompt"],
         [(r) => choices(r, "value", blank, blank), c1, "empty value"],
         [(r) => choices(r, "label", blank, blank), c1, "empty label"],
         [(r) => choices(r, "description", blank), c1, "empty description"],

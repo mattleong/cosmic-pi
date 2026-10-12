@@ -90,6 +90,7 @@ describe("structured questionnaire proxy boundary", () => {
       .ask(textRequest, new AbortController().signal)
       .then((answer) => {
         expect(answer).toEqual(outcome);
+        return undefined;
       })
       .finally(detach);
   });
@@ -132,6 +133,7 @@ describe("structured questionnaire proxy boundary", () => {
       expect(receivedOwner).toEqual(authenticated);
       detach();
       expect(queryQuestionnaireRelay(child, "child")).toBeUndefined();
+      return undefined;
     });
   });
 
@@ -163,6 +165,7 @@ describe("structured questionnaire proxy boundary", () => {
           return cleanup.promise.then(() => {
             if (ending === "replacement") generation = "g2";
             if (ending === "cleanup-rejection") throw new Error("private cleanup error");
+            return undefined;
           });
         },
       }));
@@ -182,6 +185,7 @@ describe("structured questionnaire proxy boundary", () => {
           expect(outcome._tag).toBe(ending === "answer" ? "Success" : "Failure");
           if (outcome._tag === "Failure")
             expect(outcome.failure).toBeInstanceOf(InvalidSubagentRequestError);
+          return undefined;
         });
     });
   }
@@ -209,6 +213,7 @@ describe("structured questionnaire proxy boundary", () => {
       .then(() => {
         expect(entered).toBe(false);
         expect(cancelled).toBe(false);
+        return undefined;
       });
   });
 

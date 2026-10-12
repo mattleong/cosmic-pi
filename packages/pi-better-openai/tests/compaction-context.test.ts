@@ -91,7 +91,7 @@ describe("owned checkpoint reconstruction", () => {
     expect(abort).toHaveBeenCalledOnce();
     expect(notify).toHaveBeenCalled();
     expect(
-      handlers.get("session_before_compact")![0]!(
+      handlers.get("session_before_compact")[0]!(
         {
           type: "session_before_compact",
           preparation,
@@ -157,7 +157,7 @@ describe("owned checkpoint reconstruction", () => {
     const fallback = prepareOpenAIFallback(manager.getBranch(), preparation)!;
     expect(fallback.previousSummary).toBe("ordinary prior summary");
     expect(fallback.fileOps.read.has("prior.ts")).toBe(true);
-    manager.appendCompaction("superseding ordinary summary", manager.getLeafId()!, 100);
+    manager.appendCompaction("superseding ordinary summary", manager.getLeafId(), 100);
     expect(reconstructOpenAIContext(manager.getBranch())).toBeUndefined();
     expect(
       repairOpenAIContext(manager.getBranch(), manager.buildSessionContext().messages)?.messages,

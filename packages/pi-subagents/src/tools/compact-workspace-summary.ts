@@ -1,6 +1,9 @@
 import { compactIssueSeverity } from "pi-code-previews";
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
-import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { flow, absurd } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { countLabel } from "pi-cosmic-core";
 import { WorkspaceToolDetailsSchema, type WorkspaceToolDetails } from "./details-schema.ts";
 
 function reviewPosition(details: WorkspaceToolDetails): string {
@@ -34,6 +37,7 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
     case "discard":
       return "discarded";
   }
+  return absurd(details.operation);
 }
 
 function validListCounts(details: WorkspaceToolDetails): boolean {
@@ -182,13 +186,22 @@ function operationIssues(details: WorkspaceToolDetails): CompactIssue[] {
     case "discard":
       return [];
   }
+  return absurd(details.operation);
 }
 
-export function compactWorkspaceSummary<ValueInput>(
-  value: ValueInput,
+const decodeWorkspaceToolDetailsOption = Schema.decodeUnknownOption(WorkspaceToolDetailsSchema);
+
+export const decodeWorkspaceToolDetails = flow(
+  Option.liftThrowable(decodeWorkspaceToolDetailsOption),
+  Option.flatten,
+  Option.getOrUndefined,
+);
+
+export function compactWorkspaceSummary(
+  result: { readonly details?: unknown },
   operation: string,
 ): CompactSummary | undefined {
-  const details = decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, value);
+  const details = decodeWorkspaceToolDetails(result.details);
   if (
     details?.operation !== operation ||
     !hasOperationReceipt(details) ||

@@ -19,22 +19,23 @@ export class BackgroundTaskConfigError extends Schema.TaggedError<BackgroundTask
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
+const decodeConfigFields = decodeTolerantFields(
+  {
+    enabled: Schema.Boolean,
+    maxRunning: Schema.Finite,
+    maxRetained: Schema.Finite,
+    logBufferBytesPerTask: Schema.Finite,
+    totalLogBufferBytes: Schema.Finite,
+    stopGraceMs: Schema.Finite,
+    maxWaitSeconds: Schema.Finite,
+    showFooterStatus: Schema.Boolean,
+    shellPath: Schema.String,
+  },
+  { path: "config" },
+);
+
 const decodeConfig = (value: JsonObject): Partial<BackgroundTaskConfig> =>
-  decodeTolerantFields(
-    value,
-    {
-      enabled: Schema.Boolean,
-      maxRunning: Schema.Finite,
-      maxRetained: Schema.Finite,
-      logBufferBytesPerTask: Schema.Finite,
-      totalLogBufferBytes: Schema.Finite,
-      stopGraceMs: Schema.Finite,
-      maxWaitSeconds: Schema.Finite,
-      showFooterStatus: Schema.Boolean,
-      shellPath: Schema.String,
-    },
-    { path: "config" },
-  ).value;
+  decodeConfigFields(value).value;
 
 const store = makeScopedConfigStore({
   error: BackgroundTaskConfigError,

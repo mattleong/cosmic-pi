@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import * as Struct from "effect/Struct";
+import type { JsonObject } from "pi-cosmic-core";
 import { test } from "vitest";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../../src/config/schema";
@@ -7,10 +8,8 @@ import { codePreviewSettings } from "../../src/config/state";
 import { normalizeSettingsWithDiagnostics, updateSetting } from "../../src/config/values";
 import { formatToolsSettingValue } from "../../src/tools/policy";
 
-type SettingsFixtureValue = string | number | boolean | readonly string[] | undefined;
-
 const settingsFrom = (
-  data: Readonly<Record<string, SettingsFixtureValue>>,
+  data: JsonObject,
   fallback: CodePreviewSettings = codePreviewSettings,
 ): CodePreviewSettings => normalizeSettingsWithDiagnostics(data, fallback).settings;
 

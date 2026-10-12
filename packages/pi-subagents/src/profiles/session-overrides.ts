@@ -1,13 +1,19 @@
 import * as Effect from "effect/Effect";
+import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot, invokeHostCallback } from "pi-cosmic-core";
 import type { ResolvedProfileSetSelection, ResolvedSubagentConfig } from "../config/options.ts";
 import {
+  ownDataProperty,
+  ownTypedProperty,
+  probeFields,
+  type ProbedFields,
+} from "../config/probe.ts";
+import {
   decodeProfileRoute,
   decodeSubagentNesting,
   isProfileSetName,
-  ownDataProperty,
   SUBAGENT_FEATURE_TOGGLES,
   SubagentNestingSchema,
   type SubagentFeatureToggle,
@@ -114,14 +120,14 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
   ),
 });
 
-const decodeRouteRecord = <ValueInput>(
-  value: ValueInput,
+const decodeRouteRecord = (
+  holder: ProbedFields,
   key: string,
 ): Partial<Record<ProfileId, ProfileRoute>> | undefined => {
-  const field = ownDataProperty(value, key);
-  const record = field.valid && field.present ? field.value : undefined;
+  const field = ownDataProperty(holder, key);
+  const record = field.valid && field.present ? probeFields(field.value) : undefined;
   if (
-    !Predicate.isObject(record) ||
+    !record ||
     !Reflect.ownKeys(record).every((profile) => Predicate.isString(profile) && isProfileId(profile))
   )
     return undefined;
@@ -224,24 +230,28 @@ export const cloneSessionProfileOverrideSeed = (
   });
 };
 
-export const decodeSessionProfileOverrideSeed = <ValueInput>(
-  value: ValueInput,
-): SessionProfileOverrideSeed | undefined =>
+const decodeSeedInput = decodeUnknownOrUndefined(SessionProfileOverrideSeedInputSchema, {
+  onExcessProperty: "error",
+});
+
+const decodeBaselineRoutes = (value: ProbedFields) => {
+  const baselineField = ownDataProperty(value, "baseline");
+  if (!baselineField.valid) return { valid: false };
+  if (!baselineField.present) return { valid: true };
+  const baselineFields = probeFields(baselineField.value);
+  const baselineRecord = baselineFields && decodeRouteRecord(baselineFields, "profiles");
+  const routes = baselineRecord && completeProfileRecord(baselineRecord);
+  return routes ? { valid: true, routes } : { valid: false };
+};
+
+const seedFromFields = (value: ProbedFields): SessionProfileOverrideSeed | undefined =>
   invokeHostCallback(() => {
     const overrides = decodeRouteRecord(value, "overrides");
-    const baselineField = ownDataProperty(value, "baseline");
-    const baselineRecord =
-      baselineField.valid && baselineField.present
-        ? decodeRouteRecord(baselineField.value, "profiles")
-        : undefined;
-    const baselineRoutes = baselineRecord && completeProfileRecord(baselineRecord);
-    if (!overrides || !baselineField.valid || (baselineField.present && !baselineRoutes))
-      return undefined;
-    const decoded = decodeUnknownOrUndefined(SessionProfileOverrideSeedInputSchema, value, {
-      onExcessProperty: "error",
-    });
+    const baselineRoutes = decodeBaselineRoutes(value);
+    if (!overrides || !baselineRoutes.valid) return undefined;
+    const decoded = decodeSeedInput(value);
     const baseline = decoded?.baseline &&
-      baselineRoutes && { ...decoded.baseline, profiles: baselineRoutes };
+      baselineRoutes.routes && { ...decoded.baseline, profiles: baselineRoutes.routes };
     if (
       !decoded ||
       (baseline && !(isValidOrigin(baseline.origin) && isDetachedBaselineProvenanceValid(baseline)))
@@ -249,6 +259,11 @@ export const decodeSessionProfileOverrideSeed = <ValueInput>(
       return undefined;
     return cloneSessionProfileOverrideSeed({ ...decoded, overrides, baseline });
   }, undefined);
+
+export const decodeSessionProfileOverrideSeed = flow(
+  probeFields,
+  (value) => value && seedFromFields(value),
+);
 
 export const makeSessionProfileSnapshot = (
   baseConfig: ResolvedSubagentConfig,
@@ -337,7 +352,7 @@ export const patchSessionProfileSnapshot = (
   patch: SessionProfilePatch,
 ): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_PROFILES, () => {
-    const routeProperty = ownDataProperty(patch, "route");
+    const routeProperty = ownTypedProperty(patch, "route");
     const declared = routeProperty.valid && routeProperty.present ? routeProperty.value : undefined;
     const route = declared === undefined ? undefined : decodeProfileRoute(declared);
     if (!isProfileId(patch.profile) || !routeProperty.valid || (declared !== undefined && !route))

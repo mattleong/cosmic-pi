@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import {
   decodeTolerantFields,
   makeScopedConfigStore,
+  type JsonObject,
   type ScopedConfigMetadata,
 } from "pi-cosmic-core";
 import {
@@ -25,43 +26,41 @@ export class OpenAIConfigError extends Schema.TaggedError<OpenAIConfigError>()(
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
 
-function decodeConfig<ValueInput>(value: ValueInput) {
-  const root = decodeTolerantFields(
-    value,
-    {
-      persistState: Schema.Boolean,
-      desiredActive: Schema.Boolean,
-      usage: UnknownRecordSchema,
-      compaction: UnknownRecordSchema,
-      image: UnknownRecordSchema,
-    },
-    { path: "config" },
-  ).value;
-  const usage = decodeTolerantFields(
-    root.usage,
-    {
-      refreshIntervalMs: FiniteNumberSchema,
-      showOnlyOnSubscriptionModels: Schema.Boolean,
-      showResetTimes: Schema.Boolean,
-    },
-    { path: "usage" },
-  ).value;
-  const compaction = decodeTolerantFields(
-    root.compaction,
-    { enabled: Schema.Boolean },
-    { path: "compaction" },
-  ).value;
-  const image = decodeTolerantFields(
-    root.image,
-    {
-      enabled: Schema.Boolean,
-      defaultModel: Schema.Trim.check(Schema.isNonEmpty()),
-      defaultSave: ImageSaveModeSchema,
-      outputFormat: ImageOutputFormatSchema,
-      timeoutMs: FiniteNumberSchema,
-    },
-    { path: "image" },
-  ).value;
+const decodeRoot = decodeTolerantFields(
+  {
+    persistState: Schema.Boolean,
+    desiredActive: Schema.Boolean,
+    usage: UnknownRecordSchema,
+    compaction: UnknownRecordSchema,
+    image: UnknownRecordSchema,
+  },
+  { path: "config" },
+);
+const decodeUsage = decodeTolerantFields(
+  {
+    refreshIntervalMs: FiniteNumberSchema,
+    showOnlyOnSubscriptionModels: Schema.Boolean,
+    showResetTimes: Schema.Boolean,
+  },
+  { path: "usage" },
+);
+const decodeCompaction = decodeTolerantFields({ enabled: Schema.Boolean }, { path: "compaction" });
+const decodeImage = decodeTolerantFields(
+  {
+    enabled: Schema.Boolean,
+    defaultModel: Schema.Trim.check(Schema.isNonEmpty()),
+    defaultSave: ImageSaveModeSchema,
+    outputFormat: ImageOutputFormatSchema,
+    timeoutMs: FiniteNumberSchema,
+  },
+  { path: "image" },
+);
+
+function decodeConfig(value: JsonObject) {
+  const root = decodeRoot(value).value;
+  const usage = decodeUsage(root.usage).value;
+  const compaction = decodeCompaction(root.compaction).value;
+  const image = decodeImage(root.image).value;
   return {
     ...(root.persistState !== undefined && { persistState: root.persistState }),
     ...(root.desiredActive !== undefined && { desiredActive: root.desiredActive }),

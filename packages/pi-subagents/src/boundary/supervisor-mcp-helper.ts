@@ -3,6 +3,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
+import { constVoid } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
@@ -47,7 +48,7 @@ const SERVER_VERSION = "3.0.0";
 const MAX_QUEUED_INPUT_BYTES = 2 * MAX_SUPERVISOR_CHANNEL_LINE_BYTES;
 const MAX_CONCURRENT_CALLS = 16;
 
-const fixedDiagnostic = <MessageInput>(message: MessageInput): void => {
+const fixedDiagnostic = (message: string): void => {
   const text = boundedString(message, 512) ? message : "Private supervisor helper failed.";
   process.stderr.write(`${text}\n`);
 };
@@ -64,7 +65,7 @@ const main = Effect.gen(function* () {
   const stdout = yield* makeSerializedWriter(process.stdout);
   const activeCalls = yield* FiberMap.make<string>();
   const done = yield* Deferred.make<void>();
-  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const runPromise = Effect.runPromiseWith(yield* Effect.context());
   let channelClosed = false;
   let initialized = false;
 
@@ -75,7 +76,7 @@ const main = Effect.gen(function* () {
     Deferred.doneUnsafe(done, Effect.void);
   };
 
-  const sendRpc = <MessageInput>(message: MessageInput): Promise<void> =>
+  const sendRpc = (message: Schema.Json): Promise<void> =>
     runPromise(stdout.write(message)).catch(() => {
       failChannel();
     });
@@ -102,7 +103,7 @@ const main = Effect.gen(function* () {
       : Effect.succeed(toolResult("Tool input is malformed, excessive, or unsupported.", true));
   };
 
-  const writeToolResponse = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
+  const writeToolResponse = (value: Schema.Json): Effect.Effect<void> =>
     stdout.write(value).pipe(Effect.catch(() => Effect.sync(failChannel)));
 
   const dispatchMcp = (request: DecodedMcpMessage): void => {
@@ -165,7 +166,7 @@ const main = Effect.gen(function* () {
   };
 
   let inputClosed = false;
-  let detachStdin = (): void => {};
+  let detachStdin: () => void = constVoid;
   const closeInput = (): void => {
     if (inputClosed) return;
     inputClosed = true;
@@ -216,6 +217,7 @@ const main = Effect.gen(function* () {
   );
   yield* Effect.addFinalizer(() => Effect.sync(closeInput));
   yield* Deferred.await(done);
+  return undefined;
 });
 
 NodeRuntime.runMain(

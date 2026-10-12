@@ -18,13 +18,13 @@ import {
   type DirectoryModelSessionInput,
 } from "./preference/service.ts";
 
+const warn = (ctx: ExtensionContext, message: string) =>
+  notifyAtHostBoundary(ctx, message, "warning");
+
 export function registerDirectoryModelsApplication(
   pi: ExtensionAPI,
   explicitPreference: boolean = captureExplicitPreferenceArgument(),
 ): void {
-  const warn = (ctx: ExtensionContext, message: string) =>
-    notifyAtHostBoundary(ctx, message, "warning");
-
   const slot = makePiSessionRuntimeSlot({
     makeRuntime: (input: DirectoryModelSessionInput) =>
       makePiManagedRuntime(
@@ -64,12 +64,12 @@ export function registerDirectoryModelsApplication(
 
   pi.on("model_select", (event, ctx) => {
     if (!slot.isActive() || event.source === "restore" || !captureSelectedModel(event.model))
-      return;
+      return undefined;
     return persist(ctx);
   });
 
   pi.on("thinking_level_select", (event, ctx) => {
-    if (!slot.isActive() || !captureThinkingLevel(event.level)) return;
+    if (!slot.isActive() || !captureThinkingLevel(event.level)) return undefined;
     return persist(ctx);
   });
 

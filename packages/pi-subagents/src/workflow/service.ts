@@ -106,6 +106,17 @@ interface WorkflowServiceOptions {
   readonly observer?: WorkflowRunObserver | undefined;
 }
 
+const hostOutcome = (
+  control: WorkflowRunControl,
+  outcome: WorkflowSandboxOutcome,
+): Effect.Effect<WorkflowSandboxOutcome> =>
+  Effect.gen(function* () {
+    if ((yield* Deferred.isDone(control.stop)) || !(yield* Deferred.isDone(control.failed)))
+      return outcome;
+    const failure = yield* Deferred.await(control.failed);
+    return { _tag: "Failed", kind: "script", failure, output: outcome.output };
+  });
+
 const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions) {
   const subagents = yield* SubagentService;
   const journal = yield* WorkflowJournal;
@@ -196,17 +207,6 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
             Effect.forkScoped,
             Effect.asVoid,
           );
-
-  const hostOutcome = (
-    control: WorkflowRunControl,
-    outcome: WorkflowSandboxOutcome,
-  ): Effect.Effect<WorkflowSandboxOutcome> =>
-    Effect.gen(function* () {
-      if ((yield* Deferred.isDone(control.stop)) || !(yield* Deferred.isDone(control.failed)))
-        return outcome;
-      const failure = yield* Deferred.await(control.failed);
-      return { _tag: "Failed", kind: "script", failure, output: outcome.output };
-    });
 
   const runFiber = (setup: WorkflowRunSetup, created: WorkflowRunView) =>
     Effect.scoped(

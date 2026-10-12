@@ -1,10 +1,3 @@
-import * as Predicate from "effect/Predicate";
-
-export function getObjectValue<ValueInput>(value: ValueInput, key: string) {
-  if (!Predicate.isObject(value) || !Object.hasOwn(value, key)) return undefined;
-  return value[key];
-}
-
 export function nonEmptyText(value: string | undefined): string | undefined {
   return value === "" ? undefined : value;
 }

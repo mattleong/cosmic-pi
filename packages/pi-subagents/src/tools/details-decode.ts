@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import { flow, absurd } from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core";
@@ -16,11 +19,9 @@ import {
   SubagentModelsDetailsSchema,
   SubagentStartAwaitCardDetailsSchema,
   SubagentStartDetailsSchema,
-  type CompactSubagentToolDetails,
   type SubagentAwaitDetails,
   type SubagentCardFailure,
   type SubagentRunCard,
-  type SubagentStartAwaitCardDetails,
   type SubagentStartDetails,
 } from "./details-schema.ts";
 
@@ -31,35 +32,38 @@ const RUN_ACTION_KEYS = new Set(Object.keys(RunActionDetailsSchema.fields));
 const KNOWN_ROOT_KEYS = new Set([...START_KEYS, ...AWAIT_KEYS, ...MODELS_KEYS, ...RUN_ACTION_KEYS]);
 const RUN_ACTION_SET: ReadonlySet<string> = new Set(RUN_DETAILS_ACTIONS);
 
-const rootKeysAllowed = <Container>(record: Container, allowed: ReadonlySet<string>): boolean => {
-  if (!Predicate.isObject(record)) return true;
+const DetailsFieldsSchema = Schema.Record(Schema.String, Schema.Unknown);
+type DetailsFields = typeof DetailsFieldsSchema.Type;
+type FieldsVisitor = (entry: DetailsFields | undefined) => boolean;
+
+const rootKeysAllowed = (record: DetailsFields, allowed: ReadonlySet<string>): boolean => {
   for (const key of KNOWN_ROOT_KEYS)
     if (!allowed.has(key) && Object.hasOwn(record, key)) return false;
   return true;
 };
 
-const preflightArray = <Container>(
-  record: Container,
+const preflightArray = (
+  record: DetailsFields,
   key: string,
   maximum: number,
-  visit?: <Entry>(entry: Entry) => boolean,
+  visit?: FieldsVisitor,
 ): boolean => {
-  if (!Predicate.isObject(record) || !Object.hasOwn(record, key)) return true;
+  if (!Object.hasOwn(record, key)) return true;
   const value = record[key];
-  if (!Array.isArray(value)) return true;
+  if (!Arr.isArray(value)) return true;
   const length = value.length;
   if (length > maximum) return false;
   if (!visit) return true;
   for (let index = 0; index < length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (!descriptor || !("value" in descriptor)) continue;
-    if (!visit(descriptor.value)) return false;
+    if (!visit(Predicate.isObject(descriptor.value) ? descriptor.value : undefined)) return false;
   }
   return true;
 };
 
-const preflightCard = <ValueInput>(card: ValueInput): boolean => {
-  if (!Predicate.isObject(card)) return true;
+const preflightCard: FieldsVisitor = (card) => {
+  if (!card) return true;
   if (!preflightArray(card, "capabilities", PI_SUBAGENT_CAPABILITIES.length)) return false;
   if (!preflightArray(card, "writeClaims", MAX_WRITE_CLAIMS)) return false;
   if (Object.hasOwn(card, "writeAudit")) {
@@ -78,11 +82,10 @@ const preflightCard = <ValueInput>(card: ValueInput): boolean => {
   );
 };
 
-const preflightProfile = <ValueInput>(profile: ValueInput): boolean =>
-  !Predicate.isObject(profile) || preflightArray(profile, "candidates", MAX_PROFILE_CANDIDATES);
+const preflightProfile: FieldsVisitor = (profile) =>
+  !profile || preflightArray(profile, "candidates", MAX_PROFILE_CANDIDATES);
 
-const preflight = <ValueInput>(record: ValueInput): boolean => {
-  if (!Predicate.isObject(record)) return true;
+const preflightRecord = (record: DetailsFields): boolean => {
   const action = record.action;
   if (action === "start")
     return (
@@ -109,6 +112,11 @@ const preflight = <ValueInput>(record: ValueInput): boolean => {
     );
   return true;
 };
+
+const PreflightedDetails = Schema.Unknown.check(
+  Schema.makeFilter((input) => !Predicate.isObject(input) || preflightRecord(input)),
+);
+const decodePreflighted = Schema.decodeUnknownOption(PreflightedDetails);
 
 interface StartRelationships {
   readonly failedIndexes: ReadonlySet<number>;
@@ -145,6 +153,7 @@ const validRetryDisposition = (recovery: FailedStartRecovery): boolean => {
     case "unavailable":
       return !recovery.hasRemainingCandidate;
   }
+  return absurd(recovery.retryDisposition);
 };
 
 const registerRecovery = (
@@ -214,38 +223,47 @@ const validAwaitRelationships = (details: SubagentAwaitDetails): boolean => {
   );
 };
 
-const safeDecode = <S extends Schema.ConstraintDecoder<unknown>, ValueInput>(
+const safeDecoder = <S extends Schema.ConstraintDecoder<unknown>>(
   schema: S,
-  value: ValueInput,
-  validate?: (decoded: S["Type"]) => boolean,
-): S["Type"] | undefined => {
-  try {
-    if (!preflight(value)) return undefined;
-    const decoded = Schema.decodeUnknownSync(schema, DETAILS_PARSE_OPTIONS)(value);
-    if (validate && !validate(decoded)) return undefined;
-    if (JSON.stringify(decoded).length > MAX_TOOL_OUTPUT_CHARS) return undefined;
-    return freezeSnapshot(decoded);
-  } catch {
-    return undefined;
-  }
+  validate: (decoded: S["Type"]) => boolean,
+) => {
+  const decodeTarget = Schema.decodeUnknownOption(schema, DETAILS_PARSE_OPTIONS);
+  return flow(
+    Option.liftThrowable(
+      flow(
+        decodePreflighted,
+        Option.flatMap(decodeTarget),
+        Option.filter(validate),
+        Option.filter((decoded) => JSON.stringify(decoded).length <= MAX_TOOL_OUTPUT_CHARS),
+        Option.map(freezeSnapshot),
+      ),
+    ),
+    Option.flatten,
+    Option.getOrUndefined,
+  );
 };
 
-export const decodeStartAwaitCardDetails = <ValueInput>(
-  value: ValueInput,
-): SubagentStartAwaitCardDetails | undefined =>
-  safeDecode(SubagentStartAwaitCardDetailsSchema, value, (details) =>
-    details.action === "start"
-      ? validStartRelationships(details)
-      : validAwaitRelationships(details),
-  );
+const validStartAwaitDetails = (details: typeof SubagentStartAwaitCardDetailsSchema.Type) =>
+  details.action === "start" ? validStartRelationships(details) : validAwaitRelationships(details);
 
-export const decodeCompactToolDetails = <ValueInput>(
-  value: ValueInput,
-): CompactSubagentToolDetails | undefined =>
-  safeDecode(
-    CompactSubagentToolDetailsSchema,
-    value,
-    (details) =>
-      details.action === "models" ||
-      (validReportOmission(details) && details.cards.every(validRunCardRelationships)),
-  );
+const validCompactDetails = (details: typeof CompactSubagentToolDetailsSchema.Type) =>
+  details.action === "models" ||
+  (validReportOmission(details) && details.cards.every(validRunCardRelationships));
+
+export const decodeStartAwaitCardDetails = safeDecoder(
+  SubagentStartAwaitCardDetailsSchema,
+  validStartAwaitDetails,
+);
+
+export const decodeCompactToolDetails = safeDecoder(
+  CompactSubagentToolDetailsSchema,
+  validCompactDetails,
+);
+
+export const decodeOutcomeDetails = safeDecoder(
+  Schema.Union([SubagentStartAwaitCardDetailsSchema, CompactSubagentToolDetailsSchema]),
+  (details) =>
+    details.action === "start" || details.action === "await"
+      ? validStartAwaitDetails(details)
+      : validCompactDetails(details),
+);

@@ -1,7 +1,8 @@
 import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { invokeHostCallback } from "pi-cosmic-core";
-import { expandPreviewTabs, getObjectValue, isToolOutputNoticeLine } from "../shared/helpers";
+import { expandPreviewTabs, isToolOutputNoticeLine } from "../shared/helpers";
+import { ownField, type HostObject } from "../shared/untrusted-value";
 import { escapeControlChars, injectVisibleRanges } from "../shared/terminal-text";
 import { renderHighlightedText } from "../syntax/render";
 import { pathPreviewLanguage } from "./renderers/shared/preview-text";
@@ -13,19 +14,19 @@ type ParsedGrepOutputLine = {
   kind: "match" | "context";
 };
 
-export function renderGrepOutputLines<Args>(
+export function renderGrepOutputLines(
   output: string,
   theme: Theme,
-  args: Args,
+  args: HostObject | undefined,
   invalidate?: () => void,
   syntaxHighlight = true,
 ): string[] {
-  const pattern = getObjectValue(args, "pattern");
+  const pattern = ownField(args, "pattern");
   const search =
-    Predicate.isString(pattern) && pattern && getObjectValue(args, "literal") === true
+    Predicate.isString(pattern) && pattern && ownField(args, "literal") === true
       ? new RegExp(
           pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"),
-          getObjectValue(args, "ignoreCase") === true ? "giu" : "g",
+          ownField(args, "ignoreCase") === true ? "giu" : "g",
         )
       : undefined;
   const rendered: string[] = [];

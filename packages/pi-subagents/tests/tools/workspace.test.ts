@@ -163,7 +163,7 @@ describe("workspace tool", () => {
             ...rows.map((line) => Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(line)),
           );
           if (offset === 0) expect(rows.join("\n")).not.toContain(artifact.workspaceId);
-          const summary = compactWorkspaceSummary(response.details, "list");
+          const summary = compactWorkspaceSummary(response, "list");
           expect(summary?.outcome).toBe("warning");
           const warning = summary?.issues?.find((issue) => issue.severity === "warning");
           expect(warning?.code).toBe("workspace-records-unavailable");
@@ -215,7 +215,7 @@ describe("workspace tool", () => {
         },
       ).pipe(Effect.orDie);
     const clean = yield* integrate({});
-    expect(compactWorkspaceSummary(clean.details, "integrate")).toMatchObject({
+    expect(compactWorkspaceSummary(clean, "integrate")).toMatchObject({
       issues: [],
       outcome: "success",
     });
@@ -225,7 +225,7 @@ describe("workspace tool", () => {
       treeRemovalFailed: true,
       leaseReleaseUnconfirmed: true,
     });
-    const summary = compactWorkspaceSummary(leftover.details, "integrate");
+    const summary = compactWorkspaceSummary(leftover, "integrate");
     expect(summary?.outcome).toBe("warning");
     const issues = summary?.issues ?? [];
     expect(issues).toHaveLength(3);

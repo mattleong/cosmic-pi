@@ -91,22 +91,19 @@ layer(nodeFilePlatformLayer)("Better OpenAI history before session_start", (it) 
         expect(h.messageRenderers.get("openai-image")).toBe(messageRenderer.render);
         const savedPath = `${h.cwd}/.pi/generated-images/otter.png`;
         const record = { ...details, savedPath };
-        const render = <Details>(message: {
-          readonly content: ImageCustomMessage["content"];
-          readonly details: Details;
-        }) =>
+        const render = (content: ImageCustomMessage["content"]) =>
           messageRenderer.render(
-            imageMessage(message.content, message.details),
+            imageMessage(content, record),
             { expanded: true, outputPad: 0 },
             theme,
           )!;
         const expectImages = () => {
-          const component = render({ content: [text(PROVIDER_TEXT), image], details: record });
+          const component = render([text(PROVIDER_TEXT), image]);
           expect(countImages(component)).toBe(1);
           expect(component.render(400).join("\n")).toContain(details.revisedPrompt);
         };
         const savedPathShown = () =>
-          render({ content: [text(PROVIDER_TEXT)], details: record })
+          render([text(PROVIDER_TEXT)])
             .render(400)
             .join("\n");
 

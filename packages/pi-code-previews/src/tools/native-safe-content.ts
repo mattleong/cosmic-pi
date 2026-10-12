@@ -11,24 +11,25 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 import { toolRunningLine } from "pi-cosmic-ui/tool";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
+import type { HostContainer } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import type { RendererState } from "./renderers/shared/types";
 
 const ARRAY_SLOT = /^(?:length|\d+)$/u;
 
-export function ownData<S extends Schema.ConstraintDecoder<unknown>, Value>(
-  value: Value,
+export function ownData<S extends Schema.ConstraintDecoder<unknown>>(
+  value: HostContainer | undefined,
   key: string,
   schema: S,
 ): S["Type"] | undefined {
   const descriptor = invokeHostCallback(
     () =>
-      Predicate.isObject(value) || (Array.isArray(value) && ARRAY_SLOT.test(key))
+      value !== undefined && (Predicate.isObject(value) || ARRAY_SLOT.test(key))
         ? Object.getOwnPropertyDescriptor(value, key)
         : undefined,
     undefined,
   );
-  return decodeUnknownOrUndefined(schema, descriptor?.value);
+  return decodeUnknownOrUndefined(schema)(descriptor?.value);
 }
 
 export function visibleDiagnosticLine(text: string, maximumLength: number): string {

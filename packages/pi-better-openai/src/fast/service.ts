@@ -17,6 +17,14 @@ export interface FastInjectionEvent {
 
 export type FastInjectionIngress = (event: FastInjectionEvent) => void;
 
+const desire =
+  (ctx: ExtensionContext, desiredActive: boolean) =>
+  (current: FastSnapshot): FastSnapshot => ({
+    ...current,
+    desiredActive,
+    active: desiredActive && supportsFast(ctx),
+  });
+
 interface FastModeServiceOptions {
   readonly projection: MutableRef.MutableRef<FastSnapshot>;
   readonly canPublish?: () => boolean;
@@ -61,13 +69,6 @@ export class FastModeService extends Context.Service<FastModeService>()(
               lastInjectedTier: event.tier,
             })),
         }).pipe(Effect.orDie);
-        const desire =
-          (ctx: ExtensionContext, desiredActive: boolean) => (current: FastSnapshot) => ({
-            ...current,
-            desiredActive,
-            active: desiredActive && supportsFast(ctx),
-          });
-
         return {
           recordInjection: (event: FastInjectionEvent): void => {
             ingress.offer(event);

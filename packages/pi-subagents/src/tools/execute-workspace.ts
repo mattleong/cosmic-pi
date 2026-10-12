@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -286,4 +287,5 @@ export const executeWorkspaceAction = (
         );
       }
     }
+    return absurd<never>(operation.action);
   });

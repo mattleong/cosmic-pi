@@ -6,6 +6,7 @@ import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 import { fallbackArguments } from "../tools/data/args";
+import { hostValue } from "../shared/untrusted-value";
 import { getFallbackResultText } from "../tools/data/results";
 import {
   compactStatus,
@@ -314,7 +315,7 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
     }
     const lines = [
       this.theme.fg("toolTitle", escapeControlChars(this.options.name)),
-      ...fallbackArguments(context.args).map((line) => this.theme.fg("muted", line)),
+      ...fallbackArguments(hostValue(context.args)).map((line) => this.theme.fg("muted", line)),
     ];
     return new Text(lines.join("\n"), 0, 0);
   }

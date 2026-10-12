@@ -1,5 +1,8 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { flow } from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import {
   getTextContent,
   type CompactIssue,
@@ -7,28 +10,27 @@ import {
   type CompactSummaryProvider,
 } from "pi-code-previews";
 import { failureMessage } from "pi-cosmic-core";
-import { IMAGE_OUTPUT_FORMATS } from "../config/schema.ts";
 import {
+  CodexImageDetailsSchema,
   IMAGE_ACTIONS,
-  isCodexImageDetails,
   type CodexImageDetails,
   type ToolParams,
 } from "./types.ts";
 
 const ACTIONS: ReadonlySet<string> = new Set(IMAGE_ACTIONS);
-const OUTPUT_FORMATS: ReadonlySet<string> = new Set(IMAGE_OUTPUT_FORMATS);
 
 export const imagePromptSubject = (prompt: string): string =>
   prompt.replace(/\s+/g, " ").trim().slice(0, 100);
 
-export const imageRecord = <Value>(value: Value): CodexImageDetails | undefined =>
-  isCodexImageDetails(value) &&
-  value.id.length > 0 &&
-  value.id.length <= 256 &&
-  ACTIONS.has(value.action) &&
-  OUTPUT_FORMATS.has(value.outputFormat)
-    ? value
-    : undefined;
+const ImageRecordSchema = Schema.Struct({
+  ...CodexImageDetailsSchema.fields,
+  id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+});
+
+export const imageRecord = flow(
+  Schema.decodeUnknownOption(ImageRecordSchema),
+  Option.getOrUndefined,
+);
 
 const savedFileName = (path: string | undefined): string =>
   path?.split(/[\\/]/u).pop()?.trim() ?? "";
@@ -95,15 +97,11 @@ export function imageFailureIssue(text: string): CompactIssue {
       };
 }
 
-const hasNoDetails = <Value>(details: Value): boolean =>
-  details === undefined || (Predicate.isObject(details) && Object.keys(details).length === 0);
-
 const textOnlyFailure = (result: AgentToolResult<unknown> | undefined): string | undefined => {
-  if (
-    !result?.content.length ||
-    !hasNoDetails(result.details) ||
-    result.content.some((part) => part.type !== "text")
-  )
+  if (!result?.content.length || result.content.some((part) => part.type !== "text"))
+    return undefined;
+  const details = result.details;
+  if (details !== undefined && !(Predicate.isObject(details) && Object.keys(details).length === 0))
     return undefined;
   const text = getTextContent(result.content);
   return text.trim() ? text : undefined;

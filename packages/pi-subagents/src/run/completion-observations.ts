@@ -65,6 +65,18 @@ const visibleRun = (
       ? snapshotView({ ...redacted, finalText: observed.finalText })
       : redacted;
 
+const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
+  const { finalText: _finalText, ...withoutReport } = view;
+  return snapshotView({
+    ...withoutReport,
+    sessionEvents: withoutReport.sessionEvents.map((event) =>
+      event.type === "assistant"
+        ? Object.assign({}, event, { text: "[report redacted: owned or already delivered]" })
+        : event,
+    ),
+  });
+};
+
 export function makeRunCompletionObservations(dependencies: RunCompletionObservationDependencies) {
   const {
     records,
@@ -82,18 +94,6 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       ...view,
       directChildCount: projected?.directChildCount ?? 0,
       descendantCount: projected?.descendantCount ?? 0,
-    });
-  };
-
-  const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
-    const { finalText: _finalText, ...withoutReport } = view;
-    return snapshotView({
-      ...withoutReport,
-      sessionEvents: withoutReport.sessionEvents.map((event) =>
-        event.type === "assistant"
-          ? Object.assign({}, event, { text: "[report redacted: owned or already delivered]" })
-          : event,
-      ),
     });
   };
 

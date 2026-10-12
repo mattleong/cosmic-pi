@@ -62,16 +62,16 @@ export const invalidRequest = (code: string, message: string): InvalidSubagentRe
 export const runNotFound = (id: string): SubagentNotFoundError =>
   new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` });
 
-export const processCauseError = <ErrorInput>(
+export const processCauseError = (
   operation: string,
-  error?: ErrorInput,
+  cause?: unknown,
   code?: string,
   fallbackMessage = `Unable to ${operation} subagent process.`,
 ): SubagentProcessError =>
   new SubagentProcessError({
     operation,
     message:
-      error instanceof Error ? error.message : Predicate.isString(error) ? error : fallbackMessage,
+      cause instanceof Error ? cause.message : Predicate.isString(cause) ? cause : fallbackMessage,
     ...(code && { code }),
   });
 

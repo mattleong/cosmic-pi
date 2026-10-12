@@ -7,6 +7,7 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import type { Scope } from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -40,6 +41,7 @@ import {
 } from "./fixtures/backend-supervisor.ts";
 import { objectContaining, stringContaining } from "./support/matchers.ts";
 
+const wireJson = Schema.decodeUnknownSync(Schema.Json);
 type ReplayScenario =
   | "steering"
   | "forwarded-user"
@@ -113,7 +115,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
         }
       : undefined;
     const offerChild = (value: ClaudeInboundFrame): void => {
-      Queue.offerUnsafe(childEvents, { type: "message", value });
+      Queue.offerUnsafe(childEvents, { type: "message", value: wireJson(value) });
     };
     const offerReplay = (frame: ClaudeUserFrame): void => {
       offerChild({

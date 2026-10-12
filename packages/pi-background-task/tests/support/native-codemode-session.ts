@@ -6,7 +6,7 @@ import { provideTaskService } from "./task-service-double.ts";
 
 export const nativeCodemodeSession = (service: BackgroundTaskServiceContract) =>
   Effect.gen(function* () {
-    const runTool = Effect.runPromiseWith(yield* Effect.context<never>());
+    const runTool = Effect.runPromiseWith(yield* Effect.context());
     return yield* fauxCodemodeSession({
       prefix: "background-task-workflow-",
       provider: "background-task-workflow-test",

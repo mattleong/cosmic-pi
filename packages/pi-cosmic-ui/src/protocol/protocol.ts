@@ -1,4 +1,5 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type * as Types from "effect/Types";
@@ -73,7 +74,13 @@ export interface CosmicUiHostQuery {
 
 const Version = Schema.Literal(COSMIC_UI_PROTOCOL_VERSION);
 const NonEmpty = Schema.String.check(Schema.isNonEmpty());
-const HostQueryData = Schema.Struct({ version: Version, respond: Schema.Unknown });
+const isStateResponder = <Value>(
+  value: Value,
+): value is Value & ((state: CosmicUiHostState) => void) => Predicate.isFunction(value);
+const HostQueryData = Schema.Struct({
+  version: Version,
+  respond: Schema.declare(isStateResponder),
+});
 const HostStateData = Schema.Struct({
   version: Version,
   active: Schema.Boolean,
@@ -137,30 +144,31 @@ const detachHostState = ({ active, ready, hidden }: CosmicUiHostState) => ({
   hidden: Object.freeze([...hidden]),
 });
 
-export function normalizeCosmicUiHostQuery<ValueInput>(
-  value: ValueInput,
-): CosmicUiHostQuery | undefined {
-  const query = decodeUnknownOrUndefined(HostQueryData, value);
-  if (!query || !Predicate.isFunction(query.respond)) return undefined;
+const hostQuery = (query: typeof HostQueryData.Type | undefined): CosmicUiHostQuery | undefined => {
+  if (!query) return undefined;
   const respond = query.respond;
   return Object.freeze({
     version: query.version,
     respond: (state: CosmicUiHostState) =>
-      void Function.prototype.apply.call(respond, query, [Object.freeze(detachHostState(state))]),
+      respond.call(query, Object.freeze(detachHostState(state))),
   });
-}
+};
 
-export function normalizeCosmicUiHostStateEvent<ValueInput>(
-  value: ValueInput,
-): CosmicUiHostStateEvent | undefined {
-  const event = decodeUnknownOrUndefined(HostStateData, value);
-  return event && Object.freeze({ version: event.version, ...detachHostState(event) });
-}
+export const normalizeCosmicUiHostQuery = flow(decodeUnknownOrUndefined(HostQueryData), hostQuery);
 
-export function normalizeCosmicFooterUpsertEvent<ValueInput>(
-  value: ValueInput,
-): CosmicFooterUpsertEvent | undefined {
-  const event = decodeUnknownOrUndefined(UpsertData, value);
+const hostStateEvent = (
+  event: typeof HostStateData.Type | undefined,
+): CosmicUiHostStateEvent | undefined =>
+  event && Object.freeze({ version: event.version, ...detachHostState(event) });
+
+export const normalizeCosmicUiHostStateEvent = flow(
+  decodeUnknownOrUndefined(HostStateData),
+  hostStateEvent,
+);
+
+const footerUpsertEvent = (
+  event: typeof UpsertData.Type | undefined,
+): CosmicFooterUpsertEvent | undefined => {
   if (!event) return undefined;
   let contribution = event.contribution;
   if (contribution.kind === "text") {
@@ -179,13 +187,22 @@ export function normalizeCosmicFooterUpsertEvent<ValueInput>(
     owner: event.owner,
     contribution: detachCosmicFooterContribution(contribution),
   });
-}
+};
 
-export function normalizeCosmicFooterRemoveEvent<ValueInput>(
-  value: ValueInput,
-): CosmicFooterRemoveEvent | undefined {
-  const event = decodeUnknownOrUndefined(RemoveData, value);
+export const normalizeCosmicFooterUpsertEvent = flow(
+  decodeUnknownOrUndefined(UpsertData),
+  footerUpsertEvent,
+);
+
+const footerRemoveEvent = (
+  event: typeof RemoveData.Type | undefined,
+): CosmicFooterRemoveEvent | undefined => {
   if (!event) return undefined;
   const { version, owner, id } = event;
   return Object.freeze({ version, owner, ...(id !== undefined && { id }) });
-}
+};
+
+export const normalizeCosmicFooterRemoveEvent = flow(
+  decodeUnknownOrUndefined(RemoveData),
+  footerRemoveEvent,
+);

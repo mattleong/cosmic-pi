@@ -174,6 +174,7 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
             ),
           ),
         );
+        return undefined;
       }),
     );
   const currentRecord = (record: WorkspaceRecord): WorkspaceRecord =>

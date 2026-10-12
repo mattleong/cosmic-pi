@@ -29,7 +29,8 @@ const captureTool = (
 type AskUserTool = ReturnType<typeof captureTool>;
 
 const settled = { executionStarted: true, isPartial: false };
-const callOutput = <Args>(tool: AskUserTool, args: Args) => {
+type CallArgs = Parameters<ReturnType<typeof createToolPresentationHarness>["call"]>[0];
+const callOutput = (tool: AskUserTool, args: CallArgs) => {
   const harness = createToolPresentationHarness(tool, { width: 240 });
   harness.call(args, settled);
   return harness.render().join("\n");
@@ -76,6 +77,7 @@ describe("ask_user tool", () => {
         expect(rendered).toContain("answer");
         expect(rendered).toContain("Historical custom");
         expect(rendered).toContain("Historical choice");
+        return undefined;
       });
   });
   it("shows notes under their answer, declines malformed notes, and rejects string content", () => {
@@ -128,6 +130,7 @@ describe("ask_user tool", () => {
         expect(ask).toHaveBeenCalledWith(request, signal);
         expect(result.details).toEqual(outcome);
         expect(firstText(result.content)).toContain("safe (Safe)");
+        return undefined;
       });
   });
 

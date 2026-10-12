@@ -38,11 +38,12 @@ try {
     }
   }
   if (process.exitCode !== 1) {
-    const sections: string[] = [];
-    for (const name of packages) {
-      const text = await readFile(join(directory, `${name}.txt`), "utf8");
-      sections.push(`════ ${name} ════\n\n${text}`);
-    }
+    const sections = await Promise.all(
+      packages.map(
+        async (name) =>
+          `════ ${name} ════\n\n${await readFile(join(directory, `${name}.txt`), "utf8")}`,
+      ),
+    );
     await writeFile(out, sections.join("\n"));
     console.log(`Presentation gallery written to ${out}`);
   }

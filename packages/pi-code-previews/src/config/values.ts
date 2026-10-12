@@ -1,7 +1,11 @@
 import * as Predicate from "effect/Predicate";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { decodeTolerantFields, type TolerantFieldDiagnostic } from "pi-cosmic-core";
+import {
+  decodeTolerantFields,
+  type JsonObject,
+  type TolerantFieldDiagnostic,
+} from "pi-cosmic-core";
 import { ALL_CODE_PREVIEW_TOOLS, parseCodePreviewTools } from "../tools/names";
 import {
   CODE_PREVIEW_SETTING_KEYS,
@@ -34,14 +38,16 @@ export function formatSettingValue(
   return String(value);
 }
 
-export function normalizeSettingsWithDiagnostics<DataInput>(
-  data: DataInput,
+const decodeSettingsFields = decodeTolerantFields(CodePreviewSettingsSchema.fields, {
+  path: "settings",
+  maxDiagnostics: MAX_SETTINGS_DIAGNOSTICS,
+});
+
+export function normalizeSettingsWithDiagnostics(
+  data: JsonObject,
   fallback: CodePreviewSettings,
 ): NormalizedCodePreviewSettings {
-  const decoded = decodeTolerantFields(data, CodePreviewSettingsSchema.fields, {
-    path: "settings",
-    maxDiagnostics: MAX_SETTINGS_DIAGNOSTICS,
-  });
+  const decoded = decodeSettingsFields(data);
   const next = cloneCodePreviewSettings(fallback);
   Object.assign(next, decoded.value);
   const tools = new Set(decoded.value.tools ?? fallback.tools);

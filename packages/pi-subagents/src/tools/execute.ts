@@ -5,6 +5,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { absurd } from "effect/Function";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import { invokeHostCallback } from "pi-cosmic-core";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
@@ -418,6 +419,7 @@ export const executeSubagentActionEffect = (
       case SUBAGENT_TOOL_NAME.claims:
         return yield* executeClaims(input.args);
     }
+    return absurd<never>(input);
   });
 };
 

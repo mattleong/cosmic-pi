@@ -236,7 +236,7 @@ for (const lateResult of ["success", "rejection"] as const) {
         const host = makeAskUserHost(h.ctx, bridge);
         const terminated = yield* Deferred.make<void>();
         const restored = yield* Deferred.make<void>();
-        const runEditor = Effect.runPromiseWith(yield* Effect.context<never>());
+        const runEditor = Effect.runPromiseWith(yield* Effect.context());
         const cleanup: string[] = [];
         let editorSignal: AbortSignal | undefined;
         const edit = vi

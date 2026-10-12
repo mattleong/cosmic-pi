@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import { countLabel } from "pi-cosmic-core";
 import type { SubagentRunView } from "../run/model.ts";
 import { runStateLabel } from "../ui/run-state.ts";
@@ -21,6 +22,7 @@ const stopAcknowledgement = (run: SubagentRunView): string => {
     case "reported":
       return `Stop requested for ${run.id}; current state is ${runStateLabel(run.state)}.`;
   }
+  return absurd(run.state);
 };
 
 const claimsAcknowledgement = (
@@ -76,4 +78,5 @@ export const managementAcknowledgement = (
     case "workspace":
       return runs.map((run) => formatRun(run, true)).join("\n\n");
   }
+  return absurd(action);
 };

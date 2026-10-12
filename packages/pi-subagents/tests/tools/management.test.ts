@@ -47,6 +47,26 @@ const expectInOrder = (text: string, needles: ReadonlyArray<string>, last: strin
   indexes.slice(1).forEach((index, position) => expect(indexes[position]).toBeLessThan(index));
 };
 
+const steering = (pendingDelivery: boolean) =>
+  new SubagentProcessError({
+    operation: "steer",
+    code: "steer_outcome_uncertain",
+    message: "Acknowledgement is pending.",
+    ...(pendingDelivery && { pendingDelivery: true }),
+  });
+
+const firstText = (
+  result: { readonly content: ReadonlyArray<{ readonly text: string }> } | undefined,
+) => result?.content[0]?.text;
+
+const failStart: SubagentServiceContract["start"] = () =>
+  Effect.fail(
+    new InvalidSubagentRequestError({
+      code: "all_failed",
+      message: "f".repeat(64_000),
+    }),
+  );
+
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
@@ -501,13 +521,6 @@ describe("subagent tool", () => {
   effectTest(
     "separates pending guidance from unconfirmed and failed targets in model text",
     function* () {
-      const steering = (pendingDelivery: boolean) =>
-        new SubagentProcessError({
-          operation: "steer",
-          code: "steer_outcome_uncertain",
-          message: "Acknowledgement is pending.",
-          ...(pendingDelivery && { pendingDelivery: true }),
-        });
       const service = subagentServiceDouble({
         send: (id) =>
           id === "pending"
@@ -1085,9 +1098,6 @@ describe("subagent tool", () => {
   effectTest(
     "routes dedicated claim operations through the parent-only coordination tool",
     function* () {
-      const firstText = (
-        result: { readonly content: ReadonlyArray<{ readonly text: string }> } | undefined,
-      ) => result?.content[0]?.text;
       const grants: Array<{ readonly id: string; readonly paths: ReadonlyArray<string> }> = [];
       const claimed = view({
         id: "agent-claims",
@@ -1188,13 +1198,6 @@ describe("subagent tool", () => {
           model: `provider/${"m".repeat(8_000)}`,
         }),
       );
-      const failStart: SubagentServiceContract["start"] = () =>
-        Effect.fail(
-          new InvalidSubagentRequestError({
-            code: "all_failed",
-            message: "f".repeat(64_000),
-          }),
-        );
       const service = subagentServiceDouble({
         list: Effect.succeed(oversizedRuns),
         start: failStart,

@@ -1,3 +1,4 @@
+import type * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import {
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS as MAX_ID,
@@ -6,7 +7,7 @@ import {
 } from "../src/supervisor/mcp-contract.ts";
 import { decodeSupervisorToolCall } from "../src/supervisor/tool-call.ts";
 
-type Case = readonly [label: string, tool: string, args: unknown];
+type Case = readonly [label: string, tool: string, args: Schema.Json];
 
 const PROGRESS = "supervisor_progress";
 const REPORT = "supervisor_submit_report";

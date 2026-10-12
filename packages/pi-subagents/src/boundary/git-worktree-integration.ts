@@ -38,6 +38,7 @@ const checkPreimage = (root: string, name: string, expected: SnapshotEntry | und
         "integrate",
         "Source preimage changed; publication stopped and recovery artifacts retained.",
       );
+    return undefined;
   });
 
 export const requiredLeaseDirectories = (
@@ -111,6 +112,7 @@ const checkAncestors = (
       }
       parent = path.dirname(parent);
     }
+    return undefined;
   });
 
 const journalEntry = (

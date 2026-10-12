@@ -16,6 +16,11 @@
     "**/tests/test262/fixtures/**"
   ],
   "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "promise"],
+  "categories": {
+    "correctness": "error",
+    "perf": "error",
+    "suspicious": "error"
+  },
   "jsPlugins": [
     {
       "name": "anti-slop",
@@ -76,6 +81,12 @@
     ],
     "eslint/no-self-compare": "error",
     "eslint/no-shadow": "error",
+    "eslint/no-underscore-dangle": [
+      "error",
+      {
+        "allow": ["_tag", "_meta"]
+      }
+    ],
     "eslint/no-unneeded-ternary": "error",
     "eslint/no-useless-return": "error",
     "eslint/prefer-const": "error",
@@ -184,7 +195,8 @@
           {
             "assertionStyle": "as"
           }
-        ]
+        ],
+        "typescript/no-unsafe-type-assertion": "off"
       }
     },
     {

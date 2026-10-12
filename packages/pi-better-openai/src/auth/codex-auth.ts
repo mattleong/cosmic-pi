@@ -26,12 +26,14 @@ export class CodexAuthError extends Schema.TaggedError<CodexAuthError>()("CodexA
   message: Schema.String,
 }) {}
 export type CodexCredentials = {
-  readonly accessToken: Redacted.Redacted<string>;
+  readonly accessToken: Redacted.Redacted;
   readonly accountId: string;
 };
 
+const decodeRegistryCredentials = decodeUnknownOrUndefined(RegistryCredentialsFromJsonSchema);
+
 const parseRegistryCredentials = (value: string): CodexCredentials | undefined => {
-  const parsed = decodeUnknownOrUndefined(RegistryCredentialsFromJsonSchema, value);
+  const parsed = decodeRegistryCredentials(value);
   const parsedToken = parsed?.access ?? parsed?.token;
   const parsedAccountId = (parsed?.accountId ?? parsed?.account_id)?.trim();
   if (parsedToken && parsedAccountId)

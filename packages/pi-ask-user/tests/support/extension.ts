@@ -30,7 +30,7 @@ export const startExtension = (
         _options?: Parameters<ExtensionAPI["sendMessage"]>[1],
       ) => undefined,
     );
-    const appendEntry = vi.fn(<Data>(_customType: string, _data?: Data) => undefined);
+    const appendEntry = vi.fn<ExtensionAPI["appendEntry"]>();
     const host = recordingExtensionHost({}, { events: createEventBus(), sendMessage, appendEntry });
     askUserWithDependencies(host.pi, load);
     return { ...host, sendMessage, appendEntry };

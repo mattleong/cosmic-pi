@@ -103,20 +103,25 @@ test("rejects an unleased ancestor appearing between lease revalidation and publ
   expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("prepared");
 });
 
+interface PendingInterrupt {
+  current?: () => void;
+}
+
 test("reports and owns a create interrupted while it commits the active record", function* (service, root) {
   const reported: WorkspaceHandle[] = [];
   const rename = fs.rename;
-  let interrupt = () => {};
+  const pendingInterrupt: PendingInterrupt = {};
   const spy = vi.spyOn(fs, "rename").mockImplementation((from, to) =>
     fs.readFile(from, "utf8").then((text) => {
-      if (String(to).endsWith("record.json") && text.includes('"status":"active"')) interrupt();
+      if (String(to).endsWith("record.json") && text.includes('"status":"active"'))
+        pendingInterrupt.current?.();
       return rename(from, to);
     }),
   );
   const launch = yield* Effect.forkChild(
     service.create({ sourceCwd: root, ownerId: "parent", onAcquired: (h) => reported.push(h) }),
   );
-  interrupt = () => launch.interruptUnsafe();
+  pendingInterrupt.current = () => launch.interruptUnsafe();
   const exit = yield* Fiber.await(launch).pipe(
     Effect.ensuring(Effect.sync(() => spy.mockRestore())),
   );

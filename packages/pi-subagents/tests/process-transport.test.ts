@@ -37,6 +37,7 @@ const notification = { method: "initialized" as const };
 const { ChildProcess: NodeChildProcessClass } = process.getBuiltinModule("node:child_process");
 const { PassThrough, Writable } = process.getBuiltinModule("node:stream");
 
+const foreignListener = () => {};
 const fixture = () => {
   const child: NodeChildProcess = new NodeChildProcessClass();
   const stdout = new PassThrough();
@@ -134,15 +135,14 @@ describe("shared process transport", () => {
   it.effect("detaches exactly its listeners after asynchronous spawn failure", () =>
     Effect.gen(function* () {
       const f = fixture();
-      const foreign = () => {};
-      f.child.on("error", foreign);
-      f.stdout.on("error", foreign);
+      f.child.on("error", foreignListener);
+      f.stdout.on("error", foreignListener);
       const pending = yield* Effect.forkChild(acquireNative().pipe(Effect.flip, Effect.scoped));
       yield* spawnListenerReady(f.child);
       f.child.emit("error", new Error("spawn failed"));
       expect((yield* Fiber.join(pending)).code).toBe("local_cli_spawn_failed");
-      expect(f.child.listeners("error")).toEqual([foreign]);
-      expect(f.stdout.listeners("error")).toEqual([foreign]);
+      expect(f.child.listeners("error")).toEqual([foreignListener]);
+      expect(f.stdout.listeners("error")).toEqual([foreignListener]);
       expect(f.child.listenerCount("spawn")).toBe(0);
       expect(f.child.listenerCount("close")).toBe(0);
       expect(f.stdin.destroyed && f.stdout.destroyed && f.stderr.destroyed).toBe(true);
@@ -354,8 +354,7 @@ describe("Pi transport policy", () => {
     () =>
       Effect.gen(function* () {
         const f = fixture();
-        const foreign = () => {};
-        f.child.on("message", foreign);
+        f.child.on("message", foreignListener);
         const scope = yield* Scope.make();
         const agentDirectory = yield* temporaryDirectory("pi-transport-test-");
         const context = yield* Layer.build(
@@ -392,7 +391,7 @@ describe("Pi transport policy", () => {
         expect(boundary.terminate).not.toHaveBeenCalled();
         yield* closeScope(scope);
         expect(f.writes.at(-1)).toContain('"abort"');
-        expect(f.child.listeners("message")).toEqual([foreign]);
+        expect(f.child.listeners("message")).toEqual([foreignListener]);
         expect(f.child.listenerCount("disconnect")).toBe(0);
       }),
   );

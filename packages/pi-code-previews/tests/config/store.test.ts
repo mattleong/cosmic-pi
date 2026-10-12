@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type { JsonObject } from "pi-cosmic-core";
 import { deferredPromise, temporaryDirectory } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import { effectTest, step } from "../support/effect-test";
@@ -387,7 +388,7 @@ effectTest("loadSettingsFromDisk skips invalid JSON and continues", function* ()
   assert.equal(loaded?.grepCollapsedLines, 31);
 });
 
-function writeJson<DataInput>(path: string, data: DataInput): Effect.Effect<void> {
+function writeJson(path: string, data: JsonObject): Effect.Effect<void> {
   return step(() =>
     mkdir(dirname(path), { recursive: true }).then(() =>
       writeFile(path, `${JSON.stringify(data)}\n`, "utf8"),

@@ -73,8 +73,8 @@ type ToolCallTimingOptions = {
   scheduleAnimation?: CompactAnimationScheduler | undefined;
 };
 
-export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
-  context: TContext,
+export function updateToolCallTiming(
+  context: ToolTimingUpdateContext,
   options: ToolCallTimingOptions,
 ): ToolCallTiming | undefined {
   const state = timingState(context);

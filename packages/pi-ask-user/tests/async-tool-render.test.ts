@@ -1,13 +1,20 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { plainTheme as theme } from "pi-cosmic-core/testing";
+import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
+import type { AskUserQuestion } from "../src/questionnaire/schema.ts";
 import {
   renderAsyncCall,
   renderAsyncContent,
   renderAsyncMessage,
   renderAsyncResult,
 } from "../src/ui/async-tool-render.ts";
+import type { QuestionnaireArgs } from "../src/ui/tool-body.ts";
+import { contentText } from "../src/ui/tool-render-projection.ts";
 import { hostile, hostileContent, malformedNoteAnswers } from "./support/questionnaire.ts";
+
+type ResultDetails = Parameters<typeof renderAsyncResult>[0]["details"];
+type MessageInput = Parameters<typeof renderAsyncMessage>[0];
 
 const output = (component: Component) => component.render(240).join("\n");
 const callContext = (expanded = false) => ({ expanded, state: {} });
@@ -27,17 +34,35 @@ const snapshot = {
   outcome,
 };
 const agentText = `Request ${snapshot.requestId} · delivery ${snapshot.deliveryId}\nComplete agent guidance remains available.`;
-const message = {
-  details: { ...snapshot, generation: "generation-private-id" },
-  content: agentText,
-};
-const result = <Details, Content>(details: Details, expanded = false, content?: Content) =>
-  output(renderAsyncResult({ details, content }, { expanded, isPartial: false }, theme));
+const textContent = (text: string) => (text === "" ? [] : [{ type: "text" as const, text }]);
+const asyncMessage = (content: MessageInput["content"], details?: ResultDetails): MessageInput => ({
+  role: "custom",
+  customType: ASYNC_MESSAGE_TYPE,
+  content,
+  display: true,
+  timestamp: 0,
+  details,
+});
+const message = asyncMessage(agentText, { ...snapshot, generation: "generation-private-id" });
+const result = (details: ResultDetails, expanded = false, content = "") =>
+  output(
+    renderAsyncResult(
+      { details, content: textContent(content) },
+      { expanded, isPartial: false },
+      theme,
+    ),
+  );
+const question = (title: string): AskUserQuestion => ({
+  key: title,
+  title,
+  prompt: "Prompt?",
+  mode: "text",
+});
 
 describe("async questionnaire replay rendering", () => {
   it("compact notifications keep the delivered text, answers, and unknown content behind expansion", () => {
-    const withoutText = { details: message.details, content: "" };
-    for (const input of [message, withoutText, { content: "Full fallback diagnostic" }]) {
+    const withoutText = asyncMessage("", message.details);
+    for (const input of [message, withoutText, asyncMessage("Full fallback diagnostic")]) {
       for (const expanded of [false, true, false]) {
         const text = output(renderAsyncMessage(input, { expanded, outputPad: 0 }, theme, true));
         expect(text).not.toContain("generation-private-id");
@@ -61,7 +86,7 @@ describe("async questionnaire replay rendering", () => {
         result(details, false, "string fallback"),
         output(
           renderAsyncMessage(
-            { details: { ...details, generation: "generation" }, content: "string fallback" },
+            asyncMessage("string fallback", { ...details, generation: "generation" }),
             { expanded: false, outputPad: 0 },
             theme,
           ),
@@ -120,7 +145,7 @@ describe("async questionnaire replay rendering", () => {
         expect(result(details, true)).toContain("Avoid tolls");
         const content = output(
           renderAsyncContent(
-            { details, content: "Continue only this independent work: Inspect first" },
+            { details, content: textContent("Continue only this independent work: Inspect first") },
             { expanded: true, isPartial: false },
             theme,
           ),
@@ -130,7 +155,7 @@ describe("async questionnaire replay rendering", () => {
       expect(
         output(
           renderAsyncMessage(
-            { details: { requestId: id, deliveryId: id, generation: "", outcome } },
+            asyncMessage("", { requestId: id, deliveryId: id, generation: "", outcome }),
             { expanded: true, outputPad: 0 },
             theme,
           ),
@@ -141,7 +166,7 @@ describe("async questionnaire replay rendering", () => {
     expect(result(invalid, false, "raw fallback").trimEnd()).toBe("raw fallback");
     const expanded = output(
       renderAsyncContent(
-        { details: invalid, content: "raw fallback" },
+        { details: invalid, content: textContent("raw fallback") },
         { expanded: true, isPartial: false },
         theme,
       ),
@@ -167,18 +192,22 @@ describe("async questionnaire replay rendering", () => {
       expect(result({ ...snapshot, status })).not.toContain("Scenic");
     }
     expect(
-      output(renderAsyncResult({ details: snapshot }, { expanded: false, isPartial: true }, theme)),
+      output(
+        renderAsyncResult(
+          { details: snapshot, content: [] },
+          { expanded: false, isPartial: true },
+          theme,
+        ),
+      ),
     ).not.toContain("Scenic");
     expect(
       output(
         renderAsyncMessage(
-          {
-            ...message,
-            details: {
-              ...message.details,
-              outcome: { outcome: "cancelled", answers: outcome.answers },
-            },
-          },
+          asyncMessage(agentText, {
+            ...snapshot,
+            generation: "generation-private-id",
+            outcome: { outcome: "cancelled", answers: outcome.answers },
+          }),
           { expanded: false, outputPad: 0 },
           theme,
         ),
@@ -187,8 +216,10 @@ describe("async questionnaire replay rendering", () => {
   });
 
   it("renders six questions and answers but falls back safely beyond them and for hostile data", () => {
-    const hostileResult = hostile({}, "details");
-    const questions = Array.from({ length: 6 }, (_, index) => ({ title: `Question ${index + 1}` }));
+    const hostileResult = hostile({ details: undefined, content: [] }, "details");
+    const hostileMessage = hostile(asyncMessage(""), "details");
+    const hostileArgs: QuestionnaireArgs = hostile({}, "questions");
+    const questions = Array.from({ length: 6 }, (_, index) => question(`Question ${index + 1}`));
     const answers = Array.from({ length: 7 }, (_, index) => ({
       key: `answer-${index + 1}`,
       kind: "custom",
@@ -204,13 +235,20 @@ describe("async questionnaire replay rendering", () => {
       { requests: Array.from({ length: 17 }, () => snapshot) },
       { ...snapshot, outcome: { outcome: "submitted", answers } },
     ];
-    const content = hostileContent("safe");
+    const content = [
+      { type: "text" as const, text: "safe\u001b[31m fallback" },
+      { type: "image" as const, data: "secret", mimeType: "image/png" },
+      { type: "text" as const, text: "after" },
+    ];
+    expect(contentText(hostileContent("safe"))).toBe("safe fallback\nafter");
     const hostileId = hostile({ ...snapshot }, "requestId");
     for (const rendered of [
       ...[...invalid, hostileId, { requests: [hostileId] }].map((details) =>
-        result(details, false, content),
+        output(
+          renderAsyncResult({ details, content }, { expanded: false, isPartial: false }, theme),
+        ),
       ),
-      output(renderAsyncMessage({ content }, { expanded: false, outputPad: 0 }, theme)),
+      output(renderAsyncMessage(asyncMessage(content), { expanded: false, outputPad: 0 }, theme)),
     ]) {
       expect(rendered).toContain("safe fallback");
       expect(rendered).toContain("after");
@@ -221,9 +259,9 @@ describe("async questionnaire replay rendering", () => {
       renderAsyncResult(hostileResult, { expanded: true, isPartial: false }, theme),
     ).not.toThrow();
     expect(() =>
-      renderAsyncMessage(hostileResult, { expanded: true, outputPad: 0 }, theme),
+      renderAsyncMessage(hostileMessage, { expanded: true, outputPad: 0 }, theme),
     ).not.toThrow();
-    expect(() => renderAsyncCall(hostile({}, "questions"), theme, callContext(true))).not.toThrow();
+    expect(() => renderAsyncCall(hostileArgs, theme, callContext(true))).not.toThrow();
   });
 
   it("sanitizes answers, notes, titles, metadata and notification fallback text", () => {
@@ -239,8 +277,8 @@ describe("async questionnaire replay rendering", () => {
     };
     const rendered = [
       result(details, true),
-      output(renderAsyncMessage({ content: dirty }, { expanded: false, outputPad: 0 }, theme)),
-      output(renderAsyncCall({ questions: [{ title: dirty }] }, theme, callContext())),
+      output(renderAsyncMessage(asyncMessage(dirty), { expanded: false, outputPad: 0 }, theme)),
+      output(renderAsyncCall({ questions: [question(dirty)] }, theme, callContext())),
     ];
     for (const text of rendered) {
       expect(text).toContain("value");
@@ -257,7 +295,7 @@ describe("async questionnaire replay rendering", () => {
     expect(queued).not.toMatch(/waiting/i);
     const listed = output(
       renderAsyncResult(
-        { details: { requests: [{ ...pending, presentation: "open" }, snapshot] } },
+        { details: { requests: [{ ...pending, presentation: "open" }, snapshot] }, content: [] },
         { expanded: false, isPartial: false },
         theme,
         { args: { action: "status" } },
@@ -273,16 +311,21 @@ describe("async questionnaire replay rendering", () => {
     for (const details of [snapshot, cancelledResult])
       expect(
         output(
-          renderAsyncResult({ details }, { expanded: false, isPartial: false }, theme, {
-            isError: true,
-          }),
+          renderAsyncResult(
+            { details, content: [] },
+            { expanded: false, isPartial: false },
+            theme,
+            {
+              isError: true,
+            },
+          ),
         ).trim(),
       ).toBe("");
   });
 
   it("headers name the tool and subject without request IDs", () => {
     for (const expanded of [false, true]) {
-      for (const action of ["status", "await", "cancel"]) {
+      for (const action of ["status", "await", "cancel"] as const) {
         const heading = output(
           renderAsyncCall(
             { action, requestId: "request-private-id" },

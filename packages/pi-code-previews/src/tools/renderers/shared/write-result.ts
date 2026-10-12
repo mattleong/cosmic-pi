@@ -1,5 +1,5 @@
 import * as Predicate from "effect/Predicate";
-import { getObjectValue } from "../../../shared/helpers";
+import { ownField, type HostObject } from "../../../shared/untrusted-value";
 import {
   getWriteDiffGuard,
   getWriteDiffSkipReason,
@@ -10,11 +10,11 @@ import type { RendererState } from "./types";
 
 const BEFORE_SNAPSHOT = "codePreviewWriteBeforeSnapshot";
 
-export function writeBeforeSnapshot<Details>(
+export function writeBeforeSnapshot(
   state: RendererState,
   toolCallId: string | undefined,
-  details: Details,
-) {
+  details: HostObject | undefined,
+): HostObject | undefined {
   if (Object.hasOwn(state, BEFORE_SNAPSHOT)) return state[BEFORE_SNAPSHOT];
   const before = getCodePreviewBeforeWrite(toolCallId, details);
   state[BEFORE_SNAPSHOT] = before;
@@ -28,12 +28,15 @@ type WriteDiffPlan =
   | { readonly kind: "guarded"; readonly guard: "size" | "complexity" }
   | { readonly kind: "diff"; readonly previous: string; readonly content: string };
 
-export function writeDiffPlan<Before, Content>(before: Before, content: Content): WriteDiffPlan {
-  if (!Predicate.isString(content)) return { kind: "unknown" };
+export function writeDiffPlan(
+  before: HostObject | undefined,
+  content: string | undefined,
+): WriteDiffPlan {
+  if (content === undefined) return { kind: "unknown" };
   const reason = getWriteDiffSkipReason(before, content);
   if (reason !== undefined)
     return { kind: "skipped", reason, measured: hasWriteDiffSizeEvidence(before) };
-  const previous = getObjectValue(before, "content");
+  const previous = ownField(before, "content");
   if (!Predicate.isString(previous)) return { kind: "unknown" };
   if (previous === content) return { kind: "unchanged" };
   const guard = getWriteDiffGuard(previous, content);

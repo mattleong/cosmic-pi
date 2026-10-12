@@ -11,7 +11,7 @@ import { metadata } from "../../preview/format";
 import { countContentLines } from "../../preview/line-counts";
 import { hiddenPreviewExpandHintForShell } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
-import { getObjectValue } from "../../shared/helpers";
+import { hostContainer, hostObject, ownField } from "../../shared/untrusted-value";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { normalizePreviewLanguageAlias } from "../../syntax/language";
 import { getPathArg } from "../data/args";
@@ -43,8 +43,9 @@ export function createWritePreviewTool(cwd: string) {
     ...definition,
     execute(...args: Parameters<typeof originalWrite.execute>) {
       const [toolCallId, params, signal, , ctx] = args;
-      const path = getPathArg(params);
-      const content = getObjectValue(params, "content");
+      const input = hostObject(params);
+      const path = getPathArg(input);
+      const content = ownField(input, "content");
       if (!path || !Predicate.isString(content) || !hasCodePreviewSessionCapability())
         return originalWrite.execute(...args);
       return executeWriteWithPreview(toolCallId, path, content, cwd, signal, ctx);
@@ -56,8 +57,9 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
       const { state, expanded, invalidate } = renderContext;
-      const path = getPathArg(args);
-      const contentArg = getObjectValue(args, "content");
+      const input = hostObject(args);
+      const path = getPathArg(input);
+      const contentArg = ownField(input, "content");
       const content = Predicate.isString(contentArg) ? contentArg : "";
       const lang = pathPreviewLanguage(path, content);
       const title = `${renderCodePreviewToolTitle("write", theme)} ${renderDisplayPath(path, cwd, theme)}`;
@@ -105,10 +107,16 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
         return renderPreviewError(theme, expanded, firstText);
       }
 
-      const path = getPathArg(renderContext.args);
-      const before = writeBeforeSnapshot(state, renderContext.toolCallId, result.details);
-      state.writeNewFile = isKnownNewWrite(before, result.details);
-      const plan = writeDiffPlan(before, getObjectValue(renderContext.args, "content"));
+      const input = hostObject(renderContext.args);
+      const path = getPathArg(input);
+      const before = writeBeforeSnapshot(
+        state,
+        renderContext.toolCallId,
+        hostObject(result.details),
+      );
+      state.writeNewFile = isKnownNewWrite(before, hostContainer(result.details));
+      const nextContent = ownField(input, "content");
+      const plan = writeDiffPlan(before, Predicate.isString(nextContent) ? nextContent : undefined);
       if (plan.kind === "skipped")
         return plan.measured
           ? new Text(theme.fg("muted", `diff skipped: ${escapeControlChars(plan.reason)}`), 0, 0)

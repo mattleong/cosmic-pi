@@ -30,6 +30,13 @@ type UserDecision = Extract<LocalClaudeDebugEntry, { readonly kind: "user-decisi
 const sentKindForOperation = (operation: PendingUserReplay["operation"]): ClaudeSentUserKind =>
   operation === "initialize" ? "probe" : operation === "start" ? "assignment" : "steer";
 
+const isInterruptMarker = (event: ClaudeUserProtocolEvent, sameSession: boolean): boolean =>
+  event.isReplay &&
+  event.text === CLAUDE_INTERRUPT_MARKER &&
+  event.toolResults.length === 0 &&
+  event.uuid === undefined &&
+  sameSession;
+
 export const makeLocalClaudeUserEvents = (context: LocalClaudeHandleContext) => {
   const {
     state,
@@ -86,13 +93,6 @@ export const makeLocalClaudeUserEvents = (context: LocalClaudeHandleContext) => 
     event.uuid !== undefined &&
     event.uuid === pending.uuid &&
     isExactSession(event);
-
-  const isInterruptMarker = (event: ClaudeUserProtocolEvent, sameSession: boolean): boolean =>
-    event.isReplay &&
-    event.text === CLAUDE_INTERRUPT_MARKER &&
-    event.toolResults.length === 0 &&
-    event.uuid === undefined &&
-    sameSession;
 
   const isQueuedTaskNotificationReplay = (event: ClaudeUserProtocolEvent): boolean => {
     const replay = claudeTaskNotificationReplay(event);

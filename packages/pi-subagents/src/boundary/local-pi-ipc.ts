@@ -11,7 +11,8 @@ import type { NodeChildProcess } from "./node-builtins.ts";
 
 const IPC_WRITE_TIMEOUT = "10 seconds";
 
-type IpcMessageListener = <MessageInput>(message: MessageInput) => void;
+type IpcMessage = Parameters<NodeChildProcess["send"]>[0];
+type IpcMessageListener = (message: IpcMessage) => void;
 
 export interface LocalPiIpcPort<Outbound> {
   readonly connected: () => boolean;
@@ -46,7 +47,7 @@ const boundedSend = <Message, Failure>(
 
 const attachListeners = <Outbound, Inbound>(
   port: LocalPiIpcPort<Outbound>,
-  decode: <Input>(input: Input) => Option.Option<Inbound>,
+  decode: (input: IpcMessage) => Option.Option<Inbound>,
   onMessage: (message: Inbound) => void,
   onInvalidMessage: () => void,
   onDisconnect?: () => void,

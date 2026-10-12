@@ -8,14 +8,13 @@ import {
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import {
-  captureHostSignal,
   invokeHostCallback,
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
-import { snapshotHostAbortSignal } from "./boundary/host-abort-signal.ts";
+import { capturedHostSignal, snapshotHostAbortSignal } from "./boundary/host-abort-signal.ts";
 import {
   addAssistantUsage,
   decodeAssistantUsage,
@@ -59,6 +58,17 @@ export interface CosmicUiApplicationDependencies {
   readonly shutdownHostUiTickers?: () => Promise<void>;
   readonly workingRow?: WorkingRowOptions;
 }
+
+const applyProtocolEvent = <E>(parse: () => E | undefined, apply: (event: E) => void): void => {
+  const parsed = invokeHostCallback(parse, undefined);
+  if (parsed) apply(parsed);
+};
+
+const sessionCwd = (ctx: ExtensionContext) =>
+  invokeHostCallback(() => {
+    const cwd = ctx.cwd;
+    return Predicate.isString(cwd) && cwd.length > 0 ? cwd : undefined;
+  }, undefined);
 
 export function registerCosmicUiApplication(
   pi: ExtensionAPI,
@@ -115,11 +125,6 @@ export function registerCosmicUiApplication(
     onActiveChange: publishHostState,
   });
 
-  const sessionCwd = (ctx: ExtensionContext) =>
-    invokeHostCallback(() => {
-      const cwd = ctx.cwd;
-      return Predicate.isString(cwd) && cwd.length > 0 ? cwd : undefined;
-    }, undefined);
   const resetTotals = () => {
     usageSessionManager = undefined;
     lastCompleteTotals = emptyTotals();
@@ -233,41 +238,36 @@ export function registerCosmicUiApplication(
     handler: (_args, ctx) => runFrom(activityHost.open(ctx).pipe(Effect.ignore), ctx),
   });
 
-  const hostSignal = (ctx: ExtensionContext) => {
-    const captured = captureHostSignal(ctx);
-    return captured._tag === "Captured" ? captured.signal : undefined;
-  };
   const runFrom = <A, E>(effect: Effect.Effect<A, E, CosmicUiService>, ctx: ExtensionContext) =>
-    slot.run(effect, hostSignal(ctx));
+    slot.run(effect, capturedHostSignal(ctx));
   const forkFrom = <A, E>(effect: Effect.Effect<A, E, CosmicUiService>, ctx: ExtensionContext) =>
-    slot.fork(effect, hostSignal(ctx));
+    slot.fork(effect, capturedHostSignal(ctx));
   const forkGitRefresh = (ctx: ExtensionContext, force?: boolean) =>
     forkFrom(
       CosmicUiService.use((service) => service.refreshGit(force)),
       ctx,
     );
 
-  const onProtocolEvent = <E>(
-    event: string,
-    normalize: <Raw>(raw: Raw) => E | undefined,
-    apply: (event: E) => void,
-  ): (() => void) =>
-    pi.events.on(event, (data) => {
-      const parsed = invokeHostCallback(() => normalize(data), undefined);
-      if (parsed) apply(parsed);
-    });
-
   const ensureSubscriptions = () => {
     if (subscriptions.length > 0) return;
     subscriptions = [
-      onProtocolEvent(COSMIC_UI_HOST_QUERY, normalizeCosmicUiHostQuery, (query) =>
-        invokeHostCallback(() => query.respond(hostState()), undefined),
+      pi.events.on(COSMIC_UI_HOST_QUERY, (data) =>
+        applyProtocolEvent(
+          () => normalizeCosmicUiHostQuery(data),
+          (query) => invokeHostCallback(() => query.respond(hostState()), undefined),
+        ),
       ),
-      onProtocolEvent(COSMIC_UI_FOOTER_UPSERT, normalizeCosmicFooterUpsertEvent, (event) =>
-        registry.upsert(event.owner, event.contribution),
+      pi.events.on(COSMIC_UI_FOOTER_UPSERT, (data) =>
+        applyProtocolEvent(
+          () => normalizeCosmicFooterUpsertEvent(data),
+          (event) => registry.upsert(event.owner, event.contribution),
+        ),
       ),
-      onProtocolEvent(COSMIC_UI_FOOTER_REMOVE, normalizeCosmicFooterRemoveEvent, (event) =>
-        registry.remove(event.owner, event.id),
+      pi.events.on(COSMIC_UI_FOOTER_REMOVE, (data) =>
+        applyProtocolEvent(
+          () => normalizeCosmicFooterRemoveEvent(data),
+          (event) => registry.remove(event.owner, event.id),
+        ),
       ),
     ];
   };
@@ -293,6 +293,25 @@ export function registerCosmicUiApplication(
     resetTotals();
     if (clearRegistry) registry.clear();
     resetProjection(projection);
+  };
+
+  const settleStartup = (
+    failed: boolean,
+    generation: number,
+    context: MutableRef.MutableRef<ExtensionContext>,
+    publicationOwner: MutableRef.MutableRef<boolean>,
+    releaseSignal: () => void,
+  ): void => {
+    if (failed) {
+      retirePublication(publicationOwner);
+      if (currentContext === context) currentContext = undefined;
+      releaseSignal();
+    } else if (generation === lifecycleGeneration) {
+      stopUsageTicker = startHostUiTicker(1_000, () => {
+        if (generation === lifecycleGeneration && currentContext === context)
+          void refreshUsage(MutableRef.get(context), "idle");
+      });
+    }
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -328,25 +347,17 @@ export function registerCosmicUiApplication(
         },
         abort.signal,
       )
-      .then((token) => {
-        if (token === undefined) {
-          retirePublication(publicationOwner);
-          if (currentContext === context) currentContext = undefined;
-          abort.release();
-        } else if (generation === lifecycleGeneration) {
-          stopUsageTicker = startHostUiTicker(1_000, () => {
-            if (generation === lifecycleGeneration && currentContext === context)
-              void refreshUsage(MutableRef.get(context), "idle");
-          });
-        }
-      });
+      .then((token) =>
+        settleStartup(token === undefined, generation, context, publicationOwner, abort.release),
+      );
   });
 
   const refreshUsage = (ctx: ExtensionContext, kind: "turn" | "rescan" | "idle") => {
-    if (!ownsUsageContext(ctx)) return;
+    if (!ownsUsageContext(ctx)) return undefined;
     const previous = lastCompleteTotals;
     const totals = totalsFromSession(ctx);
-    if (kind === "idle" && TOTAL_KEYS.every((key) => totals[key] === previous[key])) return;
+    if (kind === "idle" && TOTAL_KEYS.every((key) => totals[key] === previous[key]))
+      return undefined;
     updateContext(ctx);
     footerInstallation.invalidateContextUsage();
     footerInstallation.requestRender();
@@ -361,15 +372,15 @@ export function registerCosmicUiApplication(
   pi.on("session_compact", (_event, ctx) => refreshUsage(ctx, "rescan"));
   pi.on("session_tree", (_event, ctx) => refreshUsage(ctx, "rescan"));
   pi.on("agent_settled", (_event, ctx) => refreshUsage(ctx, "rescan"));
-  const renderUpdatedContext = <Event>(_event: Event, ctx: ExtensionContext) => {
+  const renderUpdatedContext = (ctx: ExtensionContext) => {
     updateContext(ctx);
     footerInstallation.requestRender();
   };
-  const invalidateContextUsage = <Event>(event: Event, ctx: ExtensionContext) => {
+  const invalidateContextUsage = (ctx: ExtensionContext) => {
     footerInstallation.invalidateContextUsage();
-    renderUpdatedContext(event, ctx);
+    renderUpdatedContext(ctx);
   };
-  pi.on("model_select", invalidateContextUsage);
+  pi.on("model_select", (_event, ctx) => invalidateContextUsage(ctx));
   pi.on("tool_execution_start", (_event, ctx) => {
     updateContext(ctx);
   });
@@ -377,10 +388,10 @@ export function registerCosmicUiApplication(
     updateContext(ctx);
     if (["bash", "edit", "write"].includes(event.toolName)) forkGitRefresh(ctx, true);
   });
-  pi.on("thinking_level_select", renderUpdatedContext);
-  pi.on("session_info_changed", renderUpdatedContext);
-  pi.on("agent_start", (event, ctx) => {
-    invalidateContextUsage(event, ctx);
+  pi.on("thinking_level_select", (_event, ctx) => renderUpdatedContext(ctx));
+  pi.on("session_info_changed", (_event, ctx) => renderUpdatedContext(ctx));
+  pi.on("agent_start", (_event, ctx) => {
+    invalidateContextUsage(ctx);
     workingRow.agentStart();
   });
   pi.on("agent_end", (_event, ctx) => {
@@ -400,9 +411,9 @@ export function registerCosmicUiApplication(
   pi.on("context_with_system", () => {
     workingRow.callStart();
   });
-  pi.on("message_start", invalidateContextUsage);
+  pi.on("message_start", (_event, ctx) => invalidateContextUsage(ctx));
   pi.on("message_update", (event, ctx) => {
-    invalidateContextUsage(event, ctx);
+    invalidateContextUsage(ctx);
     const update = event.assistantMessageEvent;
     if (
       !update ||
@@ -417,7 +428,7 @@ export function registerCosmicUiApplication(
     updateContext(ctx);
     if (event.message?.role === "assistant")
       workingRow.callEnd(decodeCompletedAssistantOutput(event.message));
-    invalidateContextUsage(event, ctx);
+    invalidateContextUsage(ctx);
   });
   pi.on("session_shutdown", () => {
     const generation = beginLifecycle();

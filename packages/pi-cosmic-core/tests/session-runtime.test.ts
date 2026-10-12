@@ -409,9 +409,7 @@ it.effect("waits for aborted runtime disposal before shutdown resolves", () =>
   Effect.gen(function* () {
     const harness = yield* abortStalledStart();
     let shutdownSettled = false;
-    const shutdown = harness.slot.shutdown().then(() => {
-      shutdownSettled = true;
-    });
+    const shutdown = harness.slot.shutdown().then(() => void (shutdownSettled = true));
     yield* Effect.promise(() => Promise.resolve());
     expect(shutdownSettled).toBe(false);
 

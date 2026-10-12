@@ -58,6 +58,8 @@ interface ActivityGalleryOptions {
   readonly now?: number;
 }
 
+const plain = (frame: readonly string[]) => frame.map((line) => stripTerminalControls(line));
+
 export function activityGalleryFrames(options: ActivityGalleryOptions): string[] {
   const { providerId } = options;
   const rows: readonly ActivityRow[] = Object.freeze(
@@ -70,7 +72,6 @@ export function activityGalleryFrames(options: ActivityGalleryOptions): string[]
   );
   const now = options.now ?? 0;
   const lines: string[] = [];
-  const plain = (frame: readonly string[]) => frame.map((line) => stripTerminalControls(line));
   for (const maxRows of options.maxRows ?? [8])
     for (const width of options.widths ?? [60, 80, 100])
       lines.push(

@@ -204,7 +204,7 @@ export const requireWorkflowArgs = (
   args: Schema.Json,
 ): Effect.Effect<void, WorkflowRequestError> =>
   Effect.gen(function* () {
-    if (contract === undefined) return;
+    if (contract === undefined) return undefined;
     const problems = yield* contract.check(args);
     if (problems.length > 0)
       return yield* workflowRequestError(
@@ -212,6 +212,7 @@ export const requireWorkflowArgs = (
         mismatchText(name, problems, contract.summary),
         problems,
       );
+    return undefined;
   });
 
 export const requireStartArgs = (

@@ -2,15 +2,14 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, imageFallback } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 
-import { getObjectValue } from "../../shared/helpers";
+import { ownField, ownObject, type HostObject } from "../../shared/untrusted-value";
 
-export function isTruncated<DetailsInput>(details: DetailsInput): boolean {
-  const truncation = getObjectValue(details, "truncation");
-  return getObjectValue(truncation, "truncated") === true;
+export function isTruncated(details: HostObject | undefined): boolean {
+  return ownField(ownObject(details, "truncation"), "truncated") === true;
 }
 
-export function getEditDiff<DetailsInput>(details: DetailsInput): string | undefined {
-  const diff = getObjectValue(details, "diff");
+export function getEditDiff(details: HostObject | undefined): string | undefined {
+  const diff = ownField(details, "diff");
   return Predicate.isString(diff) ? diff : undefined;
 }
 

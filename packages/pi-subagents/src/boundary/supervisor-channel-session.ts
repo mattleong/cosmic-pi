@@ -166,6 +166,7 @@ export const makeSupervisorChannelSession = ({
               ),
           }),
         );
+        return undefined;
       }).pipe(
         Effect.onExit((exit) =>
           Effect.sync(() => {
@@ -243,6 +244,7 @@ export const makeSupervisorChannelSession = ({
           "Parent reply delivery could not be confirmed.",
         );
       }
+      return undefined;
     });
 
     const cancelPending = (reason?: string): void => {

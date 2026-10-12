@@ -466,13 +466,15 @@ function settledSummary(
     case "logs":
       return logsSummary(details, action, subject);
   }
+  return undefined;
 }
 
-export const backgroundTaskCompactSummary: CompactSummaryProvider<
-  BackgroundTaskToolInput,
-  unknown,
-  unknown
-> = ({ phase, args, result, context }) => {
+export const backgroundTaskCompactSummary: CompactSummaryProvider<BackgroundTaskToolInput> = ({
+  phase,
+  args,
+  result,
+  context,
+}) => {
   const summary = projectBackgroundTaskCompactSummary({
     phase,
     args,

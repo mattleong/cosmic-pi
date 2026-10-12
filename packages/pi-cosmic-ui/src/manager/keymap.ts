@@ -176,6 +176,19 @@ const resolveSearch = (input: KeyInput): FullScreenResolution | undefined => {
   return input.printable === undefined ? selectionMotion(input) : undefined;
 };
 
+const MODE_RESOLVERS = {
+  confirmation: resolveConfirmation,
+  busy: resolveBusy,
+  "text-input": resolveTextInput,
+  search: resolveSearch,
+} satisfies Record<
+  Exclude<FullScreenMode, "navigation">,
+  (
+    input: KeyInput,
+    reservedKeys: ReadonlySet<string> | undefined,
+  ) => FullScreenResolution | undefined
+>;
+
 export class FullScreenKeymap {
   private pendingFirst = false;
 
@@ -187,18 +200,9 @@ export class FullScreenKeymap {
     const pendingFirst = this.pendingFirst;
     this.pendingFirst = false;
     const input = keyInput(data, options);
-    switch (options.mode) {
-      case "confirmation":
-        return resolveConfirmation(input, options.reservedKeys);
-      case "busy":
-        return resolveBusy(input);
-      case "text-input":
-        return resolveTextInput(input);
-      case "search":
-        return resolveSearch(input);
-      case "navigation":
-        return this.resolveNavigation(input, options.reservedKeys, pendingFirst);
-    }
+    if (options.mode === "navigation")
+      return this.resolveNavigation(input, options.reservedKeys, pendingFirst);
+    return MODE_RESOLVERS[options.mode](input, options.reservedKeys);
   }
 
   private resolveNavigation(

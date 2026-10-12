@@ -55,7 +55,7 @@ import {
 } from "../../../src/run/service.ts";
 import { expect } from "@effect/vitest";
 import * as Fiber from "effect/Fiber";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { provideBuiltLayer, type JsonObject } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 
 export const withService = <Eff extends Effect.Effect<unknown, unknown, unknown>, A, ROut, LE, LR>(
@@ -94,7 +94,8 @@ export const awaitRuns = (...args: Parameters<typeof awaitObservations>) =>
 export const waitForCompleted = (service: SubagentServiceContract, id: string) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < 200; attempt++) {
-      if ((yield* service.list).some((run) => run.id === id && run.state === "completed")) return;
+      if ((yield* service.list).some((run) => run.id === id && run.state === "completed"))
+        return undefined;
       yield* Effect.yieldNow;
     }
     return yield* Effect.die(new Error("Run did not complete before the delivery clock advance."));
@@ -180,14 +181,14 @@ export interface FakeChildControl {
   readonly failNextIpc: (code: string) => void;
   readonly rejectNextParentReply: () => void;
   readonly dropNext: (type: RpcCommand["type"]) => void;
-  readonly gateNextSend: (type: RpcCommand["type"], gate: Deferred.Deferred<void, never>) => void;
-  readonly gateNextIpc: (gate: Deferred.Deferred<void, never>) => void;
+  readonly gateNextSend: (type: RpcCommand["type"], gate: Deferred.Deferred<void>) => void;
+  readonly gateNextIpc: (gate: Deferred.Deferred<void>) => void;
   readonly gateNextIpcType: (
     type: LocalPiParentControl["type"],
-    gate: Deferred.Deferred<void, never>,
+    gate: Deferred.Deferred<void>,
   ) => void;
   readonly ackNextIpcBeforeSendSettles: (type: AcknowledgedIpcControlType) => void;
-  readonly gateRelease: (gate: Deferred.Deferred<void, never>) => void;
+  readonly gateRelease: (gate: Deferred.Deferred<void>) => void;
   readonly beforeNextResponse: (type: RpcCommand["type"], value: RpcWireValue) => void;
   readonly offer: (value: RpcWireValue) => void;
   readonly offerIpc: (value: IpcWireValue) => void;
@@ -210,7 +211,7 @@ const takeFirst = <A>(entries: A[], matches: (entry: A) => boolean): A | undefin
 };
 
 export function fakeChildLayer(
-  beforeSpawn: Effect.Effect<void, never, never> = Effect.void,
+  beforeSpawn: Effect.Effect<void> = Effect.void,
   options: {
     readonly dropInitialState?: boolean;
     readonly releaseDefect?: boolean;
@@ -218,7 +219,7 @@ export function fakeChildLayer(
     readonly stateThinkingLevel?: string;
     readonly onRelease?: ((spawnIndex: number) => void) | undefined;
     readonly failReclaim?: boolean | undefined;
-    readonly reclaimGate?: Deferred.Deferred<void, never> | undefined;
+    readonly reclaimGate?: Deferred.Deferred<void> | undefined;
     readonly initialFailures?: ReadonlyArray<{
       readonly spawnIndex: number;
       readonly type: RpcCommand["type"];
@@ -232,7 +233,7 @@ export function fakeChildLayer(
     readonly initialSendGates?: ReadonlyArray<{
       readonly spawnIndex: number;
       readonly type: RpcCommand["type"];
-      readonly gate: Deferred.Deferred<void, never>;
+      readonly gate: Deferred.Deferred<void>;
     }>;
   } = {},
 ) {
@@ -266,6 +267,7 @@ export function fakeChildLayer(
             code: "fixture_reclaim_failed",
             message: "Fixture run-state reclamation failed.",
           });
+        return undefined;
       }),
     spawn: (launch) =>
       Effect.acquireRelease(
@@ -278,7 +280,7 @@ export function fakeChildLayer(
           const ipc: LocalPiParentControl[] = [];
           const terminations: Array<"graceful" | "force"> = [];
           let releaseCount = 0;
-          let releaseGate: Deferred.Deferred<void, never> | undefined;
+          let releaseGate: Deferred.Deferred<void> | undefined;
           const forSpawn = <A extends { readonly spawnIndex: number }>(
             initial: ReadonlyArray<A> = [],
           ) => initial.filter((entry) => entry.spawnIndex === spawnIndex);
@@ -294,16 +296,16 @@ export function fakeChildLayer(
           if (remainingInitialStateDrops > 0) remainingInitialStateDrops -= 1;
           const sendGates: Array<{
             readonly type: RpcCommand["type"];
-            readonly gate: Deferred.Deferred<void, never>;
+            readonly gate: Deferred.Deferred<void>;
           }> = forSpawn(options.initialSendGates);
           const ipcGates: Array<{
             readonly type: LocalPiParentControl["type"] | undefined;
-            readonly gate: Deferred.Deferred<void, never>;
+            readonly gate: Deferred.Deferred<void>;
           }> = [];
           const earlyIpcAcks: AcknowledgedIpcControlType[] = [];
           const beforeResponses: Array<{
             readonly type: RpcCommand["type"];
-            readonly value: unknown;
+            readonly value: RpcWireValue;
           }> = [];
 
           const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
@@ -403,30 +405,30 @@ export function fakeChildLayer(
                   });
                 const before = takeFirst(beforeResponses, forCommand);
                 if (before) offer(before.value);
-                if (takeFirst(dropped, (type) => type === command.type) !== undefined) return;
+                if (takeFirst(dropped, (type) => type === command.type) !== undefined)
+                  return undefined;
                 const failure = takeFirst(failures, forCommand);
                 offer(
                   failure
                     ? {
                         type: "response",
-                        id: command.id,
+                        ...(command.id !== undefined && { id: command.id }),
                         command: command.type,
                         success: false,
                         error: failure.error,
                       }
                     : {
                         type: "response",
-                        id: command.id,
+                        ...(command.id !== undefined && { id: command.id }),
                         command: command.type,
                         success: true,
-                        data:
-                          command.type === "get_state"
-                            ? stateData
-                            : command.type === "get_session_stats"
-                              ? { tokens: { ...tokens }, cost }
-                              : undefined,
+                        ...(command.type === "get_state" && { data: stateData }),
+                        ...(command.type === "get_session_stats" && {
+                          data: { tokens: { ...tokens }, cost },
+                        }),
                       },
                 );
+                return undefined;
               }),
             sendContactControl: (message) =>
               Effect.gen(function* () {
@@ -447,6 +449,7 @@ export function fakeChildLayer(
                 )?.gate;
                 if (gate) yield* Deferred.await(gate);
                 if (!ackBeforeSendSettles) emitNormalIpcAck(message);
+                return undefined;
               }),
             terminate: (mode) => Effect.sync(() => void terminations.push(mode)),
           };
@@ -491,6 +494,7 @@ export function fakeChildLayer(
               options.onRelease?.(spawnIndex);
               Queue.endUnsafe(events);
               if (options.releaseDefect) return yield* Effect.die("fixture release defect");
+              return undefined;
             }),
           };
         }),
@@ -500,7 +504,7 @@ export function fakeChildLayer(
   return { controls, reclaimedRunIds, layer };
 }
 
-export const profileLayerFor = <Global>(global: Global) =>
+export const profileLayerFor = (global: JsonObject) =>
   Layer.effect(
     SubagentProfileService,
     makeSubagentProfileService(
@@ -525,7 +529,7 @@ export function fakeWriterLeaseLayer(
     readonly failCanonicalization?: boolean | undefined;
     readonly onAcquireStarted?: (() => void) | undefined;
     readonly onAcquire?: ((lease: WriterLease) => void) | undefined;
-    readonly acquireGate?: Deferred.Deferred<void, never> | undefined;
+    readonly acquireGate?: Deferred.Deferred<void> | undefined;
     readonly acquireUninterruptible?: boolean | undefined;
     readonly failAcquire?: boolean | undefined;
     readonly onMark?: ((lease: WriterLease) => void) | undefined;
@@ -637,7 +641,7 @@ export interface FakeNativeReportControl {
   readonly prompts: string[];
   readonly assignmentEpochs: number[];
   readonly terminations: Array<"graceful" | "force">;
-  readonly gateNextStart: (gate: Deferred.Deferred<void, never>) => void;
+  readonly gateNextStart: (gate: Deferred.Deferred<void>) => void;
   readonly failNextStart: (code?: string) => void;
   readonly offer: (
     event: BackendEvent | ({ readonly type: "report" } & Omit<BackendReport, "assignmentEpoch">),
@@ -654,13 +658,13 @@ export interface FakeNativeReportControl {
 
 export function fakeNativeReportBackendLayer(
   options: {
-    readonly initialStartGate?: Deferred.Deferred<void, never> | undefined;
-    readonly interruptGate?: Deferred.Deferred<void, never> | undefined;
+    readonly initialStartGate?: Deferred.Deferred<void> | undefined;
+    readonly interruptGate?: Deferred.Deferred<void> | undefined;
     readonly onInterruptStarted?: (() => void) | undefined;
     readonly capabilities?: BackendDriver["capabilities"] | undefined;
-    readonly releaseGate?: Deferred.Deferred<void, never> | undefined;
+    readonly releaseGate?: Deferred.Deferred<void> | undefined;
     readonly resumable?: boolean | undefined;
-    readonly initializeGate?: Deferred.Deferred<void, never> | undefined;
+    readonly initializeGate?: Deferred.Deferred<void> | undefined;
   } = {},
 ) {
   const controls: FakeNativeReportControl[] = [];
@@ -678,7 +682,7 @@ export function fakeNativeReportBackendLayer(
           const prompts: string[] = [];
           const assignmentEpochs: number[] = [];
           const terminations: Array<"graceful" | "force"> = [];
-          const startGates: Array<Deferred.Deferred<void, never>> = options.initialStartGate
+          const startGates: Array<Deferred.Deferred<void>> = options.initialStartGate
             ? [options.initialStartGate]
             : [];
           const startFailures: Array<string | undefined> = [];
@@ -735,6 +739,7 @@ export function fakeNativeReportBackendLayer(
                       };
                       return yield* new SubagentProcessError(code ? { ...failure, code } : failure);
                     }
+                    return undefined;
                   }),
                 steer: (message: string) =>
                   Effect.sync(() => void prompts.push(`steer:${message}`)),

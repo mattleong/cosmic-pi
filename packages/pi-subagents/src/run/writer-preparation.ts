@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -65,14 +66,15 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
               case "quarantined":
                 return Effect.fail(cancelled());
             }
+            return absurd(pool.state);
           }),
         );
         if (role === "wait") {
           yield* restore(Deferred.await(pool.preparationSettled));
           if (!(yield* restore(stillAttached))) return yield* cancelled();
-          return;
+          return undefined;
         }
-        if (role === "ready") return;
+        if (role === "ready") return undefined;
 
         let handedOff = false;
         const prepareOwner = Effect.gen(function* () {
@@ -121,6 +123,7 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
             }),
           );
           if (!(yield* stillAttached)) return yield* cancelled();
+          return undefined;
         });
         yield* restore(prepareOwner).pipe(
           Effect.onExit((exit) =>
@@ -135,6 +138,7 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
             ),
           ),
         );
+        return undefined;
       }),
     );
   };

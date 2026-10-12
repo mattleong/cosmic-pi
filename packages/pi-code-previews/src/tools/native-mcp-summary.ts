@@ -9,6 +9,7 @@ import {
   isAgentGuidance,
   sanitizeDiagnosticContent,
 } from "pi-cosmic-core";
+import { hostContainer, type HostContainer } from "../shared/untrusted-value";
 import { getBoundedTextContent } from "./data/results";
 import type { CompactIssue } from "./compact-issues";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
@@ -24,9 +25,12 @@ const Evidence = Schema.Struct({
   tool: Text,
   fullOutputPath: Schema.optionalKey(Text),
 });
+const decodeEvidence = decodeUnknownOrUndefined(Evidence);
 export type NativeMcpEvidence = typeof Evidence.Type;
 
-export function nativeMcpEvidence<Details>(details: Details): NativeMcpEvidence | undefined {
+export function nativeMcpEvidence(
+  details: HostContainer | undefined,
+): NativeMcpEvidence | undefined {
   return invokeHostCallback(() => {
     if (!Predicate.isObject(details)) return undefined;
     const input: Partial<Record<string, string>> = {};
@@ -39,16 +43,16 @@ export function nativeMcpEvidence<Details>(details: Details): NativeMcpEvidence 
       if (key === "fullOutputPath" && !descriptor.value.trim()) continue;
       input[key] = descriptor.value;
     }
-    return decodeUnknownOrUndefined(Evidence, input);
+    return decodeEvidence(input);
   }, undefined);
 }
 
-export function nativeMcpReceipt<Args>(
+export function nativeMcpReceipt(
   identity: NativeMcpIdentity,
   result: AgentToolResult<unknown>,
-  args: Args,
+  args: HostContainer | undefined,
 ): NativeMcpEvidence | undefined {
-  const evidence = nativeMcpEvidence(result.details);
+  const evidence = nativeMcpEvidence(hostContainer(result.details));
   return evidence &&
     nativeMcpReceiptMatches(identity, evidence) &&
     (identity.kind !== "resource" || evidence.server === nativeMcpArgumentText(args, "server"))
@@ -78,6 +82,8 @@ const TemplateListing = Schema.fromJsonString(
     ),
   }),
 );
+const decodeResourceListing = decodeUnknownOrUndefined(ResourceListing);
+const decodeTemplateListing = decodeUnknownOrUndefined(TemplateListing);
 const MAX_LISTING_TEXT = 64 * 1024;
 const MAX_LISTED_FAILURES = 3;
 
@@ -97,8 +103,8 @@ function nativeMcpListing(
     return undefined;
   const listing =
     name === "list_mcp_resources"
-      ? decodeUnknownOrUndefined(ResourceListing, part.text)
-      : decodeUnknownOrUndefined(TemplateListing, part.text);
+      ? decodeResourceListing(part.text)
+      : decodeTemplateListing(part.text);
   if (!listing || (listing.server ?? "") !== server) return undefined;
   const items = "resources" in listing ? listing.resources : listing.resourceTemplates;
   return {
@@ -131,10 +137,10 @@ function listingFailureIssues(listing: NativeMcpListing): CompactIssue[] {
   return issues;
 }
 
-export function nativeMcpHasRecoverableClipping<Args>(
+export function nativeMcpHasRecoverableClipping(
   identity: NativeMcpIdentity,
   result: AgentToolResult<unknown>,
-  args: Args,
+  args: HostContainer | undefined,
 ): boolean {
   const first = result.content[0];
   return Boolean(
@@ -197,7 +203,8 @@ export function nativeMcpProgress(result: AgentToolResult<unknown> | undefined):
 
 export const nativeMcpSummary =
   (identity: NativeMcpIdentity): CompactSummaryProvider<unknown, unknown, RendererState> =>
-  ({ phase, args, result, context }) => {
+  ({ phase, args: rawArgs, result, context }) => {
+    const args = hostContainer(rawArgs);
     const pending = { ...nativeMcpHeading(identity, args), showTiming: true as const };
     if (phase !== "settled") {
       const progress = nativeMcpProgress(result);

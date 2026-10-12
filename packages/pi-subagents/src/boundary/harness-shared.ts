@@ -1,5 +1,6 @@
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import type * as Schema from "effect/Schema";
 import { hasControlCharacter, hasObjectRuntimeType } from "pi-cosmic-core";
 import { homedir } from "node:os";
 import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
@@ -10,9 +11,9 @@ const MAX_PATH_CHARS = 4_096;
 
 export const tomlString = (value: string): string => JSON.stringify(value);
 
-export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined =>
-  error && hasObjectRuntimeType(error) && "code" in error && Predicate.isString(error.code)
-    ? error.code
+export const nodeErrorCode = (cause: unknown): string | undefined =>
+  cause && hasObjectRuntimeType(cause) && "code" in cause && Predicate.isString(cause.code)
+    ? cause.code
     : undefined;
 
 export const ensurePrivateDirectory = (path: string): Promise<void> =>
@@ -76,15 +77,15 @@ export const removePrivateDirectory = (directory: string): Promise<void> =>
     return fs.rm(directory, { recursive: true, force: false });
   });
 
-const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): boolean => {
+const isJsonArray = (value: Schema.Json): value is ReadonlyArray<Schema.Json> =>
+  Array.isArray(value);
+
+const boundedJsonValue = (value: Schema.Json, depth = 0): boolean => {
   if (depth > 16) return false;
   if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return true;
   if (Predicate.isNumber(value)) return Number.isFinite(value);
-  if (Array.isArray(value))
-    return (
-      value.length <= 1_024 &&
-      value.every(<EntryInput>(entry: EntryInput) => boundedJsonValue(entry, depth + 1))
-    );
+  if (isJsonArray(value))
+    return value.length <= 1_024 && value.every((entry) => boundedJsonValue(entry, depth + 1));
   if (!hasObjectRuntimeType(value)) return false;
   const entries = Object.entries(value);
   return (

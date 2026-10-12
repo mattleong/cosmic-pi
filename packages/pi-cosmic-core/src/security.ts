@@ -1,4 +1,5 @@
 import * as Base64Url from "effect/encoding/Base64Url";
+import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -117,7 +118,7 @@ export const extractJwtClaim = <S extends Schema.ConstraintDecoder<unknown>>(
   if (token === undefined) return undefined;
   const source = decodeJwtPayloadText(token);
   if (source === undefined) return undefined;
-  return decodeUnknownOrUndefined(payloadSchema, source);
+  return decodeUnknownOrUndefined(payloadSchema)(source);
 };
 
 export const redactedTokenSchema = (label: string) =>
@@ -157,27 +158,30 @@ export const isSensitiveDiagnosticKey = (key: string): boolean => {
   );
 };
 
-export function redactDiagnosticValue<ValueInput>(value: ValueInput): Schema.Json {
-  const seen = new WeakSet<object>();
-  const redact = <Current>(current: Current, depth: number): Schema.Json => {
-    if (Predicate.isString(current)) return sanitizeDiagnosticError(current);
-    if (current === null) return null;
-    if (Predicate.isBoolean(current)) return current;
-    if (Predicate.isNumber(current)) return Number.isFinite(current) ? current : null;
-    if (!Predicate.isObjectOrArray(current)) return null;
-    if (depth >= 16 || seen.has(current)) return "[TRUNCATED]";
-    seen.add(current);
-    try {
-      if (Array.isArray(current)) return Array.from(current, (entry) => redact(entry, depth + 1));
-      return Object.fromEntries(
-        Object.entries(current).map(([key, entry]) => [
-          key,
-          isSensitiveDiagnosticKey(key) ? REDACTED : redact(entry, depth + 1),
-        ]),
-      );
-    } catch {
-      return "[UNREADABLE]";
-    }
-  };
-  return redact(value, 0);
-}
+const redactNode = (seen: WeakSet<object>, depth: number) =>
+  Match.type<unknown>().pipe(
+    Match.when(Predicate.isString, (text): Schema.Json => sanitizeDiagnosticError(text)),
+    Match.when(Predicate.isNull, (): Schema.Json => null),
+    Match.when(Predicate.isBoolean, (flag): Schema.Json => flag),
+    Match.when(Predicate.isNumber, (count): Schema.Json => (Number.isFinite(count) ? count : null)),
+    Match.when(Predicate.isObjectOrArray, (container): Schema.Json => {
+      if (depth >= 16 || seen.has(container)) return "[TRUNCATED]";
+      seen.add(container);
+      const child = redactNode(seen, depth + 1);
+      try {
+        if (Array.isArray(container)) return Array.from(container, (entry) => child(entry));
+        return Object.fromEntries(
+          Object.entries(container).map(([key, entry]) => [
+            key,
+            isSensitiveDiagnosticKey(key) ? REDACTED : child(entry),
+          ]),
+        );
+      } catch {
+        return "[UNREADABLE]";
+      }
+    }),
+    Match.orElse((): Schema.Json => null),
+  );
+
+export const redactDiagnosticValue: ReturnType<typeof redactNode> = (value) =>
+  redactNode(new WeakSet(), 0)(value);

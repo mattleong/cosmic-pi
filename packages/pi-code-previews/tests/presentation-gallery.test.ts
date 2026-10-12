@@ -95,7 +95,10 @@ const nativeMcpCall: ToolRenderers = {
   },
 };
 
-const text = <Details>(value: string, details?: Details): AgentToolResult<unknown> => ({
+const text = <Details>(
+  value: string,
+  details?: Details,
+): AgentToolResult<Details | Record<string, never>> => ({
   content: [{ type: "text", text: value }],
   details: details ?? {},
 });

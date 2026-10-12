@@ -138,12 +138,11 @@ const revokeProvider = (
     },
   ];
 };
+const decodeSnapshotItems = decodeUnknownOrUndefined(ActivitySnapshotSchema);
+const decodeStarting = decodeUnknownOrUndefined(ActivityStartingSchema);
 const decodeSnapshot = (event: ActivityEnvelope): DecodedSnapshot | undefined => {
-  const decoded = decodeUnknownOrUndefined(ActivitySnapshotSchema, event.items);
-  const starting = decodeUnknownOrUndefined(
-    ActivityStartingSchema,
-    event.starting === undefined ? 0 : event.starting,
-  );
+  const decoded = decodeSnapshotItems(event.items);
+  const starting = decodeStarting(event.starting === undefined ? 0 : event.starting);
   if (decoded === undefined || starting === undefined) return undefined;
   const items = decoded.map((item) => detachActivityItem(item, cleanDetail));
   return consistentSnapshot(items) ? { items, starting } : undefined;

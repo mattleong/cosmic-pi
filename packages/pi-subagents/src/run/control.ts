@@ -35,6 +35,14 @@ export interface RunControlDependencies extends RunContext {
   readonly settle: RunSettlement["settle"];
 }
 
+const recordParentNoticeLocked = (record: RunRecord, text: string, now: number) => {
+  record.view = {
+    ...record.view,
+    lastActivityAt: now,
+    sessionEvents: appendNoticeSessionEvent(record.view.sessionEvents, "parent", text, now),
+  };
+};
+
 export function makeRunControls(dependencies: RunControlDependencies) {
   const {
     ownerScope,
@@ -65,14 +73,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         }),
       );
     });
-
-  const recordParentNoticeLocked = (record: RunRecord, text: string, now: number) => {
-    record.view = {
-      ...record.view,
-      lastActivityAt: now,
-      sessionEvents: appendNoticeSessionEvent(record.view.sessionEvents, "parent", text, now),
-    };
-  };
 
   const finalizeGuidance = (
     record: RunRecord,
@@ -298,7 +298,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             Effect.catch((error) =>
               withLock(
                 Effect.gen(function* () {
-                  if (record.view.state === "paused") return;
+                  if (record.view.state === "paused") return undefined;
                   const responseTimedOut =
                     error._tag === "SubagentProcessError" &&
                     error.code === "interrupt_outcome_uncertain";

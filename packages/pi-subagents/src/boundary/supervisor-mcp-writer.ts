@@ -34,7 +34,7 @@ export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerialize
         ),
       ),
     ).pipe(Effect.forkScoped({ startImmediately: true }));
-    const write = <ValueInput>(value: ValueInput): Effect.Effect<void, McpWriteFailure> => {
+    const write = (value: Schema.Json): Effect.Effect<void, McpWriteFailure> => {
       if (closed) return Effect.fail(new McpWriteFailure({ reason: "closed" }));
       if (acknowledgements.size >= MAX_PENDING_WRITES)
         return Effect.fail(new McpWriteFailure({ reason: "capacity" }));

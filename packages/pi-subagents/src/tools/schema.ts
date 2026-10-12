@@ -1,6 +1,8 @@
-import * as Predicate from "effect/Predicate";
+import { flow } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { StringEnum, validateToolArguments } from "@earendil-works/pi-ai";
-import { isJsonObject, type JsonValue } from "pi-cosmic-core";
+import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 import { PROFILE_IDS } from "../profiles/model.ts";
@@ -336,9 +338,18 @@ const START_ARGUMENTS_TOOL = {
   parameters: StartParameters,
 };
 
+const StartArguments = Schema.declare((input): input is SubagentStartInput =>
+  Check(StartParameters, input),
+);
+const decodeValidatedStartArguments = Schema.decodeUnknownOption(StartArguments);
+const decodeArgumentsObject = Schema.decodeUnknownOption(
+  Schema.Record(Schema.String, Schema.MutableJson),
+);
+
 const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
-  agents.forEach((agent, index) => {
-    if (!Predicate.isObject(agent)) return;
+  agents.forEach((candidate, index) => {
+    const agent = Option.getOrUndefined(decodeArgumentsObject(candidate));
+    if (!agent) return;
     const disallowedField = firstDisallowedLaunchOverride(agent);
     if (disallowedField)
       throw new Error(
@@ -346,30 +357,36 @@ const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
       );
   });
 
-const checkedStartInput = <Value>(value: Value): SubagentStartInput => {
-  if (Check(StartParameters, value)) return value;
-  throw new Error(
-    `Validation failed for tool "${SUBAGENT_TOOL_NAME.start}": arguments did not match the launch schema.`,
-  );
-};
-
-export const prepareSubagentStartArguments = <ArgsInput>(args: ArgsInput): SubagentStartInput => {
-  if (!isJsonObject(args))
-    throw new Error(
-      `Validation failed for tool "${SUBAGENT_TOOL_NAME.start}": arguments must be a JSON object.`,
-    );
+const startArgumentsFromObject = (args: JsonObject): SubagentStartInput => {
   const agents = args.agents;
   if (Array.isArray(agents)) checkStartAgents(agents);
   else if (Object.hasOwn(args, "task"))
     throw new Error(
       '[invalid_start_shape] subagent_start requires { agents: [{ task: "..." }] }; wrap the top-level launch fields in the agents array.',
     );
-  return checkedStartInput(
-    validateToolArguments(START_ARGUMENTS_TOOL, {
-      type: "toolCall",
-      id: "prepare-arguments",
-      name: SUBAGENT_TOOL_NAME.start,
-      arguments: args,
-    }),
+  return Option.getOrThrowWith(
+    decodeValidatedStartArguments(
+      validateToolArguments(START_ARGUMENTS_TOOL, {
+        type: "toolCall",
+        id: "prepare-arguments",
+        name: SUBAGENT_TOOL_NAME.start,
+        arguments: args,
+      }),
+    ),
+    () =>
+      new Error(
+        `Validation failed for tool "${SUBAGENT_TOOL_NAME.start}": arguments did not match the launch schema.`,
+      ),
   );
 };
+
+export const prepareSubagentStartArguments = flow(
+  decodeArgumentsObject,
+  Option.getOrThrowWith(
+    () =>
+      new Error(
+        `Validation failed for tool "${SUBAGENT_TOOL_NAME.start}": arguments must be a JSON object.`,
+      ),
+  ),
+  startArgumentsFromObject,
+);

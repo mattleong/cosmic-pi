@@ -1,5 +1,5 @@
 import { isJsonObject, type JsonObject } from "pi-cosmic-core";
-import { decodeSubagentConfig } from "../config/schema.ts";
+import { subagentConfigDecoder } from "../config/schema.ts";
 import { captureRestoreDeclaration, stableJson } from "../config/profile-restore.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { PROFILE_IDS, cloneProfileCandidates, type ProfileId } from "../profiles/model.ts";
@@ -229,7 +229,7 @@ export class ProfileEditVisit {
     if (receipt?.kind === "session" && target.kind === "session") {
       committed = { ...beforeInspection, session: receipt.snapshot };
     } else if (receipt?.kind === "saved" && target.kind === "profile-set") {
-      const decoded = decodeSubagentConfig(receipt.document, target.set.scope);
+      const decoded = subagentConfigDecoder(target.set.scope)(receipt.document);
       committed =
         target.set.scope === "global"
           ? { ...beforeInspection, global: decoded, globalDocument: receipt.document }

@@ -65,18 +65,13 @@ export function notifyAtHostBoundary(
   invokeBestEffort(() => ctx.ui.notify(text, level));
 }
 
-function containThenable<Value>(value: Value): void {
+export function invokeBestEffort(callback: () => void): void {
   try {
-    if (!Predicate.isObjectKeyword(value)) return;
-    const candidate: { readonly then?: unknown } = value;
+    const result = callback();
+    if (!Predicate.isObjectKeyword(result)) return;
+    const candidate: { readonly then?: unknown } = result;
     const then = candidate.then;
-    if (Predicate.isFunction(then)) then.call(value, constVoid, constVoid);
-  } catch {}
-}
-
-export function invokeBestEffort<A>(callback: () => A): void {
-  try {
-    containThenable(callback());
+    if (Predicate.isFunction(then)) then.call(result, constVoid, constVoid);
   } catch {}
 }
 

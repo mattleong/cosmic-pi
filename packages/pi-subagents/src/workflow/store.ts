@@ -150,6 +150,13 @@ interface WorkflowStoreOptions {
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
+const roots = (locations: WorkflowLocations) => [
+  ...(locations.projectTrusted
+    ? [{ scope: "project" as const, directory: locations.project }]
+    : []),
+  { scope: "user" as const, directory: locations.user },
+];
+
 export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreContract>()(
   "pi-subagents/workflow/store/WorkflowStore",
 ) {
@@ -171,13 +178,6 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
           projectTrusted: options.isProjectTrusted(),
           user: paths.join(options.agentDirectory, "workflows"),
         });
-
-        const roots = (locations: WorkflowLocations) => [
-          ...(locations.projectTrusted
-            ? [{ scope: "project" as const, directory: locations.project }]
-            : []),
-          { scope: "user" as const, directory: locations.user },
-        ];
 
         const readContained = (path: string, root: string, maximumBytes: number) =>
           fs

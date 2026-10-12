@@ -1,16 +1,17 @@
 import { getTextContent, type CompactPhase, type CompactSummary } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
+import { flow } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core";
 import {
-  WorkspaceToolDetailsSchema,
   type CompactSubagentToolDetails,
   type SubagentAwaitDetails,
   type SubagentRunCard,
   type SubagentStartDetails,
 } from "./details-schema.ts";
-import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
+import { decodeOutcomeDetails } from "./details-decode.ts";
+import { decodeWorkspaceToolDetails } from "./compact-workspace-summary.ts";
 import { countActionFailures } from "./outcome.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 
@@ -33,11 +34,11 @@ const operationLabel = (operation: string): string => OPERATION_LABELS.get(opera
 
 const decodeTargetIds = Schema.decodeUnknownOption(Schema.Array(Schema.String));
 
-const targetIds = <Ids>(ids: Ids): string[] | undefined =>
-  Option.match(decodeTargetIds(ids), {
-    onNone: () => undefined,
-    onSome: (decoded) => [...new Set(decoded.map((id) => id.trim()).filter(Boolean))],
-  });
+const targetIds = flow(
+  decodeTargetIds,
+  Option.map((decoded) => [...new Set(decoded.map((id) => id.trim()).filter(Boolean))]),
+  Option.getOrUndefined,
+);
 
 export const requestedRunIds = (input: SummaryArguments): string[] | undefined =>
   targetIds(input.runIds);
@@ -168,10 +169,9 @@ export function applyArgumentLanes(
     summary.counters = lanes.counters ?? [];
 }
 
-export const isTypedReceipt = <Details>(details: Details): boolean =>
-  decodeStartAwaitCardDetails(details) !== undefined ||
-  decodeCompactToolDetails(details) !== undefined ||
-  decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, details) !== undefined;
+export const isTypedReceipt = (result: { readonly details?: unknown }): boolean =>
+  decodeOutcomeDetails(result.details) !== undefined ||
+  decodeWorkspaceToolDetails(result.details) !== undefined;
 
 function rejectedTarget(input: SummaryArguments, action: string): string {
   if (action === "workspace") return "the proposed changes";
@@ -188,7 +188,7 @@ export function rejectedCall(
   lanes: CompactSummary,
   result: { readonly content: Parameters<typeof getTextContent>[0]; readonly details?: unknown },
 ): CompactSummary | undefined {
-  if (isTypedReceipt(result.details)) return undefined;
+  if (isTypedReceipt(result)) return undefined;
   const misplacedGuidance =
     action === "lifecycle" &&
     operation !== "resume" &&

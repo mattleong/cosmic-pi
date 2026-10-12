@@ -1,6 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { absurd } from "effect/Function";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { LocalCliProcessHandle } from "../boundary/local-cli-process.ts";
@@ -238,7 +239,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             .pipe(
               Effect.andThen(recordInbound),
               Effect.andThen(
-                (() => {
+                ((): Effect.Effect<void> => {
                   switch (event.type) {
                     case "ignored":
                       return release(raw);
@@ -258,6 +259,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                     case "result":
                       return onResult(event, raw);
                   }
+                  return absurd(event);
                 })(),
               ),
             );

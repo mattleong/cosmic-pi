@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { getObjectValue } from "../../src/shared/helpers";
+import { hostObject, ownField } from "../../src/shared/untrusted-value";
 
-test("getObjectValue reads only own properties from plain object values", () => {
+test("ownField reads only own properties from decoded host objects", () => {
   const ownUndefined = { value: undefined };
   const inherited: unknown = Object.create({ value: "inherited" });
 
-  assert.equal(getObjectValue({ value: "own" }, "value"), "own");
-  assert.equal(getObjectValue(ownUndefined, "value"), undefined);
-  assert.equal(getObjectValue(inherited, "value"), undefined);
+  assert.equal(ownField(hostObject({ value: "own" }), "value"), "own");
+  assert.equal(ownField(hostObject(ownUndefined), "value"), undefined);
+  assert.equal(ownField(hostObject(inherited), "value"), undefined);
 });
 
-test("getObjectValue rejects arrays, null, primitives, and functions", () => {
+test("hostObject rejects arrays, null, primitives, and functions", () => {
   const functionWithProperty = Object.assign(() => undefined, { value: "function" });
   const values = [
     ["array"],
@@ -25,5 +25,8 @@ test("getObjectValue rejects arrays, null, primitives, and functions", () => {
     functionWithProperty,
   ];
 
-  for (const value of values) assert.equal(getObjectValue(value, "value"), undefined);
+  for (const value of values) {
+    assert.equal(hostObject(value), undefined);
+    assert.equal(ownField(hostObject(value), "value"), undefined);
+  }
 });

@@ -132,7 +132,7 @@ export function makeQuestionnaireActivity(options: {
             if (action === "resume" && row.token !== undefined) {
               if (!options.bridge.resume(row.token))
                 throw new Error("Questionnaire is no longer mounted.");
-              return;
+              return undefined;
             }
             if (action === "cancel" && row.cancel) return options.run(row.cancel, signal);
             throw new Error("Questionnaire action is unavailable.");

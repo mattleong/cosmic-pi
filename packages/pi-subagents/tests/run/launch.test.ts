@@ -347,7 +347,7 @@ describe("SubagentService", () => {
   it.effect(
     "quarantines reclaimed history when a writer-pool pause rejects phase-C admission",
     () => {
-      let reclaimGate: Deferred.Deferred<void, never> | undefined;
+      let reclaimGate: Deferred.Deferred<void> | undefined;
       const fake = fakeChildLayer(Effect.void, {
         get reclaimGate() {
           return reclaimGate;
@@ -405,7 +405,7 @@ describe("SubagentService", () => {
   );
 
   it.effect("concurrent evicting starts never claim the same reclaim candidate", () => {
-    let gate: Deferred.Deferred<void, never> | undefined;
+    let gate: Deferred.Deferred<void> | undefined;
     const fake = fakeChildLayer(Effect.void, {
       get reclaimGate() {
         return gate;

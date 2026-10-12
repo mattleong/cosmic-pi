@@ -18,6 +18,8 @@ export const HerdrBtwLinkSchema = Schema.Struct({
   agentName: BoundedId,
   terminalId: BoundedId,
 });
+const decodeLinkOwner = decodeUnknownOrUndefined(HerdrBtwLinkOwnerSchema);
+const decodeLink = decodeUnknownOrUndefined(HerdrBtwLinkSchema);
 
 export type HerdrBtwLink = typeof HerdrBtwLinkSchema.Type;
 
@@ -45,7 +47,7 @@ export const restoreHerdrBtwLink = (
   for (const entry of entries) {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(CustomEntrySchema)(entry));
     if (decoded?.customType !== HERDR_BTW_LINK_ENTRY_TYPE) continue;
-    const linkOwner = decodeUnknownOrUndefined(HerdrBtwLinkOwnerSchema, decoded.data);
+    const linkOwner = decodeLinkOwner(decoded.data);
     if (!linkOwner) {
       restoration = { _tag: "malformed" };
       continue;
@@ -55,7 +57,7 @@ export const restoreHerdrBtwLink = (
       linkOwner.parentSessionPath !== owner.sessionPath
     )
       continue;
-    const link = decodeUnknownOrUndefined(HerdrBtwLinkSchema, decoded.data);
+    const link = decodeLink(decoded.data);
     restoration = link ? { _tag: "restored", link } : { _tag: "malformed" };
   }
   return restoration;

@@ -17,15 +17,17 @@ import {
   nativeToolSearchSubject,
   nativeToolSearchSummary,
 } from "../../src/tools/native-tool-search-summary";
+import type { HostValue } from "../../src/shared/untrusted-value";
+import { hostContainer } from "../../src/shared/untrusted-value";
 
 beforeEach(() => applyPresentationSettings({ toolCallTiming: false }));
-const result = <Details>(details: Details): AgentToolResult<unknown> => ({
+const result = (details: HostValue | undefined): AgentToolResult<unknown> => ({
   content: [
     { type: "text", text: "RAW_OUTPUT\nRead the returned tool instructions before calling it" },
   ],
   details,
 });
-const summary = <Details>(details: Details) =>
+const summary = (details: HostValue | undefined) =>
   nativeToolSearchSummary({
     phase: "settled",
     args: { query: "documentation" },
@@ -77,7 +79,8 @@ test("receipt and query inspection reject inherited data, accessors, and throwin
       },
     },
   );
-  for (const details of [accessor, Object.create({ loaded: [] }), { loaded: slot }, hostile])
+  const inheritedReceipt = hostContainer(Object.create({ loaded: [] }));
+  for (const details of [accessor, inheritedReceipt, { loaded: slot }, hostile])
     assert.equal(nativeToolSearchReceipt(details), undefined);
   assert.equal(
     nativeToolSearchSubject({
@@ -88,7 +91,7 @@ test("receipt and query inspection reject inherited data, accessors, and throwin
     }),
     "",
   );
-  assert.equal(nativeToolSearchSubject(Object.create({ query: "inherited" })), "");
+  assert.equal(nativeToolSearchSubject(hostContainer(Object.create({ query: "inherited" }))), "");
   assert.equal(nativeToolSearchSubject(hostile), "");
   const details = {
     loaded: ["docs_lookup"],

@@ -17,7 +17,7 @@ const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () =
   const bridge = makeSubagentProjectionBridge();
   bridge.publish({ revision: 1, runs });
   const pending = deferredPromise<string | undefined>();
-  const admitted = deferredPromise<void>();
+  const admitted = deferredPromise();
   const act = vi.fn(() => Promise.resolve());
   const dispose = registerSubagentActivity({
     events: transport.events,
@@ -38,24 +38,27 @@ const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () =
   return { transport, bridge, pending, admitted, act, dispose, invoke };
 };
 
+const runActionIds = (patch: Partial<SubagentRunView>) =>
+  subagentActivityItems({ revision: 1, runs: [view(patch)] })[0]!.actions!.map(
+    (action) => action.id,
+  );
+
 describe("subagent activity provider", () => {
   it("preserves the fleet action matrix without enabling claims or unresolved steering", () => {
-    const actions = (patch: Partial<SubagentRunView>) =>
-      subagentActivityItems({ revision: 1, runs: [view(patch)] })[0]!.actions!.map(
-        (action) => action.id,
-      );
-    expect(actions({ state: "completed" })).toEqual(expect.arrayContaining(["resume", "rename"]));
-    expect(actions({ state: "waiting_for_parent", question })).toContain("reply");
-    expect(actions({ state: "waiting_for_parent" })).not.toContain("reply");
-    expect(actions({ state: "stopping" })).toContain("stop");
+    expect(runActionIds({ state: "completed" })).toEqual(
+      expect.arrayContaining(["resume", "rename"]),
+    );
+    expect(runActionIds({ state: "waiting_for_parent", question })).toContain("reply");
+    expect(runActionIds({ state: "waiting_for_parent" })).not.toContain("reply");
+    expect(runActionIds({ state: "stopping" })).toContain("stop");
     for (const steeringDelivery of ["pending", "unresolved"] as const) {
-      const offered = actions({ state: "running", steeringDelivery });
+      const offered = runActionIds({ state: "running", steeringDelivery });
       expect(offered).not.toContain("message");
       expect(offered).not.toContain("interrupt");
       expect(offered).toContain("stop");
     }
-    expect(actions({ state: "paused", writeAdmissionPaused: true })).not.toContain("resume");
-    expect(actions({ state: "running", capabilities: [] })).toEqual(["stop"]);
+    expect(runActionIds({ state: "paused", writeAdmissionPaused: true })).not.toContain("resume");
+    expect(runActionIds({ state: "running", capabilities: [] })).toEqual(["stop"]);
   });
 
   for (const action of ["message", "reply", "rename", "resume"] as const) {

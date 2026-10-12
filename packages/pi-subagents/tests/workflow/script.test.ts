@@ -115,10 +115,10 @@ describe("workflow script parsing", () => {
   });
 });
 
-describe("args schema in meta", () => {
-  const withArgs = (args: string) =>
-    `export const meta = { name: 'a', description: 'b', args: ${args} };\nreturn args;`;
+const withArgs = (args: string) =>
+  `export const meta = { name: 'a', description: 'b', args: ${args} };\nreturn args;`;
 
+describe("args schema in meta", () => {
   it("compiles a literal args schema of any root when the script is parsed", () => {
     for (const args of [
       "{ type: 'object', properties: { target: { type: 'string' } }, required: ['target'] }",
@@ -137,10 +137,13 @@ describe("args schema in meta", () => {
   });
 });
 
-describe("planned agents in meta", () => {
-  const withAgents = (agents: string) =>
-    `export const meta = { name: 'a', description: 'b', phases: [{ title: 'Find', agents: ${agents} }, { title: 'Verify' }] };`;
+const withAgents = (agents: string) =>
+  `export const meta = { name: 'a', description: 'b', phases: [{ title: 'Find', agents: ${agents} }, { title: 'Verify' }] };`;
 
+const labels = (count: number) =>
+  JSON.stringify(Array.from({ length: count }, (_, index) => `agent-${index}`));
+
+describe("planned agents in meta", () => {
   it("accepts labels and labelled profiles, in declaration order", () => {
     const [find, verify] =
       parsed(withAgents("['finder', { label: ' checker ', profile: 'reviewer' }]")).meta.phases ??
@@ -174,8 +177,6 @@ describe("planned agents in meta", () => {
   });
 
   it("bounds planned agents per phase and per script", () => {
-    const labels = (count: number) =>
-      JSON.stringify(Array.from({ length: count }, (_, index) => `agent-${index}`));
     expect(parse(withAgents(labels(WORKFLOW_PHASE_AGENT_LIMIT)))._tag).toBe("Success");
     expect(failure(withAgents(labels(WORKFLOW_PHASE_AGENT_LIMIT + 1)))).toContain("Invalid meta");
     const phases = Array.from(

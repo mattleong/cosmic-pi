@@ -108,7 +108,7 @@ effectTest(
       listedCount: 1,
       unavailableCount: 1,
     });
-    const summary = compactWorkspaceSummary(response.details, "list")!;
+    const summary = compactWorkspaceSummary(response, "list")!;
     expect(summary.outcome).toBe("warning");
     const warning = summary.issues!.find((issue) => issue.severity === "warning")!;
     expect(warning.detail).toBeTruthy();

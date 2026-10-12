@@ -34,6 +34,7 @@ import {
   type NativeDiscoveryIntent,
   type NativeDiscoveryProjector,
 } from "./native-codemode-discovery";
+import { hostContainer } from "../shared/untrusted-value";
 
 const nativeModelCalls: ReadonlySet<string> = new Set(["models.classify", "models.generateImages"]);
 const SCRIPT_ERROR = "Script error:\n";
@@ -201,7 +202,7 @@ export const nativeCodemodeSummary =
     discovery: NativeDiscoveryProjector = createNativeDiscoveryProjector(),
   ): CompactSummaryProvider<unknown, unknown, RendererState> =>
   ({ phase, args, result, context }) => {
-    const intent = discovery(args);
+    const intent = discovery(hostContainer(args));
     const label = nativeDiscoveryLabel(intent);
     const heading = {
       subject: "",
@@ -210,7 +211,7 @@ export const nativeCodemodeSummary =
       showShortTiming: true as const,
     };
     if (!result) return phase === "settled" ? undefined : heading;
-    const evidence = nativeCodemodeEvidence(result.details);
+    const evidence = nativeCodemodeEvidence(hostContainer(result.details));
     const calls = evidence.kind === "available" ? evidence.calls : [];
     const complete = evidence.kind === "available" && evidence.complete;
     const header = nativeCodemodeHeader(result);

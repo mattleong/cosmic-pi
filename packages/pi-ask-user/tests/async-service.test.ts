@@ -34,6 +34,11 @@ const outcome: AskUserOutcome = {
   answers: [{ key: "library", kind: "choices", values: ["a"], labels: ["A"] }],
 };
 
+const keyedRequest = (index: number) => ({
+  ...request,
+  questions: [{ ...request.questions[0]!, key: String(index) }],
+});
+
 const acquireService = (...args: Parameters<typeof AskUserService.layer>) =>
   Effect.gen(function* () {
     const context = yield* Layer.buildWithScope(AskUserService.layer(...args), yield* Effect.scope);
@@ -400,7 +405,7 @@ it.effect("retention evicts old terminal requests, never repeats IDs, and stays 
     }
     expect(new Set(ids).size).toBe(ids.length);
     expect(yield* retained()).toHaveLength(MAX_RETAINED_REQUESTS);
-    expect(yield* Effect.flip(control(service, "status", ids[0]!))).toMatchObject({
+    expect(yield* Effect.flip(control(service, "status", ids[0]))).toMatchObject({
       reason: "not-found",
     });
     const results = yield* Effect.all(
@@ -410,7 +415,7 @@ it.effect("retention evicts old terminal requests, never repeats IDs, and stays 
       ],
       { concurrency: "unbounded" },
     ).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 16));
-    expect(Exit.isSuccess(results[0]!)).toBe(true);
+    expect(Exit.isSuccess(results[0])).toBe(true);
     expect(yield* retained()).toHaveLength(MAX_RETAINED_REQUESTS);
   }),
 );
@@ -505,19 +510,15 @@ it.effect(
         }).pipe(
           Effect.ensuring(input.questions[0]!.key === "0" ? Deferred.await(cleanup) : Effect.void),
         );
-      const input = (index: number) => ({
-        ...request,
-        questions: [{ ...request.questions[0]!, key: String(index) }],
-      });
       const service = yield* acquireService(host, () => Effect.void);
-      const first = yield* service.startAsync(input(0));
-      const second = yield* service.startAsync(input(1));
-      const third = yield* service.startAsync(input(2));
+      const first = yield* service.startAsync(keyedRequest(0));
+      const second = yield* service.startAsync(keyedRequest(1));
+      const third = yield* service.startAsync(keyedRequest(2));
       expect(second.presentation).toBe("queued");
       expect(third.presentation).toBe("queued");
       yield* service.controlAsync({ action: "cancel", requestId: second.requestId });
       expect(yield* Ref.get(mounted)).toEqual(["0"]);
-      yield* Deferred.succeed(answers[0]!, outcome);
+      yield* Deferred.succeed(answers[0], outcome);
       for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
       expect(yield* Ref.get(mounted)).toEqual(["0"]);
       yield* Deferred.succeed(cleanup, undefined);
@@ -579,6 +580,7 @@ const priorDelivery = (f: Fixture, prior: AcknowledgementPrior) =>
           if (prior === "failed" && (yield* Ref.updateAndGet(attempts, (n) => n + 1)) === 1)
             return yield* new AskUserHostError({ operation: "deliver", message: "Failed" });
           yield* f.delivery(snapshot);
+          return undefined;
         }),
     ),
   );

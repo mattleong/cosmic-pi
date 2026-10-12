@@ -202,11 +202,15 @@ describe("process signals", () => {
     "classifies ESRCH as absent and EPERM as permission",
     () => {
       const child = nodeSpawn(process.execPath, ["-e", ""], { stdio: "ignore" });
-      return once(child, "exit").then(() => {
-        expect(signalProcess(child.pid, 0)).toBe("absent");
-        expect(signalProcess(process.pid, 0)).toBe("present");
-        if (process.getuid?.() !== 0) expect(signalProcess(1, 0)).toBe("permission");
-      });
+      return once(child, "exit")
+        .then(() => ({
+          exited: signalProcess(child.pid, 0),
+          current: signalProcess(process.pid, 0),
+          init: process.getuid?.() === 0 ? "permission" : signalProcess(1, 0),
+        }))
+        .then((classified) =>
+          expect(classified).toEqual({ exited: "absent", current: "present", init: "permission" }),
+        );
     },
   );
 

@@ -144,11 +144,11 @@ describe("SubagentService", () => {
     () => {
       const fake = fakeChildLayer();
       const projections: SubagentProjection[] = [];
-      let interruptAtBoundary: () => void = () => undefined;
+      let interruptAtBoundary: (() => void) | undefined;
       const layer = serviceLayer({
         publish: (projection) => {
           projections.push(projection);
-          if (projection.runs[0]?.state === "starting") interruptAtBoundary();
+          if (projection.runs[0]?.state === "starting") interruptAtBoundary?.();
         },
       }).pipe(Layer.provide(fake.layer));
       return withService(layer, function* (service) {

@@ -112,7 +112,7 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
           "hanging-editor.mjs",
         );
         const statePath = path.join(directory, "state");
-        const services = yield* Effect.context<never>();
+        const services = yield* Effect.context();
         const controller = new AbortController();
         const editing = editWithExternalEditor(
           tui,
@@ -124,6 +124,7 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
           vi.waitFor(() =>
             Effect.runPromiseWith(services)(fs.readFileString(statePath)).then((raw) => {
               decodeHangingEditorState(raw);
+              return undefined;
             }),
           ),
         );

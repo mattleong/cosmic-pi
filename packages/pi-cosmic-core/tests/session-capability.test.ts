@@ -19,37 +19,45 @@ const hostile = new Proxy(
 describe("decodeUnknownOrUndefined", () => {
   it("returns decoded values and fails closed on mismatches and hostile input", () => {
     const Point = Schema.Struct({ x: Schema.Number });
-    expect(decodeUnknownOrUndefined(Point, { x: 1 })).toEqual({ x: 1 });
-    expect(decodeUnknownOrUndefined(Point, { x: "1" })).toBeUndefined();
-    expect(decodeUnknownOrUndefined(Point, hostile)).toBeUndefined();
+    const decodePoint = decodeUnknownOrUndefined(Point);
+    expect(decodePoint({ x: 1 })).toEqual({ x: 1 });
+    expect(decodePoint({ x: "1" })).toBeUndefined();
+    expect(decodePoint(hostile)).toBeUndefined();
   });
 
   it("applies explicit strict decoder policy without changing tolerant defaults", () => {
     const Point = Schema.Struct({ x: Schema.Number });
     const value = { x: 1, credential: "unexpected" };
-    expect(decodeUnknownOrUndefined(Point, value)).toEqual({ x: 1 });
-    expect(decodeUnknownOrUndefined(Point, value, { onExcessProperty: "error" })).toBeUndefined();
+    expect(decodeUnknownOrUndefined(Point)(value)).toEqual({ x: 1 });
+    expect(decodeUnknownOrUndefined(Point, { onExcessProperty: "error" })(value)).toBeUndefined();
   });
 });
 
+const inertResponder = () => undefined;
+
 describe("session capability queries", () => {
   it("accepts only the protocol version, a bounded non-empty session id, and a function", () => {
-    const respond = () => undefined;
-    expect(protocol.normalizeQuery({ version: 1, sessionId: "session", respond })).toMatchObject({
+    expect(
+      protocol.normalizeQuery({ version: 1, sessionId: "session", respond: inertResponder }),
+    ).toMatchObject({
       version: 1,
       sessionId: "session",
     });
     for (const query of [
-      { version: 2, sessionId: "session", respond },
-      { version: 1, sessionId: "", respond },
-      { version: 1, sessionId: "123456789", respond },
+      { version: 2, sessionId: "session", respond: inertResponder },
+      { version: 1, sessionId: "", respond: inertResponder },
+      { version: 1, sessionId: "123456789", respond: inertResponder },
       { version: 1, sessionId: "session", respond: "not a function" },
       hostile,
     ])
       expect(protocol.normalizeQuery(query)).toBeUndefined();
     const unbounded = makeSessionCapabilityProtocol({ version: 1 });
     expect(
-      unbounded.normalizeQuery({ version: 1, sessionId: "x".repeat(4096), respond }),
+      unbounded.normalizeQuery({
+        version: 1,
+        sessionId: "x".repeat(4096),
+        respond: inertResponder,
+      }),
     ).toBeDefined();
   });
 
@@ -66,8 +74,10 @@ describe("session capability queries", () => {
   });
 });
 
+type Respond = (candidate: string) => void;
+const all = (deliver: Respond) => ["a", "invalid", "b", "c"].forEach(deliver);
+
 describe("session capability discovery", () => {
-  type Respond = (candidate: string) => void;
   const discover = (emit: (respond: Respond) => void, limit?: number) => {
     let late: Respond | undefined;
     const result = querySessionCapability(
@@ -90,7 +100,6 @@ describe("session capability discovery", () => {
   };
 
   it("keeps accepted candidates in order until emit returns or the limit is reached", () => {
-    const all = (respond: Respond) => ["a", "invalid", "b", "c"].forEach(respond);
     expect(discover(all)).toEqual({ candidates: ["a", "b", "c"], failed: false });
     expect(discover(all, 2)).toEqual({ candidates: ["a", "b"], failed: false });
   });

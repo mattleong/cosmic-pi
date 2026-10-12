@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
 import type { SubagentRunView } from "../src/run/model.ts";
 import { formatStartResult } from "../src/tools/format.ts";
 import {
@@ -102,15 +102,19 @@ const replaceAt = <Item, Next>(
   next: (item: Item) => Next,
 ): Array<Item | Next> => items.map((item, position) => (position === index ? next(item) : item));
 
-const expectDeeplyFrozen = <ValueInput>(value: ValueInput): void => {
-  expect(Object.isFrozen(value)).toBe(true);
-  if (Array.isArray(value)) {
-    for (const child of value) expectDeeplyFrozen(child);
-    return;
-  }
-  if (!hasObjectRuntimeType(value) || value === null) return;
-  for (const child of Object.values(value)) expectDeeplyFrozen(child);
-};
+type FrozenJson =
+  | null
+  | boolean
+  | number
+  | string
+  | ReadonlyArray<FrozenJson>
+  | { readonly [key: string]: FrozenJson };
+
+const isDeeplyFrozen = (value: FrozenJson | undefined): boolean =>
+  Object.isFrozen(value) &&
+  (Array.isArray(value)
+    ? value.every((child: FrozenJson) => isDeeplyFrozen(child))
+    : !Predicate.isObject(value) || Object.values(value).every((child) => isDeeplyFrozen(child)));
 
 const awaitWire = () => clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
 
@@ -161,6 +165,20 @@ const readGuarded = <Item>(items: Item[]) => {
   });
   return { value, reads: () => reads };
 };
+
+const failedSelected = (index: number, name: string): SubagentStartEntry => ({
+  index,
+  name,
+  profile: "reviewer",
+  status: "failed",
+  routeStatus: "selected",
+  host: "local",
+  runtime: "pi",
+  model: "openai-codex/gpt-5.6-sol",
+  effort: "high",
+  openaiFastMode: false,
+  candidateIndex: index,
+});
 
 describe("persisted subagent details version 2", () => {
   it("retains known report availability through fitting without inventing historical absence", () => {
@@ -254,12 +272,12 @@ describe("persisted subagent details version 2", () => {
       question: { message: "May I continue?" },
       selection: { source: "profile-candidate", candidateIndex: 1 },
     });
-    expectDeeplyFrozen(details);
+    expect(isDeeplyFrozen(details)).toBe(true);
 
     const decoded = decodeStartAwaitCardDetails(details);
     expect(decoded).toEqual(details);
     expect(JSON.stringify(decoded).length).toBeLessThanOrEqual(48_000);
-    expectDeeplyFrozen(decoded);
+    expect(isDeeplyFrozen(decoded)).toBe(true);
   });
 
   it("persists awaited targets with bounded descendant context but never descendant reports", () => {
@@ -508,7 +526,7 @@ describe("persisted subagent details version 2", () => {
     expect(JSON.stringify(stripped)).not.toContain("privatePath");
     expect(JSON.stringify(stripped)).not.toContain("/private/project");
     expect(privateReads).toBe(0);
-    expectDeeplyFrozen(stripped);
+    expect(isDeeplyFrozen(stripped)).toBe(true);
   });
 
   it("requires exact request-ordered start entries and matching failures", () => {
@@ -540,7 +558,7 @@ describe("persisted subagent details version 2", () => {
       warning: stringContaining("declared local Pi fallback"),
     });
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
-    expectDeeplyFrozen(details);
+    expect(isDeeplyFrozen(details)).toBe(true);
 
     const reordered = { ...details, startEntries: details.startEntries.toReversed() };
     expect(decodeStartAwaitCardDetails(reordered)).toBeUndefined();
@@ -601,27 +619,14 @@ describe("persisted subagent details version 2", () => {
     expect(details.startEntries[0]).toMatchObject({ candidateIndex: 0 });
     expect(details.startEntries[0]?.name.length).toBeLessThanOrEqual(48);
     expect(serialized.length).toBeLessThanOrEqual(48_000);
-    expectDeeplyFrozen(details);
+    expect(isDeeplyFrozen(details)).toBe(true);
 
     const decoded = decodeStartAwaitCardDetails(details);
     expect(decoded).toEqual(details);
-    expectDeeplyFrozen(decoded);
+    expect(isDeeplyFrozen(decoded)).toBe(true);
   });
 
   it("persists admitted-run recovery in request order and rejects forged dispositions", () => {
-    const failedSelected = (index: number, name: string): SubagentStartEntry => ({
-      index,
-      name,
-      profile: "reviewer",
-      status: "failed",
-      routeStatus: "selected",
-      host: "local",
-      runtime: "pi",
-      model: "openai-codex/gpt-5.6-sol",
-      effort: "high",
-      openaiFastMode: false,
-      candidateIndex: index,
-    });
     const details = makeStartDetails({
       startEntries: [failedSelected(0, "first"), failedSelected(1, "second")],
       startFailures: [
@@ -673,7 +678,7 @@ describe("persisted subagent details version 2", () => {
       },
     ]);
     expect(decodeStartAwaitCardDetails(details)).toEqual(details);
-    expectDeeplyFrozen(details);
+    expect(isDeeplyFrozen(details)).toBe(true);
     const formatted = formatStartResult([], details.startFailures ?? []);
     expect(formatted).toContain("admitted agent-r2-1 · cleanup confirmed · retry eligible");
     expect(formatted).toContain('subagent_lifecycle({ action: "retry", runIds: ["agent-r2-1"] })');
@@ -873,7 +878,7 @@ describe("persisted subagent details version 2", () => {
     expect(projected.model).toMatch(/^[\x20-\x7e]+$/);
     expect(projected.reason).toMatch(/^[\x20-\x7e]+$/);
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
-    expectDeeplyFrozen(details);
+    expect(isDeeplyFrozen(details)).toBe(true);
   });
 
   it("rejects canonical decoded details larger than 48,000 characters", () => {

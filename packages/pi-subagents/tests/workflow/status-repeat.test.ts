@@ -16,6 +16,15 @@ const statusOf = (
   attention: ReadonlyArray<WorkflowAgentAttention> = [],
 ): WorkflowViewStatus => ({ kind: "view", run, attention });
 
+const behindWriter = (paused: boolean) =>
+  workflowRunView({
+    agents: [
+      workflowAgentView({
+        waiting: { kind: "writer", runId: "agent-w", name: "writer", paused },
+      }),
+    ],
+  });
+
 describe("workflow status repeats", () => {
   it("never shortens a repeat while an agent waits on a person", () => {
     const repeats = makeWorkflowStatusRepeats();
@@ -29,14 +38,6 @@ describe("workflow status repeats", () => {
   });
 
   it("never shortens a repeat while an agent queues behind a paused writer", () => {
-    const behindWriter = (paused: boolean) =>
-      workflowRunView({
-        agents: [
-          workflowAgentView({
-            waiting: { kind: "writer", runId: "agent-w", name: "writer", paused },
-          }),
-        ],
-      });
     const paused = makeWorkflowStatusRepeats();
     expect(paused.note(statusOf(behindWriter(true)), 1_000)).toBeUndefined();
     expect(paused.note(statusOf(behindWriter(true)), 2_000)).toBeUndefined();

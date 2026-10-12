@@ -10,6 +10,7 @@ import { plainTheme, recordingExtensionHost, tuiFixture } from "pi-cosmic-core/t
 import type { CodePreviewSettings } from "../config/schema";
 import { codePreviewSettings, setCodePreviewSettings } from "../config/state";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
+import type { HostObject } from "../shared/untrusted-value";
 import type { CodePreviewRenderers, ToolRenderContext } from "../tools/renderers/shared/types";
 
 type EmptyRecord = Record<PropertyKey, never>;
@@ -203,9 +204,9 @@ export function createToolPresentationHarness<TArgs, TDetails, TState = EmptyRec
   return harness;
 }
 
-export function hostToolRow<Args>(
+export function hostToolRow(
   name: string,
-  args: Args,
+  args: HostObject,
   renderers: ToolRenderers | undefined,
   options: {
     readonly cwd?: string;

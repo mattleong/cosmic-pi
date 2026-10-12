@@ -24,6 +24,9 @@ const HerdrCliErrorEnvelopeSchema = Schema.Struct({
     message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2_000)),
   }),
 });
+const decodeHerdrCliError = decodeUnknownOrUndefined(
+  Schema.fromJsonString(HerdrCliErrorEnvelopeSchema),
+);
 const SessionInfoSchema = Schema.Struct({
   source: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
   agent: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
@@ -142,10 +145,7 @@ const herdrCommandExitFailure = (
     "",
   );
   const detail = reason ? `: ${reason}` : "";
-  const herdrCode = decodeUnknownOrUndefined(
-    Schema.fromJsonString(HerdrCliErrorEnvelopeSchema),
-    diagnosticSource,
-  )?.error.code;
+  const herdrCode = decodeHerdrCliError(diagnosticSource)?.error.code;
   const rejected =
     request.mutation &&
     herdrCode !== undefined &&

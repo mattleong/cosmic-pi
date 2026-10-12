@@ -9,6 +9,7 @@ import {
 } from "./evidence";
 import type { WebAccessTool } from "./identity";
 import { nonEmptyText } from "../../shared/helpers";
+import { hostContainer, type HostContainer } from "../../shared/untrusted-value";
 
 function reportedIssues(details: WebAccessDetails, error: string | undefined): CompactIssue[] {
   const issues: CompactIssue[] = [];
@@ -52,9 +53,9 @@ function failureIssues(details: WebAccessDetails, researchErrors: number): Compa
   );
 }
 
-function truncationIssues<Args>(
+function truncationIssues(
   name: WebAccessTool,
-  args: Args,
+  args: HostContainer | undefined,
   details: WebAccessDetails,
 ): CompactIssue[] {
   if (!details.truncated) return [];
@@ -106,10 +107,11 @@ const COUNTERS = {
 } satisfies Record<WebAccessTool, (details: WebAccessDetails) => string[] | undefined>;
 
 export function webAccessSummary(name: WebAccessTool): CompactSummaryProvider {
-  return ({ phase, args, result }) => {
+  return ({ phase, args: rawArgs, result }) => {
+    const args = hostContainer(rawArgs);
     const heading = { subject: webAccessSubject(name, args), showTiming: true as const };
     if (!result) return phase === "settled" ? undefined : heading;
-    const evidence = webAccessEvidence(name, result.details);
+    const evidence = webAccessEvidence(name, hostContainer(result.details));
     if (!evidence) return undefined;
     const { details } = evidence;
     const error = details.error?.trim();

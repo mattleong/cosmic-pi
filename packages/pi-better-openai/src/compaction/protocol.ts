@@ -1,3 +1,4 @@
+import { flow } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -28,5 +29,7 @@ const OpenAICompactionDetailsSchema = Schema.Struct({
 export type OpenAICompactionJsonObject = typeof JsonObjectSchema.Type;
 export type OpenAICompactionCheckpoint = typeof OpenAICompactionCheckpointSchema.Type;
 
-export const decodeOpenAICompactionDetails = <Value>(raw: Value) =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(OpenAICompactionDetailsSchema)(raw));
+export const decodeOpenAICompactionDetails = flow(
+  Schema.decodeUnknownOption(OpenAICompactionDetailsSchema),
+  Option.getOrUndefined,
+);

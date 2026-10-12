@@ -119,6 +119,7 @@ const validateLocalPreflightRequest = (
           "Private agent-directory state is unavailable for the local CLI harness.",
         ),
     });
+    return undefined;
   });
 
 const resolveCodexApiKeyFallback = (
@@ -204,6 +205,7 @@ const validateLocalProbeResult = (
         "codex_unauthenticated",
         "Codex login status did not confirm an authenticated account.",
       );
+    return undefined;
   });
 
 const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (

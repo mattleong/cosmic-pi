@@ -131,7 +131,7 @@ export class CodePreviewSyntaxService extends Context.Service<
       const initialize: (theme: string) => Effect.Effect<void> = Effect.fn(
         "CodePreviewShiki.initialize",
       )(function* (theme: string) {
-        if (!codePreviewSettings.syntaxHighlighting) return;
+        if (!codePreviewSettings.syntaxHighlighting) return undefined;
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const flight: InitializationFlight = {
@@ -155,10 +155,10 @@ export class CodePreviewSyntaxService extends Context.Service<
             if (decision.tag === "Await") {
               const outcome = yield* restore(Deferred.await(decision.done));
               if (outcome === "Interrupted") return yield* restore(initialize(theme));
-              return;
+              return undefined;
             }
             if (decision.superseded) yield* Deferred.succeed(decision.superseded.done, "Completed");
-            if (decision.tag === "Ready") return;
+            if (decision.tag === "Ready") return undefined;
 
             const clearFlight = modify((current) =>
               current.initialization === flight

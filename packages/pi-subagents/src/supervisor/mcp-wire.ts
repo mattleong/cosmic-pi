@@ -2,6 +2,7 @@ import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import type * as Schema from "effect/Schema";
 import { isJsonObject, runtimeTypeName, type JsonObject, type JsonValue } from "pi-cosmic-core";
 import type { SupervisorRpcFailure } from "./protocol.ts";
 import type { SupervisorToolFailure } from "./tool-call.ts";
@@ -39,10 +40,10 @@ export type DecodedMcpMessage =
 
 export type ToolCall = Extract<DecodedMcpMessage, { readonly method: "tools/call" }>;
 
-export interface McpToolResult {
+export type McpToolResult = {
   readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
   readonly isError?: true;
-}
+};
 
 const own = (value: JsonObject, key: string): boolean => Object.hasOwn(value, key);
 
@@ -69,12 +70,15 @@ export const validRpcId = <ValueInput>(value: ValueInput): value is ValueInput &
 
 export const rpcKey = (value: RpcId): string => `${runtimeTypeName(value)}:${String(value)}`;
 
-const boundedMetadata = <ValueInput>(value: ValueInput, depth = 0): boolean => {
+const isJsonArray = (value: Schema.Json | undefined): value is ReadonlyArray<Schema.Json> =>
+  Array.isArray(value);
+
+const boundedMetadata = (value: Schema.Json | undefined, depth = 0): boolean => {
   if (depth > 6) return false;
   if (value === null || Predicate.isBoolean(value)) return true;
   if (Predicate.isNumber(value)) return Number.isFinite(value);
   if (Predicate.isString(value)) return value.length <= 4096;
-  if (Array.isArray(value))
+  if (isJsonArray(value))
     return value.length <= 64 && value.every((entry) => boundedMetadata(entry, depth + 1));
   if (!isJsonObject(value)) return false;
   const entries = Object.entries(value);
@@ -84,7 +88,7 @@ const boundedMetadata = <ValueInput>(value: ValueInput, depth = 0): boolean => {
   );
 };
 
-const validMeta = <ParamsInput>(params: ParamsInput): boolean =>
+const validMeta = (params: Schema.Json | undefined): boolean =>
   params === undefined || exactKeys(params, ["_meta"]);
 
 const messageInputSchema = {
@@ -152,8 +156,8 @@ export const toolDefinitions = [
   },
 ];
 
-const decodeInitializeMessage = <ParamsInput>(
-  params: ParamsInput,
+const decodeInitializeMessage = (
+  params: Schema.Json | undefined,
   id: RpcId | undefined,
 ): DecodedMcpMessage | undefined => {
   if (
@@ -169,14 +173,14 @@ const decodeInitializeMessage = <ParamsInput>(
   return { method: "initialize", id, protocolVersion: params.protocolVersion };
 };
 
-const decodeInitializedMessage = <ParamsInput>(
-  params: ParamsInput,
+const decodeInitializedMessage = (
+  params: Schema.Json | undefined,
   id: RpcId | undefined,
 ): DecodedMcpMessage | undefined =>
   id === undefined && validMeta(params) ? { method: "notifications/initialized" } : undefined;
 
-const decodeCancelledMessage = <ParamsInput>(
-  params: ParamsInput,
+const decodeCancelledMessage = (
+  params: Schema.Json | undefined,
   id: RpcId | undefined,
 ): DecodedMcpMessage | undefined => {
   if (
@@ -189,15 +193,15 @@ const decodeCancelledMessage = <ParamsInput>(
   return { method: "notifications/cancelled", requestId: params.requestId };
 };
 
-const decodeRequestMessage = <ParamsInput>(
+const decodeRequestMessage = (
   method: "ping" | "tools/list",
-  params: ParamsInput,
+  params: Schema.Json | undefined,
   id: RpcId | undefined,
 ): DecodedMcpMessage | undefined =>
   id !== undefined && validMeta(params) ? { method, id } : undefined;
 
-const decodeToolCallMessage = <ParamsInput>(
-  params: ParamsInput,
+const decodeToolCallMessage = (
+  params: Schema.Json | undefined,
   id: RpcId | undefined,
 ): DecodedMcpMessage | undefined => {
   if (
@@ -209,9 +213,9 @@ const decodeToolCallMessage = <ParamsInput>(
   return { method: "tools/call", id, name: params.name, arguments: params.arguments };
 };
 
-const decodeMethodMessage = <ParamsInput>(
+const decodeMethodMessage = (
   method: string,
-  params: ParamsInput,
+  params: Schema.Json | undefined,
   id: RpcId | undefined,
 ): DecodedMcpMessage | undefined => {
   switch (method) {
@@ -231,7 +235,7 @@ const decodeMethodMessage = <ParamsInput>(
   }
 };
 
-export const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessage | undefined => {
+export const decodeMcpMessage = (value: Schema.Json): DecodedMcpMessage | undefined => {
   if (
     !exactKeys(value, ["jsonrpc", "id", "method", "params"], ["jsonrpc", "method"]) ||
     value.jsonrpc !== "2.0" ||

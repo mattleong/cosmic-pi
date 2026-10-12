@@ -7,10 +7,11 @@ const DAY = 24 * HOUR;
 
 const finite = (value: number) => (Number.isFinite(value) ? Math.max(0, value) : 0);
 
+const pair = (large: number, largeUnit: string, small: number, smallUnit: string) =>
+  small > 0 ? `${large}${largeUnit} ${small}${smallUnit}` : `${large}${largeUnit}`;
+
 const unitPair = (milliseconds: number): string => {
   const seconds = Math.round(milliseconds / SECOND);
-  const pair = (large: number, largeUnit: string, small: number, smallUnit: string) =>
-    small > 0 ? `${large}${largeUnit} ${small}${smallUnit}` : `${large}${largeUnit}`;
   if (seconds >= 86_400)
     return pair(Math.floor(seconds / 86_400), "d", Math.floor((seconds % 86_400) / 3_600), "h");
   if (seconds >= 3_600)

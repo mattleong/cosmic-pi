@@ -1,4 +1,5 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { absurd } from "effect/Function";
 import { synchronousNow, notifyAtHostBoundary } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
@@ -27,8 +28,8 @@ type ProxyActionOutcome = "accepted" | "pending";
 const UNCONFIRMED_ACTION =
   "The root session didn't confirm this; it may already have happened, so check the run before trying again";
 
-const decodeRunActionDetails = <ValueInput>(action: ProxyFleetAction, value: ValueInput) => {
-  const details = decodeSubagentOutcomeDetails(action, value);
+const decodeRunActionDetails = (action: ProxyFleetAction, result: AgentToolResult<unknown>) => {
+  const details = decodeSubagentOutcomeDetails(action, result);
   return details && "runCount" in details ? details : undefined;
 };
 
@@ -37,7 +38,7 @@ const classifyProxyActionResult = (
   targetId: string,
   result: AgentToolResult<unknown>,
 ): ProxyActionOutcome => {
-  const details = decodeRunActionDetails(action, result.details);
+  const details = decodeRunActionDetails(action, result);
   if (!details) throw new Error(UNCONFIRMED_ACTION);
   const failures = details.actionFailures ?? [];
   const [failure] = failures;
@@ -53,7 +54,8 @@ const classifyProxyActionResult = (
     details.cards.length !== 0
   )
     throw new Error(UNCONFIRMED_ACTION);
-  switch (actionFailureDisposition(action, failure)) {
+  const disposition = actionFailureDisposition(action, failure);
+  switch (disposition) {
     case "pending":
       return "pending";
     case "unconfirmed":
@@ -61,6 +63,7 @@ const classifyProxyActionResult = (
     case "failed":
       throw new Error(failure.message);
   }
+  return absurd(disposition);
 };
 
 const cardView = (card: SubagentRunCard): SubagentRunView => ({
@@ -150,6 +153,7 @@ export const registerSubagentProxyManagerCommand = (
         if (refreshInFlight) return refreshInFlight;
         const pending = call({ tool: SUBAGENT_TOOL_NAME.list, args: {} }).then((result) => {
           projection = projectionFromResult(result, ++revision);
+          return undefined;
         });
         refreshInFlight = pending;
         const clear = () => {

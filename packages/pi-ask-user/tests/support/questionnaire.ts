@@ -47,7 +47,7 @@ export const submitted = (...answers: AskUserAnswer[]): AskUserOutcome => ({
 
 export const cancelled: AskUserOutcome = { outcome: "cancelled", answers: [] };
 
-export const firstText = <Details>(content: AgentToolResult<Details>["content"]) => {
+export const firstText = (content: AgentToolResult["content"]) => {
   const [first] = content;
   return first?.type === "text" ? first.text : undefined;
 };

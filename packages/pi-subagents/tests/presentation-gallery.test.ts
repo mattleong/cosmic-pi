@@ -263,7 +263,7 @@ const execute = (input: SubagentToolInput, options: Execution = {}) =>
     options.scripted,
   ).pipe(
     Effect.map((result) => {
-      const details = decodeSubagentOutcomeDetails(subagentToolAction(input), result.details);
+      const details = decodeSubagentOutcomeDetails(subagentToolAction(input), result);
       return { result, isError: details !== undefined && marksSubagentToolError(details) };
     }),
     Effect.catch((error) => Effect.succeed({ result: textResult(error.message), isError: true })),

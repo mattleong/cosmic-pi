@@ -41,9 +41,7 @@ function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): 
   return [[...counts].map(([label, count]) => `${count} ${label}`).join(", ")].filter(Boolean);
 }
 
-export function createSubagentCompactSummary(
-  toolName: string,
-): CompactSummaryProvider<unknown, unknown, unknown> {
+export function createSubagentCompactSummary(toolName: string): CompactSummaryProvider {
   const action = toolName.replace(/^subagent_/, "");
   return ({ phase, args, result, context }) => {
     if (!Predicate.isObject(args)) return undefined;
@@ -52,11 +50,11 @@ export function createSubagentCompactSummary(
     const lanes = argumentSummary(input, action, operation);
     if (!result) return context.isError || phase === "settled" ? undefined : lanes;
     if (action === "workspace" && !context.isError)
-      return compactWorkspaceSummary(result.details, operation);
+      return compactWorkspaceSummary(result, operation);
     const details =
       action === "workspace"
         ? undefined
-        : decodeSubagentOutcomeDetails(action === "claims" ? "claims" : operation, result.details);
+        : decodeSubagentOutcomeDetails(action === "claims" ? "claims" : operation, result);
     if (!details)
       return context.isError && phase === "settled"
         ? rejectedCall(input, action, operation, lanes, result)

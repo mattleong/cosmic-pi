@@ -18,7 +18,7 @@ export const makeWorkflowSkip =
       );
       for (const holder of holders)
         if (yield* runs.modify(holder.id, (run) => skipWorkflowPlanned(run, agentRunId, at)))
-          return;
+          return undefined;
       const skip = [...runs.controls.values()]
         .map((control) => control.skips.get(agentRunId))
         .find((candidate) => candidate !== undefined);

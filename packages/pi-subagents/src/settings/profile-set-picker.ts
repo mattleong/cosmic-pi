@@ -169,7 +169,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
   private readonly keymap = new FullScreenKeymap();
   private options: ProfileSetPickerOptions;
   private disposed = false;
-  private _focused = false;
+  private focusState = false;
 
   constructor(options: ProfileSetPickerOptions) {
     this.options = {
@@ -181,11 +181,11 @@ export class ProfileSetPickerComponent implements Component, Focusable {
   }
 
   get focused(): boolean {
-    return this._focused;
+    return this.focusState;
   }
 
   set focused(value: boolean) {
-    this._focused = value;
+    this.focusState = value;
     if (this.menu) this.menu.focused = value;
   }
 
@@ -259,7 +259,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
         this.renderSoon();
       },
     });
-    this.menu.focused = this._focused;
+    this.menu.focused = this.focusState;
     this.renderSoon();
   }
 

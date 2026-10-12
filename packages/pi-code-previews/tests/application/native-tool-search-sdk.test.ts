@@ -16,6 +16,7 @@ import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { drawToolRow, hostToolRow } from "../../testing";
 import { executeDescriptor } from "../support/tool-identity";
+import { hostContainer } from "../../src/shared/untrusted-value";
 
 beforeAll(() => initTheme("dark", false));
 
@@ -182,12 +183,14 @@ for (const order of ["native-first", "previews-first"] as const)
           const loaded = yield* step(() =>
             search.execute("deliberate-native-search", { query: "nebula", limit: 1 }, undefined),
           );
-          assert.deepEqual(nativeToolSearchReceipt(loaded.details), { loaded: ["nebula_fixture"] });
+          assert.deepEqual(nativeToolSearchReceipt(hostContainer(loaded.details)), {
+            loaded: ["nebula_fixture"],
+          });
           assert.ok(session.getActiveToolNames().includes("nebula_fixture"));
           const again = yield* step(() =>
             search.execute("deliberate-native-repeat", { query: "nebula", limit: 1 }, undefined),
           );
-          assert.deepEqual(nativeToolSearchReceipt(again.details), { loaded: [] });
+          assert.deepEqual(nativeToolSearchReceipt(hostContainer(again.details)), { loaded: [] });
           assert.equal(fixtureExecutions, 0);
           assert.equal(session.getToolDefinition("tool_search"), definition);
         }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),

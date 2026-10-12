@@ -26,8 +26,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
-  Effect.promise(() => Promise.resolve(value).then(() => undefined));
+const invoke = (pending: Promise<void> | undefined): Effect.Effect<void> =>
+  Effect.promise(() => Promise.resolve(pending));
 
 const gateConfigCommits = Effect.gen(function* () {
   const committed = yield* Deferred.make<void>();
@@ -162,7 +162,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         );
         const ctx = { ...h.ctx, sessionManager: manager, abort: vi.fn() };
         yield* h.emit("session_start", ctx);
-        const handler = h.handlers.get("context_with_system")![0]!;
+        const handler = h.handlers.get("context_with_system")[0]!;
         const messages = manager.buildSessionContext().messages;
         const result = yield* Effect.promise(() =>
           Promise.resolve(handler({ type: "context_with_system", messages }, ctx)),

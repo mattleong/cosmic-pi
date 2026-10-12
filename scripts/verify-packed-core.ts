@@ -19,11 +19,14 @@ const extensionPackages = [
   "pi-subagents",
 ];
 const packageNames = ["pi-cosmic-core", ...extensionPackages];
-const manifests = new Map<string, PackageManifest>();
-for (const packageName of packageNames) {
-  const path = join(root, "packages", packageName, "package.json");
-  manifests.set(packageName, decodePackageManifest(await readFile(path, "utf8")));
-}
+const manifests = new Map(
+  await Promise.all(
+    packageNames.map(async (packageName): Promise<[string, PackageManifest]> => {
+      const path = join(root, "packages", packageName, "package.json");
+      return [packageName, decodePackageManifest(await readFile(path, "utf8"))];
+    }),
+  ),
+);
 const sourceManifest = (packageName: string): PackageManifest => {
   const manifest = manifests.get(packageName);
   if (manifest === undefined) throw new Error(`Missing ${packageName} source manifest.`);
@@ -391,30 +394,35 @@ try {
     throw new Error("Packed Sharp decoder could not validate a tiny PNG in a clean consumer.");
   }
 
-  for (const source of [
-    "pi-cosmic-core/index.ts",
-    "pi-cosmic-core/testing.ts",
-    "pi-cosmic-core/src/runtime/runtime.ts",
-    "pi-code-previews/index.ts",
-    "pi-code-previews/src/extension.ts",
-    "pi-code-previews/src/application/tool-renderers.ts",
-    "pi-code-previews/src/tools/preview-admission.ts",
-    "pi-code-previews/src/tools/native-mcp-render.ts",
-  ]) {
-    await readFile(join(temporaryDirectory, "node_modules", source));
-  }
-  for (const excluded of [
-    "pi-code-previews/tests",
-    "pi-code-previews/tsconfig.json",
-    "pi-cosmic-core/dist",
-    "pi-code-previews/dist",
-  ]) {
-    const excludedPath = join(temporaryDirectory, "node_modules", excluded);
-    const present = await stat(excludedPath).then(
-      () => true,
-      () => false,
-    );
-    if (present) throw new Error(`Packed source package ships forbidden path: ${excluded}.`);
+  await Promise.all(
+    [
+      "pi-cosmic-core/index.ts",
+      "pi-cosmic-core/testing.ts",
+      "pi-cosmic-core/src/runtime/runtime.ts",
+      "pi-code-previews/index.ts",
+      "pi-code-previews/src/extension.ts",
+      "pi-code-previews/src/application/tool-renderers.ts",
+      "pi-code-previews/src/tools/preview-admission.ts",
+      "pi-code-previews/src/tools/native-mcp-render.ts",
+    ].map((source) => readFile(join(temporaryDirectory, "node_modules", source))),
+  );
+  const exclusions = await Promise.all(
+    [
+      "pi-code-previews/tests",
+      "pi-code-previews/tsconfig.json",
+      "pi-cosmic-core/dist",
+      "pi-code-previews/dist",
+    ].map(async (excluded) => ({
+      excluded,
+      present: await stat(join(temporaryDirectory, "node_modules", excluded)).then(
+        () => true,
+        () => false,
+      ),
+    })),
+  );
+  const shipped = exclusions.find((exclusion) => exclusion.present);
+  if (shipped !== undefined) {
+    throw new Error(`Packed source package ships forbidden path: ${shipped.excluded}.`);
   }
 
   const packedCoreManifest = decodePackageManifest(
@@ -427,10 +435,18 @@ try {
   ) {
     throw new Error("Packed pi-cosmic-core dependencies do not use the pinned Effect version.");
   }
-  for (const packageName of extensionPackages) {
-    const packedManifest = decodePackageManifest(
-      await readFile(join(temporaryDirectory, "node_modules", packageName, "package.json"), "utf8"),
-    );
+  const packedManifests = await Promise.all(
+    extensionPackages.map(async (packageName) => ({
+      packageName,
+      packedManifest: decodePackageManifest(
+        await readFile(
+          join(temporaryDirectory, "node_modules", packageName, "package.json"),
+          "utf8",
+        ),
+      ),
+    })),
+  );
+  for (const { packageName, packedManifest } of packedManifests) {
     const source = sourceManifest(packageName);
     assertPackedProtocolsResolved(packageName, packedManifest);
     if (

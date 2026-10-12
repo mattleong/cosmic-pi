@@ -74,6 +74,7 @@ export const removeWorkspaceTrees = (
         "recovery",
         "Editable workspace trees remain; discard is incomplete.",
       );
+    return undefined;
   });
 
 const inspectRegistry = (registry: string) =>

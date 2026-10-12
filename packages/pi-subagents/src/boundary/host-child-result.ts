@@ -121,8 +121,8 @@ export function registerChildResults(
     reminders = 0;
   });
   pi.on("agent_before_settle", (event) => {
-    if (!contract || accepted || event.outcome !== "completed") return;
-    if (reminders >= MAX_RESULT_REMINDERS) return;
+    if (!contract || accepted || event.outcome !== "completed") return undefined;
+    if (reminders >= MAX_RESULT_REMINDERS) return undefined;
     reminders += 1;
     return {
       entries: [
@@ -169,6 +169,7 @@ export function registerChildResults(
         (valueJson, signal) =>
           submit(transport, valueJson, signal).then(() => {
             accepted = true;
+            return undefined;
           }),
         transport.scheduleAnimation,
       ),

@@ -25,8 +25,8 @@ for (const failure of ["typed", "defect"] as const) {
       const ctx = extensionContextFixture({ ui: { notify } });
       const pi = extensionApiFixture({});
       const foreign = deferredPromise<number>();
-      const admitted = deferredPromise<void>();
-      const disposal = deferredPromise<void>();
+      const admitted = deferredPromise();
+      const disposal = deferredPromise();
       const slot = makePiSessionRuntimeSlot({
         makeRuntime: () => {
           const runtime = makePiManagedRuntime(pi, Layer.empty);

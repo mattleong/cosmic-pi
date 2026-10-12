@@ -19,7 +19,7 @@ const decoded = <Tool extends SubagentContractTool>(
   tool: Tool,
   contract: SubagentContract<Tool>,
 ): SubagentContract<Tool> => {
-  const result = decodeSubagentContract(tool, contract);
+  const result = decodeSubagentContract(tool)(contract);
   expect(result).toEqual(contract);
   return result!;
 };
@@ -256,7 +256,7 @@ describe("await contract", () => {
       cleanup: "confirmed",
     });
     const target = { ...contract.targets[0]!, report: { status: "delivered", text: "leak" } };
-    expect(decodeSubagentContract("subagent_await", { ...contract, targets: [target] })).toBe(
+    expect(decodeSubagentContract("subagent_await")({ ...contract, targets: [target] })).toBe(
       undefined,
     );
   });
@@ -396,15 +396,15 @@ describe("privacy and strict decoding", () => {
       null,
       "{}",
     ])
-      expect(decodeSubagentContract("subagent_status", value)).toBe(undefined);
-    expect(decodeSubagentContract("subagent_await", contract)).toBe(undefined);
+      expect(decodeSubagentContract("subagent_status")(value)).toBe(undefined);
+    expect(decodeSubagentContract("subagent_await")(contract)).toBe(undefined);
     const hostile = Object.defineProperty({ ...contract }, "targets", {
       enumerable: true,
       get: () => {
         throw new Error("hostile");
       },
     });
-    expect(decodeSubagentContract("subagent_status", hostile)).toBe(undefined);
-    expect(Object.isFrozen(decodeSubagentContract("subagent_status", contract))).toBe(true);
+    expect(decodeSubagentContract("subagent_status")(hostile)).toBe(undefined);
+    expect(Object.isFrozen(decodeSubagentContract("subagent_status")(contract))).toBe(true);
   });
 });

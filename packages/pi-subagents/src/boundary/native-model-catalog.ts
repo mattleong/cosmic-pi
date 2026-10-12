@@ -205,7 +205,7 @@ const runCatalogProcess = (
   args: ReadonlyArray<string>,
   cwd: string,
   env: NodeJS.ProcessEnv,
-): Effect.Effect<unknown, NativeModelCatalogError> =>
+): Effect.Effect<Schema.Json, NativeModelCatalogError> =>
   Effect.scoped(
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -361,7 +361,7 @@ const CATALOG_PROTOCOLS = {
     request: jsonLines(claudeInitializeFrame(CATALOG_REQUEST_ID)),
     isCorrelated: Schema.is(ClaudeCatalogCorrelatedFrame),
     isRejected: Schema.is(ClaudeCatalogErrorResponse),
-    decode: <Frame>(frame: Frame) =>
+    decode: (frame: Schema.Json) =>
       decodeClaudeCatalog(frame).pipe(
         Effect.map((response) => withExplicitClaudeModels(response.response.response.models)),
       ),
@@ -375,7 +375,7 @@ const CATALOG_PROTOCOLS = {
     }),
     isCorrelated: Schema.is(CodexCatalogCorrelatedFrame),
     isRejected: Schema.is(CodexCatalogErrorResponse),
-    decode: <Frame>(frame: Frame) =>
+    decode: (frame: Schema.Json) =>
       decodeCodexCatalog(frame).pipe(
         Effect.map((response) =>
           response.result.data.map(

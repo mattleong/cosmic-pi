@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -47,6 +48,18 @@ export type AssignmentActivationReplay =
       readonly assignmentEpoch: number;
       readonly terminal?: BackendAssistantTerminal | undefined;
     };
+
+const reportPairStatus = (record: RunRecord, report: BackendReport) => {
+  const watermark = record.lastBackendReport;
+  if (!watermark) return "new";
+  if (
+    report.assignmentEpoch === watermark.assignmentEpoch &&
+    report.sequence === watermark.sequence &&
+    report.deliveryId === watermark.deliveryId
+  )
+    return "exact-retry";
+  return report.sequence <= watermark.sequence ? "invalid" : "new";
+};
 
 export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   const { ownerScope, withLock, publish, delivery, closeRecordScope, sendPeerNotices } =
@@ -242,18 +255,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       return { kind: "unchanged" as const, view };
     });
 
-  const reportPairStatus = (record: RunRecord, report: BackendReport) => {
-    const watermark = record.lastBackendReport;
-    if (!watermark) return "new";
-    if (
-      report.assignmentEpoch === watermark.assignmentEpoch &&
-      report.sequence === watermark.sequence &&
-      report.deliveryId === watermark.deliveryId
-    )
-      return "exact-retry";
-    return report.sequence <= watermark.sequence ? "invalid" : "new";
-  };
-
   const acceptValidatedBackendReport = (record: RunRecord, report: BackendReport) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -360,6 +361,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       case "running":
         return Effect.succeed(replay.view);
     }
+    return absurd(replay);
   };
 
   const acceptBackendReport = (record: RunRecord, rawReport: BackendReport) =>

@@ -1,3 +1,5 @@
+import type { EventBus } from "@earendil-works/pi-coding-agent";
+import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { invokeBestEffort } from "./host-session.ts";
@@ -8,7 +10,7 @@ interface SessionCapabilityProtocolOptions<Version extends number> {
   readonly maxSessionIdChars?: number;
 }
 
-type CapabilityResponder = <Candidate>(candidate: Candidate) => void;
+type CapabilityResponder = (candidate: Parameters<EventBus["emit"]>[1]) => void;
 
 interface SessionCapabilityQuery<Version extends number> {
   readonly version: Version;
@@ -31,16 +33,20 @@ export const makeSessionCapabilityProtocol = <const Version extends number>(
     respond: Schema.declare(isResponder),
   });
 
-  const normalizeQuery = <Value>(value: Value): SessionCapabilityQuery<Version> | undefined => {
-    const decoded = decodeUnknownOrUndefined(Query, value);
-    if (decoded === undefined) return undefined;
-    const respond = decoded.respond;
-    return Object.freeze({
-      version: decoded.version,
-      sessionId: decoded.sessionId,
-      respond: <Candidate>(candidate: Candidate) => invokeBestEffort(() => respond(candidate)),
-    });
-  };
+  const normalizeQuery = flow(
+    decodeUnknownOrUndefined(Query),
+    (decoded): SessionCapabilityQuery<Version> | undefined => {
+      if (decoded === undefined) return undefined;
+      const respond = decoded.respond;
+      const contained: CapabilityResponder = (candidate) =>
+        invokeBestEffort(() => respond(candidate));
+      return Object.freeze({
+        version: decoded.version,
+        sessionId: decoded.sessionId,
+        respond: contained,
+      });
+    },
+  );
 
   return { normalizeQuery };
 };

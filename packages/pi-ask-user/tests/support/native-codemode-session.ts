@@ -6,7 +6,7 @@ import { registerAsyncAskUserTools } from "../../src/tools/ask-user-async.ts";
 
 export const nativeCodemodeSession = (service: Effect.Success<typeof AskUserService>) =>
   Effect.gen(function* () {
-    const runTool = Effect.runPromiseWith(yield* Effect.context<never>());
+    const runTool = Effect.runPromiseWith(yield* Effect.context());
     return yield* fauxCodemodeSession({
       prefix: "ask-user-workflow-",
       provider: "ask-user-workflow-test",

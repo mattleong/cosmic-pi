@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import type { AgentToolResult, ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ToolInfo,
+  ToolRenderers,
+} from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { afterEach, it } from "vitest";
 import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
@@ -24,8 +29,9 @@ const downstream: ToolRenderers = {
   renderCall: () => new Text("DOWNSTREAM CALL", 0, 0),
   renderResult: () => new Text("DOWNSTREAM RESULT", 0, 0),
 };
-const manager = {
+const manager: ReturnType<ExtensionAPI["getCommands"]>[number] = {
   name: "mcp",
+  source: "extension",
   sourceInfo: { source: "builtin", path: "builtin:mcp", scope: "temporary", origin: "top-level" },
 };
 

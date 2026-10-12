@@ -9,7 +9,7 @@ import {
 import { plainTheme } from "../support/render";
 import { cachedDeferredPreview, cachedPreview } from "../../src/tools/renderers/shared/cache";
 import { codePreviewPerformanceConfig } from "../../src/config/state";
-import { eventLoopTurn } from "../support/effect-test";
+import { effectTest, eventLoopTurn, step } from "../support/effect-test";
 
 afterEach(() => clearCodePreviewSessionCapability());
 
@@ -50,39 +50,41 @@ test("large previews remain synchronous before session acquisition", () => {
   assert.match(rendered.render(80).join("\n"), /ready/);
 });
 
-test("cache replacement cancels obsolete deferred publication and compares exact source", () => {
-  installTestCapability();
-  const state = {};
-  let firstComputes = 0;
-  let secondComputes = 0;
-  let invalidations = 0;
-  preview(
-    state,
-    "a".repeat(20_000),
-    () => {
-      firstComputes++;
-      return component("obsolete");
-    },
-    () => invalidations++,
-  );
-  const current = preview(
-    state,
-    "b".repeat(20_000),
-    () => {
-      secondComputes++;
-      return component("current");
-    },
-    () => invalidations++,
-  );
-  return eventLoopTurn().then(() => {
+effectTest(
+  "cache replacement cancels obsolete deferred publication and compares exact source",
+  function* () {
+    installTestCapability();
+    const state = {};
+    let firstComputes = 0;
+    let secondComputes = 0;
+    let invalidations = 0;
+    preview(
+      state,
+      "a".repeat(20_000),
+      () => {
+        firstComputes++;
+        return component("obsolete");
+      },
+      () => invalidations++,
+    );
+    const current = preview(
+      state,
+      "b".repeat(20_000),
+      () => {
+        secondComputes++;
+        return component("current");
+      },
+      () => invalidations++,
+    );
+    yield* step(() => eventLoopTurn());
     assert.equal(firstComputes, 0);
     assert.equal(secondComputes, 1);
     assert.equal(invalidations, 1);
     assert.match(current.render(80).join("\n"), /current/);
-  });
-});
+  },
+);
 
-test("a failing replacement cannot reuse a cancelled deferred preview", () => {
+effectTest("a failing replacement cannot reuse a cancelled deferred preview", function* () {
   installTestCapability();
   const state = {};
   const source = "a".repeat(20_000);
@@ -104,26 +106,25 @@ test("a failing replacement cannot reuse a cancelled deferred preview", () => {
     () => {},
   );
   assert.notEqual(current, obsolete);
-  return eventLoopTurn().then(() => {
-    assert.match(current.render(80).join("\n"), /ready/);
-  });
+  yield* step(() => eventLoopTurn());
+  assert.match(current.render(80).join("\n"), /ready/);
 });
 
-test.each([0, 1])("defers only above the character budget: budget + %i", (extra) => {
-  installTestCapability();
-  const current = preview(
-    {},
-    "a".repeat(codePreviewPerformanceConfig.asyncRenderChars + extra),
-    () => component("ready"),
-    () => {},
-  );
-  assert.equal(current.render(80).join("\n").includes("ready"), extra === 0);
-  return eventLoopTurn().then(() => {
+for (const extra of [0, 1])
+  effectTest(`defers only above the character budget: budget + ${extra}`, function* () {
+    installTestCapability();
+    const current = preview(
+      {},
+      "a".repeat(codePreviewPerformanceConfig.asyncRenderChars + extra),
+      () => component("ready"),
+      () => {},
+    );
+    assert.equal(current.render(80).join("\n").includes("ready"), extra === 0);
+    yield* step(() => eventLoopTurn());
     assert.match(current.render(80).join("\n"), /ready/);
   });
-});
 
-test("deferred publication isolates a throwing host invalidation callback", () => {
+effectTest("deferred publication isolates a throwing host invalidation callback", function* () {
   installTestCapability();
   const state = {};
   const current = preview(
@@ -134,7 +135,6 @@ test("deferred publication isolates a throwing host invalidation callback", () =
       throw new Error("host invalidation failed");
     },
   );
-  return eventLoopTurn().then(() => {
-    assert.match(current.render(80).join("\n"), /ready/);
-  });
+  yield* step(() => eventLoopTurn());
+  assert.match(current.render(80).join("\n"), /ready/);
 });

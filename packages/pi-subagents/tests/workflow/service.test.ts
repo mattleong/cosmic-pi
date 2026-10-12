@@ -215,6 +215,12 @@ describe("workflow runs", () => {
   );
 });
 
+const implementThenCheck = (task: string) =>
+  `const fixed = await agent(${JSON.stringify(task)}, { profile: "worker" }); return [fixed, await agent("run the tests")];`;
+
+const source = (options: string) =>
+  `const map = await agent("map the code"); return [map, ...(await parallel([() => agent("review the map", ${options})]))];`;
+
 describe("workflow resume", () => {
   it.live("reuses identical earlier calls in order and runs changed calls live", () =>
     workflowTest({ concurrency: 1 }, function* ({ fixture, workflows }) {
@@ -248,8 +254,6 @@ describe("workflow resume", () => {
   );
 
   it.live("runs the check again when only the shared-checkout writer before it changed", () => {
-    const implementThenCheck = (task: string) =>
-      `const fixed = await agent(${JSON.stringify(task)}, { profile: "worker" }); return [fixed, await agent("run the tests")];`;
     return workflowTest({}, function* ({ fixture, workflows }) {
       const first = yield* startScript(workflows, implementThenCheck("implement the fix"));
       yield* reportTask(fixture, "implement the fix", "Implemented.");
@@ -272,8 +276,6 @@ describe("workflow resume", () => {
   it.live(
     "fails a run on an invalid call inside parallel() and reuses its agents on resume",
     () => {
-      const source = (options: string) =>
-        `const map = await agent("map the code"); return [map, ...(await parallel([() => agent("review the map", ${options})]))];`;
       return workflowTest({}, function* ({ fixture, workflows }) {
         const failed = yield* startScript(workflows, source('{ agentType: "Explore" }'));
         yield* reportTask(fixture, "map the code", "Mapped.");
@@ -401,6 +403,7 @@ describe("workflow agents", () => {
         control.report(runId, 1, "answered", "Auth reviewed.");
         const run = yield* finished(workflows, started.id);
         expect(run.result?.text).toBe("Auth reviewed.");
+        return undefined;
       },
     ),
   );

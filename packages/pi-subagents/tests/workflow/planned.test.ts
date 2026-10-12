@@ -162,6 +162,9 @@ describe("claiming planned agents", () => {
   });
 });
 
+const phaseLine = (text: string, title: string) =>
+  text.split("\n").find((line) => line.startsWith(`- ${title}`)) ?? "";
+
 describe("planned agents in status", () => {
   it("counts a planned agent skipped before any call claimed it as skipped, not planned", () => {
     const [, skipped] = skipWorkflowPlanned(run(reviewPlan), "agent-p-3", 5);
@@ -175,8 +178,6 @@ describe("planned agents in status", () => {
   });
 
   it("counts each phase's agents that haven't started", () => {
-    const phaseLine = (text: string, title: string) =>
-      text.split("\n").find((line) => line.startsWith(`- ${title}`)) ?? "";
     const live = workflowStatusText(run(reviewPlan), 1);
     expect(phaseLine(live, "Review")).toMatch(/\b2\b/u);
     expect(phaseLine(live, "Verify")).toMatch(/\b1\b/u);
@@ -186,10 +187,11 @@ describe("planned agents in status", () => {
   });
 });
 
+const logged = (current: WorkflowRunView, message: string, level?: "warning") =>
+  withWorkflowEvent(current, { type: "log", message, ...(level && { level }) }, 1);
+
 describe("narrator line", () => {
   it("follows the newest non-blank log line on one bounded line", () => {
-    const logged = (current: WorkflowRunView, message: string, level?: "warning") =>
-      withWorkflowEvent(current, { type: "log", message, ...(level && { level }) }, 1);
     let current = logged(run([]), "scanning\n  src/auth");
     expect(current.lastLog).toBe("scanning src/auth");
     current = logged(current, "   ");

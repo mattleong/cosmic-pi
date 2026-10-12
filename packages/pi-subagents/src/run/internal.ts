@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
@@ -227,6 +228,7 @@ const unsupportedCapabilityMessage = (
     case "resume":
       return `${backend} subagents do not support ${capability}. Inspect supported operations with subagent_status({ runIds: ["${id}"] }).`;
   }
+  return absurd(capability);
 };
 
 export const requireCapability = (

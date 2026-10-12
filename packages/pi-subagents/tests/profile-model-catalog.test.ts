@@ -64,6 +64,9 @@ const hasTerminalControls = (value: string): boolean => {
   return false;
 };
 
+const selectors = (options: ReadonlyArray<ProfileModelOption> = []) =>
+  options.map((option) => option.selector);
+
 describe("profile model catalog", () => {
   for (const lateFailure of [false, true]) {
     it.effect(
@@ -148,8 +151,6 @@ describe("profile model catalog", () => {
       const scoped = piModel("openai", "scoped");
       const catalog = staticCatalog([scoped, piModel("anthropic", "all-only")], [scoped]);
       const picker = yield* loadPicker(catalog, profileCandidate("openai/scoped"));
-      const selectors = (options: ReadonlyArray<ProfileModelOption> = []) =>
-        options.map((option) => option.selector);
       expect(selectors(picker.scopedChoices)).toContain("openai/scoped");
       expect(selectors(picker.scopedChoices)).not.toContain("anthropic/all-only");
       expect(selectors(picker.choices)).toContain("anthropic/all-only");

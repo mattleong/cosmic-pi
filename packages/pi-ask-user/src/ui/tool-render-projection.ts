@@ -1,12 +1,9 @@
+import { flow } from "effect/Function";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { countLabel, decodeUnknownOrUndefined, stripTerminalControls } from "pi-cosmic-core";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import { MAX_CHOICES, MAX_QUESTIONS } from "../questionnaire/schema.ts";
-
-export const projection =
-  <S extends Schema.ConstraintDecoder<unknown>>(schema: S) =>
-  <Input>(input: Input): S["Type"] | undefined =>
-    decodeUnknownOrUndefined(schema, input);
 
 const note = { note: Schema.optional(Schema.String) };
 
@@ -34,7 +31,7 @@ export const answerOutcome = Schema.Union([
 ]);
 export type ReplayedOutcome = typeof answerOutcome.Type;
 export type ReplayedAnswer = Extract<ReplayedOutcome, { outcome: "submitted" }>["answers"][number];
-export const decodeOutcome = projection(answerOutcome);
+export const decodeOutcome = decodeUnknownOrUndefined(answerOutcome);
 
 const asyncSnapshotFields = {
   requestId: Schema.String,
@@ -61,33 +58,34 @@ const expandedAsyncSnapshot = Schema.Struct({
 export type ReplayedSnapshot = typeof expandedAsyncSnapshot.Type;
 
 const asyncRows = <S extends Schema.ConstraintDecoder<unknown>>(snapshot: S) => {
-  const decodeSingle = projection(snapshot);
-  const decodeList = projection(
-    Schema.Struct({
-      requests: Schema.Array(snapshot).check(Schema.isMaxLength(MAX_RETAINED_REQUESTS)),
-    }),
+  const list = Schema.Struct({
+    requests: Schema.Array(snapshot).check(Schema.isMaxLength(MAX_RETAINED_REQUESTS)),
+  });
+  const isList = Schema.is(list);
+  return flow(
+    decodeUnknownOrUndefined(Schema.Union([snapshot, list])),
+    (decoded): readonly S["Type"][] | undefined => {
+      if (decoded === undefined) return undefined;
+      return isList(decoded) ? decoded.requests : [decoded];
+    },
   );
-  return <Input>(details: Input): readonly S["Type"][] | undefined => {
-    const single = decodeSingle(details);
-    return single ? [single] : decodeList(details)?.requests;
-  };
 };
 export const decodeCompactAsyncRows = asyncRows(compactAsyncSnapshot);
 export const decodeExpandedAsyncRows = asyncRows(expandedAsyncSnapshot);
 
-export const decodeAsyncControl = projection(
+export const decodeAsyncControl = decodeUnknownOrUndefined(
   Schema.Struct({
     action: Schema.Literals(["status", "await", "cancel"]),
     requestId: Schema.optional(Schema.String),
   }),
 );
 
-export const isStatusList = <Args>(args: Args): boolean => {
-  const control = decodeAsyncControl(args);
-  return control?.action === "status" && control.requestId === undefined;
-};
+export const isStatusList = flow(
+  decodeAsyncControl,
+  (control) => control?.action === "status" && control.requestId === undefined,
+);
 
-export const decodeCallQuestions = projection(
+export const decodeCallQuestions = decodeUnknownOrUndefined(
   Schema.Struct({
     questions: Schema.Array(
       Schema.Struct({ title: Schema.String, key: Schema.optional(Schema.String) }),
@@ -95,21 +93,24 @@ export const decodeCallQuestions = projection(
   }),
 );
 
-export const callTitles = <Args>(args: Args): string | undefined => {
-  const titles = decodeCallQuestions(args)
-    ?.questions.map((question) => stripTerminalControls(question.title))
+export const callTitles = flow(decodeCallQuestions, (decoded): string | undefined => {
+  const titles = decoded?.questions
+    .map((question) => stripTerminalControls(question.title))
     .join(", ");
   return titles === "" ? undefined : titles;
-};
+});
 
-export const titlesByKey = <Args>(args: Args): ReadonlyMap<string, string> =>
-  new Map(
-    (decodeCallQuestions(args)?.questions ?? []).flatMap((question) =>
-      question.key === undefined ? [] : [[question.key, question.title] as const],
+export const titlesByKey = flow(
+  decodeCallQuestions,
+  (decoded): ReadonlyMap<string, string> =>
+    new Map(
+      (decoded?.questions ?? []).flatMap((question) =>
+        question.key === undefined ? [] : [[question.key, question.title] as const],
+      ),
     ),
-  );
+);
 
-export const decodeCompactChoices = projection(
+export const decodeCompactChoices = decodeUnknownOrUndefined(
   Schema.Struct({
     questions: Schema.Array(
       Schema.Struct({
@@ -122,22 +123,27 @@ export const decodeCompactChoices = projection(
     ).check(Schema.isMaxLength(MAX_QUESTIONS)),
   }),
 );
-const parts = projection(Schema.Array(Schema.Unknown));
-const textPart = projection(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }));
-const stringContent = projection(Schema.String);
+const parts = decodeUnknownOrUndefined(Schema.Array(Schema.Unknown));
+const textPart = decodeUnknownOrUndefined(
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+);
+const replayContent = decodeUnknownOrUndefined(
+  Schema.Union([Schema.String, Schema.Array(Schema.Unknown)]),
+);
 
-export function fallbackText<Content>(content: Content, allowString = false): string {
-  if (allowString) {
-    const text = stringContent(content);
-    if (text !== undefined) return stripTerminalControls(text);
-  }
-  return (parts(content) ?? [])
+const partsText = (decoded: ReadonlyArray<unknown> | undefined): string =>
+  (decoded ?? [])
     .flatMap((part) => {
       const text = textPart(part);
       return text ? [stripTerminalControls(text.text)] : [];
     })
     .join("\n");
-}
+
+export const fallbackText = flow(parts, partsText);
+
+export const contentText = flow(replayContent, (decoded) =>
+  Predicate.isString(decoded) ? stripTerminalControls(decoded) : partsText(decoded),
+);
 
 export type QuestionnaireState = "waiting" | "queued" | "answered" | "cancelled" | "failed";
 
@@ -167,6 +173,7 @@ export function questionnaireState(row: StateRow): QuestionnaireState | undefine
     case "cancelled":
       return finishedState(row, row.status);
   }
+  return undefined;
 }
 
 const STATE_WORDS = {

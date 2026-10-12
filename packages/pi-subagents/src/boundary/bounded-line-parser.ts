@@ -44,7 +44,8 @@ export function attachBoundedLineParser(
   };
 
   const emitFrames = (final: boolean) => {
-    while (!overflowed) {
+    for (;;) {
+      if (overflowed) break;
       const index = buffered.indexOf("\n");
       if (index < 0) break;
       const line = buffered.slice(0, index);
@@ -64,7 +65,8 @@ export function attachBoundedLineParser(
     if (draining || overflowed || detached) return;
     draining = true;
     try {
-      while (chunks.length > 0 && !overflowed) {
+      while (chunks.length > 0) {
+        if (overflowed) break;
         const chunk = chunks.shift();
         if (!chunk) break;
         queuedBytes -= chunk.length;

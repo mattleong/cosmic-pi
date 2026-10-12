@@ -27,6 +27,9 @@ const invalidRequest: AskUserRequest = {
 
 const outcome: AskUserOutcome = { outcome: "submitted", answers: [] };
 
+const forkNow = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.forkChild(effect, { startImmediately: true });
+
 it.effect(
   "async, owned and ordinary requests share FIFO; cancelled callers never mount or steer answers",
   () =>
@@ -45,23 +48,21 @@ it.effect(
       yield* Effect.gen(function* () {
         const service = yield* AskUserService;
         const receipt = yield* service.startAsync(asyncRequest);
-        const fork = <A, E>(effect: Effect.Effect<A, E>) =>
-          Effect.forkChild(effect, { startImmediately: true });
-        const cancelled = yield* fork(
+        const cancelled = yield* forkNow(
           service.askOwned(request, {
             runId: "cancelled",
             assignmentEpoch: 1,
             requestId: "first",
           }),
         );
-        const owned = yield* fork(
+        const owned = yield* forkNow(
           service.askOwned(keyed("owned"), {
             runId: "live",
             assignmentEpoch: 2,
             requestId: "second",
           }),
         );
-        const ordinary = yield* fork(service.ask(keyed("ordinary")));
+        const ordinary = yield* forkNow(service.ask(keyed("ordinary")));
         yield* Fiber.interrupt(cancelled);
         expect(calls).toEqual(["async"]);
         yield* service.controlAsync({ action: "cancel", requestId: receipt.requestId });

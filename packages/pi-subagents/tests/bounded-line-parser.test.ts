@@ -40,6 +40,7 @@ describe("bounded child line parser", () => {
     return ended.then(() => {
       expect(lines).toEqual(['{"type":"message_end","text":"café 🌌"}']);
       expect(overflow).not.toHaveBeenCalled();
+      return undefined;
     });
   });
 
@@ -50,6 +51,7 @@ describe("bounded child line parser", () => {
     return ended.then(() => {
       expect(lines).toEqual(["first", "second"]);
       expect(overflow).not.toHaveBeenCalled();
+      return undefined;
     });
   });
 

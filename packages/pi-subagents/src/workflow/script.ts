@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import {
   parse,
   type ArrayExpression,
@@ -198,6 +199,7 @@ function literalValue(node: Expression): Evaluated {
     case "ObjectExpression":
       return objectLiteral(node);
   }
+  return absurd(node);
 }
 
 const isModuleDeclaration = (node: Node): boolean =>

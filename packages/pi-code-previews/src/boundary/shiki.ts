@@ -94,7 +94,7 @@ export function disposeShikiHighlighter(
 ): Effect.Effect<void> {
   if (!highlighter) return Effect.void;
   return Effect.gen(function* () {
-    const services = yield* Effect.context<never>();
+    const services = yield* Effect.context();
     const state = highlighterUseState(highlighter);
     state.reportDisposalFailure = () =>
       Effect.runSyncWith(services)(
@@ -147,6 +147,7 @@ function createShikiHighlighter(
         .then((highlighter) => {
           if (cancelled) disposeShikiHighlighterSafely(highlighter);
           else resume(Effect.succeed(highlighter));
+          return undefined;
         }, failInitialization)
         .catch(() => undefined);
     } catch {
@@ -187,6 +188,7 @@ function loadShikiLanguage(
           () => {
             settle();
             if (!cancelled) resume(Effect.void);
+            return undefined;
           },
           () => {
             settle();

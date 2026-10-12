@@ -3,13 +3,14 @@ import { test } from "vitest";
 import { issueMessageStyleProblems } from "../../testing";
 import { nativeCodemodeEvidence } from "../../src/tools/native-codemode-evidence";
 import { nativeCall, scriptResult, settledSummary } from "../support/native-codemode";
+import type { HostValue } from "../../src/shared/untrusted-value";
 
 const call = (index: number) =>
   nativeCall({
     id: `private/${index}`,
     args: JSON.stringify({ path: `/project/file-${index}.ts` }),
   });
-const summary = <Details>(details: Details, failed = false) =>
+const summary = (details: HostValue | undefined, failed = false) =>
   settledSummary(scriptResult(failed ? "failed" : "completed", details), { code: "return 1" });
 
 test("complete ledgers retain classification while sampled ledgers cannot assert success", () => {

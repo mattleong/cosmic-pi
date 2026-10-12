@@ -4,7 +4,7 @@ import {
   grepResultDetail,
   projectWriteResultDetail,
 } from "./builtin-result-detail";
-import { getObjectValue } from "../shared/helpers";
+import { hostObject, ownField, type HostObject } from "../shared/untrusted-value";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { CompactSummary, CompactPhase } from "./compact-summary";
 import { fileFailure } from "./builtin-failure-file";
@@ -17,7 +17,7 @@ import {
   secretIssues,
   writeDiffProjection,
 } from "./builtin-issues";
-import { getPathArg } from "./data/args";
+import { editOperationInputs, getPathArg } from "./data/args";
 import { getBoundedTextContent, getEditDiff } from "./data/results";
 import {
   describeBuiltinCompactSubject,
@@ -47,6 +47,11 @@ export interface BuiltinCompactProjectionInput extends BuiltinCompactPolicy {
   beforeWrite: BuiltinBeforeWrite;
 }
 
+interface DecodedProjectionInput {
+  readonly args: HostObject | undefined;
+  readonly details: HostObject | undefined;
+}
+
 interface ProjectionParts {
   readonly counters: readonly string[];
   readonly metadata: readonly string[];
@@ -62,7 +67,12 @@ export function projectBuiltinCompactSummary(
   tool: BuiltinCompactTool,
   input: BuiltinCompactProjectionInput,
 ): CompactSummary | undefined {
-  const { phase, args, result, cwd, isError } = input;
+  const { phase, result, cwd, isError } = input;
+  const decoded: DecodedProjectionInput = {
+    args: hostObject(input.args),
+    details: hostObject(result?.details),
+  };
+  const { args } = decoded;
   const output = getBoundedTextContent(result?.content);
   if (output === undefined) return undefined;
   const inputSources = secretInputSources(tool, args, input.secretWarnings);
@@ -71,16 +81,17 @@ export function projectBuiltinCompactSummary(
   if (tool === "bash")
     issues.push(...bashCommandIssues(stringArg(args, "command"), input.bashWarnings));
   const subject = describeBuiltinCompactSubject(tool, args, cwd);
-  const live = liveResultParts(tool, input, output);
+  const live = liveResultParts(tool, input, decoded, output);
   if (!live) return undefined;
   issues.push(...live.issues);
   if (isError) return failureSummary(tool, subject, result, output, issues);
   if (phase !== "settled") return { subject, issues };
   if (!result) return undefined;
-  const settled = settledResultParts(tool, input, result);
+  const settled = settledResultParts(tool, input, decoded);
   if (!settled) return undefined;
   const counters = [...live.counters, ...settled.counters];
-  if (tool === "grep" && counters.length === 0) counters.push(...grepCounters(output, result));
+  if (tool === "grep" && counters.length === 0)
+    counters.push(...grepCounters(output, decoded.details));
   const merged = mergeCompactIssues([...issues, ...settled.issues]);
   return {
     subject,
@@ -94,20 +105,16 @@ export function projectBuiltinCompactSummary(
 function liveResultParts(
   tool: BuiltinCompactTool,
   input: BuiltinCompactProjectionInput,
+  { args, details }: DecodedProjectionInput,
   output: string,
 ): ProjectionParts | undefined {
-  const { args, result, isError } = input;
-  if (!result) return EMPTY_PARTS;
-  if (tool === "read" && !isError) {
-    const read = readIssues(
-      result.details,
-      output,
-      Predicate.isNumber(getObjectValue(args, "limit")),
-    );
+  if (!input.result) return EMPTY_PARTS;
+  if (tool === "read" && !input.isError) {
+    const read = readIssues(details, output, Predicate.isNumber(ownField(args, "limit")));
     return read && { ...EMPTY_PARTS, issues: read };
   }
   if (tool === "bash" || tool === "grep" || tool === "find" || tool === "ls")
-    return { ...EMPTY_PARTS, ...outputLimitProjection(tool, result.details) };
+    return { ...EMPTY_PARTS, ...outputLimitProjection(tool, details) };
   return EMPTY_PARTS;
 }
 
@@ -130,19 +137,22 @@ function failureSummary(
 function settledResultParts(
   tool: BuiltinCompactTool,
   input: BuiltinCompactProjectionInput,
-  result: AgentToolResult<unknown>,
+  decoded: DecodedProjectionInput,
 ): ProjectionParts | undefined {
-  if (tool === "write") return writeParts(input);
-  if (tool === "edit") return editParts(input, result);
+  if (tool === "write") return writeParts(input, decoded.args);
+  if (tool === "edit") return editParts(input, decoded);
   return EMPTY_PARTS;
 }
 
-function writeParts(input: BuiltinCompactProjectionInput): ProjectionParts | undefined {
-  const { args, beforeWrite } = input;
-  const content = getObjectValue(args, "content");
+function writeParts(
+  input: BuiltinCompactProjectionInput,
+  args: HostObject | undefined,
+): ProjectionParts | undefined {
+  const { beforeWrite } = input;
+  const content = ownField(args, "content");
   if (!Predicate.isString(content)) return undefined;
-  const before = beforeWrite.kind === "snapshot" ? beforeWrite.value : undefined;
-  const beforeContent = getObjectValue(before, "content");
+  const before = beforeWrite.kind === "snapshot" ? hostObject(beforeWrite.value) : undefined;
+  const beforeContent = ownField(before, "content");
   const issues = Predicate.isString(beforeContent) ? scanSecrets(input, [beforeContent]) : [];
   if (beforeWrite.kind === "new") return { counters: ["new file"], metadata: [], issues };
   const projection = writeDiffProjection(before, content, input);
@@ -157,8 +167,8 @@ function writeParts(input: BuiltinCompactProjectionInput): ProjectionParts | und
   };
 }
 
-function writeCounters<Before>(
-  before: Before,
+function writeCounters(
+  before: HostObject | undefined,
   content: string,
   input: BuiltinCompactProjectionInput,
 ): string[] {
@@ -172,10 +182,10 @@ function writeCounters<Before>(
 
 function editParts(
   input: BuiltinCompactProjectionInput,
-  result: AgentToolResult<unknown>,
+  { args, details }: DecodedProjectionInput,
 ): ProjectionParts {
-  const detail = editResultDetail(input.args);
-  const diff = getEditDiff(result.details);
+  const detail = editResultDetail(args);
+  const diff = getEditDiff(details);
   return {
     counters: detail ? [detail] : [],
     metadata: [],
@@ -185,8 +195,8 @@ function editParts(
   };
 }
 
-function grepCounters(output: string, result: AgentToolResult<unknown>): string[] {
-  const detail = grepResultDetail(output, result.details);
+function grepCounters(output: string, details: HostObject | undefined): string[] {
+  const detail = grepResultDetail(output, details);
   return detail ? [detail] : [];
 }
 
@@ -199,17 +209,16 @@ function builtinFailure(tool: BuiltinCompactTool, output: string, issues: readon
   return shellFailure(details, lines, retained);
 }
 
-function secretInputSources<Args>(
+function secretInputSources(
   tool: BuiltinCompactTool,
-  args: Args,
+  args: HostObject | undefined,
   enabled: boolean,
 ): string[] | undefined {
   if (!enabled) return [];
   const sources = [getPathArg(args), stringArg(args, "command"), stringArg(args, "pattern")];
   if (tool === "write") sources.push(stringArg(args, "content"));
   if (tool === "edit") {
-    const edits = getObjectValue(args, "edits");
-    const operations = Array.isArray(edits) ? edits : [args];
+    const operations = editOperationInputs(args);
     if (operations.length > 64) return undefined;
     for (const edit of operations) {
       sources.push(

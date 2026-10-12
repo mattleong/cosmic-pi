@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { LogBuffer, readLogBuffer } from "../src/task/log-buffer.ts";
 import { utf8ByteLength } from "pi-cosmic-core";
 
+const tailText = (buffer: LogBuffer, tailLines: number) =>
+  readLogBuffer("task-1", buffer, "running", { tailLines })
+    .events.map((event) => event.text)
+    .join("");
+
 describe("background log buffer", () => {
   it("counts UTF-8 bytes and retains a valid tail", () => {
     const buffer = new LogBuffer().append("stdout", "a🙂bc", 1, 6);
@@ -79,21 +84,17 @@ describe("background log buffer", () => {
   });
 
   it("tails logical lines that span chunks or end without a newline", () => {
-    const tail = (buffer: LogBuffer, tailLines: number) =>
-      readLogBuffer("task-1", buffer, "running", { tailLines })
-        .events.map((event) => event.text)
-        .join("");
     const open = new LogBuffer().append("stdout", "one\ntw", 1, 1024);
     open.append("stdout", "o\nthree\nfour", 2, 1024);
-    expect(tail(open, 1)).toBe("four");
-    expect(tail(open, 2)).toBe("three\nfour");
-    expect(tail(open, 3)).toBe("two\nthree\nfour");
-    expect(tail(open, 5)).toBe("one\ntwo\nthree\nfour");
+    expect(tailText(open, 1)).toBe("four");
+    expect(tailText(open, 2)).toBe("three\nfour");
+    expect(tailText(open, 3)).toBe("two\nthree\nfour");
+    expect(tailText(open, 5)).toBe("one\ntwo\nthree\nfour");
 
     const terminated = new LogBuffer().append("stdout", "one\ntw", 1, 1024);
     terminated.append("stderr", "o\n", 2, 1024);
-    expect(tail(terminated, 1)).toBe("two\n");
-    expect(tail(terminated, 2)).toBe("one\ntwo\n");
+    expect(tailText(terminated, 1)).toBe("two\n");
+    expect(tailText(terminated, 2)).toBe("one\ntwo\n");
 
     const boundary = new LogBuffer().append("stdout", "one\n", 1, 1024);
     boundary.append("stdout", "two\n", 2, 1024);

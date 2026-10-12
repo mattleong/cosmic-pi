@@ -70,6 +70,27 @@ import {
 const FAST_ID = "fast";
 const COMMAND = "openai";
 
+const ignoreFastInjection: FastInjectionIngress = () => undefined;
+
+const notifyFastState = (ctx: ExtensionContext, fast: FastSnapshot) =>
+  notifyAtHostBoundary(
+    ctx,
+    fastStateText(ctx, fast),
+    fast.desiredActive && !isFastActive(ctx, fast) ? "warning" : "info",
+  );
+
+const needsContextRepair = (ctx: ExtensionContext) =>
+  invokeHostCallback(() => Boolean(latestOwnedCheckpoint(ctx.sessionManager.getBranch())), true);
+
+const abortIncompleteContext = (ctx: ExtensionContext) => {
+  invokeBestEffort(() => ctx.abort());
+  notifyAtHostBoundary(
+    ctx,
+    "Couldn't restore the full conversation, so the request was cancelled",
+    "warning",
+  );
+};
+
 export interface BetterOpenAIExtensionDependencies {
   readonly loadPreviewSettings?: (
     projectCwd: string,
@@ -89,7 +110,7 @@ export function betterOpenAIWithDependencies(
   const resetProviderTransport =
     dependencies.resetOpenAICodexTransport ?? resetOpenAICodexTransport;
   const loadPreviewSettings = dependencies.loadPreviewSettings ?? loadCodePreviewSettings;
-  let recordFastInjection: FastInjectionIngress = () => undefined;
+  let recordFastInjection = ignoreFastInjection;
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
@@ -143,12 +164,6 @@ export function betterOpenAIWithDependencies(
       slot.fork(refreshForNewContext);
     }
   };
-  const notifyFastState = (ctx: ExtensionContext, fast: FastSnapshot) =>
-    notifyAtHostBoundary(
-      ctx,
-      fastStateText(ctx, fast),
-      fast.desiredActive && !isFastActive(ctx, fast) ? "warning" : "info",
-    );
   const refreshFooter = (ctx: ExtensionContext) => {
     updateContext(ctx);
     updateFooter(ctx);
@@ -221,7 +236,7 @@ export function betterOpenAIWithDependencies(
         currentContext = undefined;
       }
       cosmicUiWatch.stop();
-      recordFastInjection = () => undefined;
+      recordFastInjection = ignoreFastInjection;
       cosmicUi.shutdown();
       resetProjection(projection);
       MutableRef.set(fastProjection, initialFastSnapshot());
@@ -364,16 +379,6 @@ export function betterOpenAIWithDependencies(
     use: (service: OpenAICompactionService["Service"]) => Effect.Effect<A, E>,
     signal: () => AbortSignal | undefined,
   ) => Promise.resolve().then(() => run(OpenAICompactionService.use(use), signal()));
-  const needsContextRepair = (ctx: ExtensionContext) =>
-    invokeHostCallback(() => Boolean(latestOwnedCheckpoint(ctx.sessionManager.getBranch())), true);
-  const abortIncompleteContext = (ctx: ExtensionContext) => {
-    invokeBestEffort(() => ctx.abort());
-    notifyAtHostBoundary(
-      ctx,
-      "Couldn't restore the full conversation, so the request was cancelled",
-      "warning",
-    );
-  };
   pi.on("session_before_compact", (event, ctx) => {
     updateContext(ctx);
     if (!currentContext) return needsContextRepair(ctx) ? { cancel: true } : undefined;

@@ -104,7 +104,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   private prompt: FleetPrompt | undefined;
   private notice: FleetNotice | undefined;
   private busyAction: string | undefined;
-  private _focused = false;
+  private focusState = false;
   private readonly shell = new ListDetailShell();
   private readonly options: FleetOptions;
   private readonly collapsedRunIds = new Set<string>();
@@ -130,11 +130,11 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   get focused(): boolean {
-    return this._focused;
+    return this.focusState;
   }
 
   set focused(value: boolean) {
-    this._focused = value;
+    this.focusState = value;
     if (this.prompt) this.prompt.input.focused = value;
   }
 
@@ -160,7 +160,7 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   private openPrompt(run: SubagentRunView, kind: FleetPromptKind): void {
     const input = new Input();
-    input.focused = this._focused;
+    input.focused = this.focusState;
     const question = kind === "reply" ? run.question?.message : undefined;
     this.prompt = {
       kind,

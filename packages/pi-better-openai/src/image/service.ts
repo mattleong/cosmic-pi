@@ -88,6 +88,10 @@ const resolveSaveTarget = (
   return directory === undefined ? undefined : { directory, root: undefined };
 };
 
+const decodeToolParams = decodeUnknownOrUndefined(ToolParamsSchema, {
+  onExcessProperty: "error",
+});
+
 const requestOptions = (params: ToolParams, cfg: ResolvedConfig) => ({
   imageModel: params.imageModel ?? DEFAULT_IMAGE_MODEL,
   action: params.action ?? "auto",
@@ -123,14 +127,12 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
 
         const readInputs = makeImageInputReader({ fs, path, safeFile, sharp });
         const { validatedGeneratedImage, persistImage } = makeImageOutput({ fs, path, sharp });
-        const generate = Effect.fn("OpenAIImage.generate")(function* <RawParams>(
-          rawParams: RawParams,
+        const generate = Effect.fn("OpenAIImage.generate")(function* (
+          rawParams: ToolParams,
           ctx: ExtensionContext,
           cfg: ResolvedConfig | undefined,
         ) {
-          const params = decodeUnknownOrUndefined(ToolParamsSchema, rawParams, {
-            onExcessProperty: "error",
-          });
+          const params = decodeToolParams(rawParams);
           if (!params) return yield* fail("params", "Invalid OpenAI image parameters.");
           if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
           if (!cfg.image.enabled)
@@ -219,7 +221,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           };
           return result;
         });
-        const safeGenerate = <Params>(params: Params) =>
+        const safeGenerate = (params: ToolParams) =>
           Effect.suspend(() => {
             const ctx = MutableRef.get(options.context);
             const cfg = MutableRef.get(options.projection).config;

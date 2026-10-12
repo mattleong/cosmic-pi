@@ -40,8 +40,8 @@ const queries = makeSessionCapabilityProtocol({ version: 1 });
 const UNAVAILABLE =
   "The root questionnaire capability is unavailable or its owner is already active.";
 const INVALID_OWNER = "Invalid questionnaire owner.";
-const decodeOwner = <Input>(input: Input) =>
-  decodeUnknownOrUndefined(QuestionnaireOwnerSchema, input);
+const decodeOwner = decodeUnknownOrUndefined(QuestionnaireOwnerSchema);
+const invalid = (message: string) => Promise.reject(new AskUserValidationError({ message }));
 const ownerKey = (owner: QuestionnaireOwner) =>
   JSON.stringify([owner.runId, owner.assignmentEpoch, owner.requestId]);
 
@@ -52,7 +52,6 @@ export function registerQuestionnaireCapability(
   const calls = new Map<string, { readonly abort: () => void; readonly settled: Promise<void> }>();
   const current = () => invokeHostCallback(() => live && options.isCurrent(), false);
   const unavailable = () => new AskUserRuntimeClosedError({ message: UNAVAILABLE });
-  const invalid = (message: string) => Promise.reject(new AskUserValidationError({ message }));
   const capability = Object.freeze({
     version: 1,
     sessionId: options.sessionId,

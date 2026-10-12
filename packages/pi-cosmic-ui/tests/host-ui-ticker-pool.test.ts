@@ -28,6 +28,8 @@ const schedulerHarness = () => {
   return { schedule, scheduled };
 };
 
+const ignore = () => undefined;
+
 describe("host UI ticker pool", () => {
   it("shares one underlying ticker between same-cadence consumers", () => {
     const harness = schedulerHarness();
@@ -87,7 +89,7 @@ describe("host UI ticker pool", () => {
       throw new Error("host teardown");
     });
     const removed = vi.fn();
-    let stopRemoved: () => void = () => undefined;
+    let stopRemoved: () => void = ignore;
     const remover = vi.fn(() => stopRemoved());
 
     pool.start(160, throwing);
@@ -129,6 +131,7 @@ describe("host UI ticker pool", () => {
       let settled = false;
       const disposal = pool.dispose().then(() => {
         settled = true;
+        return undefined;
       });
       yield* Effect.promise(() => Promise.resolve());
       expect(settled).toBe(false);
@@ -157,6 +160,7 @@ describe("host UI ticker pool", () => {
       let settled = false;
       const shutdown = owner.shutdown().then(() => {
         settled = true;
+        return undefined;
       });
       owner.start(160, vi.fn());
       yield* Effect.promise(() => Promise.resolve());

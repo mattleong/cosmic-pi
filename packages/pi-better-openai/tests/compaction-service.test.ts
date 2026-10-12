@@ -199,6 +199,10 @@ const checkpointEntry = (
   };
 };
 
+const ownedOutput = (round: number) => [
+  { type: "compaction", encrypted_content: `owned-${round}` },
+];
+
 const previousTool = (round: number) => (round === 0 ? "old" : `tool-${round - 1}`);
 
 const appendRoundTail = (manager: SessionManager, round: number) => {
@@ -385,7 +389,7 @@ describe("OpenAICompactionService", () => {
               .filter((entry) => entry.type === "compaction")
               .map((entry) => entry.usage?.totalTokens),
           ).toEqual([15, 15, 15, 15]);
-          manager.appendCompaction("ordinary summary", manager.getLeafId()!, 10);
+          manager.appendCompaction("ordinary summary", manager.getLeafId(), 10);
           expect(yield* service.inject({ input: [] })).toBeUndefined();
           expect(
             yield* service.filterContext(manager.buildSessionContext().messages),
@@ -528,7 +532,6 @@ describe("OpenAICompactionService", () => {
       ],
     });
     const { requests, client } = recordingClient("owned");
-    const output = (round: number) => [{ type: "compaction", encrypted_content: `owned-${round}` }];
 
     return Effect.gen(function* () {
       const service = yield* OpenAICompactionService;
@@ -545,7 +548,7 @@ describe("OpenAICompactionService", () => {
 
       const second = yield* service.compact(compactEvent("kept-again"));
       expect(decodeOpenAICompactionDetails(second?.details)).toBeDefined();
-      expect(requests[1]?.input.slice(0, 1)).toEqual(output(1));
+      expect(requests[1]?.input.slice(0, 1)).toEqual(ownedOutput(1));
       expect(requests[1]?.input.length).toBe(2);
 
       target.branch.push(checkpointEntry("checkpoint-entry-2", "three", 2, second));
@@ -566,7 +569,7 @@ describe("OpenAICompactionService", () => {
         marker: "preserved",
       });
       expect(injected).toEqual({
-        input: [system, ...output(2), tail],
+        input: [system, ...ownedOutput(2), tail],
         marker: "preserved",
       });
       expect(yield* service.inject({ input: [system, tail, ...input] })).toBeUndefined();

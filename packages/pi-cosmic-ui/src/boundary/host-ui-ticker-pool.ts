@@ -30,6 +30,9 @@ const scheduleHostUiTicker: HostUiTickerScheduler = (intervalMs, tick) =>
     ),
   );
 
+const stopGroup = (group: HostUiTickerGroup): void =>
+  invokeHostCallback(() => group.fiber?.interruptUnsafe(), undefined);
+
 export const makeHostUiTickerPool = (
   schedule: HostUiTickerScheduler = scheduleHostUiTicker,
 ): HostUiTickerPool => {
@@ -38,8 +41,6 @@ export const makeHostUiTickerPool = (
   let disposed = false;
   let disposal: Promise<void> | undefined;
 
-  const stopGroup = (group: HostUiTickerGroup): void =>
-    invokeHostCallback(() => group.fiber?.interruptUnsafe(), undefined);
   const invokeGroup = (group: HostUiTickerGroup): void => {
     if (groups.get(group.intervalMs) !== group) return;
     for (const subscription of Array.from(group.subscriptions)) {

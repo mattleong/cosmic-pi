@@ -1,10 +1,11 @@
 import { expect, test } from "vitest";
 import { planCompactPresentation } from "../../src/tools/compact-presentation";
 import { compactStatus, type CompactSummary } from "../../src/tools/compact-summary";
+import { isSafeCompactSummary } from "../../src/tools/compact-summary-schema";
 
 const heading = { subject: "full/target.ts", compactSubject: "target.ts", action: "scan" };
-const plan = <SummaryInput>(
-  summary: SummaryInput,
+const plan = (
+  summary: CompactSummary | undefined,
   options: {
     isError?: boolean;
     errorText?: string;
@@ -28,13 +29,13 @@ test("a usable summary preserves its values and reconciles Pi errors", () => {
 });
 
 test("settled results without a usable summary never claim success", () => {
-  const summaries = structuredClone([
-    null,
+  const candidates = structuredClone([
+    undefined,
     { subject: "missing outcome" },
     { subject: "malformed", outcome: "success", issues: [{ severity: "fatal" }] },
   ]);
-  for (const summary of [undefined, ...summaries.slice(1)]) {
-    const planned = plan(summary);
+  for (const candidate of candidates) {
+    const planned = plan(isSafeCompactSummary(candidate) ? candidate : undefined);
     expect(planned.summary).toBeUndefined();
     expect(planned.collapsedSummary).toMatchObject({ ...heading, outcome: "uncertain" });
     expect(planned.collapsedSummary.issues ?? []).toEqual([]);

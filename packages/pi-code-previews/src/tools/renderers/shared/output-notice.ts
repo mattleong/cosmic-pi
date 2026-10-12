@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { expandedSection } from "../../../preview/expanded-section";
-import { getObjectValue } from "../../../shared/helpers";
+import { ownField, ownObject, type HostObject } from "../../../shared/untrusted-value";
 import { escapeControlChars } from "../../../shared/terminal-text";
 
 type SplitOutput = { readonly lines: string[]; readonly notice: string | undefined };
@@ -24,9 +24,12 @@ export const splitListingNotice = (lines: string[]): SplitOutput =>
 export const splitShellNotice = (lines: string[]): SplitOutput =>
   splitTrailingNotice(lines, SHELL_NOTICE);
 
-export function oversizedReadNotice<Details>(details: Details, text: string): string | undefined {
-  const truncation = getObjectValue(details, "truncation");
-  if (getObjectValue(truncation, "firstLineExceedsLimit") !== true) return undefined;
+export function oversizedReadNotice(
+  details: HostObject | undefined,
+  text: string,
+): string | undefined {
+  if (ownField(ownObject(details, "truncation"), "firstLineExceedsLimit") !== true)
+    return undefined;
   return /^\[([^\r\n]*)\]$/u.exec(text)?.[1] ?? text;
 }
 

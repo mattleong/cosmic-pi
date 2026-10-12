@@ -20,10 +20,12 @@ const Stats = Schema.Struct({
   cost: Cost,
 });
 
+const decodeStats = decodeUnknownOrUndefined(Stats);
+
 export const makeLocalPiUsage = () => {
   let previous: SubagentUsage | undefined;
-  const account = <ValueInput>(value: ValueInput): SubagentUsage | undefined => {
-    const decoded = decodeUnknownOrUndefined(Stats, value);
+  const account = (value: Schema.Json | undefined): SubagentUsage | undefined => {
+    const decoded = decodeStats(value);
     if (!decoded) return undefined;
     const { tokens, cost } = decoded;
     const next = { ...tokens, totalTokens: tokens.total, cost };

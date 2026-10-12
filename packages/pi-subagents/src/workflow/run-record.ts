@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { WorkflowRunView, WorkflowSource, WorkflowStopOrigin } from "./model.ts";
@@ -131,6 +132,7 @@ export const isWorkflowRunNoticeOwed = (
     case "stopped":
       return record.pid === liveness.currentPid || !processMayRun(record, liveness);
   }
+  return absurd(record.state);
 };
 
 export interface WorkflowRecordedRun {

@@ -41,15 +41,15 @@ const claimChangeWaiting = (record: RunRecord, pool: WriterPool, id: string): bo
   return waitingForParentClaimDecision || confirmedPausedViolationOffender;
 };
 
+const normalizePaths = (paths: ReadonlyArray<string>) => {
+  const normalized = normalizeWriteClaims(paths);
+  return normalized.ok
+    ? Effect.succeed(normalized.claims)
+    : Effect.fail(invalid(normalized.code, normalized.message));
+};
+
 export function makeRunWriteClaimControl(dependencies: RunContext) {
   const { records, writerPools, withLock, publish, requireRecord, sendPeerNotices } = dependencies;
-
-  const normalizePaths = (paths: ReadonlyArray<string>) => {
-    const normalized = normalizeWriteClaims(paths);
-    return normalized.ok
-      ? Effect.succeed(normalized.claims)
-      : Effect.fail(invalid(normalized.code, normalized.message));
-  };
 
   const claimChangeTarget = (id: string) =>
     Effect.gen(function* () {

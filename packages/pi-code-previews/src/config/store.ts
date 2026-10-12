@@ -90,10 +90,10 @@ export function flushSettingsSaveQueue(): Promise<void> {
   return runSettingsEffect(CodePreviewSettingsService.use((service) => service.flush));
 }
 
-export function formatSettingsSaveError<ErrorInput>(error: ErrorInput): string {
+export function formatSettingsSaveError(cause: unknown): string {
   const message =
-    Predicate.hasProperty(error, "message") && Predicate.isString(error.message)
-      ? failureMessage(error.message, "unknown error")
+    Predicate.hasProperty(cause, "message") && Predicate.isString(cause.message)
+      ? failureMessage(cause.message, "unknown error")
       : "unknown error";
   return `Couldn't save code preview settings: ${message}`;
 }

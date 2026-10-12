@@ -25,6 +25,7 @@ import {
 } from "./identity";
 import type { ThirdPartyAdapter } from "../registry";
 import { webAccessSummary } from "./summary";
+import { hostContainer } from "../../shared/untrusted-value";
 
 export const webAccessAdapter = {
   names: WEB_ACCESS_TOOLS,
@@ -103,7 +104,7 @@ export function createWebAccessRenderers(
 
   const renderCall: RenderCall<unknown, RendererState> = (args, theme, context) => {
     const full = invokeHostCallback(() => JSON.stringify(args, null, 2) ?? "", "");
-    const subject = webAccessSubject(name, args);
+    const subject = webAccessSubject(name, hostContainer(args));
     const fallback = context.expanded
       ? new Text(escapeControlChars(`${label}\nArguments\n${full}`), 0, 0)
       : plainRows(`${label} ${subject}`, 2);

@@ -146,6 +146,7 @@ function detailRows(
         : boundedLines(lines, "log lines", theme);
     }
   }
+  return [];
 }
 
 function rawRows(text: string, theme: PreviewTheme): Row[] {

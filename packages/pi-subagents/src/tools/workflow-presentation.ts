@@ -58,7 +58,7 @@ const META_NAME = /\bname\s*:\s*(["'`])([^"'`\n]{1,80})\1/u;
 const detailsOf = (result: AgentToolResult<unknown> | undefined) =>
   Option.getOrUndefined(decodeWorkflowToolDetails(result?.details));
 
-const baseName = (path: string): string => path.split(/[\\/]/u).filter(Boolean).at(-1) ?? path;
+const baseName = (path: string): string => path.split(/[\\/]/u).findLast(Boolean) ?? path;
 
 const callSubject = (args: Partial<WorkflowToolArgs>): string => {
   const action = workflowToolAction(args);

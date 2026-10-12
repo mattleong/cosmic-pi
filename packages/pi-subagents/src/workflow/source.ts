@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -76,6 +77,7 @@ export const makeWorkflowSources = (services: WorkflowSourcesServices) => {
           })),
         );
     }
+    return absurd(source);
   };
 
   const resumeReplay = (runId: string): Effect.Effect<WorkflowReplay, WorkflowRequestError> =>

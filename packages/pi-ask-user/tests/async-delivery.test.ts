@@ -12,6 +12,9 @@ import {
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 
+const throwSecret = () => {
+  throw new Error("secret-raw-error");
+};
 const entry = (id: string) => ({ id, parentId: null, timestamp: "2026-01-01T00:00:00.000Z" });
 
 const message = (generation: string, deliveryId: string) => ({
@@ -131,12 +134,9 @@ effectIt.effect.each(["appendEntry", "sendMessage"] as const)(
   (failing) =>
     Effect.gen(function* () {
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-      const throwing = () => {
-        throw new Error("secret-raw-error");
-      };
       const pi = extensionApiFixture({
-        appendEntry: failing === "appendEntry" ? throwing : vi.fn(),
-        sendMessage: failing === "sendMessage" ? throwing : sendMessage,
+        appendEntry: failing === "appendEntry" ? throwSecret : vi.fn(),
+        sendMessage: failing === "sendMessage" ? throwSecret : sendMessage,
       });
       const error = yield* Effect.flip(makeAsyncDelivery(pi, "generation", () => true)(snapshot));
       expect(error).toMatchObject({ _tag: "AskUserHostError", operation: "deliver" });

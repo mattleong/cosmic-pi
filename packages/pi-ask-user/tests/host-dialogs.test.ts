@@ -84,6 +84,7 @@ describe("RPC questionnaire boundary", () => {
         );
         expect(notify).toHaveBeenCalledTimes(2);
         expect(input.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
+        return undefined;
       },
     );
   });
@@ -119,6 +120,7 @@ describe("RPC questionnaire boundary", () => {
       expect(outcome).toEqual(submitted(chooseB));
       expect(select).toHaveBeenCalledTimes(3);
       expect(select.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
+      return undefined;
     });
   });
 
@@ -163,6 +165,7 @@ describe("RPC questionnaire boundary", () => {
         answers: [{ key: "library", values: ["a"] }],
       });
       expect(notify).toHaveBeenCalledOnce();
+      return undefined;
     });
   });
 
@@ -190,6 +193,7 @@ describe("RPC questionnaire boundary", () => {
       expect(input).toHaveBeenCalledTimes(2);
       expect(input.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
       expect(notify).toHaveBeenCalledOnce();
+      return undefined;
     });
   });
 
@@ -213,6 +217,7 @@ describe("RPC questionnaire boundary", () => {
         submitted({ key: "library", kind: "custom", text: "Use a hybrid instead." }),
       );
       expect(input).toHaveBeenCalledOnce();
+      return undefined;
     });
   });
 
@@ -235,6 +240,7 @@ describe("RPC questionnaire boundary", () => {
       expect(notify).toHaveBeenCalledTimes(4);
       for (const call of notify.mock.calls)
         expect(issueMessageStyleProblems(String(call.at(0)))).toEqual([]);
+      return undefined;
     });
   });
 

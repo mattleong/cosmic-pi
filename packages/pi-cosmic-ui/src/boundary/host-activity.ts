@@ -59,6 +59,8 @@ interface Binding {
   close: () => void;
   manager: object | undefined;
 }
+const decodeEnvelope = decodeUnknownOrUndefined(ActivityEnvelopeSchema);
+
 export interface ActivityHost {
   readonly serviceOptions: () => Required<ActivityServiceOptions>;
   readonly activate: (ctx: ExtensionContext, service: ActivityServiceContract) => void;
@@ -156,7 +158,7 @@ export function makeActivityHost(
       const accept: Parameters<ActivityEvents["on"]>[1] = (data) =>
         safe(() => {
           if (!isCurrent() || !binding.installed) return;
-          const envelope = decodeUnknownOrUndefined(ActivityEnvelopeSchema, data);
+          const envelope = decodeEnvelope(data);
           if (
             !envelope ||
             envelope.sessionId !== binding.sessionId ||

@@ -65,13 +65,14 @@ const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
 const startTool = (requests: StartSubagentRequest[], options?: CaptureOptions) =>
   captureSubagentTools(startCapturingService(requests), options).get("subagent_start");
 
+const driver = (selection: BackendSelection) => ({
+  ...testBackendDriver,
+  runtime: selection.runtime,
+});
+
 const preflightRegistry = (
   reject: (selection: BackendSelection) => InvalidSubagentRequestError | undefined,
 ): SubagentBackendRegistryContract => {
-  const driver = (selection: BackendSelection) => ({
-    ...testBackendDriver,
-    runtime: selection.runtime,
-  });
   return {
     resolve: (selection) => Effect.succeed(driver(selection)),
     preflight: (selection) => {

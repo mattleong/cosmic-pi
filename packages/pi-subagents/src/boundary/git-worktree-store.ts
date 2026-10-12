@@ -54,6 +54,7 @@ export const initializeWorkspaceStore = (root: string) =>
         "registry",
         "Workspace registry must be private and owned by the current user.",
       );
+    return undefined;
   });
 
 export const saveWorkspaceRecord = (
@@ -82,6 +83,7 @@ export const saveWorkspaceRecord = (
       yield* syncWorkspaceDirectory(directory);
       onCommitted?.();
     }).pipe(Effect.uninterruptible);
+    return undefined;
   });
 
 export const readWorkspaceRecord = (root: string, id: string) =>

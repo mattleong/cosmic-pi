@@ -84,6 +84,7 @@ describe("Claude input delivery ownership", () => {
       expect(inputs.failure).toBeUndefined();
       expect(counts.terminations).toBe(0);
       yield* Fiber.await(caller);
+      return undefined;
     }),
   );
 
@@ -109,6 +110,7 @@ describe("Claude input delivery ownership", () => {
         );
         yield* Deferred.succeed(releaseTermination, undefined);
         yield* Fiber.await(caller);
+        return undefined;
       }),
   );
 
@@ -161,6 +163,7 @@ describe("Claude input delivery ownership", () => {
         yield* Fiber.join(next);
         yield* TestClock.adjust("5 minutes");
         expect(counts.terminations).toBe(0);
+        return undefined;
       }),
   );
 
@@ -285,6 +288,7 @@ describe("Claude input delivery ownership", () => {
         if (!pending) return yield* Effect.die("Missing sent input");
         yield* Deferred.succeed(pending.acknowledgement, undefined);
         yield* yieldUntil(() => inputs.pending === undefined);
+        return undefined;
       }),
     ),
   );

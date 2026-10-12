@@ -5,6 +5,7 @@ import * as Exit from "effect/Exit";
 import * as FiberSet from "effect/FiberSet";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
@@ -12,6 +13,7 @@ import { terminateProcessTree } from "./process-tree.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
 export const MAX_PROCESS_LINE_BYTES = 4 * 1024 * 1024;
+const encodeFrame = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
 const EVENT_CAPACITY = 512;
@@ -36,8 +38,6 @@ export interface ProcessTransportHandle<Message, Frame> {
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
 }
 
-const encodeFrame = <Frame>(frame: Frame): string => `${JSON.stringify(frame)}\n`;
-
 const cleanupUnconfirmed = () =>
   processCauseError(
     "confirm subagent process cleanup",
@@ -55,12 +55,8 @@ interface ProcessTransportOptions<Message, Frame, Attachment> {
   readonly spawn: (spawn: ProcessTransportRuntime["spawn"]) => NodeChildProcess;
   readonly platform: NodeJS.Platform;
   readonly label: string;
-  readonly error: <ErrorInput>(
-    operation: string,
-    error?: ErrorInput,
-    code?: string,
-  ) => SubagentProcessError;
-  readonly message: <ValueInput>(value: ValueInput) => Message;
+  readonly error: (operation: string, cause?: unknown, code?: string) => SubagentProcessError;
+  readonly message: (value: Schema.Json) => Message;
   readonly maxOutboundBytes?: number;
   readonly terminateOnParserOverflow: boolean;
   readonly synchronousWriteFailure: "not_sent" | "defect";
@@ -241,14 +237,14 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
       }
       const send = (frame: Frame) =>
         Effect.callback<void, SubagentProcessError>((resume) => {
-          const notSent = <ErrorInput>(operation: string, error: ErrorInput) =>
-            resume(Effect.fail(processError(operation, error, "transport_not_sent")));
+          const notSent = (operation: string, cause: unknown) =>
+            resume(Effect.fail(processError(operation, cause, "transport_not_sent")));
           const stdin = child.stdin;
           if (!stdin || stdin.destroyed || stdinError)
             return notSent("send frame to", stdinError ?? "Process input is closed.");
           let encoded: string;
           try {
-            encoded = encodeFrame(frame);
+            encoded = `${encodeFrame(frame)}\n`;
           } catch (error) {
             return notSent("encode frame for", error);
           }
@@ -298,7 +294,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         if (yield* waitForExit) {
           if (platform === "win32") {
             if (Exit.isFailure(gracefulAttempt)) return yield* cleanupUnconfirmed();
-            return;
+            return undefined;
           }
           yield* Effect.sleep("100 millis");
           return yield* terminate("force");
@@ -306,6 +302,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         const forceAttempt = yield* Effect.exit(terminate("force"));
         const forcedExit = yield* waitForExit;
         if (Exit.isFailure(forceAttempt) || !forcedExit) return yield* cleanupUnconfirmed();
+        return undefined;
       });
       yield* Effect.addFinalizer(() =>
         release.pipe(Effect.ensuring(Effect.sync(cleanup)), Effect.orDie),

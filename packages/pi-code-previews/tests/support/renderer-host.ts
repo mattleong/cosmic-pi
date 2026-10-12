@@ -1,4 +1,4 @@
-import type { ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 import {
   CodePreviewPresentationOwner,
@@ -27,8 +27,8 @@ export const builtinToolInfo = (
 
 export const inertScheduler = { defer: () => () => undefined, schedule: () => () => undefined };
 
-export function presentationResolver<Host extends object>(
-  host: Host,
+export function presentationResolver(
+  host: Partial<ExtensionAPI>,
   enabled?: Iterable<CodePreviewToolName>,
 ) {
   const pi = extensionApiFixture({ getCommands: () => [], ...host });

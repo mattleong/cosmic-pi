@@ -21,7 +21,7 @@ export const previewScheduleEffect = (interval: number, task: () => void) =>
   );
 
 const makeScheduler = Effect.gen(function* () {
-  const run = yield* FiberSet.makeRuntime<never>();
+  const run = yield* FiberSet.makeRuntime();
   const start = (effect: Effect.Effect<void>): (() => void) => {
     const fiber = run(effect);
     return () => fiber.interruptUnsafe();

@@ -97,6 +97,7 @@ export function registerSettingsController(
             yield* Effect.sync(() => {
               if (isCurrent()) resetFastRoutingTransport(ctx);
             });
+            return undefined;
           }).pipe(Effect.result),
           signal,
         ),
@@ -253,16 +254,18 @@ export function registerSettingsController(
                   });
                 function writeSetting(id: string, value: string): Promise<void> {
                   return session.apply(id, value).then(() => {
-                    if (!isCurrent()) return;
+                    if (!isCurrent()) return undefined;
                     reconcilePicker();
                     void readRedactedConfig(ctx)
                       .catch(() => redactedConfig)
                       .then((nextRedactedConfig) => {
-                        if (!isCurrent()) return;
+                        if (!isCurrent()) return undefined;
                         redactedConfig = nextRedactedConfig;
                         invokeBestEffort(() => tui.requestRender());
+                        return undefined;
                       })
                       .catch(() => undefined);
+                    return undefined;
                   });
                 }
                 return {

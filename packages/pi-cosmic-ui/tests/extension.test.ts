@@ -297,6 +297,17 @@ const startWithPendingProbes = (h: ReturnType<typeof harness>) =>
     return { startup, aborted: () => aborted };
   });
 
+const byName = (left: string, right: string) => left.localeCompare(right);
+
+const stateful = <A>(value: A) => {
+  let reads = 0;
+  return () => {
+    reads++;
+    if (reads > 1) throw new Error("protocol getter reread");
+    return value;
+  };
+};
+
 describe("Cosmic UI extension", () => {
   it.effect(
     "a retired masked config commit cannot republish after replacement initialization fails",
@@ -375,14 +386,6 @@ describe("Cosmic UI extension", () => {
     Effect.gen(function* () {
       const h = harness();
       const respond = vi.fn();
-      const stateful = <A>(value: A) => {
-        let reads = 0;
-        return () => {
-          reads++;
-          if (reads > 1) throw new Error("protocol getter reread");
-          return value;
-        };
-      };
       const queryRespond = stateful(respond);
       const upsertOwner = stateful("owner");
       const contribution = stateful({
@@ -1114,7 +1117,6 @@ describe("Cosmic UI extension", () => {
       const h = harness();
       yield* emit(h, "session_start");
       yield* emit(h, "session_shutdown");
-      const byName = (left: string, right: string) => left.localeCompare(right);
       const released = h.unsubscribed.mock.calls.map(([name]) => name).toSorted(byName);
       expect(released).toEqual(
         [

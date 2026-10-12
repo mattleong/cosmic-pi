@@ -21,15 +21,21 @@ import {
   type ReplayedOutcome,
   type ReplayedSnapshot,
 } from "./tool-render-projection.ts";
+import type { QuestionnaireArgs } from "./tool-body.ts";
+import type {
+  AskUserAsyncControl,
+  AskUserAsyncRequest,
+  AskUserRequest,
+} from "../questionnaire/schema.ts";
 
-function identity<Args>(args: Args): CompactSummary {
+function identity(args: QuestionnaireArgs): CompactSummary {
   const control = decodeAsyncControl(args);
   if (control)
     return { action: control.action, subject: isStatusList(args) ? "all" : "Questionnaire" };
   return { subject: callTitles(args) ?? "Questionnaire" };
 }
 
-function liveSummary<Args>(args: Args): CompactSummary | undefined {
+function liveSummary(args: QuestionnaireArgs): CompactSummary | undefined {
   const questions = decodeCallQuestions(args)?.questions;
   if (questions?.length)
     return { ...identity(args), counters: [countLabel(questions.length, "question")] };
@@ -38,7 +44,10 @@ function liveSummary<Args>(args: Args): CompactSummary | undefined {
   return identity(args);
 }
 
-function verifiedLabels<Args>(args: Args, answer: ReplayedAnswer): readonly string[] | undefined {
+function verifiedLabels(
+  args: QuestionnaireArgs,
+  answer: ReplayedAnswer,
+): readonly string[] | undefined {
   const questions = decodeCompactChoices(args)?.questions;
   const question = questions?.length === 1 ? questions[0] : undefined;
   if (!question?.key || answer.key !== question.key || answer.kind !== "choices") return undefined;
@@ -55,7 +64,7 @@ function verifiedLabels<Args>(args: Args, answer: ReplayedAnswer): readonly stri
   return verified ? labels.map(stripTerminalControls) : undefined;
 }
 
-function answerCounters<Args>(args: Args, answers: readonly ReplayedAnswer[]): string[] {
+function answerCounters(args: QuestionnaireArgs, answers: readonly ReplayedAnswer[]): string[] {
   const count = countLabel(answers.length, "answer");
   const [answer] = answers;
   if (answers.length !== 1 || !answer) return [count];
@@ -65,7 +74,10 @@ function answerCounters<Args>(args: Args, answers: readonly ReplayedAnswer[]): s
   return labels ? [labels.join(", "), countLabel(labels.length, "choice")] : [count];
 }
 
-function settledSummary<Args>(args: Args, outcome: ReplayedOutcome): CompactSummary | undefined {
+function settledSummary(
+  args: QuestionnaireArgs,
+  outcome: ReplayedOutcome,
+): CompactSummary | undefined {
   if (outcome.outcome === "cancelled") return { ...identity(args), outcome: "cancelled" };
   if (outcome.answers.length === 0) return undefined;
   return {
@@ -75,7 +87,12 @@ function settledSummary<Args>(args: Args, outcome: ReplayedOutcome): CompactSumm
   };
 }
 
-export const askUserCompactSummary: CompactSummaryProvider = ({ phase, args, result, context }) => {
+export const askUserCompactSummary: CompactSummaryProvider<AskUserRequest> = ({
+  phase,
+  args,
+  result,
+  context,
+}) => {
   if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
   const decoded = decodeOutcome(result?.details);
   if (decoded?.outcome === "cancelled") return settledSummary(args, decoded);
@@ -148,7 +165,7 @@ const classified = <Row extends { readonly state: QuestionnaireState | undefined
   row: Row,
 ): row is Row & { readonly state: QuestionnaireState } => row.state !== undefined;
 
-function rowsSummary<Args>(args: Args, rows: readonly ClassifiedRow[]): CompactSummary {
+function rowsSummary(args: QuestionnaireArgs, rows: readonly ClassifiedRow[]): CompactSummary {
   const states = rows.map((row) => row.state);
   const list = isStatusList(args) || rows.length !== 1;
   const issues = [
@@ -184,12 +201,9 @@ function rowsSummary<Args>(args: Args, rows: readonly ClassifiedRow[]): CompactS
   };
 }
 
-export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
-  phase,
-  args,
-  result,
-  context,
-}) => {
+export const asyncAskUserCompactSummary: CompactSummaryProvider<
+  AskUserAsyncRequest | AskUserAsyncControl
+> = ({ phase, args, result, context }) => {
   if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
   const rows = decodeCompactAsyncRows(result?.details)?.map((row) =>
     Object.assign({}, row, { state: questionnaireState(row) }),

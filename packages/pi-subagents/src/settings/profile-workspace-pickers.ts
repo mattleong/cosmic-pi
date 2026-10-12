@@ -45,7 +45,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
 
   protected showSelectPage(page: SearchableSelectPage<string>): void {
     this.selectPage = page;
-    page.focused = this._focused;
+    page.focused = this.focusState;
     this.renderSoon();
   }
 
@@ -110,7 +110,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
     void this.options
       .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
-        if (!this.finishCatalogLoad(controller)) return;
+        if (!this.finishCatalogLoad(controller)) return undefined;
         const current = picker.choices.find((option) => option.selector === candidate.model);
         this.candidateIndex = candidateIndex;
         this.showFieldPicker(
@@ -123,6 +123,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
             : undefined,
           picker.warning,
         );
+        return undefined;
       })
       .catch((cause: unknown) => {
         if (!this.finishCatalogLoad(controller)) return;
@@ -154,11 +155,11 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         nativeSwitch !== undefined,
       )
       .then((picker) => {
-        if (!this.finishCatalogLoad(controller)) return;
+        if (!this.finishCatalogLoad(controller)) return undefined;
         if (picker.choices.length === 0) {
           this.addingCandidate = false;
           this.notice("warning", picker.warning ?? "No models are available for this selection.");
-          return;
+          return undefined;
         }
         this.modelPicker = makeProfileModelPickerPage({
           ...selectHost(this.options),
@@ -201,8 +202,9 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
             this.renderSoon();
           },
         });
-        this.modelPicker.focused = this._focused;
+        this.modelPicker.focused = this.focusState;
         this.renderSoon();
+        return undefined;
       })
       .catch((cause: unknown) => {
         if (!this.finishCatalogLoad(controller)) return;

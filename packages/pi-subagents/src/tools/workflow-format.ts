@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import { clipText, countLabel, formatDuration, formatElapsed } from "pi-cosmic-core";
 import { workflowArgsSummary } from "../workflow/args.ts";
 import type { WorkflowAgentAttention } from "../workflow/attention.ts";
@@ -215,6 +216,7 @@ const attentionLine = (agent: WorkflowAgentView | undefined, attention: Workflow
         : `- ${subject} is a paused ${kind} whose backend can't resume it; ${stop}.`;
     }
   }
+  return absurd<never>(attention);
 };
 
 const pausedWriterLines = (run: WorkflowRunView): ReadonlyArray<string> => {

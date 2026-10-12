@@ -134,6 +134,7 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
         entered.resolve();
         return ready.promise.then(() => {
           applyPresentationSettings({ toolCallCollapsedStyle: "compact" });
+          return undefined;
         });
       });
       const h = yield* host(load);

@@ -229,17 +229,18 @@ describe("profile dashboard actions", () => {
   });
 });
 
+const dashboardHost = (height = 8) => ({
+  theme: plainTheme,
+  getHeight: () => height,
+  requestRender: vi.fn(),
+});
+
 describe("internal dashboard dialogs", () => {
   const [up, down] = ["\u001b[A", "\u001b[B"];
-  const host = (height = 8) => ({
-    theme: plainTheme,
-    getHeight: () => height,
-    requestRender: vi.fn(),
-  });
   it("requires scrolling the complete replacement before confirmation", () => {
     const close = vi.fn();
     const dialog = new ProfileDashboardDialog({
-      ...host(),
+      ...dashboardHost(),
       kind: "confirm",
       title: "Replace",
       body: Array.from({ length: 20 }, (_, index) => `profile ${index}`).join("\n"),
@@ -256,7 +257,7 @@ describe("internal dashboard dialogs", () => {
   it("Copy and Rename text entry owns printable cancel bindings and arrows", () => {
     const close = vi.fn<(value: string | undefined) => void>();
     const dialog = new ProfileDashboardDialog({
-      ...host(),
+      ...dashboardHost(),
       kind: "name",
       title: "Name",
       matchesKeybinding: (data, id) => data === "q" && id === "tui.select.cancel",
@@ -280,7 +281,7 @@ describe("internal dashboard dialogs", () => {
   ] as const)("save dialog %s", (_case, projectTrusted, keys, scope, name) => {
     const close = vi.fn<(value: ProfileSetSaveDestination | undefined) => void>();
     const dialog = new ProfileDashboardDialog({
-      ...host(4),
+      ...dashboardHost(4),
       kind: "name",
       title: "Save",
       destination: { projectTrusted },
@@ -297,7 +298,7 @@ describe("internal dashboard dialogs", () => {
   it("raw Escape still cancels when configured matcher returns false", () => {
     const close = vi.fn();
     const dialog = new ProfileDashboardDialog({
-      ...host(),
+      ...dashboardHost(),
       kind: "confirm",
       title: "Confirm",
       matchesKeybinding: () => false,

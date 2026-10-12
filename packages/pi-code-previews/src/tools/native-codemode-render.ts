@@ -3,6 +3,7 @@ import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { clipToWidth } from "pi-cosmic-ui/manager";
+import { hostContainer, type HostContainer } from "../shared/untrusted-value";
 import { codePreviewSettings } from "../config/state";
 import { expandedSection } from "../preview/expanded-section";
 import { renderCompactChildren } from "../preview/compact-children";
@@ -39,17 +40,20 @@ import {
   type NativeDiscoveryProjector,
 } from "./native-codemode-discovery";
 
-const programSource = <Args>(args: Args): string =>
-  Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
+const programSource = (args: HostContainer | undefined): string =>
+  args !== undefined && Predicate.hasProperty(args, "code") && Predicate.isString(args.code)
+    ? args.code
+    : "";
 
 const renderSource =
   (discovery: NativeDiscoveryProjector): RenderCall<unknown, RendererState> =>
   (args, theme, context) => {
+    const input = hostContainer(args);
     const program = renderNativeCodemodeProgram(
-      programSource(args),
+      programSource(input),
       theme,
       { expanded: true, invalidate: context.invalidate },
-      discovery(args) ? nativeDiscoveryNote : undefined,
+      discovery(input) ? nativeDiscoveryNote : undefined,
     );
     return safeContent(() => expandedSection(theme, "Program", program), program);
   };
@@ -108,7 +112,7 @@ export function createNativeCodemodeRenderers(
     const raw = getFallbackResultText(result.content, context.showImages);
     return safeContent(() => {
       const body = new Container();
-      const evidence = nativeCodemodeEvidence(result.details);
+      const evidence = nativeCodemodeEvidence(hostContainer(result.details));
       const children = nativeCodemodeChildren(
         evidence,
         context.isPartial ? "running" : "settled",
@@ -155,9 +159,10 @@ export function createNativeCodemodeRenderers(
     { name: "codemode" },
     {
       renderCall(args, theme, context) {
-        const label = nativeDiscoveryLabel(discovery(args));
+        const input = hostContainer(args);
+        const label = nativeDiscoveryLabel(discovery(input));
         const program = renderNativeCodemodeProgram(
-          programSource(args),
+          programSource(input),
           theme,
           context,
           label ? nativeDiscoveryNote : undefined,

@@ -1,9 +1,10 @@
 import * as Effect from "effect/Effect";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
 
+const unused = () => Effect.die(new Error("Unexpected workspace operation."));
+
 export const createOnlyWorkspaceEngine = (): WorkspaceServiceContract => {
   let created = 0;
-  const unused = () => Effect.die(new Error("Unexpected workspace operation."));
   return {
     create: ({ sourceCwd, ownerId }) =>
       Effect.sync(() => {

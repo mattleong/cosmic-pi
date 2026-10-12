@@ -74,6 +74,11 @@ export interface RunLaunchDependencies extends RunContext {
   readonly workspaces: Pick<RunWorkspaceControl, "bind" | "heldLaunchSlots">;
 }
 
+const runtimeClosedError = () =>
+  new SubagentRuntimeClosedError({
+    message: "The subagent session runtime is closed.",
+  });
+
 export function makeRunLaunch(dependencies: RunLaunchDependencies) {
   const {
     backendRegistry,
@@ -98,6 +103,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     Effect.gen(function* () {
       if (request.writeIntent === "writer" && scriptOriginForStart(records, request, scriptedRoot))
         return yield* scriptedWriterAdmissionError();
+      return undefined;
     });
   const validate = (request: StartSubagentRequest, scriptedRoot = false) =>
     validateStartRequest(request, writerLeases.platform).pipe(
@@ -149,10 +155,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               if (records.get(candidate.view.id) === candidate) candidate.evictionClaim = undefined;
             }),
           );
-        const runtimeClosedError = () =>
-          new SubagentRuntimeClosedError({
-            message: "The subagent session runtime is closed.",
-          });
 
         const retryPredecessorLocked = () =>
           Effect.gen(function* () {
@@ -219,7 +221,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                   workspaces.heldLaunchSlots(parentRunId, request),
                 );
             if (capacityFailure) return yield* capacityFailure;
-            if (!canonicalWriterCwd) return;
+            if (!canonicalWriterCwd) return undefined;
             const writerFailure = writerConflictError(
               records,
               writerPools,
@@ -229,6 +231,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               predecessor,
             );
             if (writerFailure) return yield* writerFailure;
+            return undefined;
           });
 
         const checkAdmissionLocked = (ownReservation?: RunRecord) =>

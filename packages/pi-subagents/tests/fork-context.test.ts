@@ -156,7 +156,7 @@ describe("forked Pi transcript", () => {
         );
         const child = SessionManager.open(childFile);
         expect(child.getLeafId()).toBe(leafId);
-        expect(child.getEntry(leafId!)).toMatchObject({
+        expect(child.getEntry(leafId)).toMatchObject({
           type: "custom",
           customType: "pi-subagents-fork-anchor",
           parentId: compactionId,

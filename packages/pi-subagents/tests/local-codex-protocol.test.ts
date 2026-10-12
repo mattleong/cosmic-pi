@@ -1,8 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { decodeCodexNotification } from "../src/backend/local-codex-protocol.ts";
 
-const decode = <Item>(method: string, item: Item) =>
+const decode = (method: string, item: Schema.Json) =>
   decodeCodexNotification(method, { threadId: "t", turnId: "u", item });
 
 describe("local Codex protocol", () => {

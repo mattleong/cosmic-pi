@@ -1,5 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { flow } from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vitest";
 import {
   makeHostNotifier,
@@ -12,8 +15,11 @@ type SendMessage = ExtensionAPI["sendMessage"];
 const messageContent = (content: Parameters<SendMessage>[0]["content"] | undefined): string =>
   Predicate.isString(content) ? content : JSON.stringify(content);
 
-const detailsName = <Details>(details: Details) =>
-  Predicate.hasProperty(details, "name") ? details.name : undefined;
+const detailsName = flow(
+  Schema.decodeUnknownOption(Schema.Struct({ name: Schema.Unknown })),
+  Option.map(({ name }) => name),
+  Option.getOrUndefined,
+);
 
 const notifier = (sendMessage = vi.fn<SendMessage>()) => ({
   sendMessage,

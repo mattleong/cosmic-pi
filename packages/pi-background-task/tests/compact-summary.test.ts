@@ -22,8 +22,8 @@ const snapshot = {
 };
 const cursors = { nextCursor: 10, earliestAvailableCursor: 0, droppedBytes: 0 };
 type Snapshot = typeof snapshot & { readonly exitCode?: number | null };
-const project = <Details>(
-  details: Details,
+const project = (
+  details: NonNullable<Input["result"]>["details"],
   action: BackgroundTaskToolInput["action"] = "status",
   phase: Input["phase"] = "settled",
   isError = false,
@@ -35,6 +35,7 @@ const project = <Details>(
     result: { details },
     isError,
   });
+const firstIssue = (summary: ReturnType<typeof project>) => summary?.issues?.[0];
 const logs = (state = "running", fields: Partial<typeof cursors> = {}, truncated?: boolean) => ({
   action: "logs",
   logs: { id: snapshot.id, state, ...cursors, ...fields },
@@ -116,7 +117,6 @@ describe("background task compact semantics", () => {
   it("keeps unclassified task errors visible, with full text as expanded detail", () => {
     const failed = (error: string) =>
       project({ action: "status", snapshot: { ...snapshot, state: "failed", error } });
-    const firstIssue = (summary: ReturnType<typeof project>) => summary?.issues?.[0];
     const single = failed("Custom failure. Inspect state.");
     expect(single?.outcome).toBe("error");
     expect(single?.issues).toEqual([

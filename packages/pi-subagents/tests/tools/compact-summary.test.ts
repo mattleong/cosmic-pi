@@ -1,15 +1,29 @@
 import { compactIssueSeverity, type CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
+import type * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { makeCompactToolDetails } from "../../src/tools/details.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
-import type { SubagentAwaitDetails, WorkspaceToolDetails } from "../../src/tools/details-schema.ts";
+import type {
+  CompactSubagentToolDetails,
+  SubagentAwaitDetails,
+  SubagentStartDetails,
+  WorkspaceToolDetails,
+} from "../../src/tools/details-schema.ts";
 import { view } from "./fixtures/tool-harness.ts";
 
-function summarize<DetailsInput>(
+type SummarizedDetails =
+  | CompactSubagentToolDetails
+  | SubagentAwaitDetails
+  | SubagentStartDetails
+  | WorkspaceToolDetails
+  | Schema.Json
+  | undefined;
+
+function summarize(
   action: string,
-  details: DetailsInput,
+  details: SummarizedDetails,
   phase: "running" | "settled" = "settled",
   args: {
     action?: string;
@@ -78,6 +92,11 @@ const awaitReceipt = (
     ...extra,
   };
 };
+
+const unconfirmedCounter = (action: "send" | "reply", confirmed: number) =>
+  confirmed ? `1 ${action === "send" ? "sent" : "replied"}, 1 unconfirmed` : "1 unconfirmed";
+
+const compactSummaryFor = (tool: string) => createSubagentCompactSummary(`subagent_${tool}`);
 
 describe("subagent compact semantic policy", () => {
   it("treats pending and unresolved steering as delivery uncertainty, not worker failure", () => {
@@ -381,9 +400,6 @@ describe("subagent compact semantic policy", () => {
       ).toBe(true);
     },
   );
-
-  const unconfirmedCounter = (action: "send" | "reply", confirmed: number) =>
-    confirmed ? `1 ${action === "send" ? "sent" : "replied"}, 1 unconfirmed` : "1 unconfirmed";
 
   const expectMixedFailuresError = (
     action: "send" | "reply" | "resume" | "stop",
@@ -1035,7 +1051,7 @@ describe("subagent compact semantic policy", () => {
         { ...candidate, status: "skipped", reason: "Unavailable alternative" },
       ],
     };
-    const discovery = (profiles: object[], extra = {}) =>
+    const discovery = (profiles: ReadonlyArray<Schema.Json>, extra = {}) =>
       summarize("models", {
         version: 2,
         action: "models",
@@ -1280,7 +1296,6 @@ describe("subagent compact semantic policy", () => {
   });
   it("keeps rejected calls in people's terms, with service text expanded", () => {
     const id = failedActionId;
-    const provider = (tool: string) => createSubagentCompactSummary(`subagent_${tool}`);
     for (const [tool, args, text] of [
       [
         "lifecycle",
@@ -1290,7 +1305,7 @@ describe("subagent compact semantic policy", () => {
       ["workspace", { action: "prepare", workspaceId: "ws-1" }, "The revision no longer matches."],
       ["send", { runIds: [id], message: "x" }, `Subagent ${id} rejected send({ runId: "${id}" }).`],
     ] as const) {
-      const summary = provider(tool)({
+      const summary = compactSummaryFor(tool)({
         phase: "settled",
         args,
         result: { content: [{ type: "text", text }], details: {} },

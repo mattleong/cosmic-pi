@@ -105,6 +105,7 @@ export function reduceQuestionnaire(
     case "set-review-cursor":
       return { ...state, reviewCursor: action.cursor };
   }
+  return state;
 }
 
 export const isQuestionnaireComplete = (state: QuestionnaireState): boolean =>

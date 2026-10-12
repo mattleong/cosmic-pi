@@ -44,6 +44,11 @@ type Active<Input, R, RuntimeError> = {
   disposal?: Promise<void>;
 };
 
+const dispose = (runtime: Pick<PiManagedRuntime<never>, "dispose">): Promise<void> =>
+  Promise.resolve()
+    .then(() => runtime.dispose())
+    .catch(() => undefined);
+
 export function makePiSessionRuntimeSlot<
   Input,
   R,
@@ -57,11 +62,6 @@ export function makePiSessionRuntimeSlot<
   let authorityEpoch = 0;
   let active: Active<Input, R, RuntimeError> | undefined;
   let transition: Promise<unknown> = Promise.resolve();
-
-  const dispose = (runtime: PiManagedRuntime<R, RuntimeError>): Promise<void> =>
-    Promise.resolve()
-      .then(() => runtime.dispose())
-      .catch(() => undefined);
 
   const removeActive = (expected?: Active<Input, R, RuntimeError>): Promise<void> => {
     const current = active;

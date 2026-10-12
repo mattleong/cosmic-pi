@@ -135,7 +135,7 @@ describe("OpenAIImageService", () => {
         },
       },
     );
-    const throwingPrompt = Object.defineProperty({}, "prompt", {
+    const throwingPrompt = Object.defineProperty({ prompt: "throwing prompt" }, "prompt", {
       enumerable: true,
       get: () => {
         throw new Error("hostile");

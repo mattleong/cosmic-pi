@@ -3,7 +3,7 @@ import * as Predicate from "effect/Predicate";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { trimSingleTrailingNewline } from "../../preview/format";
 import { codePreviewSettings } from "../../config/state";
-import { getObjectValue } from "../../shared/helpers";
+import { hostObject, ownField, type HostObject } from "../../shared/untrusted-value";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { getFirstShellCommandName } from "../../tools/shell-command";
 import { renderHighlightedText } from "../../syntax/render";
@@ -18,8 +18,8 @@ import type { PreviewRenderers } from "./shared/types";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { previewIssuesSlot } from "../../preview/preview-issues";
 
-function shouldHideBashResult<ArgsInput>(args: ArgsInput): boolean {
-  const command = getObjectValue(args, "command");
+function shouldHideBashResult(args: HostObject | undefined): boolean {
+  const command = ownField(args, "command");
   return shouldHideShellResultByCommand(
     Predicate.isString(command) ? getFirstShellCommandName(command) : undefined,
     codePreviewSettings,
@@ -29,8 +29,9 @@ function shouldHideBashResult<ArgsInput>(args: ArgsInput): boolean {
 export function bashPreviewRenderers(): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
-      const commandArg = getObjectValue(args, "command");
-      const timeoutArg = getObjectValue(args, "timeout");
+      const input = hostObject(args);
+      const commandArg = ownField(input, "command");
+      const timeoutArg = ownField(input, "timeout");
       const command = Predicate.isString(commandArg) ? commandArg : "";
       const timeout = Predicate.isNumber(timeoutArg)
         ? theme.fg("muted", ` (timeout ${timeoutArg}s)`)
@@ -52,7 +53,11 @@ export function bashPreviewRenderers(): PreviewRenderers {
     renderResult: (result, { expanded, isPartial }, theme, renderContext) => {
       const prelude = renderResultPrelude({ isPartial, theme });
       if (prelude) return prelude;
-      if (!expanded && !renderContext.isError && shouldHideBashResult(renderContext.args))
+      if (
+        !expanded &&
+        !renderContext.isError &&
+        shouldHideBashResult(hostObject(renderContext.args))
+      )
         return renderHiddenPreviewExpandHint(renderContext.state, theme, "output");
       const output = trimSingleTrailingNewline(getTextContent(result.content));
       const lines = output ? output.split("\n") : [];

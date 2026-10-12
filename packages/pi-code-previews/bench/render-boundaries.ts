@@ -7,7 +7,7 @@ import * as Predicate from "effect/Predicate";
 import { synchronousNow as previewNow } from "pi-cosmic-core";
 import { createSimpleDiff } from "../src/diff/structured";
 import { DeferredPreview } from "../src/preview/deferred";
-import { getObjectValue } from "../src/shared/helpers";
+import { hostObject, ownField } from "../src/shared/untrusted-value";
 import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
@@ -53,7 +53,7 @@ const cases = [
   }),
   runBench("256 own-property reads", "render", "batched-pure-boundary", () => {
     for (const fixture of propertyFixtures) {
-      const value = getObjectValue(fixture, "value");
+      const value = ownField(hostObject(fixture), "value");
       if (Predicate.isNumber(value)) propertySink += value;
     }
   }),

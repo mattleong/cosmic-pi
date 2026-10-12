@@ -31,7 +31,7 @@ export const terminateProcessTree = Effect.fn("ProcessTree.terminate")(function*
   { platform = process.platform, ...windows }: ProcessTreeRuntime = {},
 ) {
   const pid = child.pid;
-  if (!pid) return;
+  if (!pid) return undefined;
   if (platform === "win32")
     return yield* terminateWindowsProcessTree({
       ...windows,
@@ -41,6 +41,7 @@ export const terminateProcessTree = Effect.fn("ProcessTree.terminate")(function*
     });
   const signal = mode === "force" ? "SIGKILL" : "SIGTERM";
   const result = signalProcessGroup(pid, signal);
-  if (result === "present" || result === "absent" || killLiveLeader(child, signal)) return;
+  if (result === "present" || result === "absent" || killLiveLeader(child, signal))
+    return undefined;
   return yield* processGroupSignalError(result);
 });

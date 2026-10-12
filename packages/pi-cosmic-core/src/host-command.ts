@@ -116,18 +116,13 @@ export function registerExtensionCommand(
     getArgumentCompletions: (prefix) => completeExtensionCommand(prefix, list()),
     handler: (args, ctx) => {
       const route = routeExtensionCommand(args, list(), bare);
-      switch (route._tag) {
-        case "Bare":
-          return settle(() => bare?.handler(route.args, ctx));
-        case "Subcommand":
-          return settle(() => route.subcommand.handler(route.args, ctx));
-        case "Overview":
-          notifyAtHostBoundary(ctx, extensionCommandOverview(name, description, list()), "info");
-          return Promise.resolve();
-        case "Unknown":
-          notifyAtHostBoundary(ctx, extensionCommandUsage(name, list(), bare), "warning");
-          return Promise.resolve();
-      }
+      if (route._tag === "Bare") return settle(() => bare?.handler(route.args, ctx));
+      if (route._tag === "Subcommand")
+        return settle(() => route.subcommand.handler(route.args, ctx));
+      if (route._tag === "Overview")
+        notifyAtHostBoundary(ctx, extensionCommandOverview(name, description, list()), "info");
+      else notifyAtHostBoundary(ctx, extensionCommandUsage(name, list(), bare), "warning");
+      return Promise.resolve();
     },
   });
   return { add: (subcommand) => void subcommands.set(subcommand.name, subcommand) };

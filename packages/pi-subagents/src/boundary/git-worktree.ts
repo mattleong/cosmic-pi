@@ -47,6 +47,18 @@ interface CreateWorkspaceInput {
   readonly onAcquired?: WorkspaceAcquired | undefined;
 }
 
+const settled = (target: WorkspaceSettledTarget) =>
+  target.processCleanupConfirmed
+    ? Effect.void
+    : Effect.fail(workspaceFailure("cleanup", "Process cleanup must be independently confirmed."));
+
+const revision = (record: WorkspaceRecord, id: string) => {
+  const current = record.revision;
+  return current?.revisionId === id
+    ? Effect.succeed(current)
+    : Effect.fail(workspaceFailure("revision", "Reviewed revision is stale or unknown."));
+};
+
 export const makeGitWorkspaceEngine = (agentDirectory: string) =>
   Effect.sync(() => {
     const registry = path.resolve(agentDirectory, "git-workspaces");
@@ -98,18 +110,6 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           );
         return record;
       });
-    const settled = (target: WorkspaceSettledTarget) =>
-      target.processCleanupConfirmed
-        ? Effect.void
-        : Effect.fail(
-            workspaceFailure("cleanup", "Process cleanup must be independently confirmed."),
-          );
-    const revision = (record: WorkspaceRecord, id: string) => {
-      const current = record.revision;
-      return current?.revisionId === id
-        ? Effect.succeed(current)
-        : Effect.fail(workspaceFailure("revision", "Reviewed revision is stale or unknown."));
-    };
     const locked = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       withWorkspaceStoreLock(registry, effect);
 
@@ -444,6 +444,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         yield* removeWorkspaceTrees(registry, record);
         yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
         owned.delete(target.workspaceId);
+        return undefined;
       });
     const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target));
     const discardUnchanged = <E, R>(

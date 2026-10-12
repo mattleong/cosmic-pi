@@ -110,6 +110,8 @@ const LIVE_CHILD_BRIDGE_BOUNDARIES: SubagentChildBridgeBoundaries = {
   loadSettings: loadCodePreviewSettings,
   openIpc: openLocalPiChildIpc,
 };
+const parentContactUnavailable = () => new Error("Parent contact is unavailable for this session.");
+
 const readResultContractFile = (path: string) => nodeFsPromises.readFile(path, "utf8");
 
 interface ChildSessionInput {
@@ -281,7 +283,7 @@ export function registerSubagentChildBridge(
         if (
           result.structuredContent !== undefined &&
           (!isSubagentContractTool(encoded.tool) ||
-            decodeSubagentContract(encoded.tool, result.structuredContent) === undefined)
+            decodeSubagentContract(encoded.tool)(result.structuredContent) === undefined)
         )
           throw new Error("Subagent proxy returned a mismatched orchestration result.");
         return result;
@@ -304,8 +306,8 @@ export function registerSubagentChildBridge(
           parameters: ContactParentParameters,
           executionMode: "sequential",
           execute(_toolCallId, params, signal) {
-            const unavailable = () => new Error("Parent contact is unavailable for this session.");
-            if (!isActivationCurrent(input, token)) return Promise.reject(unavailable());
+            if (!isActivationCurrent(input, token))
+              return Promise.reject(parentContactUnavailable());
             const requestId = `contact-${process.pid}-${nextRequest++}`;
             const send = ipc.sendContact({
               channel: "pi-subagents",
@@ -341,7 +343,7 @@ export function registerSubagentChildBridge(
               : send.pipe(Effect.as(`Parent received ${params.kind}.`));
             return slot.run(delivery, signal).then(
               (text) => {
-                if (!isActivationCurrent(input, token)) throw unavailable();
+                if (!isActivationCurrent(input, token)) throw parentContactUnavailable();
                 return { content: [{ type: "text" as const, text }], details: {} };
               },
               question

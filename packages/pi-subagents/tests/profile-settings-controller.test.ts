@@ -35,15 +35,16 @@ import { effectTest, step } from "./support/effect-test.ts";
 
 type DisposableComponent = Component & { readonly dispose?: (() => void) | undefined };
 
+const inspectionDocument = (defaultProfileSet: string, own: string) => ({
+  version: 6,
+  defaultProfileSet,
+  profileSets: { common: { profiles: {} }, [own]: { profiles: {} } },
+});
+
 const inspection = (globalDefault = "global"): ProfileSettingsInspection => {
-  const document = (defaultProfileSet: string, own: string) => ({
-    version: 6,
-    defaultProfileSet,
-    profileSets: { common: { profiles: {} }, [own]: { profiles: {} } },
-  });
   return makeProfileSettingsInspection({
-    globalDocument: document(globalDefault, "global"),
-    projectDocument: document("project", "project"),
+    globalDocument: inspectionDocument(globalDefault, "global"),
+    projectDocument: inspectionDocument("project", "project"),
     projectTrusted: true,
   });
 };
@@ -720,10 +721,10 @@ describe("profile settings controller", () => {
   });
 });
 
-describe("feature switch settings", () => {
-  const featurePatches = (fixture: ReturnType<typeof setup>) =>
-    vi.mocked(fixture.managerActions.patchFeatureToggle).mock.calls.map(([patch]) => patch);
+const featurePatches = (fixture: ReturnType<typeof setup>) =>
+  vi.mocked(fixture.managerActions.patchFeatureToggle).mock.calls.map(([patch]) => patch);
 
+describe("feature switch settings", () => {
   effectTest("saves ultracode to either named scope against its inspected document", function* () {
     const fixture = setup();
     const value = inspection();
@@ -837,18 +838,19 @@ describe("feature switch settings", () => {
   });
 });
 
+const openFleet = (run: SubagentRunView, overrides: Partial<FleetManagerActions>) => {
+  const bridge = makeSubagentProjectionBridge();
+  bridge.publish(projectionOf([run]));
+  return openRegisteredFleet((pi) =>
+    registerSubagentManagerCommand(pi, bridge, fleetManagerActionsFixture(overrides)),
+  );
+};
+
+const topLevel = (overrides: Partial<SubagentRunView> = {}) =>
+  view({ id: "child", name: "child", parentRunId: "root", depth: 1, ...overrides });
+
 describe("root /subagents fleet actions", () => {
   const question = { requestId: "q", message: "Which file?" };
-  const topLevel = (overrides: Partial<SubagentRunView> = {}) =>
-    view({ id: "child", name: "child", parentRunId: "root", depth: 1, ...overrides });
-
-  const openFleet = (run: SubagentRunView, overrides: Partial<FleetManagerActions>) => {
-    const bridge = makeSubagentProjectionBridge();
-    bridge.publish(projectionOf([run]));
-    return openRegisteredFleet((pi) =>
-      registerSubagentManagerCommand(pi, bridge, fleetManagerActionsFixture(overrides)),
-    );
-  };
 
   const sendOutcomes: ReadonlyArray<
     readonly [string, () => Promise<FleetMessageDelivery>, FleetNoticeKind]

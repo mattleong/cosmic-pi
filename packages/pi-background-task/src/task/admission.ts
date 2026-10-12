@@ -70,4 +70,5 @@ export const validateWaitRequest = (request: WaitForBackgroundTask, waitSeconds:
       return yield* invalidCommand(
         `Output waits require a non-empty contains value of at most ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars} characters with no NUL byte.`,
       );
+    return undefined;
   });

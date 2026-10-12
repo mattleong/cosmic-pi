@@ -470,9 +470,9 @@ describe("writer workspace orchestration", () => {
       expect(f.children.controls.map((control) => control.launch.cwd).toSorted()).toEqual(
         runs.map((run) => run.cwd).toSorted(),
       );
-      expect(yield* service.workspaceReview(runs[0]!.workspaceId!).pipe(Effect.flip)).toMatchObject(
-        { code: "workspace_process_unsettled" },
-      );
+      expect(yield* service.workspaceReview(runs[0].workspaceId!).pipe(Effect.flip)).toMatchObject({
+        code: "workspace_process_unsettled",
+      });
     });
   });
 

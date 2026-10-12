@@ -48,7 +48,7 @@ for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
       yield* step(() => start(h));
       const predecessorEntered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
-      const runPredecessor = Effect.runPromiseWith(yield* Effect.context<never>());
+      const runPredecessor = Effect.runPromiseWith(yield* Effect.context());
       const predecessor = withFileMutationQueue(path, () =>
         runPredecessor(
           Deferred.succeed(predecessorEntered, undefined).pipe(
@@ -75,6 +75,7 @@ for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
       ).then(
         () => {
           outcome = "success";
+          return undefined;
         },
         () => {
           outcome = "failure";

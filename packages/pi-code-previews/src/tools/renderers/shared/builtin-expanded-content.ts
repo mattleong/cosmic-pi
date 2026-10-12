@@ -2,7 +2,13 @@ import * as Predicate from "effect/Predicate";
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { BuiltinCompactTool } from "../../builtin-subject";
-import { getObjectValue } from "../../../shared/helpers";
+import {
+  hostObject,
+  ownField,
+  type HostObject,
+  hostValue,
+  type HostValue,
+} from "../../../shared/untrusted-value";
 import { escapeControlChars } from "../../../shared/terminal-text";
 import { getEditPreviewOperations, getPathArg } from "../../data/args";
 import { getEditDiff, getTextContent } from "../../data/results";
@@ -30,22 +36,23 @@ import { writeBeforeSnapshot, writeDiffPlan } from "./write-result";
 export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme, context) {
-      const path = getPathArg(args);
+      const input = hostObject(args);
+      const path = getPathArg(input);
       const container = new Container();
-      const operations = tool === "edit" ? getEditPreviewOperations(args) : [];
-      const edits = getObjectValue(args, "edits");
+      const operations = tool === "edit" ? getEditPreviewOperations(input) : [];
+      const edits = ownField(input, "edits");
       const completeEdits = Array.isArray(edits) && operations.length === edits.length;
-      const options = builtinOptionLabels(tool, args, completeEdits);
+      const options = builtinOptionLabels(tool, hostValue(args), completeEdits);
       if (options.length)
         container.addChild(
           expandedSection(theme, undefined, new Text(theme.fg("muted", options.join(" · ")), 0, 0)),
         );
-      const command = getObjectValue(args, "command");
+      const command = ownField(input, "command");
       if (tool === "bash" && Predicate.isString(command))
         container.addChild(
           expandedSection(theme, undefined, commandBody(command, theme, context.invalidate)),
         );
-      const content = getObjectValue(args, "content");
+      const content = ownField(input, "content");
       if (tool === "write" && Predicate.isString(content))
         container.addChild(
           expandedSection(theme, undefined, source(content, path, theme, context.invalidate)),
@@ -77,7 +84,7 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
 function splitAgentNotice(tool: BuiltinCompactTool, result: AgentToolResult<unknown>) {
   const output = getTextContent(result.content);
   if (tool === "read") {
-    const notice = oversizedReadNotice(result.details, output);
+    const notice = oversizedReadNotice(hostObject(result.details), output);
     return { output: notice === undefined ? output : "", notice };
   }
   if (tool === "edit" || tool === "write") return { output, notice: undefined };
@@ -96,38 +103,25 @@ function builtinResultBody(
     "args" | "state" | "toolCallId" | "invalidate"
   >,
 ): Component {
-  const path = getPathArg(context.args);
+  const input = hostObject(context.args);
+  const path = getPathArg(input);
   if (tool === "read") {
-    const body = readResultBody(result, context.args);
+    const body = readResultBody(result, input);
     if (body.kind === "image") return new Text(escapeControlChars(body.text), 0, 0);
     if (body.kind === "oversized") return new Container();
     return source(body.content, path, theme, context.invalidate, body.firstLine);
   }
   if (tool === "edit") {
-    const diff = getEditDiff(result.details);
+    const diff = getEditDiff(hostObject(result.details));
     const content = new Container();
     if (diff) content.addChild(renderDiff(diff, path, theme, context.invalidate));
     if (output) content.addChild(rawResult(output, theme));
     return content;
   }
-  if (tool === "write") {
-    const plan = writeDiffPlan(
-      writeBeforeSnapshot(context.state, context.toolCallId, result.details),
-      getObjectValue(context.args, "content"),
-    );
-    const body = new Container();
-    if (plan.kind === "skipped" && plan.measured)
-      body.addChild(new Text(theme.fg("muted", escapeControlChars(plan.reason)), 0, 0));
-    if (plan.kind === "diff")
-      body.addChild(
-        renderDiff(createSimpleDiff(plan.previous, plan.content), path, theme, context.invalidate),
-      );
-    if (output) body.addChild(rawResult(output, theme));
-    return body;
-  }
+  if (tool === "write") return writeResultBody(result, output, theme, context, input, path);
   if (tool === "grep")
     return new Text(
-      renderGrepOutputLines(output, theme, context.args, context.invalidate).join("\n"),
+      renderGrepOutputLines(output, theme, input, context.invalidate).join("\n"),
       0,
       0,
     );
@@ -143,6 +137,30 @@ function builtinResultBody(
   return new Text(escapeControlChars(output), 0, 0);
 }
 
+function writeResultBody(
+  result: AgentToolResult<unknown>,
+  output: string,
+  theme: Theme,
+  context: Pick<ToolRenderContext<RendererState, unknown>, "state" | "toolCallId" | "invalidate">,
+  input: HostObject | undefined,
+  path: string,
+): Component {
+  const content = ownField(input, "content");
+  const plan = writeDiffPlan(
+    writeBeforeSnapshot(context.state, context.toolCallId, hostObject(result.details)),
+    Predicate.isString(content) ? content : undefined,
+  );
+  const body = new Container();
+  if (plan.kind === "skipped" && plan.measured)
+    body.addChild(new Text(theme.fg("muted", escapeControlChars(plan.reason)), 0, 0));
+  if (plan.kind === "diff")
+    body.addChild(
+      renderDiff(createSimpleDiff(plan.previous, plan.content), path, theme, context.invalidate),
+    );
+  if (output) body.addChild(rawResult(output, theme));
+  return body;
+}
+
 function headingShowsExactly(value: string): boolean {
   return (
     value.length <= 60 &&
@@ -151,9 +169,9 @@ function headingShowsExactly(value: string): boolean {
   );
 }
 
-function builtinOptionLabels<Args>(
+function builtinOptionLabels(
   tool: BuiltinCompactTool,
-  args: Args,
+  args: HostValue | undefined,
   completeEdits: boolean,
 ): string[] {
   const shown = new Set<string>();

@@ -11,6 +11,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { isNativeMcpName } from "./native-mcp-identity";
+import type { HostContainer } from "../shared/untrusted-value";
 import { ownData } from "./native-safe-content";
 import { syntaxChildren, syntaxNodeGuard, unhandledSyntax } from "./native-codemode-syntax";
 
@@ -24,7 +25,9 @@ export interface NativeDiscoveryIntent {
   readonly kind: "mcp" | "tools";
   readonly discoveryOnly: boolean;
 }
-export type NativeDiscoveryProjector = <Args>(args: Args) => NativeDiscoveryIntent | undefined;
+export type NativeDiscoveryProjector = (
+  args: HostContainer | undefined,
+) => NativeDiscoveryIntent | undefined;
 
 export const nativeDiscoveryNote =
   "Discovery labels reflect program source, not executed helper calls";

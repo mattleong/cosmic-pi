@@ -325,6 +325,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 selected,
               );
               if (writerFailure) return yield* writerFailure;
+              return undefined;
             });
           const respawnFailureLocked = (selected: RunRecord) =>
             Effect.gen(function* () {
@@ -333,7 +334,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                   "backend_resume_unavailable",
                   `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
                 );
-              if (workflowOwned(selected)) return;
+              if (workflowOwned(selected)) return undefined;
               const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
               const capacityFailure = processCapacityError(
                 records,
@@ -343,6 +344,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 workspaces.heldLaunchSlots(parentRunId),
               );
               if (capacityFailure) return yield* capacityFailure;
+              return undefined;
             });
           const admitLocked = Effect.gen(function* () {
             const selected = yield* requireRecord(id);

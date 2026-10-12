@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
 import { clipText, formatDuration, formatTokens, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { SubagentUsage } from "../run/model.ts";
@@ -122,6 +123,7 @@ const sourceText = (run: WorkflowRunView): string => {
     case "file":
       return `Source: ${run.source.path}`;
   }
+  return absurd(run.source);
 };
 
 export const workflowActivityDetail = (
@@ -201,6 +203,7 @@ const waitingDetail = (waiting: WorkflowAgentWaiting | undefined): string => {
         ? `Waiting behind writer ${waiting.name}, which is paused and won't finish by itself.`
         : `Waiting behind writer ${waiting.name}, whose files it would also edit; it starts once that writer finishes.`;
   }
+  return absurd(waiting);
 };
 
 export const queuedAgentDetail = (agent: WorkflowAgentView): string =>

@@ -166,7 +166,7 @@ it.effect(
     Effect.gen(function* () {
       const bus = createEventBus();
       let calls = 0;
-      let current = () => true;
+      let stale = false;
       const layer = AskUserService.layer(() =>
         Effect.sync(() => {
           calls++;
@@ -177,7 +177,10 @@ it.effect(
         events: bus,
         sessionId: "root",
         generation: "generation",
-        isCurrent: () => current(),
+        isCurrent: () => {
+          if (stale) throw new Error("stale host");
+          return true;
+        },
         run: (effect, signal) => Effect.runPromise(effect.pipe(Effect.provide(layer)), { signal }),
       });
       expect(queryQuestionnaireCapability(bus, "other")).toBeUndefined();
@@ -191,16 +194,14 @@ it.effect(
           _tag: "AskUserRuntimeClosedError",
         }),
       );
-      current = () => {
-        throw new Error("stale host");
-      };
+      stale = true;
       yield* Effect.promise(() =>
         expect(capability.ask(request, owner, new AbortController().signal)).rejects.toMatchObject({
           _tag: "AskUserRuntimeClosedError",
         }),
       );
       expect(queryQuestionnaireCapability(bus, "root")).toBeUndefined();
-      current = () => true;
+      stale = false;
       dispose();
       expect(yield* askFails(capability, owner)).toBe(true);
       expect(queryQuestionnaireCapability(bus, "root")).toBeUndefined();
@@ -313,6 +314,7 @@ it.effect(
       let acknowledged = false;
       const cancelling = capability.cancel(owner).then(() => {
         acknowledged = true;
+        return undefined;
       });
       expect(signal?.aborted).toBe(true);
       yield* Deferred.await(cleanupEntered);
@@ -383,6 +385,7 @@ it.effect("root cancel aborts and joins only its exact owner while another owner
     let acknowledged = false;
     const cancelling = capability.cancel(owner).then(() => {
       acknowledged = true;
+      return undefined;
     });
     expect(runs.map((run) => run.signal.aborted)).toEqual([true, false]);
     yield* macrotask;

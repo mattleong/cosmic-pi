@@ -52,11 +52,12 @@ const InputEvidenceSchema = Schema.Struct({
   paths: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
-export const renderSubagentInputContent = <ValueInput>(
-  args: ValueInput,
+export const decodeInputEvidence = decodeUnknownOrUndefined(InputEvidenceSchema);
+
+export const renderSubagentInputContent = (
+  input: typeof InputEvidenceSchema.Type | undefined,
   theme: Theme,
 ): Component => {
-  const input = decodeUnknownOrUndefined(InputEvidenceSchema, args);
   if (!input) return new Text("", 0, 0);
   const lines = [input.message, input.name, ...(input.paths ?? [])].filter(Boolean);
   return new Text(theme.fg("toolOutput", escapeControlChars(lines.join("\n"))), 0, 0);
@@ -135,8 +136,9 @@ const renderTextFallback = (
   return textResultBody(theme, text, { expanded, isError }, COLLAPSED_TEXT_LINES);
 };
 
-const decodeWorkspaceDisplay = <Details>(details: Details) =>
-  decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, details, { onExcessProperty: "error" });
+const decodeWorkspaceDisplay = decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, {
+  onExcessProperty: "error",
+});
 
 const workspaceDisplayText = (
   receipt: WorkspaceToolDetails,

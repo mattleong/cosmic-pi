@@ -30,16 +30,17 @@ import { profileCandidate as candidate } from "./fixtures/profiles.ts";
 
 type ProfileSetSeed = Readonly<Record<string, DeclaredProfileRoute>>;
 
+const currentDocument = (profiles: ProfileSetSeed) =>
+  jsonObject({
+    version: 6,
+    defaultProfileSet: "default",
+    profileSets: { default: { profiles } },
+  });
+
 const inspection = (
   global: ProfileSetSeed = {},
   project?: ProfileSetSeed,
 ): ProfileSettingsInspection => {
-  const currentDocument = (profiles: ProfileSetSeed) =>
-    jsonObject({
-      version: 6,
-      defaultProfileSet: "default",
-      profileSets: { default: { profiles } },
-    });
   return makeProfileSettingsInspection({
     globalDocument: currentDocument(global),
     projectDocument: project ? currentDocument(project) : undefined,

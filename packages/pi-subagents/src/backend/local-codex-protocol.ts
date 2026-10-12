@@ -29,7 +29,7 @@ const Response = Schema.Struct({
     }),
   ),
 });
-const Notification = Schema.Struct({ method: Method, params: Schema.optional(Schema.Unknown) });
+const Notification = Schema.Struct({ method: Method, params: Schema.optional(Schema.Json) });
 const ServerRequest = Schema.Struct({
   id: RequestId,
   method: Method,
@@ -40,9 +40,9 @@ const EnvelopeDiscriminant = Schema.Struct({
   method: Schema.optional(Schema.Unknown),
 });
 
-export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope")(function* <
-  ValueInput,
->(value: ValueInput) {
+export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope")(function* (
+  value: Schema.Json,
+) {
   const discriminant = yield* Schema.decodeUnknownEffect(EnvelopeDiscriminant)(value);
   if (discriminant.method !== undefined && discriminant.id !== undefined) {
     const request = yield* Schema.decodeUnknownEffect(ServerRequest)(value);
@@ -193,7 +193,7 @@ const normalizedWarning = (summary: string, details?: string | null): string => 
 };
 
 const decodeCodexItemNotification = Effect.fn("LocalCodexProtocol.decodeItemNotification")(
-  function* <ParamsInput>(method: "item/started" | "item/completed", params: ParamsInput) {
+  function* (method: "item/started" | "item/completed", params: Schema.Json | undefined) {
     const envelope = yield* Schema.decodeUnknownEffect(NativeItemEnvelope)(params);
     const discriminant = yield* Schema.decodeUnknownEffect(NativeItemDiscriminant)(envelope.item);
     if (discriminant.type === "collabAgentToolCall") {
@@ -251,7 +251,7 @@ const decodeCodexItemNotification = Effect.fn("LocalCodexProtocol.decodeItemNoti
 );
 
 export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotification")(
-  function* <ParamsInput>(method: string, params: ParamsInput) {
+  function* (method: string, params: Schema.Json | undefined) {
     switch (method) {
       case "turn/started": {
         const value = yield* Schema.decodeUnknownEffect(TurnStarted)(params);
@@ -366,6 +366,8 @@ export const threadStartRequest = (
     },
   }) as const;
 
+const NO_ENVIRONMENTS: readonly [] = [];
+
 const input = (text: string) => [{ type: "text", text, text_elements: [] }] as const;
 
 export const turnStartRequest = (
@@ -376,26 +378,25 @@ export const turnStartRequest = (
   effort: string,
   writeIntent: "read-only" | "writer",
   openaiFastMode: boolean,
-) =>
-  ({
-    id,
-    method: "turn/start",
-    params: {
-      threadId,
-      input: input(text),
-      approvalPolicy: "never",
-      cwd: undefined,
-      effort,
-      environments: [],
-      model,
-      multiAgentMode: "explicitRequestOnly",
-      sandboxPolicy:
-        writeIntent === "writer"
-          ? ({ type: "workspaceWrite", writableRoots: [], networkAccess: false } as const)
-          : ({ type: "readOnly", networkAccess: false } as const),
-      ...(openaiFastMode && ({ serviceTier: FAST_SERVICE_TIER } as const)),
-    },
-  }) as const;
+) => ({
+  id,
+  method: "turn/start" as const,
+  params: {
+    threadId,
+    input: input(text),
+    approvalPolicy: "never" as const,
+    cwd: undefined,
+    effort,
+    environments: NO_ENVIRONMENTS,
+    model,
+    multiAgentMode: "explicitRequestOnly" as const,
+    sandboxPolicy:
+      writeIntent === "writer"
+        ? ({ type: "workspaceWrite", writableRoots: [], networkAccess: false } as const)
+        : ({ type: "readOnly", networkAccess: false } as const),
+    ...(openaiFastMode && ({ serviceTier: FAST_SERVICE_TIER } as const)),
+  },
+});
 
 export const turnSteerRequest = (id: string, threadId: string, turnId: string, text: string) =>
   ({

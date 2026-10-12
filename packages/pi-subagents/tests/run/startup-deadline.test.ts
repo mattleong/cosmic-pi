@@ -12,6 +12,15 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 
+const expectDiagnostic = (message: string | undefined) => {
+  expect(message).toContain("Failed to load extension: missing entrypoint");
+  expect(message).toContain("code 1");
+  expect(message).toContain("[REDACTED]");
+  expect(message).not.toContain("secret-credential");
+  expect(message).not.toContain("\u001b");
+  expect(message?.length).toBeLessThanOrEqual(MAX_ERROR_CHARS);
+};
+
 describe("local Pi startup deadline", () => {
   it.effect("allows slow initialization without sending the task before readiness", () =>
     Effect.gen(function* () {
@@ -85,14 +94,6 @@ describe("local Pi startup deadline", () => {
         });
         const failure = yield* Fiber.join(starting);
         expect(failure._tag).toBe("SubagentProcessError");
-        const expectDiagnostic = (message: string | undefined) => {
-          expect(message).toContain("Failed to load extension: missing entrypoint");
-          expect(message).toContain("code 1");
-          expect(message).toContain("[REDACTED]");
-          expect(message).not.toContain("secret-credential");
-          expect(message).not.toContain("\u001b");
-          expect(message?.length).toBeLessThanOrEqual(MAX_ERROR_CHARS);
-        };
         expectDiagnostic(failure.message);
         const run = projections.at(-1)!.runs[0]!;
         expect(run.state).toBe("failed");

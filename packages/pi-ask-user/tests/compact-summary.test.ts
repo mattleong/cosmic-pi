@@ -20,9 +20,9 @@ const row = (overrides = {}) => ({
   ...overrides,
 });
 type SummaryInput = Parameters<CompactSummaryProvider>[0];
-function summarize<Details>(
+function summarize(
   provider: CompactSummaryProvider,
-  details: Details,
+  details: NonNullable<SummaryInput["result"]>["details"],
   {
     isError = false,
     args = {},

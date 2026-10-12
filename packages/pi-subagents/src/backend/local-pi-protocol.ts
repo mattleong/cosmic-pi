@@ -37,7 +37,7 @@ const RpcResponseSchema = Schema.Struct({
   id: Schema.optional(ProtocolIdSchema),
   command: ProtocolNameSchema,
   success: Schema.Boolean,
-  data: Schema.optional(Schema.Unknown),
+  data: Schema.optional(Schema.Json),
   error: Schema.optional(ProtocolErrorSchema),
 });
 
@@ -60,7 +60,7 @@ const MessageStartSchema = Schema.Struct({
 });
 const MessageEndSchema = Schema.Struct({
   type: Schema.Literal("message_end"),
-  message: Schema.Unknown,
+  message: Schema.Json,
 });
 const ToolStartSchema = Schema.Struct({
   type: Schema.Literal("tool_execution_start"),
@@ -194,17 +194,16 @@ export type RpcChildEnvelope =
   | typeof RpcEventSchema.Type
   | { readonly type: "ignored"; readonly eventType: string };
 
-export function decodeRpcEnvelope<ValueInput>(
-  value: ValueInput,
-): Effect.Effect<RpcChildEnvelope, Schema.SchemaError> {
-  return Effect.gen(function* () {
+export const decodeRpcEnvelope = (
+  value: Schema.Json,
+): Effect.Effect<RpcChildEnvelope, Schema.SchemaError> =>
+  Effect.gen(function* () {
     const discriminant = yield* Schema.decodeUnknownEffect(RpcDiscriminantSchema)(value);
     if (RPC_EVENT_TYPES.has(discriminant.type ?? ""))
       return yield* Schema.decodeUnknownEffect(RpcEventSchema)(value);
     const ignored = yield* Schema.decodeUnknownEffect(IgnoredEventSchema)(value);
     return { type: "ignored" as const, eventType: ignored.type };
   });
-}
 
 const EffortSchema = Schema.Literals(SUBAGENT_EFFORTS);
 const RpcStateModelSchema = Schema.Struct({
@@ -226,8 +225,7 @@ const RpcStateDataSchema = Schema.Struct({
 
 type RpcStateData = Schema.Schema.Type<typeof RpcStateDataSchema>;
 
-export const decodeRpcStateData = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(RpcStateDataSchema)(value);
+export const decodeRpcStateData = Schema.decodeUnknownEffect(RpcStateDataSchema);
 
 export const rpcStateModelId = (model: RpcStateData["model"]): string | undefined =>
   Predicate.isString(model) ? model : model ? `${model.provider}/${model.id}` : undefined;
@@ -242,7 +240,7 @@ const AssistantMessageSchema = Schema.Struct({
 const MessageDiscriminantSchema = Schema.Struct({ role: Schema.optional(Schema.String) });
 
 export const decodeAssistantMessage = Effect.fn("SubagentProtocol.decodeAssistantMessage")(
-  function* <ValueInput>(value: ValueInput) {
+  function* (value: Schema.Json) {
     const discriminant = yield* Schema.decodeUnknownEffect(MessageDiscriminantSchema)(value);
     if (discriminant.role !== "assistant") return undefined;
     return yield* Schema.decodeUnknownEffect(AssistantMessageSchema)(value);
@@ -250,10 +248,11 @@ export const decodeAssistantMessage = Effect.fn("SubagentProtocol.decodeAssistan
 );
 
 const TextPartSchema = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
+const decodeTextPart = decodeUnknownOrUndefined(TextPartSchema);
 
 export const assistantText = (message: Schema.Schema.Type<typeof AssistantMessageSchema>): string =>
   message.content
-    .flatMap((part) => decodeUnknownOrUndefined(TextPartSchema, part)?.text ?? [])
+    .flatMap((part) => decodeTextPart(part)?.text ?? [])
     .join("\n")
     .trim();
 

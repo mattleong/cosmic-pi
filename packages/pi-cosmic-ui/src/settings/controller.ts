@@ -47,7 +47,7 @@ const settingDescriptors = [
     values: BooleanSettingSchema.literals,
     currentValue: (config: ResolvedCosmicUiConfig) => String(config.footer.enabled),
     change: (value: string): CosmicUiSettingChange | undefined => {
-      const enabled = decodeUnknownOrUndefined(BooleanSettingSchema, value);
+      const enabled = decodeUnknownOrUndefined(BooleanSettingSchema)(value);
       return enabled && { _tag: "UpdateFooter", patch: { enabled: enabled === "true" } };
     },
   },
@@ -58,7 +58,7 @@ const settingDescriptors = [
     values: FOOTER_DENSITIES,
     currentValue: (config: ResolvedCosmicUiConfig) => config.footer.density,
     change: (value: string): CosmicUiSettingChange | undefined => {
-      const density = decodeUnknownOrUndefined(FooterDensitySchema, value);
+      const density = decodeUnknownOrUndefined(FooterDensitySchema)(value);
       return density && { _tag: "UpdateFooter", patch: { density } };
     },
   },
@@ -76,7 +76,7 @@ const settingDescriptors = [
       currentValue: (config: ResolvedCosmicUiConfig) =>
         config.footer.hidden.includes(item) ? hidden : shown,
       change: (value: string): CosmicUiSettingChange | undefined => {
-        const decoded = decodeUnknownOrUndefined(schema, value);
+        const decoded = decodeUnknownOrUndefined(schema)(value);
         return decoded && { _tag: "SetVisibility", id: item, visible: decoded === shown };
       },
     };

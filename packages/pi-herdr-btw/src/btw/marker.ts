@@ -19,10 +19,10 @@ export const HerdrBtwSessionIdSchema = Schema.String.check(
 const HerdrBtwParentFileSchema = BoundedPath.check(Schema.isPattern(/^[^\0\r\n]+$/u));
 
 export const parseHerdrBtwSessionId = (value: ExtensionFlagValue): string | undefined =>
-  decodeUnknownOrUndefined(HerdrBtwSessionIdSchema, value);
+  decodeUnknownOrUndefined(HerdrBtwSessionIdSchema)(value);
 
 export const parseHerdrBtwParentFile = (value: ExtensionFlagValue): string | undefined =>
-  decodeUnknownOrUndefined(HerdrBtwParentFileSchema, value);
+  decodeUnknownOrUndefined(HerdrBtwParentFileSchema)(value);
 
 export const herdrBtwParentMarkerArguments = (
   parentSessionId: string,

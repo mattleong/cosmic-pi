@@ -1,4 +1,6 @@
 import type {
+  AgentToolResult,
+  MessageRenderer,
   MessageRenderOptions,
   Theme,
   ToolRenderResultOptions,
@@ -7,7 +9,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Text } from "@earendil-works/pi-tui";
 import { planCompactPresentation, renderCompactIssues, renderCompactRow } from "pi-code-previews";
 import * as Schema from "effect/Schema";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import {
   answersBody,
@@ -17,6 +19,7 @@ import {
   expandedResult,
   mutedState,
   stacked,
+  type QuestionnaireArgs,
   type RenderContext,
 } from "./tool-body.ts";
 import {
@@ -24,9 +27,8 @@ import {
   callTitles,
   decodeAsyncControl,
   decodeExpandedAsyncRows,
-  fallbackText,
+  contentText,
   isStatusList,
-  projection,
   questionnaireState,
   stateCounts,
   stateWords,
@@ -36,13 +38,13 @@ import {
   type ReplayedSnapshot,
 } from "./tool-render-projection.ts";
 
-const envelope = projection(
+const envelope = decodeUnknownOrUndefined(
   Schema.Struct({
     details: Schema.optional(Schema.Unknown),
     content: Schema.optional(Schema.Unknown),
   }),
 );
-const notification = projection(
+const notification = decodeUnknownOrUndefined(
   Schema.Struct({
     requestId: Schema.String,
     deliveryId: Schema.String,
@@ -50,13 +52,15 @@ const notification = projection(
     outcome: answerOutcome,
   }),
 );
-const rawText = <Content>(content: Content): string => fallbackText(content, true);
 const NO_TITLES: ReadonlyMap<string, string> = new Map();
 
 type ResultContext = Partial<Pick<RenderContext, "args" | "isError">>;
 
-export function renderAsyncCall<Args>(
-  args: Args,
+type AsyncToolResult = Pick<AgentToolResult<unknown>, "content" | "details">;
+type AsyncMessage = Parameters<MessageRenderer>[0];
+
+export function renderAsyncCall(
+  args: QuestionnaireArgs,
   theme: Theme,
   context: Pick<RenderContext, "expanded" | "state">,
   isControl = false,
@@ -79,15 +83,15 @@ function submittedAnswers(
     : undefined;
 }
 
-export function renderAsyncContent<Input>(
-  input: Input,
+export function renderAsyncContent(
+  input: AsyncToolResult,
   _options: ToolRenderResultOptions,
   theme: Theme,
   context: ResultContext = {},
 ): Component {
   const result = envelope(input);
   return expandedResult(
-    rawText(result?.content),
+    contentText(result?.content),
     context.isError ?? false,
     submittedAnswers(decodeExpandedAsyncRows(result?.details)),
     NO_TITLES,
@@ -95,8 +99,8 @@ export function renderAsyncContent<Input>(
   );
 }
 
-export function renderAsyncResult<Input>(
-  input: Input,
+export function renderAsyncResult(
+  input: AsyncToolResult,
   options: ToolRenderResultOptions,
   theme: Theme,
   context: ResultContext = {},
@@ -116,7 +120,8 @@ export function renderAsyncResult<Input>(
     return cancelled ? stacked([cancelledLine(theme), content]) : content;
   }
   if (context.isError) return emptyBody();
-  if (!decoded || states.length !== rows.length) return new Text(rawText(result?.content), 0, 0);
+  if (!decoded || states.length !== rows.length)
+    return new Text(contentText(result?.content), 0, 0);
   return collapsedRows(rows, states, list, theme);
 }
 
@@ -190,15 +195,15 @@ function compactAsyncMessage(
   return padded(options.expanded ? [heading, expanded] : [heading], options.outputPad);
 }
 
-export function renderAsyncMessage<Input>(
-  input: Input,
+export function renderAsyncMessage(
+  input: AsyncMessage,
   options: MessageRenderOptions,
   theme: Theme,
   compact = false,
 ): Component {
   const message = envelope(input);
   const outcome = notification(message?.details)?.outcome;
-  const raw = rawText(message?.content);
+  const raw = contentText(message?.content);
   const answers = outcome?.outcome === "submitted" ? outcome.answers : undefined;
   const expanded = expandedResult(raw, false, answers, NO_TITLES, theme);
   if (compact) return compactAsyncMessage(outcome, expanded, options, theme);

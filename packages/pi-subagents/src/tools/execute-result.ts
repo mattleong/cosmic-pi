@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { absurd } from "effect/Function";
 import type { SubagentRunView } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
@@ -88,6 +89,7 @@ export const presentSubagentResult = (
       case SUBAGENT_TOOL_NAME.claims:
         return acknowledgement();
     }
+    return absurd(input);
   };
   return {
     content: [{ type: "text", text: boundToolOutput(resultText()) }],

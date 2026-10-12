@@ -48,7 +48,7 @@ const nativeImageSession = (
   generate: (params: ToolParams, cwd: string) => Effect.Effect<CodexImageResult, OpenAIImageError>,
 ) =>
   Effect.gen(function* () {
-    const runTool = Effect.runPromiseWith(yield* Effect.context<never>());
+    const runTool = Effect.runPromiseWith(yield* Effect.context());
     return yield* fauxCodemodeSession({
       prefix: "openai-image-workflow-",
       provider: "openai-image-workflow-test",
@@ -56,7 +56,7 @@ const nativeImageSession = (
         name: "openai-image-workflow-test",
         factory: (cwd) => (pi) => {
           const service = OpenAIImageService.of({
-            generate: (params) => generate(Schema.decodeUnknownSync(ToolParamsSchema)(params), cwd),
+            generate: (params) => generate(Schema.decodeSync(ToolParamsSchema)(params), cwd),
           });
           registerOpenAIImage(
             pi,

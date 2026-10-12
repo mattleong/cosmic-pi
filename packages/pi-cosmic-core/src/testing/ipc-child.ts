@@ -21,7 +21,7 @@ const exitOf = (child: IpcChildProcess) =>
   Effect.callback<void>((resume) => {
     if (child.exitCode !== null || child.signalCode !== null) {
       resume(Effect.void);
-      return;
+      return undefined;
     }
     const exited = () => resume(Effect.void);
     child.once("exit", exited);
@@ -67,7 +67,7 @@ export const spawnIpcChild = (
         Effect.callback<void>((resume) => {
           if (messages.includes(expected)) {
             resume(Effect.void);
-            return;
+            return undefined;
           }
           const receive = (message: IpcMessage) => {
             if (message === expected) resume(Effect.void);

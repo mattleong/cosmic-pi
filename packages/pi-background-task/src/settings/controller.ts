@@ -181,6 +181,8 @@ const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): Setting
   currentValue: "unavailable",
 });
 
+const settingDescriptor = (id: string) => BACKGROUND_TASK_SETTINGS.find((entry) => entry.id === id);
+
 export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionSubcommand {
   return withInvocationAuthority(actions.captureAuthority, (isCurrent) =>
     createTaskSettingsSubcommand(actions, isCurrent),
@@ -191,7 +193,6 @@ function createTaskSettingsSubcommand(
   actions: TaskSettingsActions,
   isCurrent: () => boolean,
 ): ExtensionSubcommand {
-  const descriptor = (id: string) => BACKGROUND_TASK_SETTINGS.find((entry) => entry.id === id);
   const known = new Map<string, string>();
 
   const pickerItems = (config: BackgroundTaskConfig, files: ReadonlyArray<ScopeFile>) => {
@@ -249,7 +250,7 @@ function createTaskSettingsSubcommand(
       ].join("\n");
     },
     apply: (ctx, id, value, _signal, requested) => {
-      const setting = descriptor(id);
+      const setting = settingDescriptor(id);
       const parsed = value === INHERIT ? undefined : setting?.parse(value);
       if (!setting || (value !== INHERIT && parsed === undefined))
         return Promise.resolve(

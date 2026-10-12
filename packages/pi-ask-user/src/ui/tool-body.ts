@@ -10,9 +10,15 @@ import {
   toolStatusLine,
   type ToolHeader,
 } from "pi-cosmic-ui/tool";
+import type {
+  AskUserAsyncControl,
+  AskUserAsyncRequest,
+  AskUserRequest,
+} from "../questionnaire/schema.ts";
 import type { ReplayedAnswer } from "./tool-render-projection.ts";
 
 export type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
+export type QuestionnaireArgs = Partial<AskUserRequest | AskUserAsyncRequest | AskUserAsyncControl>;
 
 export const emptyBody = (): Component => new Container();
 
@@ -100,9 +106,9 @@ const rawResultSection = (theme: Theme, text: string, isError: boolean): Compone
     new Text(theme.fg(isError ? "error" : "toolOutput", text), 0, 0),
   );
 
-export function callBody<Args>(
+export function callBody(
   header: ToolHeader,
-  args: Args,
+  args: QuestionnaireArgs,
   theme: Theme,
   context: Pick<RenderContext, "expanded" | "state">,
 ): Component {

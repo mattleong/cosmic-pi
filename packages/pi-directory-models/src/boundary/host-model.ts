@@ -27,13 +27,9 @@ export class DirectoryModelHostError extends Schema.TaggedError<DirectoryModelHo
 const hostError = (operation: string, message: string) => () =>
   new DirectoryModelHostError({ operation, message });
 
-export function captureThinkingLevel<ValueInput>(value: ValueInput): ThinkingLevel | undefined {
-  return decodeUnknownOrUndefined(ThinkingLevelSchema, value);
-}
+export const captureThinkingLevel = decodeUnknownOrUndefined(ThinkingLevelSchema);
 
-export function captureSelectedModel<ValueInput>(value: ValueInput): SelectedModel | undefined {
-  return decodeUnknownOrUndefined(SelectedModelSchema, value);
-}
+export const captureSelectedModel = decodeUnknownOrUndefined(SelectedModelSchema);
 
 export function captureContextModel(ctx: ExtensionContext): SelectedModel | undefined {
   return invokeHostCallback(() => captureSelectedModel(ctx.model), undefined);

@@ -1,3 +1,4 @@
+import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
@@ -18,6 +19,15 @@ import {
   type ProfileId,
   type ProfileRoute,
 } from "../profiles/model.ts";
+import {
+  denseElements,
+  ownDataProperty,
+  ownKeysAre,
+  probeFields,
+  probeList,
+  type ProbedFields,
+  type ProbedList,
+} from "./probe.ts";
 
 export const SUBAGENT_CONFIG_BASENAME = "pi-subagents.json";
 export const SUBAGENT_CONFIG_VERSION = 6;
@@ -97,26 +107,24 @@ export const DEFAULT_SUBAGENT_NESTING_POLICY: SubagentNestingPolicy = Object.fre
 
 const NESTING_KEYS = new Set(["maxDirectChildren", "maxDepth"]);
 
-const decodedRecord = <ValueInput>(value: ValueInput) =>
-  invokeHostCallback(() => (Predicate.isObject(value) ? value : undefined), undefined);
-
-const ownKeysAre = <Fields extends object>(record: Fields, allowed: ReadonlySet<string>): boolean =>
-  invokeHostCallback(() => Object.keys(record).every((key) => allowed.has(key)), false);
-
 const nullPrototypeRecord = <Value>() => {
   const record: Record<string, Value> = {};
   Object.setPrototypeOf(record, null);
   return record;
 };
 
-export const decodeSubagentNesting = <ValueInput>(
-  value: ValueInput,
-): SubagentNestingPolicy | undefined => {
-  const record = decodedRecord(value);
-  if (!record || !ownKeysAre(record, NESTING_KEYS)) return undefined;
-  const decoded = decodeUnknownOrUndefined(SubagentNestingSchema, record);
+const decodeNestingFields = decodeUnknownOrUndefined(SubagentNestingSchema);
+
+const nestingFromFields = (record: ProbedFields): SubagentNestingPolicy | undefined => {
+  if (!ownKeysAre(record, NESTING_KEYS)) return undefined;
+  const decoded = decodeNestingFields(record);
   return decoded && Object.freeze({ ...decoded });
 };
+
+export const decodeSubagentNesting = flow(
+  probeFields,
+  (record) => record && nestingFromFields(record),
+);
 
 const CandidateContractSchema = Schema.Struct({
   host: Schema.Literals(PROFILE_CANDIDATE_HOSTS),
@@ -128,16 +136,11 @@ const CandidateContractSchema = Schema.Struct({
   openaiFastMode: Schema.optional(Schema.Boolean),
   closeOnReport: Schema.optional(Schema.Literal(true)),
 });
+const decodeCandidateContract = decodeUnknownOrUndefined(CandidateContractSchema);
 
-const readField = <Fields extends object>(
-  record: Fields,
-  key: string,
-  path: string,
-  diagnostics: string[],
-) => {
+const readField = (record: ProbedFields, key: string, path: string, diagnostics: string[]) => {
   try {
-    if (!Predicate.isObject(record) || !Object.hasOwn(record, key))
-      return { present: false as const };
+    if (!Object.hasOwn(record, key)) return { present: false as const };
     return { present: true as const, value: record[key] };
   } catch {
     diagnostics.push(path);
@@ -145,56 +148,12 @@ const readField = <Fields extends object>(
   }
 };
 
-type OwnDataProperty =
-  | { readonly valid: true; readonly present: false }
-  | { readonly valid: true; readonly present: true; readonly value: unknown }
-  | { readonly valid: false };
-
-export const ownDataProperty = <ValueInput>(value: ValueInput, key: string): OwnDataProperty =>
-  invokeHostCallback(
-    (): OwnDataProperty => {
-      if (!Predicate.isObjectKeyword(value)) return { valid: true, present: false };
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor) return { valid: true, present: false };
-      return "value" in descriptor
-        ? { valid: true, present: true, value: descriptor.value }
-        : { valid: false };
-    },
-    { valid: false },
-  );
-
-export const ownDenseArray = <ValueInput>(
-  value: ValueInput,
-  maxLength: number,
-): ReadonlyArray<unknown> | undefined =>
-  invokeHostCallback(() => {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
-    const length = ownDataProperty(value, "length");
-    if (
-      !length.valid ||
-      !length.present ||
-      !Predicate.isNumber(length.value) ||
-      !Number.isSafeInteger(length.value) ||
-      length.value < 0 ||
-      length.value > maxLength ||
-      Reflect.ownKeys(value).length !== length.value + 1
-    )
-      return undefined;
-    const elements: unknown[] = [];
-    for (let index = 0; index < length.value; index += 1) {
-      const element = ownDataProperty(value, String(index));
-      if (!element.valid || !element.present) return undefined;
-      elements.push(element.value);
-    }
-    return elements;
-  }, undefined);
-
 const CANDIDATE_KEYS: ReadonlyArray<string> = [...PROFILE_CANDIDATE_BASE_KEYS, "openaiFastMode"];
 const CANDIDATE_KEY_SET = new Set(CANDIDATE_KEYS);
 const OPTIONAL_CANDIDATE_KEYS = new Set(["closeOnReport", "openaiFastMode"]);
 
-const candidateFields = <Fields extends object>(record: Fields) => {
-  const values: Array<readonly [string, unknown]> = [];
+const candidateFields = (record: ProbedFields) => {
+  const values: Array<readonly [string, ProbedFields[string]]> = [];
   let decodable = true;
   for (const key of CANDIDATE_KEYS) {
     const field = ownDataProperty(record, key);
@@ -204,53 +163,49 @@ const candidateFields = <Fields extends object>(record: Fields) => {
   return { decodable, values };
 };
 
-export const decodeDeclaredProfileCandidate = <ValueInput>(
-  value: ValueInput,
+const declaredCandidateFromFields = (
+  record: ProbedFields,
 ): DeclaredProfileCandidate | undefined => {
-  const record = decodedRecord(value);
-  if (!record || !ownKeysAre(record, CANDIDATE_KEY_SET)) return undefined;
+  if (!ownKeysAre(record, CANDIDATE_KEY_SET)) return undefined;
   const { decodable, values } = candidateFields(record);
-  const decoded = decodable
-    ? decodeUnknownOrUndefined(CandidateContractSchema, Object.fromEntries(values))
-    : undefined;
+  const decoded = decodable ? decodeCandidateContract(Object.fromEntries(values)) : undefined;
   return decoded &&
     profileCandidateValidationIssues(normalizeProfileCandidate(decoded)).length === 0
     ? decoded
     : undefined;
 };
 
-export const decodeProfileCandidate = <ValueInput>(
-  value: ValueInput,
-): ProfileCandidate | undefined => {
-  const declared = decodeDeclaredProfileCandidate(value);
-  return declared && normalizeProfileCandidate(declared);
-};
+export const decodeDeclaredProfileCandidate = flow(
+  probeFields,
+  (record) => record && declaredCandidateFromFields(record),
+);
 
-export const decodeProfileRoute = <ValueInput>(value: ValueInput): ProfileRoute | undefined =>
+export const decodeProfileCandidate = flow(
+  decodeDeclaredProfileCandidate,
+  (declared): ProfileCandidate | undefined => declared && normalizeProfileCandidate(declared),
+);
+
+const routeFromFields = (record: ProbedFields): ProfileRoute | undefined =>
   invokeHostCallback(() => {
-    if (!Predicate.isObject(value)) return undefined;
-    const keys = Reflect.ownKeys(value);
-    const field = ownDataProperty(value, "candidates");
-    const inputs =
+    const keys = Reflect.ownKeys(record);
+    const field = ownDataProperty(record, "candidates");
+    const list =
       keys.length === 1 && keys[0] === "candidates" && field.valid && field.present
-        ? ownDenseArray(field.value, MAX_PROFILE_CANDIDATES)
+        ? probeList(field.value)
         : undefined;
+    const inputs = list && denseElements(list, MAX_PROFILE_CANDIDATES);
     const candidates = inputs?.map((input) => decodeProfileCandidate(input));
     return candidates?.every(Predicate.isNotUndefined) ? { candidates } : undefined;
   }, undefined);
 
-const decodeRoute = <ValueInput>(
-  value: ValueInput,
+export const decodeProfileRoute = flow(probeFields, (record) => record && routeFromFields(record));
+
+const routeFromList = (
+  list: ProbedList,
   path: string,
   diagnostics: string[],
 ): DeclaredProfileRoute | undefined => {
-  if (value === "disabled") return "disabled";
-  const length = invokeHostCallback(() => (Array.isArray(value) ? value.length : -1), Number.NaN);
-  if (length === -1) {
-    const candidate = decodeProfileCandidate(value);
-    if (!candidate) diagnostics.push(path);
-    return candidate;
-  }
+  const length = invokeHostCallback(() => list.length, Number.NaN);
   if (!(length > 0 && length <= MAX_PROFILE_CANDIDATES)) {
     diagnostics.push(
       length > MAX_PROFILE_CANDIDATES ? `${path}[${MAX_PROFILE_CANDIDATES}+]` : path,
@@ -258,14 +213,32 @@ const decodeRoute = <ValueInput>(
     return undefined;
   }
   const candidates = Array.from({ length }, (_, index) => {
-    const candidate = invokeHostCallback(
-      () => (Array.isArray(value) ? decodeProfileCandidate(value[index]) : undefined),
-      undefined,
-    );
+    const candidate = invokeHostCallback(() => decodeProfileCandidate(list[index]), undefined);
     if (!candidate) diagnostics.push(`${path}[${index}]`);
     return candidate;
   });
   return candidates.every(Predicate.isNotUndefined) ? candidates : undefined;
+};
+
+const decodeRouteField = (
+  record: ProbedFields,
+  id: ProfileId,
+  path: string,
+  diagnostics: string[],
+):
+  | { readonly present: false }
+  | { readonly present: true; readonly route?: DeclaredProfileRoute } => {
+  const field = readField(record, id, path, diagnostics);
+  if (!field.present) return { present: false };
+  if (field.value === "disabled") return { present: true, route: "disabled" };
+  const list = probeList(field.value);
+  if (list) {
+    const route = routeFromList(list, path, diagnostics);
+    return route === undefined ? { present: true } : { present: true, route };
+  }
+  const candidate = decodeProfileCandidate(field.value);
+  if (!candidate) diagnostics.push(path);
+  return candidate === undefined ? { present: true } : { present: true, route: candidate };
 };
 
 interface DecodedProfiles {
@@ -273,28 +246,20 @@ interface DecodedProfiles {
   readonly invalidRoutes: ReadonlyArray<ProfileId>;
 }
 
-const decodeProfiles = <ValueInput>(
-  value: ValueInput,
+const profilesFromFields = (
+  record: ProbedFields,
   path: string,
   diagnostics: string[],
-): DecodedProfiles | undefined => {
-  const decodedProfiles = decodedRecord(value);
-  if (!decodedProfiles) {
-    diagnostics.push(path);
-    return undefined;
-  }
+): DecodedProfiles => {
   const profiles: Partial<Record<ProfileId, DeclaredProfileRoute>> = {};
   const invalidRoutes: ProfileId[] = [];
   for (const id of PROFILE_IDS) {
-    const routePath = `${path}.${id}`;
-    const field = readField(decodedProfiles, id, routePath, diagnostics);
+    const field = decodeRouteField(record, id, `${path}.${id}`, diagnostics);
     if (!field.present) continue;
-    const route = decodeRoute(field.value, routePath, diagnostics);
-    if (route === undefined) invalidRoutes.push(id);
-    else profiles[id] = route;
+    if (field.route === undefined) invalidRoutes.push(id);
+    else profiles[id] = field.route;
   }
-  if (!ownKeysAre(decodedProfiles, new Set<string>(PROFILE_IDS)))
-    diagnostics.push(`${path}.<unknown>`);
+  if (!ownKeysAre(record, new Set<string>(PROFILE_IDS))) diagnostics.push(`${path}.<unknown>`);
   return { profiles, invalidRoutes };
 };
 
@@ -314,14 +279,35 @@ const EMPTY_BODY: DecodedBody = Object.freeze({
   invalidDefaultProfileSet: false,
 });
 
-const decodeProfileSets = <ValueInput>(
-  value: ValueInput,
+const decodeProfileSet = (
+  record: ProbedFields,
+  name: string,
+  setPath: string,
+  diagnostics: string[],
+): DecodedProfiles | undefined => {
+  const field = readField(record, name, setPath, diagnostics);
+  const setRecord = field.present ? probeFields(field.value) : undefined;
+  if (!setRecord || !ownKeysAre(setRecord, SET_KEYS)) {
+    diagnostics.push(setPath);
+    return undefined;
+  }
+  const profilesPath = `${setPath}.profiles`;
+  const profilesField = readField(setRecord, "profiles", profilesPath, diagnostics);
+  const profilesRecord = profilesField.present ? probeFields(profilesField.value) : undefined;
+  if (!profilesRecord) {
+    diagnostics.push(profilesPath);
+    return undefined;
+  }
+  return profilesFromFields(profilesRecord, profilesPath, diagnostics);
+};
+
+const decodeProfileSets = (
+  record: ProbedFields | undefined,
   path: string,
   diagnostics: string[],
 ): Pick<DecodedBody, "invalidProfileSetRoutes" | "invalidProfileSets"> & {
   readonly sets: Record<string, SubagentProfileSet>;
 } => {
-  const record = decodedRecord(value);
   const names = record && invokeHostCallback(() => Object.keys(record), undefined);
   if (!record || !names || names.length > MAX_PROFILE_SETS) {
     diagnostics.push(
@@ -338,19 +324,7 @@ const decodeProfileSets = <ValueInput>(
       diagnostics.push(`${setPath}.name`);
       return;
     }
-    const field = readField(record, name, setPath, diagnostics);
-    const setRecord = field.present ? decodedRecord(field.value) : undefined;
-    if (!setRecord || !ownKeysAre(setRecord, SET_KEYS)) {
-      diagnostics.push(setPath);
-      invalidProfileSets.push(name);
-      return;
-    }
-    const profilesPath = `${setPath}.profiles`;
-    const profilesField = readField(setRecord, "profiles", profilesPath, diagnostics);
-    if (!profilesField.present) diagnostics.push(profilesPath);
-    const decoded = profilesField.present
-      ? decodeProfiles(profilesField.value, profilesPath, diagnostics)
-      : undefined;
+    const decoded = decodeProfileSet(record, name, setPath, diagnostics);
     if (!decoded) {
       invalidProfileSets.push(name);
       return;
@@ -372,8 +346,8 @@ const ROOT_KEYS = new Set([
   ...SUBAGENT_FEATURE_TOGGLES,
 ]);
 
-const readRootField = <S extends Schema.Constraint, Fields extends object>(
-  rawRoot: Fields,
+const readRootField = <S extends Schema.Constraint>(
+  rawRoot: ProbedFields,
   key: string,
   scope: string,
   diagnostics: string[],
@@ -387,11 +361,7 @@ const readRootField = <S extends Schema.Constraint, Fields extends object>(
   return undefined;
 };
 
-const decodeDefaultProfileSet = <Fields extends object>(
-  rawRoot: Fields,
-  scope: string,
-  diagnostics: string[],
-) => {
+const decodeDefaultProfileSet = (rawRoot: ProbedFields, scope: string, diagnostics: string[]) => {
   const defaultPath = `${scope}.defaultProfileSet`;
   const defaultField = readField(rawRoot, "defaultProfileSet", defaultPath, diagnostics);
   const defaultProfileSet =
@@ -403,8 +373,8 @@ const decodeDefaultProfileSet = <Fields extends object>(
   return { defaultProfileSet, invalidDefaultProfileSet };
 };
 
-const decodeCurrentBody = <Fields extends object>(
-  rawRoot: Fields,
+const decodeCurrentBody = (
+  rawRoot: ProbedFields,
   scope: string,
   diagnostics: string[],
 ): DecodedBody => {
@@ -422,7 +392,7 @@ const decodeCurrentBody = <Fields extends object>(
   }
   const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
   const decoded = setsField.present
-    ? decodeProfileSets(setsField.value, `${scope}.profileSets`, diagnostics)
+    ? decodeProfileSets(probeFields(setsField.value), `${scope}.profileSets`, diagnostics)
     : undefined;
   const { defaultProfileSet, invalidDefaultProfileSet } = decodeDefaultProfileSet(
     rawRoot,
@@ -442,8 +412,8 @@ const decodeCurrentBody = <Fields extends object>(
   };
 };
 
-const decodeRootNesting = <Fields extends object>(
-  rawRoot: Fields,
+const decodeRootNesting = (
+  rawRoot: ProbedFields,
   scope: string,
   supported: boolean,
   diagnostics: string[],
@@ -462,13 +432,12 @@ const declaresMissingDefault = (file: SubagentConfigFile): boolean => {
   );
 };
 
-export function decodeSubagentConfig<InputInput>(
-  input: InputInput,
-  scope = "config",
-): DecodedSubagentConfig {
+const decodeConfigRoot = (
+  decodedRoot: ProbedFields | undefined,
+  scope: string,
+): DecodedSubagentConfig => {
   const diagnostics: string[] = [];
-  const decodedRoot = decodedRecord(input);
-  const rawRoot = decodedRoot ?? {};
+  const rawRoot: ProbedFields = decodedRoot ?? {};
   if (!decodedRoot) diagnostics.push(scope);
   const rawVersion = readField(rawRoot, "version", `${scope}.version`, diagnostics).value;
   const version = isSupportedConfigVersion(rawVersion) ? rawVersion : undefined;
@@ -498,4 +467,9 @@ export function decodeSubagentConfig<InputInput>(
     invalidDefaultProfileSet: body.invalidDefaultProfileSet || missingDefault,
     unsupportedVersion,
   };
-}
+};
+
+export const subagentConfigDecoder = (scope: string) =>
+  flow(probeFields, (root) => decodeConfigRoot(root, scope));
+
+export const decodeSubagentConfig = subagentConfigDecoder("config");

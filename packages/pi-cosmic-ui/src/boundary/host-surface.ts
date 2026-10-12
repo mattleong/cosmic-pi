@@ -221,5 +221,6 @@ export const openCommandSurface = (
   openOwnedSurfacePromise<undefined>(ctx, { ...options, closedValue: undefined }).then(
     (outcome) => {
       if (outcome._tag === "Failed") throw outcome.cause;
+      return undefined;
     },
   );

@@ -90,7 +90,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
           : this.options.saveDraft(this.options.target, profile, next),
       )
       .then((result) => {
-        if (this.disposed) return;
+        if (this.disposed) return undefined;
         this.busy = false;
         this.candidateIndex = preferredCandidateIndex;
         if ("refreshError" in result) {
@@ -118,6 +118,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
         }
         this.selectField(field);
         this.renderSoon();
+        return undefined;
       })
       .catch((cause: unknown) => {
         if (this.disposed) return;

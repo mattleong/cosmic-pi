@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as JsonSchema from "effect/JsonSchema";
@@ -57,6 +58,11 @@ const execute = (
   signal?: AbortSignal,
 ) => tools.find((tool) => tool.name === name)!.execute("call", input, signal, undefined, ctx);
 const call = (...args: Parameters<typeof execute>) => Effect.promise(() => execute(...args));
+const expectDeeplyFrozen = (value: AgentToolResult["structuredContent"]): void => {
+  if (!Predicate.isObject(value)) return;
+  expect(Object.isFrozen(value)).toBe(true);
+  Object.values(value).forEach(expectDeeplyFrozen);
+};
 const declaredAccepts = (
   tool: ReturnType<typeof registered>[number],
   value: Schema.Json | undefined,
@@ -278,13 +284,7 @@ describe("registered questionnaire structured results", () => {
           call(tools, "ask_user_async_control", { action: "await", requestId: request.requestId }),
         ]);
         const before = results.map((result) => decode(result.structuredContent));
-        const checkFrozen = <Value>(value: Value): void => {
-          if (Predicate.isObject(value)) {
-            expect(Object.isFrozen(value)).toBe(true);
-            Object.values(value).forEach(checkFrozen);
-          }
-        };
-        results.forEach((result) => checkFrozen(result.structuredContent));
+        results.forEach((result) => expectDeeplyFrozen(result.structuredContent));
         expect(Object.isFrozen(outcome)).toBe(false);
         expect(Object.isFrozen(answer.values)).toBe(false);
         answer.note = "Changed";
@@ -292,8 +292,8 @@ describe("registered questionnaire structured results", () => {
         request.requestId = "changed";
         requests.length = 0;
         expect(results.map((result) => decode(result.structuredContent))).toEqual(before);
-        expect(results[0]!.details).toBe(outcome);
-        expect(results[1]!.details).toBe(request);
+        expect(results[0].details).toBe(outcome);
+        expect(results[1].details).toBe(request);
       }),
   );
 

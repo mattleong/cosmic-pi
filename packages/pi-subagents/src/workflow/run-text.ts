@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import {
   countLabel,
   formatCost,
@@ -105,6 +106,7 @@ export const workflowWaitingText = (waiting: WorkflowAgentWaiting | undefined): 
     case "writer":
       return `waiting for ${waiting.paused ? "paused " : ""}writer ${waiting.name}`;
   }
+  return absurd(waiting);
 };
 
 export const workflowWaitingLine = (run: WorkflowRunView): string | undefined => {
@@ -274,6 +276,7 @@ export const workflowRestart = (
         ? undefined
         : { file: scriptPath, argument: `scriptPath: ${JSON.stringify(scriptPath)}` };
   }
+  return absurd(source);
 };
 
 export const workflowScriptLine = (run: WorkflowRunView): string | undefined => {

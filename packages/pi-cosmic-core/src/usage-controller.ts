@@ -135,6 +135,12 @@ interface UsageRefreshController<
   ) => Effect.Effect<A, E2>;
 }
 
+const mergeProjection = <Resolved, Snapshot, P extends UsageProjectionBase<Resolved, Snapshot>>(
+  current: P,
+  base: Partial<UsageProjectionBase<Resolved, Snapshot>>,
+  patch?: Partial<P>,
+): P => ({ ...current, ...base, ...patch });
+
 export const makeUsageRefreshController = <
   P extends UsageProjectionBase<Resolved, Snapshot>,
   Resolved extends UsageControllerConfig,
@@ -160,11 +166,7 @@ export const makeUsageRefreshController = <
     const authPath = path.join(agentDir, "auth.json");
     const projectTrusted = options.projectTrusted === true;
     const config = yield* store.resolveConfig(cwd, agentDir, projectTrusted);
-    const mergeState = (
-      current: P,
-      base: Partial<UsageProjectionBase<Resolved, Snapshot>>,
-      patch?: Partial<P>,
-    ): P => ({ ...current, ...base, ...patch });
+    const mergeState = mergeProjection<Resolved, Snapshot, P>;
     const state = yield* makeFrozenProjection<P, P>(
       mergeState(options.initialProjection(), { config, authPath }),
       (current) => current,

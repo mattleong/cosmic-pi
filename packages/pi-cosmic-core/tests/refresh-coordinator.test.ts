@@ -8,7 +8,7 @@ import {
   makeRefreshCoordinator,
   type RefreshRequest,
 } from "../src/coordination/refresh-coordinator.ts";
-import { interruptingScheduler } from "../testing.ts";
+import { interruptingScheduler, yieldUntil } from "../testing.ts";
 
 const gated = () =>
   Effect.gen(function* () {
@@ -45,7 +45,7 @@ describe("RefreshCoordinator", () => {
             }),
           )
           .pipe(Effect.forkScoped);
-        for (let turn = 0; turn < 20 && !reused; turn++) yield* Effect.yieldNow;
+        yield* yieldUntil(() => reused, 20).pipe(Effect.ignore);
         expect(reused, `interruption checkpoint ${interruptAt}`).toBe(true);
         yield* Fiber.join(retry);
       }
@@ -138,16 +138,18 @@ describe("RefreshCoordinator", () => {
       const releaseFollowUp = yield* Deferred.make<void>();
       const requests: RefreshRequest[] = [];
       const operation = (request: RefreshRequest): Effect.Effect<void, string> =>
-        Effect.gen(function* () {
+        Effect.suspend(() => {
           requests.push(request);
-          if (requests.length === 1) {
-            yield* Deferred.succeed(firstStarted, undefined);
-            yield* Deferred.await(releaseFirst);
-          } else if (requests.length === 2) {
-            yield* Deferred.succeed(followUpStarted, undefined);
-            yield* Deferred.await(releaseFollowUp);
-            return yield* Effect.fail("follow-up-boom");
-          }
+          if (requests.length === 1)
+            return Deferred.succeed(firstStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseFirst)),
+            );
+          if (requests.length === 2)
+            return Deferred.succeed(followUpStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseFollowUp)),
+              Effect.andThen(Effect.fail("follow-up-boom")),
+            );
+          return Effect.void;
         });
 
       const owner = yield* coordinator.run({}, operation).pipe(Effect.exit, Effect.forkScoped);

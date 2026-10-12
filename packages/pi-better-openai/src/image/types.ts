@@ -1,4 +1,3 @@
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   IMAGE_OUTPUT_FORMATS,
@@ -91,23 +90,19 @@ export type CodexImageResult = {
   action: ImageAction;
   outputFormat: ImageOutputFormat;
 };
-export type CodexImageDetails = Omit<CodexImageResult, "data">;
-
-const isOptionalString = <Value>(value: Value): value is Value & (string | undefined) =>
-  value === undefined || Predicate.isString(value);
-
-export const isCodexImageDetails = <Value>(value: Value): value is Value & CodexImageDetails =>
-  Predicate.isObject(value) &&
-  Predicate.isString(value.id) &&
-  Predicate.isString(value.status) &&
-  Predicate.isString(value.prompt) &&
-  isOptionalString(value.revisedPrompt) &&
-  Predicate.isString(value.mimeType) &&
-  isOptionalString(value.savedPath) &&
-  Predicate.isString(value.model) &&
-  isOptionalString(value.imageModel) &&
-  Predicate.isString(value.action) &&
-  Predicate.isString(value.outputFormat);
+export const CodexImageDetailsSchema = Schema.Struct({
+  id: Schema.String,
+  status: Schema.String,
+  prompt: Schema.String,
+  revisedPrompt: Schema.optional(Schema.String),
+  mimeType: Schema.String,
+  savedPath: Schema.optional(Schema.String),
+  model: Schema.String,
+  imageModel: Schema.optional(Schema.String),
+  action: Schema.Literals(IMAGE_ACTIONS),
+  outputFormat: ImageOutputFormatSchema,
+});
+export type CodexImageDetails = typeof CodexImageDetailsSchema.Type;
 
 export type ExtractedImageResult = Omit<
   CodexImageResult,

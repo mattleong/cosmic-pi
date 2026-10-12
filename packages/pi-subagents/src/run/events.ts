@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import type { BackendEvent, BackendHandle } from "../backend/model.ts";
@@ -10,6 +11,7 @@ import type { RunSettlement } from "./settlement.ts";
 import type { RunStructuredResults } from "./structured-result.ts";
 import {
   bashCommandMayMutate,
+  decodeToolArguments,
   MAX_OBSERVED_WRITE_PATHS,
   MAX_WRITE_CLAIM_VIOLATIONS,
   observeFileWrite,
@@ -162,7 +164,8 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     event: Extract<BackendEvent, { readonly type: "tool_started" }>,
   ) =>
     Effect.suspend(() => {
-      const observed = observeFileWrite(event.toolName, event.args);
+      const args = decodeToolArguments(event.args);
+      const observed = observeFileWrite(event.toolName, args);
       const observedPaths =
         observed === undefined
           ? []
@@ -181,7 +184,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               (path) =>
                 path === OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER || !writeClaimContains(claims, path),
             );
-      const bashHint = bashCommandMayMutate(event.toolName, event.args);
+      const bashHint = bashCommandMayMutate(event.toolName, args);
       const violationMessage =
         violatingPaths.length > 0
           ? `Writer ${record.view.id} used ${event.toolName} outside its cooperative claims: ${violatingPaths.join(", ")}. Containment has started, and new writer admission is paused.`
@@ -283,6 +286,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       case "exit":
         return handleExit(record, event);
     }
+    return absurd(event);
   };
 
   const handleViewEvent = (
@@ -381,6 +385,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         }));
       }
     }
+    return absurd(event);
   };
 
   const handleEvent = (

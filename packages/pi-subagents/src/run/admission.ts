@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import * as Effect from "effect/Effect";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { firstWriteClaimConflict } from "../domain/write-claims.ts";
@@ -95,7 +96,8 @@ const writerPoolSettlesAlone = (pool: WriterPoolEntry | undefined): boolean =>
   pool?.admissionPaused !== true && (pool?.state === "releasing" || pool?.state === "failed");
 
 const writerPoolUnavailableMessage = (pool: WriterPoolEntry | undefined): string => {
-  switch (pool?.state) {
+  const state = pool?.state;
+  switch (state) {
     case "quarantined":
       return "Shared-cwd writer ownership remains quarantined because cleanup could not be confirmed.";
     case "failed":
@@ -109,6 +111,7 @@ const writerPoolUnavailableMessage = (pool: WriterPoolEntry | undefined): string
     case "preparing":
       return `New writers are paused for this cwd after a write-claim violation.${pool?.pauseReason ? ` ${pool.pauseReason}` : ""}`;
   }
+  return absurd(state);
 };
 
 interface WriterConflict {

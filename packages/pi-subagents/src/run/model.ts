@@ -15,7 +15,7 @@ import type {
 } from "../profiles/model.ts";
 import type { ResultContract } from "../domain/result-contract.ts";
 
-export type RuntimeApiKey = Redacted.Redacted<string>;
+export type RuntimeApiKey = Redacted.Redacted;
 
 export const SUBAGENT_RUN_STATES = [
   "starting",

@@ -581,7 +581,7 @@ describe("builtin factory compact integration", () => {
     ]) {
       const tool = builtin("write");
       const ctx = context();
-      const output = result<undefined>("applied");
+      const output = result("applied");
       Object.assign(output, { details });
       const knownNew = details === fresh;
       for (const expanded of [false, true, false, true]) {
@@ -595,7 +595,7 @@ describe("builtin factory compact integration", () => {
   test("quiet write size guards preserve the original expanded skip reason and result", () => {
     const tool = builtin("write");
     const ctx = context();
-    const output = result<undefined>("applied");
+    const output = result("applied");
     Object.assign(output, {
       details: {
         codePreviewBeforeWrite: {
@@ -642,9 +642,7 @@ describe("builtin factory compact integration", () => {
                 },
               },
             )
-          : result<undefined>(
-              "selectedContent\n\n[73 more lines in file. Use offset=6 to continue.]",
-            );
+          : result("selectedContent\n\n[73 more lines in file. Use offset=6 to continue.]");
         const before = structuredClone(output);
         const page = summary("read", readArgs, output)?.issues?.[0]?.message;
         expect(page).toBeTruthy();
@@ -664,7 +662,7 @@ describe("builtin factory compact integration", () => {
     (mode) => {
       setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
       const edit = builtin("edit");
-      const editOutput = result<undefined>(
+      const editOutput = result(
         "No changes made to /project/file.ts. The replacements produced identical content.",
       );
       const refusal = summary("edit", args, editOutput, "settled", { isError: true })?.issues?.[0];

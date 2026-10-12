@@ -105,6 +105,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     const response = yield* rpc({ type: "get_session_stats" });
     const usage = accountUsage.account(response.data);
     if (usage) yield* offer({ type: "usage", usage });
+    return undefined;
   });
   const requireUsageBaseline = Effect.suspend(() =>
     accountUsage.hasBaseline()

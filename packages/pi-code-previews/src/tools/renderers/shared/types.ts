@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import type { DiffSummary } from "../../../diff/summary";
+import type { HostObject } from "../../../shared/untrusted-value";
 
 type HostToolRenderContext = Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
 
@@ -27,7 +28,7 @@ export interface RendererState {
     readonly source: string;
     readonly diffs: Array<EditProposedDiff | undefined>;
   };
-  codePreviewWriteBeforeSnapshot?: unknown;
+  codePreviewWriteBeforeSnapshot?: HostObject | undefined;
   codePreviewResultDiffShown?: boolean;
   codePreviewTimingStartedAt?: number | undefined;
   codePreviewTimingEndedAt?: number | undefined;

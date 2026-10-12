@@ -8,12 +8,13 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import * as Equal from "effect/Equal";
+import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import { decodeOpenAICompactionDetails } from "./protocol.ts";
 
 export const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
-const asJson = <Value>(value: Value) => decodeJson(encodeJson(value));
+const asJson = flow(encodeJson, decodeJson);
 
 export function hasExactPrefix(actual: readonly unknown[], expected: readonly unknown[]): boolean {
   return (

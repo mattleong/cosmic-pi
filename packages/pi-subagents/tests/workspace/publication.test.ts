@@ -1,5 +1,5 @@
-const { execFileSync } = process.getBuiltinModule("node:child_process")!;
-const fs = process.getBuiltinModule("node:fs")!;
+const { execFileSync } = process.getBuiltinModule("node:child_process");
+const fs = process.getBuiltinModule("node:fs");
 import { tmpdir } from "node:os";
 const nodePath = process.getBuiltinModule("node:path");
 import { fileURLToPath } from "node:url";

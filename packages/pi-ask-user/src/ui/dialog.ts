@@ -73,7 +73,7 @@ export class AskUserDialog implements Focusable {
   private readonly preview: PreviewPane;
   private readonly keymap = new FullScreenKeymap();
   private readonly viewport = new DialogViewport();
-  private _focused = false;
+  private hasFocus = false;
   private readonly matchesKeybinding = (input: string, id: FullScreenSelectionKeybindingId) =>
     this.options.keybindings.matches(input, id);
 
@@ -87,11 +87,11 @@ export class AskUserDialog implements Focusable {
   }
 
   get focused(): boolean {
-    return this._focused;
+    return this.hasFocus;
   }
 
   set focused(value: boolean) {
-    this._focused = value;
+    this.hasFocus = value;
     this.editor.focused = value && this.input !== undefined;
   }
 
@@ -160,7 +160,7 @@ export class AskUserDialog implements Focusable {
     this.input = { kind, question };
     this.inputError = undefined;
     this.editor.setText(value);
-    this.editor.focused = this._focused;
+    this.editor.focused = this.hasFocus;
     this.refresh();
   }
 
@@ -209,6 +209,7 @@ export class AskUserDialog implements Focusable {
       .editExternally(this.editor.getExpandedText())
       .then((value) => {
         if (active && this.input === active && value !== undefined) this.editor.setText(value);
+        return undefined;
       })
       .catch(() => {
         if (active && this.input === active)

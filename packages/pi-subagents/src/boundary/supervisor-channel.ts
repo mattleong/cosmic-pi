@@ -168,10 +168,10 @@ class SupervisorPrivateStateError extends Schema.TaggedError<SupervisorPrivateSt
   },
 ) {}
 
-const privateStateError = <ErrorInput>(operation: string, error: ErrorInput) =>
+const privateStateError = (operation: string, cause: unknown) =>
   new SupervisorPrivateStateError({
     operation,
-    code: nodeErrorCode(error) ?? "UNKNOWN",
+    code: nodeErrorCode(cause) ?? "UNKNOWN",
   });
 
 const privateStateOperation = <Value>(
@@ -261,7 +261,15 @@ const removePrivateState = ({
         code: "UNEXPECTED_ENTRIES",
       });
     yield* privateStateOperation("remove-channel-state", () => fs.rmdir(stateDirectory));
+    return undefined;
   });
+
+const cryptoUnavailable = () =>
+  channelError(
+    "authenticate",
+    "crypto_unavailable",
+    "Supervisor authentication could not be prepared.",
+  );
 
 const acquireNodeChannelEffect = (
   options: SupervisorChannelLayerOptions,
@@ -289,15 +297,10 @@ const acquireNodeChannelEffect = (
           yield* Scope.close(acquisition.internalScope, Exit.void).pipe(Effect.ignoreCause);
         if (acquisition.ownedState)
           yield* removePrivateState(acquisition.ownedState).pipe(Effect.ignore);
+        return undefined;
       });
 
       return yield* Effect.gen(function* () {
-        const cryptoUnavailable = () =>
-          channelError(
-            "authenticate",
-            "crypto_unavailable",
-            "Supervisor authentication could not be prepared.",
-          );
         const token = yield* Effect.try({
           try: () => Redacted.make(SupervisorAuthTokenSchema.make(synchronousRandomHex(32))),
           catch: cryptoUnavailable,

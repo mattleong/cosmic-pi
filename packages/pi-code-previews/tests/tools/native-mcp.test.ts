@@ -15,6 +15,7 @@ import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
 import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { sha256Text, stripAnsi } from "pi-cosmic-core";
+import type { HostValue } from "../../src/shared/untrusted-value";
 
 const styleNativeMcp = (
   definition: ToolDefinition,
@@ -63,7 +64,7 @@ function resourceTool(name: ResourceTool) {
   return definition;
 }
 
-const result = <Details>(text: string, details: Details): AgentToolResult<unknown> => ({
+const result = (text: string, details: HostValue | undefined): AgentToolResult<unknown> => ({
   content: [{ type: "text", text }],
   details,
 });

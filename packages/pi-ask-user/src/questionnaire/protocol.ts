@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
-import { querySessionCapability } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, querySessionCapability } from "pi-cosmic-core";
 import { MAX_CHOICES, MAX_QUESTIONS, type AskUserRequest } from "./schema.ts";
 import {
   normalizeAskUserRequest,
@@ -120,26 +121,19 @@ const RawAnswer = Schema.Struct({
   values: Schema.optionalKey(Schema.Unknown),
   labels: Schema.optionalKey(Schema.Unknown),
 });
-const SmallLength = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(0),
-  Schema.isLessThanOrEqualTo(MAX_QUESTIONS),
-);
-const captureArray = <Input>(input: Input, maximum = MAX_QUESTIONS): unknown[] | undefined => {
-  if (!Array.isArray(input)) return undefined;
-  const items: readonly unknown[] = input;
-  const length: unknown = items.length;
-  if (!Schema.is(SmallLength)(length) || length > maximum) return undefined;
-  return Array.from({ length }, (_, index) => items[index]);
-};
-export const decodeQuestionnaireRequest = <Input>(input: Input): AskUserRequest | undefined => {
+const boundedArray = (maximum: number) =>
+  decodeUnknownOrUndefined(Schema.Array(Schema.Unknown).check(Schema.isMaxLength(maximum)));
+const captureQuestions = boundedArray(MAX_QUESTIONS);
+const captureChoices = boundedArray(MAX_CHOICES);
+
+const captureRequest = (root: typeof RawRequest.Type): AskUserRequest | undefined => {
   try {
-    const root = Schema.decodeUnknownSync(RawRequest)(input);
-    const questions = captureArray(root.questions);
+    const questions = captureQuestions(root.questions);
     if (!questions) return undefined;
     const captured = questions.map((item) => {
       const question = Schema.decodeUnknownSync(RawQuestion)(item);
       if (question.mode === "text") return question;
-      const choices = captureArray(question.choices, MAX_CHOICES);
+      const choices = captureChoices(question.choices);
       return Object.assign({}, question, {
         choices: choices?.map((choice) => Schema.decodeUnknownSync(RawChoice)(choice)),
       });
@@ -152,10 +146,10 @@ export const decodeQuestionnaireRequest = <Input>(input: Input): AskUserRequest 
     return undefined;
   }
 };
-export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome | undefined => {
+
+const captureOutcome = (root: typeof RawOutcome.Type): AskUserOutcome | undefined => {
   try {
-    const root = Schema.decodeUnknownSync(RawOutcome)(input);
-    const answers = captureArray(root.answers);
+    const answers = captureQuestions(root.answers);
     if (!answers) return undefined;
     const captured = answers.map((item) => {
       const answer = Schema.decodeUnknownSync(RawAnswer)(item);
@@ -167,8 +161,8 @@ export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome 
       }
       return answer.kind === "choices"
         ? Object.assign({}, answer, {
-            values: captureArray(answer.values, MAX_CHOICES),
-            labels: captureArray(answer.labels, MAX_CHOICES),
+            values: captureChoices(answer.values),
+            labels: captureChoices(answer.labels),
           })
         : answer;
     });
@@ -180,6 +174,13 @@ export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome 
     return undefined;
   }
 };
+
+export const decodeQuestionnaireRequest = flow(decodeUnknownOrUndefined(RawRequest), (root) =>
+  root === undefined ? undefined : captureRequest(root),
+);
+export const decodeQuestionnaireOutcome = flow(decodeUnknownOrUndefined(RawOutcome), (root) =>
+  root === undefined ? undefined : captureOutcome(root),
+);
 
 export const queryQuestionnaireRelay = (
   events: QuestionnaireEvents,

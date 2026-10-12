@@ -24,6 +24,7 @@ export function makeRunVisibility(dependencies: Pick<RunContext, "records" | "wi
         if (!records.has(callerRunId)) return yield* runNotFound(callerRunId);
         for (const id of ids)
           if (!isRunInSubtree(records, callerRunId, id)) return yield* runNotFound(id);
+        return undefined;
       }),
     );
   return { visibleList, authorizeTargets };

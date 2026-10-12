@@ -13,6 +13,7 @@ import {
   resolveCompactSummary,
   type CompactSummary,
 } from "../../src/tools/compact-summary";
+import { isSafeCompactSummary } from "../../src/tools/compact-summary-schema";
 
 const issue = (overrides: Partial<CompactIssue> = {}): CompactIssue => ({
   severity: "error",
@@ -135,8 +136,7 @@ describe("summary resolution", () => {
         children: { total: 1, entries: [{ label: "child", status: "done" }] },
       },
     ]);
-    for (const summary of malformed)
-      expect(resolveCompactSummary(summary, "settled", false)).toBeUndefined();
+    for (const summary of malformed) expect(isSafeCompactSummary(summary)).toBe(false);
   });
 
   test("passes summaries through unchanged without a Pi error", () => {

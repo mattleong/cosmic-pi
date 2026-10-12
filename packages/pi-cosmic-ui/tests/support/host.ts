@@ -29,9 +29,6 @@ export function capturedSignal(
     get onabort() {
       return source.onabort;
     },
-    set onabort(handler) {
-      source.onabort = handler;
-    },
     throwIfAborted: () => source.throwIfAborted(),
     addEventListener,
     removeEventListener,
@@ -62,7 +59,7 @@ export const eventBus = (onUnsubscribe: (name: string) => void = () => {}) => {
   const listeners = new Map<string, Set<Parameters<ExtensionAPI["events"]["on"]>[1]>>();
   const emitted: Array<{ readonly name: string; readonly data: unknown }> = [];
   const events: ExtensionAPI["events"] = {
-    emit<DataInput>(name: string, data: DataInput) {
+    emit(name, data) {
       emitted.push({ name, data });
       for (const listener of listeners.get(name) ?? []) listener(data);
     },

@@ -144,6 +144,7 @@ const makeHerdrBtwService = (
           paneId,
           "The side session is running; switch to its pane to use it",
         );
+      return undefined;
     });
 
     const launch = Effect.fn("HerdrBtwService.launch")(function* (

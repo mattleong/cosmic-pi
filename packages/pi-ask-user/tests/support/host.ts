@@ -28,6 +28,14 @@ type CustomFactory<Outcome> = (
 ) => Surface | Promise<Surface>;
 type CustomOptions = Parameters<ExtensionUIContext["custom"]>[1];
 
+const spyHide = (handle: OverlayHandle, spy: () => void): OverlayHandle => ({
+  ...handle,
+  hide: () => {
+    spy();
+    handle.hide();
+  },
+});
+
 export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => {
   const host = fakeCustomSurfaceHost({
     columns: 200,
@@ -43,20 +51,13 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
   const ownedHide = vi.fn();
   const guardHide = vi.fn();
   const createGuard = vi.fn();
-  const done = vi.fn(<Outcome>(_outcome: Outcome) => undefined);
+  const done = vi.fn(<Outcome>(outcome: Outcome): Outcome => outcome);
   const requestRender = vi.fn();
   const stop = vi.fn();
   const start = vi.fn();
   let component: Component | undefined;
   let settleOpen: SettleOpen | undefined;
   let openFailure: Error | undefined;
-  const spyHide = (handle: OverlayHandle, spy: () => void): OverlayHandle => ({
-    ...handle,
-    hide: () => {
-      spy();
-      handle.hide();
-    },
-  });
   const tui = tuiFixture({
     terminal: host.terminal,
     requestRender,

@@ -1,6 +1,9 @@
 import type { Api, AssistantMessage, AuthResult, Model } from "@earendil-works/pi-ai";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { flow } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { expect, vi } from "vitest";
 import type { SharpAdapterContract } from "../src/boundary/sharp.ts";
@@ -105,7 +108,10 @@ export const appendAssistant = (
   timestamp = 10,
 ) => manager.appendMessage(assistantMessage([{ type: "text", text }], { stopReason, timestamp }));
 
-export const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
+export const serializedSnapshot = flow(
+  Schema.encodeOption(Schema.fromJsonString(Schema.Unknown)),
+  Option.getOrElse(() => ""),
+);
 
 export const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
   Effect.promise(() =>

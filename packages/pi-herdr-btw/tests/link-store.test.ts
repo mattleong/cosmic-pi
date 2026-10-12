@@ -1,4 +1,4 @@
-import type { CustomEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { CustomEntry, ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -80,7 +80,7 @@ const harness = (initialThrow?: ThrowingOperation) => {
     if (throwing === "entries") throw new Error("entries-secret");
     return entries.map(sessionEntry);
   });
-  const appendEntry = vi.fn(<Data>(customType: string, data?: Data) => {
+  const appendEntry = vi.fn<ExtensionAPI["appendEntry"]>((customType, data) => {
     if (throwing === "append") throw new Error("append-secret");
     entries.push({ type: "custom", customType, data });
     if (throwing === "appendAfterMutation") throw new Error("append-secret");

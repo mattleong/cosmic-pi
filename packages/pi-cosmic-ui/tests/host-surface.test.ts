@@ -29,11 +29,13 @@ const capture = () => {
   };
 };
 
+const zeroHeight = () => 0;
+
 describe("owned custom surfaces", () => {
   it.effect("keeps screen bounds and allocated height live across resizes", () =>
     Effect.gen(function* () {
       const h = fakeCustomSurfaceHost();
-      let height = () => 0;
+      let height = zeroHeight;
       const fiber = yield* open(h, {
         placement: "screen",
         closedValue: undefined,

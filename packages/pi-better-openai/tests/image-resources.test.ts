@@ -151,6 +151,7 @@ describe("OpenAI image resources", () => {
       expect(
         (yield* realFs.readDirectory(directory)).filter((name) => name.endsWith(".tmp")),
       ).toEqual([]);
+      return undefined;
     }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 

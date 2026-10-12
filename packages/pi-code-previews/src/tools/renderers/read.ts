@@ -13,13 +13,15 @@ import { readResultBody } from "./shared/read-result";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
+import { hostObject } from "../../shared/untrusted-value";
 
 export function readPreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme) {
-      const path = getPathArg(args);
+      const input = hostObject(args);
+      const path = getPathArg(input);
       const lang = pathPreviewLanguage(path);
-      const range = getReadLineRange(args);
+      const range = getReadLineRange(input);
       let text = `${renderCodePreviewToolTitle("read", theme)} ${renderDisplayPath(path, cwd, theme)}`;
       if (range) text += theme.fg("warning", range);
       text += metadata(theme, [lang ? normalizePreviewLanguageAlias(lang) : undefined]);
@@ -38,7 +40,8 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
       });
       if (prelude) return prelude;
 
-      const body = readResultBody(result, renderContext.args);
+      const input = hostObject(renderContext.args);
+      const body = readResultBody(result, input);
 
       if (body.kind === "image") {
         return new Text(
@@ -58,7 +61,7 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
       return renderContentPreview({
         content,
         limit: expanded ? 0 : codePreviewSettings.readCollapsedLines,
-        lang: pathPreviewLanguage(getPathArg(renderContext.args), content),
+        lang: pathPreviewLanguage(getPathArg(input), content),
         theme,
         invalidate: renderContext.invalidate,
         firstLine,

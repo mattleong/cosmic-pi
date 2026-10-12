@@ -2,6 +2,7 @@ import { synchronousRandomUuid } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { absurd } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as RpcClient from "effect/rpc/RpcClient";
@@ -68,9 +69,9 @@ const decodeReportArguments = Schema.decodeUnknownOption(
   exactArguments,
 );
 
-export const decodeSupervisorToolCall = <ArgumentsInput>(
+export const decodeSupervisorToolCall = (
   name: string,
-  args: ArgumentsInput,
+  args: Schema.Json | undefined,
 ): SupervisorToolCall | undefined => {
   if (name === SUPERVISOR_MCP_TOOL_NAMES[3])
     return Option.getOrUndefined(
@@ -94,6 +95,8 @@ const uncertain = () =>
     message: "Supervisor RPC delivery did not settle within its bound.",
   });
 
+const ok = (text: string, isError = false): SupervisorToolResult => ({ text, isError });
+
 export const runSupervisorTool = (
   client: SupervisorToolClient,
   call: SupervisorToolCall,
@@ -107,7 +110,6 @@ export const runSupervisorTool = (
       });
     const { rpc, auth } = client;
     const requestId = SupervisorChannelIdSchema.make(synchronousRandomUuid());
-    const ok = (text: string, isError = false): SupervisorToolResult => ({ text, isError });
     switch (call.kind) {
       case "report": {
         const { deliveryId, report: text } = call;
@@ -158,6 +160,7 @@ export const runSupervisorTool = (
         return ok(contact.text);
       }
     }
+    return absurd<SupervisorToolResult>(call);
   }).pipe(
     Effect.mapError((error) =>
       error instanceof SupervisorRpcFailure || error instanceof SupervisorToolFailure

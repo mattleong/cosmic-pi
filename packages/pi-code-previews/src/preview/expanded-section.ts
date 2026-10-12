@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { fallbackArguments } from "../tools/data/args";
+import { type HostValue } from "../shared/untrusted-value";
 
 export function expandedSection(
   theme: Theme,
@@ -22,7 +23,7 @@ export function expandedSection(
   };
 }
 
-export function expandedArguments<ArgsInput>(theme: Theme, args: ArgsInput): Component {
+export function expandedArguments(theme: Theme, args: HostValue | undefined): Component {
   const lines = fallbackArguments(args);
   if (lines.length === 0) return new Container();
   const text = lines.map((line) => theme.fg("toolOutput", line)).join("\n");

@@ -179,7 +179,7 @@ class RpcClient {
     });
   }
 
-  send<ValueInput>(value: ValueInput): void {
+  send(value: JsonRpcValue): void {
     this.child.stdin.write(`${JSON.stringify(value)}\n`);
   }
 
@@ -191,7 +191,7 @@ class RpcClient {
     return this.request({ jsonrpc: "2.0", id, method: "ping", params: {} });
   }
 
-  request<Request extends JsonRpcObject & { readonly id: string | number }>(value: Request) {
+  request(value: JsonRpcObject & { readonly id: string | number }) {
     const key = `${runtimeTypeName(value.id)}:${String(value.id)}`;
     const cell = deferredPromise<JsonRpcValue>();
     this.#pending.set(key, cell.resolve);
@@ -240,6 +240,7 @@ const initialize = (rpc: RpcClient) =>
         result: { protocolVersion: "2025-06-18" },
       });
       rpc.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+      return undefined;
     });
 
 const readyHelper = (handle: SupervisorChannelHandle) =>

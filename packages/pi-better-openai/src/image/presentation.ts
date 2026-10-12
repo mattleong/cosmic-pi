@@ -125,9 +125,11 @@ export function renderImageRequest(
   return container;
 }
 
-export function renderImageCall<
-  Context extends { readonly expanded: boolean; readonly state: object },
->(args: Partial<ToolParams>, theme: Theme, context: Context): Component {
+export function renderImageCall(
+  args: Partial<ToolParams>,
+  theme: Theme,
+  context: { readonly expanded: boolean; readonly state: object },
+): Component {
   const prompt = Predicate.isString(args.prompt) ? args.prompt : "";
   const issues = previewIssuesSlot(context);
   const { expanded } = context;

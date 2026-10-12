@@ -69,7 +69,7 @@ const clearSettingsFilter = (child: Component): void => {
 export class VimSettingsAdapter implements Component, Focusable {
   private mode: "navigation" | "search" = "navigation";
   private helpExpanded = false;
-  private _focused = false;
+  private hasFocus = false;
   private readonly keymap = new FullScreenKeymap();
   private readonly child: Component;
   private readonly options: VimSettingsAdapterOptions;
@@ -80,21 +80,21 @@ export class VimSettingsAdapter implements Component, Focusable {
   }
 
   get focused(): boolean {
-    return this._focused;
+    return this.hasFocus;
   }
 
   set focused(value: boolean) {
-    this._focused = value;
+    this.hasFocus = value;
     this.syncChildFocus();
   }
 
   private syncChildFocus(): void {
     const child = this.child;
-    if ("focused" in child) child.focused = this._focused;
+    if ("focused" in child) child.focused = this.hasFocus;
     const input = settingsSearchInput(child);
-    if (input) input.focused = this._focused && this.mode === "search";
+    if (input) input.focused = this.hasFocus && this.mode === "search";
     const submenu = settingsSubmenu(child);
-    if (Predicate.isObject(submenu) && "focused" in submenu) submenu.focused = this._focused;
+    if (Predicate.isObject(submenu) && "focused" in submenu) submenu.focused = this.hasFocus;
   }
 
   private forwardSelection(data: string, action: FullScreenAction): string | undefined {

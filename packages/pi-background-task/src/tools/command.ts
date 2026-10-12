@@ -331,4 +331,7 @@ export const executeBackgroundTaskCommand = (
         );
       }
     }
+    return yield* new InvalidBackgroundCommandError({
+      message: "Unknown background task action.",
+    });
   });

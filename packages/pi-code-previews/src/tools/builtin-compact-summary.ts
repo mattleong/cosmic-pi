@@ -1,7 +1,7 @@
 import * as Predicate from "effect/Predicate";
 import { writeResultDetail } from "./builtin-result-detail";
 import { codePreviewPerformanceConfig, codePreviewSettings } from "../config/state";
-import { getObjectValue } from "../shared/helpers";
+import { hostContainer, hostObject, ownField } from "../shared/untrusted-value";
 import { getCodePreviewBeforeWrite, isKnownNewWrite } from "../write/preview-execution";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
 import {
@@ -27,10 +27,11 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
   { phase, args, result, context }: Parameters<CompactSummaryProvider<TArgs, TDetails, TState>>[0],
 ): CompactSummary | undefined {
   let beforeWrite: BuiltinBeforeWrite = { kind: "unknown" };
+  const input = hostObject(args);
   if (tool === "write" && phase === "settled" && result && !context.isError) {
-    const before = getCodePreviewBeforeWrite(context.toolCallId, result.details);
-    const content = getObjectValue(args, "content");
-    if (isKnownNewWrite(before, result.details)) beforeWrite = { kind: "new" };
+    const before = getCodePreviewBeforeWrite(context.toolCallId, hostObject(result.details));
+    const content = ownField(input, "content");
+    if (isKnownNewWrite(before, hostContainer(result.details))) beforeWrite = { kind: "new" };
     else if (before !== undefined)
       beforeWrite = {
         kind: "snapshot",
@@ -49,10 +50,15 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
     isError: context.isError,
     beforeWrite,
   });
-  if (projected || phase !== "settled" || context.isError || !isTruncated(result?.details))
+  if (
+    projected ||
+    phase !== "settled" ||
+    context.isError ||
+    !isTruncated(hostObject(result?.details))
+  )
     return projected;
   return {
-    subject: describeBuiltinCompactSubject(tool, args, context.cwd),
+    subject: describeBuiltinCompactSubject(tool, input, context.cwd),
     outcome: "success",
     issues: [{ severity: "warning", code: "output-truncated", message: "Output was cut off" }],
   };

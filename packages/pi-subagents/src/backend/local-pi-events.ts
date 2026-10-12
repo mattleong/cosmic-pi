@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { absurd } from "effect/Function";
 import type * as Schema from "effect/Schema";
 import { safeTextPrefix } from "pi-cosmic-core";
 import type { ChildProcessHandle } from "../boundary/child-process.ts";
@@ -87,6 +88,7 @@ export const normalizeRpcEvent = (
     case "response":
       return Effect.undefined;
   }
+  return absurd(envelope);
 };
 
 export const parentContactAckOutcome = (
@@ -165,4 +167,5 @@ export const normalizeParentContact = (
           }),
       };
   }
+  return absurd(contact);
 };

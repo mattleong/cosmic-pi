@@ -14,15 +14,16 @@ import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
-import { getObjectValue } from "../../shared/helpers";
+import { hostObject, ownField } from "../../shared/untrusted-value";
 
 export function grepPreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme) {
-      const patternArg = getObjectValue(args, "pattern");
-      const pathArg = getObjectValue(args, "path");
-      const globArg = getObjectValue(args, "glob");
-      const limitArg = getObjectValue(args, "limit");
+      const input = hostObject(args);
+      const patternArg = ownField(input, "pattern");
+      const pathArg = ownField(input, "path");
+      const globArg = ownField(input, "glob");
+      const limitArg = ownField(input, "limit");
       const pattern = Predicate.isString(patternArg) ? patternArg : "";
       const path = Predicate.isString(pathArg) && pathArg ? pathArg : ".";
       const glob = Predicate.isString(globArg) && globArg ? globArg : undefined;
@@ -58,7 +59,7 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
         renderGrepOutputLines(
           chunk.join("\n"),
           theme,
-          renderContext.args,
+          hostObject(renderContext.args),
           renderContext.invalidate,
           !skipHighlight,
         ),

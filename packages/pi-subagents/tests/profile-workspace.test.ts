@@ -170,27 +170,27 @@ describe("candidate menu actions", () => {
   );
 });
 
-describe("runtime switches", () => {
-  const liveCatalogEditor = () => {
-    const loadModelPicker = vi.fn<ProfileWorkspaceOptions["loadModelPicker"]>(
-      (profile, candidateIndex, candidate) =>
-        Promise.resolve({
-          choices: ["live-older", "live-default"].map((selector) => ({
-            provider: candidate.runtime,
-            id: selector,
-            selector,
-            fastModeAvailable: false,
-          })),
-          current: candidate.model,
-          defaultSelector: "live-default",
-          context: { profile, candidateIndex, runtime: candidate.runtime },
-        }),
-    );
-    const editor = workspaceHarness({ loadModelPicker }, [profileCandidate("test/first")]);
-    const chooseRunWith = (value: string) => chooseFromPage(editor.component, "r", value);
-    return { ...editor, loadModelPicker, chooseRunWith };
-  };
+const liveCatalogEditor = () => {
+  const loadModelPicker = vi.fn<ProfileWorkspaceOptions["loadModelPicker"]>(
+    (profile, candidateIndex, candidate) =>
+      Promise.resolve({
+        choices: ["live-older", "live-default"].map((selector) => ({
+          provider: candidate.runtime,
+          id: selector,
+          selector,
+          fastModeAvailable: false,
+        })),
+        current: candidate.model,
+        defaultSelector: "live-default",
+        context: { profile, candidateIndex, runtime: candidate.runtime },
+      }),
+  );
+  const editor = workspaceHarness({ loadModelPicker }, [profileCandidate("test/first")]);
+  const chooseRunWith = (value: string) => chooseFromPage(editor.component, "r", value);
+  return { ...editor, loadModelPicker, chooseRunWith };
+};
 
+describe("runtime switches", () => {
   effectTest("takes a Codex model from the live catalog, not the previous runtime", function* () {
     const editor = liveCatalogEditor();
     editor.chooseRunWith("local/codex");
@@ -537,6 +537,7 @@ describe("profile workspace disposal", () => {
         expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
         expect(close).not.toHaveBeenCalled();
         expect(component.render(100)).toEqual([]);
+        return undefined;
       });
     },
   );
@@ -615,6 +616,7 @@ describe("profile workspace disposal", () => {
     component.handleInput("\r");
     return settleTurn().then(() => {
       expect(component.render(100).join("\n")).toContain("changed while you were editing");
+      return undefined;
     });
   });
 });

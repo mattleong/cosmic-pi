@@ -6,6 +6,8 @@ import {
   HerdrClient,
   type HerdrClientContract,
   type HerdrPane,
+  type HerdrSplitPaneInput,
+  type HerdrStartSideSessionInput,
 } from "../../src/boundary/herdr-client.ts";
 import type {
   HerdrBtwLinkRecord,
@@ -21,9 +23,15 @@ import type { HerdrBtwLink, HerdrBtwLinkRestoration } from "../../src/btw/link.t
 import { HerdrBtwService } from "../../src/btw/service.ts";
 import { HerdrBtwError } from "../../src/btw/errors.ts";
 
+type HerdrBtwCallInput =
+  | HerdrSplitPaneInput
+  | HerdrStartSideSessionInput
+  | { readonly paneId: string }
+  | { readonly agentName: string; readonly prompt?: string };
+
 export interface HerdrBtwClientCall {
   readonly operation: string;
-  readonly input?: unknown;
+  readonly input?: HerdrBtwCallInput;
 }
 
 const MUTATING_OPERATIONS = new Set([
@@ -105,9 +113,9 @@ export interface HerdrBtwFixtureOptions {
 
 export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
   const calls: HerdrBtwClientCall[] = [];
-  const runEffect = <A, Input>(
+  const runEffect = <A>(
     operation: string,
-    input: Input,
+    input: HerdrBtwCallInput | undefined,
     effect: () => Effect.Effect<A, HerdrBtwError>,
   ): Effect.Effect<A, HerdrBtwError> =>
     Effect.suspend(() => {
@@ -116,7 +124,7 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
         ? Effect.fail(commandFailure(operation))
         : effect();
     });
-  const run = <A, Input>(operation: string, input: Input, result: () => A) =>
+  const run = <A>(operation: string, input: HerdrBtwCallInput | undefined, result: () => A) =>
     runEffect(operation, input, () => Effect.sync(result));
   const createdChildId = options.createdChildId ?? CHILD_ID;
   const createdChildFile = options.createdChildFile ?? CHILD_FILE;

@@ -8,8 +8,7 @@ import { freezeSnapshot, makeFrozenProjection, ProjectionError } from "../src/pr
 import { interruptingScheduler } from "../testing.ts";
 import { thrownInstance } from "./support/thrown.ts";
 
-const projectionFailure = <Value>(value: Value) =>
-  thrownInstance(ProjectionError, () => freezeSnapshot(value));
+const projectionFailure = (freeze: () => void) => thrownInstance(ProjectionError, freeze);
 
 it.effect("commits authoritative state when interrupted at publication", () =>
   Effect.gen(function* () {
@@ -122,7 +121,7 @@ it("rejects direct and indirect cycles with the offending path", () => {
 
   const root: IndirectCycleFixture = { child: {} };
   root.child.parent = root;
-  const failure = projectionFailure(root);
+  const failure = projectionFailure(() => freezeSnapshot(root));
   expect(failure.path).toBe("$.child.parent");
   expect(failure.message).toContain("cyclic reference to $");
 
@@ -231,7 +230,7 @@ it.each([
   ["array symbol property", Object.assign([], { [Symbol("capability")]: true }), "$"],
   ["symbol-keyed property", { [Symbol("capability")]: true }, "$"],
 ])("rejects %s as a typed projection failure at its path", (_name, value, path) => {
-  expect(projectionFailure(value).path).toBe(path);
+  expect(projectionFailure(() => freezeSnapshot(value)).path).toBe(path);
 });
 
 it.effect("does not commit or publish when external publication fails", () =>

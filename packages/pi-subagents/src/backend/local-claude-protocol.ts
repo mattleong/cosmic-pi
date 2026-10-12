@@ -203,10 +203,14 @@ export type ClaudeProtocolEvent =
     }
   | { readonly type: "ignored" };
 
+const decodeTextPart = decodeUnknownOrUndefined(TextPart);
+const decodeToolResultPart = decodeUnknownOrUndefined(ToolResultPart);
+const decodeToolUsePart = decodeUnknownOrUndefined(ToolUsePart);
+
 const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
   Predicate.isString(content)
     ? content
-    : content.flatMap((part) => decodeUnknownOrUndefined(TextPart, part)?.text ?? []).join("\n");
+    : content.flatMap((part) => decodeTextPart(part)?.text ?? []).join("\n");
 
 const usageFromNative = (usage: Schema.Schema.Type<typeof Usage> | undefined): SubagentUsage => {
   const input = usage?.input_tokens ?? 0;
@@ -226,7 +230,7 @@ const userProtocolEvent = (event: typeof User.Type): ClaudeProtocolEvent => {
   const toolResults = Predicate.isString(event.message.content)
     ? []
     : event.message.content.flatMap((part) => {
-        const result = decodeUnknownOrUndefined(ToolResultPart, part);
+        const result = decodeToolResultPart(part);
         return result ? [{ id: result.tool_use_id, isError: result.is_error === true }] : [];
       });
   const text = textFromContent(event.message.content);
@@ -250,7 +254,7 @@ const userProtocolEvent = (event: typeof User.Type): ClaudeProtocolEvent => {
 
 const assistantProtocolEvent = (event: typeof Assistant.Type): ClaudeProtocolEvent => {
   const tools = event.message.content.flatMap((part) => {
-    const tool = decodeUnknownOrUndefined(ToolUsePart, part);
+    const tool = decodeToolUsePart(part);
     return tool ? [{ id: tool.id, name: tool.name, input: tool.input }] : [];
   });
   const text = textFromContent(event.message.content).trim();
@@ -285,8 +289,8 @@ const resultProtocolEvent = (event: typeof Result.Type): ClaudeProtocolEvent => 
   };
 };
 
-const decodeSystemEvent = <ValueInput>(
-  value: ValueInput,
+const decodeSystemEvent = (
+  value: Schema.Json,
 ): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
   Effect.gen(function* () {
     const system = yield* Schema.decodeUnknownEffect(SystemEvent)(value);
@@ -303,8 +307,8 @@ const decodeSystemEvent = <ValueInput>(
     };
   });
 
-const decodeControlResponseEvent = <ValueInput>(
-  value: ValueInput,
+const decodeControlResponseEvent = (
+  value: Schema.Json,
 ): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
   Effect.gen(function* () {
     const event = yield* Schema.decodeUnknownEffect(ControlResponse)(value);
@@ -322,8 +326,8 @@ const decodeControlResponseEvent = <ValueInput>(
     };
   });
 
-export const decodeClaudeProtocolEvent = <ValueInput>(
-  value: ValueInput,
+export const decodeClaudeProtocolEvent = (
+  value: Schema.Json,
 ): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
   Effect.gen(function* () {
     const discriminant = yield* Schema.decodeUnknownEffect(Discriminant)(value);
@@ -353,11 +357,11 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
     }
   });
 
-export const decodeClaudeInitializeControlResponse = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(InitializeControlResponse)(value);
+export const decodeClaudeInitializeControlResponse =
+  Schema.decodeUnknownEffect(InitializeControlResponse);
 
-export const decodeClaudeMcpStatusControlResponse = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(McpStatusControlResponse)(value);
+export const decodeClaudeMcpStatusControlResponse =
+  Schema.decodeUnknownEffect(McpStatusControlResponse);
 
 export type ClaudeUserFrame = ReturnType<typeof claudeUserFrame>;
 export type ClaudeControlRequestFrame = ReturnType<

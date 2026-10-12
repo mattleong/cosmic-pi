@@ -69,13 +69,14 @@ function confirmationFooterVariants(
   ];
 }
 
+const bare = (keys: ReadonlyArray<string>) => keys.join(" · ");
+
 function helpFooterVariants(
   actions: ActivityActionHints,
   follow: string | undefined,
   back: string,
   cancel: string,
 ): ReadonlyArray<ReadonlyArray<ManagerFooterGroup>> {
-  const bare = (keys: ReadonlyArray<string>) => keys.join(" · ");
   const views = follow ? ["f", "t"] : [];
   const keyed = actions.all
     ? [

@@ -113,6 +113,8 @@ const detailsOf = <Details>(result: AgentToolResult<Details>) => {
   return decoded.value;
 };
 
+const copy = (runId: string) => `/agent/subagents/workflow-runs/${runId}/script.js`;
+
 describe("subagent_workflow tool", () => {
   it.live("starts a background run and reports its progress and result", () =>
     Effect.gen(function* () {
@@ -159,7 +161,6 @@ describe("subagent_workflow tool", () => {
 
   it.live("returns plain-sentence issues for calls that can't run", () =>
     Effect.gen(function* () {
-      const copy = (runId: string) => `/agent/subagents/workflow-runs/${runId}/script.js`;
       const { execute, dispose } = liveTool({
         [copy("wf-mgb3k2x-1")]: script("const x = ;\nreturn x;"),
         [copy("wf-mgb3k2x-2")]: 'export const meta = { name: 5, description: "d" };\nreturn 1;',
@@ -188,13 +189,13 @@ describe("subagent_workflow tool", () => {
   );
 });
 
+const runningIds = (run: WorkflowRunView) =>
+  run.agents.filter((agent) => agent.state === "running").map((agent) => agent.runId);
+
+const fanOut = (tasks: ReadonlyArray<string>) =>
+  `return await parallel(${JSON.stringify(tasks)}.map((task) => () => agent(task)));`;
+
 describe("subagent_workflow status repeats", () => {
-  const runningIds = (run: WorkflowRunView) =>
-    run.agents.filter((agent) => agent.state === "running").map((agent) => agent.runId);
-
-  const fanOut = (tasks: ReadonlyArray<string>) =>
-    `return await parallel(${JSON.stringify(tasks)}.map((task) => () => agent(task)));`;
-
   it.live("answers a repeat with nothing new in one line until something changes", () =>
     Effect.gen(function* () {
       const shift = { ms: 0 };
@@ -415,14 +416,14 @@ describe("subagent_workflow presentation", () => {
   });
 });
 
-describe("saved workflow discovery", () => {
-  const saved = (name: string, whenToUse?: string) => ({
-    name,
-    scope: "project" as const,
-    path: `/repo/.pi/workflows/${name}.js`,
-    meta: { name, description: `Runs ${name}`, ...(whenToUse !== undefined && { whenToUse }) },
-  });
+const saved = (name: string, whenToUse?: string) => ({
+  name,
+  scope: "project" as const,
+  path: `/repo/.pi/workflows/${name}.js`,
+  meta: { name, description: `Runs ${name}`, ...(whenToUse !== undefined && { whenToUse }) },
+});
 
+describe("saved workflow discovery", () => {
   it("lists saved workflows the model can start by name, bounded", () => {
     const plain = workflowToolDescription([], memoryLocations);
     const listed = workflowToolDescription(

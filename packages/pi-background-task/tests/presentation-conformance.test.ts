@@ -42,6 +42,7 @@ const fixtures = [
   { action: "logs", logs: { id: "task-1", state: "failed", ...cursors } },
   { action: "status", snapshot: { ...snapshot, state: "exited", exitCode: 2 } },
 ];
+const rejectRun = () => Promise.reject(new Error("not executed"));
 const registeredTool = (
   mode: "on" | "off" | "border",
   style: "compact" | "preview" = "compact",
@@ -52,9 +53,11 @@ const registeredTool = (
     toolCallCollapsedStyle: style,
     toolCallTiming: false,
   });
-  const run = () => Promise.reject(new Error("not executed"));
   return captureRegistrations((pi) =>
-    registerBackgroundTaskTool(pi, { run, ...(scheduleAnimation && { scheduleAnimation }) }),
+    registerBackgroundTaskTool(pi, {
+      run: rejectRun,
+      ...(scheduleAnimation && { scheduleAnimation }),
+    }),
   ).tools[0]!;
 };
 

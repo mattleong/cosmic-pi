@@ -66,7 +66,7 @@ export abstract class ProfileWorkspaceState {
   protected catalogLoad: AbortController | undefined;
   protected modelPicker: ReturnType<typeof makeProfileModelPickerPage> | undefined;
   protected selectPage: SearchableSelectPage<string> | undefined;
-  protected _focused = false;
+  protected focusState = false;
   protected disposed = false;
   protected readonly keymap = new FullScreenKeymap();
   protected readonly options: ProfileWorkspaceOptions;
@@ -98,11 +98,11 @@ export abstract class ProfileWorkspaceState {
   }
 
   get focused(): boolean {
-    return this._focused;
+    return this.focusState;
   }
   set focused(value: boolean) {
     if (this.disposed) return;
-    this._focused = value;
+    this.focusState = value;
     if (this.modelPicker) this.modelPicker.focused = value;
     if (this.selectPage) this.selectPage.focused = value;
   }

@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import { runAttention, type AttentionRun } from "../run/attention.ts";
 import {
   sanitizeTerminalLine,
@@ -159,6 +160,7 @@ export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string
         case undefined:
           return [];
       }
+      return absurd(state);
     }),
   ].join("\n");
 };
@@ -408,6 +410,7 @@ export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string
     case "unavailable":
       return "This run has no frozen route continuation; start a new profiled run if appropriate.";
   }
+  return absurd(recovery.retryDisposition);
 };
 
 const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure>): string =>

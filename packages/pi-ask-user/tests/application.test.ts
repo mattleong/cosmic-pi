@@ -261,7 +261,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         };
         const context = { type: "context" as const, messages: [recorded, late, foreign] };
         const result = yield* Effect.promise(() =>
-          Promise.resolve(h.handlers.get("context")![0]!(context, h.ctx)),
+          Promise.resolve(h.handlers.get("context")[0]!(context, h.ctx)),
         );
         expect(result).toEqual({ messages: [recorded, foreign] });
         branch.push({
@@ -275,7 +275,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         for (const activation of ["session_tree", "session_start", "session_tree"] as const) {
           yield* Effect.promise(() => h.emit(activation));
           const again = yield* Effect.promise(() =>
-            Promise.resolve(h.handlers.get("context")![0]!(context, h.ctx)),
+            Promise.resolve(h.handlers.get("context")[0]!(context, h.ctx)),
           );
           expect(again).toEqual({ messages: [recorded, foreign] });
         }
@@ -330,6 +330,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         let replaced = false;
         const replacing = h.emit("session_start").then(() => {
           replaced = true;
+          return undefined;
         });
         yield* eventually(() => expect(editorSignal?.aborted).toBe(true));
         for (let i = 0; i < 30; i++) yield* Effect.yieldNow;

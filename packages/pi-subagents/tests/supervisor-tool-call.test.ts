@@ -28,7 +28,10 @@ const loopbackPeer = (upstreamPort?: number) =>
       const server = createServer((client) => {
         clients.push(client);
         client.on("error", () => client.destroy());
-        if (upstreamPort === undefined) return void client.resume();
+        if (upstreamPort === undefined) {
+          client.resume();
+          return;
+        }
         const upstream = connect({ host: "127.0.0.1", port: upstreamPort });
         upstream.on("error", () => upstream.destroy());
         upstream.on("close", () => client.destroy());

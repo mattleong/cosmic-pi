@@ -243,7 +243,7 @@ it.live(
                 },
               });
               pi.on("tool_call", (event) => {
-                if (event.toolName !== "echo") return;
+                if (event.toolName !== "echo") return undefined;
                 hooks.push("call");
                 if (event.input.value === "block")
                   return { block: true, reason: "Fixture permission denied" };
@@ -251,7 +251,7 @@ it.live(
                 return undefined;
               });
               pi.on("tool_result", (event) => {
-                if (event.toolName !== "echo") return;
+                if (event.toolName !== "echo") return undefined;
                 hooks.push("result");
                 return { content: [...event.content, { type: "text", text: "RESULT_HOOK" }] };
               });

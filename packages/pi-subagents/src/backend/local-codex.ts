@@ -1,6 +1,7 @@
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { absurd } from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -210,13 +211,13 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     ("threadId" in event && Boolean(threadId) && event.threadId !== threadId) ||
     ("turnId" in event && event.type !== "turn_started" && event.turnId !== activeTurnId);
 
-  const consumeNotification = <ParamsInput>(
+  const consumeNotification = (
     raw: LocalCliWireEvent,
     method: string,
-    params: ParamsInput,
+    params: Schema.Json | undefined,
   ) =>
     decodeCodexNotification(method, params).pipe(
-      Effect.flatMap((event) => {
+      Effect.flatMap((event): Effect.Effect<void> => {
         if (event.type === "ignored") return release(raw);
         if (event.type === "warning")
           return offer({ type: "warning", message: event.message }, raw);
@@ -246,6 +247,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
           case "turn_completed":
             return onTurnCompleted(event, raw);
         }
+        return absurd(event);
       }),
       Effect.catch(() =>
         offer(

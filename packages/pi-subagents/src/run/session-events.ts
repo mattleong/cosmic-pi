@@ -1,4 +1,4 @@
-import { asObject, stringField } from "./claims-observation.ts";
+import { decodeToolArguments, stringField, type ToolArguments } from "./claims-observation.ts";
 import type { SubagentSessionEvent } from "./model.ts";
 import { MAX_PROTOCOL_ID_CHARS } from "./limits.ts";
 import { sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
@@ -19,8 +19,7 @@ const bytes = (event: SubagentSessionEvent): number => {
   return size;
 };
 
-const toolTarget = <ArgsInput>(toolName: string, args: ArgsInput): string | undefined => {
-  const input = asObject(args);
+const toolTarget = (toolName: string, input: ToolArguments | undefined): string | undefined => {
   const path =
     stringField(input, "path") ?? stringField(input, "file_path") ?? stringField(input, "cwd");
   const fallbackTarget = () =>
@@ -105,7 +104,7 @@ export function startToolSessionEvent(
     readonly startedAt: number;
   },
 ): ReadonlyArray<SubagentSessionEvent> {
-  const summary = toolTarget(input.toolName, input.args);
+  const summary = toolTarget(input.toolName, decodeToolArguments(input.args));
   const target = summary ? sanitizeDiagnosticText(summary, MAX_TOOL_TARGET_CHARS) : undefined;
   return appendSessionEvent(current, {
     type: "tool" as const,

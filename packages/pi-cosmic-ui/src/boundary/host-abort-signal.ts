@@ -1,4 +1,11 @@
-import { invokeHostCallback } from "pi-cosmic-core";
+import { captureHostSignal, invokeHostCallback } from "pi-cosmic-core";
+
+export const capturedHostSignal = (
+  ctx: Parameters<typeof captureHostSignal>[0],
+): AbortSignal | undefined => {
+  const captured = captureHostSignal(ctx);
+  return captured._tag === "Captured" ? captured.signal : undefined;
+};
 
 export interface HostAbortSignalSnapshot {
   readonly signal: AbortSignal | undefined;

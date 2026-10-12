@@ -59,9 +59,11 @@ export class CodexUsageError extends Schema.TaggedError<CodexUsageError>()("Code
   message: Schema.String,
 }) {}
 
+const decodeAdditionalEntry = decodeUnknownOrUndefined(AdditionalEntrySchema);
+
 function sparkBucket(data: CodexUsageResponse): RateLimitBucket | null {
   for (const value of Object.values(data.additional_rate_limits ?? {})) {
-    const entry = decodeUnknownOrUndefined(AdditionalEntrySchema, value);
+    const entry = decodeAdditionalEntry(value);
     if (entry?.limit_name === SPARK_LIMIT_NAME && entry.rate_limit) return entry.rate_limit;
   }
   return null;

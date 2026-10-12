@@ -48,8 +48,8 @@ export const makeLocalPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendCon
     ipcAcks.clear();
   };
 
-  const rpc = <A extends RpcCommand>(
-    command: A,
+  const rpc = (
+    command: RpcCommand,
     timeout: Duration.Input = RPC_TIMEOUT,
   ): Effect.Effect<RpcResponse, SubagentError> =>
     correlatedRequest<string, RpcResponse>({

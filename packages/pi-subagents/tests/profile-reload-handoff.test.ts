@@ -12,16 +12,14 @@ const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1
 afterEach(() => handoff.clear());
 
 const slotPresent = () => Object.hasOwn(globalThis, reloadSlot);
-const slotHolds = <Envelope>(envelope: Envelope) =>
-  Object.getOwnPropertyDescriptor(globalThis, reloadSlot)?.value === envelope;
-const writeSlot = <Envelope>(envelope: Envelope) =>
+const slotDescriptor = () => Object.getOwnPropertyDescriptor(globalThis, reloadSlot);
+const writeSlot = (descriptor: PropertyDescriptor) =>
   Object.defineProperty(globalThis, reloadSlot, {
     configurable: true,
     enumerable: true,
     writable: true,
-    value: envelope,
+    ...descriptor,
   });
-const install = <Seed>(seed: Seed) => writeSlot({ version: 2, sessionKey: "session-one", seed });
 const completeSeed = (revision = 0) => ({
   revision,
   overrides: {},
@@ -44,12 +42,12 @@ describe("profile reload handoff", () => {
               },
             };
       const envelope = { version: 2, sessionKey: "session-one", seed };
-      writeSlot(envelope);
+      writeSlot({ value: envelope });
       for (let replacement = 0; replacement < 3; replacement += 1) {
         expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
-        expect(slotHolds(envelope)).toBe(true);
+        expect(slotDescriptor()?.value).toBe(envelope);
         handoff.clear("session-one");
-        expect(slotHolds(envelope)).toBe(true);
+        expect(slotDescriptor()?.value).toBe(envelope);
       }
       expect(handoff.capture("session-two")).toBeUndefined();
       expect(slotPresent()).toBe(false);
@@ -62,7 +60,7 @@ describe("profile reload handoff", () => {
       { version: 99, sessionKey: "session-one", seed: completeSeed() },
       { version: 2, sessionKey: "different-session", seed: { revision: -1, overrides: {} } },
     ]) {
-      writeSlot(envelope);
+      writeSlot({ value: envelope });
       expect(handoff.capture("session-one")).toBeUndefined();
       expect(slotPresent()).toBe(false);
     }
@@ -81,7 +79,9 @@ describe("profile reload handoff", () => {
   });
 
   it("rejects an envelope without its complete baseline", () => {
-    install({ revision: 2, overrides: {} });
+    writeSlot({
+      value: { version: 2, sessionKey: "session-one", seed: { revision: 2, overrides: {} } },
+    });
     expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(slotPresent()).toBe(true);
   });
@@ -108,7 +108,7 @@ describe("profile reload handoff", () => {
       },
     },
   ])("keeps an undecodable matching $label handoff fail-closed", ({ seed }) => {
-    install(seed);
+    writeSlot({ value: { version: 2, sessionKey: "session-one", seed } });
     expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(slotPresent()).toBe(true);
   });
@@ -128,7 +128,7 @@ describe("profile reload handoff", () => {
       overrides: { reviewer: { candidates: [accessorCandidate] } },
       baseline: completeBaseline("global"),
     };
-    install(accessorSeed);
+    writeSlot({ value: { version: 2, sessionKey: "session-one", seed: accessorSeed } });
 
     expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(candidateReads).toBe(0);
@@ -153,10 +153,16 @@ describe("profile reload handoff", () => {
         },
       },
     );
-    install({
-      revision: 1,
-      overrides: {},
-      baseline: { ...baseline, profiles: { ...baseline.profiles, reviewer: { candidates } } },
+    writeSlot({
+      value: {
+        version: 2,
+        sessionKey: "session-one",
+        seed: {
+          revision: 1,
+          overrides: {},
+          baseline: { ...baseline, profiles: { ...baseline.profiles, reviewer: { candidates } } },
+        },
+      },
     });
 
     expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
@@ -191,7 +197,7 @@ describe("profile reload handoff", () => {
     expect(setterCalls).toBe(0);
     expect(handoff.capture("session-one")).toBeDefined();
 
-    writeSlot({ malformed: true });
+    writeSlot({ value: { malformed: true } });
     const deleteSpy = vi.spyOn(Reflect, "deleteProperty").mockImplementation(() => {
       throw new Error("hostile deletion");
     });

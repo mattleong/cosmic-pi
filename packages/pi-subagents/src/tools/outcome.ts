@@ -5,15 +5,16 @@ import {
   type CompactSubagentToolDetails,
   type SubagentStartAwaitCardDetails,
 } from "./details-schema.ts";
-import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
+import { flow } from "effect/Function";
+import { decodeOutcomeDetails } from "./details-decode.ts";
 
 export type SubagentOutcomeDetails = SubagentStartAwaitCardDetails | CompactSubagentToolDetails;
 
-export const decodeSubagentOutcomeDetails = <ValueInput>(
+export const decodeSubagentOutcomeDetails = (
   action: string,
-  value: ValueInput,
+  result: { readonly details?: unknown },
 ): SubagentOutcomeDetails | undefined => {
-  const details = decodeStartAwaitCardDetails(value) ?? decodeCompactToolDetails(value);
+  const details = decodeOutcomeDetails(result.details);
   return details?.action === action ? details : undefined;
 };
 
@@ -22,10 +23,10 @@ export const hasSubagentToolFailure = (details: SubagentOutcomeDetails): boolean
     ? (details.startFailures?.length ?? 0) > 0
     : "actionFailures" in details && (details.actionFailures?.length ?? 0) > 0;
 
-export const hasReturnedFailureEvidence = <ValueInput>(value: ValueInput): boolean => {
-  const details = decodeStartAwaitCardDetails(value) ?? decodeCompactToolDetails(value);
-  return details !== undefined && hasSubagentToolFailure(details);
-};
+export const hasReturnedFailureEvidence = flow(
+  decodeOutcomeDetails,
+  (details) => details !== undefined && hasSubagentToolFailure(details),
+);
 
 export const isUncertainToolFailure = (failure: { readonly code?: string | undefined }): boolean =>
   isOutcomeUncertain(failure) || isCleanupUnconfirmed(failure);

@@ -1,3 +1,4 @@
+import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
 import { PROFILE_CANDIDATE_WRITE_INTENTS, PROFILE_IDS } from "../profiles/model.ts";
@@ -280,11 +281,11 @@ export const encodeSubagentContract = Schema.encodeSync(
 export const isSubagentContractTool = (tool: string): tool is SubagentContractTool =>
   Object.hasOwn(CONTRACT_SCHEMAS, tool);
 
-export const decodeSubagentContract = <Tool extends SubagentContractTool, ValueInput>(
-  tool: Tool,
-  value: ValueInput,
-): SubagentContract<Tool> | undefined => {
+export const decodeSubagentContract = <Tool extends SubagentContractTool>(tool: Tool) => {
   const schema: (typeof CONTRACT_SCHEMAS)[Tool] = CONTRACT_SCHEMAS[tool];
-  const decoded = decodeUnknownOrUndefined(schema, value, STRICT_PARSE_OPTIONS);
-  return decoded === undefined ? undefined : freezeSnapshot(decoded);
+  return flow(
+    decodeUnknownOrUndefined(schema, STRICT_PARSE_OPTIONS),
+    (decoded): SubagentContract<Tool> | undefined =>
+      decoded === undefined ? undefined : freezeSnapshot(decoded),
+  );
 };

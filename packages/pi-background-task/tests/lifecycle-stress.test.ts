@@ -67,6 +67,7 @@ function processFixture(behavior: Behavior, gated = false) {
         if (behavior !== "delayed" && (behavior === "graceful" || mode === "force")) {
           yield* complete();
         }
+        return undefined;
       }),
   };
   return {

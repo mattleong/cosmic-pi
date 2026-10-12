@@ -56,7 +56,7 @@ export type ChildLaunchRequest = Omit<BackendLaunchRequest, "resumeToken"> & {
 };
 
 type ChildMessage =
-  | { readonly type: "rpc_message"; readonly value: unknown }
+  | { readonly type: "rpc_message"; readonly value: Schema.Json }
   | { readonly type: "parent_contact"; readonly value: LocalPiContact };
 
 export type ChildWireEvent = ProcessWireEvent<ChildMessage>;

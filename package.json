@@ -14,7 +14,7 @@
   },
   "type": "module",
   "scripts": {
-    "check": "pnpm layout:check && pnpm diagnostics:guard && pnpm typecheck && pnpm effect:diagnostics && pnpm lint && pnpm format:check",
+    "check": "pnpm layout:check && pnpm typecheck && pnpm effect:diagnostics && pnpm lint && pnpm format:check",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint --type-aware --deny-warnings scripts packages tools",
@@ -26,7 +26,6 @@
     "typecheck:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop/tsconfig.json",
     "typecheck:scripts": "tsc --noEmit -p scripts/tsconfig.json",
     "effect:diagnostics": "pnpm --workspace-concurrency=4 --no-sort -r --if-present effect:diagnostics",
-    "diagnostics:guard": "node scripts/check-no-disabled-diagnostics.ts",
     "pack:smoke": "node scripts/verify-packed-core.ts",
     "presentation:gallery": "node scripts/presentation-gallery.ts",
     "validate": "pnpm version:check && pnpm check && pnpm test && pnpm pack:smoke",

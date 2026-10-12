@@ -67,6 +67,7 @@ it.effect("interrupts work started through a retained door after its session clo
     yield* TestClock.adjust(500);
     assert.equal(ticks, 0);
     stop();
+    return undefined;
   }),
 );
 

@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
@@ -83,6 +84,7 @@ const receiptPresentation = (entry: SubagentStartEntry) => {
     case "failed":
       return { glyph: managerStateGlyph("failed"), color: "error" } as const;
   }
+  return absurd<never>(entry);
 };
 
 interface ReceiptRowOptions {

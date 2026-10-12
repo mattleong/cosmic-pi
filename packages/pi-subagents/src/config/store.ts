@@ -30,12 +30,11 @@ import {
 } from "./profile-restore.ts";
 import {
   decodeProfileRoute,
-  decodeSubagentConfig,
   decodeSubagentNesting,
   isProfileSetName,
   isSubagentFeatureToggle,
   isSupportedConfigVersion,
-  ownDataProperty,
+  subagentConfigDecoder,
   SUBAGENT_FEATURE_TOGGLES,
   type DecodedSubagentConfig,
   type SubagentFeatureToggle,
@@ -46,6 +45,7 @@ import {
   type WriterWorkspaceMode,
   WriterWorkspaceModeSchema,
 } from "./schema.ts";
+import { ownTypedProperty } from "./probe.ts";
 
 export class SubagentConfigStoreError extends Schema.TaggedError<SubagentConfigStoreError>()(
   "SubagentConfigStoreError",
@@ -177,7 +177,7 @@ const decodeDocument = (
   scope: SubagentConfigScope,
   path: string,
 ): Effect.Effect<DecodedSubagentConfig, SubagentConfigStoreError> => {
-  const decoded = decodeSubagentConfig(raw, scope);
+  const decoded = subagentConfigDecoder(scope)(raw);
   if (decoded.unsupportedVersion) return Effect.fail(unsupportedVersionError(path));
   const fatal = new Set([
     `${scope}.<unknown>`,
@@ -220,7 +220,7 @@ const applyProfilePatch: ApplyPatch<SubagentProfilePatch> = Effect.fnUntraced(
   function* (current, patch, path) {
     if (!isProfileSetName(patch.profileSet) || !isProfileId(patch.profile))
       return yield* mutationError(path, "Invalid profile target.");
-    const routeProperty = ownDataProperty(patch, "route");
+    const routeProperty = ownTypedProperty(patch, "route");
     const captured = routeProperty.valid
       ? captureProfilePatchRoute(routeProperty.present ? routeProperty.value : undefined)
       : undefined;
@@ -271,7 +271,7 @@ const applyDefaultProfileSetPatch: ApplyPatch<SubagentDefaultProfileSetPatch> = 
     const sets = currentProfileSets(current);
     if (!Object.hasOwn(sets, name) || !isRecord(sets[name]))
       return yield* mutationError(path, "The selected profile set does not exist.");
-    const decoded = decodeSubagentConfig(current, "update");
+    const decoded = subagentConfigDecoder("update")(current);
     if (!decoded.file.profileSets?.[name])
       return yield* mutationError(path, "The selected profile set is structurally invalid.");
     if (decoded.invalidProfileSetRoutes[name])
@@ -302,7 +302,7 @@ const snapshotProfilesJson = (
     );
   const profiles: JsonObject = {};
   for (const profile of PROFILE_IDS) {
-    const field = ownDataProperty(routes, profile);
+    const field = ownTypedProperty(routes, profile);
     const route = field.valid && field.present ? decodeProfileRoute(field.value) : undefined;
     if (!route) return Effect.fail(invalidRoute);
     profiles[profile] =
@@ -419,10 +419,10 @@ const applyWriterWorkspacePatch: ApplyPatch<SubagentWriterWorkspacePatch> = Effe
 
 const applyFeatureTogglePatch: ApplyPatch<SubagentFeatureTogglePatch> = Effect.fnUntraced(
   function* (current, patch, path) {
-    const toggle = ownDataProperty(patch, "toggle");
+    const toggle = ownTypedProperty(patch, "toggle");
     if (!toggle.valid || !toggle.present || !isSubagentFeatureToggle(toggle.value))
       return yield* mutationError(path, "Invalid feature setting.");
-    const enabled = ownDataProperty(patch, "enabled");
+    const enabled = ownTypedProperty(patch, "enabled");
     const value = enabled.valid && enabled.present ? enabled.value : undefined;
     if (!enabled.valid || (value !== undefined && !Predicate.isBoolean(value)))
       return yield* mutationError(path, "A feature setting must be true, false, or inherited.");

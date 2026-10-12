@@ -21,8 +21,10 @@ const image: CodexImageResult = {
   outputFormat: "png",
 };
 
+const ignoreSubcommand: ExtensionSubcommand["handler"] = () => undefined;
+
 function fixture() {
-  let handler: ExtensionSubcommand["handler"] = () => undefined;
+  let handler = ignoreSubcommand;
   let current = true;
   const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
   const notify = vi.fn();
@@ -80,6 +82,7 @@ describe("image command delivery authority", () => {
           const retired = Promise.resolve().then(() => {
             if (retirement !== "abort") h.replace();
             if (retirement !== "replacement") h.abort();
+            return undefined;
           });
           yield* Effect.promise(() => retired);
           yield* Effect.promise(() => Promise.resolve(pending));

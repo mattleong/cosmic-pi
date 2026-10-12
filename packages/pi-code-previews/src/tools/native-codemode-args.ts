@@ -9,6 +9,8 @@ import {
 
 const Args = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 const Scalar = Schema.fromJsonString(Schema.Union([Schema.Null, Schema.Boolean, Schema.Finite]));
+const decodeArgs = decodeUnknownOrUndefined(Args);
+const decodeScalar = decodeUnknownOrUndefined(Scalar);
 const PREVIEW_LENGTH = 200;
 const MAX_DEPTH = 16;
 const credentialBoundary =
@@ -234,7 +236,7 @@ class ArgumentParser {
       const number = /^-$|^-?(?:0|[1-9]\d*)(?:(?:\.\d+)?(?:[eE][+-]?\d*)?|\.\d*)$/u.test(token);
       return literal || number ? unfinished() : undefined;
     }
-    const scalar = decodeUnknownOrUndefined(Scalar, this.source.slice(start, this.cursor));
+    const scalar = decodeScalar(this.source.slice(start, this.cursor));
     return scalar === undefined ? undefined : { complete: true, scalar };
   }
 }
@@ -259,7 +261,7 @@ function redactedText(raw: string, redactions: readonly Redaction[]): string {
 
 export function nativeArgumentPreview(raw: string): NativeArgumentPreview | undefined {
   if (!raw || raw.length > 4096) return undefined;
-  const decoded = decodeUnknownOrUndefined(Args, raw);
+  const decoded = decodeArgs(raw);
   const truncated = decoded === undefined && raw.length === PREVIEW_LENGTH && raw.endsWith("...");
   if (decoded === undefined && !truncated) return undefined;
   const parser = new ArgumentParser(truncated ? raw.slice(0, -3) : raw, truncated);

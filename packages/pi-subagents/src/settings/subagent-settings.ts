@@ -129,6 +129,9 @@ const saveFailure =
       `Couldn't ${what}: ${failureMessage(error instanceof Error ? error.message : "", "unknown error")}`,
     );
 
+const withCurrent = (values: readonly string[], currentValue: string) =>
+  values.includes(currentValue) ? [...values] : [currentValue, ...values];
+
 export function subagentSettingsSubcommand(actions: FleetManagerActions): ExtensionSubcommand {
   const captureAuthority = (): (() => boolean) => {
     if (!actions.isAvailable()) return () => !actions.isAvailable();
@@ -286,8 +289,6 @@ function subagentSettingsCommand(
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
         const scopes = editableScopes(trusted);
-        const withCurrent = (values: readonly string[], currentValue: string) =>
-          values.includes(currentValue) ? [...values] : [currentValue, ...values];
         const items: SettingItem[] = [
           {
             id: WORKSPACE,

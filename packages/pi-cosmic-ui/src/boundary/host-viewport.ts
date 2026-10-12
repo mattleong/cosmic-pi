@@ -1,8 +1,10 @@
 import type { OverlayOptions } from "@earendil-works/pi-tui";
 import { screenViewport, type TerminalSize } from "../manager/viewport.ts";
 
+const emptyTerminal = (): TerminalSize => ({ columns: 0, rows: 0 });
+
 export const createScreenViewport = () => {
-  let readTerminal: () => TerminalSize = () => ({ columns: 0, rows: 0 });
+  let readTerminal = emptyTerminal;
   const getSize = () => screenViewport(readTerminal());
   const overlayOptions: OverlayOptions = {
     get anchor() {

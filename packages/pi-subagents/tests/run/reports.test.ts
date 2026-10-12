@@ -187,21 +187,22 @@ describe("local Pi terminal evidence", () => {
   }
 });
 
-describe("primary failure privacy", () => {
-  const rawPrimary = () =>
-    processError(
-      "steer",
-      "steer_outcome_uncertain",
-      `Primary acknowledgement failure token=secret-credential \u001b[31m${"x".repeat(9000)}`,
-    );
-  const expectSanitized = (text: string | undefined) => {
-    expect(text).toContain("Primary acknowledgement failure");
-    expect(text).toContain("[REDACTED]");
-    expect(text).not.toContain("secret-credential");
-    expect(text).not.toContain("\u001b");
-    expect(text?.length).toBeLessThanOrEqual(MAX_ERROR_CHARS);
-  };
+const rawPrimary = () =>
+  processError(
+    "steer",
+    "steer_outcome_uncertain",
+    `Primary acknowledgement failure token=secret-credential \u001b[31m${"x".repeat(9000)}`,
+  );
 
+const expectSanitized = (text: string | undefined) => {
+  expect(text).toContain("Primary acknowledgement failure");
+  expect(text).toContain("[REDACTED]");
+  expect(text).not.toContain("secret-credential");
+  expect(text).not.toContain("\u001b");
+  expect(text?.length).toBeLessThanOrEqual(MAX_ERROR_CHARS);
+};
+
+describe("primary failure privacy", () => {
   it.effect(
     "retains typed initialization cause privately but only queues bounded redacted settlement",
     () =>

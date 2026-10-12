@@ -229,6 +229,7 @@ export function makeRunRetry(
           ...(outcome === "exhausted" ? { retryExhausted: true } : { retryBlocked: true }),
         };
         yield* publish;
+        return undefined;
       }),
     );
 

@@ -56,6 +56,15 @@ interface HeldBinding {
   readonly heldLocked: () => Effect.Effect<void, SubagentError>;
 }
 
+const engineRevision = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
+  service.list({ ownerId: handle.ownerId }).pipe(
+    Effect.mapError(mapWorkspaceError),
+    Effect.map(
+      (entries) =>
+        entries.find((entry) => entry.handle.workspaceId === handle.workspaceId)?.revision,
+    ),
+  );
+
 export function makeWorkspaceReview(context: WorkspaceControlContext) {
   const { withLock, state, records, requireBinding, requireEngine, operations } = context;
   const hold = <A>(
@@ -97,14 +106,6 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
     caller: string,
     use: (held: HeldBinding) => Effect.Effect<A, SubagentError>,
   ): Effect.Effect<A, SubagentError> => operations.withPermits(1)(hold(workspaceId, caller, use));
-  const engineRevision = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
-    service.list({ ownerId: handle.ownerId }).pipe(
-      Effect.mapError(mapWorkspaceError),
-      Effect.map(
-        (entries) =>
-          entries.find((entry) => entry.handle.workspaceId === handle.workspaceId)?.revision,
-      ),
-    );
   const reviewedRevision = (
     service: WorkspaceServiceContract,
     binding: WorkspaceBinding,

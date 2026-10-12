@@ -61,6 +61,7 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
         expect(report.text?.trim()).toBeTruthy();
         for (const tool of ["Agent", "SendMessage", "TaskOutput"])
           expect(observedNativeTools.has(tool), `Claude did not invoke ${tool}`).toBe(true);
+        return undefined;
       }).pipe(Effect.scoped, provideBuiltLayer(SupervisorChannel.layer({ agentDirectory }))),
     );
   }, 360_000);

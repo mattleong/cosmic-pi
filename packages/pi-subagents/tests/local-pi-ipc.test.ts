@@ -7,6 +7,7 @@ import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import { spawnIpcChild } from "pi-cosmic-core/testing";
 import type { LocalPiContact, LocalPiParentControl } from "../src/backend/local-pi-protocol.ts";
+import type { NodeChildProcess } from "./support/node-builtins.ts";
 import {
   attachLocalPiParentIpc,
   makeLocalPiChildIpcChannel,
@@ -14,6 +15,7 @@ import {
   type LocalPiIpcPort,
 } from "../src/boundary/local-pi-ipc.ts";
 
+type IpcMessage = Parameters<NodeChildProcess["send"]>[0];
 const childFixture = fileURLToPath(new URL("./fixtures/local-pi-ipc-child.ts", import.meta.url));
 
 type SendBehavior = "success" | "error" | "pending" | "throw";
@@ -51,7 +53,7 @@ const fakePort = <Outbound>() => {
     setBehavior: (value: SendBehavior) => {
       behavior = value;
     },
-    emitMessage: <MessageInput>(value: MessageInput) => events.emit("message", value),
+    emitMessage: (value: IpcMessage) => events.emit("message", value),
     disconnect: () => events.emit("disconnect"),
   };
 };
@@ -197,6 +199,7 @@ describe("Local Pi IPC boundary", () => {
       yield* exited;
       expect(child.exitCode).toBe(0);
       expect(protocolErrors).toEqual([]);
+      return undefined;
     }).pipe(Effect.scoped),
   );
 

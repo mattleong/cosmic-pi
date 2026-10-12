@@ -34,9 +34,7 @@ it.effect("waits for a successful host startup prerequisite", () =>
   Effect.gen(function* () {
     let loaded = false;
     yield* bestEffortHostBootstrap("preview-settings", () =>
-      Promise.resolve().then(() => {
-        loaded = true;
-      }),
+      Promise.resolve().then(() => void (loaded = true)),
     );
     expect(loaded).toBe(true);
   }),

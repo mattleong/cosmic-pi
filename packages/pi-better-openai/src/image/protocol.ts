@@ -81,9 +81,11 @@ const normalizeImageItem = (
   };
 };
 
-export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent")(function* <
-  Value,
->(value: Value, fallbackMimeType: string, fallbackId: string) {
+export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent")(function* (
+  value: Schema.Json,
+  fallbackMimeType: string,
+  fallbackId: string,
+) {
   const discriminant = yield* Schema.decodeUnknownEffect(EventDiscriminantSchema)(value);
   if (discriminant.type === "response.output_item.done") {
     const done = yield* Schema.decodeUnknownEffect(OutputItemDoneSchema)(value);

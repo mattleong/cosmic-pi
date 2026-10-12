@@ -28,7 +28,7 @@ import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
-import { decodeSubagentConfig } from "../src/config/schema.ts";
+import { subagentConfigDecoder } from "../src/config/schema.ts";
 import { makeSubagentProfileService } from "../src/profiles/service.ts";
 import { mountingCustomUi, sessionContextFixture as sessionContext } from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
@@ -130,6 +130,8 @@ describeActivationLifecycle("root application", (loadSettings = () => Promise.re
   };
 });
 
+const signalledContext = (signal?: AbortSignal) => sessionContext({ signal });
+
 describe("subagent Pi registration", () => {
   for (const outcome of ["accepted", "unavailable", "absent", "rejected", "replaced"] as const) {
     effectTest(`routes bare subagents to the shared view with ${outcome} admission`, function* () {
@@ -223,6 +225,7 @@ describe("subagent Pi registration", () => {
       let editorClosed = false;
       const editing = subagents("profiles", ctx).then(() => {
         editorClosed = true;
+        return undefined;
       });
       const closeEditor = () =>
         step(() =>
@@ -248,7 +251,7 @@ describe("subagent Pi registration", () => {
   }
 
   effectTest("holds the session revision lock through a deferred saved-set write", function* () {
-    const global = decodeSubagentConfig({ version: 6, profileSets: {} }, "global");
+    const global = subagentConfigDecoder("global")({ version: 6, profileSets: {} });
     const config = resolveSubagentConfig({
       globalConfigPath: "/agent/pi-subagents.json",
       projectConfigPath: "/repo/.pi/pi-subagents.json",
@@ -410,9 +413,8 @@ describe("subagent Pi registration", () => {
           return settingsLoads === 2 ? replacementSettings.promise : Promise.resolve();
         },
       });
-      const context = (signal?: AbortSignal) => sessionContext({ signal });
 
-      yield* settle(() => emit("session_start", context()));
+      yield* settle(() => emit("session_start", signalledContext()));
       expect(tools.registered.length).toBeGreaterThan(1);
       const disabledName = tools.registered[0]!;
       const expectedActive = () => [
@@ -423,14 +425,14 @@ describe("subagent Pi registration", () => {
       ];
       tools.setActive(tools.active().filter((name) => name !== disabledName));
 
-      const replacing = Promise.resolve(emit("session_tree", context()));
+      const replacing = Promise.resolve(emit("session_tree", signalledContext()));
       yield* step(() => Promise.resolve());
       expect(tools.active()).toEqual(expectedActive());
       replacementSettings.resolve();
       yield* step(() => replacing);
       expect(tools.active()).toEqual(expectedActive());
 
-      const failedCapture = context();
+      const failedCapture = signalledContext();
       Object.defineProperty(failedCapture, "cwd", {
         get: () => {
           throw new Error("capture failed");
@@ -438,17 +440,17 @@ describe("subagent Pi registration", () => {
       });
       yield* settle(() => emit("session_tree", failedCapture));
       expect(tools.active()).toEqual(["read"]);
-      yield* settle(() => emit("session_start", context()));
+      yield* settle(() => emit("session_start", signalledContext()));
       expect(tools.active()).toEqual(expectedActive());
 
       const aborted = new AbortController();
       aborted.abort();
-      yield* settle(() => emit("session_tree", context(aborted.signal)));
+      yield* settle(() => emit("session_tree", signalledContext(aborted.signal)));
       expect(tools.active()).toEqual(["read"]);
 
-      yield* settle(() => emit("session_start", context()));
+      yield* settle(() => emit("session_start", signalledContext()));
       expect(tools.active()).toEqual(expectedActive());
-      yield* settle(() => emit("session_shutdown", context()));
+      yield* settle(() => emit("session_shutdown", signalledContext()));
       expect(tools.active()).toEqual(["read"]);
     },
   );
@@ -563,6 +565,7 @@ describe("subagent Pi registration", () => {
       let editorClosed = false;
       const editing = subagents("profiles", ctx).then(() => {
         editorClosed = true;
+        return undefined;
       });
       yield* step(() => vi.waitFor(() => expect(component).toBeDefined()));
       component?.handleInput?.("e");

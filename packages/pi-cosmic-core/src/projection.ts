@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import { constVoid } from "effect/Function";
+import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import { runtimeTypeName } from "./runtime-values.ts";
 import * as Effect from "effect/Effect";
@@ -28,83 +31,89 @@ const unsupported = (path: string, kind: string): never => {
 const childPath = (path: string, key: string | number): string =>
   Predicate.isNumber(key) ? `${path}[${key}]` : `${path}.${key}`;
 
-const checkArray = (
-  value: ReadonlyArray<unknown>,
-  checked: WeakSet<object>,
-  activePaths: WeakMap<object, string>,
+interface PlainDataWalk {
+  readonly checked: WeakSet<object>;
+  readonly activePaths: WeakMap<object, string>;
+}
+
+const tracked = <Container extends object>(
+  walk: PlainDataWalk,
   path: string,
+  container: Container,
+  check: (container: Container) => void,
 ): void => {
-  if (Reflect.ownKeys(value).length !== value.length + 1)
+  const activePath = walk.activePaths.get(container);
+  if (activePath !== undefined) unsupported(path, `cyclic reference to ${activePath}`);
+  if (walk.checked.has(container)) return;
+  walk.activePaths.set(container, path);
+  check(container);
+  walk.activePaths.delete(container);
+  walk.checked.add(container);
+};
+
+const checkArray = (walk: PlainDataWalk, path: string, entries: ReadonlyArray<unknown>): void => {
+  if (Reflect.ownKeys(entries).length !== entries.length + 1)
     unsupported(path, "array with extra or symbol-keyed properties");
-  for (let index = 0; index < value.length; index++) {
+  for (let index = 0; index < entries.length; index++) {
     const at = childPath(path, index);
-    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    const descriptor = Object.getOwnPropertyDescriptor(entries, index);
     if (!descriptor) unsupported(at, "sparse array entry");
     else if (!("value" in descriptor) || !descriptor.enumerable)
       unsupported(at, "non-data array entry");
-    else checkPlainData(descriptor.value, checked, activePaths, at);
+    else plainDataAt(walk, at)(descriptor.value);
   }
 };
 
-const constructorName = <Prototype>(prototype: Prototype): string => {
-  if (!Predicate.hasProperty(prototype, "constructor")) return "non-plain object";
-  const { constructor } = prototype;
-  return Predicate.isFunction(constructor) ? constructor.name : "non-plain object";
-};
+const plainDataAt = (walk: PlainDataWalk, path: string) =>
+  Match.type<unknown>().pipe(
+    Match.when(Predicate.isUndefined, constVoid),
+    Match.when(Predicate.isNull, constVoid),
+    Match.when(Predicate.isString, constVoid),
+    Match.when(Predicate.isBoolean, constVoid),
+    Match.when(Predicate.isNumber, (count): void => {
+      if (!Number.isFinite(count)) unsupported(path, "non-finite number");
+    }),
+    Match.when(Arr.isArray, (entries): void =>
+      tracked(walk, path, entries, (array) => checkArray(walk, path, array)),
+    ),
+    Match.when(Predicate.isObject, (record): void =>
+      tracked(walk, path, record, (object) => {
+        const prototype: unknown = Object.getPrototypeOf(object);
+        if (prototype !== Object.prototype && prototype !== null) {
+          const owner = Predicate.hasProperty(prototype, "constructor")
+            ? prototype.constructor
+            : undefined;
+          unsupported(path, Predicate.isFunction(owner) ? owner.name : "non-plain object");
+        }
+        const ownKeys = Reflect.ownKeys(object);
+        if (!ownKeys.every((key) => Predicate.isString(key))) {
+          unsupported(path, "symbol-keyed property");
+          return;
+        }
+        for (const key of ownKeys) {
+          const at = childPath(path, key);
+          const descriptor = Object.getOwnPropertyDescriptor(object, key);
+          if (!descriptor) unsupported(at, "missing property descriptor");
+          else if (!("value" in descriptor)) unsupported(at, "accessor");
+          else if (!descriptor.enumerable) unsupported(at, "non-enumerable property");
+          else plainDataAt(walk, at)(descriptor.value);
+        }
+      }),
+    ),
+    Match.orElse((other): void => unsupported(path, runtimeTypeName(other))),
+  );
 
-const checkRecord = <Candidate extends object>(
-  value: Candidate,
-  checked: WeakSet<object>,
-  activePaths: WeakMap<object, string>,
-  path: string,
-): void => {
-  const prototype: unknown = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null)
-    unsupported(path, constructorName(prototype));
-  const ownKeys = Reflect.ownKeys(value);
-  if (!ownKeys.every((key) => Predicate.isString(key)))
-    return unsupported(path, "symbol-keyed property");
-  for (const key of ownKeys) {
-    const at = childPath(path, key);
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor) unsupported(at, "missing property descriptor");
-    else if (!("value" in descriptor)) unsupported(at, "accessor");
-    else if (!descriptor.enumerable) unsupported(at, "non-enumerable property");
-    else checkPlainData(descriptor.value, checked, activePaths, at);
-  }
-};
-
-const checkPlainData = <Value>(
-  value: Value,
-  checked: WeakSet<object>,
-  activePaths: WeakMap<object, string>,
-  path: string,
-): void => {
-  if (value === undefined || value === null) return;
-  if (Predicate.isString(value) || Predicate.isBoolean(value)) return;
-  if (Predicate.isNumber(value)) {
-    if (!Number.isFinite(value)) unsupported(path, "non-finite number");
-    return;
-  }
-  if (!Predicate.isObjectOrArray(value)) return void unsupported(path, runtimeTypeName(value));
-  const activePath = activePaths.get(value);
-  if (activePath !== undefined) unsupported(path, `cyclic reference to ${activePath}`);
-  if (checked.has(value)) return;
-  activePaths.set(value, path);
-  if (Array.isArray(value)) checkArray(value, checked, activePaths, path);
-  else checkRecord(value, checked, activePaths, path);
-  activePaths.delete(value);
-  checked.add(value);
-};
-
-const deepFreeze = <Value>(value: Value): void => {
-  if (!Predicate.isObjectOrArray(value) || Object.isFrozen(value)) return;
-  Object.freeze(value);
-  for (const child of Object.values(value)) deepFreeze(child);
-};
+const deepFreeze = Match.type<unknown>().pipe(
+  Match.when(Predicate.isObjectOrArray, (container): void => {
+    if (Object.isFrozen(container)) return;
+    Object.freeze(container);
+    for (const child of Object.values(container)) deepFreeze(child);
+  }),
+  Match.orElse(constVoid),
+);
 
 export const freezeSnapshot = <Snapshot>(snapshot: Snapshot): Snapshot => {
-  checkPlainData(snapshot, new WeakSet(), new WeakMap(), "$");
+  plainDataAt({ checked: new WeakSet(), activePaths: new WeakMap() }, "$")(snapshot);
   const clone = structuredClone(snapshot);
   deepFreeze(clone);
   return clone;

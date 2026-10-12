@@ -1,4 +1,5 @@
 import type * as Effect from "effect/Effect";
+import { constVoid } from "effect/Function";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   notifyAtHostBoundary,
@@ -106,7 +107,7 @@ function openFleetManager(
   return openCommandSurface(ctx, {
     placement: "screen",
     create: ({ tui, theme, keybindings, getHeight, finish }) => {
-      let unsubscribe = () => {};
+      let unsubscribe: () => void = constVoid;
       const manager = new SubagentFleetComponent({
         theme,
         getProjection: bridge.get,

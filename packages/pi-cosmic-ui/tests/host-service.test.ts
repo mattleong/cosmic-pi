@@ -70,6 +70,10 @@ function serviceLayer(
   return { layer, projection, contextRef, documents: store.documents };
 }
 
+type Resolve = (value: ExecResult) => void;
+const resolveWith = (resolve: Resolve | undefined, value: ExecResult) =>
+  Effect.sync(() => resolve?.(value));
+
 describe("Cosmic UI host service", () => {
   it.effect("reads only the global document for an untrusted project", () => {
     const projectPath = "/project/.pi/extensions/pi-cosmic-ui.json";
@@ -231,7 +235,6 @@ describe("Cosmic UI host service", () => {
   );
 
   it.effect("invalidates old-branch Git and PR completions before forced follow-ups", () => {
-    type Resolve = (value: ExecResult) => void;
     const oldResolvers = new Map<string, Resolve>();
     const nextResolvers = new Map<string, Resolve>();
     const calls = new Map<string, number>();
@@ -244,8 +247,6 @@ describe("Cosmic UI host service", () => {
         return handle.promise;
       },
     });
-    const resolveWith = (resolve: Resolve | undefined, value: ExecResult) =>
-      Effect.sync(() => resolve?.(value));
     return Effect.gen(function* () {
       const service = yield* CosmicUiService;
       const old = yield* service.refreshAll(true).pipe(Effect.forkScoped);
@@ -354,7 +355,7 @@ describe("Cosmic UI host service", () => {
         "metrics",
         "session",
       ]);
-      const saved = decodeUnknownOrUndefined(SavedFooter, documents.get(configPath)?.footer);
+      const saved = decodeUnknownOrUndefined(SavedFooter)(documents.get(configPath)?.footer);
       expect((saved?.hidden ?? []).toSorted()).toEqual(["metrics", "session"]);
     }).pipe(provideBuiltLayer(layer));
   });
@@ -390,8 +391,7 @@ describe("Cosmic UI host service", () => {
           .updateFooterConfig({ density: "compact" })
           .pipe(Effect.forkScoped);
         yield* Deferred.await(commitStarted);
-        const saved = decodeUnknownOrUndefined(
-          SavedFooter,
+        const saved = decodeUnknownOrUndefined(SavedFooter)(
           memory.documents.get(configPath)?.footer,
         );
         expect(saved?.density).toBe("compact");

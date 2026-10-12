@@ -1,7 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { NonEmptyText } from "../workflow/model.ts";
 import { WORKFLOW_SCRIPT_MAX_CHARS } from "../workflow/script.ts";
 import type { WorkflowStartRequest } from "../workflow/service.ts";
@@ -126,8 +126,10 @@ const startSource = (
   return { kind: "file", path: input.scriptPath ?? "" };
 };
 
-export const decodeWorkflowToolRequest = <Input>(
-  input: Input,
+export type WorkflowToolArguments = Static<typeof WorkflowToolParameters>;
+
+export const decodeWorkflowToolRequest = (
+  input: WorkflowToolArguments,
 ): WorkflowToolRequest | WorkflowToolInputError => {
   const start = decodeStart(input);
   if (Option.isSome(start)) {

@@ -131,6 +131,28 @@ const enterDetail = (
       )
     : { _tag: "Ignored" };
 
+type NamedMotion = Exclude<ListDetailMotion, Parameters<typeof movementOffset>[0]>;
+type NamedMotionHandler = (
+  state: ListDetailMotionState,
+  context: ListDetailMotionContext,
+  browsingDetail: boolean,
+) => ListDetailMotionResult;
+
+const NAMED_MOTIONS = {
+  cancel: (state, _context, browsingDetail) => leaveDetail(state, "cancel", browsingDetail),
+  back: (state, _context, browsingDetail) => leaveDetail(state, "back", browsingDetail),
+  quit: () => ({ _tag: "Close" }),
+  forward: (state, context) => enterDetail(state, context),
+  first: (state, context, browsingDetail) =>
+    browsingDetail
+      ? scrollDetail(state, context, context.detailMaxScroll)
+      : selectRow(state, context, 0),
+  last: (state, context, browsingDetail) =>
+    browsingDetail
+      ? scrollDetail(state, context, -context.detailMaxScroll)
+      : selectRow(state, context, context.rowCount - 1),
+} satisfies Record<NamedMotion, NamedMotionHandler>;
+
 export const listDetailMotion = (
   state: ListDetailMotionState,
   motion: ListDetailMotion,
@@ -142,23 +164,7 @@ export const listDetailMotion = (
       ? scrollDetail(state, context, -movementOffset(motion, context.detailSteps))
       : selectRow(state, context, state.selected + movementOffset(motion, context.listSteps));
   }
-  switch (motion) {
-    case "cancel":
-    case "back":
-      return leaveDetail(state, motion, browsingDetail);
-    case "quit":
-      return { _tag: "Close" };
-    case "forward":
-      return enterDetail(state, context);
-    case "first":
-      return browsingDetail
-        ? scrollDetail(state, context, context.detailMaxScroll)
-        : selectRow(state, context, 0);
-    case "last":
-      return browsingDetail
-        ? scrollDetail(state, context, -context.detailMaxScroll)
-        : selectRow(state, context, context.rowCount - 1);
-  }
+  return NAMED_MOTIONS[motion](state, context, browsingDetail);
 };
 
 interface DetailWindow {

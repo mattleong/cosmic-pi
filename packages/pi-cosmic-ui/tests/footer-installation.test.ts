@@ -14,6 +14,13 @@ import { makeProjection } from "../src/protocol/service.ts";
 
 type FooterFactory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 
+const mountFooter = (factory: FooterFactory | undefined, requestRender: () => void) => {
+  if (!factory) throw new Error("Expected an installed footer factory.");
+  const component = factory(tuiFixture({ requestRender }), plainTheme, footerDataFixture());
+  if (!component.dispose) throw new Error("Expected a disposable footer.");
+  return { dispose: () => component.dispose?.() };
+};
+
 function installation() {
   const projection = makeProjection();
   MutableRef.update(projection, (current) => ({
@@ -39,12 +46,8 @@ function installation() {
     refreshAfterBranchChange: () => undefined,
     onActiveChange: () => undefined,
   });
-  const instance = (requestRender: () => void, factory = factories.at(-1)) => {
-    if (!factory) throw new Error("Expected an installed footer factory.");
-    const component = factory(tuiFixture({ requestRender }), plainTheme, footerDataFixture());
-    if (!component.dispose) throw new Error("Expected a disposable footer.");
-    return { dispose: () => component.dispose?.() };
-  };
+  const instance = (requestRender: () => void, factory?: FooterFactory) =>
+    mountFooter(factory ?? factories.at(-1), requestRender);
   return { footer, context, instance, factories };
 }
 

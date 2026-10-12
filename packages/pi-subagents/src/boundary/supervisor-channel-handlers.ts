@@ -131,6 +131,7 @@ export const makeSupervisorChannelHandlers = (
             state.assignmentEpochs.add(acknowledgement.epoch);
           }
           Deferred.doneUnsafe(acknowledgement.firstAcknowledgement, Effect.void);
+          return undefined;
         }),
 
       SupervisorProgress: (payload, options) =>
@@ -200,6 +201,7 @@ export const makeSupervisorChannelHandlers = (
             );
           state.pendingQuestion = undefined;
           Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
+          return undefined;
         }),
 
       SupervisorReport: (payload, options) =>

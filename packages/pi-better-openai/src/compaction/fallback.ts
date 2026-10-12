@@ -59,12 +59,14 @@ const summaryMessages = (selected: readonly SessionEntry[]) =>
     .flatMap(sessionEntryToContextMessages)
     .filter((message) => message.role !== "system" && message.role !== "compactionSummary");
 
+const decodeFileDetails = decodeUnknownOrUndefined(FileDetails);
+
 const summarizedFileOps = (
   summarized: readonly SessionEntry[],
   previous: CompactionEntry | undefined,
 ) => {
   const fileOps = prepareBranchEntries([...summarized], 0).fileOps;
-  const details = previous && decodeUnknownOrUndefined(FileDetails, previous.details);
+  const details = previous && decodeFileDetails(previous.details);
   for (const path of details?.readFiles ?? []) fileOps.read.add(path);
   for (const path of details?.modifiedFiles ?? []) fileOps.edited.add(path);
   return fileOps;

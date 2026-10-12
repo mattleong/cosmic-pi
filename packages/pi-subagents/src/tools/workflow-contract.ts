@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import { sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core";
@@ -40,6 +41,7 @@ const source = (value: WorkflowSource): WorkflowSource => {
     case "saved":
       return { kind: "saved", name: value.name, scope: value.scope, path: value.path };
   }
+  return absurd(value);
 };
 const phase = (value: WorkflowPhase) => ({
   title: value.title,
@@ -191,6 +193,7 @@ const attention = (entry: WorkflowAgentAttention) => {
     case "question-unavailable":
       return { ...base, kind: entry.kind };
   }
+  return absurd<never>(entry);
 };
 export const workflowStartContract = (run: WorkflowRunView): WorkflowStartContract => ({
   ...envelope,
@@ -218,6 +221,7 @@ export const workflowStatusContract = (status: WorkflowToolStatus): WorkflowStat
         attention: status.attention.map(attention),
       };
   }
+  return absurd(status);
 };
 export const workflowStopContract = (run: WorkflowRunView): WorkflowStopContract => ({
   ...envelope,

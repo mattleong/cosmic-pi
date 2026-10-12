@@ -8,6 +8,7 @@ import { resolveNamedProfileSet, type ResolvedSubagentConfig } from "../src/conf
 import {
   decodeProfileCandidate,
   decodeSubagentConfig,
+  subagentConfigDecoder,
   type DecodedSubagentConfig,
 } from "../src/config/schema.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../src/config/store.ts";
@@ -29,7 +30,10 @@ import {
   subagentProfileServiceLayer,
   type SubagentProfileLayerOptions,
 } from "../src/profiles/service.ts";
-import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
+import {
+  resolveTestConfig,
+  type ConfigDocumentValue,
+} from "./fixtures/profile-settings-inspection.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 
 describe("Pi catalog selector classification", () => {
@@ -80,7 +84,9 @@ describe("Pi catalog selector classification", () => {
 
 const decodeDocument = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.MutableJson));
 
-const document = <Value extends object>(value?: Value): Schema.MutableJsonObject => {
+const document = (value?: {
+  readonly [key: string]: ConfigDocumentValue;
+}): Schema.MutableJsonObject => {
   const root = { version: 6, ...value };
   if (!("profiles" in root) || root.profiles === undefined) return decodeDocument(root);
   const { profiles, ...rest } = root;
@@ -102,21 +108,23 @@ const candidate = (value: Partial<ProfileCandidate> = {}) =>
 const invalidRoutes = (decoded: DecodedSubagentConfig) =>
   decoded.invalidProfileSetRoutes.default ?? [];
 
+const unexpectedStoreCall = () =>
+  Effect.die(new Error("Profile service tests only load configuration."));
+
 const loadedConfigStore = (config: ResolvedSubagentConfig): SubagentConfigStoreContract => {
-  const unused = () => Effect.die(new Error("Profile service tests only load configuration."));
   return {
     load: () => Effect.succeed(config),
-    inspect: unused,
-    patchProfile: unused,
-    restoreProfileDeclaration: unused,
-    patchDefaultProfileSet: unused,
-    createProfileSetFromSnapshot: unused,
-    copyProfileSet: unused,
-    renameProfileSet: unused,
-    deleteProfileSet: unused,
-    patchWriterWorkspace: unused,
-    patchNesting: unused,
-    patchFeatureToggle: unused,
+    inspect: unexpectedStoreCall,
+    patchProfile: unexpectedStoreCall,
+    restoreProfileDeclaration: unexpectedStoreCall,
+    patchDefaultProfileSet: unexpectedStoreCall,
+    createProfileSetFromSnapshot: unexpectedStoreCall,
+    copyProfileSet: unexpectedStoreCall,
+    renameProfileSet: unexpectedStoreCall,
+    deleteProfileSet: unexpectedStoreCall,
+    patchWriterWorkspace: unexpectedStoreCall,
+    patchNesting: unexpectedStoreCall,
+    patchFeatureToggle: unexpectedStoreCall,
   };
 };
 
@@ -202,23 +210,21 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("rejects removed configuration fields and profile aliases", () => {
-    const removedField = decodeSubagentConfig(
+    const removedField = subagentConfigDecoder("global")(
       document({ defaultProfile: "generalist", denied: [], discouraged: [], execution: "x" }),
-      "global",
     );
     expect(removedField.diagnostics).toContain("global.<unknown>");
     expect(removedField.file).toEqual({ version: 6 });
 
-    const removedAlias = decodeSubagentConfig(
+    const removedAlias = subagentConfigDecoder("global")(
       document({ profiles: { delegate: candidate() } }),
-      "global",
     );
     expect(removedAlias.diagnostics).toContain("global.profileSets[0].profiles.<unknown>");
     expect(removedAlias.file.profileSets?.default?.profiles?.generalist).toBeUndefined();
   });
 
   it("decodes disabled, one candidate, and ordered candidates with closeOnReport defaulting true", () => {
-    const decoded = decodeSubagentConfig(
+    const decoded = subagentConfigDecoder("global")(
       document({
         profiles: {
           scout: candidate(),
@@ -229,7 +235,6 @@ describe("subagent v6 profile configuration and resolution", () => {
           reviewer: "disabled",
         },
       }),
-      "global",
     );
     expect(invalidRoutes(decoded)).toEqual([]);
     expect(decoded.file.profileSets?.default?.profiles?.scout).toMatchObject({
@@ -321,7 +326,7 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("resolves named global and project sets with explicit invalid selection states", () => {
-    const global = decodeSubagentConfig(
+    const global = subagentConfigDecoder("global")(
       document({
         defaultProfileSet: "selected",
         profileSets: {
@@ -331,15 +336,13 @@ describe("subagent v6 profile configuration and resolution", () => {
           broken: { profiles: {}, extra: true },
         },
       }),
-      "global",
     );
-    const project = decodeSubagentConfig(
+    const project = subagentConfigDecoder("project")(
       document({
         profileSets: {
           saved: { profiles: { scout: candidate({ model: "openai/project-saved" }) } },
         },
       }),
-      "project",
     );
 
     const namedGlobal = resolveNamedProfileSet({ scope: "global", name: "saved", global });
@@ -447,7 +450,7 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("rejects unknown candidate keys and forbidden cross-field combinations as whole routes", () => {
-    const decoded = decodeSubagentConfig(
+    const decoded = subagentConfigDecoder("global")(
       document({
         profiles: {
           scout: { ...candidate(), execution: "background" },
@@ -457,7 +460,6 @@ describe("subagent v6 profile configuration and resolution", () => {
           reviewer: candidate({ closeOnReport: false }),
         },
       }),
-      "global",
     );
     expect(invalidRoutes(decoded)).toEqual([
       "scout",
@@ -678,9 +680,8 @@ describe("subagent v6 profile configuration and resolution", () => {
         return "parent";
       },
     });
-    const getterDecoded = decodeSubagentConfig(
+    const getterDecoded = subagentConfigDecoder("project")(
       rawDocument({ worker: accessorCandidate }),
-      "project",
     );
     expect(invalidRoutes(getterDecoded)).toEqual(["worker"]);
     expect(getterDecoded.diagnostics).toContain("project.profileSets[0].profiles.worker");
@@ -701,7 +702,7 @@ describe("subagent v6 profile configuration and resolution", () => {
 
     const revoked = Proxy.revocable([candidate()], {});
     revoked.revoke();
-    const proxyDecoded = decodeSubagentConfig(rawDocument({ reviewer: revoked.proxy }), "global");
+    const proxyDecoded = subagentConfigDecoder("global")(rawDocument({ reviewer: revoked.proxy }));
     expect(invalidRoutes(proxyDecoded)).toEqual(["reviewer"]);
     expect(proxyDecoded.diagnostics).toContain("global.profileSets[0].profiles.reviewer");
   });
@@ -716,19 +717,19 @@ describe("subagent v6 profile configuration and resolution", () => {
         return candidate();
       },
     });
-    const decoded = decodeSubagentConfig(rawDocument({ worker: candidates }), "global");
+    const decoded = subagentConfigDecoder("global")(rawDocument({ worker: candidates }));
     expect(accesses).toBe(0);
     expect(invalidRoutes(decoded)).toEqual(["worker"]);
     expect(decoded.diagnostics).toContain("global.profileSets[0].profiles.worker[32+]");
   });
 
   it("accepts version 6 while rejecting other declared versions", () => {
-    expect(decodeSubagentConfig({ version: 6 }, "global").unsupportedVersion).toBe(false);
-    const v3 = decodeSubagentConfig({ version: 3, denied: [] }, "global");
+    expect(subagentConfigDecoder("global")({ version: 6 }).unsupportedVersion).toBe(false);
+    const v3 = subagentConfigDecoder("global")({ version: 3, denied: [] });
     expect(v3).toMatchObject({ unsupportedVersion: true });
     expect(v3.diagnostics).toEqual(expect.arrayContaining(["global.version", "global.<unknown>"]));
     for (const version of [1, 2, 4, 5, "6", null, false, 6.5])
-      expect(decodeSubagentConfig({ version }, "global").unsupportedVersion).toBe(true);
+      expect(subagentConfigDecoder("global")({ version }).unsupportedVersion).toBe(true);
   });
 
   it("reads candidate optional fields descriptor-safely without invoking accessors", () => {
@@ -763,24 +764,21 @@ describe("subagent v6 profile configuration and resolution", () => {
   it("validates root bodies strictly", () => {
     const nesting = { maxDirectChildren: 2, maxDepth: 1 };
 
-    const rootProfiles = decodeSubagentConfig(
-      { version: 6, profiles: { worker: candidate() } },
-      "global",
-    );
+    const rootProfiles = subagentConfigDecoder("global")({
+      version: 6,
+      profiles: { worker: candidate() },
+    });
     expect(rootProfiles.unsupportedVersion).toBe(false);
     expect(rootProfiles.diagnostics).toContain("global.<unknown>");
     expect(rootProfiles.file.profileSets).toBeUndefined();
     expect(invalidRoutes(rootProfiles)).toEqual([]);
 
-    const v6Current = decodeSubagentConfig(
-      {
-        version: 6,
-        defaultProfileSet: "default",
-        profileSets: { default: { profiles: { worker: candidate() } } },
-        nesting,
-      },
-      "global",
-    );
+    const v6Current = subagentConfigDecoder("global")({
+      version: 6,
+      defaultProfileSet: "default",
+      profileSets: { default: { profiles: { worker: candidate() } } },
+      nesting,
+    });
     expect(v6Current.diagnostics).not.toContain("global.<unknown>");
     expect(v6Current.file.nesting).toMatchObject(nesting);
   });

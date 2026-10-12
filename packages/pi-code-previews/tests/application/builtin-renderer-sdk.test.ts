@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { getObjectValue } from "../../src/shared/helpers";
+import { hostObject, ownField } from "../../src/shared/untrusted-value";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -137,7 +137,7 @@ for (const activeWrite of [false, true])
           ),
         );
         assert.equal(yield* fs.readFileString(`${directory}/source.txt`), "AFTER");
-        assert.deepEqual(getObjectValue(receipt.details, "codePreviewBeforeWrite"), {
+        assert.deepEqual(ownField(hostObject(receipt.details), "codePreviewBeforeWrite"), {
           kind: "content",
           byteLength: 19,
         });

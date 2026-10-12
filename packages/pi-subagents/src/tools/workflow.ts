@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import {
   defineTool,
   type AgentToolResult,
@@ -59,6 +60,7 @@ import {
 } from "./workflow-presentation.ts";
 import {
   decodeWorkflowToolRequest,
+  type WorkflowToolArguments,
   WORKFLOW_TOOL_NAME,
   WorkflowToolParameters,
   type WorkflowToolAction,
@@ -227,6 +229,7 @@ const sourceIssueMessage = (error: WorkflowSourceError): string => {
     case "bad-reference":
       return "A nested workflow names neither a saved workflow nor a script file";
   }
+  return absurd(error.problem);
 };
 
 const issueFor = (error: WorkflowToolError) => {
@@ -245,6 +248,7 @@ const issueFor = (error: WorkflowToolError) => {
     case "WorkflowNotFoundError":
       return { code: "workflow-not-found", message: "That workflow run isn't in this session" };
   }
+  return absurd<never>(error);
 };
 
 const RECOVERY = {
@@ -280,18 +284,14 @@ const statusResult = (status: WorkflowToolStatus, now: number): WorkflowToolResu
         run: workflowRunSummary(status.run),
       });
   }
+  return absurd(status);
 };
 
-const executeWorkflowTool = <Args>(
+const executeWorkflowTool = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
-  args: Args & {
-    readonly action?: WorkflowToolAction | undefined;
-    readonly script?: string | undefined;
-    readonly name?: string | undefined;
-    readonly scriptPath?: string | undefined;
-  },
+  args: WorkflowToolArguments,
 ) =>
   Effect.gen(function* () {
     const request = decodeWorkflowToolRequest(args);
@@ -332,6 +332,7 @@ const executeWorkflowTool = <Args>(
         );
       }
     }
+    return absurd<never>(request);
   }).pipe(
     Effect.catch((error) => Effect.succeed(fail(workflowToolAction(args) ?? "start", error))),
   );

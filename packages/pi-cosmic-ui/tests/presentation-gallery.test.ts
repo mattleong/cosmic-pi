@@ -562,10 +562,12 @@ const footerFrames = (rows: readonly ActivityRow[], key: string) => {
   ];
 };
 
+const ignoreTick = () => {};
+
 const workingFrames = () => {
   let time = 0;
   let message: string | undefined;
-  let tick = () => {};
+  let tick = ignoreTick;
   const row = makeWorkingRow({
     now: () => time,
     every: (_interval, callback) => {

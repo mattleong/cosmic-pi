@@ -48,6 +48,12 @@ const successorRequest = (binding: WorkspaceBinding, message: string): StartSuba
   supersedes: undefined,
 });
 
+const releaseRevisionLocked = ({ binding, revision }: Succession) => {
+  if (binding.revision !== revision) return;
+  binding.revision = undefined;
+  binding.preparing = false;
+};
+
 export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
   const { records, withLock, isClosed, state, ownerFor, requireEngine, requireBinding } = context;
   const { operations, ownerScope } = context;
@@ -234,11 +240,6 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
         );
       });
     });
-  const releaseRevisionLocked = ({ binding, revision }: Succession) => {
-    if (binding.revision !== revision) return;
-    binding.revision = undefined;
-    binding.preparing = false;
-  };
   const launchSuccessor = (
     held: Succession,
     start: WorkspaceStart,

@@ -112,6 +112,7 @@ describe("assignment-owned questionnaire proxy", () => {
             cancelling = true;
             return editorCleanup.promise.then(() => {
               cleaned = true;
+              return undefined;
             });
           },
         };

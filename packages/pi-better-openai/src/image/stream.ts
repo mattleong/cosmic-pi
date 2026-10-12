@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -34,31 +35,33 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
       terminated = true;
       return false;
     }
-    const rawEvent = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(data).pipe(
+    const rawEvent = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(data).pipe(
       Effect.mapError(() => fail("stream", "Codex image response contained malformed JSON.")),
     );
     const event = yield* decodeImageStreamEvent(rawEvent, mimeType, fallbackId).pipe(
       Effect.mapError(() => fail("stream", "Codex image response contained a malformed event.")),
     );
-    switch (event._tag) {
-      case "Image":
-        if (event.image.data && event.image.status === "completed") {
-          completed = event.image;
+    return Match.valueTags(event, {
+      Image: ({ image }) => {
+        if (image.data && image.status === "completed") {
+          completed = image;
           return false;
         }
         return true;
-      case "ResponseFailed":
-        providerFailure = fail("response", sanitizeDiagnosticError(event.message));
+      },
+      ResponseFailed: ({ message }) => {
+        providerFailure = fail("response", sanitizeDiagnosticError(message));
         return false;
-      case "ProviderError":
+      },
+      ProviderError: ({ message }) => {
         providerFailure = fail(
           "response",
-          `Codex image error: ${sanitizeDiagnosticError(event.message)}`,
+          `Codex image error: ${sanitizeDiagnosticError(message)}`,
         );
         return false;
-      case "Ignored":
-        return true;
-    }
+      },
+      Ignored: () => true,
+    });
   });
 
   const drainEvents = Effect.fn("OpenAIImage.drainSseEvents")(function* () {

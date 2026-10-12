@@ -7,6 +7,7 @@ import {
   type AskUserRequest,
 } from "pi-ask-user/protocol";
 import { Check } from "typebox/value";
+import type { BackendProxyResult } from "../backend/model.ts";
 import { invalidRequest, type InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentToolName } from "../run/tool-policy.ts";
@@ -44,7 +45,11 @@ export const decodeQuestionnaireProxyRequest = (
   return value ?? invalid("Nested questionnaire arguments failed strict validation.");
 };
 
-export const encodeSubagentProxyPayload = <ValueInput>(value: ValueInput): string | undefined => {
+export type SubagentProxyPayload =
+  | BackendProxyResult
+  | { readonly code: string; readonly message: string };
+
+export const encodeSubagentProxyPayload = (value: SubagentProxyPayload): string | undefined => {
   try {
     const source = JSON.stringify(value);
     return source.length <= MAX_PROXY_JSON_CHARS ? source : undefined;
@@ -64,7 +69,7 @@ const ProxyResultSchema = Schema.Struct({
   structuredContent: Schema.optionalKey(SubagentContractSchema),
   isError: Schema.optionalKey(Schema.Boolean),
 });
-const decodeProxyArgumentsJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const decodeProxyArgumentsJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 const decodeProxyResultJson = Schema.decodeUnknownOption(Schema.fromJsonString(ProxyResultSchema), {
   onExcessProperty: "error",
 });
@@ -96,9 +101,9 @@ const TOOL_SCHEMAS: ToolSchemas = SUBAGENT_TOOL_SCHEMAS;
 const isSubagentToolName = (tool: string): tool is SubagentToolName =>
   Object.hasOwn(TOOL_SCHEMAS, tool);
 
-const decodeToolArguments = <N extends SubagentToolName, ValueInput>(
+const decodeToolArguments = <N extends SubagentToolName>(
   tool: N,
-  args: ValueInput,
+  args: Schema.Json,
 ): SubagentToolInput<N> | undefined => {
   const { parameters, validate } = TOOL_SCHEMAS[tool];
   return Check(parameters, args) && validate?.(args) === undefined ? { tool, args } : undefined;

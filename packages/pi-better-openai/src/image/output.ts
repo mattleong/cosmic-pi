@@ -153,6 +153,7 @@ export const makeImageOutput = (dependencies: {
         (canonicalBase && !isInside(canonicalBase, actualTemporary))
       )
         return yield* fail("save", "Image temporary file escaped its protected root.");
+      return undefined;
     });
     const acquireTemporary = Effect.scoped(
       Effect.uninterruptibleMask((restore) =>
@@ -180,12 +181,14 @@ export const makeImageOutput = (dependencies: {
               yield* file.sync.pipe(
                 Effect.mapError(failWith("save", "Unable to sync generated image.")),
               );
+              return undefined;
             }).pipe(Scope.provide(fileScope)),
           ).pipe(Effect.exit);
           const closeExit = yield* Scope.close(fileScope, writeExit).pipe(Effect.exit);
           if (Exit.isFailure(writeExit)) return yield* Effect.failCause(writeExit.cause);
           if (Exit.isFailure(closeExit))
             return yield* fail("save", "Unable to close image temporary file.");
+          return undefined;
         }),
       ),
     ).pipe(Effect.onError(() => removeOwnedTemporary));
@@ -211,6 +214,7 @@ export const makeImageOutput = (dependencies: {
               );
             if (published && !isOwned(published))
               return yield* fail("save", "Published image did not match the owned temporary file.");
+            return undefined;
           }).pipe(Effect.uninterruptible),
         () => removeOwnedTemporary,
       ).pipe(Effect.as(destination)),

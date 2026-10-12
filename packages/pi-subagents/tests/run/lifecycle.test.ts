@@ -426,6 +426,7 @@ describe("SubagentService", () => {
           name: "cancelled-session-waiter",
           state: "running",
         });
+        return undefined;
       });
     }),
   );
