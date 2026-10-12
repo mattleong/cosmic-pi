@@ -25,6 +25,7 @@ import {
 } from "pi-cosmic-core/testing";
 import cosmicUi from "../index.ts";
 import type { CosmicUiApplicationDependencies } from "../src/application.ts";
+import * as HostStatus from "../src/boundary/host-status.ts";
 import {
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_FOOTER_UPSERT,
@@ -640,6 +641,62 @@ describe("Cosmic UI extension", () => {
       );
     }).pipe(Effect.ensuring(emit(h, "session_shutdown")));
   });
+
+  it.effect.each(["interruption", "failure"] as const)(
+    "retries unpublished usage on the next idle refresh after %s",
+    (failure) =>
+      Effect.gen(function* () {
+        const published = yield* Deferred.make<void>();
+        let idleTick: (() => void) | undefined;
+        const ticker = vi.spyOn(HostStatus, "startHostUiTicker").mockImplementation((_ms, tick) => {
+          idleTick = tick;
+          return () => undefined;
+        });
+        let rejectNext = false;
+        const makeService = CosmicUiService.make;
+        const boundary = vi.spyOn(CosmicUiService, "make").mockImplementation((options) =>
+          makeService({ ...options, startPolling: false }).pipe(
+            Effect.map((service) => ({
+              ...service,
+              setTotals: (totals) =>
+                Effect.suspend(() => {
+                  if (!rejectNext)
+                    return service
+                      .setTotals(totals)
+                      .pipe(Effect.tap(() => Deferred.succeed(published, undefined)));
+                  rejectNext = false;
+                  return failure === "interruption"
+                    ? Effect.interrupt
+                    : Effect.die("usage publication failed");
+                }),
+            })),
+          ),
+        );
+        const h = harness();
+        const entries = assistantEntries(10);
+        h.ctx.sessionManager.getEntries = vi.fn(() => entries);
+        try {
+          yield* emit(h, "session_start");
+          const footer = capturedFooter(h);
+          entries.push(usageEntry("cache_warm", 90));
+          rejectNext = true;
+          yield* emit(h, "agent_settled");
+          expectFooterShows(footer, "↑10");
+          expect(footer.render(100).join("\n")).not.toContain("↑100");
+          h.ctx.sessionManager.getEntries = () => {
+            throw new Error("session scan unavailable");
+          };
+          expect(idleTick).toBeDefined();
+          idleTick?.();
+          yield* Deferred.await(published);
+          expectFooterShows(footer, "↑100");
+        } finally {
+          yield* emit(h, "session_shutdown");
+          boundary.mockRestore();
+          ticker.mockRestore();
+        }
+      }),
+  );
 
   it.effect("reconciles persisted usage without reading or double charging event usage", () =>
     Effect.gen(function* () {

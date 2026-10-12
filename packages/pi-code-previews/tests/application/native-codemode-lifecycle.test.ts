@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import type { ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { initTheme, type ToolInfo, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime } from "pi-cosmic-core";
-import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
-import { afterEach } from "vitest";
-import { animationSchedulerProbe, createToolPresentationHarness } from "../../testing";
+import { extensionContextFixture, macrotask, recordingExtensionHost } from "pi-cosmic-core/testing";
+import { afterEach, beforeAll } from "vitest";
+import { animationSchedulerProbe, createToolPresentationHarness, hostToolRow } from "../../testing";
 import { codePreviewsWithDependencies } from "../../src/application/lifecycle";
 import { CodePreviewSchedulerService } from "../../src/application/scheduler";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
@@ -120,7 +120,53 @@ function fixture(
     shutdown: () => host.emit("session_shutdown", ctx),
   };
 }
+beforeAll(() => initTheme("dark", false));
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
+
+it.effect("a running native codemode row releases replaced arguments and render contexts", () =>
+  Effect.gen(function* () {
+    const collectGarbage = globalThis.gc;
+    assert.ok(collectGarbage);
+    const h = fixture(() => Effect.succeed({ ...preview, toolCallCollapsedStyle: "preview" }));
+    yield* step(() => h.registered);
+    yield* Effect.addFinalizer(() => step(() => h.shutdown()));
+    yield* step(() => h.start());
+    const selected = h.resolve();
+    const renderResult = selected.renderResult;
+    assert.ok(renderResult);
+    const contexts: Array<WeakRef<Parameters<typeof renderResult>[3]>> = [];
+    let capture = true;
+    const observed: ToolRenderers = {
+      ...selected,
+      renderResult(result, options, theme, context) {
+        if (capture) contexts.push(new WeakRef(context));
+        return renderResult(result, options, theme, context);
+      },
+    };
+    let first: { readonly code: string } | undefined = { code: "text('first');" };
+    const released = new WeakRef(first);
+    const row = hostToolRow("codemode", first, observed);
+    row.setArgsComplete();
+    row.markExecutionStarted();
+    row.setExpanded(true);
+    const pending = { content: [], details: { calls: [] }, isError: false };
+    row.updateResult(pending, true);
+    row.render(120);
+    assert.ok(contexts.length > 0);
+    capture = false;
+    first = undefined;
+    for (let index = 2; index <= 20; index++) {
+      row.updateArgs({ code: `text('revision ${index}');` });
+      row.updateResult(pending, true);
+      row.render(120);
+    }
+    yield* macrotask;
+    collectGarbage();
+    assert.equal(released.deref(), undefined);
+    for (const context of contexts) assert.equal(context.deref(), undefined);
+    assert.match(row.render(120).join("\n"), /revision 20/u);
+  }),
+);
 
 for (const scenario of ["builtin", "inactive", "missing", "foreign", "wrong-builtin-path"] as const)
   it.effect(

@@ -354,8 +354,8 @@ export function registerCosmicUiApplication(
 
   const refreshUsage = (ctx: ExtensionContext, kind: "turn" | "rescan" | "idle") => {
     if (!ownsUsageContext(ctx)) return undefined;
-    const previous = lastCompleteTotals;
     const totals = totalsFromSession(ctx);
+    const previous = MutableRef.get(projection).totals;
     if (kind === "idle" && TOTAL_KEYS.every((key) => totals[key] === previous[key]))
       return undefined;
     updateContext(ctx);
