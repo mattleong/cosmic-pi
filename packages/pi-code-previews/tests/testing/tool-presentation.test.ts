@@ -25,7 +25,8 @@ const readTool = (onRenderCall: () => void = () => undefined) => ({
     context: { expanded: boolean },
   ) => {
     onRenderCall();
-    return new Text(theme.bold(`CALL ${args.path} ${context.expanded ? "open" : "closed"}`), 0, 0);
+    const path = args.path === undefined ? "" : ` ${args.path}`;
+    return new Text(theme.bold(`CALL${path} ${context.expanded ? "open" : "closed"}`), 0, 0);
   },
   renderResult: () => new Text("BODY", 0, 0),
 });

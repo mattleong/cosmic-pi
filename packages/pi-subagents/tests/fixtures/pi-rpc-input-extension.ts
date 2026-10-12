@@ -5,7 +5,10 @@ export default function rpcInputFixture(pi: ExtensionAPI) {
     if (event.text === "handled") return { action: "handled" };
     return {
       action: "transform",
-      text: `${event.source}:${event.streamingBehavior}:${event.text}`,
+      text:
+        event.streamingBehavior === undefined
+          ? `${event.source}:undefined:${event.text}`
+          : `${event.source}:${event.streamingBehavior}:${event.text}`,
     };
   });
   pi.registerCommand("fixture-shutdown", {

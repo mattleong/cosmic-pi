@@ -1,7 +1,7 @@
 import { compactIssueSeverity, type CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import type * as Schema from "effect/Schema";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { makeCompactToolDetails } from "../../src/tools/details.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
@@ -818,6 +818,7 @@ describe("subagent compact semantic policy", () => {
     const text = issueDetails(summary?.issues);
     for (const required of [
       "ALL pages",
+      "workspaceId=w",
       "revisionId=r",
       "offset=50",
       "prepare",
@@ -825,6 +826,19 @@ describe("subagent compact semantic policy", () => {
       "preparationId",
     ])
       expect(text).toContain(required);
+  });
+
+  it("preserves the exact revision on the final review page without suggesting another page", () => {
+    const summary = workspace("review", {
+      workspaceId: "w",
+      revisionId: "r",
+      offset: 50,
+      totalChars: 100,
+    });
+    expect(summary?.outcome).toBe("success");
+    const text = issueDetails(summary?.issues);
+    expect(text).toContain("revisionId=r");
+    expect(text).not.toContain("offset=");
   });
 
   it("keeps orphan recovery, the prepared cwd and revise successors in expanded detail", () => {
@@ -847,8 +861,12 @@ describe("subagent compact semantic policy", () => {
   it("declines incomplete workspace receipts instead of inventing recovery IDs", () => {
     for (const details of [
       { operation: "review", workspaceId: "w", offset: 0, totalChars: 100 },
+      { operation: "review", revisionId: "r", offset: 0, totalChars: 100 },
       { operation: "prepare", workspaceId: "w", preparedCwd: "/combined" },
+      { operation: "prepare", workspaceId: "w", revisionId: "r" },
       { operation: "integrate", workspaceId: "w", revisionId: "r" },
+      { operation: "discard" },
+      { operation: "revise", successorRunId: "successor" },
       { operation: "list", workspaceCount: 1, listedCount: 2 },
       { operation: "list", workspaceCount: 0, listedCount: 0, unavailableCount: 1 },
       { operation: "list", unavailableCount: 1 },
@@ -1315,9 +1333,10 @@ describe("subagent compact semantic policy", () => {
       expect(summary?.subject).not.toContain(id);
       expect(summary?.subject).not.toContain("ws-1");
       const [issue] = summary?.issues ?? [];
-      expect(issue?.severity).toBe("error");
-      expect(issueMessageStyleProblems(issue?.message ?? "", { forbidden: [id] })).toEqual([]);
-      expect(`${issue?.message}\n${issue?.detail ?? ""}`).toContain(text.replace(/\.$/u, ""));
+      assert.isDefined(issue);
+      expect(issue.severity).toBe("error");
+      expect(issueMessageStyleProblems(issue.message, { forbidden: [id] })).toEqual([]);
+      expect(`${issue.message}\n${issue.detail ?? ""}`).toContain(text.replace(/\.$/u, ""));
     }
   });
   it("treats requested results and routine history as routine, not warnings", () => {

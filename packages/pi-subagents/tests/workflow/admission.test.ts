@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { assert } from "vitest";
 import { subagentErrorCode } from "../../src/run/errors.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
@@ -238,6 +239,8 @@ describe("workflow agent admission", () => {
           ? [running[0]!, running[0] === "x.ts" ? "y.ts" : "x.ts"]
           : undefined;
       }, "one running writer");
+      assert.isDefined(first);
+      assert.isDefined(second);
       const writerId = yield* runningTask(fixture, `Edit ${first}`);
       yield* runningTask(fixture, "Review the plan");
       expect(stateOfTask(fixture, `Edit ${second}`)).toBeUndefined();

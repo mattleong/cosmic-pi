@@ -108,7 +108,13 @@
     "typescript/no-deprecated": "error",
     "typescript/no-empty-object-type": "error",
     "typescript/no-explicit-any": "error",
-    "typescript/no-floating-promises": "error",
+    "typescript/no-floating-promises": [
+      "error",
+      {
+        "ignoreVoid": false,
+        "checkThenables": true
+      }
+    ],
     "typescript/no-misused-promises": "error",
     "typescript/no-unnecessary-boolean-literal-compare": "error",
     "typescript/no-unnecessary-template-expression": "error",
@@ -128,7 +134,20 @@
     "typescript/prefer-reduce-type-parameter": "error",
     "typescript/prefer-string-starts-ends-with": "error",
     "typescript/require-await": "error",
-    "typescript/restrict-plus-operands": "error",
+    "typescript/restrict-plus-operands": [
+      "error",
+      {
+        "allowAny": false,
+        "allowNullish": false
+      }
+    ],
+    "typescript/restrict-template-expressions": [
+      "error",
+      {
+        "allowAny": false,
+        "allowNullish": false
+      }
+    ],
     "typescript/return-await": "error",
     "typescript/switch-exhaustiveness-check": "error",
     "typescript/use-unknown-in-catch-callback-variable": "error",

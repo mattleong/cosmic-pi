@@ -50,7 +50,11 @@ const PROFILE_OPTION_KEY =
 
 export const profileOptionLabel = (key: string): string => {
   const match = PROFILE_OPTION_KEY.exec(key);
-  return match ? `${match[1]}/${match[2]} · ${match[3]}:${match[4]}` : key;
+  if (!match) return key;
+  const [, host, runtime, model, effort] = match;
+  return host !== undefined && runtime !== undefined && model !== undefined && effort !== undefined
+    ? `${host}/${runtime} · ${model}:${effort}`
+    : key;
 };
 
 const skippedOptionsDetail = (card: SubagentRunCard): string =>

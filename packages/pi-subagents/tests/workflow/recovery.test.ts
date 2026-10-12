@@ -33,14 +33,14 @@ const recoverySurfaces = (run: WorkflowRunView) => [
 ];
 
 describe("workflow failure recovery", () => {
-  const sources: Array<Partial<WorkflowRunView>> = [
+  const sources: Array<Partial<WorkflowRunView> & Pick<WorkflowRunView, "source">> = [
     { source: { kind: "saved", name: "audit", scope: "user", path: "/workflows/audit.js" } },
     { source: { kind: "file", path: "/scripts/audit.js" } },
     { source: { kind: "inline" }, scriptPath: "/runs/script.js" },
     { source: { kind: "inline" } },
   ];
   for (const source of sources) {
-    it(`recommends runtime recovery for ${source.source?.kind} with ${source.scriptPath ?? "original source"}`, () => {
+    it(`recommends runtime recovery for ${source.source.kind} with ${source.scriptPath ?? "original source"}`, () => {
       const run = failedRun("sandbox", "Error", source);
       expect(run.failure).toMatchObject({ kind: "sandbox", name: "Error" });
       expect(run.logs.at(-1)?.message).toBe("partial output");

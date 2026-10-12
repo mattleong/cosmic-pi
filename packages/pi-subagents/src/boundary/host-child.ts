@@ -453,7 +453,7 @@ export function registerSubagentChildBridge(
         ]);
       } catch {
         deactivate(input);
-        if (slot.isCurrent(token)) void slot.shutdown();
+        if (slot.isCurrent(token)) slot.shutdown().catch(() => undefined);
       }
     },
     onDeactivated: deactivate,

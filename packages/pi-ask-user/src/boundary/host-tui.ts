@@ -64,12 +64,11 @@ export const makeAskUserTuiHost =
                 editExternally: (value) => {
                   if (authority.signal.aborted) return Promise.resolve(undefined);
                   const editing = editWithExternalEditor(tui, command, value, authority.signal);
-                  const settled = editing.then(
-                    () => undefined,
-                    () => undefined,
-                  );
+                  const release = () => {
+                    editors.delete(settled);
+                  };
+                  const settled = editing.then(release, release);
                   editors.add(settled);
-                  void settled.then(() => editors.delete(settled));
                   return editing.then(
                     (result) => (authority.signal.aborted ? undefined : result),
                     (cause: unknown) => {

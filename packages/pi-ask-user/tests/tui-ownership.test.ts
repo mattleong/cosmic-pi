@@ -226,9 +226,14 @@ for (const fail of [false, true]) {
   );
 }
 
-for (const lateResult of ["success", "rejection"] as const) {
+for (const [lateResult, failFinish] of [
+  ["success", false],
+  ["rejection", false],
+  ["success", true],
+  ["rejection", true],
+] as const) {
   it.effect(
-    `finish failure joins admitted editor cleanup before FIFO progress (${lateResult})`,
+    `finish (${failFinish ? "failure" : "success"}) joins admitted editor cleanup before FIFO progress (${lateResult})`,
     () =>
       Effect.gen(function* () {
         const h = hostFixture();
@@ -284,18 +289,21 @@ for (const lateResult of ["success", "rejection"] as const) {
           expect(editorSignal?.aborted).toBe(false);
           oldComponent.handleInput?.("\u001b");
           oldComponent.handleInput?.("1");
-          h.done.mockImplementationOnce(() => {
-            throw new Error("finish failure");
-          });
+          if (failFinish)
+            h.done.mockImplementationOnce(() => {
+              throw new Error("finish failure");
+            });
           expect(() => oldComponent.handleInput?.("\r")).not.toThrow();
           yield* eventually(() => expect(editorSignal?.aborted).toBe(true));
-          expect(bridge.resume()).toBe(false);
+          yield* eventually(() => expect(bridge.resume()).toBe(false));
           expect(h.customCalls).toBe(1);
           yield* Deferred.succeed(terminated, undefined);
           yield* eventually(() => expect(cleanup).toEqual(["process", "file"]));
           expect(h.customCalls).toBe(1);
           yield* Deferred.succeed(restored, undefined);
-          expect(Exit.isFailure(yield* Fiber.join(firstFiber))).toBe(true);
+          const firstResult = yield* Fiber.join(firstFiber);
+          expect(Exit.isFailure(firstResult)).toBe(failFinish);
+          if (Exit.isSuccess(firstResult)) expect(firstResult.value.outcome).toBe("submitted");
           expect(cleanup).toEqual(["process", "file", "tui"]);
           yield* eventually(() => expect(h.customCalls).toBe(2));
           oldComponent.handleInput?.("h");

@@ -316,7 +316,7 @@ export function registerSubagentApplication(
           disableTools();
           if (!slot.isCurrent(token)) return;
           notifyActivationFailure(activation.ctx, "Subagents couldn't register their tools");
-          if (slot.isCurrent(token)) void slot.shutdown();
+          if (slot.isCurrent(token)) slot.shutdown().catch(() => undefined);
           return;
         }
         if (!slot.isCurrent(token)) {

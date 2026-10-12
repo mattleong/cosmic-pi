@@ -13,7 +13,11 @@ export function isBuiltinTool(
   tool: ToolInfo | undefined,
   path: string | undefined = tool?.name,
 ): boolean {
-  return tool?.sourceInfo.source === "builtin" && tool.sourceInfo.path === `builtin:${path}`;
+  return (
+    path !== undefined &&
+    tool?.sourceInfo.source === "builtin" &&
+    tool.sourceInfo.path === `builtin:${path}`
+  );
 }
 
 export function isSameExtensionSource(

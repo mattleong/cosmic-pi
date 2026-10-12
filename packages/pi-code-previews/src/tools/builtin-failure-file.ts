@@ -18,15 +18,19 @@ const editFailures: ReadonlyArray<{
   readonly pattern: RegExp;
   readonly code: string;
   readonly message: string;
-  readonly detail?: (match: RegExpExecArray) => string;
+  readonly detail?: (match: RegExpExecArray) => string | undefined;
 }> = [
   {
     pattern:
       /^Found (\d+) occurrences of (?:edits\[(\d+)\]|the text) in .+\. (?:Each oldText|The text) must be unique\. Please provide more context to make it unique\.$/u,
     code: "edit-ambiguous",
     message: "The replacement text matches more than one location",
-    detail: (match) =>
-      `${oldText(match[2])} matched ${match[1]} places.\nAdd context to make it unique.`,
+    detail: (match) => {
+      const count = match[1];
+      return count === undefined
+        ? undefined
+        : `${oldText(match[2])} matched ${count} places.\nAdd context to make it unique.`;
+    },
   },
   {
     pattern:
@@ -41,8 +45,13 @@ const editFailures: ReadonlyArray<{
       /^edits\[(\d+)\] and edits\[(\d+)\] overlap in .+\. Merge them into one edit or target disjoint regions\.$/u,
     code: "edit-overlap",
     message: "The requested edits overlap",
-    detail: (match) =>
-      `edits[${match[1]}] and edits[${match[2]}] overlap.\nMerge them or target disjoint regions.`,
+    detail: (match) => {
+      const first = match[1];
+      const second = match[2];
+      return first === undefined || second === undefined
+        ? undefined
+        : `edits[${first}] and edits[${second}] overlap.\nMerge them or target disjoint regions.`;
+    },
   },
   {
     pattern: /^(?:edits\[(\d+)\]\.)?oldText must not be empty in .+\.$/u,
@@ -61,8 +70,15 @@ const editFailures: ReadonlyArray<{
 function editFailure(details: string): CompactIssue | undefined {
   for (const { pattern, code, message, detail } of editFailures) {
     const match = pattern.exec(details);
-    if (match)
-      return { severity: "error", code, message, ...(detail && { detail: detail(match) }) };
+    if (match) {
+      const expanded = detail?.(match);
+      return {
+        severity: "error",
+        code,
+        message,
+        ...(expanded !== undefined && { detail: expanded }),
+      };
+    }
   }
   return undefined;
 }

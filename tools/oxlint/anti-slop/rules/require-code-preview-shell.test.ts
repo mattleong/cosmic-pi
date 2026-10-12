@@ -63,9 +63,150 @@ tester.run("anti-slop/require-code-preview-shell", requireCodePreviewShellRule, 
       code: `pi.registerTool(fake);`,
     },
     valid(`pi.registerToolRenderer((name, next) => next());`),
+    valid(`const register = pi.registerTool; register(withCodePreviewShell(tool));`),
+    valid(`const { registerTool: register } = pi; register(withCodePreviewShell(tool));`),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); const first = second; const second = first; pi.registerTool(wrapped);`,
+    ),
+    valid(
+      `const register = pi.registerTool.bind(pi); const alias = register; alias(withCodePreviewShell(tool));`,
+    ),
+    valid(`const register = pi.registerTool.bind(pi, withCodePreviewShell(tool)); register();`),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); wrapped.execute = run; pi.registerTool(wrapped);`,
+    ),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); Object.assign(wrapped, { execute: run, name: 'owned' }); pi.registerTool(wrapped);`,
+    ),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); const changes = { execute: run }; pi.registerTool(Object.assign(wrapped, { ...changes, config: { renderResult: raw } }));`,
+    ),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); const alias = Object.assign(wrapped, { execute: run }); pi.registerTool(alias);`,
+    ),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); wrapped.execute.renderResult = raw; pi.registerTool(wrapped);`,
+    ),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); other.renderResult = raw; Object.assign(other, wrapped, { renderCall: raw }); pi.registerTool(wrapped);`,
+    ),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); const copy = { ...wrapped }; copy.renderResult = raw; pi.registerTool(wrapped);`,
+    ),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); const copy = Object.assign({}, wrapped); copy.renderResult = raw; pi.registerTool(wrapped);`,
+    ),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); function change(wrapped) { wrapped.renderResult = raw; } pi.registerTool(wrapped);`,
+    ),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); function change(Object) { Object.assign(wrapped, { renderResult: raw }); } pi.registerTool(wrapped);`,
+    ),
+    valid(`const register = local; register(tool);`),
+    valid(`const register = pi.registerTool; function unrelated(register) { register(tool); }`),
+    valid(
+      `const wrapped = withCodePreviewShell(tool); const alias = wrapped; alias['execute'] = run; delete wrapped.name; pi.registerTool(wrapped);`,
+    ),
   ],
   invalid: [
     invalid("plain definition", `pi.registerTool({ name: 'owned', execute });`),
+    invalid("registration function alias", `const register = pi.registerTool; register(tool);`),
+    invalid(
+      "destructured registration function",
+      `const { registerTool: register } = pi; register(tool);`,
+    ),
+    invalid(
+      "parenthesized renderer deletion",
+      `const wrapped = withCodePreviewShell(tool); delete (wrapped.renderResult); pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "bound registration function",
+      `const register = pi.registerTool.bind(pi); const alias = register; alias(tool);`,
+    ),
+    invalid(
+      "prebound unwrapped definition",
+      `const register = pi.registerTool.bind(pi, tool); register(withCodePreviewShell(tool));`,
+    ),
+    invalid(
+      "prebound spread definition",
+      `const register = pi.registerTool.bind(pi, ...tools); register(withCodePreviewShell(tool));`,
+    ),
+    invalid(
+      "spread bind arguments",
+      `const register = pi.registerTool.bind(...input); register(withCodePreviewShell(tool));`,
+    ),
+    invalid(
+      "renderer assignment",
+      `const wrapped = withCodePreviewShell(tool); wrapped.renderResult = raw; pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "renderer assignment through an alias",
+      `const wrapped = withCodePreviewShell(tool); const alias = wrapped; alias.renderCall = raw; pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "original mutation reaches alias",
+      `const wrapped = withCodePreviewShell(tool); const alias = wrapped; wrapped.renderShell = raw; pi.registerTool(alias);`,
+    ),
+    invalid(
+      "computed renderer assignment",
+      `const wrapped = withCodePreviewShell(tool); wrapped['renderResult'] = raw; pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "unknown field assignment",
+      `const wrapped = withCodePreviewShell(tool); wrapped[field] = raw; pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "renderer deletion",
+      `const wrapped = withCodePreviewShell(tool); delete wrapped.renderCall; pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "renderer logical assignment",
+      `const wrapped = withCodePreviewShell(tool); wrapped.renderShell ||= raw; pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "renderer update",
+      `const wrapped = withCodePreviewShell(tool); wrapped.renderResult++; pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "destructured renderer assignment",
+      `const wrapped = withCodePreviewShell(tool); [wrapped.renderCall] = callbacks; pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "Object.assign renderer mutation",
+      `const wrapped = withCodePreviewShell(tool); Object.assign(wrapped, { renderResult: raw }); pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "Object.assign aliased renderer source",
+      `const wrapped = withCodePreviewShell(tool); const changes = { renderResult: raw }; Object.assign(wrapped, { ...changes }); pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "Object.assign mutated execution-only source",
+      `const wrapped = withCodePreviewShell(tool); const changes: Partial<typeof wrapped> = { execute: run }; changes.renderResult = raw; pi.registerTool(Object.assign(wrapped, changes));`,
+    ),
+    invalid(
+      "Object.assign mutated source through a spread alias",
+      `const wrapped = withCodePreviewShell(tool); const changes = { execute: run }; const alias = changes; alias.renderResult = raw; pi.registerTool(Object.assign(wrapped, { ...changes }));`,
+    ),
+    invalid(
+      "Object.assign tracks transitive mutations independent of traversal order",
+      `const wrapped = withCodePreviewShell(tool); const changes = { execute: run }; const inherited = {}; function register() { pi.registerTool(Object.assign(wrapped, changes)); } Object.assign(changes, inherited); inherited.renderResult = raw; register();`,
+    ),
+    invalid(
+      "Object.assign unknown source",
+      `const wrapped = withCodePreviewShell(tool); Object.assign(wrapped, changes); pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "Object.assign result aliases its target",
+      `const wrapped = withCodePreviewShell(tool); const alias = Object.assign(wrapped, { execute: run }); alias.renderCall = raw; pi.registerTool(wrapped);`,
+    ),
+    invalid(
+      "mutation reaches assigned target result",
+      `const wrapped = withCodePreviewShell(tool); const alias = Object.assign(wrapped, { renderResult: raw }); pi.registerTool(alias);`,
+    ),
+    invalid(
+      "mutated helper result",
+      `function make() { const wrapped = withCodePreviewShell(tool); wrapped.renderResult = raw; return wrapped; } pi.registerTool(make());`,
+    ),
     invalid("defineTool result", `pi.registerTool(defineTool({ name: 'owned', execute }));`),
     invalid("unwrapped const", `const tool = defineTool(definition); pi.registerTool(tool);`),
     invalid(

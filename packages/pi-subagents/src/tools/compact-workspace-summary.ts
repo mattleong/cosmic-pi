@@ -73,7 +73,26 @@ function isEmptyList(details: WorkspaceToolDetails): boolean {
   );
 }
 
-function hasOperationReceipt(details: WorkspaceToolDetails): boolean {
+type WorkspaceOperationReceipt = WorkspaceToolDetails &
+  (
+    | { readonly operation: "list" }
+    | { readonly operation: "discard" | "revise"; readonly workspaceId: string }
+    | {
+        readonly operation: "review";
+        readonly workspaceId: string;
+        readonly revisionId: string;
+      }
+    | {
+        readonly operation: "prepare" | "integrate";
+        readonly workspaceId: string;
+        readonly revisionId: string;
+        readonly preparationId: string;
+      }
+  );
+
+type WorkspaceReviewReceipt = Extract<WorkspaceOperationReceipt, { readonly operation: "review" }>;
+
+function hasOperationReceipt(details: WorkspaceToolDetails): details is WorkspaceOperationReceipt {
   if (details.operation === "list") return true;
   if (!details.workspaceId) return false;
   if (["review", "prepare", "integrate"].includes(details.operation) && !details.revisionId)
@@ -119,7 +138,7 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
   return issues;
 }
 
-function reviewIssues(details: WorkspaceToolDetails): CompactIssue[] {
+function reviewIssues(details: WorkspaceReviewReceipt): CompactIssue[] {
   const next =
     details.nextOffset === undefined
       ? " End of diff does not prove earlier pages were read."
@@ -148,7 +167,7 @@ function reviewIssues(details: WorkspaceToolDetails): CompactIssue[] {
   ];
 }
 
-function operationIssues(details: WorkspaceToolDetails): CompactIssue[] {
+function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
   switch (details.operation) {
     case "list":
       return listIssues(details);
@@ -186,7 +205,7 @@ function operationIssues(details: WorkspaceToolDetails): CompactIssue[] {
     case "discard":
       return [];
   }
-  return absurd(details.operation);
+  return absurd(details);
 }
 
 const decodeWorkspaceToolDetailsOption = Schema.decodeUnknownOption(WorkspaceToolDetailsSchema);

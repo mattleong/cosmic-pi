@@ -318,12 +318,14 @@ function aggregateSummary(
 ): CompactSummary {
   const tasks = details.tasks.map((value) => taskSummary(value, causes.get(value.id)));
   const labels = taskLabels(details.tasks);
-  const issues = tasks.flatMap((task, index) =>
-    task.issues.map((entry) => ({
+  const issues = tasks.flatMap((task, index) => {
+    const label = labels[index];
+    if (label === undefined) return task.issues;
+    return task.issues.map((entry) => ({
       ...entry,
-      message: firstLineMessage(`${labels[index]}: ${entry.message}`, entry.message),
-    })),
-  );
+      message: firstLineMessage(`${label}: ${entry.message}`, entry.message),
+    }));
+  });
   const ordered = SEVERITY_ORDER.flatMap((severity) =>
     issues.filter((entry) => entry.severity === severity),
   );

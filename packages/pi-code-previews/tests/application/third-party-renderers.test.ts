@@ -94,6 +94,8 @@ it("admits supported npm identities without executing, enabling, or reading priv
 
 it("foreign, missing, duplicate, lookalike, renamed, and unsupported sources fall through", () => {
   const base = info();
+  const baseDir = base.sourceInfo.baseDir;
+  assert.ok(baseDir);
   const sources = [
     { ...base.sourceInfo, source: "npm:pi-web-access-extra" },
     { ...base.sourceInfo, source: "npm:pi-web-access@npm:another-package" },
@@ -110,8 +112,8 @@ it("foreign, missing, duplicate, lookalike, renamed, and unsupported sources fal
       path: base.sourceInfo.path,
     },
     { ...base.sourceInfo, path: "/agent/npm/node_modules/pi-web-access-extra/dist/index.js" },
-    { ...base.sourceInfo, path: `${base.sourceInfo.baseDir}/dist/other.js` },
-    { ...base.sourceInfo, path: `${base.sourceInfo.baseDir}/dist/../dist/index.js` },
+    { ...base.sourceInfo, path: `${baseDir}/dist/other.js` },
+    { ...base.sourceInfo, path: `${baseDir}/dist/../dist/index.js` },
   ];
   for (const ready of [true, false]) {
     for (const tools of [

@@ -137,6 +137,11 @@ const harness = (
     let thinkingLevel: "low" | "medium" | "high" = "low";
     const notify = vi.fn();
     const delayedThinkingEvents: ThinkingLevelSelectEvent[] = [];
+    const thinkingEvents: Array<Promise<Effect.Effect<void>>> = [];
+    const drainThinkingEvents = () =>
+      Effect.promise(() => Promise.all(thinkingEvents.splice(0))).pipe(
+        Effect.flatMap((events) => Effect.all(events, { discard: true })),
+      );
     const setModel = vi.fn((next: Model): Promise<boolean> => {
       options.onSetModel?.();
       return Promise.resolve(options.setModelSettlement).then(() => {
@@ -162,7 +167,13 @@ const harness = (
         previousLevel,
       };
       if (options.delayThinkingEvents) delayedThinkingEvents.push(event);
-      else void host.emit("thinking_level_select", ctx, event);
+      else
+        thinkingEvents.push(
+          host.emit("thinking_level_select", ctx, event).then(
+            () => Effect.void,
+            (cause: unknown) => Effect.die(cause),
+          ),
+        );
     });
     const host = recordingExtensionHost(
       {},
@@ -198,9 +209,11 @@ const harness = (
     registerDirectoryModelsApplication(host.pi, options.explicitPreference ?? false);
 
     const start = (reason: SessionStartEvent["reason"] = "startup") =>
-      Effect.promise(() => host.emit("session_start", ctx, { type: "session_start", reason }));
+      Effect.promise(() => host.emit("session_start", ctx, { type: "session_start", reason })).pipe(
+        Effect.tap(drainThinkingEvents),
+      );
     const shutdown = () => Effect.promise(() => host.emit("session_shutdown", ctx));
-    yield* Effect.addFinalizer(() => shutdown());
+    yield* Effect.addFinalizer(() => drainThinkingEvents().pipe(Effect.ensuring(shutdown())));
 
     return {
       cwd,

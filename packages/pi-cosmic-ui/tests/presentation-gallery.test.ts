@@ -545,8 +545,12 @@ const footerFrames = (rows: readonly ActivityRow[], key: string) => {
   const component = manager(rows, 12);
   component.render(140);
   select(component, key, 16);
-  const footers = (help: string) =>
-    [140, 100, 80, 50].map((width) => `${help}${width} cols ${component.render(width).at(-1)}`);
+  const footer = (width: number, help: string) => {
+    const line = component.render(width).at(-1);
+    if (line === undefined) throw new Error("Manager footer was not rendered");
+    return `${help}${width} cols ${line}`;
+  };
+  const footers = (help: string) => [140, 100, 80, 50].map((width) => footer(width, help));
   const lines = footers("");
   component.handleInput("?");
   const help = footers("? ");
@@ -558,7 +562,7 @@ const footerFrames = (rows: readonly ActivityRow[], key: string) => {
     ...lines,
     ...help,
     ...component.render(80).map((line) => `confirm 80 cols ${line}`),
-    `confirm 50 cols ${component.render(50).at(-1)}`,
+    footer(50, "confirm "),
   ];
 };
 

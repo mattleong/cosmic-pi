@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { effectTest, step } from "./support/effect-test.ts";
-import { vi } from "vitest";
+import { assert, vi } from "vitest";
 import { ACTIVITY_HOST } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { deferredPromise } from "pi-cosmic-core/testing";
@@ -349,6 +349,7 @@ describe("subagent activity provider", () => {
     ).toEqual(["run", "child"]);
     const revisions = () => items().map((item) => item.revision);
     const [run, child, other] = revisions();
+    assert.isDefined(child);
     overlap();
     expect(
       items()

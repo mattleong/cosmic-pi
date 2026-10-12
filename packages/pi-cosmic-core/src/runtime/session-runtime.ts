@@ -109,7 +109,7 @@ export function makePiSessionRuntimeSlot<
           if (active !== current || token !== generation) return;
           ++generation;
           const removal = removeActive(current);
-          void serialize(() => removal);
+          serialize(() => removal).catch(() => undefined);
         };
         const removeAbort = () => signal?.removeEventListener("abort", abort);
         const current: Active<Input, R, RuntimeError> = {

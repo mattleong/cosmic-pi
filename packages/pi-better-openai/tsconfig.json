@@ -2,7 +2,9 @@
   "extends": "../../tsconfig.effect.json",
   "compilerOptions": {
     "module": "ESNext",
-    "moduleResolution": "Bundler"
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "checkJs": true
   },
-  "include": ["index.ts", "src/**/*.ts", "tests/**/*.ts"]
+  "include": ["index.ts", "src/**/*.ts", "src/**/*.mjs", "tests/**/*.ts", "tests/**/*.mjs"]
 }

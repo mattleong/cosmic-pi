@@ -48,6 +48,27 @@ const localPiPort = `
 tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinalizerConditionRule, {
   valid: [
     `${prelude}
+      let offered = false;
+      const label = offered ? "a" : "b";
+      Effect.sync(() => { offered = true; }).pipe(
+        Effect.ensuring(Effect.logInfo({ label: "fixed" })));`,
+    `${prelude}
+      let offered = false;
+      const label = offered ? "a" : "b";
+      Effect.sync(() => { offered = true; }).pipe(
+        Effect.ensuring(Effect.logInfo(record.label)));`,
+    `${prelude}
+      let offered = false;
+      const effects = { mark: Effect.sync(() => { offered = true; }) };
+      Effect.all({ ...effects, mark: Effect.void }).pipe(
+        Effect.ensuring(offered ? Effect.void : cleanup));`,
+    `${prelude}
+      let offered = false;
+      const effects = { mark: Effect.sync(() => { offered = true; }) };
+      const replacement = { mark: Effect.void };
+      Effect.all({ ...effects, ...replacement }).pipe(
+        Effect.ensuring(offered ? Effect.void : cleanup));`,
+    `${prelude}
       const admitted = true;
       work.pipe(Effect.ensuring(admitted ? Effect.void : cleanup));`,
     `${prelude}
@@ -144,8 +165,146 @@ tester.run("anti-slop/no-eager-effect-finalizer-condition", noEagerEffectFinaliz
       let offered = false;
       work.pipe(Effect.tap(() => Effect.sync(() => { offered = true; })),
         Effect.ensuring(state.offered ? Effect.void : cleanup));`,
+    `${prelude}
+      let offered = false;
+      const finalizer = Effect.suspend(() => offered ? Effect.void : cleanup);
+      const alias = finalizer;
+      Effect.try(() => { offered = true; }).pipe(Effect.ensuring(alias));`,
+    `${prelude}
+      let offered = false;
+      const finalizer = Effect.sync(() => { if (!offered) disable(); });
+      Effect.forEach(items, () => Effect.sync(() => { offered = true; })).pipe(
+        Effect.ensuring(finalizer));`,
+    `${prelude}
+      let offered = false;
+      const finalizer = offered ? Effect.void : cleanup;
+      Effect.try(() => { let offered = false; offered = true; }).pipe(
+        Effect.ensuring(finalizer));`,
+    `${prelude}
+      let offered = false;
+      const finalizer = offered ? Effect.void : cleanup;
+      Effect.all([Effect.sync(() => { let offered = false; offered = true; })]).pipe(
+        Effect.ensuring(finalizer));`,
+    `${prelude}
+      let offered = false;
+      const finalizer = offered ? Effect.void : cleanup;
+      Effect.forEach(items, (offered) => Effect.sync(() => { offered = true; })).pipe(
+        Effect.ensuring(finalizer));`,
+    `${prelude}
+      let offered = false;
+      const unrelated = Effect.sync(() => { offered = true; });
+      Effect.all([work], { concurrency: () => { offered = true; } }).pipe(
+        Effect.ensuring(offered ? Effect.void : cleanup));`,
+    `${prelude}
+      let offered = false;
+      Effect.try(() => () => { offered = true; }).pipe(
+        Effect.ensuring(offered ? Effect.void : cleanup));`,
+    `${prelude}
+      let offered = false;
+      fake.all([Effect.sync(() => { offered = true; })]).pipe(
+        Effect.ensuring(offered ? Effect.void : cleanup));`,
+    `${prelude}
+      let offered = false;
+      const finalizer = offered ? Effect.void : cleanup;
+      function create() { let offered = false;
+        return Effect.try(() => { offered = true; }).pipe(Effect.ensuring(finalizer)); }
+      `,
+    `${prelude}
+      let offered = false;
+      const first = second; const second = first;
+      Effect.try(() => { offered = true; }).pipe(Effect.ensuring(first));`,
   ],
   invalid: [
+    {
+      code: `${prelude}
+        let offered = false;
+        const effects = { mark: Effect.sync(() => { offered = true; }) };
+        Effect.all({ mark: Effect.void, ...effects }).pipe(
+          Effect.ensuring(offered ? Effect.void : cleanup));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        const label = offered ? "a" : "b";
+        Effect.sync(() => { offered = true; }).pipe(
+          Effect.ensuring(Effect.logInfo({ label })));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        const finalizer = offered ? Effect.void : cleanup;
+        const alias = finalizer;
+        Effect.sync(() => { offered = true; }).pipe(Effect.ensuring(alias));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        const decision = offered;
+        const finalizer = decision && cleanup;
+        Effect.try(() => { offered = true; }).pipe(Effect.ensuring(finalizer));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        Effect.try({ try: () => { offered = true; }, catch: error => error }).pipe(
+          Effect.ensuring(offered ? Effect.void : cleanup));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let failed = false;
+        const options = { try: read, catch: error => { failed = true; return error; } };
+        Effect.try(options).pipe(Effect.ensuring(failed ? cleanup : Effect.void));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        Effect.forEach(items, () => Effect.sync(() => { offered = true; }), { concurrency: 2 }).pipe(
+          Effect.ensuring(offered ? Effect.void : cleanup));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        const mark = () => { offered = true; return Effect.void; };
+        Effect.forEach(mark, { discard: true })(items).pipe(
+          Effect.ensuring(offered ? Effect.void : cleanup));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        items.pipe(Effect.forEach(() => Effect.sync(() => { offered = true; }), { discard: true }),
+          Effect.ensuring(offered ? Effect.void : cleanup));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        const effects = [Effect.sync(() => { offered = true; })];
+        const alias = effects;
+        Effect.all(alias).pipe(Effect.ensuring(offered ? Effect.void : cleanup));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        const effects = { mark: Effect.try(() => { offered = true; }) };
+        Effect.all({ ...effects, work }).pipe(Effect.ensuring(offered ? Effect.void : cleanup));`,
+      errors: [error],
+    },
+    {
+      code: `${prelude}
+        let offered = false;
+        Effect.forEach(items, () => Effect.all([Effect.sync(() => { offered = true; })])).pipe(
+          Effect.ensuring(offered ? Effect.void : cleanup));`,
+      errors: [error],
+    },
     { code: localCliPort, errors: [error], output: null },
     { code: localPiPort, errors: [error], output: null },
     {

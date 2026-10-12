@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -324,9 +325,11 @@ describe("activity service", () => {
         ]),
       );
       const [row] = rows();
-      expect(row!.title.length).toBeLessThanOrEqual(ACTIVITY_LIMITS.title);
-      expect(row!.profile!.length).toBeLessThanOrEqual(ACTIVITY_LIMITS.profile);
-      expect(`${row!.title}${row!.profile}`).not.toContain("token=x");
+      assert.ok(row);
+      assert.ok(row.profile);
+      expect(row.title.length).toBeLessThanOrEqual(ACTIVITY_LIMITS.title);
+      expect(row.profile.length).toBeLessThanOrEqual(ACTIVITY_LIMITS.profile);
+      expect(`${row.title}${row.profile}`).not.toContain("token=x");
     }),
   );
   const startup = { ...registration({}, undefined, []), starting: 2 };

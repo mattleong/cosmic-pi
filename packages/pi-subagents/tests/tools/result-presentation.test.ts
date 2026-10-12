@@ -1,7 +1,7 @@
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { plainTheme } from "pi-cosmic-core/testing";
 import * as Schema from "effect/Schema";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   RESULT_ACCEPTED_TEXT,
   resultCompactSummary,
@@ -70,9 +70,10 @@ describe("child result compact summary", () => {
       const summary = summarize(VALUE, text, true);
       expect(summary?.outcome).toBe("error");
       const [issue] = summary?.issues ?? [];
-      expect(issue?.severity).toBe("error");
-      expect(issueMessageStyleProblems(issue?.message ?? "")).toEqual([]);
-      expect(`${issue?.message}\n${issue?.detail ?? ""}`).toContain(text.split("\n")[0] ?? text);
+      assert.isDefined(issue);
+      expect(issue.severity).toBe("error");
+      expect(issueMessageStyleProblems(issue.message)).toEqual([]);
+      expect(`${issue.message}\n${issue.detail ?? ""}`).toContain(text.split("\n")[0] ?? text);
     }
   });
 });

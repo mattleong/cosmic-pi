@@ -6,6 +6,7 @@ const PackageManifest = Schema.Struct({
   name: Schema.String,
   version: Schema.String,
   private: Schema.optional(Schema.Boolean),
+  scripts: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   dependencies: Schema.optional(DependencyVersions),
   peerDependencies: Schema.optional(DependencyVersions),
   optionalDependencies: Schema.optional(DependencyVersions),

@@ -21,12 +21,12 @@
   },
   "type": "module",
   "scripts": {
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "check": "pnpm typecheck && pnpm effect:diagnostics && pnpm lint && pnpm format:check",
     "validate": "pnpm check && pnpm test",
     "typecheck": "tsc --noEmit",
     "effect:diagnostics": "effect-tsgo diagnostics --project tsconfig.json",
-    "lint": "oxlint --deny-warnings .",
-    "lint:fix": "oxlint --fix .",
+    "lint": "oxlint --type-aware --deny-warnings .",
+    "lint:fix": "oxlint --type-aware --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "vitest run"

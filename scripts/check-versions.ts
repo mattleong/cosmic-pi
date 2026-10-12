@@ -17,6 +17,9 @@ if (uniqueVersions.size !== 1) {
 }
 
 const [version] = uniqueVersions;
+if (version === undefined || version.trim().length === 0) {
+  throw new Error("Workspace package version must not be blank.");
+}
 if (expectedVersion && version !== expectedVersion) {
   throw new Error(`Expected workspace version ${expectedVersion}, found ${version}`);
 }

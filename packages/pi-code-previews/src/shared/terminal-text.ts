@@ -37,7 +37,7 @@ export function replaceSgrSequences(
       out += replace(sequence, sequence.slice(2, -1));
       index += sequence.length;
     } else {
-      out += text[index];
+      out += text.charAt(index);
       index++;
     }
   }
@@ -115,7 +115,7 @@ export function injectVisibleRanges(
     }
     closePassedRanges(cursor, sorted, options.close);
     openCurrentRange(cursor, sorted, options.open);
-    cursor.out += ansi[i];
+    cursor.out += ansi.charAt(i);
     cursor.visible++;
   }
   if (cursor.active) cursor.out += options.close;

@@ -1,3 +1,5 @@
 import { publicationMain } from "./git-worktree-publish-helper.ts";
 
-void publicationMain();
+publicationMain().catch(() => {
+  process.exitCode = 1;
+});

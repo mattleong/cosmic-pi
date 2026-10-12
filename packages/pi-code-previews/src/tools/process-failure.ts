@@ -13,9 +13,11 @@ const shortenCause = (line: string): string => {
   const location = LOCATION.exec(line);
   const rest = (location ? line.slice(location[0].length) : line).replace(SEVERITY_CODE, "");
   if (!location) return rest;
-  const [, path = "", parenLine, colonLine] = location;
-  const file = path.split(/[\\/]/u).at(-1);
-  return `${file}:${parenLine ?? colonLine} ${rest}`;
+  const [, path, parenLine, colonLine] = location;
+  const lineNumber = parenLine ?? colonLine;
+  if (path === undefined || lineNumber === undefined) return rest;
+  const file = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+  return `${file}:${lineNumber} ${rest}`;
 };
 
 export function outputFailureLine(output: readonly string[]): string | undefined {

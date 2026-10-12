@@ -8,7 +8,8 @@ interface Edit {
 }
 
 const HORIZONTAL_SPACE = /[ \t]/u;
-const WORD = /[\p{L}\p{N}_$]/u;
+const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/u;
+const TOKEN_BOUNDARY = /[\s()[\]{},;]/u;
 
 function lineStart(text: string, offset: number): number {
   let index = offset;
@@ -24,17 +25,17 @@ function lineEnd(text: string, offset: number): number {
 
 function startsLine(text: string, offset: number): boolean {
   const start = lineStart(text, offset);
-  return start === 0 || text[start - 1] === "\n";
+  return start === 0 || LINE_BREAK.test(text[start - 1] ?? "");
 }
 
 function endsLine(text: string, offset: number): boolean {
   const end = lineEnd(text, offset);
-  return end === text.length || text[end] === "\n" || text[end] === "\r";
+  return end === text.length || LINE_BREAK.test(text[end] ?? "");
 }
 
 function newlineLength(text: string, offset: number): number {
   if (text.startsWith("\r\n", offset)) return 2;
-  return text[offset] === "\n" ? 1 : 0;
+  return LINE_BREAK.test(text[offset] ?? "") ? 1 : 0;
 }
 
 function removal(text: string, comment: Comment): Edit {
@@ -42,13 +43,20 @@ function removal(text: string, comment: Comment): Edit {
   const ownsEnd = endsLine(text, comment.end);
   if (ownsStart && ownsEnd) {
     const end = lineEnd(text, comment.end);
-    return { start: lineStart(text, comment.start), end: end + newlineLength(text, end), replacement: "" };
+    return {
+      start: lineStart(text, comment.start),
+      end: end + newlineLength(text, end),
+      replacement: "",
+    };
   }
+  const newline = text.slice(comment.start, comment.end).match(LINE_BREAK)?.[0];
+  if (newline !== undefined)
+    return { start: comment.start, end: comment.end, replacement: newline };
   if (ownsEnd) return { start: lineStart(text, comment.start), end: comment.end, replacement: "" };
-  const joinsWords = WORD.test(text[comment.start - 1] ?? "") && WORD.test(text[comment.end] ?? "");
-  return joinsWords
-    ? { start: comment.start, end: comment.end, replacement: " " }
-    : { start: comment.start, end: lineEnd(text, comment.end), replacement: "" };
+  const end = lineEnd(text, comment.end);
+  const separated =
+    TOKEN_BOUNDARY.test(text[comment.start - 1] ?? "") || TOKEN_BOUNDARY.test(text[end] ?? "");
+  return { start: comment.start, end, replacement: separated ? "" : " " };
 }
 
 function mergedRemovals(text: string, comments: readonly Comment[]): Map<Comment, Edit> {

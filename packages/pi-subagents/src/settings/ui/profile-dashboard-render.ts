@@ -54,8 +54,9 @@ export function renderProfileDashboard(
         bodyHeight,
         inner,
       );
-      if (state.framedChild && body.length > 0 && bodyHeight > 2) {
-        rows[2] = `${frame.outer("├")}${body[0]}${frame.outer("┤")}`;
+      const firstRow = body[0];
+      if (state.framedChild && firstRow !== undefined && bodyHeight > 2) {
+        rows[2] = `${frame.outer("├")}${firstRow}${frame.outer("┤")}`;
         for (let index = 1; index < body.length && index + 2 < bodyHeight; index += 1)
           rows[index + 2] = state.rows[index] ?? "";
       }

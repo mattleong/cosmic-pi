@@ -189,7 +189,7 @@ describe("workflow prelude", () => {
         ["await agent('over');", "budget spent"],
         ["await parallel([() => agent('reject')]);", "invalid agent options"],
         ["throw new Error('line three');", "line three"],
-      ]) {
+      ] as const) {
         const { outcome } = yield* run(`await agent('ok');\n\n${line}\nreturn 'done';`);
         expect(failure(outcome), line).toMatchObject({
           message,

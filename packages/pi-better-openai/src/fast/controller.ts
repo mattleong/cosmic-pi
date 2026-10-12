@@ -55,6 +55,6 @@ export function fastDebugLines(ctx: ExtensionContext, snapshot: FastSnapshot): s
     `Current model: ${currentModelKey(ctx)}`,
     `Supported model: ${supportsFast(ctx)}`,
     `Configured service_tier: ${FAST_SERVICE_TIER}`,
-    `Last injected: ${snapshot.lastInjectedModel ? `${snapshot.lastInjectedModel}, ${snapshot.lastInjectedTier}` : "never"}`,
+    `Last injected: ${snapshot.lastInjectedModel ? [snapshot.lastInjectedModel, snapshot.lastInjectedTier].filter((value) => value !== undefined).join(", ") : "never"}`,
   ];
 }

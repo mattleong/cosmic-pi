@@ -34,7 +34,7 @@ export function parseRenderedWordEmphasis(line: string): RenderedWordEmphasis {
         continue;
       }
     }
-    content += code[index];
+    content += code.charAt(index);
     index++;
   }
   if (rangeStart !== undefined)

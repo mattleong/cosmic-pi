@@ -309,7 +309,7 @@ export function registerCosmicUiApplication(
     } else if (generation === lifecycleGeneration) {
       stopUsageTicker = startHostUiTicker(1_000, () => {
         if (generation === lifecycleGeneration && currentContext === context)
-          void refreshUsage(MutableRef.get(context), "idle");
+          refreshUsage(MutableRef.get(context), "idle")?.catch(() => undefined);
       });
     }
   };

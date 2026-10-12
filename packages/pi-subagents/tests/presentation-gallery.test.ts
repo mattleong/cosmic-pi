@@ -1868,7 +1868,7 @@ const queuedVerifier: WorkflowAgentView = {
   queuedAt: now - 20_000,
   waiting: { kind: "slot" },
 };
-const couldNotStart: WorkflowAgentView = {
+const couldNotStart = {
   callId: 3,
   runId: "agent-9",
   label: "verify:1",
@@ -1879,7 +1879,7 @@ const couldNotStart: WorkflowAgentView = {
   endedAt: now - 25_000,
   reason:
     "couldn't start: No eligible route for profile reviewer: every candidate is over its rate limit",
-};
+} satisfies WorkflowAgentView;
 const skippedWhileQueued: WorkflowAgentView = {
   ...couldNotStart,
   state: "skipped",

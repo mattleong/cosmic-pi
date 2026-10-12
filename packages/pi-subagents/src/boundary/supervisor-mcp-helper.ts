@@ -108,13 +108,13 @@ const main = Effect.gen(function* () {
 
   const dispatchMcp = (request: DecodedMcpMessage): void => {
     if (!initialized && (request.method === "tools/list" || request.method === "tools/call")) {
-      void rpcError(request.id, -32002, "MCP helper is not initialized.");
+      rpcError(request.id, -32002, "MCP helper is not initialized.").catch(failChannel);
       return;
     }
     switch (request.method) {
       case "initialize":
         initialized = true;
-        void sendRpc({
+        sendRpc({
           jsonrpc: "2.0",
           id: request.id,
           result: {
@@ -122,31 +122,35 @@ const main = Effect.gen(function* () {
             capabilities: { tools: { listChanged: false } },
             serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
           },
-        });
+        }).catch(failChannel);
         break;
       case "notifications/initialized":
         break;
       case "notifications/cancelled":
-        void runPromise(FiberMap.remove(activeCalls, rpcKey(request.requestId)));
+        runPromise(FiberMap.remove(activeCalls, rpcKey(request.requestId))).catch(failChannel);
         break;
       case "ping":
-        void sendRpc({ jsonrpc: "2.0", id: request.id, result: {} });
+        sendRpc({ jsonrpc: "2.0", id: request.id, result: {} }).catch(failChannel);
         break;
       case "tools/list":
-        void sendRpc({
+        sendRpc({
           jsonrpc: "2.0",
           id: request.id,
           result: { tools: toolDefinitions },
-        });
+        }).catch(failChannel);
         break;
       case "tools/call": {
         if ([...activeCalls].length >= MAX_CONCURRENT_CALLS) {
-          void rpcError(request.id, -32000, "Bounded concurrent MCP call capacity is full.");
+          rpcError(request.id, -32000, "Bounded concurrent MCP call capacity is full.").catch(
+            failChannel,
+          );
           return;
         }
         const key = rpcKey(request.id);
         if (FiberMap.hasUnsafe(activeCalls, key)) {
-          void rpcError(request.id, -32600, "An MCP request with this id is already active.");
+          rpcError(request.id, -32600, "An MCP request with this id is already active.").catch(
+            failChannel,
+          );
           return;
         }
         const call = Effect.uninterruptibleMask((restore) =>
@@ -155,13 +159,14 @@ const main = Effect.gen(function* () {
             Effect.flatMap(writeToolResponse),
           ),
         );
-        void runPromise(
+        runPromise(
           FiberMap.run(activeCalls, key, { onlyIfMissing: true, startImmediately: true })(call),
-        );
+        ).catch(failChannel);
         break;
       }
       case "unknown":
-        if (request.id !== undefined) void rpcError(request.id, -32601, "Method not found.");
+        if (request.id !== undefined)
+          rpcError(request.id, -32601, "Method not found.").catch(failChannel);
     }
   };
 
@@ -177,14 +182,14 @@ const main = Effect.gen(function* () {
   const onLine = (line: string): void => {
     const decoded = decodeUnknownJsonOption(line);
     if (Option.isNone(decoded)) {
-      void rpcError(null, -32700, "Parse error.");
+      rpcError(null, -32700, "Parse error.").catch(failChannel);
       return;
     }
     const value = decoded.value;
     const request = decodeMcpMessage(value);
     if (!request) {
       const id = isJsonObject(value) && validRpcId(value.id) ? value.id : null;
-      void rpcError(id, -32600, "Invalid or excessive JSON-RPC request.");
+      rpcError(id, -32600, "Invalid or excessive JSON-RPC request.").catch(failChannel);
       return;
     }
     dispatchMcp(request);
@@ -193,9 +198,11 @@ const main = Effect.gen(function* () {
   const onInputFailure = (): void => {
     if (inputFailureStarted || inputClosed) return;
     inputFailureStarted = true;
-    void rpcError(null, -32600, "JSON-RPC input exceeds its bounded capacity.").finally(() => {
-      process.stdin.destroy();
-    });
+    rpcError(null, -32600, "JSON-RPC input exceeds its bounded capacity.")
+      .finally(() => {
+        process.stdin.destroy();
+      })
+      .catch(failChannel);
   };
   yield* Effect.acquireRelease(
     Effect.sync(() => {

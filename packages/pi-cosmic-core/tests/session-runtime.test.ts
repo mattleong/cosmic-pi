@@ -405,6 +405,33 @@ it.effect("waits for aborted runtime disposal before starting a replacement", ()
   }),
 );
 
+for (const failure of ["throw", "reject"] as const) {
+  it.effect(`contains ${failure} disposal after abort and permits a replacement`, () =>
+    Effect.gen(function* () {
+      const disposed: number[] = [];
+      const slot = makePiSessionRuntimeSlot<number, never, never, never>({
+        makeRuntime: (input) =>
+          fakeRuntime(runStartup, () => {
+            disposed.push(input);
+            if (input !== 1) return Promise.resolve();
+            const cause = new Error("runtime disposal failed");
+            if (failure === "throw") throw cause;
+            return Promise.reject(cause);
+          }),
+        startup: () => Effect.void,
+      });
+      const controller = new AbortController();
+      yield* Effect.promise(() => slot.start(1, controller.signal));
+      controller.abort();
+      expect(slot.isActive()).toBe(false);
+      expect(yield* Effect.promise(() => slot.start(2))).toBe(3);
+      expect(disposed).toEqual([1]);
+      yield* Effect.promise(() => slot.shutdown());
+      expect(disposed).toEqual([1, 2]);
+    }),
+  );
+}
+
 it.effect("waits for aborted runtime disposal before shutdown resolves", () =>
   Effect.gen(function* () {
     const harness = yield* abortStalledStart();

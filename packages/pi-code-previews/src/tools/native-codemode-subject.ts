@@ -15,7 +15,11 @@ const mcpToolName = /^mcp__([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*)__([A-Za-z0-9-]+(?:
 function nativeMcpCall(name: string): CallSubject | undefined {
   if (name.length > 64 || (name.length === 64 && /_[0-9a-f]{8}$/.test(name))) return undefined;
   const match = mcpToolName.exec(name);
-  return match ? { label: "mcp", action: "call", subject: `${match[1]} / ${match[2]}` } : undefined;
+  const server = match?.[1];
+  const tool = match?.[2];
+  return server !== undefined && tool !== undefined
+    ? { label: "mcp", action: "call", subject: `${server} / ${tool}` }
+    : undefined;
 }
 
 function fieldText(preview: NativeArgumentPreview): FieldText {

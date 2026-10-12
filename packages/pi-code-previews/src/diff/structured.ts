@@ -32,7 +32,9 @@ export function createSimpleDiff(before: string, after: string): string {
   }
 
   const { lines, firstChangeLine } = cursor;
-  return lines.length ? `@@ ${firstChangeLine} @@\n${lines.join("\n")}` : "";
+  return firstChangeLine !== undefined && lines.length
+    ? `@@ ${firstChangeLine} @@\n${lines.join("\n")}`
+    : "";
 }
 
 function unchangedContext(

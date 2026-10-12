@@ -3,7 +3,9 @@
 Vendored from [`dmmulroy/anti-slop`](https://github.com/dmmulroy/anti-slop) at commit
 `446268e5d15baa968eaec669ff65358d36ae6259` (2026-08-14).
 
-The vendored production files retain upstream behavior. Local type-only adjustments let the plugin
+The vendored production files retain upstream behavior except the documented local hardening.
+`no-module-mocking` additionally resolves namespace imports, `@effect/vitest`, and immutable aliases
+through lexical import identity; unrelated and shadowed APIs remain valid. Local type-only adjustments let the plugin
 pass its own rules. Identical scope lookup, parameter annotation unwrapping, function node types,
 and alias-name lookup mechanics are extracted into `shared/ast.ts`; rule policy stays local. The
 unused upstream helper `isPopulatedObjectExpression` was dropped from `shared/dictionary-types.ts`.
@@ -34,11 +36,15 @@ use Oxlint's AST and lexical scopes. Only `no-comments` offers an automatic fix;
 without fixes because each finding needs an author's decision:
 
 - **`no-comments`** rejects every line, block, and JSDoc comment except a shebang. Names, types,
-  and tests carry intent instead. Its fix deletes the comment and any line it leaves empty.
+  and tests carry intent instead. Its fix removes empty comment lines while retaining token separators
+  and embedded line terminators needed for parsing and automatic semicolon insertion.
 - **`no-eager-effect-finalizer-condition`** catches a conditional/logical `Effect.ensuring`
   decision that reads a binding mutated by a callback in its wrapped Effect pipeline. Defer the
   decision with `Effect.suspend`. Immutable decisions and reads inside lazy callbacks are valid.
-  Analysis follows known Effect compositions, not arbitrary helpers or object-property mutations.
+  Analysis follows bounded immutable finalizer aliases and known Effect compositions, including
+  `try`/`tryPromise`, `forEach`, and literal/aliased `all` collections with statically known property
+  overrides. Alias traversal follows lexical read references, not property names. Callback positions live in
+  `shared/finalizer-operations.ts`; arbitrary helpers and object-property mutations are not analyzed.
 - **`no-escaping-render-context`** catches whole `renderCall`/`renderResult` contexts retained by
   known deferred/component helpers or returned component methods. Capture needed fields first.
   Closures share their scope, so a capture by an immediate callback also counts when an escaping
@@ -80,6 +86,11 @@ without fixes because each finding needs an author's decision:
   `registerCodePreviewReplay`. It accepts direct calls, `const` aliases, a parameter that defaults
   to or is typed as `typeof withCodePreviewShell`, a same-file helper that returns a wrapped
   definition, and an object that spreads one when no later spread or renderer field overrides it.
+  Bounded registration aliases include destructuring and `bind`, preserving pre-bound definitions.
+  `shared/shell-mutations.ts` tracks direct renderer writes/deletes and global `Object.assign`
+  mutations through immutable object aliases and mutated assignment sources until their propagation
+  settles; execution-only changes and unrelated objects remain valid. Mutation analysis is file-local
+  and conservative, not flow-sensitive.
   Code Previews' write hook in `src/tools/renderers/registration.ts` and files under `tests/` are
   exempt.
 

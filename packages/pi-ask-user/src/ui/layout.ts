@@ -11,10 +11,8 @@ export function appendWrapped(lines: string[], prefix: string, value: string, wi
   const available = Math.max(1, safeWidth - prefixWidth);
   const wrapped = wrapTextWithAnsi(value, available);
   const continuation = " ".repeat(prefixWidth);
-  for (let index = 0; index < wrapped.length; index++) {
-    lines.push(
-      clipToWidth(`${index === 0 ? safePrefix : continuation}${wrapped[index]}`, safeWidth, ""),
-    );
+  for (const [index, line] of wrapped.entries()) {
+    lines.push(clipToWidth(`${index === 0 ? safePrefix : continuation}${line}`, safeWidth, ""));
   }
 }
 

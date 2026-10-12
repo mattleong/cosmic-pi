@@ -318,7 +318,10 @@ describe("compact child rows", () => {
                 ...(durationMs !== undefined && { durationMs }),
               };
               const text = compactChildren([child], 80, { timing, layout }).join("");
-              expect(text.includes(shown ?? "123ms"), `${label} ${status} ${durationMs}`).toBe(
+              expect(
+                text.includes(shown ?? "123ms"),
+                `${label} ${status} ${durationMs ?? "unmeasured"}`,
+              ).toBe(
                 shown !== undefined && timing && status !== "pending" && durationMs === measured,
               );
               expect(text).not.toMatch(/NaN|Infinity|-1ms/u);

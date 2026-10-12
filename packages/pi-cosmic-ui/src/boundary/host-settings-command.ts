@@ -251,7 +251,7 @@ export function settingsSubcommand<Config>(
             const [scope, id] = rowSetting(row);
             const change = {};
             latest.set(row, change);
-            void apply(
+            apply(
               id,
               value,
               (shown) => {
@@ -263,7 +263,9 @@ export function settingsSubcommand<Config>(
                 return true;
               },
               scope,
-            );
+            ).catch(() => {
+              if (latest.get(row) === change) notify(ctx, unavailable, "warning");
+            });
           },
         }),
         isCurrent,
