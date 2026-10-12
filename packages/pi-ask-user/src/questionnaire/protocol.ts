@@ -126,23 +126,23 @@ const SmallLength = Schema.Int.check(
 );
 const captureArray = <Input>(input: Input, maximum = MAX_QUESTIONS): unknown[] | undefined => {
   if (!Array.isArray(input)) return undefined;
-  const length: unknown = input.length;
+  const items: readonly unknown[] = input;
+  const length: unknown = items.length;
   if (!Schema.is(SmallLength)(length) || length > maximum) return undefined;
-  return Array.from({ length }, (_, index) => input[index]);
+  return Array.from({ length }, (_, index) => items[index]);
 };
 export const decodeQuestionnaireRequest = <Input>(input: Input): AskUserRequest | undefined => {
   try {
     const root = Schema.decodeUnknownSync(RawRequest)(input);
     const questions = captureArray(root.questions);
     if (!questions) return undefined;
-    const captured = questions.map((input) => {
-      const question = Schema.decodeUnknownSync(RawQuestion)(input);
+    const captured = questions.map((item) => {
+      const question = Schema.decodeUnknownSync(RawQuestion)(item);
       if (question.mode === "text") return question;
       const choices = captureArray(question.choices, MAX_CHOICES);
-      return {
-        ...question,
+      return Object.assign({}, question, {
         choices: choices?.map((choice) => Schema.decodeUnknownSync(RawChoice)(choice)),
-      };
+      });
     });
     const request = normalizeAskUserRequest(
       Schema.decodeUnknownSync(QuestionnaireRequestSchema)({ questions: captured }),
@@ -157,18 +157,19 @@ export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome 
     const root = Schema.decodeUnknownSync(RawOutcome)(input);
     const answers = captureArray(root.answers);
     if (!answers) return undefined;
-    const captured = answers.map((input) => {
-      const answer = Schema.decodeUnknownSync(RawAnswer)(input);
+    const captured = answers.map((item) => {
+      const answer = Schema.decodeUnknownSync(RawAnswer)(item);
       if (answer.kind === "text" && Schema.is(Schema.String)(answer.text)) {
         const checked = validateQuestionnaireInput(answer.text, "text");
-        return checked.error === undefined ? { ...answer, text: checked.value } : undefined;
+        return checked.error === undefined
+          ? Object.assign({}, answer, { text: checked.value })
+          : undefined;
       }
       return answer.kind === "choices"
-        ? {
-            ...answer,
+        ? Object.assign({}, answer, {
             values: captureArray(answer.values, MAX_CHOICES),
             labels: captureArray(answer.labels, MAX_CHOICES),
-          }
+          })
         : answer;
     });
     return Schema.decodeUnknownSync(QuestionnaireOutcomeSchema)({

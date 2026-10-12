@@ -77,8 +77,11 @@ export const configuredKeyLabels = (
   keybindingLabel: ((id: FullScreenSelectionKeybindingId, fallback: string) => string) | undefined,
   reserved: ReadonlySet<string>,
 ) => {
-  const key = (id: FullScreenSelectionKeybindingId, fallback: string): string =>
-    filterReservedKeyLabel(keybindingLabel?.(id, fallback) || fallback, reserved, fallback);
+  const key = (id: FullScreenSelectionKeybindingId, fallback: string): string => {
+    const configured = keybindingLabel?.(id, fallback);
+    const label = configured === undefined || configured === "" ? fallback : configured;
+    return filterReservedKeyLabel(label, reserved, fallback);
+  };
   const movement = keybindingLabel
     ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
     : undefined;

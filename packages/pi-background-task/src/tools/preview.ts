@@ -176,7 +176,7 @@ function previewRows(input: BackgroundTaskPreviewInput, theme: PreviewTheme): Ro
   const body = details.action === "logs" ? [] : detailRows(details, text, args, true, theme);
   const snapshot = resultSnapshot(details);
   return [
-    ...body.map((row) => ({ ...row, wrap: true })),
+    ...body.map((row) => ({ text: row.text, wrap: true })),
     ...(snapshot ? [{ text: taskProcessLine(snapshot, theme), wrap: true }] : []),
     ...rawRows(text, theme),
   ];

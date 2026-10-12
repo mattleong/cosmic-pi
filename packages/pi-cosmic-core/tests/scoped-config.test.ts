@@ -91,8 +91,8 @@ const scopedDocuments = {
 };
 const changed = (document: JsonObject): JsonObject => ({ ...document, changed: true });
 
-testLayer(Path.layer)("scoped config store", (it) => {
-  it.effect("resolves empty scopes without seeding when no default document is supplied", () => {
+testLayer(Path.layer)("scoped config store", (test) => {
+  test.effect("resolves empty scopes without seeding when no default document is supplied", () => {
     const memory = makeInMemoryDocuments();
     return Effect.gen(function* () {
       const resolved = yield* readOnlyStore.resolveConfig("/project", "/agent", true);
@@ -111,7 +111,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
     {},
   ];
   for (const document of competingDocuments) {
-    it.effect(`seeds only if still missing after inspection: ${JSON.stringify(document)}`, () =>
+    test.effect(`seeds only if still missing after inspection: ${JSON.stringify(document)}`, () =>
       Effect.gen(function* () {
         const memory = makeInMemoryDocuments();
         const locked = yield* Deferred.make<void>();
@@ -161,7 +161,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
   }
 
   for (const operation of ["read", "decode", "preserve"]) {
-    it.effect(`never rewrites a raced global document: ${operation}`, () =>
+    test.effect(`never rewrites a raced global document: ${operation}`, () =>
       Effect.gen(function* () {
         const inspected = yield* Deferred.make<void>();
         const committed = yield* Deferred.make<void>();
@@ -202,7 +202,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
     );
   }
 
-  it.effect("does not report a seeded global document when its location cannot be read", () => {
+  test.effect("does not report a seeded global document when its location cannot be read", () => {
     const logger = makeCapturedLogger();
     const documents = JsonDocumentStore.layer.pipe(
       Layer.provide(
@@ -227,7 +227,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
   });
 
   for (const operation of ["inspect", "encode", "write"]) {
-    it.effect(`does not tolerate a default seed ${operation} failure`, () => {
+    test.effect(`does not tolerate a default seed ${operation} failure`, () => {
       let inspections = 0;
       const denied = PlatformError.systemError({
         _tag: "PermissionDenied",
@@ -263,7 +263,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
     });
   }
 
-  it.effect("an existing trusted project wins precedence even when it cannot be read", () => {
+  test.effect("an existing trusted project wins precedence even when it cannot be read", () => {
     const memory = makeInMemoryDocuments(scopedDocuments);
     const malformedProject = Layer.succeed(JsonDocumentStore, {
       ...memory.service,
@@ -285,7 +285,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
     }).pipe(Effect.provide(malformedProject));
   });
 
-  it.effect("omitted trust fails closed without project-document I/O", () => {
+  test.effect("omitted trust fails closed without project-document I/O", () => {
     const memory = makeInMemoryDocuments(scopedDocuments);
     return Effect.gen(function* () {
       const resolved = yield* testStore.resolveConfig("/project", "/agent");
@@ -298,7 +298,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
     }).pipe(Effect.provide(memory.layer));
   });
 
-  it.effect("resolveCommittedConfig updates scope metadata and preserves overlays", () => {
+  test.effect("resolveCommittedConfig updates scope metadata and preserves overlays", () => {
     const memory = makeInMemoryDocuments();
     return Effect.gen(function* () {
       const absent = yield* readOnlyStore.resolveConfig("/project", "/agent", true);
@@ -330,7 +330,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
     }).pipe(Effect.provide(memory.layer));
   });
 
-  it.effect("a preferred-scope project commit overlays a readable global document", () => {
+  test.effect("a preferred-scope project commit overlays a readable global document", () => {
     const memory = makeInMemoryDocuments(scopedDocuments);
     return Effect.gen(function* () {
       const current = yield* testStore.resolveConfig("/project", "/agent", true);
@@ -347,7 +347,7 @@ testLayer(Path.layer)("scoped config store", (it) => {
     }).pipe(Effect.provide(memory.layer));
   });
 
-  it.effect("an unreadable global fallback fails the commit unless it is tolerated", () => {
+  test.effect("an unreadable global fallback fails the commit unless it is tolerated", () => {
     const memory = makeInMemoryDocuments(scopedDocuments);
     const unreadableGlobal = Layer.succeed(JsonDocumentStore, {
       ...memory.service,

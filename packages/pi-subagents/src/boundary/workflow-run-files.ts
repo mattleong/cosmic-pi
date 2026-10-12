@@ -74,7 +74,7 @@ const newestRunDirectories = (root: string) =>
     );
     return dated
       .flat()
-      .sort((left, right) => right.at - left.at || right.name.localeCompare(left.name));
+      .toSorted((left, right) => right.at - left.at || right.name.localeCompare(left.name));
   });
 
 export const listWorkflowRunDirectories = (

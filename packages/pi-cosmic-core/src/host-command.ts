@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import { notifyAtHostBoundary } from "./host-session.ts";
 
 interface CommandCompletion {
@@ -67,7 +68,7 @@ export const completeExtensionCommand = (
   const subcommand = subcommands.find((entry) => entry.name === head);
   const inner = subcommand?.complete?.(rest.trimStart());
   if (!inner || inner.length === 0) return null;
-  return inner.map((choice) => ({ ...choice, value: `${head} ${choice.value}` }));
+  return inner.map((choice) => Object.assign({}, choice, { value: `${head} ${choice.value}` }));
 };
 
 const extensionCommandOverview = (
@@ -96,7 +97,9 @@ const settle = (run: () => Promise<void> | void): Promise<void> => {
   try {
     return Promise.resolve(run());
   } catch (error) {
-    return Promise.reject(error);
+    return Promise.reject(
+      Predicate.isError(error) ? error : new Error("The command failed.", { cause: error }),
+    );
   }
 };
 

@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { applyPresentationSettings, renderContextFixture } from "../../../testing";
 import type {
@@ -573,7 +574,7 @@ describe("builtin factory compact integration", () => {
       undefined,
       {},
       fresh,
-      JSON.parse(JSON.stringify(fresh)),
+      Schema.decodeSync(Schema.fromJsonString(Schema.Json))(JSON.stringify(fresh)),
       accessor,
       { codePreviewBeforeWrite: { kind: "content", byteLength: 12 } },
       { codePreviewBeforeWrite: { kind: "unrecognized" } },

@@ -46,13 +46,13 @@ export const openSupervisorClient = (
               ),
               Effect.provideService(Socket.Socket, socket),
             );
-            const rpc = yield* RpcClient.make(SupervisorRpcGroup).pipe(
+            const client = yield* RpcClient.make(SupervisorRpcGroup).pipe(
               Effect.provideService(RpcClient.Protocol, protocol),
             );
-            const opened = yield* rpc
+            const session = yield* client
               .SupervisorOpenSession(auth)
               .pipe(Effect.timeout(CONNECT_TIMEOUT_MILLIS));
-            return { rpc, opened } as const;
+            return { rpc: client, opened: session } as const;
           }).pipe(Scope.provide(connection)),
         ).pipe(
           Effect.onExit((exit) =>

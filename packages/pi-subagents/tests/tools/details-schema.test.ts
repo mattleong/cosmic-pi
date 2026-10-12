@@ -120,7 +120,9 @@ describe("subagent detail evidence", () => {
     expect(
       decodeCompactToolDetails({
         ...historical,
-        cards: historical.cards.map((card) => ({ ...card, steeringDelivery: "invented" })),
+        cards: historical.cards.map((card) =>
+          Object.assign({}, card, { steeringDelivery: "invented" }),
+        ),
       }),
     ).toBeUndefined();
   });
@@ -173,7 +175,9 @@ describe("subagent detail evidence", () => {
     if (details.action === "models") throw new Error("Expected run-card details.");
     const forged = {
       ...details,
-      cards: details.cards.map((card) => ({ ...card, writeViolationOffender: false })),
+      cards: details.cards.map((card) =>
+        Object.assign({}, card, { writeViolationOffender: false }),
+      ),
     };
     expect(decodeCompactToolDetails(forged)).toBeUndefined();
 
@@ -192,13 +196,15 @@ describe("subagent detail evidence", () => {
     if (peer.action === "models") throw new Error("Expected run-card details.");
     const projectedOffender = {
       ...peer,
-      cards: peer.cards.map((card) => ({ ...card, writeViolationOffender: true })),
+      cards: peer.cards.map((card) => Object.assign({}, card, { writeViolationOffender: true })),
     };
     expect(decodeCompactToolDetails(projectedOffender)).toEqual(projectedOffender);
     expect(
       decodeCompactToolDetails({
         ...projectedOffender,
-        cards: projectedOffender.cards.map((card) => ({ ...card, writeIntent: "read-only" })),
+        cards: projectedOffender.cards.map((card) =>
+          Object.assign({}, card, { writeIntent: "read-only" }),
+        ),
       }),
     ).toBeUndefined();
   });

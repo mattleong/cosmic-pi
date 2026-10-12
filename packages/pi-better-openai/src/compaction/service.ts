@@ -268,7 +268,10 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
               return yield* compactionError("context", "No safe compaction boundary is available.");
             return yield* compactWithPi(MutableRef.get(options.context), event, preparation);
           });
-          if (!ctx.model || !findActiveOpenAICompactionCheckpoint(branch, ctx.model))
+          if (
+            !isEligibleOpenAICompactionModel(ctx.model) ||
+            !findActiveOpenAICompactionCheckpoint(branch, ctx.model)
+          )
             return yield* fallback();
           const result = yield* compactOpenAI(event).pipe(Effect.catch(() => fallback()));
           return result ?? (yield* fallback());

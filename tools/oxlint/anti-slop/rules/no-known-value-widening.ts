@@ -55,15 +55,12 @@ function hasKnownEvidence(
 	const variable = resolveVariable(sourceCode, unwrapped);
 	if (variable === null || visitedVariables.has(variable)) return false;
 	const declarator = variableDeclarator(variable);
-	if (
-		declarator === null ||
-		declarator.init === null ||
-		!isStableConstVariable(variable, declarator)
-	) {
+	const init = declarator?.init ?? null;
+	if (declarator === null || init === null || !isStableConstVariable(variable, declarator)) {
 		return false;
 	}
 	visitedVariables.add(variable);
-	return hasKnownEvidence(sourceCode, declarator.init, visitedVariables);
+	return hasKnownEvidence(sourceCode, init, visitedVariables);
 }
 
 function annotationTarget(
@@ -190,7 +187,7 @@ export const noKnownValueWideningRule = defineRule({
 				const variable = resolveVariable(context.sourceCode, node.left);
 				if (variable === null) return;
 				const declarator = variableDeclarator(variable);
-				if (declarator === null || declarator.id.type !== "Identifier") return;
+				if (declarator?.id.type !== "Identifier") return;
 				reportFlow(
 					node.right,
 					targetFromAnnotation(declarator.id.typeAnnotation),

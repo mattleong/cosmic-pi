@@ -40,7 +40,7 @@ export function renderProfileDashboard(
   const child = state.framedChild
     ? state.rows.map((line) => sliceByColumn(line, 1, inner))
     : state.rows;
-  const footer = (state.framedChild && child.length > 1 && child.at(-1)) || "";
+  const footer = state.framedChild && child.length > 1 ? (child.at(-1) ?? "") : "";
   const body = state.framedChild && child.length > 1 ? child.slice(0, -1) : child;
   return framedScreen(frame, {
     width,

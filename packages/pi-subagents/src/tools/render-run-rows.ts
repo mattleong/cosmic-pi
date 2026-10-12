@@ -185,6 +185,6 @@ export const renderResponsiveRunRows = (
         compactIdentityWidth,
       )} · ${clipToWidth(theme.fg(color, compactStatus), compactStatusWidth)}`;
     })();
-    return [identityLine, ...renderRouteRail(run, safeWidth, theme)];
+    return [identityLine].concat(renderRouteRail(run, safeWidth, theme));
   });
 };

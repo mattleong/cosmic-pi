@@ -293,7 +293,7 @@ describe("planned workflow agents", () => {
   it("admits planned rows only after real work and counts those that don't fit", () => {
     const titles = ["Inventory", "Audit", "Fix", "Verify"];
     const workflow = workflowRow("harden", titles, "running", "Inventory", {
-      phases: titles.map((title) => ({ title, ...(title === "Verify" && { planned: 9 }) })),
+      phases: titles.map((title) => (title === "Verify" ? { title, planned: 9 } : { title })),
     });
     const work = ["one", "two"].map((id) => memberRow(id, workflow, "Inventory"));
     const plan = ["Audit", "Fix", "Verify"].flatMap((phase) =>

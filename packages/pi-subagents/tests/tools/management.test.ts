@@ -267,7 +267,7 @@ describe("subagent tool", () => {
         runIds: ["agent-1", "agent-2"],
         message: "Conclude now.",
       });
-      expect([...sent].sort()).toEqual(["agent-1", "agent-2"]);
+      expect([...sent].toSorted()).toEqual(["agent-1", "agent-2"]);
       expect(sentResult?.content[0]?.text).toBe(
         "Guidance delivered to 2 subagents: agent-1, agent-2.",
       );
@@ -352,7 +352,7 @@ describe("subagent tool", () => {
       { runIds: [waiting.id], until: "all_finished" },
       {
         signal: immediateController.signal,
-        update: (result) => immediateUpdates.push(resultText(result)),
+        update: (partial) => immediateUpdates.push(resultText(partial)),
       },
     );
     const immediateResult = yield* step(() => immediate);
@@ -598,7 +598,7 @@ describe("subagent tool", () => {
       runIds: ids,
       message: "Continue",
     });
-    expect(completed).toEqual([...ids].reverse());
+    expect(completed).toEqual([...ids].toReversed());
     expect(result?.details).toMatchObject({
       cards: [{ id: "success-1" }, { id: "success-2" }],
       actionFailures: [

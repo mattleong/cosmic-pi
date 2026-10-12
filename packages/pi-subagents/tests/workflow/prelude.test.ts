@@ -8,6 +8,7 @@ import {
   type WorkflowSandboxOutcome,
 } from "../../src/boundary/codemode-sandbox.ts";
 import { decodeWorkflowAgentOptions } from "../../src/workflow/options.ts";
+import { stringMatching } from "../support/matchers.ts";
 
 const JsonFields = Schema.Record(Schema.String, Schema.Json);
 type JsonFields = typeof JsonFields.Type;
@@ -192,7 +193,7 @@ describe("workflow prelude", () => {
         const { outcome } = yield* run(`await agent('ok');\n\n${line}\nreturn 'done';`);
         expect(failure(outcome), line).toMatchObject({
           message,
-          stack: expect.stringMatching(/line 3:\d+/u),
+          stack: stringMatching(/line 3:\d+/u),
         });
       }
     }),

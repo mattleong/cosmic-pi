@@ -1,22 +1,30 @@
 import { access, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-export async function workspacePackageDirectories(rootDir = resolve(import.meta.dirname, "..")) {
-  const directories = [];
+function missingFile(error: Error): boolean {
+  return "code" in error && error.code === "ENOENT";
+}
+
+export async function workspacePackageDirectories(
+  rootDir = resolve(import.meta.dirname, ".."),
+): Promise<string[]> {
+  const directories: string[] = [];
   for (const entry of await readdir(join(rootDir, "packages"), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const directory = join(rootDir, "packages", entry.name);
     try {
       await access(join(directory, "package.json"));
       directories.push(directory);
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
+    } catch (cause) {
+      if (!(cause instanceof Error) || !missingFile(cause)) throw cause;
     }
   }
-  return directories.sort((left, right) => (left === right ? 0 : left < right ? -1 : 1));
+  return directories.toSorted((left, right) => (left === right ? 0 : left < right ? -1 : 1));
 }
 
-export async function workspaceManifestPaths(rootDir = resolve(import.meta.dirname, "..")) {
+export async function workspaceManifestPaths(
+  rootDir = resolve(import.meta.dirname, ".."),
+): Promise<string[]> {
   const packageDirectories = await workspacePackageDirectories(rootDir);
   return [rootDir, ...packageDirectories].map((directory) => join(directory, "package.json"));
 }

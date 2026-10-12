@@ -1,6 +1,24 @@
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
+import { Schema } from "effect";
+
+const Request = Schema.Struct({
+  id: Schema.optional(Schema.Json),
+  method: Schema.optional(Schema.String),
+  params: Schema.optional(
+    Schema.Struct({
+      protocolVersion: Schema.optional(Schema.String),
+      arguments: Schema.optional(Schema.Struct({ text: Schema.optional(Schema.String) })),
+      uri: Schema.optional(Schema.String),
+    }),
+  ),
+});
+
+type Request = typeof Request.Type;
+
+const requestFromJson = Schema.decodeUnknownSync(Schema.fromJsonString(Request));
+
 const marker = process.argv[2];
 if (!marker) throw new Error("Native MCP fixture needs a lifecycle marker path.");
 writeFileSync(marker, JSON.stringify({ pid: process.pid, state: "running" }));
@@ -11,26 +29,20 @@ const finish = () => {
   writeFileSync(marker, JSON.stringify({ pid: process.pid, state: "closed" }));
   process.exit(0);
 };
-input.on("close", finish);
-process.on("SIGTERM", finish);
-input.on("line", (line) => {
-  const request = JSON.parse(line);
-  if (request.id === undefined) return;
-  let result;
+
+function resultFor(request: Request) {
   switch (request.method) {
     case "initialize":
-      result = {
-        protocolVersion: request.params.protocolVersion,
+      return {
+        protocolVersion: request.params?.protocolVersion,
         capabilities: { tools: {}, resources: {} },
         serverInfo: { name: "cosmic-pack-fixture", version: "1.0.0" },
         instructions: "Local packed-source echo fixture",
       };
-      break;
     case "ping":
-      result = {};
-      break;
+      return {};
     case "tools/list":
-      result = {
+      return {
         tools: [
           {
             name: "echo",
@@ -44,35 +56,44 @@ input.on("line", (line) => {
           },
         ],
       };
-      break;
     case "tools/call":
-      result = {
+      return {
         content: [
-          { type: "text", text: request.params.arguments.text },
+          { type: "text", text: request.params?.arguments?.text },
           { type: "image", mimeType: "image/png", data: png },
         ],
-        structuredContent: { echoed: request.params.arguments.text },
+        structuredContent: { echoed: request.params?.arguments?.text },
         isError: false,
       };
-      break;
     case "resources/list":
-      result = {
+      return {
         resources: [{ uri: "fixture://packed", name: "Packed source", mimeType: "text/plain" }],
       };
-      break;
     case "resources/templates/list":
-      result = { resourceTemplates: [] };
-      break;
+      return { resourceTemplates: [] };
     case "resources/read":
-      result = {
-        contents: [{ uri: request.params.uri, mimeType: "text/plain", text: "packed resource" }],
+      return {
+        contents: [{ uri: request.params?.uri, mimeType: "text/plain", text: "packed resource" }],
       };
-      break;
+    case undefined:
     default:
-      process.stdout.write(
-        `${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Method not found" } })}\n`,
-      );
-      return;
+      return undefined;
   }
-  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
+}
+
+input.on("close", finish);
+process.on("SIGTERM", finish);
+input.on("line", (line) => {
+  const request = requestFromJson(line);
+  if (request.id === undefined) return;
+  const result = resultFor(request);
+  const response =
+    result === undefined
+      ? {
+          jsonrpc: "2.0",
+          id: request.id,
+          error: { code: -32601, message: "Method not found" },
+        }
+      : { jsonrpc: "2.0", id: request.id, result };
+  process.stdout.write(`${JSON.stringify(response)}\n`);
 });

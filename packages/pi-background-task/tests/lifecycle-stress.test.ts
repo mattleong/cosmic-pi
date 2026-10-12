@@ -200,8 +200,8 @@ describe("background task lifecycle stress", () => {
           if (failure._tag === "BackgroundTerminationError") {
             expect(new Set(failure.id.split(", "))).toEqual(new Set([tasks[0]!.id, tasks[16]!.id]));
           }
-          expect((yield* service.list("active")).map((task) => task.id).sort()).toEqual(
-            [tasks[0]!.id, tasks[16]!.id].sort(),
+          expect((yield* service.list("active")).map((task) => task.id).toSorted()).toEqual(
+            [tasks[0]!.id, tasks[16]!.id].toSorted(),
           );
           fixtures[0]!.recover();
           fixtures[16]!.recover();

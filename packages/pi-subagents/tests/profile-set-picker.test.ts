@@ -98,7 +98,7 @@ describe("saved profile-set library", () => {
       projectTrusted: true,
     });
     const entry = profileSetPickerEntries(value, true).find(
-      (entry) => entry.key === "project:partial",
+      (option) => option.key === "project:partial",
     );
     if (entry?.kind !== "set") throw new Error("Missing project set");
     expect(entry.preview.find((profile) => profile.id === "scout")).toMatchObject({
@@ -207,7 +207,7 @@ describe("saved profile-set library", () => {
 
   it("offers complete More actions and keeps a default set's Delete unavailable", () => {
     const menu = (value: ProfileSettingsInspection, key: string) => {
-      const entry = profileSetPickerEntries(value, true).find((candidate) => candidate.key === key);
+      const entry = profileSetPickerEntries(value, true).find((option) => option.key === key);
       if (entry?.kind !== "set" && entry?.kind !== "invalid-default") throw new Error(key);
       return savedSetMenuChoices(entry).map(({ payload, enabled }) => [payload, enabled !== false]);
     };
@@ -288,7 +288,7 @@ describe("saved profile-set library", () => {
     (scope) => {
       const value = malformedDefaultInspection(scope);
       const entry = profileSetPickerEntries(value, true).find(
-        (candidate) => candidate.kind === "invalid-default" && candidate.scope === scope,
+        (option) => option.kind === "invalid-default" && option.scope === scope,
       );
       expect(entry).toMatchObject({ kind: "invalid-default", scope, scopeDefault: true });
 

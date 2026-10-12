@@ -16,7 +16,7 @@ export type SettlementState = PendingInitializationSettlement["state"];
 const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => {
   switch (terminal?.stopReason) {
     case "error":
-      return `Final provider error: ${terminal.errorMessage || "provider returned no diagnostic"}`;
+      return `Final provider error: ${(terminal.errorMessage ?? "") || "provider returned no diagnostic"}`;
     case "aborted":
       return "Assignment aborted without a parent stop or correlated pause.";
     case "length":

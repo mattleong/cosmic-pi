@@ -71,7 +71,7 @@ const startDetailsCandidate = (
 ): SubagentStartDetails => {
   const failures = input.startFailures
     ? [...input.startFailures]
-        .sort((left, right) => left.index - right.index)
+        .toSorted((left, right) => left.index - right.index)
         .slice(0, MAX_START_BATCH)
         .map((failure) => projectFailure(failure, density))
     : undefined;

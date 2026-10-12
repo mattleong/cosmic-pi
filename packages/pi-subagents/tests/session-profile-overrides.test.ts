@@ -22,6 +22,7 @@ import {
 } from "../src/profiles/session-overrides.ts";
 import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
 import { profileCandidate as candidate } from "./fixtures/profiles.ts";
+import { stringContaining } from "./support/matchers.ts";
 
 const route = (model: string): ProfileRoute => ({ candidates: [candidate(model)] });
 
@@ -372,7 +373,7 @@ describe("session profile overrides", () => {
         _tag: "SessionProfileConflictError",
         expectedRevision: MAX_SESSION_PROFILE_REVISION,
         actualRevision: MAX_SESSION_PROFILE_REVISION,
-        message: expect.stringContaining("exact-integer limit"),
+        message: stringContaining("exact-integer limit"),
       });
     }),
   );
@@ -459,7 +460,7 @@ describe("session profile overrides", () => {
           }),
         ).toMatchObject({
           kind: "failed",
-          message: expect.stringContaining("/subagents profiles"),
+          message: stringContaining("/subagents profiles"),
         });
 
         const conflict = yield* service

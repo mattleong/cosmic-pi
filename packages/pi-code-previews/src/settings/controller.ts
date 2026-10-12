@@ -90,7 +90,7 @@ function codePreviewSettingsCommand(isCurrent: () => boolean): ExtensionSubcomma
         return Promise.resolve(Result.fail({ message: `${id} can't be set to ${value}` }));
       return persistSettingsChange(next, previousTheme, loadOptions(ctx)).then(
         () => Result.succeed(undefined),
-        (error) => Result.fail({ message: formatSettingsSaveError(error) }),
+        (cause: unknown) => Result.fail({ message: formatSettingsSaveError(cause) }),
       );
     },
     open: (ctx, session) => {

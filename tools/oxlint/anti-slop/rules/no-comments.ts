@@ -57,7 +57,7 @@ function mergedRemovals(text: string, comments: readonly Comment[]): Map<Comment
   let group: Edit | undefined;
   for (const comment of comments) {
     const edit = removal(text, comment);
-    if (owner && group && group.replacement === "" && edit.replacement === "" && edit.start <= group.end) {
+    if (owner && group?.replacement === "" && edit.replacement === "" && edit.start <= group.end) {
       group = { start: group.start, end: Math.max(group.end, edit.end), replacement: "" };
       owners.set(owner, group);
       continue;

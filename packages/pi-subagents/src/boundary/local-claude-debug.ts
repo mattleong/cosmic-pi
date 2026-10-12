@@ -144,7 +144,7 @@ const ownedLedgerDirectories = Effect.fn("LocalClaudeDebug.ownedLedgers")(functi
   );
   return owned
     .filter((entry): entry is OwnedLedgerDirectory => Boolean(entry))
-    .sort((left, right) => left.modifiedAt - right.modifiedAt);
+    .toSorted((left, right) => left.modifiedAt - right.modifiedAt);
 });
 
 const persistLedger = Effect.fn("LocalClaudeDebug.persist")(function* (

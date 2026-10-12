@@ -189,7 +189,7 @@ describe("activity ownership", () => {
       const root = row(`root-${branch}`);
       return [
         root,
-        ...Array.from({ length: 200 }, (_, index) =>
+        ...Array.from({ length: 200 }, (_slot, index) =>
           row(`done-${branch}-${index}`, "done", root.id),
         ),
       ];

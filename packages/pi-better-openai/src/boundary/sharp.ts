@@ -67,9 +67,9 @@ export const makeSharpAdapter = (run: SharpProcessRunner = runDecoder): SharpAda
               cleanupConfirmed = confirmed;
             }),
           ).pipe(
-            Effect.tap((result) =>
+            Effect.tap((outcome) =>
               Effect.sync(() => {
-                if (result.cleanupUnconfirmed) cleanupConfirmed = false;
+                if (outcome.cleanupUnconfirmed) cleanupConfirmed = false;
               }),
             ),
             Effect.ensuring(

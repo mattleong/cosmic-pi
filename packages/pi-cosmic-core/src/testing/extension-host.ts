@@ -4,6 +4,7 @@ import {
   type ExtensionContext,
   type MessageRenderer,
   type RegisteredCommand,
+  type SlashCommandInfo,
   type SourceInfo,
   type ToolDefinition,
   type ToolRendererResolver,
@@ -111,12 +112,11 @@ export const recordingExtensionHost = (
           sourceInfo: options.toolSource ?? source,
         })),
       getCommands: () =>
-        [...commands].map(([name, command]) => ({
-          name,
-          ...(command.description !== undefined && { description: command.description }),
-          source: "extension" as const,
-          sourceInfo: source,
-        })),
+        [...commands].map(([name, command]) => {
+          const info: SlashCommandInfo = { name, source: "extension", sourceInfo: source };
+          if (command.description !== undefined) info.description = command.description;
+          return info;
+        }),
       getActiveTools: () => [...active],
       setActiveTools: (names: ReadonlyArray<string>) => {
         active = names.filter((name) => name === "read" || tools.has(name));

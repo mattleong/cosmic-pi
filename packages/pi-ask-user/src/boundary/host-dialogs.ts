@@ -267,7 +267,7 @@ const runRpc = (
       const selected = yield* dialogCall((signal) =>
         ctx.ui.select(reviewTitle, options, { signal }),
       );
-      if (selected === undefined || selected === options[options.length - 1]) {
+      if (selected === undefined || selected === options.at(-1)) {
         return cancelQuestionnaire();
       }
       if (selected === options[0]) {

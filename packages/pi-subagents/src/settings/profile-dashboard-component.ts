@@ -66,14 +66,14 @@ export class ProfileDashboardComponent implements Component, Focusable {
     });
     this.editor({ kind: "session" });
   }
-  private current = (): boolean => {
+  private readonly current = (): boolean => {
     if (this.disposed) return false;
     if (this.options.isCurrent()) return true;
     this.dispose();
     this.options.workspace.close();
     return false;
   };
-  private renderSoon = (): void => {
+  private readonly renderSoon = (): void => {
     if (this.current()) this.options.workspace.requestRender();
   };
   private host(framed = true) {
@@ -210,9 +210,9 @@ export class ProfileDashboardComponent implements Component, Focusable {
         this.publish(latest);
         return latest;
       })
-      .catch((error) => {
+      .catch((cause: unknown) => {
         if (this.current()) this.blocked = true;
-        throw error;
+        throw cause;
       });
   }
   private act(action: ProfileSetPickerAction): void {
@@ -293,9 +293,9 @@ export class ProfileDashboardComponent implements Component, Focusable {
       },
       action,
     )
-      .catch((error) => {
+      .catch((cause: unknown) => {
         if (!this.current()) return;
-        this.message = error instanceof Error ? error.message : "Could not update profiles.";
+        this.message = cause instanceof Error ? cause.message : "Could not update profiles.";
         return this.refresh().then(
           (inspection) => {
             if (this.current()) this.visit.reconcile(inspection);

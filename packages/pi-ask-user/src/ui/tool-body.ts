@@ -81,10 +81,12 @@ export function answersBody(
       if (rest.some((entry) => entry.trim()) || visibleWidth(line) > width) cut = true;
       return clipToWidth(line, width);
     };
-    const rendered = entries.flatMap(({ label, value, note }) => [
-      fit(`${theme.fg("muted", `${label}:`)} `, value, (line) => line),
-      ...(note === undefined ? [] : [fit("  ", note, (line) => theme.fg("dim", `Note: ${line}`))]),
-    ]);
+    const rendered = entries.flatMap(({ label, value, note }) => {
+      const answerLine = fit(`${theme.fg("muted", `${label}:`)} `, value, (line) => line);
+      return note === undefined
+        ? [answerLine]
+        : [answerLine, fit("  ", note, (line) => theme.fg("dim", `Note: ${line}`))];
+    });
     if (cut)
       rendered.push(clipToWidth(renderExpansionAffordance("Full answers", false, theme), width));
     return rendered;

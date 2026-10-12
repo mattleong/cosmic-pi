@@ -226,6 +226,10 @@ export const nativeCodemodeSummary =
     if (phase !== "settled") return summary;
     if (!header) return undefined;
     if (header === "failed")
-      return scriptFailure(summary, result, Boolean(evidence.fullOutputPath || truncatedEnvelope));
-    return completedOutcome(summary, calls, complete, Boolean(context.isError || result.isError));
+      return scriptFailure(
+        summary,
+        result,
+        Boolean(evidence.fullOutputPath) || truncatedEnvelope !== undefined,
+      );
+    return completedOutcome(summary, calls, complete, context.isError || result.isError === true);
   };

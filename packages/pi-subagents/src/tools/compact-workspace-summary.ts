@@ -173,7 +173,12 @@ function operationIssues(details: WorkspaceToolDetails): CompactIssue[] {
         },
       ];
     case "integrate":
-      return (details.warnings ?? []).map((warning) => ({ severity: "warning", ...warning }));
+      return (details.warnings ?? []).map((warning) => ({
+        severity: "warning",
+        code: warning.code,
+        message: warning.message,
+        detail: warning.detail,
+      }));
     case "discard":
       return [];
   }

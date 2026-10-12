@@ -62,7 +62,7 @@ describe("workflow runs", () => {
         started.id,
         (run) => run.agents.length === 3 && run.agents.some((agent) => agent.state === "running"),
       );
-      expect(queued.agents.map((agent) => agent.state).sort()).toEqual([
+      expect(queued.agents.map((agent) => agent.state).toSorted()).toEqual([
         "queued",
         "queued",
         "running",

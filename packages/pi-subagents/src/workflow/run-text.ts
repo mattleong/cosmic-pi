@@ -190,7 +190,7 @@ export const workflowFailureLine = (
   failure: WorkflowFailure | undefined,
   clip: (text: string) => string = verbatim,
 ): string =>
-  `${failure?.name || "Error"}: ${clip(failure ? failure.message : "The script failed.")}`;
+  `${(failure?.name ?? "") || "Error"}: ${clip(failure ? failure.message : "The script failed.")}`;
 
 export const workflowFailureSection = (
   run: WorkflowRunView,

@@ -46,8 +46,7 @@ export type UsageFetchOutcome<Snapshot, Patch> =
   | { readonly _tag: "Failure"; readonly message: string; readonly patch?: Patch }
   | { readonly _tag: "Success"; readonly snapshot: Snapshot; readonly patch: Patch };
 
-const hostHasUi = (ctx: ExtensionContext): boolean =>
-  invokeHostCallback(() => ctx.hasUI !== false, true);
+const hostHasUi = (ctx: ExtensionContext): boolean => invokeHostCallback(() => ctx.hasUI, true);
 
 type RefreshValue<Snapshot, Patch> =
   | { readonly _tag: "Skipped" }
@@ -318,10 +317,10 @@ export const makeUsageRefreshController = <
       provideDependencies(refreshEngine.request(request));
     const contextChanged = (clearUsage = false) =>
       provideDependencies(refreshEngine.invalidateWith(synchronize(clearUsage)));
-    const installConfig = (config: Resolved) =>
+    const installConfig = (installed: Resolved) =>
       provideDependencies(
         refreshEngine.invalidateWith(
-          updateState((latest) => mergeState(latest, { config })).pipe(
+          updateState((latest) => mergeState(latest, { config: installed })).pipe(
             Effect.andThen(synchronize(true)),
           ),
         ),

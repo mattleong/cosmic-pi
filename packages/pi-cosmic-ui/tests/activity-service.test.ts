@@ -112,14 +112,15 @@ describe("activity service", () => {
         expect(starting()).toBe(2);
         yield* service.receive({ ...event, operation: "publish", starting: 3 });
         expect(starting()).toBe(3);
-        const pending: ActivityItem[] = ["a", "b", "c"].map((id) => ({
-          ...item(),
-          id,
-          kind: "agent",
-          status: "pending",
-          inputTarget: undefined,
-          blockedReason: undefined,
-        }));
+        const pending: ActivityItem[] = ["a", "b", "c"].map((id) =>
+          Object.assign(item(), {
+            id,
+            kind: "agent",
+            status: "pending",
+            inputTarget: undefined,
+            blockedReason: undefined,
+          } as const),
+        );
         yield* service.receive({ ...event, operation: "publish", items: pending });
         expect(starting()).toBe(2);
         yield* service.receive({ ...event, operation: "publish", items: pending, starting: 0 });

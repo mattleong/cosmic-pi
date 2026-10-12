@@ -196,7 +196,7 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
   private renderDetails(hasResult: boolean, plan: CompactPlan, reuse = false): Component {
     const { summary } = plan;
     const status = compactStatus(plan.phase, plan.collapsedSummary);
-    const content = Boolean(summary && (this.contentCallRender || this.contentResultRender));
+    const content = Boolean(summary && (this.contentCallRender ?? this.contentResultRender));
     const callBody = this.detailSlot(
       "call",
       content,

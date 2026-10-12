@@ -134,8 +134,8 @@ export function makeAwaitExecution(
       interrupted = true;
     },
     wasInterrupted: () => interrupted,
-    markDeliveryAttempt: (ids: ReadonlyArray<string>) => {
-      for (const id of ids) deliveryAttemptedIds.add(id);
+    markDeliveryAttempt: (attempted: ReadonlyArray<string>) => {
+      for (const id of attempted) deliveryAttemptedIds.add(id);
     },
     cancelled,
   };

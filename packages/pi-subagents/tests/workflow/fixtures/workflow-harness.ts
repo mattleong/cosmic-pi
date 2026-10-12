@@ -198,12 +198,12 @@ const readMemoryScript = (path: string, source: string | undefined) =>
       )
     : parseWorkflowScript(source).pipe(
         Effect.mapError(
-          (script) =>
+          (scriptError) =>
             new WorkflowSourceError({
-              message: `${path}: ${script.message}`,
+              message: `${path}: ${scriptError.message}`,
               problem: "script",
               subject: fileName(path),
-              script,
+              script: scriptError,
             }),
         ),
       );

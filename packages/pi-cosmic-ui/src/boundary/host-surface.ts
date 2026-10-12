@@ -179,7 +179,7 @@ function mountOwnedSurface<A>(
     );
     void Promise.resolve(opened).then(
       (value) => complete({ _tag: "Settled", value }),
-      (cause) => complete({ _tag: "Failed", cause }),
+      (cause: unknown) => complete({ _tag: "Failed", cause }),
     );
   } catch (cause) {
     complete({ _tag: "Failed", cause });

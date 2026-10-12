@@ -215,9 +215,9 @@ describe("subagent activity provider", () => {
   });
 
   it("distinguishes claim peers, containment, review and recovery without enabling unsafe actions", () => {
-    const question = { requestId: "q", message: "private parent question" };
+    const privateQuestion = { requestId: "q", message: "private parent question" };
     const runs = [
-      view({ id: "question", state: "waiting_for_parent", question }),
+      view({ id: "question", state: "waiting_for_parent", question: privateQuestion }),
       view({ id: "missing", state: "waiting_for_parent" }),
       view({ id: "paused", state: "paused", capabilities: ["resume"] }),
       view({ id: "peer", state: "running", writeAdmissionPaused: true }),
@@ -231,7 +231,7 @@ describe("subagent activity provider", () => {
       view({
         id: "containment",
         state: "waiting_for_parent",
-        question,
+        question: privateQuestion,
         writeAdmissionPaused: true,
         writeViolationOffender: true,
       }),
@@ -264,16 +264,17 @@ describe("subagent activity provider", () => {
         .filter((item) => item.actions?.some((action) => action.id === "resume"))
         .map((item) => item.id),
     ).toEqual(["paused"]);
-    expect(JSON.stringify(items)).not.toContain(question.message);
+    expect(JSON.stringify(items)).not.toContain(privateQuestion.message);
     const recovered = subagentActivityItems({
       revision: 2,
-      runs: runs.map((run) => ({
-        ...run,
-        state: "running",
-        question: undefined,
-        writeAdmissionPaused: false,
-        writeViolationOffender: false,
-      })),
+      runs: runs.map((run) =>
+        Object.assign({}, run, {
+          state: "running" as const,
+          question: undefined,
+          writeAdmissionPaused: false,
+          writeViolationOffender: false,
+        }),
+      ),
     });
     expect(
       recovered.every(

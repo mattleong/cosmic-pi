@@ -33,6 +33,7 @@ import {
   worktreeWriter,
   until,
 } from "./fixtures/workflow-harness.ts";
+import { anyNumber, objectContaining } from "../support/matchers.ts";
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
@@ -355,7 +356,7 @@ describe("workflow runs a restart interrupted", () => {
         expect.objectContaining({
           runId,
           outcome: "interrupted",
-          agents: expect.objectContaining({ total: 1 }),
+          agents: objectContaining({ total: 1 }),
         }),
       ]);
       expect(notices[0]?.content).toContain(`resumeFromRunId: "${runId}"`);
@@ -525,10 +526,10 @@ describe("workflow runs a restart interrupted", () => {
           workflows,
           `await ${WORKTREE_WRITER};\nreturn await agent("next");`,
         );
-        const workspaceId = yield* leaveInWorktree(first, "edit", "changed");
+        const leftWorkspace = yield* leaveInWorktree(first, "edit", "changed");
         yield* workflows.skip(yield* runningTask(first, "edit"));
         yield* runningTask(first, "next");
-        return { runId: started.id, workspaceId };
+        return { runId: started.id, workspaceId: leftWorkspace };
       });
       const notices = yield* restartNotices(sessionKey, runFiles, "wf-sentinel-1");
       expect(notices).toEqual([
@@ -574,7 +575,7 @@ describe("a workflow run's record", () => {
         source: { kind: "inline" },
         scriptPath: memoryRunPaths(started.id).script,
         state: "completed",
-        endedAt: expect.any(Number),
+        endedAt: anyNumber(),
         notified: true,
       });
     });

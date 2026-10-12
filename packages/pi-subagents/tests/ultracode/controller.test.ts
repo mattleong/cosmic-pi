@@ -77,7 +77,7 @@ const controllerFixture = () => {
     },
     marked: () => {
       const last = setStatus.mock.lastCall;
-      return last !== undefined && last[1] !== undefined && String(last[1]).trim() !== "";
+      return last?.[1] !== undefined && String(last[1]).trim() !== "";
     },
   };
 };

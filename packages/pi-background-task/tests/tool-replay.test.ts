@@ -65,17 +65,17 @@ const host = (load: () => Promise<void>) =>
     const fs = yield* FileSystem.FileSystem;
     const agentDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-background-replay-" });
     yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory));
-    const host = recordingExtensionHost({}, { events: createEventBus() });
-    registerBackgroundTaskApplication(host.pi, { loadSettings: load });
+    const extension = recordingExtensionHost({}, { events: createEventBus() });
+    registerBackgroundTaskApplication(extension.pi, { loadSettings: load });
     const row = () =>
-      hostToolRow("background_task", args, host.resolve("background_task"), {
+      hostToolRow("background_task", args, extension.resolve("background_task"), {
         id: "background-task-call",
         result: { content: [{ type: "text", text }], details, isError: false },
       });
     return {
-      registered: host.tools,
+      registered: extension.tools,
       row,
-      emit: (name: DefaultedEventName, ctx: ExtensionContext) => host.emit(name, ctx),
+      emit: (name: DefaultedEventName, ctx: ExtensionContext) => extension.emit(name, ctx),
     };
   });
 

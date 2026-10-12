@@ -115,28 +115,26 @@ describe("summary resolution", () => {
     expect(resolveCompactSummary({ subject: "work" }, "running", false)).toEqual({
       subject: "work",
     });
-    const malformed: CompactSummary[] = JSON.parse(
-      JSON.stringify([
-        { subject: 42 },
-        { subject: "work", outcome: "done" },
-        {
-          subject: "work",
-          outcome: "success",
-          issues: [{ severity: "fatal", code: "x", message: "" }],
-        },
-        {
-          subject: "work",
-          outcome: "success",
-          issues: [{ severity: "error", code: "", message: "" }],
-        },
-        { subject: "work", outcome: "success", children: { total: -1, entries: [] } },
-        {
-          subject: "work",
-          outcome: "success",
-          children: { total: 1, entries: [{ label: "child", status: "done" }] },
-        },
-      ]),
-    );
+    const malformed = structuredClone([
+      { subject: 42 },
+      { subject: "work", outcome: "done" },
+      {
+        subject: "work",
+        outcome: "success",
+        issues: [{ severity: "fatal", code: "x", message: "" }],
+      },
+      {
+        subject: "work",
+        outcome: "success",
+        issues: [{ severity: "error", code: "", message: "" }],
+      },
+      { subject: "work", outcome: "success", children: { total: -1, entries: [] } },
+      {
+        subject: "work",
+        outcome: "success",
+        children: { total: 1, entries: [{ label: "child", status: "done" }] },
+      },
+    ]);
     for (const summary of malformed)
       expect(resolveCompactSummary(summary, "settled", false)).toBeUndefined();
   });

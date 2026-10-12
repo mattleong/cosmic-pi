@@ -112,14 +112,11 @@ it.each(["comfortable", "compact"] as const)(
 );
 
 it("puts configured contributions first, by their last configured position, without mutating inputs", () => {
-  const values: CosmicFooterTextContribution[] = ["custom", "location", "branch", "model"].map(
-    (id) => ({
-      kind: "text",
-      id,
-      region: "identity",
-      text: id,
-      ...(id !== "custom" && { order: 200 }),
-    }),
+  const values = ["custom", "location", "branch", "model"].map(
+    (id): CosmicFooterTextContribution =>
+      id === "custom"
+        ? { kind: "text", id, region: "identity", text: id }
+        : { kind: "text", id, region: "identity", text: id, order: 200 },
   );
   const originals = values.map((value) => ({ ...value }));
   const defaults = makeDefaultResolvedCosmicUiConfig();

@@ -161,8 +161,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               : undefined;
             if (
               request.supersedes &&
-              (!predecessor ||
-                predecessor.view.state !== "failed" ||
+              (predecessor?.view.state !== "failed" ||
                 predecessor.retryClaim?.token !== request.supersedes.claimToken ||
                 predecessor.view.supersededByRunId !== undefined)
             )
@@ -334,7 +333,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                           record.evictionClaim === undefined &&
                           record.runStateReclaimState !== "running",
                       )
-                      .sort(
+                      .toSorted(
                         (left, right) =>
                           (left.view.endedAt ?? left.view.startedAt) -
                           (right.view.endedAt ?? right.view.startedAt),

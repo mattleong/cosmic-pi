@@ -23,7 +23,8 @@ export function capturedSignal(
       return source.aborted;
     },
     get reason() {
-      return source.reason;
+      const reason: unknown = source.reason;
+      return reason;
     },
     get onabort() {
       return source.onabort;

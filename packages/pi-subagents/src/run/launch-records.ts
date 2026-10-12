@@ -52,7 +52,7 @@ export const validateStartRequest = (
         "write_claims_read_only",
         "writes may be supplied only for a writer subagent.",
       );
-    if (request.closeOnReport === false)
+    if (!request.closeOnReport)
       return yield* invalidRequest(
         "retained_report_capability_invalid",
         "closeOnReport=false is unsupported; local subagents close after reporting.",

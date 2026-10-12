@@ -1,11 +1,12 @@
 import { readFile } from "node:fs/promises";
 
-import { workspaceManifestPaths } from "./workspace-manifest-paths.mjs";
+import { decodePackageManifest } from "./package-manifest.ts";
+import { workspaceManifestPaths } from "./workspace-manifest-paths.ts";
 
 const expectedVersion = process.argv[2];
 const manifestPaths = await workspaceManifestPaths();
 const manifests = await Promise.all(
-  manifestPaths.map(async (path) => JSON.parse(await readFile(path, "utf8"))),
+  manifestPaths.map(async (path) => decodePackageManifest(await readFile(path, "utf8"))),
 );
 const versions = new Map(manifests.map(({ name, version }) => [name, version]));
 const uniqueVersions = new Set(versions.values());

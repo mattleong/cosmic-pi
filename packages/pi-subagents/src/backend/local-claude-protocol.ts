@@ -265,7 +265,7 @@ const assistantProtocolEvent = (event: typeof Assistant.Type): ClaudeProtocolEve
 
 const resultProtocolEvent = (event: typeof Result.Type): ClaudeProtocolEvent => {
   const diagnostic =
-    event.result?.trim() ||
+    (event.result?.trim() ?? "") ||
     event.errors
       ?.map((error) => error.trim())
       .filter(Boolean)

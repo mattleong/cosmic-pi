@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 
-import { workspaceManifestPaths } from "./workspace-manifest-paths.mjs";
+import { decodeManifestDocument, decodePackageManifest } from "./package-manifest.ts";
+import { workspaceManifestPaths } from "./workspace-manifest-paths.ts";
 
 const version = process.argv[2];
 const semverPattern =
@@ -13,8 +14,9 @@ if (!version || !semverPattern.test(version)) {
 const manifestPaths = await workspaceManifestPaths();
 
 for (const manifestPath of manifestPaths) {
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-  manifest.version = version;
+  const text = await readFile(manifestPath, "utf8");
+  const { name } = decodePackageManifest(text);
+  const manifest = { ...decodeManifestDocument(text), version };
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  console.log(`Updated ${manifest.name} to ${version}`);
+  console.log(`Updated ${name} to ${version}`);
 }

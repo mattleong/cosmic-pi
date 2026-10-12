@@ -312,7 +312,7 @@ export const workflowActivityItems = (input: {
 }): ReadonlyArray<ActivityItem> => {
   const shown: ReadonlyArray<ShownWorkflow> = [
     ...input.runs.filter((run) => !isWorkflowRunFinished(run.state)),
-    ...input.runs.filter((run) => isWorkflowRunFinished(run.state)).reverse(),
+    ...input.runs.filter((run) => isWorkflowRunFinished(run.state)).toReversed(),
   ]
     .slice(0, Math.max(0, input.budget))
     .map((run) => ({

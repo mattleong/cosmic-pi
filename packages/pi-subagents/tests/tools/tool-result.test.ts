@@ -62,7 +62,7 @@ const execute = (tool: Tool, args: JsonObject, options?: Parameters<typeof execu
     const admission: ExtensionEventNamed<"tool_call"> = { type: "tool_call", ...call, input: args };
     for (const hook of hooks?.get("tool_call") ?? []) {
       const result = yield* step(() => Promise.resolve(hook(admission, ctx)));
-      if (result !== undefined && result.block) return yield* Effect.die(new Error(result.reason));
+      if (result?.block) return yield* Effect.die(new Error(result.reason));
     }
     return yield* step(() => executeTool(tool, args, options));
   });

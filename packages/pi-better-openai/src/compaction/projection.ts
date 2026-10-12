@@ -102,7 +102,7 @@ export function injectOpenAICompactionCheckpoint<PayloadInput>(
   coveredInput: readonly OpenAICompactionJsonObject[],
 ) {
   if (!Predicate.isObject(payload) || !Array.isArray(payload.input)) return undefined;
-  const input = payload.input;
+  const input: readonly unknown[] = payload.input;
   const instructionCount = leadingInstructionCount(input);
   const providerInput = input.slice(instructionCount);
   if (!hasExactPrefix(providerInput, coveredInput)) return undefined;

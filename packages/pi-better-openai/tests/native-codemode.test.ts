@@ -39,7 +39,7 @@ const literal = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const print = (expression: string) => `text('IMAGE_RESULT ' + JSON.stringify(${expression}));`;
 const output = (text: string) => {
-  const line = text.split("\n").find((line) => line.startsWith("IMAGE_RESULT "));
+  const line = text.split("\n").find((candidate) => candidate.startsWith("IMAGE_RESULT "));
   expect(line, text).toBeDefined();
   return decodeOutput(line!.slice("IMAGE_RESULT ".length));
 };

@@ -452,8 +452,8 @@ export const executeSubagentAction = (
         ),
         signal,
       );
-  return executing.catch((error) => {
-    if (!awaitState?.wasInterrupted()) throw error;
+  return executing.catch((cause: unknown) => {
+    if (!awaitState?.wasInterrupted()) throw cause;
     const result = awaitState.cancelled(runtime.proxyCall !== undefined);
     invokeHostCallback(() => onUpdate?.(result), undefined);
     return result;

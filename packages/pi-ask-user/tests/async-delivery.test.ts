@@ -1,3 +1,4 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { expect, it, vi } from "vitest";
@@ -101,7 +102,7 @@ effectIt.effect(
   "the host message uses stable correlation, strips controls, and is revoked before publication",
   () =>
     Effect.gen(function* () {
-      const sendMessage = vi.fn();
+      const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
       const pi = extensionApiFixture({ sendMessage, appendEntry: vi.fn() });
       let active = true;
       const send = makeAsyncDelivery(pi, "generation", () => active);
@@ -129,7 +130,7 @@ effectIt.effect.each(["appendEntry", "sendMessage"] as const)(
   "a throwing %s produces a redacted typed failure",
   (failing) =>
     Effect.gen(function* () {
-      const sendMessage = vi.fn();
+      const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
       const throwing = () => {
         throw new Error("secret-raw-error");
       };

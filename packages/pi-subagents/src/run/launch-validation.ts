@@ -14,9 +14,7 @@ export type DisallowedLaunchOverrideField = (typeof DISALLOWED_LAUNCH_OVERRIDE_F
 export const firstDisallowedLaunchOverride = <Value extends object>(
   value: Value,
 ): DisallowedLaunchOverrideField | undefined =>
-  DISALLOWED_LAUNCH_OVERRIDE_FIELDS.find((field) =>
-    Object.prototype.hasOwnProperty.call(value, field),
-  );
+  DISALLOWED_LAUNCH_OVERRIDE_FIELDS.find((field) => Object.hasOwn(value, field));
 
 export const disallowedLaunchOverrideMessage = (
   field: DisallowedLaunchOverrideField,

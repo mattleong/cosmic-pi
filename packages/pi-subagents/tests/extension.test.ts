@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import { createJiti } from "jiti";
 import { afterEach, vi } from "vitest";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
+import { anyFunction, objectContaining } from "./support/matchers.ts";
 
 type Extension = typeof import("../src/extension.ts").default;
 
@@ -55,7 +56,7 @@ it.effect.each([undefined, "0", "true"])(
         expect(on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
         expect(registerCommand).toHaveBeenCalledWith(
           "subagents",
-          expect.objectContaining({ handler: expect.any(Function) }),
+          objectContaining({ handler: anyFunction() }),
         );
       }
     }),

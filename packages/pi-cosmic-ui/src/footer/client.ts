@@ -64,8 +64,13 @@ export function createCosmicFooterClient(
             const event = normalizeCosmicUiHostStateEvent(data);
             if (!event) return;
             host = event;
-            const { active, ready, hidden } = event;
-            invokeHostCallback(() => listener(Object.freeze({ active, ready, hidden })), undefined);
+            invokeHostCallback(
+              () =>
+                listener(
+                  Object.freeze({ active: event.active, ready: event.ready, hidden: event.hidden }),
+                ),
+              undefined,
+            );
           }) ?? noop,
         noop,
       ),

@@ -19,11 +19,12 @@ import type { SubagentProfileView } from "./model.ts";
 
 export const listContract = (runs: ReadonlyArray<SubagentRunView>): SubagentListContract => ({
   ...envelope(SUBAGENT_TOOL_NAME.list),
-  runs: projectRunCardTree(runs).map(({ run }) => ({
-    ...withheldTarget(run),
-    parentRunId: run.parentRunId ?? "root",
-    depth: run.depth ?? 1,
-  })),
+  runs: projectRunCardTree(runs).map(({ run }) =>
+    Object.assign({}, withheldTarget(run), {
+      parentRunId: run.parentRunId ?? "root",
+      depth: run.depth ?? 1,
+    }),
+  ),
 });
 
 export const renameContract = (outcome: LifecycleContractOutcome): SubagentRenameContract => ({

@@ -397,12 +397,12 @@ export const projectStartEntry = (
     : { ...identity, status: "failed", ...selectedFields };
 };
 
-export const projectSubagentProfileRoutes = (
-  profiles: ReadonlyArray<SubagentProfileView>,
-  density: DetailDensity = "full",
-): ReadonlyArray<SubagentProfileRouteCard> => {
+const projectProfileRouteCard = (
+  profile: SubagentProfileView,
+  density: DetailDensity,
+): SubagentProfileRouteCard => {
   const limits = DENSITY_LIMITS[density];
-  return profiles.slice(0, PROFILE_IDS.length).map((profile) => ({
+  return {
     id: profile.id,
     description: requiredText(profile.description, limits.profileDescription, "Profile route."),
     source: profile.source,
@@ -432,7 +432,31 @@ export const projectSubagentProfileRoutes = (
           : requiredText(candidate.reason, limits.profileReason, "Route detail omitted."),
     })),
     ...(profile.defaultEffort !== undefined && { defaultEffort: profile.defaultEffort }),
-  }));
+  };
+};
+
+export const projectSubagentProfileRoutes = (
+  profiles: ReadonlyArray<SubagentProfileView>,
+  density: DetailDensity = "full",
+): ReadonlyArray<SubagentProfileRouteCard> =>
+  profiles.slice(0, PROFILE_IDS.length).map((profile) => projectProfileRouteCard(profile, density));
+
+const projectActionFailure = (
+  action: RunDetailsAction,
+  failure: CompactToolActionFailure,
+  density: DetailDensity,
+): CompactToolActionFailure => {
+  const limits = DENSITY_LIMITS[density];
+  const code = optionalText(failure.code, MAX_ACTION_FAILURE_CODE_CHARS);
+  const pendingDelivery =
+    actionFailureDisposition(action, { code, pendingDelivery: failure.pendingDelivery }) ===
+    "pending";
+  return {
+    id: requiredText(failure.id, limits.actionFailureId, "unknown-run"),
+    ...(code !== undefined && { code }),
+    message: requiredText(failure.message, limits.actionFailureMessage, "Action failed."),
+    ...(pendingDelivery && { pendingDelivery: true as const }),
+  };
 };
 
 export const projectActionFailures = (
@@ -441,17 +465,7 @@ export const projectActionFailures = (
   density: DetailDensity,
 ): ReadonlyArray<CompactToolActionFailure> | undefined => {
   if (!failures || failures.length === 0) return undefined;
-  const limits = DENSITY_LIMITS[density];
-  return failures.slice(0, MAX_TARGET_RUNS).map((failure) => {
-    const code = optionalText(failure.code, MAX_ACTION_FAILURE_CODE_CHARS);
-    const pendingDelivery =
-      actionFailureDisposition(action, { code, pendingDelivery: failure.pendingDelivery }) ===
-      "pending";
-    return {
-      id: requiredText(failure.id, limits.actionFailureId, "unknown-run"),
-      ...(code !== undefined && { code }),
-      message: requiredText(failure.message, limits.actionFailureMessage, "Action failed."),
-      ...(pendingDelivery && { pendingDelivery: true as const }),
-    };
-  });
+  return failures
+    .slice(0, MAX_TARGET_RUNS)
+    .map((failure) => projectActionFailure(action, failure, density));
 };

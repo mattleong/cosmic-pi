@@ -241,7 +241,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     const entry = this.selected();
     if (entry?.kind !== "set" && entry?.kind !== "invalid-default") {
       this.setMessage(
-        entry?.scope === "project" && this.options.projectTrusted === false ? "warning" : "info",
+        entry?.scope === "project" && !this.options.projectTrusted ? "warning" : "info",
         entry?.description ?? "Select a saved set first.",
       );
       return;

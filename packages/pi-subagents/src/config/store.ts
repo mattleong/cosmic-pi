@@ -179,13 +179,13 @@ const decodeDocument = (
 ): Effect.Effect<DecodedSubagentConfig, SubagentConfigStoreError> => {
   const decoded = decodeSubagentConfig(raw, scope);
   if (decoded.unsupportedVersion) return Effect.fail(unsupportedVersionError(path));
-  const fatal = [
+  const fatal = new Set([
     `${scope}.<unknown>`,
     `${scope}.nesting`,
     `${scope}.writerWorkspaceMode`,
     ...SUBAGENT_FEATURE_TOGGLES.map((toggle) => `${scope}.${toggle}`),
-  ];
-  return decoded.diagnostics.some((diagnostic) => fatal.includes(diagnostic))
+  ]);
+  return decoded.diagnostics.some((diagnostic) => fatal.has(diagnostic))
     ? Effect.fail(
         configError(
           "activate",

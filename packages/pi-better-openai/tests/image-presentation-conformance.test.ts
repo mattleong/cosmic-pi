@@ -55,13 +55,16 @@ describe("registered image presentation", () => {
         const result = { details, content };
         const before = structuredClone(result);
         const harness = createToolPresentationHarness(tool, { theme, width: 180 });
-        for (const { expanded, text } of harness.cycle({ prompt: details.prompt }, result)) {
+        for (const { expanded, text: rendered } of harness.cycle(
+          { prompt: details.prompt },
+          result,
+        )) {
           if (expanded) {
-            expect(text).toContain("PROMPT_END");
-            expect(text).toContain(details.revisedPrompt);
-            expect(text).toContain("saved image.png");
+            expect(rendered).toContain("PROMPT_END");
+            expect(rendered).toContain(details.revisedPrompt);
+            expect(rendered).toContain("saved image.png");
           }
-          expect(text).not.toContain(image.data);
+          expect(rendered).not.toContain(image.data);
           expect(result.content.find((part) => part.type === "image")).toBe(image);
         }
         expect(result).toEqual(before);
@@ -98,8 +101,8 @@ describe("registered image presentation", () => {
         saveDir: "/project/image-target",
         outputFormat: "webp",
       };
-      for (const details of [undefined, {}]) {
-        const result = { details, content: [text(`${cause}\n${recovery}`)] };
+      for (const resultDetails of [undefined, {}]) {
+        const result = { details: resultDetails, content: [text(`${cause}\n${recovery}`)] };
         for (const expanded of [false, true]) {
           harness.call(input, { expanded });
           harness.result(result, { expanded, isError: true });
@@ -155,11 +158,14 @@ describe("registered image presentation", () => {
           const result = { details: record, content };
           const before = structuredClone(result);
           const harness = createToolPresentationHarness(tool, { theme, width: 240 });
-          for (const { expanded, text } of harness.cycle({ prompt: details.prompt }, result)) {
+          for (const { expanded, text: rendered } of harness.cycle(
+            { prompt: details.prompt },
+            result,
+          )) {
             if (!expanded) continue;
-            expect(occurrences(text, "saved image.png"), text).toBe(1);
-            expect(occurrences(text, details.revisedPrompt), text).toBe(1);
-            expect(occurrences(text, "PROMPT_END"), text).toBe(1);
+            expect(occurrences(rendered, "saved image.png"), rendered).toBe(1);
+            expect(occurrences(rendered, details.revisedPrompt), rendered).toBe(1);
+            expect(occurrences(rendered, "PROMPT_END"), rendered).toBe(1);
           }
           expect(result).toEqual(before);
         }
@@ -174,7 +180,7 @@ describe("registered image presentation", () => {
       states: [false, true],
       overrides: () => ({ executionStarted: true, isPartial: true }),
     });
-    for (const { text } of frames) expect(text).not.toContain("PARTIAL_PROGRESS");
+    for (const { text: rendered } of frames) expect(rendered).not.toContain("PARTIAL_PROGRESS");
   });
 
   it("does not let raw prose claim structured image metadata", () => {

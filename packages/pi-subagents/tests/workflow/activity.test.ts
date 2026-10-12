@@ -26,6 +26,7 @@ import {
 import { makeWorkflowRuns } from "../../src/workflow/runs.ts";
 import { view, workflowAgentView, workflowRunView } from "../fixtures/run-view.ts";
 import { effectTest, step } from "../support/effect-test.ts";
+import { anyString } from "../support/matchers.ts";
 
 const agent = (patch: Partial<WorkflowAgentView> = {}): WorkflowAgentView =>
   workflowAgentView({ phase: "Find", ...patch });
@@ -65,8 +66,8 @@ const WORKFLOW_PARENT = { providerId: "pi-subagents", itemId: "workflow:wf-a-1" 
 const owned = (id: string, phase = "Find") =>
   view({ id, task: id, workflow: { workflowId: "wf-a-1", name: "review", phase } });
 
-const byId = (items: ReadonlyArray<ActivityItem>) =>
-  new Map(items.map((item) => [item.id, item] as const));
+const byId = (activityItems: ReadonlyArray<ActivityItem>) =>
+  new Map(activityItems.map((item) => [item.id, item] as const));
 
 const isSnapshot = Schema.is(ActivitySnapshotSchema);
 
@@ -125,7 +126,7 @@ describe("workflow activity", () => {
       status: "pending",
       parent,
       phase: "Verify",
-      actions: [{ id: "skip", handoff: false, confirmation: expect.any(String) }],
+      actions: [{ id: "skip", handoff: false, confirmation: anyString() }],
     });
     expect(found.get("agent-r1-2")?.startedAt).toBeUndefined();
   });
@@ -361,7 +362,7 @@ describe("workflow activity", () => {
                 expect.objectContaining({
                   id: "skip",
                   handoff: false,
-                  confirmation: expect.any(String),
+                  confirmation: anyString(),
                 }),
               ]
             : [],
@@ -411,8 +412,12 @@ describe("workflow activity", () => {
       ...Array.from({ length: 12 }, (_, index) =>
         workflow({
           id: `wf-a-${index}`,
-          agents: queued.map((entry) => ({ ...entry, runId: `${entry.runId}-${index}` })),
-          planned: planned.map((entry) => ({ ...entry, runId: `${entry.runId}-${index}` })),
+          agents: queued.map((entry) =>
+            Object.assign({}, entry, { runId: `${entry.runId}-${index}` }),
+          ),
+          planned: planned.map((entry) =>
+            Object.assign({}, entry, { runId: `${entry.runId}-${index}` }),
+          ),
         }),
       ),
     );
@@ -690,7 +695,9 @@ describe("workflow activity", () => {
             id: `wf-a-${run}`,
             state: "completed",
             endedAt: 10 + run,
-            agents: settled.map((entry) => ({ ...entry, runId: `${entry.runId}-${run}` })),
+            agents: settled.map((entry) =>
+              Object.assign({}, entry, { runId: `${entry.runId}-${run}` }),
+            ),
           }),
         ),
       );

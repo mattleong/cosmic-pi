@@ -80,8 +80,10 @@ const keptWithinHistoryLimit = (
 ): Set<string> => {
   const history = rows.filter((row) => !parents.has(row.key) && !protectedKeys.has(row.key));
   const evictionOrder = [
-    ...history.filter((row) => row.retained).reverse(),
-    ...history.filter((row) => !row.retained).sort((left, right) => endedAt(left) - endedAt(right)),
+    ...history.filter((row) => row.retained).toReversed(),
+    ...history
+      .filter((row) => !row.retained)
+      .toSorted((left, right) => endedAt(left) - endedAt(right)),
   ];
   const evictedRoots = new Set(
     evictionOrder.slice(0, Math.max(0, history.length - HISTORY_ROOT_LIMIT)).map((row) => row.key),
@@ -177,7 +179,7 @@ export function retainActivity(
         omitted.get(row.key) ?? 0,
         old.get(row.key)?.omittedChildren ?? 0,
       );
-      return { ...row, ...(omittedChildren > 0 && { omittedChildren }) };
+      return Object.assign({}, row, omittedChildren > 0 ? { omittedChildren } : {});
     });
 }
 

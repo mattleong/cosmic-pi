@@ -83,7 +83,7 @@ export const DEFAULT_CONTRIBUTION_ORDER = 500;
 export function ranked(
   contributions: readonly CosmicFooterTextContribution[],
 ): CosmicFooterTextContribution[] {
-  return [...contributions].sort(
+  return contributions.toSorted(
     (a, b) =>
       (a.order ?? DEFAULT_CONTRIBUTION_ORDER) - (b.order ?? DEFAULT_CONTRIBUTION_ORDER) ||
       (b.priority ?? 50) - (a.priority ?? 50),

@@ -350,12 +350,12 @@ describe("Cosmic UI host service", () => {
         ],
         { concurrency: "unbounded", discard: true },
       );
-      expect([...(MutableRef.get(projection).config?.footer.hidden ?? [])].sort()).toEqual([
+      expect((MutableRef.get(projection).config?.footer.hidden ?? []).toSorted()).toEqual([
         "metrics",
         "session",
       ]);
       const saved = decodeUnknownOrUndefined(SavedFooter, documents.get(configPath)?.footer);
-      expect([...(saved?.hidden ?? [])].sort()).toEqual(["metrics", "session"]);
+      expect((saved?.hidden ?? []).toSorted()).toEqual(["metrics", "session"]);
     }).pipe(provideBuiltLayer(layer));
   });
 

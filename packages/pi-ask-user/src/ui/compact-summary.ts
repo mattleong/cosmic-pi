@@ -191,10 +191,9 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
   context,
 }) => {
   if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
-  const rows = decodeCompactAsyncRows(result?.details)?.map((row) => ({
-    ...row,
-    state: questionnaireState(row),
-  }));
+  const rows = decodeCompactAsyncRows(result?.details)?.map((row) =>
+    Object.assign({}, row, { state: questionnaireState(row) }),
+  );
   if (rows?.every(classified)) {
     const cancelled = rows.length > 0 && rows.every((row) => row.state === "cancelled");
     if (!context.isError || cancelled) return rowsSummary(args, rows);

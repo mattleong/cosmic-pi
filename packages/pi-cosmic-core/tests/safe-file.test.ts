@@ -25,7 +25,7 @@ const openedFile = (content = "safe") =>
     yield* Effect.promise(() => fs.writeFile(file, content));
     const handle = yield* Effect.acquireRelease(
       Effect.promise(() => nodeFsPromises.open(file, "r")),
-      (handle) => Effect.promise(() => handle.close()),
+      (opened) => Effect.promise(() => opened.close()),
     );
     yield* Effect.acquireRelease(
       Effect.sync(() => vi.spyOn(nodeFsPromises, "open").mockResolvedValue(handle)),

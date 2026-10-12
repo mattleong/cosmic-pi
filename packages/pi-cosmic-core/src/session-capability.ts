@@ -8,11 +8,16 @@ interface SessionCapabilityProtocolOptions<Version extends number> {
   readonly maxSessionIdChars?: number;
 }
 
+type CapabilityResponder = <Candidate>(candidate: Candidate) => void;
+
 interface SessionCapabilityQuery<Version extends number> {
   readonly version: Version;
   readonly sessionId: string;
-  readonly respond: <Candidate>(candidate: Candidate) => void;
+  readonly respond: CapabilityResponder;
 }
+
+const isResponder = <Value>(value: Value): value is Value & CapabilityResponder =>
+  Predicate.isFunction(value);
 
 export const makeSessionCapabilityProtocol = <const Version extends number>(
   options: SessionCapabilityProtocolOptions<Version>,
@@ -23,7 +28,7 @@ export const makeSessionCapabilityProtocol = <const Version extends number>(
       Schema.isMinLength(1),
       Schema.isMaxLength(options.maxSessionIdChars ?? Number.MAX_SAFE_INTEGER),
     ),
-    respond: Schema.declare(Predicate.isFunction),
+    respond: Schema.declare(isResponder),
   });
 
   const normalizeQuery = <Value>(value: Value): SessionCapabilityQuery<Version> | undefined => {

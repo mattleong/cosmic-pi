@@ -57,7 +57,10 @@ const headingSubtitle = (
   resultSubject: string | undefined,
 ): string => {
   if (!args.action) return "";
-  const subject = resultSubject || backgroundTaskCallSubject(args);
+  const subject =
+    resultSubject === undefined || resultSubject === ""
+      ? backgroundTaskCallSubject(args)
+      : resultSubject;
   return [backgroundTaskActionLabel(args.action), subject].filter(Boolean).join(" ");
 };
 

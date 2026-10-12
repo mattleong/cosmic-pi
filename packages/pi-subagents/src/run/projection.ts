@@ -8,7 +8,7 @@ export const emptyProjection = (): SubagentProjection => ({
 });
 
 export const sortRuns = (runs: ReadonlyArray<SubagentRunView>): ReadonlyArray<SubagentRunView> =>
-  [...runs].sort((left, right) => {
+  [...runs].toSorted((left, right) => {
     const activeDifference =
       Number(isActiveRunState(right.state)) - Number(isActiveRunState(left.state));
     if (activeDifference !== 0) return activeDifference;

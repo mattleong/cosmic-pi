@@ -48,6 +48,7 @@ import {
   view,
 } from "./fixtures/tool-harness.ts";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { stringContaining } from "../support/matchers.ts";
 
 const route = (overrides: Partial<DeclaredProfileCandidate> = {}): DeclaredProfileCandidate => ({
   host: "local",
@@ -117,7 +118,7 @@ describe("subagent tool", () => {
       expect(result?.content[0]?.text).toContain("agent-1");
       expect(request).toMatchObject({
         profile: "generalist",
-        profileGuidance: expect.stringContaining("Act as a generalist"),
+        profileGuidance: stringContaining("Act as a generalist"),
         selection: { source: "profile-parent-candidate", skippedCandidates: [] },
         context: "fresh",
         model: "openai-codex/gpt-5.6-sol",

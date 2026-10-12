@@ -44,8 +44,7 @@ export interface McpToolResult {
   readonly isError?: true;
 }
 
-const own = (value: JsonObject, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(value, key);
+const own = (value: JsonObject, key: string): boolean => Object.hasOwn(value, key);
 
 const exactKeys = <ValueInput>(
   value: ValueInput,

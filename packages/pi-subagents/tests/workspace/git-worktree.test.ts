@@ -342,7 +342,7 @@ test("keeps the worker for writer files at paths the source itself left out", fu
   const { revision, integration } = yield* prepareIntegration(handle);
   expect(revision.changedPaths).toEqual(["src/main.ts"]);
   const integrated = yield* service.integrate(integration);
-  expect([...integrated.uncapturedPaths].sort()).toEqual([".env", "notes.cs", "vendor/lib.go"]);
+  expect([...integrated.uncapturedPaths].toSorted()).toEqual([".env", "notes.cs", "vendor/lib.go"]);
   expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
   expect(yield* readText(root, "notes.cs")).toBe("source notes\n");
   expect(yield* readText(root, "vendor/lib.go")).toBe("package lib\n");

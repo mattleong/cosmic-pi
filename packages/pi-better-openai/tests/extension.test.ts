@@ -12,6 +12,7 @@ import {
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_PROTOCOL_VERSION,
+  normalizeCosmicFooterUpsertEvent,
   normalizeCosmicUiHostQuery,
 } from "pi-cosmic-ui/protocol";
 import { afterEach, vi } from "vitest";
@@ -320,10 +321,13 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       )?.[1];
       const publish = () =>
         stateListener?.({ version: COSMIC_UI_PROTOCOL_VERSION, active, ready: true, hidden });
-      expect(h.eventsEmit).toHaveBeenCalledWith(
-        COSMIC_UI_FOOTER_UPSERT,
-        expect.objectContaining({ contribution: expect.objectContaining({ id: "openai.fast" }) }),
-      );
+      expect(
+        h.eventsEmit.mock.calls.some(
+          ([channel, data]) =>
+            channel === COSMIC_UI_FOOTER_UPSERT &&
+            normalizeCosmicFooterUpsertEvent(data)?.contribution.id === "openai.fast",
+        ),
+      ).toBe(true);
       expect(h.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
 
       active = false;

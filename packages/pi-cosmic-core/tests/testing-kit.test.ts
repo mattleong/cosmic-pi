@@ -26,7 +26,7 @@ it.effect("settles a deferred promise once, with the exact value or error", () =
     const settled = yield* Effect.promise(() =>
       rejected.promise.then(
         () => undefined,
-        (error: Error) => error,
+        (cause: unknown) => cause,
       ),
     );
     expect(settled).toBe(failure);
@@ -35,7 +35,7 @@ it.effect("settles a deferred promise once, with the exact value or error", () =
 
 it.live("records IPC messages from spawn and removes the temporary directory with its scope", () =>
   Effect.gen(function* () {
-    const directory = yield* Effect.scoped(
+    const removed = yield* Effect.scoped(
       Effect.gen(function* () {
         const directory = yield* temporaryDirectory("cosmic-kit-test-");
         const child = yield* spawnIpcChild(childFixture, [directory, "exit"], {
@@ -50,7 +50,7 @@ it.live("records IPC messages from spawn and removes the temporary directory wit
     );
     expect(
       yield* Effect.promise(() =>
-        fs.stat(directory).then(
+        fs.stat(removed).then(
           () => true,
           () => false,
         ),

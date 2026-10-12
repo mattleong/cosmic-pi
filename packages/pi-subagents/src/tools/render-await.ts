@@ -42,7 +42,7 @@ const firstFinishedRun = (
   until === "any_finished"
     ? runs
         .filter((run) => isAssignmentFinishedRunState(run.state))
-        .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0]
+        .toSorted((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0]
     : undefined;
 
 const ACTIVE_STATES = ["starting", "running", "waiting_for_parent", "paused", "stopping"] as const;

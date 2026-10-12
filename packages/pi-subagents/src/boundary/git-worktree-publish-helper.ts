@@ -150,7 +150,7 @@ const eligibleTarget = (r: PublicationWireRequest) => {
   return target !== undefined && target.isFile() && !target.isSymbolicLink() && target.nlink === 1;
 };
 const artifactsExist = (r: PublicationWireRequest) =>
-  Boolean(inspect(r.backupName) || inspect(r.temporaryName));
+  inspect(r.backupName) !== undefined || inspect(r.temporaryName) !== undefined;
 const writeTemporary = (name: string, after: PublicationImage) => {
   const temporary = fs.openSync(name, "wx", 0o600);
   try {

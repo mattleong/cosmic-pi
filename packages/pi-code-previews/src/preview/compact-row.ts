@@ -67,7 +67,7 @@ function compactRowDuration(input: CompactRowInput): string | undefined {
     elapsedMs !== undefined &&
     Number.isFinite(elapsedMs) &&
     elapsedMs >= 0 &&
-    (input.summary.showShortTiming || elapsedMs >= TIMING_VISIBLE_MS);
+    (input.summary.showShortTiming === true || elapsedMs >= TIMING_VISIBLE_MS);
   return visible ? compactSingleLine(input.duration ?? "") : undefined;
 }
 

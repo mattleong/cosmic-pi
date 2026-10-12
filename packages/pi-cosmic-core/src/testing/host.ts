@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import { modelRegistryFixture, type HostModelRegistry } from "./model.ts";
-import { ignore, overlay, memberDescriptors } from "./overlay.ts";
+import { ignore, overlay } from "./overlay.ts";
 import { FIXTURE_CWD, sessionManagerFixture, type HostSessionManager } from "./session.ts";
 import { extensionUiFixture } from "./ui.ts";
 
@@ -90,7 +90,7 @@ export const extensionContextFixture = (
     modelRegistry: modelRegistryFixture(modelRegistry),
   });
   const flatOverrides = Object.fromEntries(
-    Object.entries(memberDescriptors(overrides)).filter(([key]) => !nestedContextKeys.has(key)),
+    Object.entries(descriptors).filter(([key]) => !nestedContextKeys.has(key)),
   );
   return Object.defineProperties(context, flatOverrides);
 };

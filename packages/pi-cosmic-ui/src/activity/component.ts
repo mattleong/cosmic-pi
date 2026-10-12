@@ -209,7 +209,7 @@ export class ActivityComponent {
     const identity = row ? JSON.stringify([row.key, row.generation]) : selected?.id;
     if (identity !== this.selectedIdentity) this.resetSelectionState(identity);
     this.shell.ensureSelectionPane(
-      !!selected && !(selected.type === "section" && selected.children === 0),
+      selected !== undefined && !(selected.type === "section" && selected.children === 0),
     );
     return { entries, selected };
   }
@@ -433,7 +433,7 @@ export class ActivityComponent {
     const wasDetail = this.shell.state.pane === "detail";
     const changed = this.shell.applyMotion(motion, {
       rowCount: entries.length,
-      hasSelection: !!selected,
+      hasSelection: selected !== undefined,
     });
     if (changed._tag === "Close") {
       this.close();

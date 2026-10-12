@@ -31,6 +31,7 @@ import {
   workflowTest,
   worktreeWriter,
 } from "./fixtures/workflow-harness.ts";
+import { objectContaining } from "../support/matchers.ts";
 
 const WORKTREE_WRITER = `const fixed = await ${worktreeWriter("fix the bug")};`;
 
@@ -246,7 +247,7 @@ describe("workflow teardown", () => {
         expect(notice).toMatchObject({
           runId,
           outcome: "interrupted",
-          agents: expect.objectContaining({ total: 1 }),
+          agents: objectContaining({ total: 1 }),
           workspaces: [expect.any(String)],
         });
         expect(notice.content).toContain(`resumeFromRunId: "${runId}"`);
@@ -305,9 +306,9 @@ describe("workflow teardown", () => {
     const first = workflowFixture({ sessionKey, worktrees: true });
     return Effect.gen(function* () {
       const original = yield* inWorkflows(first, function* ({ workflows }) {
-        const original = yield* failAfterWorktreeWriter(first, workflows);
+        const failed = yield* failAfterWorktreeWriter(first, workflows);
         yield* eventually(() => first.delivered[0], "the failure notification");
-        return original;
+        return failed;
       });
 
       yield* workflowTest({ sessionKey, worktrees: true }, function* ({ fixture, workflows }) {
@@ -376,9 +377,9 @@ describe("workflow teardown", () => {
         { sessionKey, worktrees: true },
         function* ({ fixture, workflows, subagents }) {
           const original = yield* failAfterIntegratedWriter(fixture, workflows, subagents);
-          const resumedId = yield* resumeWithChecker(workflows, original.runId);
+          const resumed = yield* resumeWithChecker(workflows, original.runId);
           yield* runningTask(fixture, "check it");
-          return resumedId;
+          return resumed;
         },
       );
       const remembered = yield* withJournal(sessionKey, (journal) => journal.interruptedRuns);

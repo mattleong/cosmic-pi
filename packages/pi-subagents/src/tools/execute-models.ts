@@ -58,13 +58,12 @@ export const executeModelsAction = (
       const candidates: ProfileCandidateDiscovery[] = route.candidates.map((candidate, index) => {
         const attempt = attempts.find((value) => value.candidateIndex === index);
         const omitted = skipped.find((value) => value.candidateIndex === index);
-        return {
-          ...candidate,
-          status: attempt ? "eligible" : "skipped",
+        return Object.assign({}, candidate, {
+          status: attempt ? ("eligible" as const) : ("skipped" as const),
           reason: attempt
             ? "Candidate adapter is statically eligible before native authentication/integration/harness readiness."
             : (omitted?.reason ?? "Candidate was not eligible."),
-        };
+        });
       });
       return [
         {

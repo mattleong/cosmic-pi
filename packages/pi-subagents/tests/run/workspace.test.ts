@@ -467,8 +467,8 @@ describe("writer workspace orchestration", () => {
         runs.every((run) => run.sourceCwd === "/repo" && run.writerWorkspaceMode === "worktree"),
       ).toBe(true);
       expect(f.acquired.every((cwd) => cwd.startsWith("/private/"))).toBe(true);
-      expect(f.children.controls.map((control) => control.launch.cwd).sort()).toEqual(
-        runs.map((run) => run.cwd).sort(),
+      expect(f.children.controls.map((control) => control.launch.cwd).toSorted()).toEqual(
+        runs.map((run) => run.cwd).toSorted(),
       );
       expect(yield* service.workspaceReview(runs[0]!.workspaceId!).pipe(Effect.flip)).toMatchObject(
         { code: "workspace_process_unsettled" },

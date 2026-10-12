@@ -12,7 +12,9 @@ const context = (setStatus: (key: string, value: string | undefined) => void) =>
   extensionContextFixture({ mode: "tui", ui: { setStatus } });
 
 setFlagsFromString("--expose-gc");
-const gc: () => void = runInNewContext("gc");
+const gc = (): void => {
+  runInNewContext("gc()");
+};
 
 it.live("forgets each waiter once the gate reopens", () =>
   Effect.gen(function* () {

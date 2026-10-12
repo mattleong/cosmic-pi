@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { SubagentBackendRegistry } from "../../../src/backend/service.ts";
@@ -75,9 +76,10 @@ const decodeCount = Schema.decodeUnknownOption(Schema.Finite);
 
 const schemaType = (node: JsonRecord): string | undefined => {
   const declared = Option.getOrUndefined(decodeTypes(node.type));
-  const type = Array.isArray(declared)
-    ? declared.find((entry) => entry !== "null")
-    : (declared ?? undefined);
+  const type =
+    declared === undefined || Predicate.isString(declared)
+      ? declared
+      : declared.find((entry) => entry !== "null");
   return type ?? (node.properties === undefined ? undefined : "object");
 };
 

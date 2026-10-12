@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { failureMessage } from "pi-cosmic-core";
 import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
-import type { AskUserHostError } from "../src/questionnaire/errors.ts";
+import { AskUserHostError } from "../src/questionnaire/errors.ts";
 import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import type { AskUserAnswer } from "../src/questionnaire/model.ts";
 import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schema.ts";
@@ -70,7 +70,7 @@ const textRequest: AskUserRequest = {
 describe("RPC questionnaire boundary", () => {
   it("asks text directly, retries invalid input and preserves notes through review edits", () => {
     const input = vi
-      .fn()
+      .fn<ExtensionUIContext["input"]>()
       .mockResolvedValueOnce(" \n ")
       .mockResolvedValueOnce("x".repeat(4001))
       .mockResolvedValueOnce(" initial\nanswer ")
@@ -170,7 +170,10 @@ describe("RPC questionnaire boundary", () => {
     const tooLong = "x".repeat(MAX_NOTE_LENGTH + 1);
     const escape = String.fromCharCode(27);
     const note = `Why ${escape}[31mB${escape}[0m matters.`;
-    const input = vi.fn().mockResolvedValueOnce(tooLong).mockResolvedValueOnce(note);
+    const input = vi
+      .fn<ExtensionUIContext["input"]>()
+      .mockResolvedValueOnce(tooLong)
+      .mockResolvedValueOnce(note);
     let reviewTitle: string | undefined;
     let selectCall = 0;
     const select = vi.fn((title: string, options: string[]) => {
@@ -238,10 +241,11 @@ describe("RPC questionnaire boundary", () => {
   it("reports a failed native dialog in plain words without host details", () =>
     rpc({ select: vi.fn(() => Promise.reject(new Error("secret host failure"))) }).then(
       () => expect.unreachable(),
-      (error: AskUserHostError) => {
-        expect(error).toMatchObject({ _tag: "AskUserHostError", operation: "open" });
-        expect(error.message).not.toContain("secret");
-        expect(issueMessageStyleProblems(failureMessage(error.message, ""))).toEqual([]);
+      (cause: unknown) => {
+        expect(cause).toMatchObject({ _tag: "AskUserHostError", operation: "open" });
+        if (!(cause instanceof AskUserHostError)) throw cause;
+        expect(cause.message).not.toContain("secret");
+        expect(issueMessageStyleProblems(failureMessage(cause.message, ""))).toEqual([]);
       },
     ));
 

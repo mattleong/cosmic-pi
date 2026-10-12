@@ -132,7 +132,7 @@ const byId = new Map(
     finished,
     noisy,
     unnamed,
-  ].map((task) => [task.id, task]),
+  ].map((entry) => [entry.id, entry]),
 );
 
 type Line = Pick<BackgroundLogEvent, "stream" | "text">;
@@ -142,8 +142,8 @@ const err = (text: string): Line => ({ stream: "stderr", text: `${text}\n` });
 const service: Partial<BackgroundTaskServiceContract> = {
   list: () => Effect.succeed([running, failed, killed]),
   status: (id) => {
-    const task = byId.get(id);
-    return task ? Effect.succeed(task) : Effect.fail(backgroundTaskNotFound(id));
+    const found = byId.get(id);
+    return found ? Effect.succeed(found) : Effect.fail(backgroundTaskNotFound(id));
   },
 };
 
@@ -377,7 +377,10 @@ const registeredScenarios: ReadonlyArray<RegisteredScenario> = [
     input: { action: "start", command: "pnpm docs:dev", name: "docs" },
     service: {
       start: (request) =>
-        started("task-13", 48701)(request).pipe(Effect.map((task) => ({ ...task, startedAt: -1 }))),
+        started(
+          "task-13",
+          48701,
+        )(request).pipe(Effect.map((snapshot) => ({ ...snapshot, startedAt: -1 }))),
     },
   },
 ];

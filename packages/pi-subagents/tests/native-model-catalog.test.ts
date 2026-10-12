@@ -10,13 +10,11 @@ import {
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
-const fixture = fileURLToPath(new URL("./fixtures/model-catalog-fixture.mjs", import.meta.url));
+const fixture = fileURLToPath(new URL("./fixtures/model-catalog-fixture.ts", import.meta.url));
 const setup = Effect.gen(function* () {
   const directory = yield* temporaryDirectory("pi-subagents-catalog-");
   const home = yield* step(() => fs.realpath(directory));
-  const executable = nodePath.join(home, "catalog.mjs");
-  yield* step(() => fs.copyFile(fixture, executable));
-  yield* step(() => fs.chmod(executable, 0o700));
+  const executable = fixture;
   yield* step(() => fs.mkdir(nodePath.join(home, ".claude")));
   const cwd = nodePath.join(home, "project");
   yield* step(() => fs.mkdir(nodePath.join(cwd, ".claude"), { recursive: true }));

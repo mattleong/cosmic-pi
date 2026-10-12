@@ -91,7 +91,7 @@ const completionBody = (run: SubagentCompletionNotification): string => {
   const primary =
     run.outcome === "failed"
       ? failureText(run.error)
-      : run.finalText?.trim() || "Completed without a final report.";
+      : (run.finalText?.trim() ?? "") || "Completed without a final report.";
   const retry = run.retryAvailable
     ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with subagent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
     : undefined;

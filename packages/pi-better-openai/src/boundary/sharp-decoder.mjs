@@ -7,6 +7,7 @@ try {
   const chunks = [];
   let size = 0;
   for await (const chunk of process.stdin) {
+    if (!Buffer.isBuffer(chunk)) throw new Error("input chunk");
     size += chunk.byteLength;
     if (size > 60 * 1024 * 1024) throw new Error("input limit");
     chunks.push(chunk);

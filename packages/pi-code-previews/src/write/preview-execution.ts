@@ -109,6 +109,6 @@ function nativeErrorMessage<Failure>(error: Failure): string {
 }
 
 function redactedBeforeWriteDetail(before: CodePreviewBeforeWrite): RedactedCodePreviewBeforeWrite {
-  if (!before || before.kind !== "content") return before;
+  if (before?.kind !== "content") return before;
   return { kind: "content", byteLength: Buffer.byteLength(before.content, "utf8") };
 }

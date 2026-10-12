@@ -32,7 +32,7 @@ type ActionOf<Type extends QuestionnaireAction["type"]> = Extract<
 
 const selectOne = (state: QuestionnaireState, action: ActionOf<"select-one">) => {
   const question = state.request.questions[action.question];
-  if (!question || question.mode !== "single") return state;
+  if (question?.mode !== "single") return state;
   const choice = question.choices[action.choice];
   if (!choice) return state;
   return updateDraft(state, action.question, (draft) => ({
@@ -43,7 +43,7 @@ const selectOne = (state: QuestionnaireState, action: ActionOf<"select-one">) =>
 
 const toggleMany = (state: QuestionnaireState, action: ActionOf<"toggle-many">) => {
   const question = state.request.questions[action.question];
-  if (!question || question.mode !== "multiple") return state;
+  if (question?.mode !== "multiple") return state;
   const choice = question.choices[action.choice];
   if (!choice) return state;
   return updateDraft(state, action.question, (draft) => {

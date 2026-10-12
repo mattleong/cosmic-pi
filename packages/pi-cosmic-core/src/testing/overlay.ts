@@ -1,54 +1,40 @@
 import * as Predicate from "effect/Predicate";
 
+const prototypeOf = <Value extends object>(value: Value): object | null => {
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return Predicate.isObjectKeyword(prototype) ? prototype : null;
+};
+
 const isPlainRecord = <Value extends object>(value: Value): boolean => {
-  const prototype = Object.getPrototypeOf(value);
+  const prototype = prototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 };
 
-const delegate = <Owner extends object>(
-  descriptor: PropertyDescriptor,
-  owner: Owner,
-): PropertyDescriptor => {
-  const value: unknown = descriptor.value;
-  if (descriptor.get === undefined && descriptor.set === undefined)
-    return {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: Predicate.isFunction(value) ? value.bind(owner) : value,
-    };
-  const forwarded: PropertyDescriptor = { configurable: true, enumerable: true };
-  if (descriptor.get !== undefined) forwarded.get = () => descriptor.get?.call(owner);
-  if (descriptor.set !== undefined) forwarded.set = (next) => descriptor.set?.call(owner, next);
-  return forwarded;
-};
-
-export const memberDescriptors = <Source extends object>(source: Source): PropertyDescriptorMap => {
-  const descriptors: PropertyDescriptorMap = {};
+const memberNames = <Source extends object>(source: Source): ReadonlySet<string> => {
+  const names = new Set<string>();
   for (
     let owner: object | null = source;
     owner !== null && owner !== Object.prototype;
-    owner = Object.getPrototypeOf(owner)
-  ) {
-    for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(owner))) {
-      if (key === "constructor" || Object.hasOwn(descriptors, key)) continue;
-      descriptors[key] = owner === source ? descriptor : delegate(descriptor, source);
-    }
-  }
-  return descriptors;
+    owner = prototypeOf(owner)
+  )
+    for (const name of Object.getOwnPropertyNames(owner))
+      if (name !== "constructor") names.add(name);
+  return names;
 };
 
 const isCompleteInstance = <Base extends object>(
   defaults: Base,
   overrides: Partial<Base>,
-): overrides is Base =>
-  !isPlainRecord(overrides) &&
-  Object.keys(memberDescriptors(defaults)).every((key) => key in overrides);
+): overrides is Base => [...memberNames(defaults)].every((name) => name in overrides);
 
-export const overlay = <Base extends object>(defaults: Base, overrides: Partial<Base>): Base =>
-  isCompleteInstance(defaults, overrides)
-    ? overrides
-    : Object.defineProperties(defaults, memberDescriptors(overrides));
+export const overlay = <Base extends object>(defaults: Base, overrides: Partial<Base>): Base => {
+  if (isPlainRecord(overrides))
+    return Object.defineProperties(defaults, Object.getOwnPropertyDescriptors(overrides));
+  if (isCompleteInstance(defaults, overrides)) return overrides;
+  throw new Error(
+    "A class-instance override must provide every member; pass a plain object for a partial override.",
+  );
+};
 
 export const ignore = (): undefined => undefined;
 

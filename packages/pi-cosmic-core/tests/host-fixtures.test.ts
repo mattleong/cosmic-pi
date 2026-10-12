@@ -79,7 +79,7 @@ it("builds a real Pi theme whose overridden styling can change between renders",
   expect(theme.getColorMode()).toBe("truecolor");
 });
 
-it("uses complete class-instance overrides as-is and delegates partial ones", () => {
+it("uses complete class-instance overrides as-is and rejects partial ones", () => {
   const session = SessionManager.inMemory("/real");
   const ctx = extensionContextFixture({ sessionManager: session });
   expect(ctx.sessionManager).toBe(session);
@@ -91,7 +91,8 @@ it("uses complete class-instance overrides as-is and delegates partial ones", ()
       return this.#id;
     }
   }
-  const partial = sessionManagerFixture(new PartialSession(), "/fallback");
-  expect(partial.getSessionId()).toBe("partial-session");
-  expect(partial.getCwd()).toBe("/fallback");
+  expect(() => sessionManagerFixture(new PartialSession(), "/fallback")).toThrow(
+    "class-instance override",
+  );
+  expect(sessionManagerFixture({ getSessionId: () => "plain" }, "/plain").getCwd()).toBe("/plain");
 });

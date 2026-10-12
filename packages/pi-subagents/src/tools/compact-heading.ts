@@ -1,5 +1,7 @@
 import { getTextContent, type CompactPhase, type CompactSummary } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import {
   WorkspaceToolDetailsSchema,
@@ -29,10 +31,13 @@ const OPERATION_LABELS = new Map([
 
 const operationLabel = (operation: string): string => OPERATION_LABELS.get(operation) ?? operation;
 
+const decodeTargetIds = Schema.decodeUnknownOption(Schema.Array(Schema.String));
+
 const targetIds = <Ids>(ids: Ids): string[] | undefined =>
-  Array.isArray(ids) && ids.every(Predicate.isString)
-    ? [...new Set(ids.map((id) => id.trim()).filter(Boolean))]
-    : undefined;
+  Option.match(decodeTargetIds(ids), {
+    onNone: () => undefined,
+    onSome: (decoded) => [...new Set(decoded.map((id) => id.trim()).filter(Boolean))],
+  });
 
 export const requestedRunIds = (input: SummaryArguments): string[] | undefined =>
   targetIds(input.runIds);

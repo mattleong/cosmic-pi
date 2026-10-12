@@ -98,7 +98,7 @@ export const updateFooterConfig = Effect.fn("pi-cosmic-ui.config.update-footer")
   cwd: string,
   agentDir: string,
   patch: FooterPatch,
-  projectTrusted = false,
+  projectTrusted: boolean = false,
   afterCommit: CosmicUiConfigAfterCommit = noAfterCommit,
 ) {
   return yield* modifyFooterConfig(
@@ -120,7 +120,7 @@ export const setFooterVisibility = Effect.fn("pi-cosmic-ui.config.set-visibility
   agentDir: string,
   id: string,
   visible: boolean,
-  projectTrusted = false,
+  projectTrusted: boolean = false,
   afterCommit: CosmicUiConfigAfterCommit = noAfterCommit,
 ) {
   return yield* modifyFooterConfig(

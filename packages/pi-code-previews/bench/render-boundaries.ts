@@ -26,11 +26,16 @@ import {
 } from "./helpers";
 
 printBenchHeader("render boundaries");
+const inheritedValue = (value: number) => {
+  const fixture = {};
+  Reflect.setPrototypeOf(fixture, { value });
+  return fixture;
+};
 const propertyFixtures: unknown[] = Array.from({ length: 256 }, (_, index) =>
   index % 4 === 0
     ? { value: index }
     : index % 4 === 1
-      ? Object.create({ value: index })
+      ? inheritedValue(index)
       : index % 4 === 2
         ? [index]
         : null,

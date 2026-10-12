@@ -175,11 +175,11 @@ describe("registered questionnaire presentation", () => {
       delivery: "failed" as const,
       outcome,
     }));
-    const args = { action: "status" as const };
+    const statusArgs = { action: "status" as const };
     const grouped = (rows: ReadonlyArray<object>) => {
       const issues = asyncAskUserCompactSummary({
         phase: "settled",
-        args,
+        args: statusArgs,
         result: { content: [], details: { requests: rows } },
         context: renderContextFixture(),
       })?.issues;

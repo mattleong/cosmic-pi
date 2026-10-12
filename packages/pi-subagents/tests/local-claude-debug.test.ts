@@ -1,11 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
 import {
   acquireLocalClaudeDebug,
   type LocalClaudeDebugEntry,
 } from "../src/boundary/local-claude-debug.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+
+const decodeJsonLine = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
 const setup = () =>
   temporaryDirectory("pi-subagents-claude-debug-").pipe(
@@ -55,7 +58,7 @@ const readLedger = (agentDirectory: string) =>
     const lines: unknown[] = content
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line));
+      .map((line) => decodeJsonLine(line));
     return { rootStat, directoryStat, ledgerStat, content, lines };
   });
 

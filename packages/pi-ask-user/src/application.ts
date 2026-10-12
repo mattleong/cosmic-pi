@@ -164,9 +164,9 @@ export function askUserWithDependencies(
                   AskUserService.use((service) => service.startAsync(request)),
                   signal,
                 ),
-          (input, signal) =>
+          (control, signal) =>
             runCurrent(
-              AskUserService.use((service) => service.controlAsync(input)),
+              AskUserService.use((service) => service.controlAsync(control)),
               signal,
             ),
           scheduleAnimation,

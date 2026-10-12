@@ -10,8 +10,8 @@ type CompactHeading = Pick<
   "subject" | "compactSubject" | "action" | "showTiming" | "showShortTiming"
 >;
 
-export function planCompactPresentation(input: {
-  summary: CompactSummary | undefined;
+export function planCompactPresentation<SummaryInput>(input: {
+  summary: SummaryInput;
   phase: CompactPhase;
   isError: boolean;
   errorText?: string;

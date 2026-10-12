@@ -99,7 +99,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         return record;
       });
     const settled = (target: WorkspaceSettledTarget) =>
-      target.processCleanupConfirmed === true
+      target.processCleanupConfirmed
         ? Effect.void
         : Effect.fail(
             workspaceFailure("cleanup", "Process cleanup must be independently confirmed."),
@@ -361,7 +361,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           "Worker, test tree, source, branch or index changed; review and test again.",
         );
       const required = yield* requiredLeaseDirectories(record, reviewed.changedPaths);
-      if (required.some((directory) => !preparation.leaseDirectories.includes(directory)))
+      if (required.some((ancestor) => !preparation.leaseDirectories.includes(ancestor)))
         return yield* workspaceFailure(
           "integrate",
           "Changed-file ancestors changed; prepare and test again before integration.",

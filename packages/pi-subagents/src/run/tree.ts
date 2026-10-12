@@ -25,7 +25,7 @@ export const isRunInSubtree = (
 };
 
 export const leafFirst = (records: Iterable<RunRecord>): ReadonlyArray<RunRecord> =>
-  [...records].sort((left, right) => runDepth(right.view) - runDepth(left.view));
+  [...records].toSorted((left, right) => runDepth(right.view) - runDepth(left.view));
 
 export const descendantRunIds = (
   records: ReadonlyMap<string, RunRecord>,

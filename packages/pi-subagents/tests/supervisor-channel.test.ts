@@ -40,6 +40,7 @@ import {
   SupervisorDeliveryIdSchema,
   SupervisorRpcGroup,
 } from "../src/supervisor/protocol.ts";
+import { anyString, anything, stringContaining } from "./support/matchers.ts";
 
 type JsonRpcValue = Schema.Json;
 interface JsonRpcObject {
@@ -441,7 +442,7 @@ describe("private supervisor channel", () => {
     const cleaned = yield* step(() =>
       stat(acquired.connectionConfigPath).then(
         () => false,
-        (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+        (cause: unknown) => Predicate.hasProperty(cause, "code") && cause.code === "ENOENT",
       ),
     );
     expect(cleaned).toBe(true);
@@ -709,9 +710,9 @@ describe("private supervisor channel", () => {
         ]),
       );
       expect(ping).toMatchObject({ id: "ping-while-blocked", result: {} });
-      expect(progress).not.toMatchObject({ error: expect.anything() });
+      expect(progress).not.toMatchObject({ error: anything() });
       expect(report).toMatchObject({
-        result: { content: [{ text: expect.stringContaining("sequence 1") }] },
+        result: { content: [{ text: stringContaining("sequence 1") }] },
       });
       expect(yield* Effect.orDie(handle.hasAcceptedReport(1))).toBe(true);
       expect(yield* Effect.orDie(handle.acceptedReportForEpoch(1))).toMatchObject({
@@ -771,7 +772,7 @@ describe("private supervisor channel", () => {
         }),
       );
       expect(retry).toMatchObject({
-        result: { content: [{ text: expect.stringContaining("retry accepted; sequence 1") }] },
+        result: { content: [{ text: stringContaining("retry accepted; sequence 1") }] },
       });
       const noDuplicateEvent = yield* Queue.poll(handle.events);
       expect(Option.isNone(noDuplicateEvent)).toBe(true);
@@ -790,7 +791,7 @@ describe("private supervisor channel", () => {
         }),
       );
       expect(laterReport).toMatchObject({
-        result: { content: [{ text: expect.stringContaining("sequence 2") }] },
+        result: { content: [{ text: stringContaining("sequence 2") }] },
       });
       expect(yield* step(() => takeEvent(handle))).toMatchObject({
         type: "report",
@@ -1104,7 +1105,7 @@ describe("private supervisor channel", () => {
       const questionEvent = yield* step(() => takeEvent(handle));
       if (questionEvent.type !== "supervisor_contact") throw new Error("expected question");
       handle.cancelPending("Adapter is closing the assignment.");
-      expect(yield* step(() => pending)).toMatchObject({ error: expect.anything() });
+      expect(yield* step(() => pending)).toMatchObject({ error: anything() });
       expect(yield* step(() => takeEvent(handle))).toMatchObject({
         type: "supervisor_question_cancelled",
         assignmentEpoch: 1,
@@ -1209,7 +1210,7 @@ describe("private supervisor channel", () => {
           report: '{"verdict":"ok"}',
         }),
       );
-      expect(accepted).toMatchObject({ result: { content: [{ text: expect.any(String) }] } });
+      expect(accepted).toMatchObject({ result: { content: [{ text: anyString() }] } });
       expect(accepted).not.toMatchObject({ result: { isError: true } });
       expect(yield* step(() => takeEvent(handle))).toMatchObject({
         type: "report",

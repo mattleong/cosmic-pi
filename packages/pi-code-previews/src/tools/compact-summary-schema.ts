@@ -43,6 +43,8 @@ const Summary = Schema.Struct({
 
 const isSummary = Schema.is(Summary);
 
-export function isSafeCompactSummary<Value>(value: Value): boolean {
+export type SafeCompactSummary = typeof Summary.Type;
+
+export function isSafeCompactSummary<Value>(value: Value): value is Value & SafeCompactSummary {
   return invokeHostCallback(() => isSummary(value), false);
 }

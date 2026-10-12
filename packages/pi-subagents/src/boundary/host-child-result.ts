@@ -157,8 +157,8 @@ export function registerChildResults(
       requestId,
       transport.send({ channel: "pi-subagents", type: "structured_result", requestId, valueJson }),
     );
-    return transport.run(delivery, signal).catch((error) => {
-      throw parentContactRejection(error);
+    return transport.run(delivery, signal).catch((cause: unknown) => {
+      throw parentContactRejection(cause);
     });
   };
 

@@ -91,7 +91,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       ...withoutReport,
       sessionEvents: withoutReport.sessionEvents.map((event) =>
         event.type === "assistant"
-          ? { ...event, text: "[report redacted: owned or already delivered]" }
+          ? Object.assign({}, event, { text: "[report redacted: owned or already delivered]" })
           : event,
       ),
     });

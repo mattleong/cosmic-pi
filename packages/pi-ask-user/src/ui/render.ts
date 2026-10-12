@@ -234,7 +234,9 @@ function renderQuestionPane(
   const choices = question.mode === "text" ? [] : question.choices;
   const choice = choices[draft.cursor];
   model.preview.setChoice(choice?.preview ? choice : undefined);
-  const hasAnyPreview = choices.some((candidate) => !!candidate.preview);
+  const hasAnyPreview = choices.some(
+    (candidate) => candidate.preview !== undefined && candidate.preview !== "",
+  );
   const lines: string[] = [];
   if (hasAnyPreview && width >= 92) {
     const leftWidth = Math.max(36, Math.floor(width * 0.48));

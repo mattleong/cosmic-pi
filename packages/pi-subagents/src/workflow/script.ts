@@ -79,7 +79,9 @@ export const workflowPlannedAgents = (
       ? { label: agent, profile: undefined }
       : agent;
     const shownProfile = profile?.trim();
-    return { phase: title, label: label.trim(), ...(shownProfile && { profile: shownProfile }) };
+    return shownProfile
+      ? { phase: title, label: label.trim(), profile: shownProfile }
+      : { phase: title, label: label.trim() };
   });
 
 const plannedAgentsProblem = (meta: WorkflowMeta): string | undefined => {

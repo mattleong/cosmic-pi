@@ -219,9 +219,14 @@ const harness = (
       setThinkingLevel,
       start,
       shutdown,
-      emitModel: (model: Model, previousModel: Model, source: "set" | "restore" = "set") =>
+      emitModel: (selected: Model, previousModel: Model, source: "set" | "restore" = "set") =>
         Effect.promise(() =>
-          host.emit("model_select", ctx, { type: "model_select", model, previousModel, source }),
+          host.emit("model_select", ctx, {
+            type: "model_select",
+            model: selected,
+            previousModel,
+            source,
+          }),
         ),
       emitThinking: (level: ThinkingLevel, previousLevel: ThinkingLevel) =>
         Effect.promise(() =>

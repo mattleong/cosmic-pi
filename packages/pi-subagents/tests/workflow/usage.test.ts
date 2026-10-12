@@ -12,6 +12,7 @@ import {
   type WorkflowFixture,
   workflowTest,
 } from "./fixtures/workflow-harness.ts";
+import { anyNumber } from "../support/matchers.ts";
 
 const PAIR = `return await parallel([() => agent("first", { label: "a" }), () => agent("second", { label: "b" })]);`;
 
@@ -64,7 +65,7 @@ describe("workflow usage", () => {
             label: "a",
             usage: { input: 100, output: 10, total: 120, cost: 0.5 },
             toolUses: 2,
-            durationMs: expect.any(Number),
+            durationMs: anyNumber(),
           }),
           expect.objectContaining({
             label: "b",

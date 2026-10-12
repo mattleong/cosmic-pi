@@ -20,6 +20,7 @@ import {
 import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { step } from "../support/effect-test.ts";
 import { executeTool } from "./fixtures/tool-harness.ts";
+import { stringContaining } from "../support/matchers.ts";
 
 const managedTools = Effect.gen(function* () {
   const fixture = nativeReportServiceFixture();
@@ -60,7 +61,7 @@ it.live("returns a parent question in the await result without a second notifica
       cards: [{ id: child.id, state: "waiting_for_parent" }],
     });
     expect(result.content[0]).toMatchObject({
-      text: expect.stringContaining("Which change should I make?"),
+      text: stringContaining("Which change should I make?"),
     });
     yield* Effect.sleep(Duration.millis(50));
     expect(fixture.notifications.filter((item) => item.type === "question")).toHaveLength(0);
@@ -122,11 +123,9 @@ it.live("keeps late-abort delivery uncertain and recoverable after consumption",
     ).not.toContain("Recover after late abort");
     const observations = yield* step(() =>
       runtime.run(
-        service.withStatusObservations(
-          [child.id],
-          ({ observations }) => Effect.succeed(observations),
-          { includeDeliveredReports: true },
-        ),
+        service.withStatusObservations([child.id], (scope) => Effect.succeed(scope.observations), {
+          includeDeliveredReports: true,
+        }),
       ),
     );
     expect(observations[0]).toMatchObject({
@@ -149,9 +148,9 @@ it.live(
             effect.pipe(Effect.onExit((exit) => Effect.sync(() => void exits.push(exit)))),
             signal,
           )
-          .catch((error) => {
-            rejections.push(error);
-            throw error;
+          .catch((cause: unknown) => {
+            rejections.push(cause);
+            throw cause;
           });
       let activePresentations = 0;
       const awaitLeases: unknown[] = [];

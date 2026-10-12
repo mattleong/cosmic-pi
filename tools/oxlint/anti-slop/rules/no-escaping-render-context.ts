@@ -422,7 +422,7 @@ export const noEscapingRenderContextRule = defineRule({
           context.report({ node, messageId: "missingHelper", data: { name: helper.name } });
           continue;
         }
-        const expected = [...(helper.retained ?? []), ...(helper.builders ?? [])].sort(
+        const expected = [...(helper.retained ?? []), ...(helper.builders ?? [])].toSorted(
           (left, right) => left - right,
         );
         const actual = parameters.flatMap((parameter, index) => {

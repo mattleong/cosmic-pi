@@ -43,6 +43,11 @@ export const boundedMiddle = (value: string, maximum: number): string => {
   return `${characters.slice(0, left).join("")}…${characters.slice(characters.length - (maximum - left - 1)).join("")}`;
 };
 
+const effortLabel = (supportedEfforts: ModelPickerModel["supportedEfforts"]): string => {
+  const efforts = supportedEfforts?.map(sanitizeTerminalLine).join(", ");
+  return efforts === undefined || efforts === "" ? "default" : efforts;
+};
+
 const labeledItem = (
   selector: string,
   rawLabel: string,
@@ -66,7 +71,7 @@ const modelItem = <M extends ModelPickerModel>(model: M, current?: string): Sele
     ? sanitizeTerminalLine(model.unavailableReason ?? "Model is unavailable")
     : undefined;
   if (model.label) return labeledItem(selector, model.label, unavailableReason, model.description);
-  const efforts = model.supportedEfforts?.map(sanitizeTerminalLine).join(", ") || "default";
+  const efforts = effortLabel(model.supportedEfforts);
   const name =
     model.name && model.name !== model.id
       ? `${boundedMiddle(sanitizeTerminalLine(model.name), 48)} · `

@@ -88,10 +88,10 @@ function identityOf(
   if (declarator.id.type === "Identifier") return identity;
   if (declarator.id.type !== "ObjectPattern") return null;
   const property = declarator.id.properties.find(
-    (property) =>
-      property.type === "Property" &&
-      property.value.type === "Identifier" &&
-      property.value.name === variable.name,
+    (candidate) =>
+      candidate.type === "Property" &&
+      candidate.value.type === "Identifier" &&
+      candidate.value.name === variable.name,
   );
   return property?.type === "Property"
     ? memberIdentity(identity, staticPropertyName(property.key, property.computed))
@@ -185,7 +185,7 @@ function collectCallbacks(pipeline: Pipeline, expression: ESTree.Expression): vo
   if (node.type === "Identifier") {
     const variable = resolveVariable(pipeline.sourceCode, node);
     const declarator = variable === null ? null : constDeclarator(variable);
-    if (declarator?.init !== null && declarator !== null && declarator.id.type === "Identifier") {
+    if (declarator?.id.type === "Identifier" && declarator.init !== null) {
       collectCallbacks(pipeline, declarator.init);
     }
   } else if (node.type === "ConditionalExpression") {

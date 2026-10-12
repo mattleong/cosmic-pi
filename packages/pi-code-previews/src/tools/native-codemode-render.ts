@@ -1,4 +1,4 @@
-import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
@@ -14,7 +14,12 @@ import type { CodePreviewRendererAppearance } from "../application/renderer-cont
 import type { CompactSummary } from "./compact-summary";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
-import type { RenderCall, RendererState, RenderResult } from "./renderers/shared/types";
+import type {
+  CodePreviewRenderers,
+  RenderCall,
+  RendererState,
+  RenderResult,
+} from "./renderers/shared/types";
 import {
   nativeCodemodeChildren,
   nativeCodemodeHeader,
@@ -88,7 +93,7 @@ function renderCallList(
 export function createNativeCodemodeRenderers(
   cwd: string,
   appearance: CodePreviewRendererAppearance,
-): ToolRenderers {
+): CodePreviewRenderers<unknown, unknown, RendererState> {
   const discovery = createNativeDiscoveryProjector();
   const summary = nativeCodemodeSummary(cwd, discovery);
   const previewStyle =

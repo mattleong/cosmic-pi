@@ -342,20 +342,20 @@ describe("activity presentation", () => {
     expect(component.shell.state.selectedId).toBe(child.key);
   });
   it("n skips parent questions and blocked rows and preserves state when no human needs input", () => {
-    const owner = activityRow("owner");
+    const questionOwner = activityRow("owner");
     const parent = activityRow("parent", "needs-input", undefined, { inputTarget: "parent" });
     const blocked = activityRow("blocked", "blocked", undefined, {
       blockedReason: "file-access-review",
     });
-    const human = activityRow("human", "needs-input", owner.id);
-    let rows = [owner, parent, blocked, human];
+    const human = activityRow("human", "needs-input", questionOwner.id);
+    let rows = [questionOwner, parent, blocked, human];
     const { component } = mountActivity(() => rows);
     component.render(80);
     component.handleInput("h");
     component.handleInput("w");
     expect(component.shell.state.selectedId).toBe(human.key);
-    expect(component.presentation.collapsed.has(owner.key)).toBe(false);
-    rows = [owner, parent, blocked];
+    expect(component.presentation.collapsed.has(questionOwner.key)).toBe(false);
+    rows = [questionOwner, parent, blocked];
     component.render(80);
     component.handleInput("z");
     const selected = component.shell.state.selectedId;
@@ -573,9 +573,9 @@ describe("grouped activity interaction", () => {
   });
   it("reveals urgent owned questions across collapsed workflow and section headings", () => {
     const workflow = reviewWorkflow();
-    const owner = memberRow("owner", workflow, "Find");
-    const human = activityRow("human", "needs-input", owner.id, { kind: "question" });
-    const { component } = mountGrouped(() => [workflow, owner, human]);
+    const findMember = memberRow("owner", workflow, "Find");
+    const human = activityRow("human", "needs-input", findMember.id, { kind: "question" });
+    const { component } = mountGrouped(() => [workflow, findMember, human]);
     component.render(120);
     component.presentation.collapsed.add(workflow.key);
     component.presentation.collapsed.add(activitySectionId("workflows"));

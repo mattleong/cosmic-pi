@@ -20,11 +20,11 @@ const sideSession =
       return Promise.resolve();
     }
     const trimmed = args.trim();
-    return run(trimmed || undefined).then(
+    return run(trimmed === "" ? undefined : trimmed).then(
       (result) => notifyHerdrBtw(ctx, SUCCESS_MESSAGES[result.mode], "info"),
-      (failure) => {
+      (cause: unknown) => {
         const message =
-          failure instanceof HerdrBtwError ? failure.message : "Couldn't open a BTW side session";
+          cause instanceof HerdrBtwError ? cause.message : "Couldn't open a BTW side session";
         notifyHerdrBtw(ctx, message, "error");
       },
     );

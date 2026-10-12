@@ -75,7 +75,9 @@ export const createNativeModelOptions = (
     .map((model) => {
       const fastModeAvailable = model.supportedServiceTiers.includes(FAST_SERVICE_TIER);
       return {
-        ...pseudoModel(model.selector),
+        provider: "profile",
+        id: model.selector,
+        selector: model.selector,
         label: `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${nativeModelStatus(model, currentSelector)}`,
         description: `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}reasoning levels: ${model.supportedEfforts.join(", ") || "default"}${fastModeAvailable ? " · fast mode available" : ""}`,
         searchText: `${model.selector} ${model.label} ${model.description ?? ""}`,

@@ -63,7 +63,7 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
           const roots = yield* Effect.forEach(artifact.preparation.leaseDirectories, (cwd) =>
             leases.canonicalize(cwd).pipe(Effect.mapError(mapWorkspaceError)),
           );
-          const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].sort(
+          const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].toSorted(
             (left, right) => left.digest.localeCompare(right.digest),
           );
           const proposalTrees = [
@@ -115,7 +115,7 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
                         return;
                       }
                     }
-                    for (const lease of owned.reverse())
+                    for (const lease of owned.toReversed())
                       yield* leases.release(lease).pipe(
                         Effect.catch(() =>
                           Effect.sync(() => {

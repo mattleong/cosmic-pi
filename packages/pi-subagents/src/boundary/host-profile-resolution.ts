@@ -202,7 +202,7 @@ const dynamicCandidateSkip = (
 ): SkippedProfileCandidate => ({
   candidateIndex: attempt.candidateIndex,
   candidate: routeLabel(attempt),
-  code: error.code || error._tag,
+  code: (error.code ?? "") || error._tag,
   reason: error.message,
 });
 
@@ -386,7 +386,7 @@ export const resolveProfileStart = (
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
     const profileSnapshot = capturedProfiles ?? (yield* profiles.capture);
-    const selectedProfile = rawInput.profile?.trim() || "generalist";
+    const selectedProfile = (rawInput.profile?.trim() ?? "") || "generalist";
     const definition = profiles.definition(selectedProfile);
     if (!definition)
       return yield* new InvalidSubagentRequestError({

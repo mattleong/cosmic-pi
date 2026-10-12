@@ -899,7 +899,8 @@ describe("BackgroundTaskService", () => {
       const service = yield* BackgroundTaskService;
       expect(yield* refusedStart(service)).toMatchObject({ _tag: "BackgroundSpawnError" });
       const [failed] = yield* service.list();
-      expect(failed).toMatchObject({ state: "failed", error: expect.any(String) });
+      expect(failed?.state).toBe("failed");
+      expect(failed?.error).toBeTypeOf("string");
       expect(failed?.endedAt).toBeDefined();
       expect(yield* refusedStart(service)).toMatchObject({ _tag: "BackgroundSpawnError" });
     }).pipe(Effect.scoped, provideBuiltLayer(layer));

@@ -275,11 +275,12 @@ export function applyTextDecorations(
     .map((entry) => {
       const prefix = prefixes.get(entry.id);
       if (prefix === undefined) return entry;
-      return {
-        ...entry,
-        text: `${prefix}${entry.text}`,
-        ...(entry.compactText !== undefined && { compactText: `${prefix}${entry.compactText}` }),
-      };
+      return Object.assign(
+        {},
+        entry,
+        { text: `${prefix}${entry.text}` },
+        entry.compactText === undefined ? {} : { compactText: `${prefix}${entry.compactText}` },
+      );
     });
 }
 
@@ -298,9 +299,11 @@ export function orderedContributions(
     )
     .map((value) => {
       const configuredOrder = order.get(value.id);
-      return configuredOrder === undefined ? value : { ...value, order: configuredOrder };
+      return configuredOrder === undefined
+        ? value
+        : Object.assign({}, value, { order: configuredOrder });
     })
-    .sort(
+    .toSorted(
       (a, b) => (a.order ?? DEFAULT_CONTRIBUTION_ORDER) - (b.order ?? DEFAULT_CONTRIBUTION_ORDER),
     );
 }

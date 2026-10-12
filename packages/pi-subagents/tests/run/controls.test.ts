@@ -16,6 +16,7 @@ import {
   withService,
   type FakeChildControl,
 } from "./fixtures/service-harness.ts";
+import { anyString } from "../support/matchers.ts";
 
 describe("SubagentService", () => {
   it.effect("clears a waiting parent question when its MCP caller cancels", () => {
@@ -74,7 +75,7 @@ describe("SubagentService", () => {
         channel: "pi-subagents",
         type: "parent_reply",
         requestId: "question-1",
-        ackId: expect.any(String),
+        ackId: anyString(),
         message: "Use the public API.",
       });
 
@@ -225,8 +226,9 @@ describe("SubagentService", () => {
         const interrupting = yield* service
           .interrupt(run.id)
           .pipe(Effect.forkScoped({ startImmediately: true }));
-        if (fault.timesOutAfter) {
-          yield* yieldUntil(() => fault.timesOutAfter?.(control) === true);
+        const { timesOutAfter } = fault;
+        if (timesOutAfter) {
+          yield* yieldUntil(() => timesOutAfter(control));
           yield* TestClock.adjust("10 seconds");
         }
         const failure = yield* Fiber.join(interrupting).pipe(Effect.flip);
@@ -610,14 +612,14 @@ describe("SubagentService", () => {
           channel: "pi-subagents",
           type: "parent_reply",
           requestId: "unsent-question",
-          ackId: expect.any(String),
+          ackId: anyString(),
           message: "Proceed.",
         },
         {
           channel: "pi-subagents",
           type: "parent_reply",
           requestId: "unsent-question",
-          ackId: expect.any(String),
+          ackId: anyString(),
           message: "Proceed.",
         },
       ]);

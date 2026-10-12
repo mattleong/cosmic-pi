@@ -74,14 +74,14 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
         "failing-editor.mjs",
       );
 
-      yield* Effect.promise(() =>
-        expect(
-          editWithExternalEditor(tui, command, "initial", new AbortController().signal),
-        ).rejects.toMatchObject({
-          _tag: "ExternalEditorError",
-          message: expect.not.stringContaining(script),
-        }),
+      const failure = yield* Effect.promise(() =>
+        editWithExternalEditor(tui, command, "initial", new AbortController().signal).then(
+          () => undefined,
+          (cause: unknown) => cause,
+        ),
       );
+      expect(failure).toMatchObject({ _tag: "ExternalEditorError" });
+      expect(failure instanceof Error ? failure.message : "").not.toContain(script);
 
       expect(stop).toHaveBeenCalledOnce();
       expect(start).toHaveBeenCalledOnce();

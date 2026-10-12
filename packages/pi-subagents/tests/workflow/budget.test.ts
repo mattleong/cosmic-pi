@@ -23,6 +23,7 @@ import {
   type WorkflowFixture,
   type WorkflowFixtureOptions,
 } from "./fixtures/workflow-harness.ts";
+import { stringContaining } from "../support/matchers.ts";
 
 const startBudgeted = (
   workflows: WorkflowServiceContract,
@@ -69,7 +70,7 @@ describe("workflow token budget", () => {
       expect(run.state).toBe("failed");
       expect(run.failure).toMatchObject({
         name: WORKFLOW_BUDGET_ERROR,
-        message: expect.stringContaining("budget"),
+        message: stringContaining("budget"),
       });
       expect(run.budget).toEqual({ total: 100, spent: 150, refused: 1 });
       expect(run.warnings).toHaveLength(1);
@@ -98,7 +99,7 @@ describe("workflow token budget", () => {
       expect(run.state).toBe("completed");
       expect(resultValue(run)).toEqual({
         first: "first done",
-        error: expect.stringContaining("budget"),
+        error: stringContaining("budget"),
         spent: 150,
         remaining: 0,
       });
@@ -231,7 +232,7 @@ describe("workflow token budget", () => {
       expect(run.state).toBe("completed");
       expect(resultValue(run)).toEqual({
         a: "a done",
-        refused: expect.stringContaining("budget"),
+        refused: stringContaining("budget"),
       });
       expect(run.agents.find((agent) => agent.label === "b")).toMatchObject({
         state: "skipped",

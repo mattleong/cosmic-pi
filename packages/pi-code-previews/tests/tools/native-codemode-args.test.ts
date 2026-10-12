@@ -36,7 +36,7 @@ for (const tool of ["bash", "edit"])
     assert.ok(preview);
     assert.equal(preview.partialFields.has(field), true);
     const target = nativeCodemodeCallSubject(tool, preview, "/project").subject;
-    assert.ok(target && target.endsWith("…"));
+    assert.ok(target?.endsWith("…"));
     assert.ok(value.includes(String(preview.values[field])));
   });
 

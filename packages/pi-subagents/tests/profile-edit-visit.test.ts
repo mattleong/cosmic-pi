@@ -252,7 +252,7 @@ describe("profile editing visit", () => {
     const visit = new ProfileEditVisit(opening);
     const after = inspect(doc(candidate));
     save(visit, saved(), "worker", opening, after, explicit);
-    const reordered = Object.fromEntries(Object.entries(candidate).reverse());
+    const reordered = Object.fromEntries(Object.entries(candidate).toReversed());
     expect(visit.isEdited(saved(), "worker", inspect(doc(reordered)))).toBe(true);
   });
 

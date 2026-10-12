@@ -104,7 +104,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
       renderSubagentStartCall(
         Array.isArray(args.agents) ? args.agents : [],
         theme,
-        context?.expanded === true,
+        context.expanded,
         false,
         context,
       ),

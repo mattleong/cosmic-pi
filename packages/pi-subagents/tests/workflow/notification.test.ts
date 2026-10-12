@@ -2,7 +2,11 @@ import { applyPresentationSettings, captureRegistrations } from "pi-code-preview
 import { formatCost, formatTokens } from "pi-cosmic-core";
 import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerSubagentMessageRenderers } from "../../src/application/messages.ts";
+import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
+import {
+  registerSubagentMessageRenderers,
+  renderSubagentMessage,
+} from "../../src/application/messages.ts";
 import {
   makeHostNotifier,
   type SubagentWorkflowNotification,
@@ -63,7 +67,7 @@ const interrupted = (patch: Partial<WorkflowInterruptedRun> = {}) =>
   });
 
 const sent = (...notifications: ReadonlyArray<SubagentWorkflowNotification>) => {
-  const sendMessage = vi.fn();
+  const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
   const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
   const accepted = notifications.map((notification) => notify(notification));
   return { calls: sendMessage.mock.calls, accepted };
@@ -243,7 +247,10 @@ describe("workflow notification", () => {
     const reader = finishedRun().agents[0]!;
     const allUnchanged = workflowNotification(
       finishedRun({
-        agents: [reader, ...writers.map((writer) => ({ ...writer, unchanged: true as const }))],
+        agents: [
+          reader,
+          ...writers.map((writer) => Object.assign({}, writer, { unchanged: true as const })),
+        ],
       }),
     )!;
     expect(allUnchanged.workspaces).toEqual([]);
@@ -419,12 +426,17 @@ describe("workflow notification", () => {
     "renders one %s row naming the workflow and the full content when expanded",
     (style, notification, name, runId, detail) => {
       restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
-      const render = captureRegistrations(registerSubagentMessageRenderers).messageRenderers.get(
-        "pi-subagents-workflow",
-      )!;
-      const message = { ...sent(notification).calls[0]![0], role: "custom", timestamp: 0 };
+      const registered = captureRegistrations(registerSubagentMessageRenderers).messageRenderers;
+      expect(registered.has("pi-subagents-workflow")).toBe(true);
+      const message: Parameters<MessageRenderer>[0] = {
+        ...sent(notification).calls[0]![0],
+        role: "custom",
+        timestamp: 0,
+      };
       const lines = (expanded: boolean) =>
-        render(message, { expanded, outputPad: 0 }, plainTheme)!.render(160).join("\n");
+        renderSubagentMessage(message, { expanded, outputPad: 0 }, plainTheme)!
+          .render(160)
+          .join("\n");
       expect(lines(false)).toContain(name);
       expect(lines(false)).not.toContain(runId);
       expect(lines(true)).toContain(runId);

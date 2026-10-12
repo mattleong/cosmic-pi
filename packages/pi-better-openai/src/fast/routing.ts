@@ -36,8 +36,7 @@ export function applyFastRoutingHeaders(
 ): void {
   const model = ctx.model;
   if (
-    !model ||
-    model.provider !== "openai-codex" ||
+    model?.provider !== "openai-codex" ||
     model.api !== "openai-codex-responses" ||
     !isCanonicalCodexEndpoint(model.baseUrl) ||
     !isFastActive(ctx, snapshot)

@@ -79,7 +79,7 @@ export const decodeWorkflowAgentOptions = (
     );
     const shownLabel = label === undefined ? undefined : workflowAgentLabel(label);
     const shownPhase = phase === undefined ? undefined : workflowPhaseTitle(phase) || undefined;
-    const named = profile?.trim() || undefined;
+    const named = (profile?.trim() ?? "") || undefined;
     return {
       ...options,
       ...(shownLabel !== undefined && { label: shownLabel }),
@@ -99,6 +99,6 @@ export const workflowAgentJournalKey = (
       workflowAgentProfile(options.profile),
       schemaDigest ?? null,
       options.isolation ?? null,
-      options.writes ? [...options.writes].sort() : null,
+      options.writes ? [...options.writes].toSorted() : null,
     ]),
   );

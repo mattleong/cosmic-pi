@@ -99,9 +99,9 @@ export function registerQuestionnaireCapability(
             finish();
             return outcome;
           },
-          (error) => {
+          (cause: unknown) => {
             finish();
-            throw error;
+            throw cause;
           },
         );
       } catch {

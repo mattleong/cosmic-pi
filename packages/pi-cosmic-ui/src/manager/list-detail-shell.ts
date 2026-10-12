@@ -23,7 +23,7 @@ interface ListDetailShellState extends ListDetailMotionState {
 
 export class ListDetailShell {
   readonly keymap = new FullScreenKeymap();
-  private current: Types.Mutable<ListDetailShellState> = {
+  private readonly current: Types.Mutable<ListDetailShellState> = {
     pane: "list",
     details: false,
     selected: 0,

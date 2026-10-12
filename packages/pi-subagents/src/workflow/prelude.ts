@@ -164,12 +164,11 @@ export const workflowSandboxSource = (body: string): string => `${WORKFLOW_PRELU
 
 const SANDBOX_WRAPPER_CHARS = "(async (tools, console) => {".length;
 const STACK_FRAME = /^\s*at /u;
-const NATIVE_FRAME = /\(native\)$/u;
 const SANDBOX_POSITION = /^(\s*at .*?)\(?codemode\.js:(\d+):(\d+)\)?$/u;
 
 export const workflowScriptStack = (stack: string): string | undefined => {
   const frames = stack.split("\n").flatMap((line): ReadonlyArray<string> => {
-    if (!STACK_FRAME.test(line) || NATIVE_FRAME.test(line)) return [];
+    if (!STACK_FRAME.test(line) || line.endsWith("(native)")) return [];
     const position = SANDBOX_POSITION.exec(line);
     if (!position) return [line.trim()];
     const [, head = "", lineText = "", columnText = ""] = position;

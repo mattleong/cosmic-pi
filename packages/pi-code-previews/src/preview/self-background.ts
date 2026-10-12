@@ -54,7 +54,8 @@ class SelfBackgroundRow<TArgs, TState> implements Component {
     context: ToolRenderContext<TState, TArgs>,
     theme: Theme,
   ) {
-    this[slot] = component;
+    if (slot === "call") this.call = component;
+    else this.result = component;
     this.context = context;
     this.theme = theme;
     this.box.clear();

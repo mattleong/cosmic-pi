@@ -74,11 +74,11 @@ export function backgroundTaskActivityDetail(
   projection: BackgroundTaskProjection,
   id: string,
 ): string | undefined {
-  const task = projection.tasks.find((task) => task.id === id);
+  const task = projection.tasks.find((candidate) => candidate.id === id);
   if (!task) return undefined;
   let remaining = 12_000;
   const chunks: string[] = [];
-  for (const event of [...task.logs].reverse()) {
+  for (const event of task.logs.toReversed()) {
     if (remaining <= 0) break;
     const text = event.text.slice(-remaining);
     chunks.push(text);
@@ -97,7 +97,7 @@ export function backgroundTaskActivityDetail(
     ].join("\n"),
     { maximumLength: 4_000 },
   );
-  return sanitizeDiagnosticContent(`${header}\n\n${chunks.reverse().join("")}`, {
+  return sanitizeDiagnosticContent(`${header}\n\n${chunks.toReversed().join("")}`, {
     maximumLength: ACTIVITY_LIMITS.detail,
   });
 }

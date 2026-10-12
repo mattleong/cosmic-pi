@@ -39,7 +39,7 @@ const hasTaskNotificationEnvelope = (text: string): boolean => {
   const trimmed = text.trimStart();
   return (
     trimmed.startsWith("<task-notification>") &&
-    trimmed.indexOf("</task-notification>", "<task-notification>".length) >= 0
+    trimmed.includes("</task-notification>", "<task-notification>".length)
   );
 };
 

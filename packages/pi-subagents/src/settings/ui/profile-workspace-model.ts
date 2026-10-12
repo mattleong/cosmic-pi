@@ -222,7 +222,17 @@ export const profileWorkspaceRows = (
       parentModel,
       expanded.has(candidateIndex),
       candidateIndex,
-    ).map((row): ProfileWorkspaceRow => ({ ...row, scope: "candidate", candidateIndex })),
+    ).map(
+      (row): ProfileWorkspaceRow => ({
+        field: row.field,
+        label: row.label,
+        value: row.value,
+        fixed: row.fixed,
+        fixedReason: row.fixedReason,
+        scope: "candidate",
+        candidateIndex,
+      }),
+    ),
   ),
   {
     scope: "profile",

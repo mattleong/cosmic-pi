@@ -1,3 +1,4 @@
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -53,7 +54,7 @@ const sessionFixture = (
     let host = recordingExtensionHost();
     const sent: string[] = [];
     const userMessages: string[] = [];
-    const notify = vi.fn();
+    const notify = vi.fn<ExtensionUIContext["notify"]>();
     const sessionId = `ultracode-session-${process.pid}-${nextSession++}`;
     const ctx = sessionContextFixture(
       {

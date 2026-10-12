@@ -18,8 +18,8 @@ export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined
 export const ensurePrivateDirectory = (path: string): Promise<void> =>
   fs
     .mkdir(path, { mode: 0o700 })
-    .catch((error) => {
-      if (nodeErrorCode(error) !== "EEXIST") throw error;
+    .catch((cause: unknown) => {
+      if (nodeErrorCode(cause) !== "EEXIST") throw cause;
     })
     .then(() => fs.lstat(path))
     .then((stat) => {
@@ -37,7 +37,10 @@ export const writeExclusive = (path: string, source: string): Promise<void> => {
         .then(() => handle.sync())
         .then(
           () => handle.close(),
-          (error) => handle.close().then(() => Promise.reject(error)),
+          (cause: unknown) =>
+            handle.close().then(() => {
+              throw cause;
+            }),
         ),
     )
     .then(() => fs.chmod(path, 0o600));
@@ -116,5 +119,6 @@ export const readValidatedCodexAuth = (
   sourceEnvironment: NodeJS.ProcessEnv,
 ): Promise<string | undefined> =>
   safeAgentDirectory(
-    sourceEnvironment.CODEX_HOME ?? nodePath.join(sourceEnvironment.HOME || homedir(), ".codex"),
+    sourceEnvironment.CODEX_HOME ??
+      nodePath.join((sourceEnvironment.HOME ?? "") || homedir(), ".codex"),
   ).then(readValidatedCodexAuthFromHome, () => undefined);

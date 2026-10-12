@@ -138,10 +138,10 @@ for (const trigger of ["scope", "shutdown"] as const) {
           const ingress = yield* trigger === "scope"
             ? Effect.scoped(create.pipe(Effect.tap(begin)))
             : create.pipe(
-                Effect.tap((ingress) =>
-                  begin(ingress).pipe(
-                    Effect.andThen(ingress.shutdown),
-                    Effect.andThen(ingress.shutdown),
+                Effect.tap((created) =>
+                  begin(created).pipe(
+                    Effect.andThen(created.shutdown),
+                    Effect.andThen(created.shutdown),
                   ),
                 ),
               );

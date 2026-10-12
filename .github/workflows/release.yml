@@ -49,7 +49,7 @@ jobs:
             exit 1
           fi
           VERSION="${RELEASE_TAG#v}"
-          node scripts/check-versions.mjs "$VERSION"
+          node scripts/check-versions.ts "$VERSION"
           test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")"
 
       - name: Install dependencies

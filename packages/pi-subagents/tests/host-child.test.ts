@@ -148,7 +148,7 @@ function contactOfType<Type extends LocalPiContact["type"]>(
 const rejection = (promise: Promise<unknown>) =>
   promise.then(
     () => undefined,
-    (error: Error) => error,
+    (cause: unknown) => cause,
   );
 
 afterEach(() => {

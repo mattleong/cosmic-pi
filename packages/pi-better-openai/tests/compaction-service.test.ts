@@ -50,7 +50,7 @@ import {
   zeroUsage,
 } from "./helpers.ts";
 
-const entry = (id: string, content: string): SessionEntry => ({
+const customMessageEntry = (id: string, content: string): SessionEntry => ({
   type: "custom_message",
   id,
   parentId: null,
@@ -63,7 +63,7 @@ const entry = (id: string, content: string): SessionEntry => ({
 const compactEvent = (firstKeptEntryId = "kept"): SessionBeforeCompactEvent => {
   return {
     type: "session_before_compact",
-    branchEntries: [entry(firstKeptEntryId, "kept")],
+    branchEntries: [customMessageEntry(firstKeptEntryId, "kept")],
     customInstructions: "retain decisions",
     reason: "manual",
     signal: new AbortController().signal,
@@ -522,7 +522,10 @@ describe("OpenAICompactionService", () => {
   it.effect("creates, reuses, filters, and injects native checkpoints", () => {
     const target = fixture({
       enabled: true,
-      branch: [entry("one", "first turn"), { ...entry("two", "second turn"), parentId: "one" }],
+      branch: [
+        customMessageEntry("one", "first turn"),
+        { ...customMessageEntry("two", "second turn"), parentId: "one" },
+      ],
     });
     const { requests, client } = recordingClient("owned");
     const output = (round: number) => [{ type: "compaction", encrypted_content: `owned-${round}` }];
@@ -535,7 +538,10 @@ describe("OpenAICompactionService", () => {
       expect(decodeOpenAICompactionDetails(first?.details)).toBeDefined();
 
       target.branch.push(checkpointEntry("checkpoint-entry", "two", 1, first));
-      target.branch.push({ ...entry("three", "third turn"), parentId: "checkpoint-entry" });
+      target.branch.push({
+        ...customMessageEntry("three", "third turn"),
+        parentId: "checkpoint-entry",
+      });
 
       const second = yield* service.compact(compactEvent("kept-again"));
       expect(decodeOpenAICompactionDetails(second?.details)).toBeDefined();

@@ -42,9 +42,10 @@ export function loadCodePreviewSettings(
       service.load(admission, { projectCwd, projectTrusted }),
     );
     if (!hasCodePreviewSessionCapability()) return runOneShotSettingsEffect(effect, signal);
-    return runCodePreviewSessionEffect(effect, signal).catch((error) =>
-      signal?.aborted ? Promise.reject(error) : runOneShotSettingsEffect(effect, signal),
-    );
+    return runCodePreviewSessionEffect(effect, signal).catch((cause: unknown) => {
+      if (signal?.aborted) throw cause;
+      return runOneShotSettingsEffect(effect, signal);
+    });
   };
 
   if (signal) return execute(makeSettingsAdmission());

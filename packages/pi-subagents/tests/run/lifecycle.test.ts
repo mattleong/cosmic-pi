@@ -16,6 +16,7 @@ import {
   request,
   withService,
 } from "./fixtures/service-harness.ts";
+import { anyString, stringContaining } from "../support/matchers.ts";
 
 describe("SubagentService", () => {
   it.effect("checks current direct-parent capacity before completed respawn", () => {
@@ -375,7 +376,7 @@ describe("SubagentService", () => {
       const failed = yield* service.status(failedRun.id);
       expect(failed).toMatchObject({
         state: "failed",
-        error: expect.stringContaining("Fixture awaitExit failure"),
+        error: stringContaining("Fixture awaitExit failure"),
       });
       expect(failed.pid).toBeUndefined();
 
@@ -493,7 +494,7 @@ describe("SubagentService", () => {
             name: "failed-name",
             generation: 1,
             outcome: "failed",
-            error: expect.any(String),
+            error: anyString(),
           },
         ],
       });

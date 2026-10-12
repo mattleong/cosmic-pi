@@ -100,7 +100,7 @@ export const makeLocalClaudeInputDelivery = (
   const acceptReport = (epoch: number): Effect.Effect<boolean> =>
     Effect.suspend(() => {
       const input = pending;
-      if (!input || input.operation !== "steer" || input.epoch !== epoch || failure)
+      if (input?.operation !== "steer" || input.epoch !== epoch || failure)
         return Effect.succeed(false);
       transportClosed = processError(
         "steer",
@@ -147,9 +147,9 @@ export const makeLocalClaudeInputDelivery = (
         pending = input;
         let transferred = false;
         const nativeSend = Effect.suspend(() => {
-          const closed = closedError();
-          return closed
-            ? Effect.fail(closed)
+          const closedOnSend = closedError();
+          return closedOnSend
+            ? Effect.fail(closedOnSend)
             : child.send(claudeUserFrame(text, { shouldQuery, uuid: input.uuid }));
         }).pipe(
           Effect.tapError((error) =>

@@ -1,9 +1,11 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
-import { workspacePackageDirectories } from "./workspace-manifest-paths.mjs";
+
+import { decodePackageManifest } from "./package-manifest.ts";
+import { workspacePackageDirectories } from "./workspace-manifest-paths.ts";
 
 const rootDir = join(import.meta.dirname, "..");
-const violations = [];
+const violations: string[] = [];
 const hostProvidedPackages = new Set([
   "@earendil-works/pi-ai",
   "@earendil-works/pi-agent-core",
@@ -19,7 +21,7 @@ const extensionRootAllowlist = new Set([
   "protocol.ts",
 ]);
 
-const hasOwnManifest = async (directory) => {
+const hasOwnManifest = async (directory: string): Promise<boolean> => {
   try {
     const entries = await readdir(directory, { withFileTypes: true });
     return entries.some((entry) => entry.isFile() && entry.name === "package.json");
@@ -28,8 +30,8 @@ const hasOwnManifest = async (directory) => {
   }
 };
 
-const walkFiles = async (directory) => {
-  const files = [];
+const walkFiles = async (directory: string): Promise<string[]> => {
+  const files: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (ignoredDirectories.has(entry.name)) continue;
@@ -52,7 +54,7 @@ const walkFiles = async (directory) => {
 const packageDirectories = await workspacePackageDirectories(rootDir);
 
 for (const packageDir of packageDirectories) {
-  const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
+  const manifest = decodePackageManifest(await readFile(join(packageDir, "package.json"), "utf8"));
   const files = await walkFiles(packageDir);
   const isExtensionPackage = manifest.pi !== undefined;
 

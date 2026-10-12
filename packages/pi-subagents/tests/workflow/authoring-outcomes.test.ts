@@ -4,6 +4,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { workflowToolExample } from "../../src/tools/workflow.ts";
 import { fragment, recipe, runRecipe, type GuideCall } from "./fixtures/authoring-guide.ts";
+import { objectContaining, stringContaining } from "../support/matchers.ts";
 
 const finding = {
   file: "src/auth.ts",
@@ -138,13 +139,13 @@ describe("workflow recipe outcomes", () => {
           const outcomes = decodeOutcomes(run.value);
           expect(outcomes.confirmed).toEqual([
             expect.objectContaining({
-              finding: expect.objectContaining({ ...first, reports: [first, supporting] }),
+              finding: objectContaining({ ...first, reports: [first, supporting] }),
               verification: confirmed,
             }),
           ]);
           expect(outcomes.refuted).toEqual([
             expect.objectContaining({
-              finding: expect.objectContaining(nearby),
+              finding: objectContaining(nearby),
               verification: refuted,
             }),
           ]);
@@ -263,7 +264,7 @@ describe("adaptive exhaustive review", () => {
         expect(coverage.uncovered).toHaveLength(2);
         expect(coverage.uncovered).toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ task: expect.stringContaining("missing.ts") }),
+            expect.objectContaining({ task: stringContaining("missing.ts") }),
           ]),
         );
         expect(coverage.rounds).toBe(1);
@@ -360,7 +361,7 @@ describe("adaptive exhaustive review", () => {
       expect(outcomes.confirmed).toEqual([]);
       expect(outcomes.unverified).toEqual([
         expect.objectContaining({
-          finding: expect.objectContaining({ reports: [finding, counter] }),
+          finding: objectContaining({ reports: [finding, counter] }),
           verification: uncertain,
         }),
       ]);

@@ -62,7 +62,7 @@ const scopeEntries = (
     ...(decoded.file.defaultProfileSet ? [decoded.file.defaultProfileSet] : []),
   ]);
   const sets = [...names]
-    .sort((left, right) => left.localeCompare(right))
+    .toSorted((left, right) => left.localeCompare(right))
     .map((name): ProfileSetPickerEntry => {
       const profileSet = decoded.file.profileSets?.[name];
       const resolved = resolvedSet(inspection, { scope, name });
@@ -79,7 +79,7 @@ const scopeEntries = (
           ? repairable
             ? `${countLabel(invalidProfileCount, "invalid profile")}, fix before use`
             : "invalid structure, delete and create a new set"
-          : `${countLabel(profileCount, "saved profile")}`,
+          : countLabel(profileCount, "saved profile"),
       ].filter((value): value is string => value !== undefined);
       return {
         kind: "set",

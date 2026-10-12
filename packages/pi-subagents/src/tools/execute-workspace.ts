@@ -122,7 +122,7 @@ const executeWorkspaceList = (
         ...(record.preparation && { preparationId: record.preparation.preparationId }),
       })),
       ...listing.unavailable,
-    ].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId));
+    ].toSorted((a, b) => a.workspaceId.localeCompare(b.workspaceId));
     const lines: string[] = [];
     let chars = 0;
     for (const entry of entries.slice(offset, offset + 8)) {

@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { workflowSession } from "./fixtures/native-workflow-session.ts";
 import { eventually, reportTask, script } from "./fixtures/workflow-harness.ts";
+import { stringContaining } from "../support/matchers.ts";
 
 describe("dynamic workflows in a Pi session", () => {
   it.live("runs a script in the background and steers its result into the conversation", () =>
@@ -35,7 +36,7 @@ describe("dynamic workflows in a Pi session", () => {
         "the workflow result in the conversation",
       );
       expect(delivered).toMatchObject({
-        content: expect.stringContaining("src/index.ts is the entry point."),
+        content: stringContaining("src/index.ts is the entry point."),
       });
       yield* eventually(
         () => (session.isStreaming ? undefined : true),

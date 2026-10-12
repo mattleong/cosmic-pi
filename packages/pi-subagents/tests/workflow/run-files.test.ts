@@ -25,6 +25,7 @@ import {
   workflowTest,
   until,
 } from "./fixtures/workflow-harness.ts";
+import { anyString } from "../support/matchers.ts";
 
 const labelsAndStates = (lines: ReturnType<typeof journalLines>) =>
   lines.map((line) => [line["label"], line["state"]]);
@@ -170,7 +171,7 @@ describe("a run's results journal", () => {
           state: "skipped",
           runId: skippable.runId,
           result: null,
-          reason: expect.any(String),
+          reason: anyString(),
         }),
       ]);
       const notification = yield* eventually(() => fixture.delivered[0], "the notification");
@@ -251,7 +252,7 @@ describe("a run's results journal", () => {
       expect(
         lines
           .map((line) => line["label"])
-          .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+          .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
       ).toEqual(["one", "two"]);
       expect(lines.every((line) => line["reused"] === true)).toBe(true);
     });

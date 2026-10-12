@@ -20,7 +20,7 @@ const phaseCounts = (run: WorkflowRunView): ReadonlyArray<readonly [string, numb
     const key = `${agent.phase ?? ""}\u0000${agent.state}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  return [...counts].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return [...counts].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
 };
 
 const queuedBehindPausedWriter = (run: WorkflowRunView): boolean =>

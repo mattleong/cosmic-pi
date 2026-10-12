@@ -52,8 +52,8 @@ export type CompactSummaryProvider<
   context: ToolRenderContext<TState, Partial<TArgs>>;
 }) => CompactSummary | undefined;
 
-export function resolveCompactSummary(
-  summary: CompactSummary | undefined,
+export function resolveCompactSummary<SummaryInput>(
+  summary: SummaryInput,
   phase: CompactPhase,
   isError: boolean,
   errorText = "",

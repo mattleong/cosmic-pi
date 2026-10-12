@@ -97,10 +97,8 @@ test("only a recognized owned recoverable MCP envelope is quietly suppressed", (
       return path;
     },
   });
-  const inherited = Object.assign(Object.create({ fullOutputPath: path }), {
-    server: "docs",
-    tool: "lookup",
-  });
+  const inherited = { server: "docs", tool: "lookup" };
+  Reflect.setPrototypeOf(inherited, { fullOutputPath: path });
   const cases: Array<{ result: AgentToolResult<unknown>; isError?: boolean; isPartial?: boolean }> =
     [
       ...[

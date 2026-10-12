@@ -21,7 +21,7 @@ export const parentBtwDisplayName = (cwd: string): string => {
     .replaceAll(/[\\/]+$/gu, "")
     .split(/[\\/]/gu)
     .at(-1);
-  return `BTW · ${directoryName || "Pi"}`;
+  return `BTW · ${directoryName === undefined || directoryName === "" ? "Pi" : directoryName}`;
 };
 
 export const sideSessionPrompt = (prompt: string): string => `Side-session request:\n${prompt}`;

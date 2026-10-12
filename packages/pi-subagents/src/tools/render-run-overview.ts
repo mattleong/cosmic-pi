@@ -69,7 +69,11 @@ export const expandedRunReportSections = (
   return candidates.map((section) =>
     section.text.length <= perSection
       ? section
-      : { ...section, text: clipWithMarker(section.text, perSection, "\n… [report truncated]") },
+      : {
+          name: section.name,
+          kind: section.kind,
+          text: clipWithMarker(section.text, perSection, "\n… [report truncated]"),
+        },
   );
 };
 
@@ -235,7 +239,7 @@ const expandedRowDiagnostics = (
   theme: Theme,
   options: RunOverviewOptions,
 ): string[] => {
-  const routine = options.contentOnly || options.hierarchy?.awaitedRunIds === undefined;
+  const routine = options.contentOnly === true || options.hierarchy?.awaitedRunIds === undefined;
   return runs.flatMap((run) => [
     ...(routine
       ? routineRunDiagnostics(run, width, theme)

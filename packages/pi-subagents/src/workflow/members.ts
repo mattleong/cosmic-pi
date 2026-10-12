@@ -98,9 +98,9 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
 
   const warnOnce = (setup: WorkflowRunSetup, error: WorkflowRunFileError) =>
     Effect.suspend(() => {
-      const journal = setup.control.journal;
-      if (journal.warned) return Effect.void;
-      journal.warned = true;
+      const runJournal = setup.control.journal;
+      if (runJournal.warned) return Effect.void;
+      runJournal.warned = true;
       return runs.recordEvent(
         setup.id,
         workflowServiceLog("warning", `The results journal may be incomplete: ${error.message}`),

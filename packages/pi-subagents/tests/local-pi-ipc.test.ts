@@ -14,7 +14,7 @@ import {
   type LocalPiIpcPort,
 } from "../src/boundary/local-pi-ipc.ts";
 
-const childFixture = fileURLToPath(new URL("./fixtures/local-pi-ipc-child.mjs", import.meta.url));
+const childFixture = fileURLToPath(new URL("./fixtures/local-pi-ipc-child.ts", import.meta.url));
 
 type SendBehavior = "success" | "error" | "pending" | "throw";
 
@@ -173,7 +173,7 @@ describe("Local Pi IPC boundary", () => {
 
       const initial = yield* takeUntil(hasMessage("child-ready"), isQuestion);
       const question = initial.find(isQuestion);
-      if (!question || question.type !== "contact_parent")
+      if (question?.type !== "contact_parent")
         return yield* Effect.die(new Error("The real IPC child did not ask its question."));
 
       yield* ipc.sendControl({

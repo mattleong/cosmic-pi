@@ -69,11 +69,12 @@ export const completeSettingsArguments = (
   if (scoped && scope) {
     const inner = completeSettingsArguments(scoped[2] ?? "", descriptors);
     return (
-      inner?.map((choice) => ({
-        ...choice,
-        value: `${scope.value} ${choice.value}`,
-        label: `${scope.value} ${choice.label}`,
-      })) ?? null
+      inner?.map((choice) =>
+        Object.assign({}, choice, {
+          value: `${scope.value} ${choice.value}`,
+          label: `${scope.value} ${choice.label}`,
+        }),
+      ) ?? null
     );
   }
   const [head = "", ...rest] = normalized.split(/\s+/);

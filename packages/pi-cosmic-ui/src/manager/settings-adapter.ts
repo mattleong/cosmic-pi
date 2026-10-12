@@ -48,6 +48,9 @@ const SETTINGS_ACTION_INPUT = {
   readonly [input?: string, id?: FullScreenSelectionKeybindingId]
 >;
 
+const isTextCallback = <Value>(value: Value): value is Value & ((text: string) => void) =>
+  Predicate.isFunction(value);
+
 const settingsSearchInput = (child: Component) => {
   if (!("searchInput" in child)) return undefined;
   const input = child.searchInput;
@@ -59,8 +62,8 @@ const settingsSubmenu = (child: Component) =>
 
 const clearSettingsFilter = (child: Component): void => {
   const input = settingsSearchInput(child);
-  if (Predicate.isFunction(input?.setValue)) input.setValue("");
-  if ("applyFilter" in child && Predicate.isFunction(child.applyFilter)) child.applyFilter("");
+  if (isTextCallback(input?.setValue)) input.setValue("");
+  if ("applyFilter" in child && isTextCallback(child.applyFilter)) child.applyFilter("");
 };
 
 export class VimSettingsAdapter implements Component, Focusable {

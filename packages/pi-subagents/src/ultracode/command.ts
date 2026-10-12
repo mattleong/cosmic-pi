@@ -79,11 +79,11 @@ const toggle = (
         `Turned ultracode ${name} for this session; /subagents settings saves it for new sessions`,
         "info",
       ),
-    (error) =>
+    (cause: unknown) =>
       notifyAtHostBoundary(
         ctx,
         `Couldn't turn ultracode ${name}: ${failureMessage(
-          error instanceof Error ? error.message : "",
+          cause instanceof Error ? cause.message : "",
           "unknown error",
         )}`,
         "error",

@@ -24,7 +24,7 @@ describe("installed Pi RPC input hooks", () => {
         const exited = yield* Deferred.make<void>();
         const child = yield* Effect.acquireRelease(
           Effect.sync(() => {
-            const child = nodeSpawn(
+            const spawned = nodeSpawn(
               process.execPath,
               [
                 path.join(getPackageDir(), "dist/bundle/cli.js"),
@@ -51,12 +51,12 @@ describe("installed Pi RPC input hooks", () => {
                 stdio: ["pipe", "pipe", "pipe"],
               },
             );
-            child.once("close", () => Deferred.doneUnsafe(exited, Effect.void));
-            return child;
+            spawned.once("close", () => Deferred.doneUnsafe(exited, Effect.void));
+            return spawned;
           }),
-          (child) =>
+          (running) =>
             Effect.gen(function* () {
-              if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+              if (running.exitCode === null && running.signalCode === null) running.kill("SIGKILL");
               yield* Deferred.await(exited);
             }),
         );

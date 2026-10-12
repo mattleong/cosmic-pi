@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Predicate from "effect/Predicate";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import { runIsolatedCodexAuthProbe, runProbeEffect } from "../src/boundary/local-cli-harness.ts";
@@ -68,9 +69,9 @@ describe("probe interruption cleanup", () => {
       yield* expectInterruptKills(fiber, test.pidPath);
       const harnessRoot = nodePath.join(agentDirectory, "subagents", "native-model-catalog-v1");
       const entries = yield* step(() =>
-        fs.readdir(harnessRoot).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return [];
-          throw error;
+        fs.readdir(harnessRoot).catch((cause: unknown) => {
+          if (Predicate.hasProperty(cause, "code") && cause.code === "ENOENT") return [];
+          throw cause;
         }),
       );
       expect(entries).toEqual([]);

@@ -8,6 +8,7 @@ import {
   type WebAccessDetails,
 } from "./evidence";
 import type { WebAccessTool } from "./identity";
+import { nonEmptyText } from "../../shared/helpers";
 
 function reportedIssues(details: WebAccessDetails, error: string | undefined): CompactIssue[] {
   const issues: CompactIssue[] = [];
@@ -58,8 +59,8 @@ function truncationIssues<Args>(
 ): CompactIssue[] {
   if (!details.truncated) return [];
   const reference =
-    details.responseId?.trim() ||
-    details.searchId?.trim() ||
+    nonEmptyText(details.responseId?.trim()) ??
+    nonEmptyText(details.searchId?.trim()) ??
     (name === "get_search_content" ? webAccessArgumentReference(args) : "");
   return [
     {

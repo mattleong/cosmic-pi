@@ -22,6 +22,7 @@ import {
   startScript,
   workflowTest,
 } from "./fixtures/workflow-harness.ts";
+import { anyString } from "../support/matchers.ts";
 
 const planned = (
   runId: string,
@@ -130,7 +131,7 @@ describe("claiming planned agents", () => {
       runId: "agent-p-2",
       state: "skipped",
       endedAt: 7,
-      reason: expect.any(String),
+      reason: anyString(),
     });
   });
 
@@ -280,7 +281,7 @@ describe("planned agents in a run", () => {
         ),
       );
       const queued = yield* runWhere(workflows, started.id, (view) => view.agents.length === 2);
-      expect(queued.agents.map((agent) => agent.label).sort()).toEqual(["first", "second"]);
+      expect(queued.agents.map((agent) => agent.label).toSorted()).toEqual(["first", "second"]);
       expect(queued.planned).toEqual([]);
       expect(queued.phases.map((phase) => phase.title)).toEqual(["Review"]);
       yield* reportTask(fixture, "check one", "1");
@@ -304,9 +305,9 @@ describe("planned agents in a run", () => {
       );
       const parent = started.planned[0]!;
       const loaded = yield* runWhere(workflows, started.id, (view) => view.agents.length === 1);
-      const child = loaded.agents[0]!;
-      expect(child.runId).not.toBe(parent.runId);
-      expect(child.phase).toBe(loaded.phases.at(-1)?.title);
+      const childAgent = loaded.agents[0]!;
+      expect(childAgent.runId).not.toBe(parent.runId);
+      expect(childAgent.phase).toBe(loaded.phases.at(-1)?.title);
       expect(loaded.planned).toEqual([parent]);
       yield* reportTask(fixture, "fix it", "Fixed.");
       const reviewed = yield* runWhere(workflows, started.id, (view) => view.agents.length === 2);

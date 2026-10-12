@@ -33,6 +33,7 @@ import {
   presentationResolver,
   setPlainPreviewSettings,
 } from "../support/renderer-host";
+import type { CodePreviewRenderers } from "../../src/tools/renderers/shared/types";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => {
@@ -226,9 +227,13 @@ for (const name of ["bash", "tool_search"] as const)
     owner.retire();
   });
 
+interface PanelState {
+  resultWasSeen?: boolean;
+}
+
 it("cold and declined rows preserve independent downstream caches and live panel state", () => {
   const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] });
-  const panels: ToolRenderers = {
+  const panels: CodePreviewRenderers<unknown, unknown, PanelState> = {
     renderCall: (_args, _theme, context) => {
       assert.ok(context.lastComponent === undefined || context.lastComponent instanceof Text);
       const panel = context.lastComponent ?? new Text("", 0, 0);

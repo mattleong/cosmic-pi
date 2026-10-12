@@ -95,12 +95,12 @@ export function createCodePreviewSettingsModel({
       sync(list);
       saved = persistSettingsChange(next, previousTheme, loadOptions, effects);
     }
-    void saved.catch((error) => {
+    void saved.catch((cause: unknown) => {
       if (revision === changeRevision) {
         draftSettings = cloneCodePreviewSettings(codePreviewSettings);
         sync(list);
       }
-      notify(formatSettingsSaveError(error), "warning");
+      notify(formatSettingsSaveError(cause), "warning");
     });
   };
   const routeBoundChange = (id: string, value: string): void => {

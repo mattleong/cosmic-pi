@@ -5,7 +5,10 @@ import { fileLayer } from "../platform/node.ts";
 
 export const galleryDirectory = (
   environment: Readonly<Record<string, string | undefined>>,
-): string | undefined => environment["PRESENTATION_GALLERY"] || undefined;
+): string | undefined => {
+  const directory = environment["PRESENTATION_GALLERY"];
+  return directory === undefined || directory === "" ? undefined : directory;
+};
 
 export const writeGallerySection = (directory: string, name: string, lines: readonly string[]) =>
   Effect.gen(function* () {

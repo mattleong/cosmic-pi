@@ -20,7 +20,7 @@ const invalidRequest: AskUserRequest = {
     {
       ...request.questions[0]!,
       title: " \t ",
-      choices: request.questions[0]!.choices.map((choice) => ({ ...choice })),
+      choices: request.questions[0]!.choices.map((choice) => Object.assign({}, choice)),
     },
   ],
 };

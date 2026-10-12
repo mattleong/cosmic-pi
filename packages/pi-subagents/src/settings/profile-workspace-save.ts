@@ -119,13 +119,13 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
         this.selectField(field);
         this.renderSoon();
       })
-      .catch((error) => {
+      .catch((cause: unknown) => {
         if (this.disposed) return;
         this.optimisticDraft = undefined;
         this.optimisticProfile = undefined;
         this.busy = false;
         this.refreshBlocked = true;
-        const detail = error instanceof Error ? error.message : "Could not save profile settings.";
+        const detail = cause instanceof Error ? cause.message : "Could not save profile settings.";
         this.notice("error", `${detail} Close and reopen the editor before another edit.`);
       });
   }

@@ -62,12 +62,12 @@ export const scopedPrintSession = (options: CreateAgentSessionOptions) =>
   Effect.gen(function* () {
     const { session } = yield* Effect.acquireRelease(
       step(() => createAgentSession(options)),
-      ({ session }) =>
-        step(() => session.abort()).pipe(
+      ({ session: created }) =>
+        step(() => created.abort()).pipe(
           Effect.andThen(
-            step(() => session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" })),
+            step(() => created.extensionRunner.emit({ type: "session_shutdown", reason: "quit" })),
           ),
-          Effect.ensuring(Effect.sync(() => session.dispose())),
+          Effect.ensuring(Effect.sync(() => created.dispose())),
         ),
     );
     yield* step(() => session.bindExtensions({ mode: "print" }));
@@ -126,7 +126,7 @@ export const fauxCodemodeSession = (options: FauxCodemodeSessionOptions) =>
         const message = session.agent.state.messages.findLast(
           (candidate) => candidate.role === "toolResult" && candidate.toolName === name,
         );
-        if (!message || message.role !== "toolResult")
+        if (message?.role !== "toolResult")
           return yield* Effect.die(new Error("The real agent loop returned no tool result."));
         const text = message.content
           .filter((part) => part.type === "text")

@@ -28,10 +28,11 @@ export const isPlannedEntry = (entry: GroupedActivityRow): boolean =>
 const isFailedEntry = (entry: GroupedActivityRow): boolean =>
   entry.type === "member" && entry.row.status === "failed";
 
-export const workflowNarrator = (entry: GroupedActivityRow): string | undefined =>
-  entry.type === "workflow" && entry.depth === 1
-    ? entry.row.summary?.trim() || undefined
-    : undefined;
+export const workflowNarrator = (entry: GroupedActivityRow): string | undefined => {
+  if (entry.type !== "workflow" || entry.depth !== 1) return undefined;
+  const narrator = entry.row.summary?.trim();
+  return narrator === "" ? undefined : narrator;
+};
 const narratorCount = (entries: readonly GroupedActivityRow[]) =>
   entries.filter((entry) => workflowNarrator(entry) !== undefined).length;
 

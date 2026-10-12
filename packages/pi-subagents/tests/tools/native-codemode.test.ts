@@ -23,7 +23,7 @@ import { startCapturingService, view } from "./fixtures/tool-harness.ts";
 
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const output = (text: string) => {
-  const line = text.split("\n").find((line) => line.startsWith("WORKFLOW_RESULT "));
+  const line = text.split("\n").find((entry) => entry.startsWith("WORKFLOW_RESULT "));
   expect(line).toBeDefined();
   return decodeOutput(line!.slice("WORKFLOW_RESULT ".length));
 };
@@ -63,7 +63,7 @@ describe("native scripted subagent workflows", () => {
               { index: 1, status: "started", runId: "agent-1", name: "entry-scout" },
             ],
           });
-          expect(requests.map((request) => request.writeIntent)).toEqual(["read-only"]);
+          expect(requests.map((started) => started.writeIntent)).toEqual(["read-only"]);
           yield* h.call(
             "subagent_start",
             {
@@ -470,7 +470,7 @@ describe("profile selection in native sessions", () => {
       });
       const direct = yield* h.call("subagent_start", { agents });
       expect(direct.isError).toBe(false);
-      expect(requests.map((request) => [request.profile, request.writeIntent])).toEqual([
+      expect(requests.map((started) => [started.profile, started.writeIntent])).toEqual([
         ["scout", "read-only"],
         ["generalist", "read-only"],
         ["scout", "read-only"],

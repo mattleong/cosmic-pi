@@ -3,8 +3,8 @@ import { planCompactPresentation } from "../../src/tools/compact-presentation";
 import { compactStatus, type CompactSummary } from "../../src/tools/compact-summary";
 
 const heading = { subject: "full/target.ts", compactSubject: "target.ts", action: "scan" };
-const plan = (
-  summary: CompactSummary | undefined,
+const plan = <SummaryInput>(
+  summary: SummaryInput,
   options: {
     isError?: boolean;
     errorText?: string;
@@ -28,13 +28,11 @@ test("a usable summary preserves its values and reconciles Pi errors", () => {
 });
 
 test("settled results without a usable summary never claim success", () => {
-  const summaries: Array<CompactSummary | undefined> = JSON.parse(
-    JSON.stringify([
-      null,
-      { subject: "missing outcome" },
-      { subject: "malformed", outcome: "success", issues: [{ severity: "fatal" }] },
-    ]),
-  );
+  const summaries = structuredClone([
+    null,
+    { subject: "missing outcome" },
+    { subject: "malformed", outcome: "success", issues: [{ severity: "fatal" }] },
+  ]);
   for (const summary of [undefined, ...summaries.slice(1)]) {
     const planned = plan(summary);
     expect(planned.summary).toBeUndefined();

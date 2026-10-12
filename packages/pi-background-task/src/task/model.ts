@@ -91,7 +91,7 @@ export const countTaskStates = (tasks: ReadonlyArray<Pick<BackgroundTaskSnapshot
 export function sortTasksByActivity<A extends Pick<BackgroundTaskSnapshot, "state" | "startedAt">>(
   tasks: ReadonlyArray<A>,
 ): ReadonlyArray<A> {
-  return [...tasks].sort((left, right) => {
+  return tasks.toSorted((left, right) => {
     const active = Number(isActiveTaskState(right.state)) - Number(isActiveTaskState(left.state));
     return active !== 0 ? active : right.startedAt - left.startedAt;
   });

@@ -27,7 +27,7 @@ const checkPreimage = (root: string, name: string, expected: SnapshotEntry | und
   Effect.gen(function* () {
     const visible = yield* readWorkspaceFile(root, name);
     if (
-      !visible !== !expected ||
+      (visible === undefined) !== (expected === undefined) ||
       (visible &&
         expected &&
         (visible.mode !== expected.mode ||
@@ -51,7 +51,7 @@ export const requiredLeaseDirectories = (
       for (const part of path
         .dirname(name)
         .split(path.sep)
-        .filter((part) => part !== ".")) {
+        .filter((segment) => segment !== ".")) {
         directory = path.join(directory, part);
         const stat = yield* workspaceIOIfPresent("prepare", () => fs.lstat(directory));
         if (!stat) break;
@@ -64,7 +64,7 @@ export const requiredLeaseDirectories = (
         directories.add(directory);
       }
     }
-    return [...directories].sort();
+    return [...directories].toSorted();
   });
 
 type SnapshotEntries = ReadonlyMap<string, SnapshotEntry>;
@@ -77,7 +77,7 @@ const changedPaths = (previous: SnapshotEntries, next: SnapshotEntries) =>
         b = next.get(name);
       return a?.oid !== b?.oid || a?.mode !== b?.mode;
     })
-    .sort();
+    .toSorted();
 
 const publishedPermissions = (
   expected: SnapshotEntry | undefined,
@@ -236,7 +236,7 @@ export const publishWorkspace = (
       );
       yield* checkPreimage(root, name, previous.get(name));
     }
-    const plannedDirectories = [...missingDirectories].sort(
+    const plannedDirectories = [...missingDirectories].toSorted(
       (a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b),
     );
     const entries = yield* Effect.forEach(changed, (name) =>

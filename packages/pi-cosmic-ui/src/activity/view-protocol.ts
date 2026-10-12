@@ -10,11 +10,16 @@ export interface ActivityViewCapability {
   readonly open: (section: ActivitySection, signal?: AbortSignal) => Promise<boolean>;
 }
 
+const isViewOpener = <Value>(
+  value: Value,
+): value is Value & ((section: ActivitySection, signal?: AbortSignal) => void) =>
+  Predicate.isFunction(value);
+
 const ViewCapability = Schema.Struct({
   version: Schema.Literal(1),
   sessionId: Schema.String,
   hostToken: Schema.ObjectKeyword,
-  open: Schema.declare(Predicate.isFunction),
+  open: Schema.declare(isViewOpener),
 });
 export const isActivitySection = (section: string): section is ActivitySection =>
   section === "workflows" || section === "subagents" || section === "tasks";

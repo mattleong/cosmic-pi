@@ -187,7 +187,7 @@ export class ProfileEditVisit {
     this.reconcile(inspection);
     const checkpoint = this.checkpoints.get(key(target))?.get(profile);
     return (
-      !!checkpoint?.owned &&
+      checkpoint?.owned === true &&
       !checkpoint.invalidated &&
       restorable(checkpoint) &&
       checkpoint.openingFingerprint !== state(target, profile, inspection).fingerprint

@@ -5,9 +5,8 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Schema from "effect/Schema";
-import * as Predicate from "effect/Predicate";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
 import { deferredPromise, macrotask } from "pi-cosmic-core/testing";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { registerQuestionnaireCapability } from "../src/boundary/host-owned-calls.ts";
@@ -38,10 +37,10 @@ const askFails = (
   Effect.exit(Effect.tryPromise((signal) => capability.ask(request, askOwner, signal))).pipe(
     Effect.map(Exit.isFailure),
   );
+const relayQueries = makeSessionCapabilityProtocol({ version: 1 });
 const attachRelay = (bus: QuestionnaireEvents, relay: QuestionnaireRelay) =>
   bus.on(QUESTIONNAIRE_RELAY_QUERY, (data) => {
-    const query = Schema.decodeUnknownSync(Schema.Struct({ respond: Schema.Unknown }))(data);
-    if (Predicate.isFunction(query.respond)) query.respond(relay);
+    relayQueries.normalizeQuery(data)?.respond(relay);
   });
 afterEach(() => vi.unstubAllEnvs());
 it("decodes bounded structured transport data and rejects hostile or semantically invalid requests", () => {
@@ -114,10 +113,9 @@ it("decodes detached text requests and rejects incompatible choices and malforme
   question.prompt = "changed";
   expect(decoded?.questions[0]?.prompt).toBe("Explain?");
   for (const incompatible of [
-    ...[[], undefined, [{ value: "a", label: "A", description: "A" }]].map((choices) => ({
-      ...question,
-      choices,
-    })),
+    ...[[], undefined, [{ value: "a", label: "A", description: "A" }]].map((choices) =>
+      Object.assign({}, question, { choices }),
+    ),
     {
       ...question,
       get choices() {

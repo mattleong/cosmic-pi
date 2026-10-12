@@ -80,8 +80,8 @@ export function collectCompletionDeliveryBatch(
   records: ReadonlyMap<string, RunRecord>,
 ): ReadonlyArray<CompletionDeliverySelection> {
   const selected: CompletionDeliverySelection[] = [];
-  for (const record of [...records.values()].sort(compareRecordIds)) {
-    const completions = [...record.completionGenerations.values()].sort(
+  for (const record of [...records.values()].toSorted(compareRecordIds)) {
+    const completions = [...record.completionGenerations.values()].toSorted(
       (left, right) => left.generation - right.generation,
     );
     for (const completion of completions) {

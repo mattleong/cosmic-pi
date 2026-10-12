@@ -148,7 +148,7 @@ export function getCodePreviewAnimationFrame(context: { readonly state: unknown 
     const state = context.state;
     if (!Predicate.isObject(state) || Array.isArray(state)) return 0;
     const descriptor = Object.getOwnPropertyDescriptor(state, TIMING_FIELDS.animationFrame);
-    const frame = descriptor && "value" in descriptor ? descriptor.value : undefined;
+    const frame: unknown = descriptor && "value" in descriptor ? descriptor.value : undefined;
     return Predicate.isNumber(frame) && Number.isSafeInteger(frame) && frame >= 0 ? frame : 0;
   }, 0);
 }

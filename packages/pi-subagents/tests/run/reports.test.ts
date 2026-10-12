@@ -26,6 +26,7 @@ import {
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
+import { anyString, stringContaining } from "../support/matchers.ts";
 
 const resumableBackend = () =>
   fakeNativeReportBackendLayer({
@@ -395,12 +396,12 @@ describe("SubagentService", () => {
           state: "completed",
           reportGeneration: 1,
           finalText: report,
-          warning: expect.stringContaining("may already have applied"),
+          warning: stringContaining("may already have applied"),
         });
 
         const delivered = yield* awaitObservations(service, [run.id]);
         expect(delivered[0]).toMatchObject({
-          run: { finalText: report, warning: expect.stringContaining("may already have applied") },
+          run: { finalText: report, warning: stringContaining("may already have applied") },
           completionReceipt: { id: run.id, generation: 1 },
         });
 
@@ -434,7 +435,7 @@ describe("SubagentService", () => {
         });
         expect(projections.at(-1)?.runs[0]).toMatchObject({
           state: "starting",
-          warning: expect.stringContaining("may already have applied"),
+          warning: stringContaining("may already have applied"),
         });
 
         const bufferedReport = {
@@ -453,7 +454,7 @@ describe("SubagentService", () => {
         expect(projections.at(-1)?.runs[0]).toMatchObject({
           reportGeneration: 1,
           finalText: report,
-          warning: expect.stringContaining("may already have applied"),
+          warning: stringContaining("may already have applied"),
         });
 
         const delivered = yield* service.withAwaitTerminalObservations(
@@ -483,7 +484,7 @@ describe("SubagentService", () => {
         const first = yield* Fiber.join(waiting);
         expect(first[0]).toMatchObject({
           run: { state: "completed", reportGeneration: 1, finalText: "First report." },
-          completionReceipt: { id: run.id, generation: 1, claimToken: expect.any(String) },
+          completionReceipt: { id: run.id, generation: 1, claimToken: anyString() },
         });
         yield* yieldUntil(() => fake.controls[0]!.released() === 1);
         expect(yield* service.status(run.id)).not.toHaveProperty("finalText");

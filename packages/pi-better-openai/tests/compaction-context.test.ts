@@ -208,7 +208,7 @@ describe("owned checkpoint reconstruction", () => {
         const { systemMessage: _ignored, ...withoutSnapshot } = entry;
         return omitSnapshots
           ? withoutSnapshot
-          : { ...withoutSnapshot, systemMessage: obsoleteSystem };
+          : Object.assign({}, withoutSnapshot, { systemMessage: obsoleteSystem });
       });
       const repaired = repairOpenAIContext(branch, buildSessionContext(branch).messages)!.messages!;
       const prompt = getCurrentSystemPrompt(repaired);
@@ -266,7 +266,7 @@ describe("owned checkpoint reconstruction", () => {
         .buildSessionContext()
         .messages.map((message) =>
           message.role === "toolResult"
-            ? { ...message, content: [{ type: "text" as const, text: "foreign" }] }
+            ? Object.assign({}, message, { content: [{ type: "text" as const, text: "foreign" }] })
             : message,
         );
       expect(() => repairOpenAIContext(branch, tampered)).toThrow();
@@ -380,8 +380,7 @@ describe("owned checkpoint reconstruction", () => {
     const futureId = appendAssistant(manager, "length", "future length remains");
     const branch = manager.getBranch().map((entry) =>
       entry.type === "compaction"
-        ? {
-            ...entry,
+        ? Object.assign({}, entry, {
             details: {
               ...details,
               checkpoint: {
@@ -397,7 +396,7 @@ describe("owned checkpoint reconstruction", () => {
                 ],
               },
             },
-          }
+          })
         : entry,
     );
     const restored = reconstructOpenAIContext(branch)!;

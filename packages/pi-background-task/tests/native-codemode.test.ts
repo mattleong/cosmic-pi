@@ -23,7 +23,7 @@ import {
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const literal = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 const output = (text: string) => {
-  const line = text.split("\n").find((line) => line.startsWith("WORKFLOW_RESULT "));
+  const line = text.split("\n").find((candidate) => candidate.startsWith("WORKFLOW_RESULT "));
   expect(line, text).toBeDefined();
   return decodeOutput(line!.slice("WORKFLOW_RESULT ".length));
 };

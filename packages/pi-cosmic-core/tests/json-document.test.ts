@@ -264,7 +264,7 @@ it.effect("treats rename as the final fallible commit and ignores cleanup defect
   const harness = documentLayer({});
   const chmodPaths: string[] = [];
   let cleanupAttempts = 0;
-  harness.fileSystem.chmod = (path) => Effect.sync(() => void chmodPaths.push(String(path)));
+  harness.fileSystem.chmod = (path) => Effect.sync(() => void chmodPaths.push(path));
   harness.fileSystem.remove = () =>
     Effect.sync(() => void cleanupAttempts++).pipe(
       Effect.andThen(Effect.die("expected cleanup defect")),

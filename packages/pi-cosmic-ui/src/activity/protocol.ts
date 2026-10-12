@@ -267,7 +267,9 @@ export function registerRevisionedActivityProvider(
   const current = () => live && options.isCurrent();
   const lookup = (id: string, revision: string, signal: AbortSignal) => {
     if (!current() || signal.aborted) throw new Error("Activity provider is unavailable.");
-    const item = options.items().find((item) => item.id === id && item.revision === revision);
+    const item = options
+      .items()
+      .find((candidate) => candidate.id === id && candidate.revision === revision);
     if (!item) throw new Error("Activity item changed.");
     return item;
   };

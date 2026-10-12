@@ -4,12 +4,7 @@ import * as Semaphore from "effect/Semaphore";
 import { HerdrClient, type HerdrPane } from "../boundary/herdr-client.ts";
 import type { HerdrBtwLinkRecordResult, HerdrBtwLinkStore } from "../boundary/host-link-store.ts";
 import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
-import {
-  compareSessionFileIdentity,
-  createBlankChildSessionFile,
-  createChildSessionId,
-  probeSessionHeader,
-} from "../boundary/session-file.ts";
+import * as SessionFile from "../boundary/session-file.ts";
 import { confirmedFailure, HerdrBtwError, uncertainFailure } from "./errors.ts";
 import type { HerdrBtwLink } from "./link.ts";
 import {
@@ -56,10 +51,10 @@ export interface HerdrBtwResult {
 }
 
 const sessionFileBoundary = {
-  probeSessionHeader,
-  compareSessionFileIdentity,
-  createChildSessionId,
-  createBlankChildSessionFile,
+  probeSessionHeader: SessionFile.probeSessionHeader,
+  compareSessionFileIdentity: SessionFile.compareSessionFileIdentity,
+  createChildSessionId: SessionFile.createChildSessionId,
+  createBlankChildSessionFile: SessionFile.createBlankChildSessionFile,
 };
 
 const failClosedLink = (operation: string, code: string, message: string): HerdrBtwError =>

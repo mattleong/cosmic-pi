@@ -113,12 +113,12 @@ export abstract class ProfileWorkspaceState {
     return this.busy;
   }
   get hasOverlay(): boolean {
-    return Boolean(
-      this.modelPicker ||
-      this.selectPage ||
-      this.pendingAction ||
+    return (
+      this.modelPicker !== undefined ||
+      this.selectPage !== undefined ||
+      this.pendingAction !== undefined ||
       this.helpOpen ||
-      this.catalogLoad,
+      this.catalogLoad !== undefined
     );
   }
   getPosition() {

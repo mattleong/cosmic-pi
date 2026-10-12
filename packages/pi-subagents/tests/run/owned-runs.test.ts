@@ -26,6 +26,7 @@ import {
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
+import { objectContaining } from "../support/matchers.ts";
 
 const OWNER = "wf-test-1";
 const owner = { ownerId: OWNER } as const;
@@ -189,7 +190,7 @@ describe("owned subagent runs", () => {
       expect(questions(notifications)).toEqual([
         expect.objectContaining({
           id: handle.runId,
-          workflow: expect.objectContaining({ workflowId: OWNER }),
+          workflow: objectContaining({ workflowId: OWNER }),
         }),
       ]);
       expect(waiting.pollUnsafe()).toBeUndefined();
@@ -385,14 +386,14 @@ describe("owned subagent runs", () => {
       yield* service.openOwner(OWNER);
       const [writer, reader] = yield* Effect.scoped(
         Effect.gen(function* () {
-          const writer = yield* service.startOwned(
+          const ownedWriter = yield* service.startOwned(
             ownedRequest({ name: "writer", writeIntent: "writer" }),
             owner,
           );
-          const reader = yield* service.startOwned(ownedRequest({ name: "reader" }), owner);
-          backend.controls[0]!.report(writer.runId, 1, "writer", "Changed src/auth.ts.");
-          yield* yieldUntil(() => stateOf(projections, writer.runId) === "completed");
-          return [writer, reader] as const;
+          const ownedReader = yield* service.startOwned(ownedRequest({ name: "reader" }), owner);
+          backend.controls[0]!.report(ownedWriter.runId, 1, "writer", "Changed src/auth.ts.");
+          yield* yieldUntil(() => stateOf(projections, ownedWriter.runId) === "completed");
+          return [ownedWriter, ownedReader] as const;
         }),
       );
       expect(stateOf(projections, reader.runId)).toBe("stopped");

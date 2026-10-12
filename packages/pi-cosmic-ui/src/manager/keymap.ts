@@ -51,7 +51,7 @@ export interface FullScreenKeymapOptions {
 export const decodeFullScreenPrintable = (data: string): string | undefined => {
   const printable =
     data.length === 1 && data.charCodeAt(0) >= 32 ? data : decodeKittyPrintable(data);
-  return printable !== undefined && printable.charCodeAt(0) === 127 ? undefined : printable;
+  return printable?.charCodeAt(0) === 127 ? undefined : printable;
 };
 
 const action = (value: FullScreenAction): FullScreenResolution => ({

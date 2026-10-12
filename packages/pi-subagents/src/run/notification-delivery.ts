@@ -195,8 +195,8 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
     pendingActionNotifications.set(record.view.id, queued);
     Latch.openUnsafe(actionWake);
   };
-  const claimQuestionsLocked = (records: ReadonlyArray<RunRecord>, token: string): void => {
-    for (const record of records) questionClaims.set(record.view.id, token);
+  const claimQuestionsLocked = (claimed: ReadonlyArray<RunRecord>, token: string): void => {
+    for (const record of claimed) questionClaims.set(record.view.id, token);
   };
   const questionReceiptLocked = (
     record: RunRecord,
@@ -225,8 +225,8 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
         pendingActionNotifications.delete(receipt.id);
     }
   };
-  const releaseQuestionClaimsLocked = (records: ReadonlyArray<RunRecord>, token: string): void => {
-    for (const record of records) {
+  const releaseQuestionClaimsLocked = (claimed: ReadonlyArray<RunRecord>, token: string): void => {
+    for (const record of claimed) {
       if (questionClaims.get(record.view.id) !== token) continue;
       questionClaims.delete(record.view.id);
       if (pendingActionNotifications.has(record.view.id)) Latch.openUnsafe(actionWake);

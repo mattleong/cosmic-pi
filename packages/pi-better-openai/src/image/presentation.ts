@@ -96,11 +96,11 @@ const optionLines = (args: Partial<ToolParams>, shown: ImageRequestOptions): str
   Object.entries(args).flatMap(([key, value]) => {
     if (key === "prompt" || (key === "action" && shown.action) || value === undefined) return [];
     const label = OPTION_LABELS.get(key) ?? key;
-    const entries: ReadonlyArray<string | undefined> = Array.isArray(value) ? value : [value];
-    return entries.map(
-      (entry) =>
-        `${label}: ${compactPlainText(Predicate.isString(entry) ? entry : String(JSON.stringify(entry)))}`,
-    );
+    const entries: readonly unknown[] = Array.isArray(value) ? value : [value];
+    return entries.map((entry) => {
+      const encoded: string | undefined = Predicate.isString(entry) ? entry : JSON.stringify(entry);
+      return `${label}: ${compactPlainText(encoded ?? "undefined")}`;
+    });
   });
 
 export function renderImageRequest(

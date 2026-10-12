@@ -3,11 +3,15 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import { decodeContextUsage, decodeHostCount } from "./host-usage.ts";
 
 export type FooterContextUsage = ReturnType<ExtensionContext["getContextUsage"]>;
-export type FooterModel = NonNullable<ExtensionContext["model"]>;
+type HostModel = NonNullable<ExtensionContext["model"]>;
+export type FooterModel = Parameters<ExtensionContext["modelRegistry"]["isUsingOAuth"]>[0];
+
+const isFooterModel = (model: HostModel): model is FooterModel => Predicate.isString(model.api);
 
 export interface FooterProjectedModel {
   readonly id: string;
@@ -36,7 +40,8 @@ export interface FooterHostProjection {
 export const materializeModel = (ctx: ExtensionContext): FooterModelView | undefined =>
   invokeHostCallback<FooterModelView | undefined>(() => {
     const source = ctx.model;
-    if (!source || decodeHostCount(source.contextWindow) === undefined) return undefined;
+    if (!source || !isFooterModel(source) || decodeHostCount(source.contextWindow) === undefined)
+      return undefined;
     return Object.freeze({
       source,
       id: source.id,
@@ -67,7 +72,7 @@ export const materializeFooterHostProjection = (options: {
   const extensionStatuses = invokeHostCallback<FooterHostProjection["extensionStatuses"]>(
     () =>
       [...footerData.getExtensionStatuses().entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
+        .toSorted(([a], [b]) => a.localeCompare(b))
         .map(([id, text]) => ({ id, text: sanitizeTerminalLine(text) }))
         .filter(({ text }) => Boolean(text)),
     [],

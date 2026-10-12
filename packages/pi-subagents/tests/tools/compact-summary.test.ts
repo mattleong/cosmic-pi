@@ -36,12 +36,12 @@ const workspace = (
     action: operation,
   });
 
-const details = (issues: readonly CompactIssue[] | undefined) =>
+const issueDetails = (issues: readonly CompactIssue[] | undefined) =>
   (issues ?? []).map((issue) => issue.detail ?? "").join("\n");
 const messages = (issues: readonly CompactIssue[] | undefined) =>
   (issues ?? []).map((issue) => issue.message).join("\n");
 const evidence = (issues: readonly CompactIssue[] | undefined) =>
-  `${messages(issues)}\n${details(issues)}`;
+  `${messages(issues)}\n${issueDetails(issues)}`;
 
 const pending = {
   index: 0,
@@ -88,15 +88,15 @@ describe("subagent compact semantic policy", () => {
         const summary = summarize("status", status);
         expect(summary?.outcome).toBe("uncertain");
         expect(compactIssueSeverity(summary?.issues)).toBe("warning");
-        expect(details(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
-        expect(details(summary?.issues)).toContain("Do not resend");
+        expect(issueDetails(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
+        expect(issueDetails(summary?.issues)).toContain("Do not resend");
         expect(messages(summary?.issues)).not.toContain("failed");
       }
     }
     for (const steeringDelivery of ["confirmed", "not-sent", "report-unconfirmed"] as const) {
       const summary = summarize("status", statusOf({ steeringDelivery }));
       expect(summary?.outcome).toBe(steeringDelivery === "confirmed" ? "success" : "warning");
-      expect(details(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
+      expect(issueDetails(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
     }
   });
 
@@ -119,7 +119,7 @@ describe("subagent compact semantic policy", () => {
     );
     expect(unknown?.outcome).toBe("warning");
     expect(messages(unknown?.issues)).not.toContain("Review external ownership");
-    expect(details(unknown?.issues)).toContain("Review external ownership before retrying.");
+    expect(issueDetails(unknown?.issues)).toContain("Review external ownership before retrying.");
   });
   it("uses start names or profiles before launch and combines observed state counts", () => {
     const provider = createSubagentCompactSummary("subagent_start");
@@ -417,8 +417,8 @@ describe("subagent compact semantic policy", () => {
     const summary = summarize(tool, projected, "settled", { action }, true);
     expect(summary?.outcome).toBe("uncertain");
     expect(compactIssueSeverity(summary?.issues)).toBe("warning");
-    expect(details(summary?.issues)).toContain(code);
-    expect(details(summary?.issues)).toContain("Do not resend");
+    expect(issueDetails(summary?.issues)).toContain(code);
+    expect(issueDetails(summary?.issues)).toContain("Do not resend");
     expect(messages(summary?.issues)).not.toContain("Do not resend");
     if (action === "send" || action === "reply")
       expect(summary?.counters?.join(" ")).toContain(unconfirmedCounter(action, confirmed));
@@ -465,9 +465,9 @@ describe("subagent compact semantic policy", () => {
       );
       expect(pendingIssues.map((issue) => issue.severity)).toEqual(["warning", "info"]);
       expect(messages(pendingIssues)).not.toMatch(/pending-run|steer_outcome_uncertain|failed/);
-      expect(details(pendingIssues)).toContain("steer_outcome_uncertain");
-      expect(details(pendingIssues)).toContain("Do not resend");
-      expect(details(pendingIssues)).toContain("stop remains available");
+      expect(issueDetails(pendingIssues)).toContain("steer_outcome_uncertain");
+      expect(issueDetails(pendingIssues)).toContain("Do not resend");
+      expect(issueDetails(pendingIssues)).toContain("stop remains available");
       if (outcome !== "error") expect(compactIssueSeverity(summary?.issues)).toBe("warning");
     }
     const reply = makeCompactToolDetails({
@@ -543,8 +543,8 @@ describe("subagent compact semantic policy", () => {
       const summary = summarize("start", launch, "settled", {}, true);
       expect(summary?.outcome).toBe("uncertain");
       expect(compactIssueSeverity(summary?.issues)).toBe("warning");
-      expect(details(summary?.issues)).toContain(code);
-      expect(details(summary?.issues)).toContain("Do not retry");
+      expect(issueDetails(summary?.issues)).toContain(code);
+      expect(issueDetails(summary?.issues)).toContain("Do not retry");
     }
   });
 
@@ -560,7 +560,7 @@ describe("subagent compact semantic policy", () => {
         startFailures: [{ index: 0, code, message }],
       });
       expect(summary?.outcome).toBe("error");
-      expect(details(summary?.issues)).toContain(message);
+      expect(issueDetails(summary?.issues)).toContain(message);
       expect(
         (summary?.issues ?? []).flatMap((issue) => issueMessageStyleProblems(issue.message)),
       ).toEqual([]);
@@ -582,7 +582,7 @@ describe("subagent compact semantic policy", () => {
     expect(summary?.outcome).toBe("error");
     expect(compactIssueSeverity(summary?.issues)).toBe("error");
     expect(messages(summary?.issues)).not.toContain("agent-1");
-    expect(details(summary?.issues)).toContain("agent-1");
+    expect(issueDetails(summary?.issues)).toContain("agent-1");
   });
 
   it.each([
@@ -638,7 +638,7 @@ describe("subagent compact semantic policy", () => {
     expect(
       summary?.issues?.find((issue) => issue.code.endsWith(":cleanup-receipt"))?.severity,
     ).toBe("warning");
-    const text = details(summary?.issues);
+    const text = issueDetails(summary?.issues);
     expect(text).toContain("quarantined-run");
     expect(text).toContain("quarantined");
     expect(text).toContain("Do not retry or launch a replacement");
@@ -667,7 +667,7 @@ describe("subagent compact semantic policy", () => {
     });
     expect(summary?.outcome).toBe("error");
     expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["error", "info"]);
-    expect(details(summary?.issues)).toContain('action: "retry"');
+    expect(issueDetails(summary?.issues)).toContain('action: "retry"');
   });
 
   it("matches claims operations to the claims detail family", () => {
@@ -692,7 +692,7 @@ describe("subagent compact semantic policy", () => {
         action: "interrupt",
         runs: [view({ state: "paused", capabilities: resumable ? ["resume"] : [] })],
       });
-      const text = details(
+      const text = issueDetails(
         summarize("lifecycle", projected, "settled", { action: "interrupt" })?.issues,
       );
       expect(text).toContain(resumable ? 'action: "resume"' : 'action: "stop"');
@@ -711,7 +711,7 @@ describe("subagent compact semantic policy", () => {
         writeClaims: ["src/a.ts"],
         writeAudit: { observedFileWrites: [], violations: [], bashWriteHints: 0 },
       });
-      const text = details(summarize("status", projected)?.issues);
+      const text = issueDetails(summarize("status", projected)?.issues);
       expect(text).not.toContain("paths:");
       expect(text).not.toContain("src/a.ts");
       if (offender) {
@@ -740,20 +740,20 @@ describe("subagent compact semantic policy", () => {
     expect(summary?.metadata).not.toContain("1 completed");
     expect(summary?.counters).toContain("finished");
     expect(summary?.metadata).not.toContain("1 paused");
-    const text = `${messages(summary?.issues)}\n${details(summary?.issues)}`;
+    const text = `${messages(summary?.issues)}\n${issueDetails(summary?.issues)}`;
     expect(summary?.metadata).toEqual([]);
     expect(text).not.toContain("SECRET REPORT BODY");
     expect(text).not.toContain('action: "resume"');
     const cancelled = summarize("await", { ...receipt, cancelled: true });
     expect(cancelled?.outcome).toBe("cancelled");
-    expect(details(cancelled?.issues)).toContain("NOT stopped");
+    expect(issueDetails(cancelled?.issues)).toContain("NOT stopped");
     const proxyCancelled = summarize("await", {
       ...receipt,
       cancelled: true,
       cancellationCleanup: "unconfirmed",
     });
     expect(proxyCancelled?.outcome).toBe("cancelled");
-    const proxyDetails = details(proxyCancelled?.issues);
+    const proxyDetails = issueDetails(proxyCancelled?.issues);
     expect(proxyDetails).toContain("Root completion-claim cleanup is unconfirmed");
     expect(proxyDetails).toContain("completion_claim_conflict");
     expect(proxyDetails).not.toContain("await the requested targets again");
@@ -780,7 +780,7 @@ describe("subagent compact semantic policy", () => {
     expect(summary?.issues?.map((issue) => issue.code)).toEqual(
       expect.arrayContaining(["evidence-omitted", "runs-omitted"]),
     );
-    expect(details(summary?.issues)).toContain("subagent_status");
+    expect(issueDetails(summary?.issues)).toContain("subagent_status");
   });
 
   it("preserves workspace pagination and exact test gates", () => {
@@ -799,7 +799,7 @@ describe("subagent compact semantic policy", () => {
     ]);
     expect(summary?.issues?.every((issue) => issue.severity === "info")).toBe(true);
     expect(summary?.outcome).toBe("success");
-    const text = details(summary?.issues);
+    const text = issueDetails(summary?.issues);
     for (const required of [
       "ALL pages",
       "revisionId=r",
@@ -813,7 +813,7 @@ describe("subagent compact semantic policy", () => {
 
   it("keeps orphan recovery, the prepared cwd and revise successors in expanded detail", () => {
     const list = workspace("list", { workspaceCount: 10, listedCount: 8, nextOffset: 8 });
-    expect(details(list?.issues)).toContain("Do not auto-adopt or delete an orphan");
+    expect(issueDetails(list?.issues)).toContain("Do not auto-adopt or delete an orphan");
     expect(
       workspace("prepare", {
         workspaceId: "w",
@@ -948,7 +948,7 @@ describe("subagent compact semantic policy", () => {
         ],
         { awaitedRunIds: ["a", "b"] },
       );
-      return reverse ? { ...receipt, cards: [...receipt.cards].reverse() } : receipt;
+      return reverse ? { ...receipt, cards: receipt.cards.toReversed() } : receipt;
     };
     const first = summarize("await", snapshot(false), "running");
     const next = summarize("await", snapshot(true, "new warning"), "running");
@@ -959,7 +959,10 @@ describe("subagent compact semantic policy", () => {
     const completed = snapshot(false);
     const finalProgress = summarize(
       "await",
-      { ...completed, cards: completed.cards.map((card) => ({ ...card, state: "completed" })) },
+      {
+        ...completed,
+        cards: completed.cards.map((card) => Object.assign({}, card, { state: "completed" })),
+      },
       "running",
     );
     expect(finalProgress?.subject).toBe(first?.subject);
@@ -1004,7 +1007,7 @@ describe("subagent compact semantic policy", () => {
     expect(workspace("list", { workspaceCount: 0, listedCount: 0 })?.issues).toEqual([]);
     expect(workspace("list", {})?.issues).toHaveLength(1);
     const paged = workspace("list", { workspaceCount: 2, listedCount: 1, nextOffset: 1 });
-    expect(details(paged?.issues)).toContain("offset=1");
+    expect(issueDetails(paged?.issues)).toContain("offset=1");
   });
 
   it("counts static mixed profile eligibility without warning for usable alternatives", () => {
@@ -1090,7 +1093,7 @@ describe("subagent compact semantic policy", () => {
       const summary = summarize("status", projected);
       expect(summary?.outcome).toBe("success");
       expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["info"]);
-      expect(details(summary?.issues)).toContain(skipped.reason);
+      expect(issueDetails(summary?.issues)).toContain(skipped.reason);
       expect(summary?.metadata).toEqual([]);
       expect(summarize("status", projected, "running")?.metadata).toEqual([]);
       for (const patch of [

@@ -124,12 +124,12 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
           picker.warning,
         );
       })
-      .catch((error) => {
+      .catch((cause: unknown) => {
         if (!this.finishCatalogLoad(controller)) return;
         this.notice(
           "error",
-          error instanceof Error
-            ? error.message
+          cause instanceof Error
+            ? cause.message
             : fastMode
               ? "Could not check fast mode."
               : "Could not load reasoning levels.",
@@ -204,10 +204,10 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         this.modelPicker.focused = this._focused;
         this.renderSoon();
       })
-      .catch((error) => {
+      .catch((cause: unknown) => {
         if (!this.finishCatalogLoad(controller)) return;
         this.addingCandidate = false;
-        this.notice("error", error instanceof Error ? error.message : "Could not load models.");
+        this.notice("error", cause instanceof Error ? cause.message : "Could not load models.");
       });
   }
 

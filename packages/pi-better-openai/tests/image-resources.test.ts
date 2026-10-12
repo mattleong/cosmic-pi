@@ -196,9 +196,7 @@ describe("OpenAI image resources", () => {
       const { fs: realFs, path, root, directory } = yield* tempImages;
       const hostileFs: typeof realFs = Object.assign({}, realFs, {
         stat: (pathArg: Parameters<typeof realFs.stat>[0]) =>
-          String(pathArg).endsWith(".png")
-            ? Effect.die("verification-io-loss")
-            : realFs.stat(pathArg),
+          pathArg.endsWith(".png") ? Effect.die("verification-io-loss") : realFs.stat(pathArg),
       });
       const output = makeImageOutput({ fs: hostileFs, path, sharp: pngSharp });
       const content = bytes("committed-image-bytes");

@@ -310,9 +310,9 @@ describe("hierarchical tool result rendering", () => {
   });
 
   it("preserves truncated fallback output in expanded results", () => {
-    const text = Array.from({ length: 13 }, (_, index) => `line ${index + 1}`).join("\n");
+    const output = Array.from({ length: 13 }, (_, index) => `line ${index + 1}`).join("\n");
     const collapsed = renderSubagentResult(
-      { content: [{ type: "text", text }] },
+      { content: [{ type: "text", text: output }] },
       false,
       false,
       plainTheme,
@@ -320,7 +320,7 @@ describe("hierarchical tool result rendering", () => {
       .render(120)
       .join("\n");
     const expanded = renderSubagentResult(
-      { content: [{ type: "text", text }] },
+      { content: [{ type: "text", text: output }] },
       false,
       true,
       plainTheme,

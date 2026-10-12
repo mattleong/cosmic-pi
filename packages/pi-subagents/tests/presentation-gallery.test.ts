@@ -550,11 +550,9 @@ const messagingScenarios = Effect.all([
 const retryRoute: ProfileRouteContinuation = {
   profile: "reviewer",
   routeSource: "global",
-  candidates: [candidate({ model: "anthropic/claude-opus-4-7" }), candidate()].map((entry) => ({
-    ...entry,
-    openaiFastMode: false,
-    closeOnReport: true,
-  })),
+  candidates: [candidate({ model: "anthropic/claude-opus-4-7" }), candidate()].map((entry) =>
+    Object.assign({}, entry, { openaiFastMode: false, closeOnReport: true }),
+  ),
   selectedCandidateIndex: 0,
   skippedCandidates: [],
 };
@@ -986,8 +984,8 @@ const contact = (
   title: string,
   kind: string,
   message: string,
-  scenario: Partial<GalleryScenario>,
-): ToolScenario => ({ tool: "contact_parent", title, args: { kind, message }, ...scenario });
+  overrides: Partial<GalleryScenario>,
+): ToolScenario => ({ tool: "contact_parent", title, args: { kind, message }, ...overrides });
 
 const parentScenarios: ReadonlyArray<ToolScenario> = [
   contact("progress", "progress", progressNote, {
@@ -1127,11 +1125,9 @@ const completedWorkflow = workflowRun({
   state: "completed",
   currentPhase: "Verify",
   endedAt: now,
-  agents: workflowRun().agents.map((agent) => ({
-    ...agent,
-    state: "completed" as const,
-    endedAt: now,
-  })),
+  agents: workflowRun().agents.map((agent) =>
+    Object.assign({}, agent, { state: "completed" as const, endedAt: now }),
+  ),
   result: {
     text: JSON.stringify(
       [{ file: "src/auth/session.ts", line: 118, claim: "Timeout is swallowed" }],
@@ -1148,7 +1144,11 @@ const failedWorkflow = workflowRun({
   agents: workflowRun().agents.map(({ waiting: _waiting, ...agent }) =>
     agent.state === "completed"
       ? agent
-      : { ...agent, state: "stopped" as const, reason: "the workflow stopped", endedAt: now },
+      : Object.assign({}, agent, {
+          state: "stopped" as const,
+          reason: "the workflow stopped",
+          endedAt: now,
+        }),
   ),
   failure: {
     name: "TypeError",
@@ -1174,7 +1174,11 @@ const stoppedWorkflow = workflowRun({
   agents: workflowRun().agents.map((agent) =>
     agent.state === "completed"
       ? agent
-      : { ...agent, state: "stopped" as const, reason: "the workflow stopped", endedAt: now },
+      : Object.assign({}, agent, {
+          state: "stopped" as const,
+          reason: "the workflow stopped",
+          endedAt: now,
+        }),
   ),
 });
 const writerWorkflow = workflowRun({
@@ -1200,16 +1204,20 @@ const writerWorkflow = workflowRun({
 const migrateWorkflow = workflowRun({
   ...completedWorkflow,
   name: "migrate-call-sites",
-  agents: ["billing", "invoices", "ledger", "payroll"].map((site, index) => ({
-    callId: index + 1,
-    runId: `agent-${30 + index}`,
-    label: `migrate:${site}`,
-    profile: "worker",
-    state: "completed" as const,
-    queuedAt: now - 120_000,
-    workspaceId: `workspace-${10 + index}`,
-    ...(site !== "ledger" && { unchanged: true as const }),
-  })),
+  agents: ["billing", "invoices", "ledger", "payroll"].map((site, index) =>
+    Object.assign(
+      {
+        callId: index + 1,
+        runId: `agent-${30 + index}`,
+        label: `migrate:${site}`,
+        profile: "worker",
+        state: "completed" as const,
+        queuedAt: now - 120_000,
+        workspaceId: `workspace-${10 + index}`,
+      },
+      site === "ledger" ? {} : { unchanged: true as const },
+    ),
+  ),
   result: {
     text: "Migrated 1 of 4 call sites; the rest already used the new API.",
     clipped: false,
@@ -1272,8 +1280,12 @@ const budgetFailedWorkflow = workflowRun({
   usage: { ...completedWorkflow.usage, output: 512_340, totalTokens: 9_812_340, cost: 31.2 },
   agents: workflowRun().agents.map(({ waiting: _waiting, ...agent }) =>
     agent.state === "queued"
-      ? { ...agent, state: "skipped" as const, reason: WORKFLOW_BUDGET_REASON, endedAt: now }
-      : { ...agent, state: "completed" as const, endedAt: now },
+      ? Object.assign({}, agent, {
+          state: "skipped" as const,
+          reason: WORKFLOW_BUDGET_REASON,
+          endedAt: now,
+        })
+      : Object.assign({}, agent, { state: "completed" as const, endedAt: now }),
   ),
   logs: [...workflowRun().logs, budgetWarning],
   warnings: [budgetWarning],
@@ -1385,7 +1397,7 @@ const startedRun = (script: WorkflowScript) =>
     phases: script.meta.phases ?? [],
     planned: (script.meta.phases ?? [])
       .flatMap((phase) => workflowPlannedAgents(phase))
-      .map((agent, index) => ({ ...agent, runId: `agent-${20 + index}` })),
+      .map((agent, index) => Object.assign({}, agent, { runId: `agent-${20 + index}` })),
     scriptPath: `${runDirectory}/script.js`,
   });
 
@@ -1530,7 +1542,10 @@ const workflowRuntime: WorkflowToolRuntime = {
 
 const workflowScenarios = Effect.gen(function* () {
   const [tool] = captureRegistrations((pi) => registerWorkflowTool(pi, workflowRuntime)).tools;
-  const execute = (title: string, args: Partial<WorkflowToolArgs>): Effect.Effect<ToolScenario> =>
+  const executeWorkflow = (
+    title: string,
+    args: Partial<WorkflowToolArgs>,
+  ): Effect.Effect<ToolScenario> =>
     Effect.promise(() => tool!.execute("call", args, undefined, undefined, context)).pipe(
       Effect.map((result) => ({
         tool: "subagent_workflow",
@@ -1541,72 +1556,84 @@ const workflowScenarios = Effect.gen(function* () {
       })),
     );
   return [
-    yield* execute("start an inline script", {
+    yield* executeWorkflow("start an inline script", {
       action: "start",
       script: reviewScript,
       args: { scope: "src/auth" },
     }),
-    yield* execute("start a script that declares its agents", {
+    yield* executeWorkflow("start a script that declares its agents", {
       action: "start",
       script: plannedReviewScript,
       args: { scope: "src/auth" },
     }),
-    yield* execute("script without meta is rejected", { action: "start", script: "return 1;" }),
-    yield* execute("start with args that don't match the script's meta.args", {
+    yield* executeWorkflow("script without meta is rejected", {
+      action: "start",
+      script: "return 1;",
+    }),
+    yield* executeWorkflow("start with args that don't match the script's meta.args", {
       action: "start",
       script: targetedScript,
       args: { module: "src/auth", concern: "style" },
     }),
-    yield* execute("script with a syntax error is rejected", {
+    yield* executeWorkflow("script with a syntax error is rejected", {
       action: "start",
       script: 'export const meta = { name: "broken", description: "d" };\nconst x: number = 1;',
     }),
-    yield* execute("status while agents run", { action: "status", runId: workflowRun().id }),
-    yield* execute("status past its token budget, agents waiting", {
+    yield* executeWorkflow("status while agents run", {
+      action: "status",
+      runId: workflowRun().id,
+    }),
+    yield* executeWorkflow("status past its token budget, agents waiting", {
       action: "status",
       runId: budgetedWorkflow.id,
     }),
-    yield* execute("status repeated within a minute while nothing changed", {
+    yield* executeWorkflow("status repeated within a minute while nothing changed", {
       action: "status",
       runId: repeatedWorkflow.id,
     }),
-    yield* execute("status of a stuck fan-out that needs the user", {
+    yield* executeWorkflow("status of a stuck fan-out that needs the user", {
       action: "status",
       runId: stuckWorkflow.id,
     }),
-    yield* execute("start with a token budget", {
+    yield* executeWorkflow("start with a token budget", {
       action: "start",
       script: reviewScript,
       budget: 500_000,
     }),
-    yield* execute("status after completion", { action: "status", runId: completedWorkflow.id }),
-    yield* execute("status after a script error", {
+    yield* executeWorkflow("status after completion", {
+      action: "status",
+      runId: completedWorkflow.id,
+    }),
+    yield* executeWorkflow("status after a script error", {
       action: "status",
       runId: failedWorkflow.id,
     }),
-    yield* execute("status after a runtime dependency failure", {
+    yield* executeWorkflow("status after a runtime dependency failure", {
       action: "status",
       runId: runtimeFailedWorkflow.id,
     }),
-    yield* execute("status after its token budget was spent and the script didn't catch it", {
-      action: "status",
-      runId: budgetFailedWorkflow.id,
-    }),
-    yield* execute("status of a run from before a Pi restart", {
+    yield* executeWorkflow(
+      "status after its token budget was spent and the script didn't catch it",
+      {
+        action: "status",
+        runId: budgetFailedWorkflow.id,
+      },
+    ),
+    yield* executeWorkflow("status of a run from before a Pi restart", {
       action: "status",
       runId: recordedWorkflow.id,
     }),
-    yield* execute("status of a run another Pi process runs", {
+    yield* executeWorkflow("status of a run another Pi process runs", {
       action: "status",
       runId: recordedElsewhere.id,
     }),
-    yield* execute("status receipt retained when structured encoding fails", {
+    yield* executeWorkflow("status receipt retained when structured encoding fails", {
       action: "status",
       runId: "wf-contract-unavailable",
     }),
-    yield* execute("unknown run", { action: "status", runId: "wf-old-3" }),
-    yield* execute("stop", { action: "stop", runId: "wf-mg3k2l-1" }),
-    yield* execute("list saved workflows and runs", { action: "list" }),
+    yield* executeWorkflow("unknown run", { action: "status", runId: "wf-old-3" }),
+    yield* executeWorkflow("stop", { action: "stop", runId: "wf-mg3k2l-1" }),
+    yield* executeWorkflow("list saved workflows and runs", { action: "list" }),
   ];
 });
 
@@ -2002,29 +2029,24 @@ const activityScenarios: ReadonlyArray<ActivityScenario> = [
 ];
 
 const activityLines = (): ReadonlyArray<string> =>
-  activityScenarios.flatMap((scenario) => {
-    const projection = { revision: 1, runs: scenario.runs };
-    const workflows = { runs: scenario.workflows };
+  activityScenarios.flatMap((activity) => {
+    const projection = { revision: 1, runs: activity.runs };
+    const workflows = { runs: activity.workflows };
     const items = subagentActivityItems(projection, undefined, workflows);
     const gallery = {
-      title: scenario.title,
+      title: activity.title,
       providerId: "pi-subagents",
       items,
       detail: (id: string) => subagentActivityDetail(projection, id, workflows, now),
       now,
     };
-    return [
-      `── activity · ${scenario.title} · published rows`,
-      ...items.map(activityRowLine),
-      "",
-      ...activityGalleryFrames({ ...gallery, widths: [60, 80, 100], maxRows: [8] }),
-      ...activityGalleryFrames({
-        ...gallery,
-        widths: [80],
-        maxRows: [3],
-        open: [...new Set([`workflow:${scenario.workflows[0]?.id ?? ""}`, ...scenario.details])],
-      }),
-    ];
+    const opened = new Set([`workflow:${activity.workflows[0]?.id ?? ""}`, ...activity.details]);
+    return [`── activity · ${activity.title} · published rows`].concat(
+      items.map(activityRowLine),
+      [""],
+      activityGalleryFrames({ ...gallery, widths: [60, 80, 100], maxRows: [8] }),
+      activityGalleryFrames({ ...gallery, widths: [80], maxRows: [3], open: [...opened] }),
+    );
   });
 
 const directory = galleryDirectory(process.env) ?? "";
@@ -2060,7 +2082,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
           const tools = [...registered.tools, contactParentTool(), resultTool()];
           for (const { tool, ...entry } of scenarios)
             lines.push(
-              ...galleryFrames(tools.find((candidate) => candidate.name === tool)!, {
+              ...galleryFrames(tools.find((definition) => definition.name === tool)!, {
                 ...entry,
                 title: `${style} · ${tool} · ${entry.title}`,
               }),

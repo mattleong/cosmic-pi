@@ -4,6 +4,7 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
   type ExtensionToolContext,
+  type ExtensionUIContext,
   type TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
@@ -113,7 +114,7 @@ function tasksCommandHarness(
     rows: 8,
     keybindings: piKeybindingsFixture({ matches: () => false }),
   });
-  const notify = vi.fn();
+  const notify = vi.fn<ExtensionUIContext["notify"]>();
   const ui = { notify, custom: host.ctx.ui.custom.bind(host.ctx.ui) };
   const custom = vi.spyOn(ui, "custom");
   const ctx = extensionContextFixture({
@@ -292,7 +293,7 @@ describe("background-task Pi lifecycle", () => {
         () => Effect.sync(() => vi.unstubAllEnvs()),
       );
       const app = harness(() => Promise.resolve());
-      const notify = vi.fn();
+      const notify = vi.fn<ExtensionUIContext["notify"]>();
       const ctx = extensionContextFixture({
         cwd,
         signal: undefined,
@@ -378,7 +379,10 @@ describe("background-task Pi lifecycle", () => {
 
         replacement.resolve();
         yield* Effect.promise(() => replacing);
-        expect(app.tools.map((tool) => tool.name)).toEqual(["background_task", "background_task"]);
+        expect(app.tools.map((registered) => registered.name)).toEqual([
+          "background_task",
+          "background_task",
+        ]);
         yield* Effect.promise(() =>
           expect(staleCall()).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
         );

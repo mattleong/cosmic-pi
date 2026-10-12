@@ -121,7 +121,7 @@ export const enforceRetainedLogBudget = (tasks: TaskRegistry, budget: number) =>
 export const trimRetention = (tasks: TaskRegistry, maxRetained: number) => {
   const completed = [...tasks.values()]
     .filter((record) => !isActiveTaskState(record.snapshot.state))
-    .sort((left, right) => (left.snapshot.endedAt ?? 0) - (right.snapshot.endedAt ?? 0));
+    .toSorted((left, right) => (left.snapshot.endedAt ?? 0) - (right.snapshot.endedAt ?? 0));
   const evicted = completed.slice(0, Math.max(0, completed.length - maxRetained));
   for (const record of evicted) tasks.delete(record.snapshot.id);
 };

@@ -62,7 +62,7 @@ const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
     provider: model.provider,
     id: model.id,
     name: model.name,
-    reasoning: model.reasoning === true,
+    reasoning: model.reasoning,
     supportedEfforts: efforts,
   };
 };
@@ -185,11 +185,11 @@ const loadNativeModels = (
               : undefined,
         };
       },
-      (error): NativeModelLoadFailure => ({
+      (cause: unknown): NativeModelLoadFailure => ({
         models: [],
         warning: `${
-          error instanceof Error
-            ? sanitizeTerminalLine(error.message)
+          cause instanceof Error
+            ? sanitizeTerminalLine(cause.message)
             : `Could not load ${runtimeLabel(runtime)} models.`
         }${input.modelPending ? "" : " Showing the current model instead."}`,
       }),

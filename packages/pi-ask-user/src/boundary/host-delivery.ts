@@ -38,7 +38,7 @@ export const acceptsAsyncMessage = (
   if (message.role !== "custom" || message.customType !== ASYNC_MESSAGE_TYPE) return true;
   const data = decodeUnknownOrUndefined(Metadata, message.details);
   return (
-    !!data &&
+    data !== undefined &&
     (data.generation === generation || historical.has(`${data.generation}/${data.deliveryId}`))
   );
 };

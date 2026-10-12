@@ -126,13 +126,13 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     envelopes: () => emitted.filter(({ name }) => name === ACTIVITY_EVENT).map(({ data }) => data),
     service,
     rows: () => rows,
-    tick: (service: ActivityServiceContract, now: number) => ticks.get(service)?.(now),
+    tick: (contract: ActivityServiceContract, now: number) => ticks.get(contract)?.(now),
     drain,
     openManager,
     mountWidget,
     renderWidget: () => mountedWidget?.render(80) ?? [],
-    resizeWidget: (rows: number) => {
-      terminalRows = rows;
+    resizeWidget: (nextRows: number) => {
+      terminalRows = nextRows;
     },
     redraws: () => redraws,
     pendingWork: () => work.length,
@@ -410,11 +410,11 @@ describe("activity host lifecycle", () => {
       )(fixture.envelopes());
       const broadcast = decoded
         .flatMap((event) =>
-          event.items.flatMap((item) => [
-            item.title,
-            item.summary,
-            item.detail,
-            ...(item.actions ?? []).flatMap((action) => [action.label, action.confirmation]),
+          event.items.flatMap((activity) => [
+            activity.title,
+            activity.summary,
+            activity.detail,
+            ...(activity.actions ?? []).flatMap((action) => [action.label, action.confirmation]),
           ]),
         )
         .join("\n");

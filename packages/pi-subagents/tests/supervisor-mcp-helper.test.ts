@@ -14,10 +14,10 @@ it.effect("writer scope closure settles queued acknowledgements despite stalled 
     };
     const { writer, acknowledgements } = yield* Effect.scoped(
       Effect.gen(function* () {
-        const writer = yield* makeSerializedWriter(stream);
-        const acknowledgements = [writer.write({ id: 1 }), writer.write({ id: 2 })];
+        const scopedWriter = yield* makeSerializedWriter(stream);
+        const queued = [scopedWriter.write({ id: 1 }), scopedWriter.write({ id: 2 })];
         yield* Deferred.await(started);
-        return { writer, acknowledgements };
+        return { writer: scopedWriter, acknowledgements: queued };
       }),
     );
     for (const acknowledgement of acknowledgements) {

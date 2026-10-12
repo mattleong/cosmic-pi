@@ -620,6 +620,7 @@ it.effect(
     Effect.gen(function* () {
       for (const timing of [true, false]) {
         let ticks = 0;
+        const tickCount = () => ticks;
         yield* Effect.scoped(
           Effect.gen(function* () {
             const scheduler = yield* CodePreviewSchedulerService;
@@ -632,40 +633,40 @@ it.effect(
             h.call({ invalidate: () => ticks++ });
             const pending = h.rows().join("");
             yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
-            assert.equal(ticks, 0);
+            assert.equal(tickCount(), 0);
             assert.equal(h.rows().join(""), pending);
             h.call({ executionStarted: true });
             const firstFrame = h.rows().join("");
             h.update({}, result(""));
             h.update({}, result(""));
             yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
-            assert.equal(ticks, 2, "repeated slot updates must share one animation timer");
+            assert.equal(tickCount(), 2, "repeated slot updates must share one animation timer");
             assert.notEqual(h.rows().join(""), firstFrame);
             if (!timing) {
               assert.equal(h.state.codePreviewTimingStartedAt, undefined);
               assert.doesNotMatch(h.rows().join(""), /\d+(?:ms|s)\b/u);
               h.update({ expanded: true });
               yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
-              assert.equal(ticks, 2);
+              assert.equal(tickCount(), 2);
               h.update({ expanded: false });
               yield* TestClock.adjust(SPINNER_FRAME_MS);
-              assert.equal(ticks, 3);
+              assert.equal(tickCount(), 3);
             }
             h.update({ isPartial: false }, result("final"));
-            const settledTicks = ticks;
+            const settledTicks = tickCount();
             const settled = h.rows().join("");
             yield* TestClock.adjust(500);
-            assert.equal(ticks, settledTicks);
+            assert.equal(tickCount(), settledTicks);
             assert.equal(h.rows().join(""), settled);
             const activeAtShutdown = harness(summarize, "off", { timing });
             activeAtShutdown.call({ executionStarted: true, invalidate: () => ticks++ });
             yield* TestClock.adjust(SPINNER_FRAME_MS);
-            assert.equal(ticks, settledTicks + 1);
+            assert.equal(tickCount(), settledTicks + 1);
           }).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer)),
         );
-        const shutdownTicks = ticks;
+        const shutdownTicks = tickCount();
         yield* TestClock.adjust(500);
-        assert.equal(ticks, shutdownTicks);
+        assert.equal(tickCount(), shutdownTicks);
       }
     }),
 );

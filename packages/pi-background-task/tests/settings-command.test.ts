@@ -1,4 +1,4 @@
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import {
   KeybindingsManager as TuiKeybindingsManager,
   setKeybindings,
@@ -27,7 +27,7 @@ const harness = (options: { readonly trusted?: boolean; readonly started?: boole
     read,
     write,
   });
-  const notify = vi.fn();
+  const notify = vi.fn<ExtensionUIContext["notify"]>();
   const ctx = extensionContextFixture({
     cwd: "/project",
     mode: "rpc",
@@ -47,7 +47,7 @@ const pickerHarness = (
   initTheme();
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
   const write = vi.fn<TaskSettingsActions["write"]>(() => Promise.resolve());
-  const notify = vi.fn();
+  const notify = vi.fn<ExtensionUIContext["notify"]>();
   const command = taskSettingsSubcommand({
     config: () => DEFAULT_BACKGROUND_TASK_CONFIG,
     captureAuthority,

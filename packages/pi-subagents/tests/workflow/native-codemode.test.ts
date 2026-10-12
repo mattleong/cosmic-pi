@@ -18,11 +18,12 @@ import {
   runWhere,
   script,
 } from "./fixtures/workflow-harness.ts";
+import { anyNumber } from "../support/matchers.ts";
 
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const quote = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 const output = (text: string) => {
-  const line = text.split("\n").find((line) => line.startsWith("WORKFLOW_RESULT "));
+  const line = text.split("\n").find((entry) => entry.startsWith("WORKFLOW_RESULT "));
   expect(line, text).toBeDefined();
   return decodeOutput(line!.slice("WORKFLOW_RESULT ".length));
 };
@@ -97,7 +98,7 @@ describe("native codemode workflow runner", () => {
           id,
           first: "view",
           repeat: "unchanged",
-          sinceMs: expect.any(Number),
+          sinceMs: anyNumber(),
           attention: [],
           saved: [],
           state: "stopped",
@@ -282,7 +283,7 @@ describe("native codemode workflow runner", () => {
         id,
         state: "stopped",
         status: "stopped",
-        endedAt: expect.any(Number),
+        endedAt: anyNumber(),
       });
       expect(backend.controls[0]?.released()).toBe(1);
       expect(h.fixture.delivered.filter((notice) => notice.runId === id)).toHaveLength(1);

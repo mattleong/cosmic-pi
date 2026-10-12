@@ -137,7 +137,7 @@ describe("workspace tool", () => {
           status: "discarded",
           baseline: "baseline",
         }),
-      ).reverse();
+      ).toReversed();
       const artifact = {
         workspaceId: "99",
         status: "unavailable",
@@ -172,7 +172,7 @@ describe("workspace tool", () => {
       }
       expect(all).toHaveLength(10);
       expect(all.slice(0, 9)).toEqual(
-        [...records].reverse().map((entry) => ({
+        [...records].toReversed().map((entry) => ({
           workspaceId: entry.handle.workspaceId,
           ownerId: entry.handle.ownerId,
           sourceCwd: entry.handle.sourceCwd,

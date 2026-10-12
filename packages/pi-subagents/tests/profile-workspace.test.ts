@@ -126,7 +126,7 @@ describe("candidate menu actions", () => {
     editor.saveDraft.mockClear();
     editor.act("move-down");
     expect(editor.saveDraft).not.toHaveBeenCalled();
-    expect(editor.candidates()).toEqual([...editor.original].reverse());
+    expect(editor.candidates()).toEqual(editor.original.toReversed());
   });
 
   effectTest(

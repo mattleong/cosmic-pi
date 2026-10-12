@@ -20,6 +20,7 @@ import {
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
 import { PROFILE_IDS, type ProfileRoute } from "../src/profiles/model.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
+import { objectContaining, stringContaining } from "./support/matchers.ts";
 
 const CWD = "/repo";
 const AGENT = "/agent";
@@ -62,7 +63,7 @@ const rejects = <A>(
       expect(error).toMatchObject({
         operation,
         path,
-        ...(message !== undefined && { message: expect.stringContaining(message) }),
+        ...(message !== undefined && { message: stringContaining(message) }),
       }),
     ),
   );
@@ -585,7 +586,7 @@ describe("SubagentConfigStore profile sets", () => {
       expect(memory.documents.get(GLOBAL)).toEqual({
         version: 6,
         defaultProfileSet: "main",
-        profileSets: { main: { profiles: expect.objectContaining({ generalist }) } },
+        profileSets: { main: { profiles: objectContaining({ generalist }) } },
       });
     }),
   );

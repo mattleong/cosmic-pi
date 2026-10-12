@@ -95,10 +95,12 @@ export const decodeCallQuestions = projection(
   }),
 );
 
-export const callTitles = <Args>(args: Args): string | undefined =>
-  decodeCallQuestions(args)
+export const callTitles = <Args>(args: Args): string | undefined => {
+  const titles = decodeCallQuestions(args)
     ?.questions.map((question) => stripTerminalControls(question.title))
-    .join(", ") || undefined;
+    .join(", ");
+  return titles === "" ? undefined : titles;
+};
 
 export const titlesByKey = <Args>(args: Args): ReadonlyMap<string, string> =>
   new Map(

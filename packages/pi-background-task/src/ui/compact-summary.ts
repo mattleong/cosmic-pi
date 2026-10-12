@@ -39,7 +39,7 @@ const MAX_QUOTED_CHARS = 40;
 const SEVERITY_ORDER: ReadonlyArray<CompactIssue["severity"]> = ["error", "warning", "info"];
 
 export const backgroundTaskActionLabel = (action: string): string =>
-  action === "stop_all" ? "stop all" : sanitizeTerminalLine(String(action));
+  action === "stop_all" ? "stop all" : sanitizeTerminalLine(action);
 
 export const quotedWaitText = (text: string): string =>
   `"${clipText(sanitizeTerminalLine(text), MAX_QUOTED_CHARS)}"`;

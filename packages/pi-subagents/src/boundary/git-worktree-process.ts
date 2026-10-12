@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import { runBoundedProcessNode } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
+import { nodeErrorCode } from "./harness-shared.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 
 export const workspaceFailure = (operation: string, message: string) =>
@@ -16,9 +17,9 @@ export const workspaceIO = <A>(operation: string, run: () => PromiseLike<A>) =>
   });
 export const workspaceIOIfPresent = <A>(operation: string, run: () => Promise<A>) =>
   workspaceIO(operation, () =>
-    run().catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
+    run().catch((cause: unknown) => {
+      if (nodeErrorCode(cause) === "ENOENT") return undefined;
+      throw cause;
     }),
   );
 

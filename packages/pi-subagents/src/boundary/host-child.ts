@@ -345,9 +345,9 @@ export function registerSubagentChildBridge(
                 return { content: [{ type: "text" as const, text }], details: {} };
               },
               question
-                ? (error) => {
+                ? (cause: unknown) => {
                     if (signal?.aborted) throw new Error("Parent question was cancelled.");
-                    throw parentContactRejection(error);
+                    throw parentContactRejection(cause);
                   }
                 : undefined,
             );
@@ -484,9 +484,9 @@ export function registerSubagentChildBridge(
         input.result = document;
         return start();
       },
-      (error) =>
+      (cause: unknown) =>
         Promise.resolve(start()).then(() => {
-          throw error;
+          throw cause;
         }),
     );
   });

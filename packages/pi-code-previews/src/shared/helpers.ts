@@ -5,6 +5,10 @@ export function getObjectValue<ValueInput>(value: ValueInput, key: string) {
   return value[key];
 }
 
+export function nonEmptyText(value: string | undefined): string | undefined {
+  return value === "" ? undefined : value;
+}
+
 export function isToolOutputNoticeLine(line: string): boolean {
   return line.startsWith("[") && line.endsWith("]");
 }

@@ -62,7 +62,7 @@ export const removeWorkspaceTrees = (
         );
     }
     for (const name of names.filter(
-      (name) => removedWorker(name) || /^prepare-[a-f0-9-]{36}$/u.test(name),
+      (entry) => removedWorker(entry) || /^prepare-[a-f0-9-]{36}$/u.test(entry),
     )) {
       const tree = path.join(directory, name);
       yield* checkDirectory(tree);
@@ -96,7 +96,7 @@ export const listWorkspaceRecords = (registry: string) =>
     const before = yield* inspectRegistry(registry);
     if (!before) return { records, unavailable };
     const names = yield* workspaceIO("registry", () => fs.readdir(registry));
-    for (const workspaceId of names.filter(validWorkspaceId).sort()) {
+    for (const workspaceId of names.filter(validWorkspaceId).toSorted()) {
       const record = yield* readWorkspaceRecord(registry, workspaceId).pipe(
         Effect.catchTag("WorkspaceError", () => Effect.void),
       );

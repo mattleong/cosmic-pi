@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
 import { normalizeWriteClaim } from "../domain/write-claims.ts";
 
 export const MAX_OBSERVED_WRITE_PATHS = 64;
@@ -23,16 +24,15 @@ const pathFields = <Container>(value: Container, keys: ReadonlyArray<string>) =>
 const collectKnownPaths = <ArgsInput>(args: ArgsInput): ReadonlyArray<string> => {
   const input = asObject(args);
   if (!input) return [];
-  const changes = Array.isArray(input.changes) ? input.changes : [];
+  const changes = Arr.isArray(input.changes) ? input.changes : [];
   return [
     ...new Set([
       ...pathFields(input, PATH_KEYS),
       ...changes.slice(0, MAX_NATIVE_CHANGE_PATHS).flatMap((change) => {
         const item = asObject(change);
-        return [
-          ...pathFields(item, PATH_KEYS).slice(0, 1),
-          ...pathFields(asObject(item?.kind), MOVE_PATH_KEYS).slice(0, 1),
-        ];
+        return pathFields(item, PATH_KEYS)
+          .slice(0, 1)
+          .concat(pathFields(asObject(item?.kind), MOVE_PATH_KEYS).slice(0, 1));
       }),
       ...(changes.length > MAX_NATIVE_CHANGE_PATHS
         ? ["/<native-file-change-set-exceeded-observation-bound>"]

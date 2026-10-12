@@ -1,3 +1,5 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import { describe, expect, it, vi } from "vitest";
 import {
   makeHostNotifier,
@@ -5,10 +7,18 @@ import {
 } from "../src/boundary/host-notifier.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 
-const notifier = (sendMessage = vi.fn()) => ({
+type SendMessage = ExtensionAPI["sendMessage"];
+
+const messageContent = (content: Parameters<SendMessage>[0]["content"] | undefined): string =>
+  Predicate.isString(content) ? content : JSON.stringify(content);
+
+const detailsName = <Details>(details: Details) =>
+  Predicate.hasProperty(details, "name") ? details.name : undefined;
+
+const notifier = (sendMessage = vi.fn<SendMessage>()) => ({
   sendMessage,
   notify: makeHostNotifier(extensionApiFixture({ sendMessage })),
-  content: (call = 0) => String(sendMessage.mock.calls[call]?.[0].content),
+  content: (call = 0) => messageContent(sendMessage.mock.calls[call]?.[0].content),
 });
 
 const completion = (
@@ -31,7 +41,7 @@ describe("subagent host notifier", () => {
     expect(message).toMatchObject({ customType: "pi-subagents-completed", display: true });
     expect(content()).toContain("agent-1");
     expect(content()).toContain(finalText);
-    expect(JSON.stringify(message.details)).not.toContain("Read report");
+    expect(JSON.stringify(message?.details)).not.toContain("Read report");
     expect(options).toEqual(steer);
   });
 
@@ -95,13 +105,13 @@ describe("subagent host notifier", () => {
       generation: 1,
     });
     const [completed, question] = sendMessage.mock.calls.map(([message]) => message);
-    expect(completed.details.name).toBe("reader");
-    expect(question.details.name).toBe("writer");
+    expect(detailsName(completed?.details)).toBe("reader");
+    expect(detailsName(question?.details)).toBe("writer");
     notify({
       type: "completed",
       runs: [completion("agent-3", "a"), completion("agent-4", "b")],
     });
-    expect(sendMessage.mock.calls[2]?.[0].details.name).toBeUndefined();
+    expect(detailsName(sendMessage.mock.calls[2]?.[0].details)).toBeUndefined();
   });
 
   it("directs failed profiled runs through remaining candidates before generalist", () => {
@@ -214,7 +224,7 @@ describe("subagent host notifier", () => {
   it("acknowledges only the first chunk when the second send accepts then throws", () => {
     let sendOrdinal = 0;
     const { sendMessage, notify } = notifier(
-      vi.fn((): void => {
+      vi.fn<SendMessage>(() => {
         sendOrdinal += 1;
         if (sendOrdinal === 2) throw new Error("accepted before host callback threw");
       }),

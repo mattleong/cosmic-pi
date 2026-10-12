@@ -22,8 +22,8 @@ export function isSameExtensionSource(
 ): boolean {
   const owner = tool?.sourceInfo;
   return (
-    !!owner &&
-    !!source &&
+    owner !== undefined &&
+    source !== undefined &&
     source.source !== "builtin" &&
     owner.source === source.source &&
     owner.path === source.path &&

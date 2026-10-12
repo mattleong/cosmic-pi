@@ -14,13 +14,11 @@ type CopiedField =
   | { readonly omit: true }
   | { readonly omit: false; readonly key: string; readonly value: string | boolean };
 
-const copyField = (
+const copiedValue = <Value>(
   key: string,
-  field: PropertyDescriptor | undefined,
+  value: Value,
   omitUndefinedOptionals: boolean,
 ): CopiedField | undefined => {
-  if (!field || !field.enumerable || !("value" in field)) return undefined;
-  const value: unknown = field.value;
   if (omitUndefinedOptionals && value === undefined && OPTIONAL_CANDIDATE_FIELDS.has(key))
     return { omit: true };
   return Predicate.isString(value) || Predicate.isBoolean(value)
@@ -28,13 +26,22 @@ const copyField = (
     : undefined;
 };
 
+const copyField = (
+  key: string,
+  field: PropertyDescriptor | undefined,
+  omitUndefinedOptionals: boolean,
+): CopiedField | undefined =>
+  field && field.enumerable && "value" in field
+    ? copiedValue(key, field.value, omitUndefinedOptionals)
+    : undefined;
+
 const copyCandidate = <CandidateInput>(
   input: CandidateInput,
   omitUndefinedOptionals: boolean,
 ): JsonObject | undefined => {
   if (!Predicate.isObject(input)) return undefined;
-  const prototype = Object.getPrototypeOf(input);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  if (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)
+    return undefined;
   const keys = Reflect.ownKeys(input);
   if (keys.length > MAX_CANDIDATE_KEYS) return undefined;
   const copy: JsonObject = {};
@@ -114,7 +121,7 @@ export const stableJson = <ValueInput>(value: ValueInput): string => {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (Predicate.isObjectOrArray(value))
     return `{${Object.entries(value)
-      .sort(([left], [right]) => (left < right ? -1 : 1))
+      .toSorted(([left], [right]) => (left < right ? -1 : 1))
       .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
       .join(",")}}`;
   return JSON.stringify(value);

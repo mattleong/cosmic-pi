@@ -15,6 +15,7 @@ import {
   backendSupervisor,
   supervisorMetadata,
 } from "./fixtures/backend-supervisor.ts";
+import { stringContaining } from "./support/matchers.ts";
 
 const report = {
   runId: "codex-terminal",
@@ -121,7 +122,7 @@ it.effect("Codex keeps a failed report-ownership check distinct from an invalid 
       });
       expect(yield* Queue.take(backend.events)).toMatchObject({
         type: "protocol_error",
-        message: expect.stringContaining("Supervisor channel closed."),
+        message: stringContaining("Supervisor channel closed."),
       });
     }),
   ),

@@ -217,7 +217,11 @@ export const workflowAgentTotal = (run: WorkflowRunView): number =>
   run.agents.length + run.reused + workflowSkippedPlanned(run);
 
 export const workflowWorkspaces = (run: WorkflowRunView): ReadonlyArray<WorkflowWorkspace> => [
-  ...(run.reusedWorkspaces ?? []).map((workspace) => ({ ...workspace, state: "reused" as const })),
+  ...(run.reusedWorkspaces ?? []).map((workspace) => ({
+    workspaceId: workspace.workspaceId,
+    label: workspace.label,
+    state: "reused" as const,
+  })),
   ...run.agents.flatMap((agent) =>
     agent.workspaceId === undefined || agent.unchanged
       ? []

@@ -145,13 +145,13 @@ function subagentSettingsCommand(
   isCurrent: () => boolean,
 ): ExtensionSubcommand {
   const current = (
-    run: (isCurrent: () => boolean) => Promise<SettingsResult>,
+    run: (stillCurrent: () => boolean) => Promise<SettingsResult>,
   ): Promise<SettingsResult> => {
     if (!actions.isAvailable()) return Promise.reject(new Error("Subagents are not active"));
     const owner = actions.captureModelRefresh();
-    const isCurrent = () => owner.isCurrent() && actions.isAvailable();
-    return run(isCurrent).then((result) =>
-      isCurrent() ? result : Result.fail({ message: "", stale: true }),
+    const stillCurrent = () => owner.isCurrent() && actions.isAvailable();
+    return run(stillCurrent).then((result) =>
+      stillCurrent() ? result : Result.fail({ message: "", stale: true }),
     );
   };
 
@@ -165,11 +165,11 @@ function subagentSettingsCommand(
       readonly saved: (patch: Payload & ReturnType<typeof profileSetPatchBase>) => Promise<void>;
     },
   ): Promise<SettingsResult> =>
-    current((isCurrent) =>
+    current((stillCurrent) =>
       actions
         .inspectProfiles(isProjectTrusted(ctx))
         .then((inspection): SettingsResult | Promise<SettingsResult> => {
-          if (!isCurrent()) return succeeded;
+          if (!stillCurrent()) return succeeded;
           const projectTrusted = isProjectTrusted(ctx);
           if (scope === "project" && !projectTrusted) return failed(UNTRUSTED);
           return (
@@ -187,7 +187,7 @@ function subagentSettingsCommand(
     );
 
   const applyWorkspace = (value: string): Promise<SettingsResult> =>
-    current((isCurrent) =>
+    current((stillCurrent) =>
       actions
         .inspectWriterWorkspace()
         .then((snapshot): SettingsResult | Promise<SettingsResult> => {
@@ -199,7 +199,7 @@ function subagentSettingsCommand(
                 ? WORKSPACE_BLOCKS[snapshot.blockedCode]
                 : "Can't change the writer workspace right now",
             );
-          if (snapshot.mode === value || !isCurrent()) return succeeded;
+          if (snapshot.mode === value || !stillCurrent()) return succeeded;
           return actions
             .setWriterWorkspaceMode(value)
             .then(() => succeeded, saveFailure("change the writer workspace"));

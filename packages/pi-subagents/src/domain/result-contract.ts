@@ -55,7 +55,7 @@ const resultJsonCandidates = (text: string): ReadonlyArray<Schema.Json> => {
   const whole = decodeJsonText(text.trim());
   if (Option.isSome(whole)) return [whole.value];
   return [...text.matchAll(FENCED_BLOCK)]
-    .reverse()
+    .toReversed()
     .flatMap((match) => Option.toArray(decodeJsonText((match[1] ?? "").trim())));
 };
 

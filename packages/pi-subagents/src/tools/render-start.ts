@@ -28,10 +28,10 @@ import type { SubagentStartFailure } from "./model.ts";
 import type { SubagentStartSpec } from "./schema.ts";
 
 const requestedName = (agent: SubagentStartSpec, index: number): string =>
-  sanitizeTerminalLine(agent.name?.trim() || `launch ${index + 1}`);
+  sanitizeTerminalLine((agent.name?.trim() ?? "") || `launch ${index + 1}`);
 
 const requestedProfile = (agent: SubagentStartSpec): string =>
-  sanitizeTerminalLine(agent.profile?.trim() || "generalist");
+  sanitizeTerminalLine((agent.profile?.trim() ?? "") || "generalist");
 
 export const renderSubagentStartCall = (
   agents: ReadonlyArray<SubagentStartSpec>,

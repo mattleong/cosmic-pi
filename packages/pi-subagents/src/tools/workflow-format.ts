@@ -165,12 +165,12 @@ const queuedRow = (agent: WorkflowAgentView): string =>
 const agentsSection = (run: WorkflowRunView, now: number): string | undefined => {
   const running = run.agents
     .filter((agent) => agent.state === "running")
-    .sort((left, right) => (left.startedAt ?? 0) - (right.startedAt ?? 0));
+    .toSorted((left, right) => (left.startedAt ?? 0) - (right.startedAt ?? 0));
   const ended = run.agents
     .filter(
       (agent) => agent.state === "failed" || agent.state === "skipped" || agent.state === "stopped",
     )
-    .sort((left, right) => (right.endedAt ?? 0) - (left.endedAt ?? 0));
+    .toSorted((left, right) => (right.endedAt ?? 0) - (left.endedAt ?? 0));
   const queued = run.agents.filter((agent) => agent.state === "queued");
   const [runningRows = 0, endedRows = 0, queuedRows = 0] = allotRows(
     [running.length, ended.length, queued.length],

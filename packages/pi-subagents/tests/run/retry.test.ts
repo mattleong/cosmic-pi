@@ -22,6 +22,7 @@ import {
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
+import { stringContaining } from "../support/matchers.ts";
 
 const reviewerNative = () =>
   nativeReportRequest({ profile: "reviewer", routeContinuation: reviewerContinuation(0) });
@@ -55,8 +56,8 @@ describe("explicit profile-route retry", () => {
         const registry = cleanupFailure
           ? Layer.effect(
               SubagentBackendRegistry,
-              SubagentBackendRegistry.use((registry) =>
-                registry.resolve({ host: "local", runtime: "claude", context: "fresh" }).pipe(
+              SubagentBackendRegistry.use((backends) =>
+                backends.resolve({ host: "local", runtime: "claude", context: "fresh" }).pipe(
                   Effect.map((driver) =>
                     makeSubagentBackendRegistry([
                       {
@@ -552,7 +553,7 @@ describe("explicit profile-route retry", () => {
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
         activeId: failedRun.id,
-        message: expect.stringContaining("route retry"),
+        message: stringContaining("route retry"),
       });
       const disjoint = yield* service.start(
         request({

@@ -277,7 +277,7 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
                   (entry) =>
                     entry.endsWith(".js") && WORKFLOW_NAME_PATTERN.test(entry.slice(0, -3)),
                 )
-                .sort()
+                .toSorted()
                 .map((entry) => ({ scope, directory, name: entry.slice(0, -3) })),
             ),
           );

@@ -110,7 +110,7 @@ const setup = (
     customCalls += 1;
     return customImplementation(factory, customOptions);
   };
-  const ui = { notify: vi.fn(), custom: countedCustom };
+  const ui = { notify: vi.fn<ExtensionUIContext["notify"]>(), custom: countedCustom };
   const ctx = extensionContextFixture({
     cwd: "/repo",
     signal: undefined,
@@ -861,8 +861,8 @@ describe("root /subagents fleet actions", () => {
     effectTest(`routes guidance to send and shows ${label}`, function* () {
       const send = vi.fn((_id: string, _message: string) => outcome());
       const reply = vi.fn((): Promise<void> => Promise.resolve());
-      const { press, settled, close } = yield* openFleet(topLevel(), { send, reply });
-      press("m", "h", "i", "\r");
+      const { press: pressKeys, settled, close } = yield* openFleet(topLevel(), { send, reply });
+      pressKeys("m", "h", "i", "\r");
       expect(yield* settled()).toBe(expected);
       expect(send).toHaveBeenCalledTimes(1);
       expect(send).toHaveBeenCalledWith("child", "hi");
@@ -873,11 +873,12 @@ describe("root /subagents fleet actions", () => {
   effectTest("routes a parent-question reply to reply and reports its success", function* () {
     const send = vi.fn((): Promise<FleetMessageDelivery> => Promise.resolve("pending"));
     const reply = vi.fn((_id: string, _message: string): Promise<void> => Promise.resolve());
-    const { press, settled, close } = yield* openFleet(
-      topLevel({ state: "waiting_for_parent", question }),
-      { send, reply },
-    );
-    press("m", "o", "k", "\r");
+    const {
+      press: pressKeys,
+      settled,
+      close,
+    } = yield* openFleet(topLevel({ state: "waiting_for_parent", question }), { send, reply });
+    pressKeys("m", "o", "k", "\r");
     expect(yield* settled()).toBe("success");
     expect(reply).toHaveBeenCalledWith("child", "ok");
     expect(send).not.toHaveBeenCalled();

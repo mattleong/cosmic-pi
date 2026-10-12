@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 const quote = Schema.encodeSync(Schema.fromJsonString(Schema.String));
+const decodePublicationResult = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ status: Schema.String })),
+);
 import { afterEach, describe, expect } from "vitest";
 import { it } from "@effect/vitest";
 import {
@@ -36,7 +39,7 @@ const helper = fileURLToPath(
 );
 const hooked = (request: ReturnType<typeof setup>, hook: string, phase = "captured") => {
   const code = `const {createJiti}=await import(${JSON.stringify(import.meta.resolve("jiti"))});const jiti=createJiti(${JSON.stringify(import.meta.url)});const {executePublication}=await jiti.import(${JSON.stringify(helper)});const Effect=await jiti.import('effect/Effect');const fs=await import('node:fs');const request=${JSON.stringify({ ...request, before: { bytes: Buffer.from("before").toString("base64"), mode: 0o644 }, after: { bytes: Buffer.from("after").toString("base64"), mode: 0o644 } })};const result=await Effect.runPromise(executePublication(request,{${phase}:()=>{${hook}}}));process.stdout.write(JSON.stringify(result));`;
-  return JSON.parse(
+  return decodePublicationResult(
     execFileSync(process.execPath, ["--input-type=module", "-e", code], {
       cwd: request.directory,
       encoding: "utf8",

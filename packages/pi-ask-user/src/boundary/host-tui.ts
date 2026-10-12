@@ -72,8 +72,8 @@ export const makeAskUserTuiHost =
                   void settled.then(() => editors.delete(settled));
                   return editing.then(
                     (result) => (authority.signal.aborted ? undefined : result),
-                    (error) => {
-                      if (!authority.signal.aborted) throw error;
+                    (cause: unknown) => {
+                      if (!authority.signal.aborted) throw cause;
                       return undefined;
                     },
                   );

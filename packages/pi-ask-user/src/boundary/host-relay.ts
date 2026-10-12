@@ -9,7 +9,7 @@ import {
 } from "../questionnaire/protocol.ts";
 
 const hasRelayMarker = (environment: Readonly<NodeJS.ProcessEnv>): boolean =>
-  environment.PI_SUBAGENT_CHILD === "1" && !!environment.PI_SUBAGENT_RUN_ID?.trim();
+  environment.PI_SUBAGENT_CHILD === "1" && (environment.PI_SUBAGENT_RUN_ID?.trim() ?? "") !== "";
 export const requiresQuestionnaireRelay = (): boolean => hasRelayMarker(process.env);
 const relayFailure = (message: string) => new AskUserHostError({ operation: "relay", message });
 

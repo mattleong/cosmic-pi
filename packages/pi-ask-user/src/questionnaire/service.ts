@@ -49,7 +49,7 @@ export const noQuestionnaireActivity: QuestionnaireActivity = {
 const makeService = Effect.fn("AskUserService.make")(function* (
   host: AskUserHost,
   delivery?: AsyncDelivery,
-  idPrefix = "ask",
+  idPrefix: string = "ask",
   activity: QuestionnaireActivity = noQuestionnaireActivity,
 ) {
   const queue = yield* makeQuestionnaireQueue;

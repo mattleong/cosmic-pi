@@ -257,7 +257,8 @@ export function groupedActivityTree(
     options.hideHistory && options.liveFailures !== undefined
       ? liveFailures(nodes.values(), options.liveFailures)
       : { pinned: new Set<string>(), hidden: new Map<string, number>() };
-  for (const section of sections) completeNode(section, section.section, !!options.hideHistory);
+  for (const section of sections)
+    completeNode(section, section.section, options.hideHistory === true);
   const pinned = (node: Node) => node.type === "phase" || failures.pinned.has(node.id);
   const visible = (node: Node) => !options.hideHistory || !node.history || pinned(node);
   const result: GroupedActivityRow[] = [];
@@ -293,7 +294,7 @@ export function groupedActivityTree(
       child.type === "phase"
         ? 0
         : 1 + 2 * Number(nodeRow(child)?.planned === true) + Number(child.history);
-    const ordered = [...children].sort((left, right) => rank(left) - rank(right));
+    const ordered = children.toSorted((left, right) => rank(left) - rank(right));
     ordered.forEach((child, index) =>
       visit(child, [...continuations, index < ordered.length - 1], base.breadcrumbs),
     );
@@ -320,7 +321,7 @@ function liveFailures(nodes: Iterable<Node>, limit: number) {
     const failed = [node, ...node.children.filter((child) => child.type === "phase")]
       .flatMap((branch) => branch.children)
       .flatMap((child) => (child.type === "member" && child.row.status === "failed" ? [child] : []))
-      .sort((left, right) => (right.row.endedAt ?? 0) - (left.row.endedAt ?? 0));
+      .toSorted((left, right) => (right.row.endedAt ?? 0) - (left.row.endedAt ?? 0));
     for (const child of failed.slice(0, limit)) pinned.add(child.id);
     for (const { parentId } of failed.slice(limit))
       if (parentId !== undefined) hidden.set(parentId, (hidden.get(parentId) ?? 0) + 1);

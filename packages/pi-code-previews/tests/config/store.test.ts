@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { deferredPromise, temporaryDirectory } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import { effectTest, step } from "../support/effect-test";
@@ -62,8 +63,12 @@ const settingsRoots = (prefix: string) =>
 const installRunOnlyCapability = (run: CodePreviewSessionCapability["run"]) =>
   installCodePreviewSessionCapability({ run, ...inertScheduler });
 
+const decodeSavedDocument = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+);
+
 const readSavedDocument = (path: string) =>
-  step(() => readFile(path, "utf8").then((contents) => JSON.parse(contents)));
+  step(() => readFile(path, "utf8").then(decodeSavedDocument));
 
 const loadPreviewSettings = (project: string, trusted?: boolean) =>
   step(() => loadCodePreviewSettings(project, trusted));

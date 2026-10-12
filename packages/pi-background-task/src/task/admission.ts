@@ -46,7 +46,8 @@ const validCursor = (cursor: number | undefined) =>
   cursor === undefined || (Number.isInteger(cursor) && cursor >= 0);
 
 const validContains = (contains: string | undefined) =>
-  !!contains &&
+  contains !== undefined &&
+  contains !== "" &&
   contains.length <= BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars &&
   !contains.includes("\0");
 

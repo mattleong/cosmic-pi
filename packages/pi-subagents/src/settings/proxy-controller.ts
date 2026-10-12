@@ -193,7 +193,10 @@ export const registerSubagentProxyManagerCommand = (
                 .then((result) => classifyProxyActionResult(expected, targetId, result))
                 .then(
                   (outcome) => afterRefresh(() => Promise.resolve(outcome)),
-                  (error) => afterRefresh(() => Promise.reject(error)),
+                  (cause: unknown) =>
+                    afterRefresh((): Promise<ProxyActionOutcome> => {
+                      throw cause;
+                    }),
                 );
             const accepted = (outcome: ProxyActionOutcome): void => {
               if (outcome !== "accepted") throw new Error(UNCONFIRMED_ACTION);
@@ -203,12 +206,12 @@ export const registerSubagentProxyManagerCommand = (
               id: string,
               resumeMessage?: string,
             ) => {
-              const args: SubagentLifecycleInput = resumeMessage
+              const lifecycleArgs: SubagentLifecycleInput = resumeMessage
                 ? { action: lifecycleAction, runIds: [id], message: resumeMessage }
                 : { action: lifecycleAction, runIds: [id] };
               return action(lifecycleAction, id, {
                 tool: SUBAGENT_TOOL_NAME.lifecycle,
-                args,
+                args: lifecycleArgs,
               }).then(accepted);
             };
             const message = (

@@ -7,6 +7,7 @@ import {
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_STATE,
   COSMIC_UI_PROTOCOL_VERSION,
+  normalizeCosmicFooterUpsertEvent,
 } from "../src/protocol/protocol.ts";
 import { eventBus } from "./support/host.ts";
 
@@ -78,13 +79,16 @@ describe("Cosmic footer client discovery", () => {
       ready: true,
       hidden: [],
     });
-    expect(bus.emitted).toContainEqual({
-      name: COSMIC_UI_FOOTER_UPSERT,
-      data: expect.objectContaining({
-        owner: "manager",
-        contribution: expect.objectContaining({ kind: "status", id: "manager-status" }),
-      }),
+    const republished = bus.emitted.some(({ name, data }) => {
+      if (name !== COSMIC_UI_FOOTER_UPSERT) return false;
+      const event = normalizeCosmicFooterUpsertEvent(data);
+      return (
+        event?.owner === "manager" &&
+        event.contribution.kind === "status" &&
+        event.contribution.id === "manager-status"
+      );
     });
+    expect(republished).toBe(true);
   });
 
   it("propagates visibility changes without an ownership change and contains consumer failure", () => {

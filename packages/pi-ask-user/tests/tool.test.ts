@@ -6,7 +6,7 @@ import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
 import { fallbackText } from "../src/ui/tool-render-projection.ts";
-import { hostileContent, malformedNoteAnswers } from "./support/questionnaire.ts";
+import { firstText, hostileContent, malformedNoteAnswers } from "./support/questionnaire.ts";
 
 const request: AskUserRequest = {
   questions: [
@@ -59,9 +59,7 @@ describe("ask_user tool", () => {
       .execute("text-call", input, undefined, undefined, extensionContextFixture())
       .then((result) => {
         expect(result.details).toEqual(outcome);
-        expect(result.content[0]).toMatchObject({
-          text: expect.stringContaining("bq1234\nanswer"),
-        });
+        expect(firstText(result.content)).toContain("bq1234\nanswer");
         const rendered = resultOutput(
           tool,
           {
@@ -129,7 +127,7 @@ describe("ask_user tool", () => {
       .then((result) => {
         expect(ask).toHaveBeenCalledWith(request, signal);
         expect(result.details).toEqual(outcome);
-        expect(result.content[0]).toMatchObject({ text: expect.stringContaining("safe (Safe)") });
+        expect(firstText(result.content)).toContain("safe (Safe)");
       });
   });
 

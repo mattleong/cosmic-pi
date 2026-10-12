@@ -18,6 +18,7 @@ import {
   decodeStartAwaitCardDetails,
 } from "../src/tools/details-decode.ts";
 import { view } from "./fixtures/run-view.ts";
+import { stringContaining } from "./support/matchers.ts";
 
 const run = (index = 1, cost?: number): SubagentRunView =>
   view({
@@ -176,7 +177,9 @@ describe("persisted subagent details version 2", () => {
     });
     const restored = decodeStartAwaitCardDetails(historical);
     expect(
-      restored && restored.action === "await" && restored.cards[0]?.reportStatus,
+      restored === undefined
+        ? undefined
+        : restored.action === "await" && restored.cards[0]?.reportStatus,
     ).toBeUndefined();
     for (const reportStatus of ["claimed", "delivered", "missing"] as const) {
       const details = makeAwaitDetails({
@@ -310,7 +313,7 @@ describe("persisted subagent details version 2", () => {
       selection: {
         ...run(index + 1).selection,
         reason: "r".repeat(1_024),
-        skippedCandidates: Array.from({ length: 8 }, (_, candidateIndex) => ({
+        skippedCandidates: Array.from({ length: 8 }, (_slot, candidateIndex) => ({
           candidateIndex,
           candidate: `candidate-${candidateIndex}-${"c".repeat(64)}`,
           code: "unavailable",
@@ -534,12 +537,12 @@ describe("persisted subagent details version 2", () => {
     ]);
     expect(details.startEntries[0]).toMatchObject({
       runId: "agent-r2-1",
-      warning: expect.stringContaining("declared local Pi fallback"),
+      warning: stringContaining("declared local Pi fallback"),
     });
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
     expectDeeplyFrozen(details);
 
-    const reordered = { ...details, startEntries: [...details.startEntries].reverse() };
+    const reordered = { ...details, startEntries: details.startEntries.toReversed() };
     expect(decodeStartAwaitCardDetails(reordered)).toBeUndefined();
 
     const { startFailures: _startFailures, ...missingFailure } = details;
@@ -582,7 +585,7 @@ describe("persisted subagent details version 2", () => {
       name: `launch-${index}-${"n".repeat(300)}`,
       code: "c".repeat(128),
       message: "failure ".concat("m".repeat(5_000)),
-    })).reverse();
+    })).toReversed();
 
     const details = makeStartDetails({ startEntries: entries, startFailures });
     const serialized = JSON.stringify(details);
@@ -689,7 +692,7 @@ describe("persisted subagent details version 2", () => {
     const forgedRemaining = withFirstAdmitted({ hasRemainingCandidate: false });
     expect(decodeStartAwaitCardDetails(forgedRemaining)).toBeUndefined();
 
-    const reordered = { ...details, startFailures: [...(details.startFailures ?? [])].reverse() };
+    const reordered = { ...details, startFailures: (details.startFailures ?? []).toReversed() };
     expect(decodeStartAwaitCardDetails(reordered)).toBeUndefined();
   });
 

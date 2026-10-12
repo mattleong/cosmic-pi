@@ -21,7 +21,7 @@ export const managerTable = (
       index,
       natural: Math.max(column.minWidth, ...rows.map((row) => visibleWidth(row[index] ?? ""))),
     }))
-    .sort((a, b) => b.priority - a.priority || a.index - b.index);
+    .toSorted((a, b) => b.priority - a.priority || a.index - b.index);
   let remaining = available;
   let admitted = 0;
   for (const column of priority) {
@@ -35,10 +35,10 @@ export const managerTable = (
     admitted += 1;
   }
   for (const column of priority) {
-    const width = widths[column.index] ?? 0;
-    if (!width) continue;
-    const extra = Math.min(remaining, column.natural - width);
-    widths[column.index] = width + extra;
+    const admittedWidth = widths[column.index] ?? 0;
+    if (!admittedWidth) continue;
+    const extra = Math.min(remaining, column.natural - admittedWidth);
+    widths[column.index] = admittedWidth + extra;
     remaining -= extra;
   }
   const cell = (text: string, column: number): string =>

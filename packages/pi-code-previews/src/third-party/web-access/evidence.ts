@@ -2,6 +2,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 import type { WebAccessTool } from "./identity";
+import { nonEmptyText } from "../../shared/helpers";
 
 const Text = Schema.String.check(Schema.isMaxLength(8192));
 const Count = Schema.Int.check(
@@ -45,14 +46,16 @@ const Details = Schema.Struct({
   unavailable: Schema.optionalKey(Texts),
 });
 
-function arraySnapshot<Value>(value: Value[]): Value[] | undefined {
-  const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
-  if (!Number.isSafeInteger(length) || length < 0 || length > 256) return undefined;
-  const copied: Value[] = [];
+function arraySnapshot(value: readonly unknown[]): unknown[] | undefined {
+  const length: unknown = Object.getOwnPropertyDescriptor(value, "length")?.value;
+  if (!Predicate.isNumber(length) || !Number.isSafeInteger(length) || length < 0 || length > 256)
+    return undefined;
+  const copied: unknown[] = [];
   for (let index = 0; index < length; index++) {
     const entry = Object.getOwnPropertyDescriptor(value, String(index));
     if (!entry || !("value" in entry)) return undefined;
-    copied.push(entry.value);
+    const item: unknown = entry.value;
+    copied.push(item);
   }
   return copied;
 }
@@ -67,8 +70,9 @@ function snapshot<Value, Key extends string>(
     const field = Object.getOwnPropertyDescriptor(value, key);
     if (!field) continue;
     if (!("value" in field)) return undefined;
-    if (field.value === undefined) continue;
-    const raw = Array.isArray(field.value) ? arraySnapshot(field.value) : field.value;
+    const fieldValue: unknown = field.value;
+    if (fieldValue === undefined) continue;
+    const raw = Array.isArray(fieldValue) ? arraySnapshot(fieldValue) : fieldValue;
     const decoded = decodeUnknownOrUndefined(Field, raw);
     if (decoded === undefined) return undefined;
     input[key] = decoded;
@@ -83,8 +87,14 @@ export function webAccessSubject<Args>(name: WebAccessTool, args: Args): string 
     if (!fields) return "";
     if (name === "web_enable") return "enable";
     if (name === "source_check") return fields.claim ?? "";
-    if (name === "web_search") return fields.queries?.join("; ") || fields.query || "";
-    return fields.urls?.join("; ") || fields.url || fields.query || "stored result";
+    if (name === "web_search")
+      return nonEmptyText(fields.queries?.join("; ")) ?? nonEmptyText(fields.query) ?? "";
+    return (
+      nonEmptyText(fields.urls?.join("; ")) ??
+      nonEmptyText(fields.url) ??
+      nonEmptyText(fields.query) ??
+      "stored result"
+    );
   }, "");
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compactStatus, type CompactSummaryProvider } from "pi-code-previews";
+import { compactStatus, type CompactIssue, type CompactSummaryProvider } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { askUserCompactSummary, asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
 import { hostile } from "./support/questionnaire.ts";
@@ -37,6 +37,16 @@ function summarize<Details>(
   });
 }
 
+const expectSingleIssue = (
+  issues: readonly CompactIssue[] | undefined,
+  severity: CompactIssue["severity"],
+  detail: string,
+) => {
+  expect(issues).toHaveLength(1);
+  expect(issues?.[0]?.severity).toBe(severity);
+  expect(issues?.[0]?.detail).toContain(detail);
+};
+
 describe("questionnaire compact outcome projection", () => {
   it("summarizes live transcript args without claiming an answer", () => {
     for (const provider of [askUserCompactSummary, asyncAskUserCompactSummary]) {
@@ -65,12 +75,7 @@ describe("questionnaire compact outcome projection", () => {
         expect(summary?.outcome).toBe("success");
         expect(JSON.stringify([summary?.subject, summary?.counters])).not.toContain("request-1");
         expect(summary?.counters?.[0]).toMatch(presentation === "queued" ? /queued/ : /waiting/);
-        expect(summary?.issues).toEqual([
-          expect.objectContaining({
-            severity: "info",
-            detail: expect.stringContaining("ask_user_async_control await"),
-          }),
-        ]);
+        expectSingleIssue(summary?.issues, "info", "ask_user_async_control await");
         expect(summary?.issues?.[0]?.message).not.toMatch(/ask_user_async_control|request-1/);
       }
     },
@@ -104,7 +109,7 @@ describe("questionnaire compact outcome projection", () => {
     expect(summary?.counters?.[0]).toMatch(/1 waiting/);
     const lengths = summary?.counters?.map((counter) => counter.length) ?? [];
     expect(lengths.length).toBeGreaterThan(1);
-    expect(lengths).toEqual([...lengths].sort((a, b) => b - a));
+    expect(lengths).toEqual(lengths.toSorted((a, b) => b - a));
     expect(summary?.issues).toEqual([expect.objectContaining({ severity: "info" })]);
   });
 
@@ -204,28 +209,27 @@ describe("questionnaire compact outcome projection", () => {
   );
 
   it("keeps automatic delivery recovery visible even when answers were submitted", () => {
-    const failedDelivery = expect.objectContaining({
-      severity: "warning",
-      code: "delivery-failed",
-      detail: expect.stringContaining("status or await"),
-    });
+    const expectFailedDelivery = (issues: readonly CompactIssue[] | undefined) => {
+      expectSingleIssue(issues, "warning", "status or await");
+      expect(issues?.[0]?.code).toBe("delivery-failed");
+    };
     const summary = summarize(asyncAskUserCompactSummary, row({ delivery: "failed" }));
     expect(summary && compactStatus("settled", summary)).toBe("warning");
-    expect(summary?.issues).toEqual([failedDelivery]);
+    expectFailedDelivery(summary?.issues);
     expect(summary?.issues?.[0]?.message).not.toMatch(/ask_user_async_control|delivery-1/);
     const cancelledDelivery = summarize(
       asyncAskUserCompactSummary,
       row({ status: "cancelled", outcome: cancelled, delivery: "failed" }),
     );
     expect(cancelledDelivery?.outcome).toBe("cancelled");
-    expect(cancelledDelivery?.issues).toEqual([failedDelivery]);
+    expectFailedDelivery(cancelledDelivery?.issues);
     const several = summarize(asyncAskUserCompactSummary, {
       requests: [
         row({ delivery: "failed" }),
         row({ requestId: "request-2", deliveryId: "delivery-2", delivery: "failed" }),
       ],
     });
-    expect(several?.issues).toEqual([failedDelivery]);
+    expectFailedDelivery(several?.issues);
   });
 
   it("preserves inconsistent pending replies behind the generic row", () => {

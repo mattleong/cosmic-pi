@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
+import { decodePackageManifest, type PackageManifest } from "./package-manifest.ts";
+
 const root = resolve(import.meta.dirname, "..");
 const workspace = await readFile(join(root, "pnpm-workspace.yaml"), "utf8");
 const expectedEffectVersion = /\n  effect: ([^\n]+)/.exec(workspace)?.[1];
@@ -17,13 +19,18 @@ const extensionPackages = [
   "pi-subagents",
 ];
 const packageNames = ["pi-cosmic-core", ...extensionPackages];
-const manifests = new Map();
+const manifests = new Map<string, PackageManifest>();
 for (const packageName of packageNames) {
   const path = join(root, "packages", packageName, "package.json");
-  manifests.set(packageName, JSON.parse(await readFile(path, "utf8")));
+  manifests.set(packageName, decodePackageManifest(await readFile(path, "utf8")));
 }
-const coreManifest = manifests.get("pi-cosmic-core");
-const catalogVersion = (name) => {
+const sourceManifest = (packageName: string): PackageManifest => {
+  const manifest = manifests.get(packageName);
+  if (manifest === undefined) throw new Error(`Missing ${packageName} source manifest.`);
+  return manifest;
+};
+const coreManifest = sourceManifest("pi-cosmic-core");
+const catalogVersion = (name: string): string => {
   const escaped = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const version = new RegExp(`\\n  "?${escaped}"?: ([^\\n]+)`).exec(workspace)?.[1];
   if (!version) throw new Error(`Missing ${name} from the pnpm catalog.`);
@@ -33,7 +40,18 @@ const piVersion = catalogVersion("@earendil-works/pi-coding-agent");
 const tuiVersion = catalogVersion("@earendil-works/pi-tui");
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosmic-pi-pack-"));
 
-function run(command, args, cwd, options = {}) {
+interface RunOptions {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly timeout?: number;
+  readonly killSignal?: NodeJS.Signals;
+}
+
+function run(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  options: RunOptions = {},
+): string {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
@@ -49,10 +67,10 @@ function run(command, args, cwd, options = {}) {
 
 const workspaceStoreDir = run("pnpm", ["store", "path"], root).trim();
 
-function assertPackedProtocolsResolved(packageName, manifest) {
-  for (const section of ["dependencies", "peerDependencies", "optionalDependencies"]) {
+function assertPackedProtocolsResolved(packageName: string, manifest: PackageManifest): void {
+  for (const section of ["dependencies", "peerDependencies", "optionalDependencies"] as const) {
     for (const [dependency, version] of Object.entries(manifest[section] ?? {})) {
-      if (String(version) === version && /^(?:catalog:|workspace:)/.test(version)) {
+      if (/^(?:catalog:|workspace:)/.test(version)) {
         throw new Error(
           `Packed ${packageName} retains unresolved ${section}.${dependency} = ${version}.`,
         );
@@ -66,18 +84,23 @@ try {
     run("pnpm", ["--filter", packageName, "pack", "--pack-destination", temporaryDirectory], root);
   }
   const tarballs = (await readdir(temporaryDirectory)).filter((name) => name.endsWith(".tgz"));
-  const tarballNames = new Map(
-    packageNames.map((packageName) => [
-      packageName,
-      tarballs.find((name) => name === `${packageName}-${manifests.get(packageName).version}.tgz`),
-    ]),
-  );
-  if (tarballs.length !== packageNames.length || [...tarballNames.values()].some((name) => !name)) {
+  const tarballNames = new Map<string, string>();
+  for (const packageName of packageNames) {
+    const tarball = tarballs.find(
+      (name) => name === `${packageName}-${sourceManifest(packageName).version}.tgz`,
+    );
+    if (tarball !== undefined) tarballNames.set(packageName, tarball);
+  }
+  if (tarballs.length !== packageNames.length || tarballNames.size !== packageNames.length) {
     throw new Error(
       `Expected ${packageNames.length} workspace tarballs, found: ${tarballs.join(", ")}.`,
     );
   }
-  const tarballPath = (packageName) => join(temporaryDirectory, tarballNames.get(packageName));
+  const tarballPath = (packageName: string): string => {
+    const tarball = tarballNames.get(packageName);
+    if (tarball === undefined) throw new Error(`Missing ${packageName} workspace tarball.`);
+    return join(temporaryDirectory, tarball);
+  };
   const tarballDependencies = Object.fromEntries(
     packageNames.map((packageName) => [packageName, `file:${tarballPath(packageName)}`]),
   );
@@ -121,8 +144,8 @@ try {
     temporaryDirectory,
   );
   await writeFile(
-    join(temporaryDirectory, "mcp-fixture.mjs"),
-    await readFile(join(root, "scripts/fixtures/native-mcp-server.mjs")),
+    join(temporaryDirectory, "mcp-fixture.ts"),
+    await readFile(join(root, "scripts/fixtures/native-mcp-server.ts")),
   );
   const agentDirectory = join(temporaryDirectory, "agent");
   const fixtureDirectory = join(temporaryDirectory, "mcp-project");
@@ -149,7 +172,7 @@ try {
         fixture: {
           command: process.execPath,
           args: [
-            join(temporaryDirectory, "mcp-fixture.mjs"),
+            join(temporaryDirectory, "mcp-fixture.ts"),
             join(temporaryDirectory, "mcp-fixture-state.json"),
           ],
           cwd: fixtureDirectory,
@@ -394,30 +417,30 @@ try {
     if (present) throw new Error(`Packed source package ships forbidden path: ${excluded}.`);
   }
 
-  const packedCoreManifest = JSON.parse(
+  const packedCoreManifest = decodePackageManifest(
     await readFile(join(temporaryDirectory, "node_modules/pi-cosmic-core/package.json"), "utf8"),
   );
   assertPackedProtocolsResolved("pi-cosmic-core", packedCoreManifest);
   if (
-    packedCoreManifest.dependencies.effect !== expectedEffectVersion ||
+    packedCoreManifest.dependencies?.effect !== expectedEffectVersion ||
     packedCoreManifest.dependencies["@effect/platform-node"] !== expectedEffectVersion
   ) {
     throw new Error("Packed pi-cosmic-core dependencies do not use the pinned Effect version.");
   }
   for (const packageName of extensionPackages) {
-    const packedManifest = JSON.parse(
+    const packedManifest = decodePackageManifest(
       await readFile(join(temporaryDirectory, "node_modules", packageName, "package.json"), "utf8"),
     );
-    const sourceManifest = manifests.get(packageName);
+    const source = sourceManifest(packageName);
     assertPackedProtocolsResolved(packageName, packedManifest);
     if (
-      packedManifest.dependencies.effect !== expectedEffectVersion ||
+      packedManifest.dependencies?.effect !== expectedEffectVersion ||
       packedManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||
-      packedManifest.version !== sourceManifest.version
+      packedManifest.version !== source.version
     ) {
       throw new Error(`Packed ${packageName} dependencies are not synchronized.`);
     }
-    for (const [dependency, version] of Object.entries(sourceManifest.dependencies)) {
+    for (const [dependency, version] of Object.entries(source.dependencies ?? {})) {
       const expected =
         version === "catalog:"
           ? catalogVersion(dependency)
@@ -435,8 +458,8 @@ try {
       (packedManifest.private === true ||
         packedManifest.exports?.["."] !== "./index.ts" ||
         packedManifest.pi?.extensions?.length !== 1 ||
-        packedManifest.pi.extensions[0] !== sourceManifest.pi.extensions[0] ||
-        !packedManifest.pi.extensions[0].endsWith(".ts"))
+        packedManifest.pi.extensions[0] !== source.pi?.extensions?.[0] ||
+        packedManifest.pi.extensions[0]?.endsWith(".ts") !== true)
     ) {
       throw new Error("Packed pi-code-previews must be a public source-only Pi extension.");
     }

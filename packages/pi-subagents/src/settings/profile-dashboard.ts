@@ -116,17 +116,17 @@ export function openProfileDashboard(
             })
             .then(
               (snapshot) => refreshInspection(undefined, { kind: "session", snapshot }),
-              (error) => {
-                if (Predicate.isTagged(error, "SessionProfileConflictError"))
+              (cause: unknown) => {
+                if (Predicate.isTagged(cause, "SessionProfileConflictError"))
                   return refreshInspection(
                     "Current Session changed while you were editing. The editor now shows the latest profiles. Try again.",
                   );
-                throw error;
+                throw cause;
               },
             );
         const scope = editorTarget.set.scope;
-        const projectTrusted = isProjectTrusted(ctx);
-        if (scope === "project" && !projectTrusted) {
+        const trustedNow = isProjectTrusted(ctx);
+        if (scope === "project" && !trustedNow) {
           notifyAtHostBoundary(
             ctx,
             "This project is no longer trusted. Nothing was saved.",
@@ -135,7 +135,7 @@ export function openProfileDashboard(
           return refreshInspection();
         }
         const base = {
-          ...profileSetPatchBase(inspection, scope, projectTrusted),
+          ...profileSetPatchBase(inspection, scope, trustedNow),
           profileSet: editorTarget.set.name,
           profile,
         };
@@ -148,17 +148,17 @@ export function openProfileDashboard(
               })
         ).then(
           (document) => refreshInspection(undefined, { kind: "saved", document }),
-          (error) => {
+          (cause: unknown) => {
             if (
-              error instanceof SubagentConfigStoreError &&
-              error.operation === "update" &&
-              error.message ===
+              cause instanceof SubagentConfigStoreError &&
+              cause.operation === "update" &&
+              cause.message ===
                 "Subagents settings changed on disk; reopen /subagents profiles and try again."
             )
               return refreshInspection(
                 "Saved settings changed on disk. Your change was not applied. The editor now shows the latest profiles. Try again.",
               );
-            throw error;
+            throw cause;
           },
         );
       };
@@ -245,11 +245,11 @@ export function openProfileDashboard(
         })
         .finally(release);
     },
-    (error) => {
+    (cause: unknown) => {
       if (!refreshOwner.isCurrent()) return;
       notifyAtHostBoundary(
         ctx,
-        error instanceof Error ? error.message : "Could not inspect profile settings.",
+        cause instanceof Error ? cause.message : "Could not inspect profile settings.",
         "error",
       );
     },

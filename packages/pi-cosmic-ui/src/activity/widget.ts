@@ -66,7 +66,8 @@ const widgetGroupLine = (
   if (visibleWidth(evidence) + Math.min(12, visibleWidth(title)) + 3 > width)
     evidence = notices.join(" ");
   if (visibleWidth(evidence) > width) {
-    const attention = Object.values(summary.attention).reduce((sum, count) => sum + count, 0);
+    const { user, parent, blocked, failed } = summary.attention;
+    const attention = user + parent + blocked + failed;
     evidence = [attention ? `${attention} attention` : "", omitted].filter(Boolean).join(" · ");
   }
   const active = summary.running + summary.pending + summary.stopping;
@@ -128,13 +129,13 @@ const overflowLine = (
     .map(({ heading }) => heading.summary)
     .reduce(addGroupSummaries, emptyGroupSummary);
   const sum = (count: (section: ActivityWidgetSection) => number) =>
-    sections.reduce((total, section) => total + count(section), 0);
+    sections.reduce((subtotal, section) => subtotal + count(section), 0);
   const shown = (matches: (entry: GroupedActivityRow) => boolean) =>
     sum((section) => section.entries.filter(matches).length);
   const hidden = (type: GroupedActivityRow["type"]) => shown((entry) => entry.type === type);
   const shownPlanned = shown(isPlannedEntry);
   const countedFailures = sum((section) =>
-    [...section.failureOverflow.values()].reduce((total, count) => total + count, 0),
+    [...section.failureOverflow.values()].reduce((subtotal, overflow) => subtotal + overflow, 0),
   );
   return style(
     widgetGroupLine(

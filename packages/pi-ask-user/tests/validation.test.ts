@@ -61,7 +61,11 @@ describe("ask-user validation", () => {
     const [q1, c1, c2] = ["Question 1", "Question 1, choice 1", "Question 1, choice 2"];
     const question = (request: Request) => request.questions[0]!;
     const keys = (request: Request, ...values: string[]) =>
-      request.questions.splice(0, 1, ...values.map((key) => ({ ...question(request), key })));
+      request.questions.splice(
+        0,
+        1,
+        ...values.map((key) => Object.assign({}, question(request), { key })),
+      );
     const choices = (
       request: Request,
       field: "value" | "label" | "description",

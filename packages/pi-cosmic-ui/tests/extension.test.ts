@@ -19,6 +19,7 @@ import {
   modelFixture,
   plainTheme,
   recordingExtensionHost,
+  tuiFixture,
   type DefaultedEventName,
   type ExtensionEventNamed,
 } from "pi-cosmic-core/testing";
@@ -43,9 +44,9 @@ import {
 } from "./support/host.ts";
 
 function harness(dependencies?: CosmicUiApplicationDependencies) {
-  const setFooter = vi.fn();
+  const setFooter = vi.fn<ExtensionUIContext["setFooter"]>();
   const setWorkingMessage = vi.fn();
-  const unsubscribed = vi.fn();
+  const unsubscribed = vi.fn<(name: string) => void>();
   const exec = vi.fn((command: string, args: string[], _options?: { signal?: AbortSignal }) =>
     execOk(
       command === "gh"
@@ -126,7 +127,8 @@ const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
     ),
   );
 
-type FooterData = Parameters<NonNullable<Parameters<ExtensionContext["ui"]["setFooter"]>[0]>>[2];
+type FooterFactory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
+type FooterData = Parameters<FooterFactory>[2];
 
 function footerData(overrides: Partial<FooterData> = {}): FooterData {
   return {
@@ -139,15 +141,17 @@ function footerData(overrides: Partial<FooterData> = {}): FooterData {
 }
 
 function makeFooter(
-  factory: (
-    tui: { requestRender(): void },
-    theme: { fg(color: string, text: string): string },
-    data: FooterData,
-  ) => { render(width: number): string[]; dispose(): void },
+  factory: FooterFactory | undefined,
   data: Partial<FooterData> = {},
   requestRender: () => void = vi.fn(),
 ) {
-  return factory({ requestRender }, plainTheme, footerData(data));
+  if (!factory) throw new Error("Expected an installed footer factory.");
+  const component = factory(tuiFixture({ requestRender }), plainTheme, footerData(data));
+  if (!component.dispose) throw new Error("Expected a disposable footer.");
+  return {
+    render: (width: number) => component.render(width),
+    dispose: () => component.dispose?.(),
+  };
 }
 
 function capturedFooter(
@@ -188,7 +192,9 @@ const nativeUsage = (input: number) => ({
 
 function assistantEntries(...inputs: number[]): SessionEntries {
   return inputs.map((input) => ({
-    ...entryBase,
+    id: entryBase.id,
+    parentId: entryBase.parentId,
+    timestamp: entryBase.timestamp,
     type: "message",
     message: {
       role: "assistant",
@@ -1109,7 +1115,7 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "session_start");
       yield* emit(h, "session_shutdown");
       const byName = (left: string, right: string) => left.localeCompare(right);
-      const released = h.unsubscribed.mock.calls.map(([name]) => name).sort(byName);
+      const released = h.unsubscribed.mock.calls.map(([name]) => name).toSorted(byName);
       expect(released).toEqual(
         [
           COSMIC_UI_HOST_QUERY,
@@ -1118,7 +1124,7 @@ describe("Cosmic UI extension", () => {
           ACTIVITY_EVENT,
           ACTIVITY_DISCOVER,
           ACTIVITY_VIEW_DISCOVER,
-        ].sort(byName),
+        ].toSorted(byName),
       );
       yield* emit(h, "session_shutdown");
       expect(h.unsubscribed).toHaveBeenCalledTimes(released.length);

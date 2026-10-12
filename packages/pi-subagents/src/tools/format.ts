@@ -274,7 +274,7 @@ const writeStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefin
         )
       : undefined,
     run.writeIntent === "writer"
-      ? statusField("Writes", run.writeClaims?.join(", ") || "exclusive whole cwd")
+      ? statusField("Writes", (run.writeClaims?.join(", ") ?? "") || "exclusive whole cwd")
       : undefined,
     run.writeAdmissionPaused ? statusField("Admission", "paused after claim violation") : undefined,
     run.writeViolationOffender

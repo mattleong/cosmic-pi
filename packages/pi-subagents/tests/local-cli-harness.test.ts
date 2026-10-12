@@ -5,6 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import { deferredPromise, temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
 import {
@@ -40,12 +41,10 @@ const supervisor = (directory: string) =>
   });
 
 const harnessEntries = (agentDirectory: string) =>
-  fs
-    .readdir(nodePath.join(agentDirectory, "subagents", "local-cli-v1"))
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return [];
-      throw error;
-    });
+  fs.readdir(nodePath.join(agentDirectory, "subagents", "local-cli-v1")).catch((cause: unknown) => {
+    if (Predicate.hasProperty(cause, "code") && cause.code === "ENOENT") return [];
+    throw cause;
+  });
 
 describe("local CLI harness ownership", () => {
   it("keeps adapter debug controls out of the child environment", () => {

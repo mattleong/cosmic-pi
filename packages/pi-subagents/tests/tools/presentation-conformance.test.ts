@@ -62,7 +62,7 @@ it("retains malformed and historical evidence through expansion for every root r
 });
 
 it("keeps parent recovery visible when a live panel hides partial hierarchy", () => {
-  const tool = registered(true).find((tool) => tool.name === "subagent_await")!;
+  const tool = registered(true).find((candidate) => candidate.name === "subagent_await")!;
   const details = makeAwaitDetails({
     runs: [
       view({
@@ -112,7 +112,7 @@ effectTest(
     expect(summary.outcome).toBe("warning");
     const warning = summary.issues!.find((issue) => issue.severity === "warning")!;
     expect(warning.detail).toBeTruthy();
-    const tool = registered().find((tool) => tool.name === "subagent_workspace")!;
+    const tool = registered().find((candidate) => candidate.name === "subagent_workspace")!;
     const harness = createToolPresentationHarness(tool, { width: 200 });
     for (const { expanded, text } of harness.cycle({ action: "list" }, response)) {
       expect(text).toContain(warning.message);
@@ -127,7 +127,7 @@ effectTest(
 );
 
 it("keeps workspace diff bytes without repeating generated recovery", () => {
-  const tool = registered().find((tool) => tool.name === "subagent_workspace")!;
+  const tool = registered().find((candidate) => candidate.name === "subagent_workspace")!;
   const harness = createToolPresentationHarness(tool);
   const prefix = "legacy generated status\n";
   const diff = "diff --git a/file b/file\n+preserved evidence";
@@ -371,7 +371,9 @@ it("counts a preview-style call's targets as execution reads them", () => {
     ["subagent_send", { message: "guidance" }],
     ["subagent_lifecycle", { action: "stop" }],
   ] as const) {
-    const harness = createToolPresentationHarness(tools.find((tool) => tool.name === name)!);
+    const harness = createToolPresentationHarness(
+      tools.find((candidate) => candidate.name === name)!,
+    );
     harness.call({ ...args, runIds: ["agent-1", " agent-1 "] }, { expanded: false });
     const text = harness.render(120).join("\n");
     expect(text).toContain("1 subagent");

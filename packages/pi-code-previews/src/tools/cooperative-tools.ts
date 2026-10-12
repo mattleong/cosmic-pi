@@ -18,6 +18,7 @@ import type {
   RenderResult,
   ToolRenderContext,
 } from "./renderers/shared/types";
+import { nonEmptyText } from "../shared/helpers";
 
 export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TState = unknown> {
   mode?: ToolCallBackgroundMode;
@@ -88,7 +89,7 @@ export function withCodePreviewRenderers<TArgs, TDetails, TState extends object>
   const shell = createCodePreviewToolShell<TArgs, TDetails, TState>(
     options.mode,
     {
-      name: options.displayName || identity.name,
+      name: nonEmptyText(options.displayName) ?? identity.name,
       animateProgress: options.animateProgress,
       showShortTiming: options.showShortTiming,
       scheduleAnimation: options.scheduleAnimation,
@@ -134,7 +135,7 @@ function renderFallbackToolCall<TArgs>(
   expanded: boolean,
 ): Component {
   const lines = [
-    theme.fg("toolTitle", theme.bold(tool.label || tool.name)),
+    theme.fg("toolTitle", theme.bold(nonEmptyText(tool.label) ?? tool.name)),
     ...(expanded ? fallbackArguments(args).map((line) => theme.fg("muted", line)) : []),
   ];
   return new Text(lines.join("\n"), 0, 0);

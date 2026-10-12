@@ -174,7 +174,7 @@ export const captureSnapshot = (
       yield* gitFields(root, ["ls-files", "--stage", "-z"]),
     );
     const flags = yield* gitFields(root, ["ls-files", "-v", "-z"]);
-    if (flags.some((entry) => entry[0] !== "H"))
+    if (flags.some((entry) => !entry.startsWith("H")))
       return yield* workspaceFailure(
         "snapshot",
         "Sparse, assume-unchanged or unsupported index state.",
@@ -182,13 +182,13 @@ export const captureSnapshot = (
     const untracked = yield* gitFields(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
     const candidates = [
       ...new Set([...requiredPaths, ...tracked, ...untracked.filter(eligibleUntrackedSource)]),
-    ].sort();
+    ].toSorted();
     const excludedPaths = [
       ...new Set([
         ...tracked.filter(excludedWorkspacePath),
         ...untracked.filter((name) => !eligibleUntrackedSource(name)),
       ]),
-    ].sort();
+    ].toSorted();
     if (candidates.length > MAX_WORKSPACE_FILES)
       return yield* workspaceFailure(
         "snapshot",

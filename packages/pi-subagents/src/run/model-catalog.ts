@@ -27,7 +27,7 @@ const nearMatchesFor = (
       const candidate = canonical.toLowerCase();
       return candidate.includes(lowered) || candidate.includes(bare) || bare.includes(candidate);
     })
-    .sort()
+    .toSorted()
     .slice(0, MAX_NEAR_MATCHES);
 };
 
@@ -49,6 +49,6 @@ export const resolvePiModelSelector = (
       : available.filter((model) => comparisonKey(model).toLowerCase() === lowered);
   if (matched.length === 1 && matched[0]) return { kind: "resolved", ...matched[0] };
   if (matched.length > 1)
-    return { kind: "ambiguous", candidates: matched.map(canonicalPiModelId).sort() };
+    return { kind: "ambiguous", candidates: matched.map(canonicalPiModelId).toSorted() };
   return { kind: "unknown", nearMatches: nearMatchesFor(trimmed, available) };
 };

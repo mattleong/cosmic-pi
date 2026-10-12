@@ -18,7 +18,7 @@ export const readClaudeModelPreference = (
   safeFile: SafeFileContract,
 ): Effect.Effect<string> =>
   Effect.gen(function* () {
-    const home = environment.HOME || homedir();
+    const home = (environment.HOME ?? "") || homedir();
     if (!nodePath.isAbsolute(home) || home.length > 4_096 || /\p{Cc}/u.test(home)) return "default";
     const path = yield* Effect.tryPromise(() =>
       fs.realpath(nodePath.join(home, ".claude", "settings.json")),

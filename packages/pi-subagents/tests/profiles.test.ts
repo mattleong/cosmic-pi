@@ -68,7 +68,7 @@ describe("Pi catalog selector classification", () => {
       kind: "unknown",
       nearMatches: models
         .map(({ provider, id }) => `${provider}/${id}`)
-        .sort()
+        .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0))
         .slice(0, 6),
     });
     expect(resolvePiModelSelector("unrelated", models)).toEqual({

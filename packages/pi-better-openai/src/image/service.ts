@@ -39,7 +39,10 @@ const resolveModel = (
   cfg: ResolvedConfig,
 ): string => {
   const requested = params.model?.trim();
-  if (requested) return requested.split("/").pop() || requested;
+  if (requested) {
+    const unqualified = requested.split("/").at(-1) ?? "";
+    return unqualified.length > 0 ? unqualified : requested;
+  }
   const currentModel = ctx.model;
   return currentModel?.provider === "openai-codex"
     ? (currentModel.id ?? cfg.image.defaultModel)
@@ -92,8 +95,12 @@ const requestOptions = (params: ToolParams, cfg: ResolvedConfig) => ({
   save: params.save ?? cfg.image.defaultSave,
 });
 
-const customDirectory = (params: ToolParams, configured: Option.Option<string>) =>
-  params.saveDir?.trim() || Option.getOrUndefined(configured)?.trim();
+const customDirectory = (params: ToolParams, configured: Option.Option<string>) => {
+  const requested = params.saveDir?.trim();
+  return requested !== undefined && requested.length > 0
+    ? requested
+    : Option.getOrUndefined(configured)?.trim();
+};
 
 interface OpenAIImageServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;

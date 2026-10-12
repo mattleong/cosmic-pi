@@ -1,28 +1,44 @@
 #!/usr/bin/env node
-import { createInterface } from "node:readline";
+import * as Config from "effect/Config";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+const readline = process.getBuiltinModule("node:readline");
+const decodeSettings = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ disableAllHooks: Schema.optionalKey(Schema.Json) })),
+);
+const decodeMcpConfig = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ mcpServers: Schema.Record(Schema.String, Schema.Json) })),
+);
+const decodeRequest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ request_id: Schema.optionalKey(Schema.Json) })),
+);
+const configured = (name: string) =>
+  Option.exists(Effect.runSync(Config.option(Config.String(name))), (value) => value !== "");
 const args = process.argv.slice(2);
-const value = (flag) => args[args.indexOf(flag) + 1];
+const value = (flag: string) => args[args.indexOf(flag) + 1];
 if (
   value("--setting-sources") !== "" ||
   value("--tools") !== "" ||
   value("--permission-mode") !== "dontAsk" ||
   !args.includes("--strict-mcp-config") ||
-  JSON.parse(value("--settings")).disableAllHooks !== true ||
-  Object.keys(JSON.parse(value("--mcp-config")).mcpServers).length !== 0 ||
-  process.env.CLAUDE_CONFIG_DIR ||
-  process.env.ANTHROPIC_API_KEY
+  decodeSettings(value("--settings")).disableAllHooks !== true ||
+  Object.keys(decodeMcpConfig(value("--mcp-config")).mcpServers).length !== 0 ||
+  configured("CLAUDE_CONFIG_DIR") ||
+  configured("ANTHROPIC_API_KEY")
 )
   process.exit(2);
 const selector = value("--model");
-createInterface({ input: process.stdin }).on("line", (line) => {
-  const request = JSON.parse(line);
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const requestId = decodeRequest(line).request_id;
   if (selector === "reject") {
     process.stdout.write(
       `${JSON.stringify({
         type: "control_response",
         response: {
           subtype: "error",
-          request_id: request.request_id,
+          request_id: requestId,
           error: "private-provider-diagnostic",
         },
       })}\n`,
@@ -34,7 +50,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       type: "control_response",
       response: {
         subtype: "success",
-        request_id: request.request_id,
+        request_id: requestId,
         response: {
           models:
             selector === "aliases"

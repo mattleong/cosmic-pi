@@ -45,10 +45,7 @@ if (misses.length > 0) {
 
 function exactPairCases(): number {
   return report.cases.filter(
-    (result) =>
-      result.pairs !== undefined &&
-      result.pairs.falsePositive === 0 &&
-      result.pairs.falseNegative === 0,
+    (result) => result.pairs?.falsePositive === 0 && result.pairs.falseNegative === 0,
   ).length;
 }
 

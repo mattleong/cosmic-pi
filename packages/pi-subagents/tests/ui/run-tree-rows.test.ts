@@ -19,7 +19,7 @@ describe("tool run-card hierarchy", () => {
       { id: "cycle-b", parentRunId: "cycle-a" },
       { id: "orphan", parentRunId: "omitted-parent" },
     ]);
-    expect(rows.map((row) => row.run.id).sort()).toEqual(["cycle-a", "cycle-b", "orphan"]);
+    expect(rows.map((row) => row.run.id).toSorted()).toEqual(["cycle-a", "cycle-b", "orphan"]);
   });
 });
 

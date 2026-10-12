@@ -13,7 +13,7 @@ import type { AskUserRequest, AskUserAsyncControl } from "../src/questionnaire/s
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
 import { registerAsyncAskUserTools } from "../src/tools/ask-user-async.ts";
 import { QuestionnaireContractSchema } from "../src/tools/contract-schema.ts";
-import { asyncRequest, cancelled } from "./support/questionnaire.ts";
+import { asyncRequest, cancelled, firstText } from "./support/questionnaire.ts";
 
 const envelope = { contract: "pi-ask-user/questionnaire", version: 1 };
 const snapshot = (
@@ -196,7 +196,7 @@ describe("registered questionnaire structured results", () => {
           action: "status",
           requests: [],
         });
-        expect(result.content[0]).toMatchObject({ type: "text", text: expect.any(String) });
+        expect(firstText(result.content)).toBeTypeOf("string");
       }),
   );
 
@@ -353,8 +353,8 @@ describe("registered questionnaire structured results", () => {
       const failure = new Error("Owned service refused admission");
       const signal = yield* Effect.abortSignal;
       const seen: (AbortSignal | undefined)[] = [];
-      const reject = (_input: AskUserRequest | AskUserAsyncControl, signal?: AbortSignal) => {
-        seen.push(signal);
+      const reject = (_input: AskUserRequest | AskUserAsyncControl, received?: AbortSignal) => {
+        seen.push(received);
         return Promise.reject(failure);
       };
       const tools = registered({ ask: reject, start: reject, control: reject });

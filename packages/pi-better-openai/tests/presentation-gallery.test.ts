@@ -107,14 +107,14 @@ describe.skipIf(!directory)("presentation gallery", () => {
       const lines: string[] = [];
       for (const style of ["compact", "preview"] as const)
         withPresentationSettings({ toolCallCollapsedStyle: style, toolCallTiming: false }, () => {
-          const { tool, message } = registerImagePresentation();
+          const { tool, message: renderMessage } = registerImagePresentation();
           for (const scenario of toolScenarios)
             lines.push(
               ...galleryFrames(tool, { ...scenario, title: `${style} · ${scenario.title}` }),
             );
           for (const scenario of messageScenarios)
             lines.push(
-              ...galleryMessageFrames(message, {
+              ...galleryMessageFrames(renderMessage, {
                 ...scenario,
                 title: `${style} · ${scenario.title}`,
               }),

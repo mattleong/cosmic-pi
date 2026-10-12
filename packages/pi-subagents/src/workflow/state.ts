@@ -111,7 +111,9 @@ export const nestedWorkflowPlanned = (
     .flatMap((phase) => {
       const title = nestedPhaseTitle(name, phase.title);
       return added.has(title) && !shown.has(title)
-        ? workflowPlannedAgents(phase, title).map((agent) => ({ ...agent, workflow: name }))
+        ? workflowPlannedAgents(phase, title).map((agent) =>
+            Object.assign({}, agent, { workflow: name }),
+          )
         : [];
     })
     .slice(0, Math.max(0, WORKFLOW_RUN_PLANNED_LIMIT - run.planned.length));
@@ -275,7 +277,7 @@ export const concludeWorkflow = (exit: Exit.Exit<WorkflowSandboxOutcome>): Workf
     failure: {
       kind: "runner",
       name: "WorkflowRunnerError",
-      message: detail.split("\n")[0] || "The workflow runner failed unexpectedly.",
+      message: (detail.split("\n")[0] ?? "") || "The workflow runner failed unexpectedly.",
       ...(detail.includes("\n") && { stack: detail }),
     },
     output: [],
@@ -305,7 +307,7 @@ export const retainWorkflowRuns = (
   if (finished.length <= WORKFLOW_RETAINED_RUNS) return runs;
   const evicted = new Set(
     [...finished]
-      .sort((left, right) => (left.endedAt ?? 0) - (right.endedAt ?? 0))
+      .toSorted((left, right) => (left.endedAt ?? 0) - (right.endedAt ?? 0))
       .slice(0, finished.length - WORKFLOW_RETAINED_RUNS)
       .map((run) => run.id),
   );

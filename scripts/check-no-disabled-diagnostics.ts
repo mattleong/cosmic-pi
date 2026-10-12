@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
-const self = "scripts/check-no-disabled-diagnostics.mjs";
+const self = "scripts/check-no-disabled-diagnostics.ts";
 const rootConfigurations = new Set([
   ".oxlintrc.json",
   "tsconfig.base.json",
@@ -13,7 +13,7 @@ const tracked = execFileSync("git", ["ls-files", "-co", "--exclude-standard"], {
   .split("\n")
   .filter(
     (path) =>
-      path &&
+      path !== "" &&
       path !== self &&
       (path.startsWith("packages/") ||
         path.startsWith("scripts/") ||
@@ -35,7 +35,7 @@ const disabledRulePattern = new RegExp(
 const disabledEffectSwitchPattern = /"(?:diagnostics|includeSuggestionsInTsc)"\s*:\s*false/u;
 const ignoredEffectExitPattern =
   /"ignoreEffect(?:Warnings|Errors|Suggestions)InTscExitCode"\s*:\s*true/u;
-const findings = [];
+const findings: string[] = [];
 
 for (const path of tracked) {
   if (!/\.(?:[cm]?[jt]sx?|jsonc?)$/u.test(path) || !existsSync(path)) continue;

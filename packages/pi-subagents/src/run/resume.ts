@@ -110,10 +110,10 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
         return record.cleanupPending ? record.cleanupSettlement : undefined;
       }),
     ).pipe(
-      Effect.flatMap((settlement) =>
-        settlement === undefined
+      Effect.flatMap((cleanupSettlement) =>
+        cleanupSettlement === undefined
           ? Effect.void
-          : Deferred.await(settlement).pipe(
+          : Deferred.await(cleanupSettlement).pipe(
               Effect.flatMap((outcome) =>
                 outcome === "confirmed"
                   ? Effect.void
@@ -219,19 +219,19 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
       );
       const view = yield* withLock(
         Effect.gen(function* () {
-          const record = claimed.record;
-          if (issued.state !== "running") return snapshotView(record.view);
-          record.view = {
-            ...record.view,
+          const resumed = claimed.record;
+          if (issued.state !== "running") return snapshotView(resumed.view);
+          resumed.view = {
+            ...resumed.view,
             sessionEvents: appendNoticeSessionEvent(
-              record.view.sessionEvents,
+              resumed.view.sessionEvents,
               "parent",
               `Resume: ${prompt}`,
               now,
             ),
           };
           yield* publish;
-          return snapshotView(record.view);
+          return snapshotView(resumed.view);
         }),
       );
       if (view.state !== "running" && !isTerminalRunState(view.state))
@@ -394,7 +394,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
               );
               return { prompt, now, claimed };
             }),
-            ({ prompt, now, claimed }) => commitResume(id, claimed, prompt, now),
+            (admitted) => commitResume(id, admitted.claimed, admitted.prompt, admitted.now),
           );
         }),
       ),

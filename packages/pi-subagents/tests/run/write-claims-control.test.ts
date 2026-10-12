@@ -14,6 +14,7 @@ import {
   nativeReportServiceFixture,
   withService,
 } from "./fixtures/service-harness.ts";
+import { stringContaining } from "../support/matchers.ts";
 
 const writer = (name: string, writes: ReadonlyArray<string>) =>
   request({ name, writeIntent: "writer", writes: [...writes] });
@@ -102,7 +103,7 @@ describe("shared-cwd write claims", () => {
         .pipe(Effect.flip);
       expect(blocked).toMatchObject({
         _tag: "SubagentWriterConflictError",
-        message: expect.stringContaining("paused"),
+        message: stringContaining("paused"),
       });
 
       const resumed = yield* service.resumeWriterAdmission(first.id);
@@ -127,7 +128,7 @@ describe("shared-cwd write claims", () => {
         .pipe(Effect.flip);
       expect(stillBlocked).toMatchObject({
         _tag: "SubagentWriterConflictError",
-        message: expect.stringContaining("paused"),
+        message: stringContaining("paused"),
       });
       expect((yield* service.resumeWriterAdmission(first.id)).writeAdmissionPaused).toBeUndefined();
       expect(

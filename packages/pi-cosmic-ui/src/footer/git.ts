@@ -41,7 +41,7 @@ export function parseGitStatus(output: string): FooterGitStatus | undefined {
       status.conflicts++;
       continue;
     }
-    if (code[0] !== " ") status.staged++;
+    if (!code.startsWith(" ")) status.staged++;
     if (code[1] !== " ") status.modified++;
   }
 

@@ -38,6 +38,7 @@ import {
   supervisorMetadata,
   takeBackendEvent,
 } from "./fixtures/backend-supervisor.ts";
+import { objectContaining, stringContaining } from "./support/matchers.ts";
 
 type ReplayScenario =
   | "steering"
@@ -159,15 +160,15 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
         response: { subtype: "success", request_id: outbound.request_id },
       });
     };
-    const queuedNotificationScenarios: ReadonlyArray<ReplayScenario> = [
+    const queuedNotificationScenarios: ReadonlySet<ReplayScenario> = new Set([
       "queued-task-notification",
       "queued-task-notification-duplicate",
       "queued-task-notification-cross-session",
       "tagged-task-notification-nonreplay",
       "tagged-task-notification-channel",
-    ];
+    ]);
     const offerQueuedNotification = () => {
-      if (!queuedNotificationScenarios.includes(scenario)) return;
+      if (!queuedNotificationScenarios.has(scenario)) return;
       const notification: ClaudeInboundFrame = {
         type: "user",
         uuid: "claude-queued-notification-uuid",
@@ -555,7 +556,7 @@ const expectInternalUserFrame = (scenario: ReplayScenario) =>
       expect(yield* take(backend)).toMatchObject({
         type: "assistant_message",
         assignmentEpoch: 8,
-        usage: expect.objectContaining({ cost: 0.001 }),
+        usage: objectContaining({ cost: 0.001 }),
       });
       expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
     }),
@@ -809,7 +810,7 @@ describe("local Claude replay classification", () => {
     Effect.gen(function* () {
       expect(yield* takeRejectedUserFrame(scenario)).toMatchObject({
         type: "protocol_error",
-        message: expect.stringContaining(diagnostic),
+        message: stringContaining(diagnostic),
       });
     }),
   );
@@ -819,7 +820,7 @@ describe("local Claude replay classification", () => {
       const failure = yield* takeRejectedUserFrame("foreign-replay");
       expect(failure).toMatchObject({
         type: "protocol_error",
-        message: expect.stringContaining("uuid=present"),
+        message: stringContaining("uuid=present"),
       });
       if (failure.type === "protocol_error") {
         expect(failure.message).toContain("session=match");
@@ -917,7 +918,7 @@ describe("local Claude replay classification", () => {
       Effect.gen(function* () {
         expect(yield* take(backend)).toMatchObject({
           type: "warning",
-          message: expect.stringContaining("report=accepted"),
+          message: stringContaining("report=accepted"),
         });
         expect(yield* take(backend)).toMatchObject({
           type: "report",
@@ -928,7 +929,7 @@ describe("local Claude replay classification", () => {
         expect(yield* take(backend)).toMatchObject({
           type: "assistant_message",
           assignmentEpoch: 12,
-          usage: expect.objectContaining({ cost: 0.001 }),
+          usage: objectContaining({ cost: 0.001 }),
         });
         expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
       }),
@@ -951,7 +952,7 @@ describe("local Claude task-notification replays", () => {
         expect(yield* take(backend)).toMatchObject({
           type: "assistant_message",
           assignmentEpoch: 12,
-          usage: expect.objectContaining({ cost: 0.001 }),
+          usage: objectContaining({ cost: 0.001 }),
         });
         yield* harness.acceptReport(12);
         expect(yield* take(backend)).toMatchObject({
@@ -973,7 +974,7 @@ describe("local Claude task-notification replays", () => {
         yield* harness.assignmentResult;
         expect(yield* take(backend)).toMatchObject({
           type: "assistant_message",
-          usage: expect.objectContaining({ cost: 0.001 }),
+          usage: objectContaining({ cost: 0.001 }),
         });
       }),
     ),
@@ -1002,7 +1003,7 @@ describe("local Claude task-notification replays", () => {
         yield* harness.taskNotification("unlabelled");
         expect(yield* take(backend)).toMatchObject({
           type: "protocol_error",
-          message: expect.stringContaining("pending=steer"),
+          message: stringContaining("pending=steer"),
         });
         yield* Fiber.interrupt(caller);
       }),
@@ -1017,7 +1018,7 @@ describe("local Claude task-notification replays", () => {
           yield* harness.assignmentResult;
           expect(yield* take(backend)).toMatchObject({
             type: "assistant_message",
-            usage: expect.objectContaining({ cost: 0.001 }),
+            usage: objectContaining({ cost: 0.001 }),
           });
           yield* harness.taskNotification(form);
           expect(yield* take(backend)).toMatchObject({ type: "protocol_error" });
@@ -1036,7 +1037,7 @@ describe("local Claude task-notification replays", () => {
         yield* harness.taskNotification(form);
         expect(yield* take(backend)).toMatchObject({
           type: "protocol_error",
-          message: expect.stringContaining(diagnostic),
+          message: stringContaining(diagnostic),
         });
       }),
     ),

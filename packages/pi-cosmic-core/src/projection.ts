@@ -46,15 +46,21 @@ const checkArray = (
   }
 };
 
+const constructorName = <Prototype>(prototype: Prototype): string => {
+  if (!Predicate.hasProperty(prototype, "constructor")) return "non-plain object";
+  const { constructor } = prototype;
+  return Predicate.isFunction(constructor) ? constructor.name : "non-plain object";
+};
+
 const checkRecord = <Candidate extends object>(
   value: Candidate,
   checked: WeakSet<object>,
   activePaths: WeakMap<object, string>,
   path: string,
 ): void => {
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null)
-    unsupported(path, prototype?.constructor?.name ?? "non-plain object");
+    unsupported(path, constructorName(prototype));
   const ownKeys = Reflect.ownKeys(value);
   if (!ownKeys.every((key) => Predicate.isString(key)))
     return unsupported(path, "symbol-keyed property");

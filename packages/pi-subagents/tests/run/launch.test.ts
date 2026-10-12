@@ -15,6 +15,7 @@ import {
   request,
   withService,
 } from "./fixtures/service-harness.ts";
+import { stringContaining } from "../support/matchers.ts";
 
 const completeHistory = (
   service: SubagentServiceContract,
@@ -392,7 +393,7 @@ describe("SubagentService", () => {
         const oldest = (yield* service.list).find((run) => run.id === oldestId);
         expect(oldest).toMatchObject({
           state: "completed",
-          warning: expect.stringContaining("remains quarantined"),
+          warning: stringContaining("remains quarantined"),
         });
         const resumeFailure = yield* service.resume(oldestId).pipe(Effect.flip);
         expect(resumeFailure).toMatchObject({ code: "resume_state_reclaimed" });

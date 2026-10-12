@@ -131,7 +131,9 @@ describe("forked Pi transcript", () => {
           hookEntry,
           ...entries
             .slice(1)
-            .map((entry, index) => (index === 0 ? { ...entry, parentId: hookEntry.id } : entry)),
+            .map((entry, index) =>
+              index === 0 ? Object.assign({}, entry, { parentId: hookEntry.id }) : entry,
+            ),
         ];
         const original = Buffer.from(
           [

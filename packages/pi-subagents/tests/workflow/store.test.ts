@@ -305,14 +305,14 @@ describe("workflow run files", () => {
     onDisk(function* (setup) {
       const { name, files, whole, bounded, outside } = yield* withStore(setup, (store) =>
         Effect.gen(function* () {
-          const files = yield* store.createRunFiles("wf-r-3", source, new Set());
-          const name = yield* store.writeRunResult(files, 1, '"full value"');
+          const created = yield* store.createRunFiles("wf-r-3", source, new Set());
+          const resultName = yield* store.writeRunResult(created, 1, '"full value"');
           return {
-            name,
-            files,
-            whole: yield* store.readRunResult(files, name, 1_024),
-            bounded: yield* store.readRunResult(files, name, 4),
-            outside: yield* store.readRunResult(files, "../wf-r-3/script.js", 1_024),
+            name: resultName,
+            files: created,
+            whole: yield* store.readRunResult(created, resultName, 1_024),
+            bounded: yield* store.readRunResult(created, resultName, 4),
+            outside: yield* store.readRunResult(created, "../wf-r-3/script.js", 1_024),
           };
         }),
       );

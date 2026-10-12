@@ -57,7 +57,7 @@ it.effect("keeps Effect log output off the TTY console", () =>
     const consoleCalls = yield* silencedConsole;
     const runtime = yield* Effect.acquireRelease(
       Effect.sync(() => makePiManagedRuntime(extensionApiFixture({}), Layer.empty)),
-      (runtime) => Effect.promise(() => runtime.dispose()),
+      (managed) => Effect.promise(() => managed.dispose()),
     );
     yield* Effect.promise(() =>
       runtime.run(Effect.logWarning("Subscription usage recovery: refresh_failed.")),

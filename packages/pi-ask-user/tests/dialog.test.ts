@@ -231,11 +231,12 @@ describe("AskUserDialog", () => {
           {
             ...question,
             prompt: "Prompt start " + "long prompt ".repeat(80) + "PROMPT-END",
-            choices: question.choices.map((choice, index) => ({
-              ...choice,
-              description: "description ".repeat(60) + `DETAIL-END-${index}`,
-              preview: index === 0 ? "preview\n".repeat(80) + "PREVIEW-END" : "",
-            })),
+            choices: question.choices.map((choice, index) =>
+              Object.assign({}, choice, {
+                description: "description ".repeat(60) + `DETAIL-END-${index}`,
+                preview: index === 0 ? "preview\n".repeat(80) + "PREVIEW-END" : "",
+              }),
+            ),
           },
         ],
       },

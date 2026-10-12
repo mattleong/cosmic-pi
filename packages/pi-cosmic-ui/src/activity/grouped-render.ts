@@ -220,7 +220,7 @@ export function renderGroupedActivity(
   const { shell, entries, selected } = state;
   const rows = options.snapshot();
   const tier = shell.syncLayout(width);
-  shell.ensureSelectionPane(!!selected);
+  shell.ensureSelectionPane(selected !== undefined);
   const height = Math.max(0, options.height());
   const inner = Math.max(0, width - 2);
   const frame = listDetailFrame(options.theme, shell.state.pane);

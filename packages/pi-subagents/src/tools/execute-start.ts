@@ -67,7 +67,7 @@ const startSpecs = (
   });
 
 const entryName = (spec: SubagentStartSpec, index: number): string =>
-  sanitizeTerminalLine(spec.name?.trim() || `launch ${index + 1}`);
+  sanitizeTerminalLine((spec.name?.trim() ?? "") || `launch ${index + 1}`);
 
 const routeFields = (
   source: Pick<StartSubagentRequest, "host" | "runtime" | "model" | "effort" | "openaiFastMode">,
@@ -95,7 +95,7 @@ const startEntriesFor = (
     const base = {
       index,
       name: entryName(spec, index),
-      profile: sanitizeTerminalLine(spec.profile?.trim() || "generalist"),
+      profile: sanitizeTerminalLine((spec.profile?.trim() ?? "") || "generalist"),
     } as const;
     const outcome = outcomes.get(index);
     if (!outcome) return { ...base, status: "pending", routeStatus: "resolving" };
@@ -147,7 +147,7 @@ const failureFor = (
 };
 
 const settleStartOutcomes = (outcomes: Iterable<SubagentStartOutcome>) => {
-  const ordered = [...outcomes].sort((left, right) => left.index - right.index);
+  const ordered = [...outcomes].toSorted((left, right) => left.index - right.index);
   return {
     ordered,
     launched: ordered.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),

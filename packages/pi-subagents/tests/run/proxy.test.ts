@@ -130,12 +130,12 @@ describe("SubagentService parent proxy executions", () => {
         hangingHandlerLayer(fake, started, release),
         function* (service) {
           yield* service.start(request({ name: "proxy-capacity" }));
-          const control = fake.controls[0]!;
-          for (let index = 0; index < 16; index += 1) offerProxyRequest(control, `req-${index}`);
+          const child = fake.controls[0]!;
+          for (let index = 0; index < 16; index += 1) offerProxyRequest(child, `req-${index}`);
           yield* yieldUntil(() => started.length === 16);
-          offerProxyRequest(control, "req-16");
-          yield* yieldUntil(() => responseFor(control, "req-16") !== undefined);
-          return control;
+          offerProxyRequest(child, "req-16");
+          yield* yieldUntil(() => responseFor(child, "req-16") !== undefined);
+          return child;
         },
       );
       const rejected = responseFor(control, "req-16")!;
@@ -154,10 +154,10 @@ describe("SubagentService parent proxy executions", () => {
       const layer = hangingHandlerLayer(fake, started, neverReleased);
       const control = yield* withService(layer, function* (service) {
         yield* service.start(request({ name: "proxy-shutdown" }));
-        const control = fake.controls[0]!;
-        offerProxyRequest(control, "req-1");
+        const child = fake.controls[0]!;
+        offerProxyRequest(child, "req-1");
         yield* yieldUntil(() => started.includes("req-1"));
-        return control;
+        return child;
       });
       expect(control.ipc.filter((message) => message.type === "proxy_response")).toEqual([]);
     }),

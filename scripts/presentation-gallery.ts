@@ -13,11 +13,10 @@ const packages = [
   "pi-better-openai",
 ];
 const outIndex = process.argv.indexOf("--out");
+const outArgument = outIndex >= 0 ? process.argv[outIndex + 1] : undefined;
 const out = resolve(
   rootDir,
-  outIndex >= 0 && process.argv[outIndex + 1]
-    ? process.argv[outIndex + 1]
-    : "presentation-gallery.txt",
+  outArgument === undefined || outArgument === "" ? "presentation-gallery.txt" : outArgument,
 );
 
 const directory = await mkdtemp(join(tmpdir(), "presentation-gallery-"));
@@ -39,7 +38,7 @@ try {
     }
   }
   if (process.exitCode !== 1) {
-    const sections = [];
+    const sections: string[] = [];
     for (const name of packages) {
       const text = await readFile(join(directory, `${name}.txt`), "utf8");
       sections.push(`════ ${name} ════\n\n${text}`);

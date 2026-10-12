@@ -21,6 +21,7 @@ import {
   serviceLayer,
   withService,
 } from "./fixtures/service-harness.ts";
+import { stringContaining } from "../support/matchers.ts";
 
 const leaseFixture = (
   leases: Parameters<typeof fakeWriterLeaseLayer>[0],
@@ -91,7 +92,7 @@ describe("SubagentService", () => {
         expect(counts.release).toBe(0);
         expect(projections.at(-1)?.runs[0]).toMatchObject({
           state: "failed",
-          warning: expect.stringContaining("ownership remain quarantined"),
+          warning: stringContaining("ownership remain quarantined"),
         });
         const conflict = yield* service
           .start(
@@ -132,7 +133,7 @@ describe("SubagentService", () => {
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
         activeId: run.id,
-        message: expect.stringContaining("cleanup could not be confirmed"),
+        message: stringContaining("cleanup could not be confirmed"),
       });
       expect(fake.controls).toHaveLength(1);
     });
@@ -491,7 +492,7 @@ describe("SubagentService", () => {
       expect(counts.release).toBe(1);
       expect(stopped).toMatchObject({
         state: "stopped",
-        warning: expect.stringContaining("ownership remain quarantined"),
+        warning: stringContaining("ownership remain quarantined"),
       });
       const conflict = yield* service
         .start(writer("blocked-after-release-failure"))
@@ -582,7 +583,7 @@ describe("SubagentService", () => {
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
         activeId: first.id,
-        message: expect.stringContaining("already claims"),
+        message: stringContaining("already claims"),
       });
       const disjoint = yield* service.start(
         claimedWriter("claim-disjoint", ["packages/auth/src/errors.ts"]),
@@ -609,7 +610,7 @@ describe("SubagentService", () => {
         .pipe(Effect.flip);
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
-        message: expect.stringContaining("quarantined"),
+        message: stringContaining("quarantined"),
       });
       expect(fake.controls).toHaveLength(2);
     });
@@ -625,7 +626,7 @@ describe("SubagentService", () => {
       const stopped = yield* service.stop(first.id);
       expect(stopped).toMatchObject({
         state: "stopped",
-        warning: expect.stringContaining("ownership remain quarantined"),
+        warning: stringContaining("ownership remain quarantined"),
       });
       expect(fake.controls[0]?.released()).toBe(1);
 
@@ -633,7 +634,7 @@ describe("SubagentService", () => {
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
         activeId: first.id,
-        message: expect.stringContaining("cleanup could not be confirmed"),
+        message: stringContaining("cleanup could not be confirmed"),
       });
       expect(fake.controls).toHaveLength(1);
     });

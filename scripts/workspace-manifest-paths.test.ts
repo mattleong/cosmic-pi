@@ -3,10 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import {
-  workspaceManifestPaths,
-  workspacePackageDirectories,
-} from "./workspace-manifest-paths.mjs";
+import { workspaceManifestPaths, workspacePackageDirectories } from "./workspace-manifest-paths.ts";
 
 await test("workspace checks ignore manifest-less retired residue but include real packages", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "cosmic-manifests-"));

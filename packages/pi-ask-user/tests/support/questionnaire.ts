@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { AskUserAnswer, AskUserOutcome } from "../../src/questionnaire/model.ts";
 import type {
   AskUserAsyncRequest,
@@ -45,6 +46,11 @@ export const submitted = (...answers: AskUserAnswer[]): AskUserOutcome => ({
 });
 
 export const cancelled: AskUserOutcome = { outcome: "cancelled", answers: [] };
+
+export const firstText = <Details>(content: AgentToolResult<Details>["content"]) => {
+  const [first] = content;
+  return first?.type === "text" ? first.text : undefined;
+};
 
 export const noExecution = () => {
   throw new Error("Rendering must not execute");

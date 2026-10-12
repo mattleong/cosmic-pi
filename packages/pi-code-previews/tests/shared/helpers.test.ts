@@ -4,7 +4,7 @@ import { getObjectValue } from "../../src/shared/helpers";
 
 test("getObjectValue reads only own properties from plain object values", () => {
   const ownUndefined = { value: undefined };
-  const inherited = Object.create({ value: "inherited" });
+  const inherited: unknown = Object.create({ value: "inherited" });
 
   assert.equal(getObjectValue({ value: "own" }, "value"), "own");
   assert.equal(getObjectValue(ownUndefined, "value"), undefined);

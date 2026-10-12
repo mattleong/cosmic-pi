@@ -329,11 +329,11 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     correlatedRequest({
       timeout: RPC_TIMEOUT,
       register: (deferred) => {
-        const request = makeRequest(`codex-${nextRequestId++}`);
-        responses.set(request.id, { method: request.method, deferred });
+        const rpcRequest = makeRequest(`codex-${nextRequestId++}`);
+        responses.set(rpcRequest.id, { method: rpcRequest.method, deferred });
         return {
-          frame: request,
-          unregister: Effect.sync(() => void responses.delete(request.id)),
+          frame: rpcRequest,
+          unregister: Effect.sync(() => void responses.delete(rpcRequest.id)),
         };
       },
       send: (frame) =>

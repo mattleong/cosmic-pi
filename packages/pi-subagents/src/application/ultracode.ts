@@ -4,6 +4,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
   makeFooterStatusDeclaration,
@@ -170,8 +171,10 @@ export function registerUltracodeController(
       try {
         deliver();
         return Promise.resolve();
-      } catch (error) {
-        return Promise.reject(error);
+      } catch (cause) {
+        return Promise.reject(
+          Predicate.isError(cause) ? cause : new Error("The ultracode request was not sent."),
+        );
       }
     },
   };

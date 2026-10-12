@@ -104,10 +104,10 @@ const reclaimChildRunState = (
       request.runId,
     );
     return rm(runDirectory, { recursive: true, force: true }).then(() =>
-      rmdir(nodePath.join(runDirectory, "..")).catch((error) => {
-        const code = nodeErrorCode(error);
+      rmdir(nodePath.join(runDirectory, "..")).catch((cause: unknown) => {
+        const code = nodeErrorCode(cause);
         if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
-          throw error;
+          throw cause;
       }),
     );
   });

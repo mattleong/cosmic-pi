@@ -1,7 +1,11 @@
 import { applyPresentationSettings, captureRegistrations } from "pi-code-previews/testing";
 import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, test, vi } from "vitest";
-import { registerSubagentMessageRenderers } from "../src/application/messages.ts";
+import {
+  registerSubagentMessageRenderers,
+  renderSubagentMessage,
+} from "../src/application/messages.ts";
 import { makeHostNotifier } from "../src/boundary/host-notifier.ts";
 
 let restore = () => {};
@@ -12,7 +16,7 @@ test.each(["compact", "preview"] as const)(
   (style) => {
     restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
     const renderers = captureRegistrations(registerSubagentMessageRenderers).messageRenderers;
-    const sendMessage = vi.fn();
+    const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
     const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
     notify({
       type: "completed",
@@ -37,7 +41,8 @@ test.each(["compact", "preview"] as const)(
     });
     for (const [message] of sendMessage.mock.calls) {
       const before = JSON.stringify(message);
-      const render = renderers.get(message.customType)!;
+      expect(renderers.has(message.customType)).toBe(true);
+      const render = renderSubagentMessage;
       expect(message.content).toContain("PRIVATE_RUN_ID");
       for (const expanded of [false, true, false, true]) {
         const component = render(

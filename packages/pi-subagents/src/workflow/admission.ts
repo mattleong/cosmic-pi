@@ -85,7 +85,7 @@ export const admitWorkflowAgent = (
   const pass: Effect.Effect<Pass, InvalidSubagentRequestError> = Effect.gen(function* () {
     yield* show(undefined);
     if (yield* budget.exhausted) return yield* refuse;
-    if (request === undefined) request = yield* call.resolve;
+    request ??= yield* call.resolve;
     const revision = yield* subagents.admissionRevision;
     const writer = yield* subagents.queuedWriterConflict(request);
     if (writer) return { writer, request, revision };

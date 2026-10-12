@@ -120,7 +120,6 @@ const previewRows = (
   ];
   const budget = Math.max(1, Math.floor((height - 1) / entry.preview.length));
   const profiles = entry.preview.map((profile) => ({
-    ...profile,
     label: `${theme.fg(managerTone.identity, profile.id)}${profile.inherited ? theme.fg("muted", ` · inherited ${profile.source.replace("-invalid", "")}`) : ""}`,
     cells:
       profile.status === "configured"

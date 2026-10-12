@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ExtensionCommand, ExtensionSubcommand } from "pi-cosmic-core";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { OPENAI_IMAGE_TOOL, registerOpenAIImage } from "../src/image/register.ts";
@@ -24,7 +24,7 @@ const image: CodexImageResult = {
 function fixture() {
   let handler: ExtensionSubcommand["handler"] = () => undefined;
   let current = true;
-  const sendMessage = vi.fn();
+  const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
   const notify = vi.fn();
   const updateContext = vi.fn();
   const noteCwd = vi.fn();
@@ -137,7 +137,13 @@ describe("image command delivery authority", () => {
           image: { type: "image", data, mimeType: image.mimeType },
         });
         expect(h.sendMessage.mock.calls[0]?.[0]).not.toHaveProperty("structuredContent");
-        for (const delivered of [h.sendMessage.mock.calls[0]?.[0], toolResult]) {
+        const message = h.sendMessage.mock.calls[0]?.[0];
+        if (!message || !Array.isArray(message.content))
+          throw new Error("Expected a structured image message");
+        for (const delivered of [
+          { details: message.details, content: message.content },
+          { details: toolResult.details, content: toolResult.content },
+        ]) {
           expect(delivered.details).toEqual(details);
           const parts: ReadonlyArray<{ type: string; text?: string }> = delivered.content;
           expect(parts.filter((part) => part.type === "image")).toEqual([

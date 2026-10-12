@@ -3,10 +3,13 @@ import { plainTheme, themeFixture } from "pi-cosmic-core/testing";
 import type { BackgroundTaskView, BackgroundLogEvent } from "../src/task/model.ts";
 import { TaskManagerComponent } from "../src/ui/manager.ts";
 
-const logEvents = (count: number): BackgroundLogEvent[] =>
+const logEvents = (
+  count: number,
+  stream: BackgroundLogEvent["stream"] = "stdout",
+): BackgroundLogEvent[] =>
   Array.from({ length: count }, (_, index) => ({
     cursor: index + 1,
-    stream: "stdout",
+    stream,
     text: `line-${index + 1}\n`,
     timestamp: 0,
     bytes: 1,
@@ -143,9 +146,7 @@ describe("/tasks theme invalidation", () => {
     const mutableTheme = themeFixture({
       fg: (color, text) => (color === "error" ? errorStyle(text) : text),
     });
-    const logs = Object.freeze(
-      logEvents(1).map((event) => ({ ...event, stream: "stderr" as const })),
-    );
+    const logs = Object.freeze(logEvents(1, "stderr"));
     const { component } = makeManager([task("a", { logs })], 8, mutableTheme);
     const logRow = () => component.render(120).find((line) => line.includes("line-1"));
 

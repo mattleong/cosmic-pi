@@ -81,7 +81,7 @@ export const projectSubagentActivityPanel = (
 
   const includedRuns = projection.runs
     .filter((run) => includedIds.has(run.id))
-    .sort(
+    .toSorted(
       (left, right) =>
         left.startedAt - right.startedAt || RUN_ID_COLLATOR.compare(left.id, right.id),
     );

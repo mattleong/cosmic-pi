@@ -127,7 +127,7 @@ function isNeverType(type: ESTree.TSType): boolean {
 function isEffectivelyEmptyMember(member: ESTree.TSSignature): boolean {
 	return (
 		member.type === "TSPropertySignature" &&
-		member.optional === true &&
+		member.optional &&
 		member.typeAnnotation !== null &&
 		member.typeAnnotation !== undefined &&
 		isNeverType(member.typeAnnotation.typeAnnotation)
@@ -144,8 +144,7 @@ function isEffectivelyEmptyInterface(
 	if (declarations.length !== 1) return false;
 	const [type] = declarations;
 	return (
-		type !== undefined &&
-		type.extends.length === 0 &&
+		type?.extends.length === 0 &&
 		(type.body.body.length === 0 || type.body.body.every(isEffectivelyEmptyMember))
 	);
 }

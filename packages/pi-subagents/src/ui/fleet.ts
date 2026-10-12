@@ -189,20 +189,19 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.notice = notice;
       this.options.requestRender();
     };
+    const fail = (cause: unknown): void =>
+      settle({
+        kind: "error",
+        text: cause instanceof Error ? cause.message : "Subagent operation failed.",
+      });
     let result: Promise<A>;
     try {
       result = operation();
-    } catch (error) {
-      result = Promise.reject(error);
+    } catch (cause) {
+      queueMicrotask(() => fail(cause));
+      return;
     }
-    void Promise.resolve(result).then(
-      (value) => settle(settled(value)),
-      (error) =>
-        settle({
-          kind: "error",
-          text: error instanceof Error ? error.message : "Subagent operation failed.",
-        }),
-    );
+    void result.then((value) => settle(settled(value)), fail);
   }
 
   private submitPrompt(): void {

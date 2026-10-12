@@ -25,6 +25,7 @@ import {
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
+import { anyString } from "../support/matchers.ts";
 
 type CompletionPolicy = (
   attempt: number,
@@ -522,7 +523,7 @@ describe("SubagentService", () => {
       yield* Effect.yieldNow;
       fake.controls[0]?.exit(1);
       const [failed] = yield* Fiber.join(awaiting);
-      expect(failed).toMatchObject({ id: run.id, state: "failed", error: expect.any(String) });
+      expect(failed).toMatchObject({ id: run.id, state: "failed", error: anyString() });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
@@ -619,7 +620,7 @@ describe("SubagentService", () => {
       expect(observations[0]?.completionReceipt).toEqual({
         id: run.id,
         generation: 1,
-        claimToken: expect.any(String),
+        claimToken: anyString(),
       });
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => notifications.length === 1);

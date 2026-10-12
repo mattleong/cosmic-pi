@@ -144,8 +144,8 @@ function awaitIssues(
     details.attentionRequired &&
     !cards.some(
       (card) =>
-        card.question ||
-        card.writeAdmissionPaused ||
+        card.question !== undefined ||
+        card.writeAdmissionPaused === true ||
         card.state === "paused" ||
         card.state === "waiting_for_parent",
     )
@@ -210,8 +210,8 @@ function summarizeModels(
   }
   const counters = [`${eligibleOptions} statically eligible`];
 
-  if (disabled) counters.push(`${countLabel(disabled, "disabled profile")}`);
-  if (unavailable) counters.push(`${countLabel(unavailable, "unavailable profile")}`);
+  if (disabled) counters.push(countLabel(disabled, "disabled profile"));
+  if (unavailable) counters.push(countLabel(unavailable, "unavailable profile"));
   summary.counters = [counters.join(", ")];
   if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
     summary.outcome = "warning";
@@ -252,8 +252,8 @@ function cardOutcome(
   if (
     cards.some(
       (card) =>
-        card.writeAdmissionPaused ||
-        card.question ||
+        card.writeAdmissionPaused === true ||
+        card.question !== undefined ||
         (card.state === "paused" && action !== "interrupt") ||
         card.state === "waiting_for_parent",
     )

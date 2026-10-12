@@ -49,13 +49,13 @@ export type TaskCommandActions = TaskManagerActions & TaskSettingsActions;
 function notifyActionFailure(
   ctx: ExtensionCommandContext,
   action: "stop the task" | "clear finished tasks",
-  failure: Error | undefined,
+  cause: unknown,
 ): void {
   const reason =
-    failure instanceof BackgroundTaskNotFoundError
+    cause instanceof BackgroundTaskNotFoundError
       ? "it no longer exists"
-      : failure instanceof Error
-        ? failureMessage(sanitizeTerminalLine(failure.message), "")
+      : cause instanceof Error
+        ? failureMessage(sanitizeTerminalLine(cause.message), "")
         : "";
   notifyAtHostBoundary(ctx, `Couldn't ${action}${reason ? `: ${reason}` : ""}`, "error");
 }
@@ -95,14 +95,14 @@ function openTaskManager(
         close: () => finish(undefined),
         stop: (id) => {
           if (!revoked())
-            void actions.stop(id).catch((failure) => {
-              if (isCurrent()) notifyActionFailure(ctx, "stop the task", failure);
+            void actions.stop(id).catch((cause: unknown) => {
+              if (isCurrent()) notifyActionFailure(ctx, "stop the task", cause);
             });
         },
         clear: () => {
           if (!revoked())
-            void actions.clear().catch((failure) => {
-              if (isCurrent()) notifyActionFailure(ctx, "clear finished tasks", failure);
+            void actions.clear().catch((cause: unknown) => {
+              if (isCurrent()) notifyActionFailure(ctx, "clear finished tasks", cause);
             });
         },
       });
@@ -261,10 +261,10 @@ function createTaskSettingsSubcommand(
           known.set(rowKey(scope, setting.id), value);
           return Result.succeed(undefined);
         },
-        (error) =>
+        (cause: unknown) =>
           Result.fail({
             message: `Couldn't save background task settings: ${failureMessage(
-              error instanceof Error ? error.message : "",
+              cause instanceof Error ? cause.message : "",
               "unknown error",
             )}`,
           }),
@@ -282,11 +282,11 @@ function createTaskSettingsSubcommand(
       const readScope = (scope: TaskSettingsScope): Promise<ScopeFile> =>
         actions.read({ cwd: ctx.cwd, scope }).then(
           (own) => ({ scope, own }),
-          (error) => {
-            if (!(error instanceof BackgroundTaskConfigError)) throw error;
+          (cause: unknown) => {
+            if (!(cause instanceof BackgroundTaskConfigError)) throw cause;
             return {
               scope,
-              problem: `${sanitizeTerminalLine(error.path)} can't be read or isn't a JSON object`,
+              problem: `${sanitizeTerminalLine(cause.path)} can't be read or isn't a JSON object`,
             };
           },
         );

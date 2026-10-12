@@ -68,13 +68,13 @@ layer(nodeFilePlatformLayer)("Better OpenAI history before session_start", (it) 
 
           yield* h.emit("session_start");
           expect(h.tools.map((tool) => tool.name)).toEqual([OPENAI_IMAGE_TOOL]);
-          for (const { expanded, text } of row.cycle(args, result)) {
-            expect(text).not.toContain(image.data);
+          for (const { expanded, text: rendered } of row.cycle(args, result)) {
+            expect(rendered).not.toContain(image.data);
             if (expanded) {
-              expect(text).toContain(PROVIDER_TEXT);
-              if (owner === "owned") expect(text).toContain(details.revisedPrompt);
+              expect(rendered).toContain(PROVIDER_TEXT);
+              if (owner === "owned") expect(rendered).toContain(details.revisedPrompt);
             } else {
-              expect(text.includes(PROVIDER_TEXT)).toBe(owner === "foreign");
+              expect(rendered.includes(PROVIDER_TEXT)).toBe(owner === "foreign");
             }
           }
           expect(result).toEqual(before);

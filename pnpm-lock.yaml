@@ -68,6 +68,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0
       jiti:
         specifier: 2.7.0
         version: 2.7.0
