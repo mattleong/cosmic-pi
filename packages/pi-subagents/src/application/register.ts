@@ -26,7 +26,9 @@ import {
   registerSubagentActivity,
 } from "../boundary/host-activity.ts";
 import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
+import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
+import { makeSubagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { SessionProfileOverrideSeed } from "../profiles/session-overrides.ts";
@@ -138,6 +140,7 @@ export function registerSubagentApplication(
   const bridge = makeSubagentProjectionBridge(pi.events);
   const notify = makeHostNotifier(pi);
   const profileOverrideHandoff = makeProfileOverrideHandoff();
+  const sessionFooter = makeSubagentSessionFooter(pi.events);
   let releaseActivity: (() => void) | undefined;
   let currentActivation: CapturedActivation | undefined;
   let startupFailureTools: ReadonlyArray<string> = [];
@@ -148,14 +151,24 @@ export function registerSubagentApplication(
   const disableTools = (): void => {
     startupFailureTools = [...new Set([...startupFailureTools, ...deactivateSubagentTools(pi)])];
   };
+  const showSessionFooter = (): void => {
+    const session = profileOverrideHandoff.captureSnapshot();
+    if (currentActivation && session) sessionFooter.show(currentActivation.ctx, session);
+  };
   const detachActivation = (keepTools: boolean): void => {
     receipts.deactivate();
     releaseActivity?.();
     releaseActivity = undefined;
     if (!keepTools) disableTools();
     currentActivation = undefined;
+    sessionFooter.clear();
     bridge.clear();
   };
+  registerDelegationPrompt(pi, () =>
+    currentActivation
+      ? profileOverrideHandoff.captureSnapshot()?.effectiveConfig.delegation
+      : undefined,
+  );
   const retainingToolsDuring = <A>(transition: () => A): A => {
     retainingTools = true;
     try {
@@ -200,7 +213,10 @@ export function registerSubagentApplication(
           publishSessionBaseConfig: (config) =>
             profileOverrideHandoff.publishBaseConfig(owner, config),
           initialSessionOverrides: restoredReload ?? profileOverrideHandoff.capture(),
-          publishSessionOverrides: (seed) => profileOverrideHandoff.publish(owner, seed),
+          publishSession: (snapshot) => {
+            profileOverrideHandoff.publishSnapshot(owner, snapshot);
+            if (ownsActivation() && currentActivation === activation) showSessionFooter();
+          },
           publish: (projection) => {
             if (ownsActivation()) bridge.publish(projection);
           },
@@ -326,6 +342,7 @@ export function registerSubagentApplication(
         if (activation.trigger !== "tree") replay.publish();
         bridge.publish(prepared.projection);
         currentActivation = activation;
+        showSessionFooter();
         if (activation.trigger === "reload" && activation.sessionKey)
           profileReloadHandoff.clear(activation.sessionKey);
         bridge.setContext(activation.ctx);

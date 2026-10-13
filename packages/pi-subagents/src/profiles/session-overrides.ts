@@ -13,8 +13,10 @@ import {
 import {
   decodeProfileRoute,
   decodeSubagentNesting,
+  DelegationModeSchema,
   isProfileSetName,
   SubagentNestingSchema,
+  type DelegationMode,
   type SubagentNestingPolicy,
 } from "../config/schema.ts";
 import { BUILTIN_PROFILE_ROUTES } from "./definitions.ts";
@@ -44,6 +46,7 @@ export interface SessionProfileOverrideSeed {
   readonly revision: number;
   readonly overrides: SessionProfileOverrides;
   readonly nesting?: SubagentNestingPolicy | undefined;
+  readonly delegation?: DelegationMode | undefined;
   readonly baseline?: SessionProfileBaseline | undefined;
 }
 
@@ -68,6 +71,11 @@ export interface SessionNestingPatch {
   readonly expectedRevision: number;
 }
 
+export interface SessionDelegationPatch {
+  readonly delegation?: DelegationMode | undefined;
+  readonly expectedRevision: number;
+}
+
 export class SessionProfileConflictError extends Schema.TaggedError<SessionProfileConflictError>()(
   "SessionProfileConflictError",
   {
@@ -85,6 +93,7 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
   ),
   overrides: Schema.Unknown,
   nesting: Schema.optional(SubagentNestingSchema),
+  delegation: Schema.optional(DelegationModeSchema),
   // Discard the previous runtime's preference until version-2 reload envelopes retire.
   features: Schema.optional(Schema.Struct({ ultracode: Schema.Boolean })),
   baseline: Schema.optional(
@@ -199,6 +208,7 @@ export const cloneSessionProfileOverrideSeed = (
     revision,
     overrides,
     ...(seed.nesting !== undefined && { nesting: { ...seed.nesting } }),
+    ...(seed.delegation !== undefined && { delegation: seed.delegation }),
     ...(seed.baseline !== undefined && { baseline: cloneBaseline(seed.baseline) }),
   });
 };
@@ -246,6 +256,7 @@ export const makeSessionProfileSnapshot = (
     revision,
     overrides,
     nesting,
+    delegation,
     baseline = baselineFromConfig(baseConfig),
   } = cloneSessionProfileOverrideSeed(seed);
   return freezeSnapshot({
@@ -261,8 +272,10 @@ export const makeSessionProfileSnapshot = (
         overrides[id] ? "session" : baseline.profileSources[id],
       ),
       nesting: nesting ?? baseConfig.nesting,
+      delegation: delegation ?? baseConfig.delegation,
     },
     ...(nesting && { nesting }),
+    ...(delegation && { delegation }),
   });
 };
 
@@ -381,4 +394,14 @@ export const patchSessionNestingSnapshot = (
       snapshot.nesting?.maxDepth === nesting?.maxDepth
       ? undefined
       : { nesting };
+  });
+
+export const patchSessionDelegationSnapshot = (
+  snapshot: SessionProfileSnapshot,
+  patch: SessionDelegationPatch,
+): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> =>
+  editSnapshot(snapshot, patch.expectedRevision, STALE_SETTINGS, () => {
+    if (patch.delegation !== undefined && !Schema.is(DelegationModeSchema)(patch.delegation))
+      return "The delegation mode is invalid and was not applied.";
+    return snapshot.delegation === patch.delegation ? undefined : { delegation: patch.delegation };
   });

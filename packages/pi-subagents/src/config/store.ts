@@ -38,6 +38,8 @@ import {
   MAX_PROFILE_SETS,
   SUBAGENT_CONFIG_BASENAME,
   SUBAGENT_CONFIG_VERSION,
+  type DelegationMode,
+  DelegationModeSchema,
   type SubagentNestingPolicy,
   type WriterWorkspaceMode,
   WriterWorkspaceModeSchema,
@@ -109,6 +111,10 @@ export interface SubagentWriterWorkspacePatch extends SubagentConfigPatchBase {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
 }
 
+export interface SubagentDelegationPatch extends SubagentConfigPatchBase {
+  readonly delegation?: DelegationMode | undefined;
+}
+
 type ConfigRead<A> = (
   cwd: string,
   agentDirectory: string,
@@ -133,6 +139,7 @@ export interface SubagentConfigStoreContract {
   readonly deleteProfileSet: ConfigPatch<SubagentDeleteProfileSetPatch>;
   readonly patchWriterWorkspace: ConfigPatch<SubagentWriterWorkspacePatch>;
   readonly patchNesting: ConfigPatch<SubagentNestingPatch>;
+  readonly patchDelegation: ConfigPatch<SubagentDelegationPatch>;
 }
 
 export class SubagentConfigStore extends Context.Service<
@@ -170,7 +177,12 @@ const decodeDocument = (
 ): Effect.Effect<DecodedSubagentConfig, SubagentConfigStoreError> => {
   const decoded = subagentConfigDecoder(scope)(raw);
   if (decoded.unsupportedVersion) return Effect.fail(unsupportedVersionError(path));
-  const fatal = new Set([`${scope}.<unknown>`, `${scope}.nesting`, `${scope}.writerWorkspaceMode`]);
+  const fatal = new Set([
+    `${scope}.<unknown>`,
+    `${scope}.nesting`,
+    `${scope}.writerWorkspaceMode`,
+    `${scope}.delegation`,
+  ]);
   return decoded.diagnostics.some((diagnostic) => fatal.has(diagnostic))
     ? Effect.fail(
         configError(
@@ -403,6 +415,15 @@ const applyWriterWorkspacePatch: ApplyPatch<SubagentWriterWorkspacePatch> = Effe
   },
 );
 
+const applyDelegationPatch: ApplyPatch<SubagentDelegationPatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    const mode = patch.delegation;
+    if (mode !== undefined && !Schema.is(DelegationModeSchema)(mode))
+      return yield* mutationError(path, "Invalid delegation mode.");
+    return withEntry(current, "delegation", mode);
+  },
+);
+
 export const subagentConfigStoreLayer = Layer.effect(
   SubagentConfigStore,
   Effect.gen(function* () {
@@ -500,6 +521,7 @@ export const subagentConfigStoreLayer = Layer.effect(
       deleteProfileSet: patchVoid(applyDeleteProfileSet),
       patchWriterWorkspace: patchVoid(applyWriterWorkspacePatch),
       patchNesting: patchVoid(applyNestingPatch),
+      patchDelegation: patchVoid(applyDelegationPatch),
     });
   }),
 );

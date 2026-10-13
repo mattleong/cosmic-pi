@@ -134,6 +134,7 @@ describe("SubagentConfigStore activation", () => {
         { version: 6, nesting: { maxDirectChildren: 12, maxDepth: 9 } },
         { version: 6, nesting: { maxDirectChildren: 12.5, maxDepth: 3 } },
         { version: 6, writerWorkspaceMode: "invalid" },
+        { version: 6, delegation: "always" },
         { version: 6, automaticProfileRouting: false },
       ]) {
         const { store } = yield* setup({ [GLOBAL]: document });
@@ -215,6 +216,42 @@ describe("SubagentConfigStore activation", () => {
         maxDirectChildren: 20,
         maxDepth: 6,
       });
+    }),
+  );
+});
+
+describe("SubagentConfigStore delegation", () => {
+  it.effect("prefers a trusted project's delegation over global and defaults to normal", () =>
+    Effect.gen(function* () {
+      const { store } = yield* setup({
+        [GLOBAL]: { version: 6, delegation: "encouraged" },
+        [PROJECT]: { version: 6, delegation: "orchestration" },
+      });
+      expect((yield* store.load(CWD, AGENT, true)).delegation).toBe("orchestration");
+      expect((yield* store.load(CWD, AGENT, false)).delegation).toBe("encouraged");
+      const empty = yield* setup({});
+      expect((yield* empty.store.load(CWD, AGENT, true)).delegation).toBe("normal");
+    }),
+  );
+
+  it.effect("saves and clears delegation while preserving every other field", () =>
+    Effect.gen(function* () {
+      const original = {
+        version: 6,
+        defaultProfileSet: "saved",
+        profileSets: { saved: { profiles: { worker: "disabled" } } },
+        nesting: { maxDirectChildren: 4, maxDepth: 2 },
+      };
+      const { memory, store } = yield* setup({ [GLOBAL]: original });
+      yield* store.patchDelegation(CWD, AGENT, {
+        ...at("global", original),
+        delegation: "orchestration",
+      });
+      const saved = { ...original, delegation: "orchestration" };
+      expect(memory.documents.get(GLOBAL)).toEqual(saved);
+      expect((yield* store.load(CWD, AGENT, false)).delegation).toBe("orchestration");
+      yield* store.patchDelegation(CWD, AGENT, at("global", saved));
+      expect(memory.documents.get(GLOBAL)).toEqual(original);
     }),
   );
 });

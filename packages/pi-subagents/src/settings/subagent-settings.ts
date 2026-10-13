@@ -9,6 +9,8 @@ import {
   type SettingsSession,
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import {
+  DELEGATION_MODES,
+  DelegationModeSchema,
   DEFAULT_SUBAGENT_NESTING_POLICY,
   MAX_DIRECT_CHILDREN,
   MAX_SUBAGENT_DEPTH,
@@ -16,6 +18,7 @@ import {
   MIN_SUBAGENT_DEPTH,
   WRITER_WORKSPACE_MODES,
   WriterWorkspaceModeSchema,
+  type DelegationMode,
   type SubagentNestingPolicy,
 } from "../config/schema.ts";
 import type { WriterWorkspaceBlockCode } from "../run/workspace-control.ts";
@@ -34,7 +37,11 @@ type SettingsResult = Result.Result<
 type NestingField = keyof SubagentNestingPolicy;
 
 const WORKSPACE = "writerWorkspace";
+const DELEGATION = "delegation";
 const INHERIT = "inherit";
+
+const DELEGATION_DESCRIPTION =
+  "How much the main agent delegates to subagents. normal leaves its prompt unchanged, encouraged prefers subagents, and orchestration delegates nearly all substantive work.";
 
 interface NestingFieldInfo {
   readonly label: string;
@@ -66,9 +73,12 @@ const isNestingField = (id: string): id is NestingField => Object.hasOwn(NESTING
 const NESTING_FIELD_IDS = Object.keys(NESTING_FIELDS).filter(isNestingField);
 
 const SCOPES = [
-  { name: "session", description: "Change nesting limits for this session only" },
-  { name: "global", description: "Change nesting limits for new sessions everywhere" },
-  { name: "project", description: "Change nesting limits for this trusted project" },
+  { name: "session", description: "Change delegation and nesting limits for this session only" },
+  {
+    name: "global",
+    description: "Change delegation and nesting limits for new sessions everywhere",
+  },
+  { name: "project", description: "Change delegation and nesting limits for this trusted project" },
 ] as const;
 
 const UNTRUSTED = "Trust this project before changing its subagent settings";
@@ -81,6 +91,7 @@ const WORKSPACE_BLOCKS = {
 } satisfies Record<WriterWorkspaceBlockCode, string>;
 
 const isWorkspaceMode = Schema.is(WriterWorkspaceModeSchema);
+const isDelegationMode = Schema.is(DelegationModeSchema);
 
 const settingScope = (scope: string | undefined): ProfileSettingsScope =>
   scope === "global" || scope === "project" ? scope : "session";
@@ -93,6 +104,12 @@ const scopeNesting = (
   scope: ProfileSettingsScope,
 ): SubagentNestingPolicy | undefined =>
   scope === "session" ? inspection.session.nesting : inspection[scope]?.file.nesting;
+
+const scopeDelegation = (
+  inspection: ProfileSettingsInspection,
+  scope: ProfileSettingsScope,
+): DelegationMode | undefined =>
+  scope === "session" ? inspection.session.delegation : inspection[scope]?.file.delegation;
 
 const inheritedNesting = (
   inspection: ProfileSettingsInspection,
@@ -123,6 +140,36 @@ const saveFailure =
 
 const withCurrent = (values: readonly string[], currentValue: string) =>
   values.includes(currentValue) ? [...values] : [currentValue, ...values];
+
+const SCOPED_SETTING_IDS: ReadonlyArray<typeof DELEGATION | NestingField> = [
+  DELEGATION,
+  ...NESTING_FIELD_IDS,
+];
+
+const scopedSettingItem = (
+  inspection: ProfileSettingsInspection,
+  scope: ProfileSettingsScope,
+  id: typeof DELEGATION | NestingField,
+): SettingItem => {
+  const reloadNote = scope === "session" ? "" : " Takes effect after /reload.";
+  if (id === DELEGATION)
+    return {
+      id: `${scope}:${DELEGATION}`,
+      label: `${SCOPE_LABELS[scope]} · delegation`,
+      description: `${DELEGATION_DESCRIPTION} ${INHERIT} uses the next scope's mode.${reloadNote}`,
+      currentValue: scopeDelegation(inspection, scope) ?? INHERIT,
+      values: [...DELEGATION_MODES, INHERIT],
+    };
+  const own = scopeNesting(inspection, scope);
+  const currentValue = own ? String(own[id]) : INHERIT;
+  return {
+    id: `${scope}:${id}`,
+    label: `${SCOPE_LABELS[scope]} · ${NESTING_FIELDS[id].label}`,
+    description: `${NESTING_FIELDS[id].description} ${INHERIT} uses the next scope's limits.${reloadNote}`,
+    currentValue,
+    values: withCurrent([...NESTING_FIELDS[id].presets, INHERIT], currentValue),
+  };
+};
 
 export function subagentSettingsSubcommand(actions: FleetManagerActions): ExtensionSubcommand {
   const captureAuthority = (): (() => boolean) => {
@@ -231,25 +278,48 @@ function subagentSettingsCommand(
     );
   };
 
+  const applyDelegation = (
+    ctx: ExtensionCommandContext,
+    value: string,
+    scope: ProfileSettingsScope,
+  ): Promise<SettingsResult> => {
+    if (value !== INHERIT && !isDelegationMode(value))
+      return Promise.resolve(
+        failed(`${DELEGATION} must be ${DELEGATION_MODES.join(", ")}, or ${INHERIT}`),
+      );
+    return saveToScope(
+      ctx,
+      scope,
+      "save the delegation mode",
+      () => (value === INHERIT ? {} : { delegation: value }),
+      { session: actions.patchSessionDelegation, saved: actions.patchDelegation },
+    );
+  };
+
   const statusText = (ctx: ExtensionCommandContext): Promise<string> => {
     if (!actions.isAvailable()) return Promise.reject(new Error("Subagents are not active"));
     const trusted = isProjectTrusted(ctx);
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
         const scopes = editableScopes(trusted);
-        const scopeLine = (scope: ProfileSettingsScope) => {
+        const nestingLine = (scope: ProfileSettingsScope) => {
           const own = scopeNesting(inspection, scope);
           return own
             ? `  ${scope}: maxDirectChildren = ${own.maxDirectChildren}, maxDepth = ${own.maxDepth}`
             : `  ${scope}: ${INHERIT}`;
         };
-        const effective = inspection.session.effectiveConfig.nesting;
+        const delegationLine = (scope: ProfileSettingsScope) =>
+          `  ${scope}: ${scopeDelegation(inspection, scope) ?? INHERIT}`;
+        const effective = inspection.session.effectiveConfig;
         return [
           "Subagents settings",
           `  ${WORKSPACE} = ${workspace.mode}${workspace.blockedCode ? ` (${WORKSPACE_BLOCKS[workspace.blockedCode]})` : ""}`,
-          `  maxDirectChildren = ${effective.maxDirectChildren}, maxDepth = ${effective.maxDepth} (in effect)`,
+          `  ${DELEGATION} = ${effective.delegation} (in effect)`,
+          `  maxDirectChildren = ${effective.nesting.maxDirectChildren}, maxDepth = ${effective.nesting.maxDepth} (in effect)`,
+          "Delegation by scope:",
+          ...scopes.map(delegationLine),
           "Nesting limits by scope:",
-          ...scopes.map(scopeLine),
+          ...scopes.map(nestingLine),
         ].join("\n");
       },
     );
@@ -274,17 +344,7 @@ function subagentSettingsCommand(
             values: [...WRITER_WORKSPACE_MODES],
           },
           ...scopes.flatMap((scope) =>
-            NESTING_FIELD_IDS.map((field) => {
-              const own = scopeNesting(inspection, scope);
-              const currentValue = own ? String(own[field]) : INHERIT;
-              return {
-                id: `${scope}:${field}`,
-                label: `${SCOPE_LABELS[scope]} · ${NESTING_FIELDS[field].label}`,
-                description: `${NESTING_FIELDS[field].description} ${INHERIT} uses the next scope's limits.${scope === "session" ? "" : " Takes effect after /reload."}`,
-                currentValue,
-                values: withCurrent([...NESTING_FIELDS[field].presets, INHERIT], currentValue),
-              };
-            }),
+            SCOPED_SETTING_IDS.map((id) => scopedSettingItem(inspection, scope, id)),
           ),
         ];
         for (const item of items) committed.set(item.id, item.currentValue);
@@ -300,6 +360,7 @@ function subagentSettingsCommand(
     scope: ProfileSettingsScope,
   ): Promise<SettingsResult> => {
     if (id === WORKSPACE) return applyWorkspace(value);
+    if (id === DELEGATION) return applyDelegation(ctx, value, scope);
     if (!isNestingField(id)) return Promise.resolve(failed(`Unknown setting: ${id}`));
     return applyNesting(ctx, id, value, scope);
   };
@@ -307,13 +368,19 @@ function subagentSettingsCommand(
   return settingsSubcommand<undefined>({
     root: "subagents",
     isCurrent,
-    description: "Configure the writer workspace and nesting limits",
+    description: "Configure delegation, the writer workspace, and nesting limits",
     title: "Subagents",
     descriptors: [
       {
         id: WORKSPACE,
         description: "Where writer subagents make changes. Saved for new sessions.",
         values: [...WRITER_WORKSPACE_MODES],
+        currentValue: () => "",
+      },
+      {
+        id: DELEGATION,
+        description: DELEGATION_DESCRIPTION,
+        values: [...DELEGATION_MODES, INHERIT],
         currentValue: () => "",
       },
       ...NESTING_FIELD_IDS.map((field) => ({
@@ -325,12 +392,14 @@ function subagentSettingsCommand(
       })),
     ],
     examples: [
+      "delegation orchestration",
+      "global delegation encouraged",
       "writerWorkspace worktree",
       "global maxDepth 2",
       "session maxDirectChildren inherit",
     ],
     notes: () => [
-      "Nesting limits apply to the named scope, session by default. Session",
+      "Delegation and nesting limits apply to the named scope, session by default. Session",
       `changes apply now; global and project changes after /reload, and project wins. ${INHERIT}`,
       "clears a scope's own value. The writer workspace applies to new sessions and ignores the scope.",
     ],

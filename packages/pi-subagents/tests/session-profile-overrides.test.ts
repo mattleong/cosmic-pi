@@ -60,7 +60,7 @@ describe("session profile overrides", () => {
     Effect.gen(function* () {
       const published: number[] = [];
       const service = yield* makeSubagentProfileService(baseConfig(), {
-        publishSessionOverrides: (seed) => published.push(seed.revision),
+        publishSession: (snapshot) => published.push(snapshot.revision),
       });
       const initial = yield* service.capture;
       const local = candidate("openai/local");
@@ -120,10 +120,10 @@ describe("session profile overrides", () => {
       Effect.gen(function* () {
         const published: Array<{ revision: number; baselineProfiles: number }> = [];
         const service = yield* makeSubagentProfileService(baseConfig(), {
-          publishSessionOverrides: (seed) =>
+          publishSession: (snapshot) =>
             published.push({
-              revision: seed.revision,
-              baselineProfiles: Object.keys(seed.baseline?.profiles ?? {}).length,
+              revision: snapshot.revision,
+              baselineProfiles: Object.keys(snapshot.baseline.profiles).length,
             }),
         });
         const initial = yield* service.capture;
@@ -406,6 +406,35 @@ describe("session profile overrides", () => {
     }),
   );
 
+  it.effect("overrides delegation for the session, survives the reload seed, and clears", () =>
+    Effect.gen(function* () {
+      const service = yield* makeSubagentProfileService(baseConfig());
+      const initial = yield* service.capture;
+      expect(initial.effectiveConfig.delegation).toBe("normal");
+
+      const orchestrating = yield* service.patchSessionDelegation({
+        delegation: "orchestration",
+        expectedRevision: initial.revision,
+      });
+      expect(orchestrating.effectiveConfig.delegation).toBe("orchestration");
+      yield* service
+        .patchSessionDelegation({ delegation: "encouraged", expectedRevision: initial.revision })
+        .pipe(Effect.flip);
+
+      const reloaded = yield* makeSubagentProfileService(baseConfig(), {
+        initialSessionOverrides: decodeSessionProfileOverrideSeed(
+          sessionProfileSeed(orchestrating),
+        ),
+      });
+      expect((yield* reloaded.capture).effectiveConfig.delegation).toBe("orchestration");
+
+      const cleared = yield* service.patchSessionDelegation({
+        expectedRevision: orchestrating.revision,
+      });
+      expect(cleared.effectiveConfig.delegation).toBe("normal");
+    }),
+  );
+
   it.effect(
     "commits each edit with its best-effort handoff publication, even interrupted there",
     () =>
@@ -413,8 +442,8 @@ describe("session profile overrides", () => {
         const committing: Array<Fiber.Fiber<unknown, unknown>> = [];
         const published: number[] = [];
         const service = yield* makeSubagentProfileService(baseConfig(), {
-          publishSessionOverrides: (seed) => {
-            published.push(seed.revision);
+          publishSession: (snapshot) => {
+            published.push(snapshot.revision);
             committing[0]?.interruptUnsafe();
             throw new Error("hostile session publication");
           },

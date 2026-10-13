@@ -80,11 +80,13 @@ const actions = (value: ProfileSettingsInspection) =>
     renameProfileSet: vi.fn(() => Promise.resolve()),
     deleteProfileSet: vi.fn(() => Promise.resolve()),
     patchNesting: vi.fn(() => Promise.resolve()),
+    patchDelegation: vi.fn(() => Promise.resolve()),
     inspectWriterWorkspace: vi.fn(() => Promise.resolve({ mode: "worktree" as const })),
     setWriterWorkspaceMode: vi.fn(() => Promise.resolve()),
     patchSessionProfile: vi.fn(() => Promise.resolve(value.session)),
     replaceSessionProfiles: vi.fn(() => Promise.resolve(value.session)),
     patchSessionNesting: vi.fn(() => Promise.resolve()),
+    patchSessionDelegation: vi.fn(() => Promise.resolve()),
     listNativeModels: () => Promise.resolve([]),
   });
 
@@ -648,6 +650,33 @@ describe("profile settings controller", () => {
       expect(fixture.ui.notify).toHaveBeenLastCalledWith(expect.any(String), "error");
     },
   );
+
+  effectTest(
+    "changes delegation in the session by default and clears a saved scope with inherit",
+    function* () {
+      const fixture = setup({ value: atSessionRevision(inspection(), 3) });
+      yield* step(() => fixture.settings("delegation orchestration"));
+      expect(fixture.managerActions.patchSessionDelegation).toHaveBeenCalledWith({
+        delegation: "orchestration",
+        expectedRevision: 3,
+      });
+      yield* step(() => fixture.settings("global delegation inherit"));
+      const savedPatch = vi.mocked(fixture.managerActions.patchDelegation).mock.calls[0]?.[0];
+      expect(savedPatch).toMatchObject({ scope: "global" });
+      expect(savedPatch).not.toHaveProperty("delegation");
+      yield* step(() => fixture.settings("delegation always"));
+      expect(fixture.managerActions.patchSessionDelegation).toHaveBeenCalledTimes(1);
+      expect(fixture.ui.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
+    },
+  );
+
+  effectTest("rechecks Project trust before a Project delegation write", function* () {
+    const fixture = setup();
+    onNextInspection(fixture, () => fixture.setProjectTrusted(false));
+    yield* step(() => fixture.settings("project delegation encouraged"));
+    expect(fixture.managerActions.patchDelegation).not.toHaveBeenCalled();
+    expect(fixture.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "error");
+  });
 
   effectTest("rechecks Project trust before a Project nesting write", function* () {
     const fixture = setup();

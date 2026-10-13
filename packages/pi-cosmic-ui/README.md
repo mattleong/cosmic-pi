@@ -56,6 +56,7 @@ Settings live in `~/.pi/agent/extensions/pi-cosmic-ui.json`, and a project's `.p
       "openai.fast",
       "branch",
       "pullRequest",
+      "subagents",
       "git",
       "context",
       "session",

@@ -9,6 +9,7 @@
 - `run/` owns `SubagentService`: authoritative run records, admission and writer ownership, process lifecycle, assignment transitions, completion claims, and immutable fleet projections. `writer-pool.ts` encapsulates pool membership and lifecycle transitions; the service retains the shared run lock and run records. Factories receive the capabilities they need from the service's composition root.
 - `backend/` translates Pi, Claude, and Codex behavior into normalized handles, controls, and events. `boundary/` and `supervisor/` own host integration, processes, files, leases, and authenticated transport. Run orchestration does not interpret native wire protocols.
 - `workspace/` owns isolated-writer artifacts and Git operations. Run-level bindings retain parent authority and cleanup evidence; root workspace operations serialize separately from ordinary run activity.
+- `delegation/` owns each delegation mode's prompt guidance. The root application applies Current Session's mode through `boundary/host-delegation-prompt.ts` and shows its profile set and mode in the footer.
 - `tools/` owns public contracts, execution, and compact presentation. `settings/` owns commands and editors; `ui/` and settings rendering consume immutable projections. Host Activity actions recheck activation, revision, and capabilities before reaching services.
 
 ## Lifecycle
@@ -25,6 +26,7 @@ Natural completion leaves descendants running. Explicit stop and runtime replace
 - Writer admission, assignment changes, completion consumption, and cleanup evidence remain coordinated under their owning locks. Uncertain process or lease cleanup blocks reuse and can quarantine a writer pool.
 - Shared-checkout claims coordinate writers; they do not sandbox filesystem access. Worktree reports are proposals. Only the direct parent may review, test, and integrate an exact revision against current parent work.
 - Tools and UI read frozen projections. A terminal state or returned start receipt does not prove cleanup or completion. Native result contracts remain separate from bounded presentation details.
+- Delegation modes change only the root session's prompt guidance. They never restrict tools or reach nested children.
 - Current Session edits affect later launches. Saved-set edits do not change the active working set, and Project writes recheck trust.
 
 ## Detailed contracts

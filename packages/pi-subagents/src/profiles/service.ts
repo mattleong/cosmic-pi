@@ -15,10 +15,11 @@ import {
 import {
   conflict,
   makeSessionProfileSnapshot,
+  patchSessionDelegationSnapshot,
   patchSessionNestingSnapshot,
   patchSessionProfileSnapshot,
   replaceSessionProfileSnapshot,
-  sessionProfileSeed,
+  type SessionDelegationPatch,
   type SessionProfileConflictError,
   type SessionNestingPatch,
   type SessionProfileOverrideSeed,
@@ -48,6 +49,9 @@ export interface SubagentProfileServiceContract {
   readonly patchSessionNesting: (
     patch: SessionNestingPatch,
   ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
+  readonly patchSessionDelegation: (
+    patch: SessionDelegationPatch,
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
 }
 
 export class SubagentProfileService extends Context.Service<
@@ -62,27 +66,23 @@ export interface SubagentProfileLayerOptions {
   readonly sessionBaseConfig?: ResolvedSubagentConfig | undefined;
   readonly publishSessionBaseConfig?: ((config: ResolvedSubagentConfig) => void) | undefined;
   readonly initialSessionOverrides?: SessionProfileOverrideSeed | undefined;
-  readonly publishSessionOverrides?: ((seed: SessionProfileOverrideSeed) => void) | undefined;
+  /** Receives the initial snapshot and every committed session change. */
+  readonly publishSession?: ((snapshot: SessionProfileSnapshot) => void) | undefined;
 }
 
 export const makeSubagentProfileService = (
   config: ResolvedSubagentConfig,
-  options: Pick<
-    SubagentProfileLayerOptions,
-    "initialSessionOverrides" | "publishSessionOverrides"
-  > = {},
+  options: Pick<SubagentProfileLayerOptions, "initialSessionOverrides" | "publishSession"> = {},
 ): Effect.Effect<SubagentProfileServiceContract> =>
   Effect.gen(function* () {
-    const publishSeed = (snapshot: SessionProfileSnapshot): Effect.Effect<void> => {
-      const publish = options.publishSessionOverrides;
-      return publish
-        ? Effect.try(() => publish(sessionProfileSeed(snapshot))).pipe(Effect.ignore)
-        : Effect.void;
+    const publishSnapshot = (snapshot: SessionProfileSnapshot): Effect.Effect<void> => {
+      const publish = options.publishSession;
+      return publish ? Effect.try(() => publish(snapshot)).pipe(Effect.ignore) : Effect.void;
     };
     const initial = makeSessionProfileSnapshot(config, options.initialSessionOverrides);
     const state = yield* Ref.make(initial);
     const lock = yield* Semaphore.make(1);
-    yield* publishSeed(initial);
+    yield* publishSnapshot(initial);
     const commit = <E>(
       transition: (current: SessionProfileSnapshot) => Effect.Effect<SessionProfileSnapshot, E>,
     ): Effect.Effect<SessionProfileSnapshot, E> =>
@@ -90,7 +90,9 @@ export const makeSubagentProfileService = (
         Ref.get(state).pipe(
           Effect.flatMap(transition),
           Effect.tap((next) =>
-            Effect.uninterruptible(Ref.set(state, next).pipe(Effect.andThen(publishSeed(next)))),
+            Effect.uninterruptible(
+              Ref.set(state, next).pipe(Effect.andThen(publishSnapshot(next))),
+            ),
           ),
         ),
       );
@@ -122,6 +124,8 @@ export const makeSubagentProfileService = (
         commit((current) => replaceSessionProfileSnapshot(current, patch)),
       patchSessionNesting: (patch) =>
         commit((current) => patchSessionNestingSnapshot(current, patch)),
+      patchSessionDelegation: (patch) =>
+        commit((current) => patchSessionDelegationSnapshot(current, patch)),
     });
   });
 

@@ -36,6 +36,7 @@ import {
 } from "./schema.ts";
 import { countLabel, invokeHostCallback, toPiToolOutputSchema } from "pi-cosmic-core";
 import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
+import { NORMAL_START_GUIDELINE } from "../delegation/prompt.ts";
 
 const quoted = (message: string | undefined) => (message ? `“${message}”` : "");
 
@@ -92,7 +93,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     promptSnippet:
       "Parallelize independent reconnaissance, research, planning, and review with background subagents",
     promptGuidelines: [
-      "Before substantial work, check for independent workstreams. When two or more exist, use subagent_start early to launch one to three read-only subagents in one batch; skip subagent_start only for trivial or tightly serial tasks.",
+      NORMAL_START_GUIDELINE,
       "Use subagent_start for bounded slices rather than the whole assignment. Choose the profile by the required deliverable, not whether the task is read-only or comes first: scout locates and explains existing code; planner recommends implementation strategies and ordered changes; reviewer evaluates code, plans, or simplification opportunities before or after implementation. Read-only does not imply scout. Do not assign scouts substantive reviews, safety judgments, or implementation design. Give each subagent a narrow question and concrete deliverable while allowing it to follow relevant evidence as deeply as needed. Use researcher for sourced external research, oracle for inherited-decision analysis, and generalist for work without a matching specialized role.",
       "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. The selected version 6 profile-set route supplies runtime, model, effort, context, write intent, OpenAI fast mode, and local execution with closeOnReport=true; writes only narrows a writer to exact cooperative file claims.",
       "After subagent_start, continue independent work instead of waiting idle. Use subagent_await only when progress or final synthesis depends on a report; unclaimed completion reports are delivered automatically.",

@@ -32,6 +32,8 @@ A route is exactly `"disabled"`, one candidate, or a non-empty ordered candidate
 
 Native selectors use one fail-closed 256-character grammar across config, settings, and all three local adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, including Pi registry context variants such as `cursor/gpt-5.5@1m`, plus Claude's optional exact long-context suffix such as `[1m]`.
 
+Optional root `delegation` is `normal`, `encouraged`, or `orchestration`. Its precedence matches nesting: Session, trusted Project, Global, then `normal`. A present invalid value fails activation. See [Delegation settings](settings-workspace.md#delegation-settings).
+
 Unknown root keys fail document activation. Diagnostics redact profile-set names.
 
 ### Current Session and saved sets

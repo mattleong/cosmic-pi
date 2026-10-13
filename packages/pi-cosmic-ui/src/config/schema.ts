@@ -28,6 +28,7 @@ export const DEFAULT_FOOTER_ORDER = [
   "openai.fast",
   "branch",
   "pullRequest",
+  "subagents",
   "git",
   "context",
   "session",

@@ -38,6 +38,11 @@ export type WriterWorkspaceMode = (typeof WRITER_WORKSPACE_MODES)[number];
 export const DEFAULT_WRITER_WORKSPACE_MODE: WriterWorkspaceMode = "shared-checkout";
 export const WriterWorkspaceModeSchema = Schema.Literals(WRITER_WORKSPACE_MODES);
 
+export const DELEGATION_MODES = ["normal", "encouraged", "orchestration"] as const;
+export type DelegationMode = (typeof DELEGATION_MODES)[number];
+export const DEFAULT_DELEGATION_MODE: DelegationMode = "normal";
+export const DelegationModeSchema = Schema.Literals(DELEGATION_MODES);
+
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
 export const MIN_SUBAGENT_DEPTH = 0;
@@ -62,6 +67,7 @@ export interface SubagentConfigFile {
   readonly profileSets?: Readonly<Record<string, SubagentProfileSet>> | undefined;
   readonly nesting?: SubagentNestingPolicy | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
+  readonly delegation?: DelegationMode | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -330,6 +336,7 @@ const ROOT_KEYS = new Set([
   "profileSets",
   "nesting",
   "writerWorkspaceMode",
+  "delegation",
 ]);
 
 const readRootField = <S extends Schema.Constraint>(
@@ -371,6 +378,7 @@ const decodeCurrentBody = (
     diagnostics,
     WriterWorkspaceModeSchema,
   );
+  const delegation = readRootField(rawRoot, "delegation", scope, diagnostics, DelegationModeSchema);
   const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
   const decoded = setsField.present
     ? decodeProfileSets(probeFields(setsField.value), `${scope}.profileSets`, diagnostics)
@@ -385,6 +393,7 @@ const decodeCurrentBody = (
       ...(decoded && Object.keys(decoded.sets).length > 0 && { profileSets: decoded.sets }),
       ...(defaultProfileSet !== undefined && { defaultProfileSet }),
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
+      ...(delegation !== undefined && { delegation }),
     },
     invalidProfileSetRoutes: decoded?.invalidProfileSetRoutes ?? {},
     invalidProfileSets: decoded?.invalidProfileSets ?? [],

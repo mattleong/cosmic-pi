@@ -114,11 +114,13 @@ export const fleetManagerActionsFixture = (
     renameProfileSet: unexpectedAction,
     deleteProfileSet: unexpectedAction,
     patchNesting: unexpectedAction,
+    patchDelegation: unexpectedAction,
     inspectWriterWorkspace: unexpectedAction,
     setWriterWorkspaceMode: unexpectedAction,
     patchSessionProfile: unexpectedAction,
     replaceSessionProfiles: unexpectedAction,
     patchSessionNesting: unexpectedAction,
+    patchSessionDelegation: unexpectedAction,
     listNativeModels: unexpectedAction,
     ...overrides,
   };

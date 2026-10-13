@@ -50,7 +50,19 @@ Ask for work that splits into independent pieces, and the agent launches subagen
 | --------------------- | -------------------------------------------- |
 | `/subagents`          | Open the fleet in the Activity manager       |
 | `/subagents profiles` | Choose models and fallbacks for each profile |
-| `/subagents settings` | Nesting limits and writer workspace mode     |
+| `/subagents settings` | Delegation, nesting limits, writer workspace |
+
+### Delegation
+
+`/subagents settings delegation <mode>` sets how much the main agent delegates:
+
+| Mode            | Effect                                                                                         |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| `normal`        | Default. The system prompt is unchanged.                                                       |
+| `encouraged`    | The main agent prefers subagents and launches independent slices in parallel.                  |
+| `orchestration` | The main agent acts as an orchestrator and delegates nearly all substantive work to subagents. |
+
+The mode only changes prompt guidance; no tools are restricted, and subagents keep the default guidance. Session is the default scope. `global` and `project` persist for new sessions and apply after `/reload`. The footer shows the current profile set, marked `*` when this session has its own route edits, followed by the mode when it isn't `normal`.
 
 The agent's tools are `subagent_start`, `subagent_await`, `subagent_status`, `subagent_list`, `subagent_send`, `subagent_reply`, `subagent_lifecycle`, `subagent_rename`, `subagent_models`, `subagent_claims`, and `subagent_workspace`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
 
@@ -87,7 +99,8 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
     }
   },
   "nesting": { "maxDirectChildren": 12, "maxDepth": 3 },
-  "writerWorkspaceMode": "shared-checkout"
+  "writerWorkspaceMode": "shared-checkout",
+  "delegation": "normal"
 }
 ```
 

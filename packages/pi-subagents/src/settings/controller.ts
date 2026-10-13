@@ -22,6 +22,7 @@ import type {
   SubagentCopyProfileSetPatch,
   SubagentCreateProfileSetFromSnapshotPatch,
   SubagentDefaultProfileSetPatch,
+  SubagentDelegationPatch,
   SubagentDeleteProfileSetPatch,
   SubagentNestingPatch,
   SubagentProfilePatch,
@@ -30,6 +31,7 @@ import type {
 } from "../config/store.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import type {
+  SessionDelegationPatch,
   SessionNestingPatch,
   SessionProfilePatch,
   SessionProfileSetPatch,
@@ -86,6 +88,7 @@ export interface FleetManagerActions {
   readonly renameProfileSet: (patch: SubagentRenameProfileSetPatch) => Promise<void>;
   readonly deleteProfileSet: (patch: SubagentDeleteProfileSetPatch) => Promise<void>;
   readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
+  readonly patchDelegation: (patch: SubagentDelegationPatch) => Promise<void>;
   readonly inspectWriterWorkspace: () => Promise<WriterWorkspaceInspection>;
   readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;
   readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<SessionProfileSnapshot>;
@@ -93,6 +96,7 @@ export interface FleetManagerActions {
     patch: SessionProfileSetPatch,
   ) => Promise<SessionProfileSnapshot>;
   readonly patchSessionNesting: (patch: SessionNestingPatch) => Promise<void>;
+  readonly patchSessionDelegation: (patch: SessionDelegationPatch) => Promise<void>;
   readonly listNativeModels: (
     runtime: LocalCliRuntime,
     signal?: AbortSignal,

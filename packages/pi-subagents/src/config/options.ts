@@ -9,8 +9,10 @@ import {
   type ProfileRouteSource,
 } from "../profiles/model.ts";
 import {
+  DEFAULT_DELEGATION_MODE,
   DEFAULT_SUBAGENT_NESTING_POLICY,
   DEFAULT_WRITER_WORKSPACE_MODE,
+  type DelegationMode,
   type WriterWorkspaceMode,
   type DecodedSubagentConfig,
   type SubagentNestingPolicy,
@@ -31,6 +33,7 @@ export interface ResolvedSubagentConfig {
   readonly currentProfileSet: ResolvedProfileSetSelection;
   readonly nesting: SubagentNestingPolicy;
   readonly writerWorkspaceMode: WriterWorkspaceMode;
+  readonly delegation: DelegationMode;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
   readonly diagnostics: ReadonlyArray<string>;
@@ -168,7 +171,10 @@ const declaredSelection = (
 const layeredPolicy = (
   project: DecodedSubagentConfig | undefined,
   global: DecodedSubagentConfig,
-): Pick<ResolvedSubagentConfig, "currentProfileSet" | "nesting" | "writerWorkspaceMode"> => ({
+): Pick<
+  ResolvedSubagentConfig,
+  "currentProfileSet" | "nesting" | "writerWorkspaceMode" | "delegation"
+> => ({
   currentProfileSet: declaredSelection("project", project) ??
     declaredSelection("global", global) ?? { scope: "builtin" },
   nesting: project?.file.nesting ?? global.file.nesting ?? DEFAULT_SUBAGENT_NESTING_POLICY,
@@ -176,6 +182,7 @@ const layeredPolicy = (
     project?.file.writerWorkspaceMode ??
     global.file.writerWorkspaceMode ??
     DEFAULT_WRITER_WORKSPACE_MODE,
+  delegation: project?.file.delegation ?? global.file.delegation ?? DEFAULT_DELEGATION_MODE,
 });
 
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
@@ -190,6 +197,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     currentProfileSet: policy.currentProfileSet,
     nesting: policy.nesting,
     writerWorkspaceMode: policy.writerWorkspaceMode,
+    delegation: policy.delegation,
     profiles: effective.profiles,
     profileSources: effective.profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],

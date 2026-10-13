@@ -180,12 +180,17 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
     renameProfileSet: withConfigStore((store) => store.renameProfileSet),
     deleteProfileSet: withConfigStore((store) => store.deleteProfileSet),
     patchNesting: withConfigStore((store) => store.patchNesting),
+    patchDelegation: withConfigStore((store) => store.patchDelegation),
     patchSessionProfile: (patch) =>
       runCurrent(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))),
     replaceSessionProfiles: (patch) =>
       runCurrent(SubagentProfileService.use((profiles) => profiles.replaceSessionProfiles(patch))),
     patchSessionNesting: (patch) =>
       run(SubagentProfileService.use((profiles) => profiles.patchSessionNesting(patch))).then(
+        () => undefined,
+      ),
+    patchSessionDelegation: (patch) =>
+      run(SubagentProfileService.use((profiles) => profiles.patchSessionDelegation(patch))).then(
         () => undefined,
       ),
     listNativeModels: (runtime, signal) =>

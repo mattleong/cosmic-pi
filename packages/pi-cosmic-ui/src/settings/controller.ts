@@ -23,6 +23,7 @@ const footerLabels = {
   "openai.fast": "Fast indicator",
   branch: "Branch",
   pullRequest: "Pull request",
+  subagents: "Subagent profiles and delegation",
   git: "Git changes",
   context: "Context usage",
   session: "Session",
