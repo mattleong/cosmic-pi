@@ -38,6 +38,7 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
   });
 
   registerHerdrBtwCommands(pi, {
+    captureAuthority: slot.captureAuthority,
     open: (prompt) => slot.run(HerdrBtwService.use((service) => service.open(prompt))),
     openNew: (prompt) => slot.run(HerdrBtwService.use((service) => service.openNew(prompt))),
   });

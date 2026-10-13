@@ -19,7 +19,10 @@ export type SubagentQuestionNotification = Extract<
   { readonly type: "question" }
 >;
 
-export interface RunNotificationDeliveryDependencies extends RunContext {
+export interface RunNotificationDeliveryDependencies extends Pick<
+  RunContext,
+  "ownerScope" | "records" | "withLock"
+> {
   readonly withCompletionGate: WithRunLock;
   readonly notify: (
     notification: SubagentNotification,

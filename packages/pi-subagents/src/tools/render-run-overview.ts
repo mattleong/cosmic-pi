@@ -18,9 +18,7 @@ import {
   composeToolComponent as renderComponent,
   renderExpansionAffordance,
 } from "pi-cosmic-ui/tool";
-import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
-import { clipWithMarker } from "../run/state.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { profileOptionLabel } from "./compact-run-issues.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
@@ -52,30 +50,15 @@ const reportSection = (
   };
 };
 
+// Card projection owns retention; expansion preserves every retained report.
 export const expandedRunReportSections = (
   runs: ReadonlyArray<SubagentRunCard>,
-): ReadonlyArray<RunReportSection> => {
-  const candidates = runs.flatMap((run) =>
+): ReadonlyArray<RunReportSection> =>
+  runs.flatMap((run) =>
     [reportSection(run, "report"), reportSection(run, "failure")].filter(
       (section): section is RunReportSection => section !== undefined,
     ),
   );
-  if (candidates.length === 0) return [];
-  const headingBudget = candidates.reduce((total, section) => total + section.name.length + 24, 0);
-  const perSection = Math.max(
-    256,
-    Math.floor((MAX_TOOL_OUTPUT_CHARS - headingBudget) / candidates.length),
-  );
-  return candidates.map((section) =>
-    section.text.length <= perSection
-      ? section
-      : {
-          name: section.name,
-          kind: section.kind,
-          text: clipWithMarker(section.text, perSection, "\n… [report truncated]"),
-        },
-  );
-};
 
 const reportAffordance = (
   sections: ReadonlyArray<RunReportSection>,

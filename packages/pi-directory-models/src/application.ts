@@ -57,10 +57,14 @@ export function registerDirectoryModelsApplication(
       .then(() => undefined);
   });
 
-  const persist = (ctx: ExtensionContext) =>
-    slot
+  const persist = (ctx: ExtensionContext) => {
+    const isCurrent = slot.captureAuthority();
+    return slot
       .run(DirectoryModelPreferenceService.use((service) => service.remember))
-      .catch(() => warn(ctx, WRITE_WARNING));
+      .catch(() => {
+        if (isCurrent()) warn(ctx, WRITE_WARNING);
+      });
+  };
 
   pi.on("model_select", (event, ctx) => {
     if (!slot.isActive() || event.source === "restore" || !captureSelectedModel(event.model))

@@ -4,6 +4,8 @@ import type { Component, Focusable, OverlayHandle, TUI } from "@earendil-works/p
 
 const INPUT_DOCK_PRESENCE = Symbol.for("@cosmic-pi/pi-cosmic-ui/input-dock-presence/v1");
 
+type InputDockComponent = Component & Partial<Focusable> & { dispose?(): void };
+
 const visibleDocks = (): Set<unknown> => {
   const state: object = globalThis;
   const current = INPUT_DOCK_PRESENCE in state ? state[INPUT_DOCK_PRESENCE] : undefined;
@@ -23,7 +25,7 @@ export const inputDockVisible = (): boolean => visibleDocks().size > 0;
 export const createInputDock = (ui: ExtensionUIContext) => {
   const widgetKey = `cosmic-input-dock-${synchronousRandomUuid()}`;
   let tui: TUI | undefined;
-  let dialog: (Component & Partial<Focusable>) | undefined;
+  let dialog: InputDockComponent | undefined;
   let mounted = false;
   let hidden = false;
   let disposed = false;
@@ -55,15 +57,27 @@ export const createInputDock = (ui: ExtensionUIContext) => {
     if (disposed) return;
     disposed = true;
     syncPresence();
-    if (dialog) dialog.focused = false;
-    if (mounted) ui.setWidget(widgetKey, undefined);
+    const component = dialog;
+    dialog = undefined;
+    try {
+      if (component) component.focused = false;
+    } finally {
+      try {
+        if (mounted) ui.setWidget(widgetKey, undefined);
+      } finally {
+        component?.dispose?.();
+      }
+    }
   };
 
   return {
     input,
     getHeight: () => Math.max(1, Math.floor((tui?.terminal.rows ?? 0) * 0.6)),
-    mount(host: TUI, component: Component & Partial<Focusable>): void {
-      if (disposed) return;
+    mount(host: TUI, component: InputDockComponent): void {
+      if (disposed) {
+        component.dispose?.();
+        return;
+      }
       tui = host;
       dialog = component;
       mounted = true;

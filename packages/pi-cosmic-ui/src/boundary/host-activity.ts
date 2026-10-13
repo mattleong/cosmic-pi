@@ -284,6 +284,7 @@ export function makeActivityHost(
         if (binding.manager) return yield* new ActivityError({ reason: "stale" });
         const owner = {};
         binding.manager = owner;
+        const currentHost = () => binding.active && binding.installed && current === binding;
         const previousRender = binding.render;
         let closing = false;
         let detailController: AbortController | undefined;
@@ -316,7 +317,7 @@ export function makeActivityHost(
               height: getHeight,
               close: finish,
               invoke: (request) => {
-                if (owned()) submit(invokeOrWarn(binding.service, request, ctx));
+                if (owned()) submit(invokeOrWarn(binding.service, request, ctx, currentHost));
               },
               requestRender: () => tui.requestRender(),
               ...fullScreenKeybindingOptions(keybindings),
@@ -352,8 +353,7 @@ export function makeActivityHost(
             }),
           ),
         );
-        if (action && binding.active && current === binding)
-          yield* invokeOrWarn(binding.service, action, ctx);
+        if (action && currentHost()) yield* invokeOrWarn(binding.service, action, ctx, currentHost);
         return true;
       }),
   };
@@ -363,16 +363,15 @@ const invokeOrWarn = (
   service: ActivityServiceContract,
   request: ActivityActionRequest,
   ctx: ExtensionContext,
+  isCurrent: () => boolean,
 ) =>
-  service
-    .invoke(request)
-    .pipe(
-      Effect.tapError(() =>
-        Effect.sync(() =>
-          notifyAtHostBoundary(ctx, "That action is no longer available", "warning"),
-        ),
-      ),
-    );
+  Effect.suspend(() => (isCurrent() ? service.invoke(request) : Effect.void)).pipe(
+    Effect.tapError(() =>
+      Effect.sync(() => {
+        if (isCurrent()) notifyAtHostBoundary(ctx, "That action is no longer available", "warning");
+      }),
+    ),
+  );
 const serviceDetail = (
   service: ActivityServiceContract,
   request: Parameters<ActivityServiceContract["detail"]>[0],

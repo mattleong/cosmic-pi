@@ -1,10 +1,12 @@
 import { once } from "node:events";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vitest";
 import {
+  confirmProcessGroupExit,
   processGroupSignalError,
   signalProcess,
   signalProcessGroup,
@@ -185,6 +187,49 @@ describe("windows process-tree terminator", () => {
 });
 
 describe("process signals", () => {
+  for (const initial of ["present", "permission"] as const)
+    it.effect(`confirms process-group absence after an initial ${initial} observation`, () =>
+      Effect.gen(function* () {
+        const inspected = yield* Deferred.make<void>();
+        let alive = true;
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            vi.spyOn(process, "kill").mockImplementation(() => {
+              Deferred.doneUnsafe(inspected, Effect.void);
+              if (alive) {
+                if (initial === "present") return true;
+                throw Object.assign(new Error("settling"), { code: "EPERM" });
+              }
+              throw Object.assign(new Error("gone"), { code: "ESRCH" });
+            }),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        const pending = yield* confirmProcessGroupExit(42, 100).pipe(Effect.forkScoped);
+        yield* Deferred.await(inspected);
+        alive = false;
+        yield* TestClock.adjust(10);
+        expect(yield* Fiber.join(pending)).toBe(true);
+      }),
+    );
+
+  for (const code of ["EPERM", "EIO"] as const)
+    it.effect(`does not confirm process-group exit when inspection fails with ${code}`, () =>
+      Effect.gen(function* () {
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            vi.spyOn(process, "kill").mockImplementation(() => {
+              throw Object.assign(new Error("unavailable"), { code });
+            }),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        const pending = yield* confirmProcessGroupExit(42, 100).pipe(Effect.forkScoped);
+        yield* TestClock.adjust(100);
+        expect(yield* Fiber.join(pending)).toBe(false);
+      }),
+    );
+
   it("never signals a pid that is not a positive safe integer", () => {
     const kill = vi.spyOn(process, "kill");
     try {

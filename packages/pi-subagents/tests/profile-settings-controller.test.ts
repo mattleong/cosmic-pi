@@ -850,6 +850,27 @@ const topLevel = (overrides: Partial<SubagentRunView> = {}) =>
   view({ id: "child", name: "child", parentRunId: "root", depth: 1, ...overrides });
 
 describe("root /subagents fleet actions", () => {
+  effectTest(
+    "does not dispatch a retained fleet control into a replacement activation",
+    function* () {
+      let current = true;
+      const stop = vi.fn(() => Promise.resolve());
+      const fixture = yield* openFleet(topLevel(), {
+        stop,
+        captureModelRefresh: () => ({
+          isCurrent: () => current,
+          run: (effect, signal) => Effect.runPromise(effect, { signal }),
+        }),
+      });
+      fixture.press("x");
+      current = false;
+      fixture.press("\r");
+      expect(stop).not.toHaveBeenCalled();
+      expect(fixture.fleet.render(120)).toEqual([]);
+      yield* fixture.close();
+    },
+  );
+
   const question = { requestId: "q", message: "Which file?" };
 
   const sendOutcomes: ReadonlyArray<
@@ -867,7 +888,11 @@ describe("root /subagents fleet actions", () => {
       pressKeys("m", "h", "i", "\r");
       expect(yield* settled()).toBe(expected);
       expect(send).toHaveBeenCalledTimes(1);
-      expect(send).toHaveBeenCalledWith("child", "hi");
+      expect(send).toHaveBeenCalledWith(
+        "child",
+        "hi",
+        expect.objectContaining({ assignmentEpoch: 1, state: "running" }),
+      );
       expect(reply).not.toHaveBeenCalled();
       yield* close();
     });
@@ -882,7 +907,15 @@ describe("root /subagents fleet actions", () => {
     } = yield* openFleet(topLevel({ state: "waiting_for_parent", question }), { send, reply });
     pressKeys("m", "o", "k", "\r");
     expect(yield* settled()).toBe("success");
-    expect(reply).toHaveBeenCalledWith("child", "ok");
+    expect(reply).toHaveBeenCalledWith(
+      "child",
+      "ok",
+      expect.objectContaining({
+        assignmentEpoch: 1,
+        state: "waiting_for_parent",
+        questionRequestId: "q",
+      }),
+    );
     expect(send).not.toHaveBeenCalled();
     yield* close();
   });

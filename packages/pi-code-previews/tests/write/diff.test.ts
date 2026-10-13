@@ -45,6 +45,54 @@ it.effect("previous content is bounded, exact and skipped with measured reasons"
   }).pipe(provideBuiltLayer(previewFileLayer)),
 );
 
+it.effect("previous content stays complete and bounded across short filesystem reads", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-short-read-" });
+    const path = join(dir, "unicode.txt");
+    const content = "\uFEFFbefore 😀\nlast line";
+    yield* fs.writeFileString(path, content);
+    let chunkBytes = 2;
+    const shortReads: FileSystem.FileSystem = {
+      ...fs,
+      open: (filePath, options) =>
+        fs.open(filePath, options).pipe(
+          Effect.map(
+            (file): FileSystem.File => ({
+              [FileSystem.FileTypeId]: FileSystem.FileTypeId,
+              stat: file.stat,
+              seek: (offset, from) => file.seek(offset, from),
+              sync: file.sync,
+              read: (buffer) => file.read(buffer),
+              readAlloc: (size) => file.readAlloc(Math.min(size, chunkBytes)),
+              truncate: (length) => file.truncate(length),
+              write: (buffer) => file.write(buffer),
+              writeAll: (buffer) => file.writeAll(buffer),
+            }),
+          ),
+        ),
+    };
+    const before = yield* readExistingFileForPreviewEffect(path, "after").pipe(
+      Effect.provideService(FileSystem.FileSystem, shortReads),
+    );
+    assert.deepEqual(before, { kind: "content", content });
+
+    const initialInfo = yield* fs.stat(path);
+    const maxBytes = defaultCodePreviewPerformanceConfig.maxWriteDiffBytes;
+    yield* fs.writeFileString(path, "x".repeat(maxBytes + 1));
+    chunkBytes = 16 * 1024;
+    const grown = yield* readExistingFileForPreviewEffect(path, "after").pipe(
+      Effect.provideService(FileSystem.FileSystem, {
+        ...shortReads,
+        stat: () => Effect.succeed(initialInfo),
+      }),
+    );
+    assert.equal(hasWriteDiffSizeEvidence(grown), true);
+    if (grown?.kind !== "skipped") assert.fail("growing file exceeded the preview bound");
+    assert.equal(grown.byteLength, maxBytes + 1);
+  }).pipe(provideBuiltLayer(previewFileLayer)),
+);
+
 it.effect.skipIf(process.platform === "win32")(
   "a named pipe is skipped without waiting for a writer",
   () =>

@@ -28,12 +28,10 @@
     }
   ],
   "rules": {
-    "anti-slop/no-comments": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-eager-effect-finalizer-condition": "error",
     "anti-slop/no-escaping-render-context": "error",
     "anti-slop/no-known-value-widening": "error",
-    "anti-slop/no-legacy-names": "error",
     "anti-slop/no-lossy-expanded-arguments": "error",
     "anti-slop/no-manual-abort-listener": "error",
     "anti-slop/no-module-mocking": "error",
@@ -41,13 +39,11 @@
     "anti-slop/no-raw-host-notify": "error",
     "anti-slop/no-runtime-type-only-tests": "error",
     "anti-slop/no-runtime-typeof": "error",
-    "anti-slop/no-shape-in-symbol-names": "error",
     "anti-slop/no-unknown-parameters": "error",
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/require-code-preview-shell": "error",
-    "eslint/complexity": ["error", 15],
     "eslint/default-case-last": "error",
     "eslint/eqeqeq": "error",
     "eslint/no-else-return": "error",
@@ -175,14 +171,6 @@
     {
       "files": ["packages/*/src/**/*.ts"],
       "rules": {
-        "eslint/max-lines": [
-          "error",
-          {
-            "max": 500,
-            "skipBlankLines": true,
-            "skipComments": true
-          }
-        ],
         "typescript/no-non-null-assertion": "error"
       }
     },

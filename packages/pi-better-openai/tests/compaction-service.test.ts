@@ -40,7 +40,6 @@ import {
   OPENAI_COMPACTION_SUMMARY,
 } from "../src/compaction/protocol.ts";
 import { initialFastSnapshot } from "../src/fast/controller.ts";
-import { initialProjection } from "../src/usage/projection.ts";
 import {
   appendAssistant,
   assistantMessage,
@@ -107,19 +106,13 @@ function fixture(options: {
   const context = MutableRef.make<ExtensionContext>(
     options.manager ? { ...base, sessionManager: options.manager } : base,
   );
-  const projection = MutableRef.make({
-    ...initialProjection(),
-    config: makeResolvedConfig({ compaction: { enabled: options.enabled } }),
-  });
+  const config = MutableRef.make(makeResolvedConfig({ compaction: { enabled: options.enabled } }));
   const fastProjection = MutableRef.make(initialFastSnapshot());
   const setEnabled = (enabled: boolean) =>
-    MutableRef.update(projection, (current) => ({
-      ...current,
-      config: makeResolvedConfig({ compaction: { enabled } }),
-    }));
+    MutableRef.set(config, makeResolvedConfig({ compaction: { enabled } }));
   const setModel = (model: Model<Api>) =>
     MutableRef.update(context, (current) => ({ ...current, model }));
-  return { branch, context, projection, fastProjection, setEnabled, setModel };
+  return { branch, context, config, fastProjection, setEnabled, setModel };
 }
 
 function serviceLayer(
@@ -128,7 +121,7 @@ function serviceLayer(
 ) {
   return OpenAICompactionService.layer({
     context: target.context,
-    projection: target.projection,
+    config: () => MutableRef.get(target.config),
     fastProjection: target.fastProjection,
   }).pipe(
     Layer.provide(Layer.succeed(OpenAICompactionClient, OpenAICompactionClient.of({ compact }))),

@@ -97,11 +97,11 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       totalTokens: Math.max(0, event.total.totalTokens - cumulativeUsage.totalTokens),
     };
     cumulativeUsage = {
-      input: event.total.inputTokens,
-      output: event.total.outputTokens,
-      cacheRead: event.total.cachedInputTokens,
-      cacheWrite: event.total.cacheWriteInputTokens ?? 0,
-      totalTokens: event.total.totalTokens,
+      input: Math.max(cumulativeUsage.input, event.total.inputTokens),
+      output: Math.max(cumulativeUsage.output, event.total.outputTokens),
+      cacheRead: Math.max(cumulativeUsage.cacheRead, event.total.cachedInputTokens),
+      cacheWrite: Math.max(cumulativeUsage.cacheWrite, event.total.cacheWriteInputTokens ?? 0),
+      totalTokens: Math.max(cumulativeUsage.totalTokens, event.total.totalTokens),
     };
     return offer({ type: "assistant_message", assignmentEpoch, usage: delta }, raw);
   };

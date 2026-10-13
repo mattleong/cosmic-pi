@@ -1,106 +1,64 @@
 # Architecture
 
-Custom screens use the shared live viewport: centered at 90% of terminal width and height at 125×30 or larger, otherwise full bounds. Resize keeps the same component lifetime and selection state.
+`pi-background-task` runs local commands in session-owned background processes. It exposes the
+`background_task` tool, `/tasks`, and Activity/footer projections. Tasks are neither durable jobs
+nor a command sandbox, and completion does not automatically send messages or trigger agent turns.
 
-`pi-background-task` is an Effect-managed Pi extension for session-scoped local background tasks.
+## Ownership and boundaries
 
-## Source map
+- [Application](src/application.ts) owns the managed session-runtime slot and binds tools,
+  commands, preview replay, and UI publication to an activation. [Layer composition](src/layer.ts)
+  supplies configuration, process execution, task service, and preview scheduling.
+- [Task service](src/task/service.ts) owns the registry, admission, stop/wait coordination, and
+  scoped process monitors. Registry transitions and each task's mutable log buffer share a
+  semaphore. [Registry policy](src/task/registry.ts), [admission](src/task/admission.ts), and
+  [output matching](src/task/output-match.ts) keep deterministic work separate from orchestration.
+- [Local-process boundary](src/boundary/local-process.ts) owns shell spawning, output streams,
+  bounded ingress, process-tree termination, and release through Effect's process platform and
+  core's process-tree helpers.
+- [Log buffers](src/task/log-buffer.ts) own retained output and byte accounting;
+  [publication](src/task/publication.ts) coalesces updates into immutable projections.
+- [Config store](src/config/store.ts) resolves global and trusted project settings and handles
+  explicit writes. Reading configuration never creates a default file or probes an untrusted
+  project. [Settings controller](src/settings/controller.ts) adapts commands and settings UI.
+- [Tool execution](src/tools/command.ts) produces text, presentation details, and a separate
+  [native result contract](src/tools/contract.ts) from service facts. Renderers do not infer task
+  state from log text or own processes.
+- [Host UI](src/boundary/host-ui.ts), [Activity integration](src/boundary/host-activity.ts), and
+  [manager](src/ui/manager.ts) consume projections. The manager owns local interaction state and
+  delegates shared screen mechanics to Cosmic UI; service state remains authoritative.
 
-- `src/extension.ts` is the thin Pi registration entrypoint; `src/layer.ts` owns session Layer
-  composition; `src/application.ts` owns session lifecycle, tool, `/tasks`, footer, and Activity
-  wiring. `src/settings/controller.ts` registers the one `/tasks` command through
-  core's `registerExtensionCommand`: bare opens Cosmic UI's shared Activity view focused on Tasks (falling back to the standalone manager only when that view is not installed), and `settings` is Cosmic UI's shared
-  settings shell, reporting the active runtime's normalized config as `status` and reading and
-  writing each scope's own values through the store's `BackgroundTaskSettingsFiles`, where
-  `inherit` removes a value. A scope whose file can't be read opens as one read-only row naming
-  that file, while readable scopes stay editable; an unavailable runtime still blocks the picker.
-  It keeps `/tasks` manager actions at Promise-shaped host
-  boundaries. The manager
-  opens on Cosmic UI's shared `screen` surface, so closing never pops an overlay stacked above it; a
-  failed opening rejects the command.
-- `src/config/` — schema/defaults, normalization, and `store.ts` as the single persistence door. The store resolves project over global through core's `makeScopedConfigStore` with no default document, so it never writes and never probes an untrusted project.
-- `src/boundary/local-process.ts` — scoped Effect ChildProcess and process-tree adapter. Cwd inspection runs interruptibly before the masked process acquisition and release handoff. Effect owns detached shell spawning, output streams, force escalation, and release; the boundary owns the termination policy over core's process-tree helpers: immediate graceful group signal dispatch with a leader fallback, the POSIX post-leader group sweep, and Windows graceful and force `taskkill` through core's bounded `terminateWindowsProcessTree`. Outside a stop, the POSIX sweep SIGKILLs the group as soon as the leader exits. During a graceful stop, it gives the whole group the grace window: `awaitExit` waits until the group is gone or the caller escalates to force, which SIGKILLs the group. A compound command's descendants therefore get the full `stopGraceMs`. Because Windows can reuse an exited PID, the boundary records the leader's exit and never runs its own `taskkill` after it; a `taskkill` racing that exit treats a nonzero result as settled. The upstream Effect spawner is outside that guard: after any nonzero leader exit (a failed command, or one stopped by force `taskkill`), it runs an untimed `taskkill /pid <pid> /T /F` from its exit listener and again from its scope finalizer, whatever the unref state, so failed and force-stopped Windows tasks keep that PID-reuse risk. Every core terminator failure maps to the redacted `LocalProcessError`, as does a spawn Node refuses synchronously (a NUL character in the command or shell path), which Effect would otherwise surface as a defect that never settles the task. One process-scope fiber owns the immediately dispatched graceful helper. Repeated graceful requests reuse that attempt; force escalation interrupts and joins it first, then serializes bounded force attempts so a failed attempt can be retried. Graceful timeout does not prevent escalation. Core's terminator cleans up synchronously on interruption (typically the 2-second timeout) without awaiting taskkill's own exit, so a hung taskkill can never hang the interrupting finalizer join. It requests color (`FORCE_COLOR=1` default, explicit `FORCE_COLOR`/`NO_COLOR` honored), and the bounded ingress queue evicts the oldest event when recent output must replace a full queue.
-- `src/boundary/host-ui.ts` — exception-safe Pi status projection bridge for the footer and `/tasks`.
-- `src/boundary/host-activity.ts` registers session-token-bound Cosmic UI activity summaries from frozen task views through Cosmic UI's `registerRevisionedActivityProvider`. Summaries omit logs and remain root entries because tasks have no `ownerRunId`. Each snapshot stays within the protocol's `ACTIVITY_LIMITS.items`, since the host rejects an oversized one whole: active tasks come first and the oldest finished ones drop. The producer redacts credentials before summaries or selected details leave its boundary. Selected details materialize only the chosen task's bounded recent log tail through a revision/session/cancellation-checked capability. Stop declares process-tree confirmation scope, rechecks the item revision, active state, and session, then passes the host abort signal to `BackgroundTaskService`; replacement and shutdown revoke callbacks and registration. A terminal record also offers clear-finished, confirmed as a whole-session action that leaves active tasks untouched. Selected details add bounded technical fields. The standalone `/tasks` manager and footer fallback remain independent.
-- `src/task/` — `bounds.ts` is the pure owner of the command, resolved-cwd, name, and task-id admission limits used by both schemas and service admission, plus the signal, error, and snapshot-count output-contract limits. `schema.ts` is the pure owner of the task contract: the action and state vocabularies, the snapshot, log-metadata, and wait schemas, and the persisted `background_task` details union. Persisted details and the native result contract share its member schemas, so their field and literal order must not change. `model.ts` derives its types from them and intersects domain-only fields such as log events and `awaited` locally. The directory also owns the task model with its pure projection helpers (`sortTasksByActivity`, `footerStatus`, and `countTaskStates` as the single owner of the failed/timed-out counting policy), typed errors, bounded logs with shared UTF-8 byte accounting, and the scoped service. The service delegates pure pieces to siblings it alone calls: `admission.ts` normalizes start requests and validates wait requests, `registry.ts` defines `TaskRecord` and the registry policies (projection, retained-log budget eviction, retention trimming, completion snapshots) that the service runs under its semaphore, `output-match.ts` scans retained chunks for a wait's literal text, and `publication.ts` owns the scoped output-publication worker and the monotonic clock helper. Bounded `wait` barriers reuse each task's completion and output wake signals, match literal text across retained chunks, and report timeout as data. A `logs` long-poll keeps waiting through wakes that add nothing past its cursor (shared-budget trimming, stop requests) until new output, task end, or its deadline. Wait, long-poll, and output-publish deadlines run on Effect's monotonic clock, so wall-clock steps cannot stretch them; log timestamps stay wall-clock. Line tails count logical lines across chunks. Each wait owns a scoped reference count on its admitted record under the registry semaphore. The task view publishes `awaited` until the last waiter completes, times out, or is interrupted; Cosmic UI uses the same await marker as subagents. Tool waits use this service-owned tracking without changing task state or stopping the process. One latch-driven worker coalesces output publications onto the configured leading/trailing interval; `totalLogBufferBytes` splits roughly in half between retained logs and per-process ingress buffers divided across `maxRunning`.
-- `src/tools/` owns the shared action executor and schema plus `background_task` registration and
-  pure collapsed or expanded log rendering over the shared Cosmic UI tool header and expansion hint. Command details are the
-  shared action-discriminated union and carry metadata only: `logs` details keep cursors and five truncation fields, never
-  log events or truncated text. A `logs` text cuts its output once, from the oldest end, within what its metadata lines
-  leave of the line and byte bounds, so it keeps the newest lines, `nextCursor` stays the latest cursor, and the
-  truncation fields describe exactly the output the text holds. When a task fails, the service keeps the first line of its recent output that
-  names the failure, redacted and bounded, as the in-memory, domain-only `failureCause`. Status, wait, stop, and list
-  results write it into their text on a `cause:` line beneath the task, so the agent learns why without a `logs` call,
-  and details record only where it sits: producer-computed UTF-16 `causes` spans, never parsed. A span the final,
-  possibly truncated, text no longer holds is dropped. The command layer strips `failureCause` before building details,
-  and persisted details never carry it; programs see the cause through `text` and the contract.
-  The registered tool also declares a native Pi `outputSchema` for a separate success-only contract
-  (`pi-background-task/task`, version 1). `contract-schema.ts` is its authoritative Effect Schema; it
-  reuses the frozen member fields by value without changing them, and Pi receives core's
-  `toPiToolOutputSchema` derivation. `contract.ts` projects it from the original domain facts (service
-  snapshots with `failureCause`, log slices, and wait results) before details strip anything, and never
-  reads text or details. The executor returns `BackgroundTaskContractResult`, the
-  `{ text, details }` pair plus the contract; presentation consumes only the pair.
-  Contract tasks pick their fields explicitly: no command, cwd, pid, waiter marks, or log events.
-  `finished` is terminal task state, never proof of exit, cleanup, or success. Name, signal, error,
-  and cause are terminal-sanitized, credential-redacted, and bounded; IDs pass unchanged. `logs`
-  output reuses the text's sanitized combined output and `[stderr] ` convention, is not credential-redacted,
-  and keeps its newest 1 MiB of UTF-8 independently of the text bound. `truncated` reports only
-  that clipping, and `nextCursor` stays the latest assigned cursor. Registration strictly encodes the
-  contract with its JSON codec and freezes the detached `structuredContent`. Typed failures and
-  interruption still reject; an encoding invariant failure returns `isError` without structured data,
-  a short first line, and the original text and details, with no rollback. Task IDs restart at `task-1`
-  in each fresh registry, so scripts must not reuse checkpointed IDs across runtime replacement.
-  The public `pi-code-previews` cooperative shell decorates the registered tool with an explicit
-  `src/ui/compact-summary.ts` provider. This pure projection decodes the details with the shared task schema,
-  distinguishes management completion from task state, and reports failure, cleanup, timeout,
-  and output-loss problems as shared `CompactIssue`s with task-scoped codes (`<taskId>:<code>`).
-  Each issue has one short human message; agent-facing recovery, cursors, and byte counts live
-  only in its expanded `detail`, and retrieval hints are expanded-only `info` issues. Unclassified
-  task errors use their first line as the message and keep the full text as detail. A non-zero exit adds the cause
-  read from the result text at its span, else the meaning of a conventional exit code or signal (127 command not
-  found, 137 killed). A wait timeout names what it awaited and how long the service let it run, the
-  shorter of `waitSeconds` and `maxWaitSeconds`, never the requested time. Wait details record that
-  as `appliedWaitSeconds` beside the shared wait member, so the native contract never carries it;
-  older details without it fall back to the shell's measured timing. Aggregate
-  `list`/`stop_all` messages name each task by its unique name, else its ID. Both styles retain the exact submitted arguments on expansion, including unnormalized cwd and timeout values. Compact expansion uses content-only callbacks that preserve arguments, fetched text and cursors without parsing log words; the shell owns the single heading, status and issue rendering. Preview style keeps the original callbacks. Status and failure causes belong in the subject or
-  issues, not optional metadata; stopped signals remain cancellation rather than failure.
-  Clean exited log slices report successful retrieval, not verified process success; their
-  contractual lack of exit codes is not a warning. Snapshot-based status still requires exit
-  evidence. Snapshot summaries prefer the optional task name, then ID; live starts use the name
-  or command. One detail combines state/exit or wait evidence, and lists combine state counts.
-  Failed or stopping tasks, lost logs, and truncated output retain attention.
-  Unknown details and outer tool errors retain the original renderer; no process state,
-  execution, or lifecycle behavior depends on the collapsed style.
-- `src/ui/` owns pure full-screen `/tasks` presentation (`manager.ts`) and bounded safe-SGR log rows (`styled-log.ts`), built on the `pi-cosmic-ui/manager` chrome, keymap, key-label, and list/detail primitives shared with `/subagents`. Generic selection/pane/layout/detail-scroll/page-size state and framed screen composition delegate to the shared `ListDetailShell` (`pi-cosmic-ui/manager/list-detail-shell`). The shared `manager/style` roles distinguish task identities and technical values while retaining status and log colors. Selected controls use the shared focus treatment only in the active list pane. The shared `listDetailFrame(theme, pane)` supplies muted enclosing frames and current-focus pane edges, `listDetailHeading` styles pane headings, and `detailFieldRows` formats status and technical fields. `framedFill` frames, clips, and fills raw content lines. The manager keeps follow semantics, stop/clear/technical actions and their confirmation policy, the cached themed log rows, state/row/detail presentation, help copy, geometry constants, and Enter-to-inspect navigation in every layout. Technical metadata and logs wrap before windowing; Esc returns from inspection before closing. Half/full-page list motions page by the render-computed visible rows. Unfollow (`f`) is sticky: the anchored detail window keeps the viewed slice even before overflow and while new lines arrive, motions that scroll away from the newest lines detach follow without silently re-following at the bottom, and toggling follow back on returns to the newest lines.
+## Lifecycle
 
-## Operational limits
+Session start and successful tree navigation capture cwd, trust, and session identity, then
+replace the runtime. Deactivation revokes publication and command capabilities before cleanup,
+so settling old processes cannot repopulate replacement UI. Startup loads trusted preview
+settings before the current activation registers its wrapped tool. History replay is
+presentation-only and never starts tasks.
 
-Tasks have local-user command authority, not a sandbox. Do not record inherited environment values, persist command output automatically, or include command/path data in telemetry. Completion does not inject model context, trigger turns, or send notifications.
+Tree navigation joins process-tree cleanup before activating a fresh registry. Tool callbacks
+retain their activation token; `/tasks` captures authority for each invocation. Retained managers,
+settings pickers, and Activity actions cannot target a later registry, even when task IDs repeat.
+Shutdown closes admission and attempts to settle active processes before interrupting their monitors.
 
-Literal output waits match across retained chunks within one stream. Dropped-byte boundaries reset partial matches. Cleanup cannot be guaranteed after host `SIGKILL` or machine loss. Without Job Objects, Windows cannot clean up descendants that outlive their leader.
+## Critical invariants
 
-## Ownership
+- Metadata is normalized and bounded before IDs, monitors, or processes are allocated, including
+  calls that bypass the tool schema.
+- Stop requests retain active capacity until exit is confirmed. A termination failure leaves a
+  task `stopping`; `stopAll` attempts every captured task before reporting aggregate failures.
+- Admitted readers retain their task record. Clearing or evicting registry entries removes
+  discoverability without invalidating in-flight waits or reinserting removed tasks.
+- Output and ingress are bounded independently. Dropped output remains explicit; literal waits
+  never match across a dropped-byte gap. Wait and publication deadlines use monotonic time.
+- Projections and log slices are detached and immutable. Neither consumer mutation nor later
+  buffer eviction can alter earlier results or authoritative byte accounting.
+- Structured results project domain facts rather than parsing display text. Encoding failure
+  preserves the receipt of an applied action, without replay or rollback. A terminal state alone
+  does not prove success or process-tree cleanup.
 
-`BackgroundTaskService` is the only task-registry owner. Before it acquires the registry permit, it trims command and name, resolves cwd, and applies the shared limits to those normalized values. Oversized metadata therefore cannot allocate an id, enter the registry, fork a monitor, or spawn a process even when a caller bypasses the TypeBox schema. An admitted `logs` or `wait` call captures one `TaskRecord`; wakes and timeouts re-inspect that retained record under the same semaphore. Eviction and `clear` remove discoverability for new calls without failing admitted readers or reinserting removed records. All process monitors share one fixed child scope created before the service shutdown finalizer, so shutdown requests and confirms active process settlement before monitor interruption without accumulating one owner-scope finalizer per historical task; interrupting a monitor whose spawn never settled fails its waiting `start` with `BackgroundRuntimeClosedError`. Stop ownership is claimed while interruption is masked, then waits resume interruptibly. If the owner is interrupted, its finalizer force-terminates only an already-settled handle; the monitor force-terminates a handle that arrives later. A stop timeout or process-tree termination failure is a typed `BackgroundTerminationError`; the task remains `stopping`, consumes active capacity, and can become `stopped` only when the process handle's `awaitExit` joins the scoped exit observer after its process-group sweep. `stopAll` settles every captured active task before failing: one task's typed termination failure never interrupts a sibling's graceful-to-force workflow, tasks evicted mid-flight are tolerated, and remaining failures aggregate into one `BackgroundTerminationError` rather than a partial success. Closing the session runtime applies the same ordering to every active process tree. Release first unrefs the upstream Effect handle, so its fallback finalizer never waits on a live or cleanly exited process, then performs this boundary's bounded force-confirmation path; the boundary attempts Windows `taskkill /T /F` only while the leader's exit is unrecorded (it passes core's exited-target skip), while POSIX performs the explicit post-leader group sweep. After a nonzero leader exit, the upstream finalizer still signals the group, which on Windows is its own untimed `taskkill` outside this boundary's bound. Pi callbacks only execute Effects through the managed session-runtime slot.
-
-Session activation is slot-native: `session_start` and successful `session_tree` navigation capture
-cwd, trust, and stable session identity once and start the managed session-runtime slot with the
-captured abort signal; the slot deactivates and disposes the prior runtime before any new-session
-or new-branch work. Tree navigation retains the session id but revokes prior capabilities and joins
-process-tree cleanup before activating a fresh task registry. Deactivation revokes a per-runtime
-publication owner before clearing the shared UI bridge, so finalizer settlement cannot restore
-abandoned task rows in the footer, `/tasks`, or replacement activity provider. Runtime startup then loads trusted code-preview settings as its first step (an injectable best-effort boundary for lifecycle tests) and returns `showFooterStatus` and the scoped animation scheduler as the activation value. The host bridge owns the empty initial and cleared projections; the service publishes later changes. Superseded starts never reach the settings boundary, and only the current-generation activation registers the wrapped `background_task` tool, so stale, aborted, or shutdown-invalidated starts cannot reactivate an older session. Registered tool runners retain their activation token and reject with `PiSessionRuntimeError` both during and after replacement. `/tasks` captures the session slot's authority per invocation, not registration; the next start, shutdown, or runtime removal revokes it for good. Fallback-manager stop/clear callbacks check that authority beside dispatch, delayed failures cannot notify a replacement session, and a revoked manager closes on its next bridge update or action rather than showing the replacement's tasks. Settings reuse `withInvocationAuthority` for applies, notifications and after-apply callbacks, recheck authority before opening a picker after file reads, and close a revoked picker on its next key. Stale callbacks never target reused task IDs in the replacement registry; newly invoked commands still use the current activation. The generic application runner also rejects while the slot holds an unactivated runtime.
-
-Each `TaskRecord` owns one mutable `LogBuffer` under the registry semaphore. Its offset-backed
-store compacts amortized dead prefixes; events freeze at creation and consumers retain cached,
-detached frozen event slices. Reads freeze their envelope and selected arrays, including clipped
-tail events. Projection publication freezes detached scalar rows, their task array, and its envelope
-while structurally sharing immutable log events. Consumer mutation and later appends or evictions
-cannot change earlier snapshots, authoritative logs, or byte accounting.
-
-The UI and host footer project immutable service snapshots; neither owns subprocesses. Extensions exchange only the public plain tool-definition protocol.
-
-The factory registers `registerCodePreviewReplay`, anchored to `/tasks`, for `background_task`. History Pi rebuilds before `session_start` stays raw until that start's activation wraps the tool through the replay shell and publishes. That start's settlement closes aborted, failed, or replaced startup; tree activations never publish, and shutdown retires replay. Replay never executes the tool or changes registration or activation.
-
-The application Layer owns `CodePreviewSchedulerService` in the same session runtime as its tools. Startup returns that scheduler to activation, which passes a token-checked scheduling capability to each cooperative wrapper. Replacement and shutdown close animation fibers; retained wrappers cannot schedule against a stale session. No animation depends on another extension's Jiti module instance.
+The focused [process lifecycle note](docs/process-lifecycle.md) explains cancellation handoff and
+platform cleanup limits. [Task-service tests](tests/task-service.test.ts),
+[process tests](tests/local-process.test.ts), [lifecycle tests](tests/lifecycle-stress.test.ts),
+and [log-buffer tests](tests/log-buffer.test.ts) protect these invariants. Tool semantics, settings,
+and rendering are described in the [reference](docs/reference.md).

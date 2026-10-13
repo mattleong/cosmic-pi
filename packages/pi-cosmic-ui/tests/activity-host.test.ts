@@ -6,12 +6,14 @@ import * as Fiber from "effect/Fiber";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
+  deferredPromise,
   extensionApiFixture,
   extensionContextFixture,
   piKeybindingsFixture,
   plainTheme,
   terminalFixture,
   tuiFixture,
+  yieldUntil,
 } from "pi-cosmic-core/testing";
 import {
   ACTIVITY_EVENT,
@@ -47,6 +49,7 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     work.push(effect);
   });
   let redraws = 0;
+  const notifications: string[] = [];
   let terminalRows = 24;
   const terminal = terminalFixture({
     columns: 80,
@@ -83,7 +86,9 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
         if (mode === "throws-after-factory") throw new Error("installation failed after factory");
       },
       custom: surface.custom,
-      notify() {},
+      notify(message) {
+        notifications.push(message);
+      },
     },
   });
   let rows: readonly ActivityRow[] = [];
@@ -135,12 +140,66 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
       terminalRows = nextRows;
     },
     redraws: () => redraws,
+    notifications,
     pendingWork: () => work.length,
     disposeWidget: () => mountedWidget?.dispose?.(),
   };
 }
 
 describe("activity host lifecycle", () => {
+  it.effect("suppresses late action warnings after the host is replaced", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      const completion = deferredPromise();
+      let invoked = false;
+      const provider = fixture.register({
+        snapshot: () => [{ ...item(), actions: [{ id: "stop", label: "Stop", handoff: false }] }],
+        invoke: () => {
+          invoked = true;
+          return completion.promise;
+        },
+      });
+      yield* fixture.drain();
+      const { component } = yield* fixture.openManager();
+      component.render(120);
+      component.handleInput("x");
+      const action = yield* fixture.drain().pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* yieldUntil(() => invoked);
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      completion.reject(new Error("late action failure"));
+      yield* Fiber.join(action);
+      expect(fixture.notifications).toEqual([]);
+      provider.dispose();
+    }),
+  );
+  it.effect("reports current action failures and discards actions queued before retirement", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      let attempts = 0;
+      const provider = fixture.register({
+        snapshot: () => [{ ...item(), actions: [{ id: "stop", label: "Stop", handoff: false }] }],
+        invoke: () => {
+          attempts++;
+          return Promise.reject(new Error("unavailable"));
+        },
+      });
+      yield* fixture.drain();
+      const { component } = yield* fixture.openManager();
+      component.render(120);
+      component.handleInput("x");
+      yield* fixture.drain();
+      expect(attempts).toBe(1);
+      expect(fixture.notifications).toHaveLength(1);
+      component.handleInput("x");
+      fixture.host.deactivate();
+      yield* fixture.drain();
+      expect(attempts).toBe(1);
+      expect(fixture.notifications).toHaveLength(1);
+      provider.dispose();
+    }),
+  );
   it.effect("keeps a published phase checklist visible and recalculates its budget on resize", () =>
     Effect.gen(function* () {
       const fixture = harness();

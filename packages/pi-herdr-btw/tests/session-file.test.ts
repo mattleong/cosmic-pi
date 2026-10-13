@@ -127,6 +127,26 @@ describe("session-file identity", () => {
     expect(compareSessionFileIdentity(first, second)).toBe("distinct");
   });
 
+  it("compares the actual file when parent traversal follows a directory symlink", () => {
+    const lexicalDirectory = pathApi.join(dir, "identity-lexical");
+    const physicalDirectory = pathApi.join(dir, "identity-physical");
+    const nestedDirectory = pathApi.join(physicalDirectory, "nested");
+    mkdirSync(lexicalDirectory);
+    mkdirSync(nestedDirectory, { recursive: true });
+    const target = writeHeader("identity-physical/session.jsonl", "target-session");
+    writeHeader("identity-lexical/session.jsonl", "different-session");
+    const directoryAlias = pathApi.join(lexicalDirectory, "alias");
+    symlinkSync(nestedDirectory, directoryAlias);
+    const traversed = `${directoryAlias}${sep}..${sep}session.jsonl`;
+
+    expect(probeSessionHeader(traversed)).toMatchObject({
+      _tag: "valid",
+      header: { id: "target-session" },
+    });
+    expect(compareSessionFileIdentity(traversed, target)).toBe("same");
+    expect(compareSessionFileIdentity(target, traversed)).toBe("same");
+  });
+
   it("treats symlinks, missing files, and invalid paths as unavailable", () => {
     const target = writeHeader("identity-target.jsonl", "target");
     const symlink = pathApi.join(dir, "identity-symlink.jsonl");

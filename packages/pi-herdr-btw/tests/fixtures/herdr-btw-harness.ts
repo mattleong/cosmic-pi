@@ -90,6 +90,7 @@ export interface HerdrBtwFixtureOptions {
   readonly recordResult?: HerdrBtwLinkRecordResult;
   readonly liveAgents?: ReadonlyArray<HerdrPane>;
   readonly liveAgentSnapshots?: ReadonlyArray<ReadonlyArray<HerdrPane>>;
+  readonly onLiveAgentSnapshot?: (index: number) => void;
   readonly probes?: Readonly<Record<string, SessionHeaderProbe>>;
   readonly compareSessionFileIdentity?: SessionFileIdentityComparator;
   readonly failOperation?: string;
@@ -167,14 +168,15 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
     inspectPiIntegration: () =>
       run("inspect Pi integration", undefined, () => options.integrationCurrent ?? true),
     inspectLiveAgents: () =>
-      run(
-        "inspect live agents",
-        undefined,
-        () =>
-          options.liveAgentSnapshots?.[snapshotReads++] ??
+      run("inspect live agents", undefined, () => {
+        const index = snapshotReads++;
+        options.onLiveAgentSnapshot?.(index);
+        return (
+          options.liveAgentSnapshots?.[index] ??
           options.liveAgents ??
-          (startedAgentName === undefined ? [] : [startedAgentSnapshot(startedAgentName)]),
-      ),
+          (startedAgentName === undefined ? [] : [startedAgentSnapshot(startedAgentName)])
+        );
+      }),
     resolveCallingPane: () => run("resolve calling pane", undefined, () => parentPane),
     inspectPaneLayout: (paneId) =>
       run("inspect calling pane layout", { paneId }, () => ({

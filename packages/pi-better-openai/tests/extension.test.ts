@@ -4,7 +4,7 @@ import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { JsonDocumentError, JsonDocumentStore, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import {
   COSMIC_UI_HOST_QUERY,
@@ -33,23 +33,45 @@ const gateConfigCommits = Effect.gen(function* () {
   const committed = yield* Deferred.make<void>();
   const release = yield* Deferred.make<void>();
   let armed = false;
-  const modify = configStore.modifyConfig;
-  const gatedModify: typeof modify = (path, update) =>
-    modify(path, (raw) => {
-      const modification = update(raw);
-      if (!armed) return modification;
-      return {
-        ...modification,
-        afterCommit: Deferred.succeed(committed, undefined).pipe(
-          Effect.andThen(Deferred.await(release)),
-          Effect.andThen(modification.afterCommit ?? Effect.void),
-        ),
+  let failLoads = false;
+  const make = configStore.OpenAIConfigService.make;
+  vi.spyOn(configStore.OpenAIConfigService, "make").mockImplementation((options) =>
+    Effect.gen(function* () {
+      const documents = yield* JsonDocumentStore;
+      const gatedDocuments: typeof documents = {
+        ...documents,
+        exists: (path) =>
+          failLoads
+            ? Effect.fail(
+                new JsonDocumentError({ operation: "exists", path, message: "unavailable" }),
+              )
+            : documents.exists(path),
+        modifyObject: (path, update) =>
+          documents.modifyObject(path, (raw) =>
+            update(raw).pipe(
+              Effect.map((modification) =>
+                !armed
+                  ? modification
+                  : {
+                      ...modification,
+                      afterCommit: Deferred.succeed(committed, undefined).pipe(
+                        Effect.andThen(Deferred.await(release)),
+                        Effect.andThen(modification.afterCommit ?? Effect.void),
+                      ),
+                    },
+              ),
+            ),
+          ),
       };
-    });
-  vi.spyOn(configStore, "modifyConfig").mockImplementation(gatedModify);
+      return yield* make(options).pipe(Effect.provideService(JsonDocumentStore, gatedDocuments));
+    }),
+  );
   return {
     committed,
     release,
+    failLoads: () => {
+      failLoads = true;
+    },
     arm: (value: boolean) => {
       armed = value;
     },
@@ -106,15 +128,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       gate.arm(true);
       const pending = h.commands.get("openai")?.handler("settings image.enabled true", h.ctx);
       yield* Deferred.await(gate.committed);
-      vi.spyOn(configStore, "resolveConfig").mockReturnValue(
-        Effect.fail(
-          new configStore.OpenAIConfigError({
-            operation: "read",
-            path: "test",
-            message: "unavailable",
-          }),
-        ),
-      );
+      gate.failLoads();
       const replacement = yield* h
         .emit("session_start", { ...h.ctx })
         .pipe(Effect.forkScoped({ startImmediately: true }));

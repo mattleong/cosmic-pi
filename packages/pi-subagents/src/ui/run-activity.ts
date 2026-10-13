@@ -132,7 +132,12 @@ export function runActions(run: SubagentRunView, title: string, owned: boolean) 
 }
 
 const runIdentity = (run: SubagentRunView): string =>
-  JSON.stringify([run.reportGeneration, run.sessionId ?? null, run.question?.requestId ?? null]);
+  JSON.stringify([
+    run.assignmentEpoch,
+    run.reportGeneration,
+    run.sessionId ?? null,
+    run.question?.requestId ?? null,
+  ]);
 
 const runSummary = (
   run: SubagentRunView,

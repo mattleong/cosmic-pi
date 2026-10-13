@@ -13,16 +13,19 @@ const SUCCESS_MESSAGES = {
 } satisfies Record<HerdrBtwResult["mode"], string>;
 
 const sideSession =
-  (usage: string, run: SideSessionRun) =>
+  (usage: string, run: SideSessionRun, captureAuthority: () => () => boolean) =>
   (args: string, ctx: ExtensionCommandContext): Promise<void> => {
     if (ctx.mode !== "tui") {
       notifyHerdrBtw(ctx, `Open Pi in an interactive terminal to use ${usage}`, "warning");
       return Promise.resolve();
     }
+    const isCurrent = captureAuthority();
     const trimmed = args.trim();
     return run(trimmed === "" ? undefined : trimmed).then(
-      (result) => notifyHerdrBtw(ctx, SUCCESS_MESSAGES[result.mode], "info"),
+      (result) =>
+        isCurrent() ? notifyHerdrBtw(ctx, SUCCESS_MESSAGES[result.mode], "info") : undefined,
       (cause: unknown) => {
+        if (!isCurrent()) return;
         const message =
           cause instanceof HerdrBtwError ? cause.message : "Couldn't open a BTW side session";
         notifyHerdrBtw(ctx, message, "error");
@@ -32,18 +35,29 @@ const sideSession =
 
 export const registerHerdrBtwCommands = (
   pi: ExtensionAPI,
-  handlers: { readonly open: SideSessionRun; readonly openNew: SideSessionRun },
+  handlers: {
+    readonly open: SideSessionRun;
+    readonly openNew: SideSessionRun;
+    readonly captureAuthority: () => () => boolean;
+  },
 ): void => {
   registerExtensionCommand(pi, {
     name: HERDR_BTW_COMMAND,
     description: "Open or return to a side conversation in the current tab",
-    bare: { text: true, handler: sideSession(`/${HERDR_BTW_COMMAND}`, handlers.open) },
+    bare: {
+      text: true,
+      handler: sideSession(`/${HERDR_BTW_COMMAND}`, handlers.open, handlers.captureAuthority),
+    },
     subcommands: [
       {
         name: HERDR_BTW_NEW_SUBCOMMAND,
         arguments: "[prompt]",
         description: "Start a fresh side conversation and keep it as this session's side session",
-        handler: sideSession(`/${HERDR_BTW_COMMAND} ${HERDR_BTW_NEW_SUBCOMMAND}`, handlers.openNew),
+        handler: sideSession(
+          `/${HERDR_BTW_COMMAND} ${HERDR_BTW_NEW_SUBCOMMAND}`,
+          handlers.openNew,
+          handlers.captureAuthority,
+        ),
       },
     ],
   });

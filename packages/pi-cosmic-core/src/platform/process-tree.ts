@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { nodeSpawn } from "./node-builtins.ts";
@@ -22,6 +23,24 @@ export const signalProcessGroup = (pid: number | undefined, signal: NodeJS.Signa
 
 export const signalProcess = (pid: number | undefined, signal: NodeJS.Signals | 0) =>
   signalable(pid) ? send(pid, signal) : "failed";
+
+export const confirmProcessGroupExit = (
+  pid: number | undefined,
+  timeoutMillis: number,
+): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    while (true) {
+      const observed = signalProcessGroup(pid, 0);
+      if (observed === "absent") return true;
+      if (observed === "failed") return false;
+      // macOS may report EPERM briefly while a terminated group is being reaped.
+      yield* Effect.sleep(10);
+    }
+  }).pipe(
+    Effect.interruptible,
+    Effect.timeoutOption(Math.max(1, timeoutMillis)),
+    Effect.map((result) => Option.isSome(result) && result.value),
+  );
 
 export class ProcessTreeError extends Schema.TaggedError<ProcessTreeError>()("ProcessTreeError", {
   operation: Schema.String,

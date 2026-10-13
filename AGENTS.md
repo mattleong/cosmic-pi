@@ -16,53 +16,31 @@ This is a pnpm workspace. Shared configuration lives at the root; package source
 
 Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. Native `codemode` and MCP execution belong to Pi; the retired `pi-code-mode`, `pi-mcp`, and standalone `pi-mcp-previews` packages have no compatibility layer. Code Previews requires Pi 1.0.1 or later and is tested with 1.0.2. Previously installed standalone MCP Previews must be removed manually; never edit user configuration automatically.
 
-## Package layout
+## Architecture and organization
 
-Use this layout proportionally to the package's size. Read its `ARCHITECTURE.md` for current ownership and lifecycle details.
+Read the package's `ARCHITECTURE.md` and the relevant [shared contracts](docs/architecture/effect-v4.md) before changing ownership or lifecycle. Architecture files describe the current design; they are not a mandate to preserve existing package boundaries or file trees.
 
-```text
-src/
-  extension.ts          # required Pi registration entrypoint
-  layer.ts              # only when Effect composition is needed
-  application.ts        # small-package orchestration
-  application/          # replaces application.ts in larger packages
-    register.ts         # non-trivial command/event registration
-    lifecycle.ts        # start, replace, shutdown
-    state.ts            # application state
-  config/
-    schema.ts           # shape, defaults, enums, codecs
-    options.ts          # optional normalization and resolution
-    store.ts            # single persistence entrypoint
-  settings/
-    controller.ts       # settings commands and pickers
-    ui/                 # optional settings presentation
-  boundary/             # I/O and third-party adapters
-    host-*.ts           # dedicated Pi host adapters
-  <feature>/            # feature services, policy, and helpers
-  ui/                   # pure rendering and projection
-tests/**/*.test.ts
-ARCHITECTURE.md
-```
-
-- Only `extension.ts`, `layer.ts`, `application.ts`, and an optional `protocol.ts` re-export belong at an extension's `src/` root. Nest other modules by feature.
-- Use `controller.ts` for a real command or service API, not a re-export hub. Registration-only packages may omit application and Layer modules.
-- Config has one public persistence entrypoint, `config/store.ts`, including any Promise compatibility helpers. Do not add a peer `persistence.ts` or a separate service API for the same job. Name persistence modules store/service, never repository. Existing `resolve.ts` names may remain until renamed.
-- Keep Effect resources and authoritative state in feature services. Top-level `ui/` is pure. Feature-local rendering is allowed; document it in `ARCHITECTURE.md`.
-- Boundaries contain I/O or third-party adapters, not pure helpers. Dedicated Pi adapters use the `host-*` prefix. Leave direct stateless host calls at their call site rather than wrapping them solely for placement.
-- Prefer one public entrypoint per role and small implementation files. Split before roughly 400 to 500 lines of hard logic; do not merge files merely to reduce file count. Oxlint caps `src` files at 500 non-blank lines and every function at complexity 15.
-- Write no comments, no explicit `any`, and no type assertions other than `as const`; Oxlint rejects all three. Carry intent in names, types, and tests, and decode unknown input with Effect Schema instead of asserting its type.
-- Keep no backwards-compatibility, migration, or legacy paths. Rename and replace outright; Oxlint rejects identifiers containing "legacy" or "deprecated".
-- Put tests under package-root `tests/`, never under `src/`, and use `*.test.ts`, never `*.spec.ts`. Large packages should mirror source structure; small packages may use flat test names.
-- Keep each package's `ARCHITECTURE.md` concise and focused on ownership, boundaries, and lifecycle, not a full file tree. Update it when those change. Package-level `AGENTS.md` files must not conflict with this file.
-- Shared Effect platform code belongs in `pi-cosmic-core`; do not invent parallel runtime helpers in feature packages. Group core modules by concern. Keep the public `index.ts` and `testing.ts` exports that workspace packages use stable, and remove exports that nothing in the workspace uses.
+- Organize code around cohesive behavior and explicit state/resource owners. A module, service, or package boundary should isolate a responsibility, lifetime, external dependency, or reusable contract. Do not add layers or wrappers solely to match a template.
+- Keep Pi registration and Effect execution at identifiable host boundaries. `extension.ts`, `application.ts` or `application/`, and `layer.ts` are useful conventions where those roles exist; small extensions may combine them. Pure functions need no service or Layer.
+- Common locations include `config/` for schemas and persistence, `settings/` for commands and pickers, `boundary/` for I/O adapters, and feature directories for behavior. Names and placement may change when that improves cohesion. Prefer a discoverable public entrypoint for each role and one owner for each persisted document.
+- Services own application state, resources, and concurrency. Renderers consume synchronous projections without running services or acquiring application resources. Widgets may own local input, selection, focus, and layout state.
+- File size and function complexity are review signals. Split when responsibilities diverge or a unit becomes hard to understand; keep cohesive logic together. Do not split or merge solely to meet a count.
+- Use names and types to explain what code does. Add concise comments for nonobvious reasons, ownership handoffs, or external constraints; avoid narrating the implementation.
+- Keep strict TypeScript: no explicit `any` or type assertions other than `as const`. Decode unknown external input with Effect Schema.
+- Replace internal paths directly when refactoring. Preserve supported public contracts and saved data. Compatibility or migration code needs a concrete supported consumer, a documented lifetime, and behavioral coverage; do not retain speculative shims.
+- Package tests live under `tests/` and use `*.test.ts`, as required by the test runners. Organize them around behavior; mirroring source folders is optional.
+- Keep package `ARCHITECTURE.md` files focused on purpose, ownership, boundaries, lifecycle, and critical invariants. Link to focused integration notes and tests for detailed rationale. Avoid duplicating shared rules, source inventories, rendering constants, or change history.
+- Share platform/runtime capabilities through `pi-cosmic-core` when consumers need the same contract. Keep feature policy with its owner. Change package boundaries when that reduces coupling; preserve public exports consumed by the workspace or update their consumers together.
 
 ## Tool rendering
 
-Workspace-owned visible tools use `withCodePreviewShell` and list `pi-code-previews` as a runtime dependency. Follow `docs/architecture/tool-presentation.md` for compact policy, the issue model, content-only expansion, and conservative fallback. Exercise actual registered definitions or renderer-only callbacks with `pi-code-previews/testing`; preserve input, output, recovery, and native images through expansion. Headless tools and non-tool command/settings interfaces do not need the shell.
+Follow [tool presentation](docs/architecture/tool-presentation.md) for registration, replay, compact issues, full expansion, and fallback. Workspace-owned visible tools use `withCodePreviewShell` and declare `pi-code-previews` as a runtime dependency. Renderer-only integrations use `withCodePreviewRenderers`; headless tools and non-tool commands/settings do not need the shell.
 
-When trusted project settings apply, call `loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())` before wrapping and registering tools inside `session_start`. The wrapper captures its shell mode at registration time. Register `registerCodePreviewReplay` at factory time for owned tools registered during `session_start`, using the extension's unique command as its ownership anchor. Wrap through its `shell` after trusted settings load, publish only after successful tool registration, finish pending startup on settlement, and retire on shutdown. Historical replay must never execute tools or borrow another session's settings/scheduler. Wrap only executable tool definitions owned by the extension, never another extension's definitions. Explicit third-party presentation adapters use public renderer-only callbacks after exact package/source admission; keep them siloed from builtin/native admission. Report every error and warning as a `CompactIssue`: a short human-facing `message`, shown collapsed and expanded, plus optional expanded-only `detail` for agent-directed recovery and diagnostics. Messages follow the style rules in the presentation standard and never contain agent procedures or internal IDs; an unclassified failure may use `failureMessage`, and other text `firstLineMessage`. Check producer messages with `issueMessageStyleProblems` from `pi-code-previews/testing`. Keep full agent-facing evidence and expanded details unchanged. To review wording and layout, run `pnpm presentation:gallery`, which renders each package's env-gated `tests/presentation-gallery.test.ts` scenarios into the gitignored `presentation-gallery.txt`; add a scenario there when you add a visible state.
+Pi owns native codemode/MCP execution, activation, permissions, connections, and stored results. Presentation must not acquire execution authority. Code Previews uses a stable public renderer resolver with exact source admission; write's real before-write snapshot hook is the sole execution-hook exception. Owned tools retain their normal executable registrations.
 
-Code Previews registers one stable `pi.registerToolRenderer` resolver during factory loading for builtin/native and explicitly supported third-party presentation. Read only public renderer fields from `next()`, never an execution definition. Exact public builtin source metadata controls admission; unknown historical MCP names require the independent native manager. Do not compose or intercept native codemode/MCP factories, replace `/mcp`, change tool selection/exposure, or register execution definitions just for presentation. The sole exception is write's actual before-write snapshot hook, which preserves Pi's mutation queue and activation. Extension-owned user/task/subagent/image tools keep their normal executable registrations and use `withCodePreviewShell`; renderer-only integrations use `withCodePreviewRenderers`.
+Load trusted project preview settings before session tool registration. Factory-time replay bridges capture their originating owner, publish only after successful registration, settle startup, and retire on shutdown. Historical rendering must never execute tools or borrow another session's settings or scheduler.
+
+Every error or warning has a short human-facing `CompactIssue.message` visible collapsed and expanded; recovery procedures and diagnostics belong in expanded `detail`. Preserve complete input, output, recovery evidence, and native images through expansion. Exercise actual registrations or public renderer callbacks with `pi-code-previews/testing`, including `issueMessageStyleProblems` for issue producers. Use `pnpm presentation:gallery` for visual review and add a scenario when introducing a visible state.
 
 ## Testing policy
 
@@ -96,7 +74,7 @@ pnpm --filter <package-name> test
 pnpm validate
 ```
 
-Run both after architecture changes. TypeScript, type-aware Oxlint (`oxlint --type-aware` through `oxlint-tsgolint`), the Effect language service, and tests enforce the architecture rules.
+Run both after architecture changes. TypeScript, type-aware Oxlint (`oxlint --type-aware` through `oxlint-tsgolint`), the Effect language service, and tests check safety and behavior; review checks ownership and cohesion.
 
 Do not commit `node_modules/`, generated `dist/` output, local `.pi/` state, credentials, or generated images.
 

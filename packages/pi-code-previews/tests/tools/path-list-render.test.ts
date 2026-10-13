@@ -59,3 +59,11 @@ test("collapsed flat lists retain linear paths and hidden-lines markers", () => 
   assert.equal(lines[7], "file-11.ts");
   assert.match(lines.join("\n"), /Showing 7 of 12 paths/);
 });
+
+test("absolute listing paths stay distinct from relative paths and retain the root entry", () => {
+  const lines = renderCollapsed(["/", "/etc/hosts", "etc/passwd"]);
+
+  assert.ok(lines.includes("/"));
+  assert.ok(lines.includes("/etc/hosts"));
+  assert.ok(lines.includes("etc/passwd"));
+});

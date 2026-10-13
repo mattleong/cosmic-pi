@@ -12,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
+import { processGroupSignalError } from "pi-cosmic-core";
 import { ChildProcess } from "../src/boundary/child-process.ts";
 import { acquireLocalCliTransport } from "../src/boundary/local-cli-transport.ts";
 import {
@@ -23,6 +24,7 @@ import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 const boundary = {
   spawn: vi.fn<ProcessTransportRuntime["spawn"]>(),
   terminate: vi.fn<ProcessTransportRuntime["terminate"]>(),
+  confirmGroupExit: vi.fn<ProcessTransportRuntime["confirmGroupExit"]>(),
 };
 const nativeRequest = {
   executable: "fixture",
@@ -118,6 +120,7 @@ const openNative = (f: ReturnType<typeof fixture>) =>
 beforeEach(() => {
   boundary.spawn.mockReset();
   boundary.terminate.mockReset();
+  boundary.confirmGroupExit.mockReset().mockReturnValue(Effect.succeed(true));
 });
 
 describe("shared process transport", () => {
@@ -346,9 +349,71 @@ describe("shared process transport", () => {
       expect(boundary.terminate.mock.calls.map((call) => call[1])).toEqual(["graceful", "force"]);
     }),
   );
+
+  it.effect("retains cleanup failure when the leader exited but its process group remains", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      boundary.confirmGroupExit.mockReturnValue(Effect.succeed(false));
+      const { scope } = yield* openNative(f);
+      const cause = yield* finishTimed(
+        Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip),
+      );
+      expect(Cause.squash(cause)).toMatchObject({ code: "cleanup_unconfirmed" });
+      expect(f.stdin.destroyed).toBe(true);
+    }),
+  );
+
+  it.effect("confirms group absence after a failed final signal to an exited leader", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      boundary.terminate.mockImplementation((_child, mode) =>
+        mode === "graceful"
+          ? Effect.sync(f.finish)
+          : Effect.fail(processGroupSignalError("permission")),
+      );
+      const { scope } = yield* openNative(f);
+      yield* closeScope(scope);
+      expect(f.stdin.destroyed).toBe(true);
+      expect(boundary.confirmGroupExit).toHaveBeenCalled();
+    }),
+  );
 });
 
 describe("Pi transport policy", () => {
+  it.effect("includes unacknowledged Node IPC payloads in the process byte budget", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const scope = yield* Scope.make();
+      const agentDirectory = yield* temporaryDirectory("pi-transport-test-");
+      const context = yield* Layer.build(
+        ChildProcess.layer({ agentDirectory, transportRuntime: boundary }),
+      );
+      const service = Context.get(context, ChildProcess);
+      const handle = yield* start(
+        f.child,
+        service.spawn(backendLaunch()).pipe(Scope.provide(scope)),
+      );
+      const contact = {
+        channel: "pi-subagents",
+        type: "proxy_request",
+        requestId: "bounded",
+        tool: "subagent_start",
+        argumentsJson: "x".repeat(2 * 1024 * 1024),
+      };
+      f.child.emit("message", contact);
+      const first = yield* Queue.take(handle.events);
+      handle.acknowledge(first);
+      for (let index = 0; index < 3; index++) {
+        f.child.emit("message", contact);
+        expect(yield* Queue.take(handle.events)).toMatchObject({ type: "parent_contact" });
+      }
+      expect(boundary.terminate).not.toHaveBeenCalled();
+      f.child.emit("message", contact);
+      expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
+      expect(boundary.terminate).toHaveBeenCalled();
+      yield* closeScope(scope);
+    }),
+  );
   it.effect(
     "captures early IPC, leaves parser overflow to the backend, and preserves Pi frame policy",
     () =>

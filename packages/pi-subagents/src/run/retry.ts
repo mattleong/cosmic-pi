@@ -154,7 +154,9 @@ const retryResourceFailure = (
 };
 
 export function makeRunRetry(
-  dependencies: RunContext & { readonly allocateClaimToken: () => string },
+  dependencies: Pick<RunContext, "records" | "withLock" | "publish" | "requireRecord"> & {
+    readonly allocateClaimToken: () => string;
+  },
 ) {
   const { records, withLock, publish, allocateClaimToken, requireRecord } = dependencies;
 

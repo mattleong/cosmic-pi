@@ -159,5 +159,5 @@ export const openRegisteredFleet = function* (register: (pi: ExtensionAPI) => vo
     press("\u001b");
     yield* step(() => running);
   };
-  return { fleet, press, settled, close };
+  return { fleet, press, settled, close, completion: running };
 };

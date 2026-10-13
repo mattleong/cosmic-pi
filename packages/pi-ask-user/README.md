@@ -34,7 +34,7 @@ The agent calls the tools and you answer in the overlay. A typical call:
       "prompt": "Which date library should we use?",
       "mode": "single",
       "choices": [
-        { "value": "date-fns", "label": "date-fns" },
+        { "value": "date-fns", "label": "date-fns", "description": "Small functional helpers." },
         { "value": "luxon", "label": "Luxon", "description": "Richer timezone support." }
       ]
     }

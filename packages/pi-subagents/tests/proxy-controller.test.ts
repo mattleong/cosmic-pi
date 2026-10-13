@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { describe, expect } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import { SubagentProfileService } from "../src/profiles/service.ts";
 import {
@@ -8,7 +8,7 @@ import {
   SubagentProcessError,
   type SubagentError,
 } from "../src/run/errors.ts";
-import type { SubagentRunView } from "../src/run/model.ts";
+import type { SubagentControlExpectation, SubagentRunView } from "../src/run/model.ts";
 import { SubagentService, type SubagentServiceContract } from "../src/run/service.ts";
 import { SUBAGENT_TOOL_NAME } from "../src/run/tool-policy.ts";
 import {
@@ -16,6 +16,12 @@ import {
   type SubagentProxyCall,
 } from "../src/settings/proxy-controller.ts";
 import { makeCompactToolDetails } from "../src/tools/details.ts";
+import {
+  decodeFleetActionRequest,
+  encodeFleetActionRequest,
+  executeFleetSnapshot,
+  fleetSnapshotProxyRequest,
+} from "../src/tools/proxy-fleet.ts";
 import { executeSubagentActionEffect } from "../src/tools/execute.ts";
 import { steeringDeliveryEvidence } from "../src/tools/outcome.ts";
 import {
@@ -25,7 +31,7 @@ import {
 import type { SubagentToolInput } from "../src/tools/schema.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { openRegisteredFleet } from "./fixtures/profile-settings-inspection.ts";
-import { effectTest } from "./support/effect-test.ts";
+import { effectTest, step } from "./support/effect-test.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import {
   context,
@@ -55,6 +61,8 @@ type RootResponder = (input: SubagentToolInput) => Promise<AgentToolResult<unkno
 interface ProxyFleetOptions {
   readonly service?: Partial<SubagentServiceContract>;
   readonly respond?: RootResponder;
+  readonly snapshot?: () => Promise<AgentToolResult<unknown>> | undefined;
+  readonly isCurrent?: () => boolean;
 }
 
 const openProxyFleet = function* (
@@ -68,7 +76,7 @@ const openProxyFleet = function* (
     ...options.service,
   });
   const rootPi = extensionApiFixture({});
-  const root = (input: SubagentToolInput) =>
+  const root = (input: SubagentToolInput, expected: SubagentControlExpectation) =>
     Effect.runPromise(
       executeSubagentActionEffect(
         rootPi,
@@ -77,6 +85,9 @@ const openProxyFleet = function* (
         undefined,
         context,
         CALLER,
+        undefined,
+        false,
+        expected,
       ).pipe(
         Effect.provideService(SubagentService, service),
         Effect.provideService(SubagentProfileService, fallbackProfileService),
@@ -87,22 +98,161 @@ const openProxyFleet = function* (
       if (!decoded) throw new Error("Root proxy result failed to round-trip.");
       return decoded;
     });
-  const call: SubagentProxyCall = (input) => {
-    calls.push(input);
-    return options.respond?.(input) ?? root(input);
+  const call: SubagentProxyCall = (input, expected) => {
+    const decoded = decodeFleetActionRequest(encodeFleetActionRequest(input, expected));
+    if (decoded instanceof InvalidSubagentRequestError) return Promise.reject(decoded);
+    calls.push(decoded.input);
+    return options.respond?.(decoded.input) ?? root(decoded.input, decoded.expected);
   };
+  let snapshots = 0;
+  const snapshot = (signal: AbortSignal) =>
+    (
+      options.snapshot?.() ??
+      Effect.runPromise(
+        executeFleetSnapshot(fleetSnapshotProxyRequest, CALLER).pipe(
+          Effect.provideService(SubagentService, service),
+        ),
+        { signal },
+      )
+    ).then((result) => {
+      const decoded = decodeSubagentProxyResult(encodeSubagentProxyPayload(result) ?? "");
+      if (!decoded) throw new Error("Fleet snapshot failed to round-trip.");
+      snapshots += 1;
+      return decoded;
+    });
   const fleet = yield* openRegisteredFleet(
-    (pi) => registerSubagentProxyManagerCommand(pi, CALLER, call),
+    (pi) =>
+      registerSubagentProxyManagerCommand(
+        pi,
+        CALLER,
+        call,
+        snapshot,
+        options.isCurrent ?? (() => true),
+      ),
     160,
   );
   const toolCalls = (tool: string) => calls.filter((input) => input.tool === tool);
-  return { ...fleet, toolCalls };
+  const refreshed = function* () {
+    const before = snapshots;
+    yield* step(() => vi.waitFor(() => expect(snapshots).toBeGreaterThan(before)));
+  };
+  return { ...fleet, toolCalls, refreshed };
 };
 
 const sendGuidance = (fixture: { readonly press: (...keys: string[]) => void }) =>
   fixture.press("m", "h", "i", ENTER);
 
 describe("nested /subagents proxied actions", () => {
+  effectTest(
+    "closes a retired fleet and stops refreshing without further user input",
+    function* () {
+      let current = true;
+      const snapshot = vi.fn(() => undefined);
+      const fixture = yield* openProxyFleet(() => [caller, child()], {
+        isCurrent: () => current,
+        snapshot,
+      });
+      let closed = false;
+      void Promise.resolve(fixture.completion).then(
+        () => {
+          closed = true;
+          return undefined;
+        },
+        () => undefined,
+      );
+      current = false;
+      yield* step(() => vi.waitFor(() => expect(closed).toBe(true)));
+      expect(snapshot).toHaveBeenCalledTimes(1);
+      expect(fixture.fleet.render(160)).toEqual([]);
+    },
+  );
+
+  effectTest(
+    "carries the captured question identity before the next snapshot refresh",
+    function* () {
+      const original = child({
+        state: "waiting_for_parent",
+        assignmentEpoch: 4,
+        sessionId: "first-session",
+        question: { requestId: "first-question", message: "Proceed?" },
+      });
+      let runs = [caller, original];
+      const received: SubagentControlExpectation[] = [];
+      const fixture = yield* openProxyFleet(() => runs, {
+        service: {
+          reply: (_id, _message, expected) => {
+            if (expected) received.push(expected);
+            return Effect.fail(
+              new InvalidSubagentRequestError({
+                code: "run_control_stale",
+                message: "The question changed before this reply was admitted.",
+              }),
+            );
+          },
+        },
+      });
+      fixture.press("m", "y", "e", "s");
+      runs = [
+        caller,
+        child({
+          state: "waiting_for_parent",
+          assignmentEpoch: 5,
+          question: { requestId: "second-question", message: "Proceed?" },
+        }),
+      ];
+      fixture.press(ENTER);
+      expect(yield* fixture.settled()).toBe("error");
+      expect(received).toEqual([
+        {
+          assignmentEpoch: 4,
+          sessionId: "first-session",
+          state: "waiting_for_parent",
+          questionRequestId: "first-question",
+        },
+      ]);
+      yield* fixture.close();
+    },
+  );
+
+  effectTest("keeps children beyond the public tool's display-card limit selectable", function* () {
+    const runs = Array.from({ length: 32 }, (_, index) =>
+      child({ id: `child-${index}`, name: `child-${index}` }),
+    );
+    const fixture = yield* openProxyFleet(() => [caller, ...runs], {
+      service: { stop: (id) => Effect.succeed(child({ id, state: "stopped" })) },
+    });
+    fixture.press("G", "x", "x");
+    expect(yield* fixture.settled()).toBe("success");
+    expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.lifecycle)).toEqual([
+      { tool: SUBAGENT_TOOL_NAME.lifecycle, args: { action: "stop", runIds: ["child-31"] } },
+    ]);
+    yield* fixture.close();
+  });
+
+  effectTest("keeps exact question identity across private snapshot refreshes", function* () {
+    let runs = [
+      caller,
+      child({
+        state: "waiting_for_parent",
+        question: { requestId: "first", message: "Proceed?" },
+      }),
+    ];
+    const fixture = yield* openProxyFleet(() => runs);
+    fixture.press("m", "y", "e", "s");
+    runs = [
+      caller,
+      child({
+        state: "waiting_for_parent",
+        question: { requestId: "second", message: "Proceed?" },
+      }),
+    ];
+    yield* fixture.refreshed();
+    fixture.press(ENTER);
+    expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.reply)).toHaveLength(0);
+    fixture.press("\u001b");
+    yield* fixture.close();
+  });
+
   effectTest("confirms delivered guidance from the target's own run card", function* () {
     const fixture = yield* openProxyFleet(() => [caller, child()], {
       service: { send: (id) => Effect.succeed(child({ id })) },
@@ -301,10 +451,8 @@ describe("nested /subagents proxied actions", () => {
     let refreshFails = false;
     const fixture = yield* openProxyFleet(() => [caller, child()], {
       service: { send: (id) => Effect.succeed(child({ id })) },
-      respond: (input) =>
-        refreshFails && input.tool === SUBAGENT_TOOL_NAME.list
-          ? Promise.reject(new Error("Refresh unavailable."))
-          : undefined,
+      snapshot: () =>
+        refreshFails ? Promise.reject(new Error("Refresh unavailable.")) : undefined,
     });
     refreshFails = true;
     sendGuidance(fixture);
@@ -322,10 +470,8 @@ describe("nested /subagents proxied actions", () => {
             new InvalidSubagentRequestError({ code: "run_not_running", message: SEND_FAILURE }),
           ),
       },
-      respond: (input) =>
-        refreshFails && input.tool === SUBAGENT_TOOL_NAME.list
-          ? Promise.reject(new Error("Refresh unavailable."))
-          : undefined,
+      snapshot: () =>
+        refreshFails ? Promise.reject(new Error("Refresh unavailable.")) : undefined,
     });
     refreshFails = true;
     sendGuidance(fixture);

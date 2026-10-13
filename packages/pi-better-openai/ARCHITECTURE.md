@@ -1,63 +1,134 @@
 # Better OpenAI architecture
 
-## Purpose
+Better OpenAI adds subscription usage, fast-mode request injection, provider-native
+compaction, image generation, and settings to Pi. This document maps ownership and
+the invariants that make those integrations safe. Module boundaries may change
+while those responsibilities remain explicit.
 
-Adds OpenAI subscription usage, fast-mode request injection, provider-native compaction, image generation, settings, and footer output to Pi.
+## Ownership and dependencies
 
-## Host surface
+| Owner                                                                 | Responsibility                                                                                                        |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [Application](src/application.ts) and [Layer](src/layer.ts)           | Pi commands/events, one session runtime, activation authority, synchronous projections, and service composition.      |
+| [Config store](src/config/store.ts)                                   | Resolved configuration, serialized settings/fast commits, and committed-config notifications to consumers.            |
+| [Usage](src/usage/controller.ts)                                      | Refresh admission, polling, stale-result rejection, and usage projections.                                            |
+| [Fast mode](src/fast/service.ts)                                      | Desired versus model-eligible state and the scoped ingress for synchronous request-injection receipts.                |
+| [Compaction](src/compaction/service.ts)                               | Owned checkpoints, complete-context reconstruction, encrypted reuse, and safe native fallback.                        |
+| [Images](src/image/service.ts)                                        | A captured request context/configuration, bounded streaming, validation, and file publication.                        |
+| [Settings](src/settings/controller.ts) and [UI](src/ui/primitives.ts) | Package-specific settings actions and pure footer data. Cosmic UI owns the shared settings surface and custom footer. |
 
-- Flag: `--fast`.
-- Command: one `/openai` root from core's `registerExtensionCommand`, created at load in `src/application.ts` with `usage` and `fast`; `src/settings/controller.ts` adds `settings`, and `src/image/register.ts` adds or replaces `image` at each session activation alongside the image tool.
-- Renderers: Pi draws history before `session_start`, so the factory registers the `openai-image` message renderer and a renderer-only `registerCodePreviewReplay` bridge for `openai_image`, anchored to `/openai`. Neither registers execution or changes tool activation.
-- Events: session lifecycle, agent/turn/model/message changes, `session_before_compact`, `context_with_system`, `before_provider_headers`, and `before_provider_request`.
+Core supplies runtime, configuration, HTTP, process, and file primitives. Code
+Previews supplies the image tool's presentation shell and replay bridge. Pi owns
+authentication refresh, tool execution, transcript persistence, and native image
+rendering. [Codex auth](src/auth/codex-auth.ts) obtains credentials only through
+Pi's model registry and keeps them redacted until the HTTP boundary. Provider
+bodies, native decoder errors, and secrets stay out of diagnostics.
 
-## Source map
+## Lifecycle and configuration
 
-- `src/extension.ts` is the thin Pi package entrypoint.
-- `src/application.ts` coordinates commands, host events, projections, and one session runtime.
-- `src/layer.ts` composes usage, fast-mode, compaction, image, animation-scheduler, platform, and file/Sharp Layers.
-- `src/auth/codex-auth.ts` reads `openai-codex` credentials only through Pi's model registry `getProviderAuth`, which owns refresh and persistence, and lossily parses the key as a JSON credential payload or an account-bearing JWT. A rejected lookup fails with a fixed `CodexAuthError`, an empty key is missing, and an unparseable non-empty key is `registry-decode`. Tokens remain `Redacted` until usage or image HTTP code constructs an authorization header. The diagnostics `Auth file:` line names Pi's default credential store.
-- `src/usage/controller.ts`, `src/fast/service.ts`, `src/compaction/service.ts`, and `src/image/service.ts` are the feature Context service doors.
-- `src/usage/projection.ts` owns frozen usage projection policy, and `debug.ts` owns deterministic diagnostics. `format.ts` defines the usage HTTP schema and projects its decoded root and primary bucket directly. It still decodes the unknown additional-limit entries before selecting the Spark bucket.
-- `src/image/register.ts` owns image host names and registration. Registration captures session authority for runtime admission and rechecks it with the originating signal immediately beside queued command delivery; retired definitions reject before context writes or progress. Its factory-time message renderer reads the current presentation policy per render and displays saved paths against the latest cwd from activation or a current command/tool call; retired definitions never update it. Activation wraps the tool through the replay `shell` after trusted preview settings load, publishes only after registration succeeds, and the first `session_start` settlement closes an unpublished startup; shutdown retires adoption. `service.ts` captures one context/config snapshot, resolves request options once, and orchestrates auth, HTTP, validation, and saving. `protocol.ts` builds requests from those resolved values and schema-decodes provider events into a normalized internal union.
-- `src/image/tool-result.ts` owns the version-1 `pi-better-openai/image` Effect schema, strict JSON codec, core `toPiToolOutputSchema` derivation, and pure service-result projection/formatting. Registration attaches the output schema before the preview shell. Native scripts receive metadata plus a required `{ type: "image", data, mimeType }` image block, even with a saved path or `save:none`; no root byte field or byte decode/re-encode is added, and prompts stay verbatim. Normal content remains text plus one image, details remain byte-free, and command messages are unchanged. Encoding invariant failures keep the original text/image/details with `isError` and no structured payload or codec diagnostics; service failures and cancellation still reject. No new state or persistence is owned here. Real native-codemode tests use the owned service seam and verify pinned Pi 1.0.2 persists only the normal image, not another structured copy. `save:project` supplies workspace-contained edit inputs; `save:none` skips Better OpenAI files, not Pi history. Pi 1.1 may additionally save `image()` output temporarily, unlike pinned 1.0.2; no temporary-path contract is assumed. Native output/VM limits are independent of the unchanged 60 MiB image validation limit.
-- `src/image/compact-summary.ts` supplies a pure semantic opt-in to the cooperative preview shell, and the one classification both tool results and command messages use. It classifies validated image details, uses a shortened prompt as its subject with the saved file name as metadata, and declines unknown results or attachment-bearing errors. A failed status projects one error issue and typed incomplete states project one warning issue. Text-only failures project an error issue from the first line of their text; the full text stays in the labeled raw result. Expanded content already states the saved path, so no issue repeats it. Pi still owns native result images; execution and session resources are unchanged.
-- `src/image/presentation.ts` owns the preview heading and the image body shared by tool results and command messages: format, size, and saved file, then the revised prompt and any raw text once expanded. In preview style the body states a cancellation the call did not report as an error; the shell states the ones it did. `src/image/message.ts` renders `/openai image` messages with the same heading, issue lines, and body the shell draws for the tool, so a message and a tool result for one record read the same. Pi owns native tool images; the message renderer owns the Image component built from its image content part. Execution bytes are unchanged. Validated cancellation remains cancellation even when the host reports an error.
-- `src/image/input.ts` owns input MIME detection and workspace containment. `stream.ts` owns bounded SSE framing and terminal outcomes. `output.ts` owns strict base64 decoding, output-format metadata, output containment, generated-byte validation, and publication. `types.ts` retains only contracts, constants, and the shared image-details guard used by the renderer and compact summary.
-- `src/config/schema.ts` owns config shapes and defaults, `options.ts` owns setting descriptors (update decoding is shared core `decodeSettingUpdate`), and `store.ts` is the persistence door. `src/fast/controller.ts`, `src/fast/routing.ts` (including the Codex routing header), `src/fast/models.ts`, and `src/image/protocol.ts` contain deterministic policy and protocol logic.
-- `src/boundary/` isolates Pi UI, the cached Codex transport reset, schema-encoded and response-bounded OpenAI compaction HTTP, and Sharp. Best-effort UI effects call the total `pi-cosmic-core` host callback adapter and add no ignored error channel. `host-ui.ts` also owns the command-failure containment shared by `/openai fast`, `/openai usage`, and `/openai image`: current-session typed failures and defects warn, and interrupts stay silent. Its actual notification callbacks recheck the captured command/session authority, including foreign-Promise failure settlement before deferred runtime disposal. Footer and usage projection code call the shared core OAuth host helper directly.
-- `src/ui/primitives.ts` projects frozen provider state into plain footer contributions. Application orchestration queries Cosmic UI's v2 ownership, readiness, and visibility policy. Cosmic UI is the only custom-footer owner; providers use its sanitized keyed-status helper when no custom footer is active. Provider config has no footer mode or usage-display switch. Hidden usage suppresses automatic requests and both output paths, while the explicit usage command remains available. Visibility changes invalidate pending usage results and refresh newly visible usage. Deactivation removes contributions and clears provider status. Image tools retain the cooperative code-preview shell. The session Layer includes the animation scheduler, and startup returns it with the fast-mode ingress through activation. Image registration receives a generation-checked scheduler callback; replacement and shutdown revoke scheduling and dispose ticks without relying on shared extension modules.
-- `src/settings/controller.ts` adds `/openai settings` through Cosmic UI's shared settings subcommand (`pi-cosmic-ui/boundary/host-settings-command`), which owns completions, help, guarded diagnostics, validation messages, and the shared apply with its per-change `id = value` notice. `updateContext` runs on every invocation and before each apply. The signal is optional: each apply rereads it, a throwing getter applies without one, and a rejected apply warns unless its signal has aborted. Without a custom-UI TUI, the bare command shows help. The controller supplies the persistence call and keeps its grouped picker, which opens through the shell's `openSettingsList` with its guarded host rendering; a throwing factory or failing `custom` call reports a failed open. The picker owns category-summary reconciliation from the authoritative projection after each write and the redacted-config refresh. Redacted raw configuration is rendered with standard JSON serialization. Cosmic UI projects config descriptors and owns the shared category submenu and diagnostic text panel; Better OpenAI supplies plain rows, persistence actions, and package-specific summaries. The outer adapter owns search; the small nested category lists do not create a second search input. `status` prints the diagnostics; in the picker, the Diagnostics item's id is `diagnostics`.
+Factory loading registers `/openai`, the service-free `openai-image` message
+renderer, and the renderer-only image replay bridge. `session_start` creates the
+session runtime, loads trusted preview settings, initializes services, and activates
+the current session's image command/tool and request-injection ingress. The replay
+bridge publishes only after successful tool registration; startup settlement
+closes unsuccessful adoption. Replacement or shutdown revokes publication and
+scheduling authority before clearing projections and disposing scoped work.
 
-## State and resources
+Commands and retained tool definitions capture their originating session's
+authority. Delayed UI callbacks and queued image delivery check it beside the host
+action, so an old invocation cannot enter a replacement runtime or repaint its UI.
+A retired durable commit may finish privately; it cannot restore projections or
+notify. Compaction hooks capture the same authority: retirement cancels pending
+compaction and prevents delayed context repair or payload rewrites from reaching
+the host. See [compaction lifecycle tests](tests/compaction-lifecycle.test.ts),
+[extension lifecycle tests](tests/extension.test.ts),
+[image admission/delivery tests](tests/image-registration.test.ts), and
+[host failure tests](tests/host-ui.test.ts).
 
-Usage, fast mode, compaction, and image work are scoped services. They publish immutable projections for synchronous request injection and rendering. Fast mode serializes a private `Ref` with one `Semaphore`; lock waiting and precommit I/O remain interruptible. Its snapshots contain only owned boolean and string state, so cloning and freezing are total by contract. The boundary snapshot and backing `Ref` commit together in one narrow uninterruptible region. Persisted transitions run that complete commit inside config persistence's durable `afterCommit`, without reacquiring the fast permit, so interruption cannot leave the private state behind the document or projection. Only an explicit toggle or setting, or a `--fast` flag that changes the resolved intent, writes the document; startup and model switches commit in memory. Fast-only config commits neither invalidate pending usage results nor wake usage polling; they recompute usage eligibility against the committed config. Fast-mode startup returns its scoped injection ingress through the session slot, so only the current activation can install it and deactivation immediately restores a no-op boundary. Each session input owns publication authority revoked synchronously before projection reset and runtime disposal; usage/fast commits may finish privately or durably but cannot republish or notify. Settings capture that authority at invocation, and all delayed host callbacks recheck it adjacent to delivery. Omitted project-trust input is treated as untrusted; project-local configuration is read only after literal-true trust. OpenAI checkpoints live in normal branch-local Pi compaction entries under typed extension details. Pi retains the original branch for tree navigation; only its last entry stays in the new active context. Image streaming, file handles, and background refresh work are owned by the session runtime. Output writing opens, identifies, writes, and syncs the temporary file inside a nested scope, so its handle closes before publication. The outer pathname acquisition retains identity-checked cleanup. Image publication commits at the exclusive hard link. After that link succeeds, verification may report a positive identity mismatch but never removes the destination, which may already be a foreign replacement.
+`OpenAIConfigService` owns configuration independently of usage. Settings and fast
+mode commit through it; images and compaction read its dedicated configuration
+projection. Usage registers a scoped observer under the configuration update gate
+before starting polling, so initialization cannot miss a concurrent change.
+Project configuration requires explicit trust, and writes preserve unknown JSON
+fields. A durable fast transition commits its document, private state, and
+synchronous projection together through the store's `afterCommit` region, without
+reacquiring the fast permit.
+Waiting and preparation remain interruptible. Startup writes only when `--fast`
+changes resolved intent; model switches stay in memory. Fast-only commits preserve
+in-flight usage results and do not wake polling. See [config tests](tests/config.test.ts),
+[config service tests](tests/config-service.test.ts), and
+[fast commit tests](tests/fast-service.test.ts).
 
-Sharp runs only in the shipped `src/boundary/sharp-decoder.mjs` one-shot process. `boundary/sharp.ts` opts into core `runBoundedProcessNode` with fixed `process.execPath` and helper path, no shell or caller argv/environment. Both sides reject stdin over 60 MiB. The child fully decodes all animation pages with strict error handling, a 40-million-pixel limit, sequential reads, and uchar sRGB raw output of at most four channels. Sharp cache is disabled and concurrency is one, only inside the child. Only bounded, schema-decoded format JSON crosses back; native errors, stderr, and pixels never reach callers.
+Usage visibility comes from Cosmic UI: hiding it suppresses automatic requests
+and both footer/status output paths, while `/openai usage` remains available.
+Visibility/context changes invalidate pending usage results. Services publish
+immutable snapshots; synchronous renderers and provider hooks read those snapshots
+without running effects. Shared host rules are in
+[Pi boundaries](../../docs/architecture/pi-boundaries.md).
 
-One module-private immediate semaphore shares admission across session runtimes. Busy calls fail rather than queue image buffers. Its permit covers the runner's entire process scope, including cancellation cleanup. The 30-second execution deadline terminates the process, with a two-second cleanup confirmation budget and forced SIGKILL fallback. Sharp's cooperative 30-second raw timeout is secondary and does not bound metadata. Stream destruction is not native cancellation. Core's finalizer reports explicit child-exit confirmation through `onCleanup`, even on interruption or stream failure. Sharp defaults to unconfirmed and latches disabled before releasing admission unless cleanup confirms exit. A failed or partial spawn without a returned handle also disables decoding until restart, since the platform cannot prove no child survived. Confirmed cancellations remain reusable; a successful scope return or kill call alone is not confirmation. If the OS cannot terminate a child, core's platform finalizer can wait beyond these budgets for actual exit; ownership and the permit remain held, so shutdown has no unconditional wall-clock guarantee. The subprocess and pixel limits constrain work but are not an OS memory sandbox.
+## Compaction and transcript authority
 
-## Compaction
+[Projection](src/compaction/projection.ts) uses public Pi transcript and Responses
+conversion APIs, with the native provider's tool and grammar options. Projection
+and injection omit the same leading instruction prefix while preserving later
+system updates. Checkpoints live in ordinary branch-local compaction entries with
+typed extension details; the original branch remains navigable.
 
-Compaction projects Pi's persisted transcript through public `normalizeContext`, `resolveTranscript`, and the Responses converter with the native provider's transcript, tool-addition, tool-search, and grammar options. Effect JSON codecs serialize the converter output before validation, matching the SDK's omission of optional undefined fields. Projection and injection exclude the same leading instruction prefix; mid-conversation system updates remain in the counted input.
+[Context reconstruction](src/compaction/context.ts) remains active for an owned
+checkpoint even after compaction is disabled or the model changes. It reconstructs
+complete plaintext, including tool results/images, canonical system updates, and
+branch-local context edits, without mutating history or crossing an earlier
+ordinary Pi compaction boundary. Retry omissions are accepted only for eligible
+assistant responses on the active branch; stored omission metadata cannot delete
+user, system, tool, successful assistant, or future-tail messages.
 
-Each new checkpoint keeps only the last pre-compaction branch entry, never an older compaction. `compaction/context.ts` reconstructs the plaintext conversation whenever the latest compaction is owned, regardless of configuration or current model. It replaces owned entries with inert cloned parent anchors before public `buildSessionProjection` applies the last ordinary Pi compaction boundary, suppresses retained older compaction contributions, and applies branch-local `context_edit` omissions and replacements. Projected entry clones preserve source IDs for fallback boundaries without changing raw history. Public `getCurrentSystemMessage` folds the original prompt updates through the checkpoint instead of trusting persisted compaction snapshots. Reconstruction emits that canonical system snapshot, the covered conversation with complete tool results and images, and genuine post-checkpoint updates. It never changes persisted entries or resurrects history summarized by ordinary Pi compaction.
+Repair uses `context_with_system` because Pi's conversation-only hook cannot repair
+prompt/tool authority. It replaces only a verified native session prefix and keeps
+other extensions' appended context. Failed repair aborts the request: Pi otherwise
+contains extension exceptions and could continue with incomplete context.
+Encrypted reuse additionally requires matching-model, JSON-equivalent provider
+prefixes. New covered omissions or edits invalidate reuse; complete plaintext is
+the safe alternative. See [context tests](tests/compaction-context.test.ts) and
+[projection tests](tests/compaction-projection.test.ts).
 
-The `context_with_system` hook replaces only an identified canonical native session prefix and preserves non-session additions after it. Pi's conversation-only `context` hook cannot own prompt/tool repair. Prefix matching uses public projected contributions, not raw entry messages. Matching permits Pi's retry omission of persisted assistant `error` or `length` responses, but requires every other native message. A session-scoped Ref tracks observed omissions; actual native reappearance or tree navigation clears transient evidence. `willRetry` preparation accounts for the final response Pi removes before continuing. Checkpoint `omittedEntryIds` preserves covered exclusions across checkpoints and reload, with active-branch and assistant-stop-reason checks preventing metadata from deleting user, system, tool, successful assistant, or future-tail messages. Newly observed covered omissions and post-checkpoint context edits targeting covered entries disable stale encrypted reuse; the next checkpoint compacts the edited plaintext instead. A failed repair aborts the Pi run with a sanitized warning, because Pi contains extension exceptions. Encryption is optional: eligible matching-model requests replace the reconstructed covered prefix only after JSON-equivalent provider-prefix verification. A mismatch leaves complete plaintext. Subsequent OpenAI compaction uses that same reconstructed coverage to combine encrypted output with new tail input.
+[Fallback](src/compaction/fallback.ts) prepares native compaction from that same
+reconstructed history through public Pi APIs, preserving tool groups, prior
+ordinary summaries, file operations, auth, and routing. It cancels if no safe cut
+exists or Pi would persist a stale system/tool snapshot that supersedes repair.
+It never hands Pi incomplete preparation. Usage is returned on the native
+compaction result; cost remains Pi's catalog estimate for the captured model.
+See [compaction service tests](tests/compaction-service.test.ts).
 
-`compaction/fallback.ts` prepares public native compaction from reconstructed history when configuration is disabled, the model changes, or the OpenAI endpoint fails. Public `findCutPoint` keeps tool groups intact and limits retention to entries after the owned checkpoint and any omitted response, so native replay cannot reinsert an omitted tail. Public `prepareBranchEntries` supplies file operations, not messages, since it omits tool results. Previous ordinary summaries and file operations survive. `boundary/host-compaction.ts` calls public `compact` through `ModelRegistry.streamSimple`, preserving native authentication and runtime selection with scoped cancellation, instructions, thinking level, and session routing. The ordinary result supersedes repair. Missing safe boundaries or failed fallback cancel compaction rather than passing Pi an incomplete preparation. Unowned sessions keep normal native fallback behavior. Pi persists an ordinary compaction's system snapshot from its unfiltered session, not the repaired request. If native system state differs from reconstructed prompt sections or tool authority, fallback cancels rather than freezing that stale state and superseding repair. Full request-time repair still works; no persisted transcript mutation is attempted.
+## Image isolation and publication
 
-The service returns native `CompactionResult.usage`; Pi stores and totals it on the compaction entry without a second usage entry. Uncached input excludes cached tokens. Public `calculateCost` uses the captured request model's custom rates and token tiers. This is a catalog estimate, not an invoice-exact priority price: Pi's public calculator does not apply provider-private priority multipliers.
+[Input](src/image/input.ts) enforces workspace containment.
+[Output](src/image/output.ts) validates generated bytes and owns temporary files
+by identity. It closes the written/synced file before publication, then commits at
+an exclusive hard link. Cleanup removes only the owned temporary file; a
+post-commit identity mismatch never removes a destination that may now belong to
+someone else. [Resource tests](tests/image-resources.test.ts) protect collisions,
+interruption, and lost verification.
 
-## Lifecycle
+[Sharp](src/boundary/sharp.ts) runs only in the shipped
+[one-shot decoder](src/boundary/sharp-decoder.mjs), through core's bounded process
+runner with a fixed executable/helper and no shell or caller-supplied environment.
+It fully decodes animation pages under byte/pixel/output limits; only bounded,
+schema-decoded format metadata returns. One process-wide immediate permit rejects
+busy calls instead of queuing image buffers and remains held through cleanup.
+Decoding stays disabled after unconfirmed child exit, including partial spawn:
+scope success or a successful kill request is not proof of termination. Deadlines
+and process isolation are neither an OS memory sandbox nor an unconditional
+shutdown deadline. See [adapter tests](tests/sharp.test.ts) and
+[real-process tests](tests/sharp-process.test.ts).
 
-```text
-factory load -> /openai command + openai-image message renderer + openai_image replay bridge
-session_start -> application -> layer -> abort-aware preview-settings bootstrap
-                              -> usage + fast + image services -> current-session activation
-current-session activation -> register image command/tool through the replay shell -> publish
-session_start settled -> finish replay startup (closes adoption unless published)
-command/event -> runtime service -> projection -> footer/UI or request injection
-Pi compaction trigger -> OpenAI /responses/compact -> custom checkpoint -> request projection
-session_shutdown -> replay retired + publication revoked + projections reset -> fibers/resources disposed
-```
+[Tool-result projection](src/image/tool-result.ts) owns the versioned structured
+result. Normal content keeps one native image and byte-free details; structured
+encoding failure preserves the generated receipt instead of rolling it back.
+The [native codemode contract](README.md#native-codemode) explains retention and
+host limits; [SDK tests](tests/native-codemode.test.ts) verify the pinned host.
+
+Image commands and tools share classification and content rendering. Historical
+replay never executes images or borrows a later session's settings/scheduler.
+Custom messages can render before startup without restoring delivery authority.
+See [replay tests](tests/tool-replay.test.ts) and the
+[shared presentation contract](../../docs/architecture/tool-presentation.md).

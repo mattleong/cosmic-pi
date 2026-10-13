@@ -1,164 +1,108 @@
 # Code Previews architecture
 
-## Ownership and host surface
+Code Previews owns tool presentation: syntax highlighting, diffs, warnings, appearance settings,
+and the cooperative shell. Pi owns native execution, tool discovery/activation, MCP connections,
+permissions, and result storage. The module map is descriptive; renderer ownership and evidence
+preservation are the constraints a refactor must retain.
 
-Code Previews owns syntax-highlighted previews, structured diffs, safer write/edit presentation,
-appearance settings, and the cooperative tool shell. It registers `/code-previews health` and
-`/code-previews settings`, plus `session_start` and `session_shutdown`. One factory-time public
-`pi.registerToolRenderer` resolver presents seven core builtins, native `codemode` and `tool_search`,
-and standalone native MCP tools/resources, plus explicitly supported third-party presentation. Pi 1.0.1 is the
-minimum; the workspace tests against 1.0.2.
+## Ownership and boundaries
 
-Pi independently owns native codemode/tool-search/MCP execution and the `/mcp` manager. Code Previews neither
-composes nor intercepts their factories, registers their execution definitions, nor changes tool
-selection/exposure or permissions. Write alone retains a real before-write snapshot hook.
-Standalone MCP presentation has no startup toggle; old unknown settings fields remain inert on
-disk. The former standalone `pi-mcp-previews` package is retired and must be removed manually.
+| Area                                                                                                   | Responsibility                                                                  |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| [Application](src/application/lifecycle.ts) and [Layer](src/layer.ts)                                  | Session runtime, trusted startup, presentation readiness, replacement, shutdown |
+| [Renderer resolver](src/application/tool-renderers.ts) and [admission](src/tools/preview-admission.ts) | Exact public-source admission and renderer-only composition                     |
+| [Replay bridge](src/application/owned-replay.ts) and [retained row](src/application/renderer-row.ts)   | Historical rows and originating-owner readiness/appearance                      |
+| [Configuration store](src/config/store.ts)                                                             | Settings persistence and atomic publication across runtime instances            |
+| [Syntax](src/syntax/) and [write](src/write/)                                                          | Scoped highlighter acquisition and actual before-write evidence                 |
+| [Preview shell](src/preview/) and [tool projectors](src/tools/)                                        | Synchronous rendering, semantic summaries, bounded evidence, fallback           |
+| [Third-party registry](src/third-party/registry.ts)                                                    | Explicit, independently admitted external renderer adapters                     |
 
-## Lifecycle and boundaries
+Public APIs and integration examples live in [extension authors](docs/extension-authors.md).
+The [reference](docs/reference.md) documents user settings; the
+[tool presentation standard](../../docs/architecture/tool-presentation.md) owns shell/issue policy.
 
-- `src/extension.ts` is the thin entrypoint; `application/lifecycle.ts` coordinates one shared
-  core session-runtime slot, trusted settings loading, renderer readiness, syntax initialization,
-  replacement, and shutdown. Factory loading registers one resolver; session starts never add more.
-- `src/layer.ts` composes private settings, syntax, write, and scheduler dependencies. The final
-  Layer retains the Node file platform for effects run through the session capability.
-- `application/capability.ts` is the synchronous runtime/defer/schedule bridge. Its run callback
-  checks the captured slot token. Deactivation clears the capability and revokes native animation.
-  `application/scheduler.ts` scopes deferred and cadence callbacks in a FiberSet; disposal awaits
-  remaining fibers. Cooperative extensions can compose its public Layer into their own runtime.
-- `boundary/host-tool-renderers.ts` captures public tool and command metadata; a name listed twice
-  reads as unknown. `tools/preview-admission.ts` owns the exact-source admission that rendering,
-  status and write registration share. The resolver retains only public renderer fields from
-  `next()`, and unsupported foreign tools fall through unchanged. Core/native
-  codemode/tool-search presentation follows preview selection, not active-at-start status.
-  `tool_search` requires `builtin:tool-search` (not `builtin:tool_search`). Native MCP
-  definitions require builtin MCP ownership; missing historical aliases require the independently
-  proven unique builtin `/mcp` manager. Nothing is introduced or activated for presentation.
-- Public `registerCodePreviewReplay` (`application/owned-replay.ts`) lets each cooperating owner register a factory-time renderer-only bridge for its own late tools. It stages self-framed callbacks alongside normal wrapping, admits first-ready adoption only after exact public tool/command source matching, and reuses `renderer-row.ts`. Existing downstream callbacks and later ready rows fall through. The owner closes failed startup and retires on shutdown; no execution, activation, settings I/O, or scheduler belongs to the bridge.
-- `application/tool-renderers.ts` publishes an originating presentation owner only after trusted
-  settings and startup succeed. Rows resolved after readiness get ordinary renderers in Pi's own
-  shell. `renderer-row.ts` retains only cold replay call/result slots under a fixed self shell,
-  then adopts that owner's first-ready appearance and reconstructs complete arguments/results.
-  Old rows retain their appearance and cannot borrow replacement schedulers.
-- `tools/renderers/registration.ts` registers only write's execution hook after exact builtin or
-  proven prior ownership admission. It preserves activation through `defaultActive`, separates
-  attempted ownership from successful installation, and permits retry after mutate-then-refresh
-  failures. Discovery failures stop startup; a bounded write registration error keeps rendering
-  and the current runtime available. Without an active session the installed hook writes
-  natively, recording no before-write evidence.
+## Host ownership and replay
 
-## Siloed third-party presentation
+The extension installs one public `pi.registerToolRenderer` resolver at factory time. It reads only
+public renderer callbacks from `next()` and admits native tools through exact public source metadata.
+A matching name is insufficient; ambiguous metadata declines. Historical MCP aliases require an
+independently proven native manager. The `tool_search` source path is `builtin:tool-search`, which
+intentionally differs from its tool name. Unsupported tools fall through unchanged.
 
-`src/third-party/registry.ts` is the sole adapter list, reached by a small resolver seam; builtin
-admission and preview-tools settings do not know about external packages. Each adapter owns its
-package/source/name admission, bounded evidence projection, and renderer composition. Removing its
-registry entry disables support without touching native presentation or external execution.
+The resolver must not compose native factories, replace `/mcp`, register execution definitions,
+or alter tool selection. The sole execution exception is
+[write's before-write hook](src/tools/renderers/registration.ts): it captures real evidence while
+preserving Pi's mutation queue, direct-write behavior, and activation. An inactive hook delegates
+natively without recording a snapshot. Attempted ownership and successful installation remain distinct
+so a host refresh failure after registration can be retried without taking over a foreign tool.
+The [write boundary note](docs/host-write.md) explains its queue and cancellation handoff.
 
-The `web-access/` adapter accepts only default tool names from public `npm:pi-web-access` package
-metadata with a matching package-root/known-entry relationship. Missing, duplicate, renamed, local,
-and unsupported sources remain downstream, including cold history. No filesystem probing, provider
-imports, execution definitions, activation, or stored-artifact reads are involved. It reuses the
-originating owner's readiness, appearance, and scheduler. Non-error delivery is neutral, not a
-claim verdict. Downstream components retain their own caches and mouse behavior; complete arguments
-and every raw output/recovery text block are appended on expansion because external renderers may
-truncate even expanded content. Slot failures retain raw evidence without replaying broken callbacks.
-Pi continues to own native images. See `docs/third-party-renderers.md` for adding/removing adapters.
+Session startup loads trusted settings before publishing a presentation owner and its scheduler.
+Readiness belongs to that originating owner. Cold historical rows can adopt its first-ready appearance
+and reconstruct complete arguments/results, but cannot execute a tool, load settings, or borrow a
+replacement session's scheduler. Deactivation revokes capabilities immediately; runtime disposal
+awaits scoped scheduler work. Syntax initialization can fall back to plain text without taking down
+presentation.
 
-## Settings and durable publication
+Deferred and lazily created diff previews capture their originating capability and display limits.
+If that owner retires before computation or first draw, they render retained evidence as plain text
+without scheduling work, requesting syntax resources, or invalidating the previous host.
 
-`config/store.ts` is the sole public persistence door: Effect `load`, `save`, `flush` and Promise
-compatibility helpers. `boundary/settings-one-shot.ts` runs short-lived pre-session access;
-ordinary live operations use the active runtime. Signalled loads own cancellation and admission;
-unsignalled equivalent loads share disk work but return defensive settings/tools copies.
+Cooperating extensions retain their own executable registrations. They install
+`registerCodePreviewReplay` at factory time, wrap through its `shell` after settings load, publish
+only after successful registration, finish pending startup on settlement, and retire on shutdown.
+`withCodePreviewShell` preserves an owned execution definition; `withCodePreviewRenderers` handles
+renderer-only composition. Shell mode and collapsed style are captured when wrapping.
 
-The process-local `config/coordinator.ts` serializes work across runtime Layers. Monotonic
-admissions publish only after newer successful work; failed or interrupted work advances no
-currency. The service holds a private complete baseline/loaded Ref. Atomic document modification,
-private replacement and projection publication share commit; idle saves rehydrate under the same
-permit without intermediate publication. Flush is a global barrier.
+Third-party support stays behind the isolated registry, with exact package/source/name admission.
+Adapters never import providers, inspect executions, change activation, or read stored artifacts.
+They preserve downstream components and append full raw evidence because an external renderer may
+truncate its own expanded content. See [adapter maintenance](docs/third-party-renderers.md).
 
-Schema-derived tolerant decoding preserves valid siblings. Built-in defaults, global nested
-`codePreview`, trusted-project nested settings, then flat global overrides determine values;
-there are no environment overrides, and performance budgets are fixed. Untrusted projects are
-ignored. Locked latest-document saves touch only edited known overrides, preserve unknown fields
-and never rewrite an unchanged document, though they still commit. An override is dropped only
-when both the project and global baselines already yield its value; reset removes every known
-override. Loads publish ignored files and invalid fields, which session start and health report.
-The settings controller uses Cosmic UI's shared command and owned settings surfaces and edits only
-settings a session has loaded; pure menus live in `settings/ui/`. Panel drafts roll back only the
-latest failed edit. Syntax initialization failure after a successful theme save cannot roll back
-persistence. Health is an owned overlay, so closing cannot pop an unrelated stacked surface.
+## Settings and state
 
-## Presentation and feature state
+The configuration store is the persistence entrypoint; pre-session access uses a short-lived boundary
+runtime. A process-local coordinator serializes operations across independently built Layers. Only
+successful work advances publication authority. Atomic document modification, private replacement,
+and settings projection publication commit together; flush is a global barrier.
 
-- `withCodePreviewRenderers` (`tools/cooperative-tools.ts`) is the one renderer composition.
-  Shell mode and collapsed style are captured at wrapping; timing remains live. It accepts no
-  execution/schema; `withCodePreviewShell` delegates to it and preserves an extension-owned
-  execution definition. Builtin factories supply only their call/result bodies;
-  `tools/renderers/registration.ts` adds the shared summary and expanded content.
-  `selfShell: true` retains fixed self framing in every appearance mode, including a
-  native-like combined background in preview/on.
-- `tools/compact-summary.ts` and bounded schemas define semantic summaries; malformed or absent
-  evidence gets conservative generic presentation, never inferred success. `compact-issues.ts`
-  merges human messages with expanded-only diagnostics. Preview and compact styles share issues.
-- `preview/` owns shell composition, separate original/content-only slot caches, frame/timing,
-  children, expanded sections and safe fallback. Expanded content retains complete input/output.
-  Slot failures restore raw output without replaying failed renderers. Native renderers read the
-  animation frame through a safe scalar projection, not mutable timing state. Shell-private
-  border, issue-frame, timing-handle and preview-cache state lives in WeakMaps keyed by the
-  host's renderer `state` object; only the timing start/end and animation-frame fields stay on
-  that object, written and read through checked accessors.
-- Untrusted host values (tool arguments, result details, before-write snapshots) are decoded once
-  at each renderer, provider or projection entry with the Effect Schema declarations in
-  `shared/untrusted-value.ts`; helpers below that boundary take the decoded `HostObject`,
-  `HostContainer` or `HostValue` and read only own properties.
-- Native codemode evidence inspects only the latest 256 own data-property call slots, validates
-  neighbors independently and reports missing coverage. Subjects use observed bounded arguments
-  and unambiguous MCP aliases. `tools/native-mcp-identity.ts` also owns the argument-only
-  resource action/subject; it contains no manager or standalone renderer logic.
-- `tools/native-codemode-discovery.ts` projects source-derived discovery intent with Acorn, not
-  execution telemetry. Direct unshadowed helper calls supply fixed MCP/tool hints; unused function
-  bodies, aliases, dynamic callees and unsupported/budget-exhausted source decline. Whole-program
-  bindings/mutations conservatively veto shadowed helpers. Parsing is capped at 32,768 source code
-  units, 4096 tokens/nodes and depth 128; each originating renderer memoizes one source/projection,
-  no AST. Class initialization sites are active; method bodies and instance initializers are not.
-  Both styles keep hints separate from native dispatch counts and show the intent caveat expanded.
-  Only discovery-only source plus a complete empty ledger suppresses the zero counter. Native
-  evidence alone continues to supply children, coverage warnings, outcomes and timing.
-- Native codemode collapsed source is bounded to eight wrapped rows, with five selected children;
-  expansion keeps Program, Calls and Output. Saved-output recovery is informational; missing
-  recovery remains a warning. Rendering never reads spill files. Parent and child measured
-  subsecond timing obeys settings; retired callbacks cannot use replacement schedulers.
-- `tools/native-tool-search-summary.ts` validates only bounded own-data `details.loaded` receipts
-  (at most 256 names of 256 code units each). Missing, malformed, inherited or accessor evidence
-  declines rather than guessing counts; non-error receipts mean tools listed, not current activation
-  or domain success. `native-tool-search-render.ts` preserves full arguments and every output/error/
-  recovery text on expansion in both styles, leaving images and results untouched. It reads no
-  artifacts and assigns no meaning to unrelated saved-output fields. Native search alone owns
-  discovery and activation; the renderer reuses existing owner/replay and scheduler lifecycles.
-- `tools/native-mcp-render.ts` presents arguments, native output, images and recovery without
-  reading retained artifacts. Identity uses exact native metadata, bounded receipts and forward
-  SHA matching; missing aliases remain conservative and renderer caches reject foreign ownership.
-- Syntax and write services own authoritative state and publish immutable synchronous projections.
-  Syntax acquisition/loading and request ingress are bounded and scoped; stale finalization cannot
-  clear newer highlighter caches. Failed themes and grammars are remembered for the session and
-  render as plain text; renderer requests never retry them, while an explicit theme initialization
-  may. Write previews retain Pi's direct-write semantics and error text and use bounded
-  before-write evidence without destructive renderer lookup. Shared projection tokens prevent
-  stale session cleanup from clearing replacement state.
-- Preview-style write and edit show a finished change once: Pi renders the call before the
-  result, so the call's proposed content checks shared row state when drawn and yields to the
-  result's diff. It stays while pending or running, after a failure, and when no diff is shown.
-- `diff/`, `paths/`, `warnings/` and builtin projectors own deterministic bounded policy.
-  Size/complexity guards, secret warnings, command risks and output limits retain uncertainty;
-  unknown history never warrants a new-file claim.
+Settings resolution ignores untrusted projects, preserves valid sibling fields after malformed input,
+and reports ignored files/invalid fields. Saves modify only known edited overrides in the latest
+locked document, preserving unrelated fields and publishing its resolved values. Reset removes known
+overrides. Failed UI edits cannot undo later successful edits. Save follow-up retains its invoking
+session's authority; retirement prevents panel updates, notifications, or replacement-session syntax
+initialization. Syntax initialization failure cannot roll back a committed theme.
 
-Follow the [tool presentation standard](../../docs/architecture/tool-presentation.md).
-The public `testing.ts` harness exercises actual registered callbacks without execution, including
-expansion, fallback, animation ownership and native images. Package tests protect lifecycle,
-persistence, cancellation and conservative evidence; the env-gated gallery retains builtin and
-native codemode, tool-search and standalone MCP scenarios. SDK and packed-consumer checks keep
-builtin native execution independent and prove real fixture execution, images and cleanup. The
-native tool-search SDK test loads the CLI-equivalent factory independently, preserves the same
-pre-start host row through readiness, and executes search only after deliberate activation;
-discovered fixture tools are never executed.
+Syntax and write services own resources and authoritative state; renderers consume synchronous
+projections. Bounded, scoped syntax requests remember failed grammars/themes for the session rather
+than retrying on every draw. Ownership tokens prevent late cleanup from clearing newer caches or
+write evidence. Renderer-local caches, frame state, and component state may be mutable; they are
+presentation state, not a second owner of execution or session resources.
+
+## Evidence and failure behavior
+
+Unknown host values are decoded at their boundary before projection. Native dispatch/result evidence
+is bounded and conservative: missing coverage is uncertainty, non-error delivery is not proof of
+domain success, and unknown write history is not proof of a new file. Codemode's parsed discovery
+hints describe source intent, separately from observed native dispatch. Rendering never reads saved
+output or spill files.
+
+The shell preserves exact arguments, full output/recovery text, and native images through expansion.
+Original and content-only slots keep independent caches. A failed callback falls back to raw evidence
+without replaying that callback. Long-lived components retain the state they need, not a render
+context whose previous-component pointer would retain earlier rows. Pi continues to own images and
+transcript separators. Issues use the shared human message plus expanded diagnostic detail in both
+appearance modes.
+
+## Verification
+
+[Lifecycle](tests/application/lifecycle.test.ts),
+[renderer replay](tests/application/renderer-replay.test.ts),
+[owned replay replacement](tests/application/owned-replay-replacement-sdk.test.ts), and
+[settings concurrency](tests/config/service.test.ts) tests protect ownership and cleanup.
+[Write execution](tests/write/preview-execution.test.ts) and
+[native codemode SDK](tests/application/native-codemode-sdk.test.ts),
+[tool-search SDK](tests/application/native-tool-search-sdk.test.ts), and
+[MCP SDK](tests/application/native-mcp-sdk.test.ts) tests check the real host boundary.
+Use `pi-code-previews/testing` for presentation behavior and `pnpm presentation:gallery` for visual
+review; neither presentation rendering nor replay should execute a tool.

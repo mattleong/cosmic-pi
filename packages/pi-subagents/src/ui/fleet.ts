@@ -27,7 +27,12 @@ import {
   ListDetailShell,
   type ListDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
-import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
+import {
+  captureSubagentControlExpectation,
+  type SubagentControlExpectation,
+  type SubagentProjection,
+  type SubagentRunView,
+} from "../run/model.ts";
 import {
   CONFIRMATION_KEYS,
   FLEET_SHORTCUTS,
@@ -38,6 +43,7 @@ import {
   promptAvailable,
   promptUnavailableFeedback,
   shortcutUnavailableReason,
+  sameFleetAssignment,
   type FleetPrompt,
   type FleetPromptKind,
   type PendingConfirmation,
@@ -65,15 +71,24 @@ export type FleetMessageMode = RunMessageMode;
 export type FleetMessageDelivery = "delivered" | "pending";
 
 export interface FleetActions {
-  readonly stop: (id: string) => Promise<void>;
-  readonly interrupt: (id: string) => Promise<void>;
-  readonly resume: (id: string, message?: string) => Promise<void>;
+  readonly stop: (id: string, expected: SubagentControlExpectation) => Promise<void>;
+  readonly interrupt: (id: string, expected: SubagentControlExpectation) => Promise<void>;
+  readonly resume: (
+    id: string,
+    message: string | undefined,
+    expected: SubagentControlExpectation,
+  ) => Promise<void>;
   readonly message: (
     id: string,
     mode: FleetMessageMode,
     message: string,
+    expected: SubagentControlExpectation,
   ) => Promise<FleetMessageDelivery>;
-  readonly rename: (id: string, name: string) => Promise<void>;
+  readonly rename: (
+    id: string,
+    name: string,
+    expected: SubagentControlExpectation,
+  ) => Promise<void>;
 }
 
 interface FleetOptions {
@@ -92,6 +107,7 @@ interface FleetOptions {
   readonly actions: FleetActions;
   readonly visibilityRootId?: string | undefined;
   readonly onDispose?: (() => void) | undefined;
+  readonly isCurrent?: (() => boolean) | undefined;
 }
 
 export type FleetNoticeKind = "info" | "success" | "warning" | "error";
@@ -105,6 +121,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   private notice: FleetNotice | undefined;
   private busyAction: string | undefined;
   private focusState = false;
+  private disposed = false;
   private readonly shell = new ListDetailShell();
   private readonly options: FleetOptions;
   private readonly collapsedRunIds = new Set<string>();
@@ -166,6 +183,7 @@ export class SubagentFleetComponent implements Component, Focusable {
       kind,
       runId: run.id,
       runName: sanitizeTerminalLine(run.name),
+      run,
       input,
       ...(question && { context: sanitizeTerminalLine(question) }),
     };
@@ -185,6 +203,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     this.notice = { kind: "info", text: progress };
     this.options.requestRender();
     const settle = (notice: FleetNotice): void => {
+      if (!this.current()) return;
       this.busyAction = undefined;
       this.notice = notice;
       this.options.requestRender();
@@ -214,6 +233,11 @@ export class SubagentFleetComponent implements Component, Focusable {
       return;
     }
     const current = this.options.getProjection().runs.find((run) => run.id === prompt.runId);
+    if (current && !sameFleetAssignment(prompt.run, current)) {
+      prompt.feedback = "Nothing was sent: this assignment or question changed. Reopen the input.";
+      this.options.requestRender();
+      return;
+    }
     if (!promptAvailable(prompt.kind, current)) {
       prompt.feedback = promptUnavailableFeedback(prompt.kind, current);
       this.options.requestRender();
@@ -223,7 +247,11 @@ export class SubagentFleetComponent implements Component, Focusable {
     const name = prompt.runName;
     if (prompt.kind === "resume") {
       this.performAction(`Resuming ${name}…`, `Resumed ${name}.`, () =>
-        this.options.actions.resume(prompt.runId, message || undefined),
+        this.options.actions.resume(
+          prompt.runId,
+          message || undefined,
+          captureSubagentControlExpectation(prompt.run),
+        ),
       );
       return;
     }
@@ -231,7 +259,12 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.performAction(
         `Renaming ${name}…`,
         `Renamed ${name} to ${sanitizeTerminalLine(message)}.`,
-        () => this.options.actions.rename(prompt.runId, message),
+        () =>
+          this.options.actions.rename(
+            prompt.runId,
+            message,
+            captureSubagentControlExpectation(prompt.run),
+          ),
       );
       return;
     }
@@ -239,7 +272,13 @@ export class SubagentFleetComponent implements Component, Focusable {
     const { label, progress } = MESSAGES[mode];
     this.performOutcome(
       `${progress}…`,
-      () => this.options.actions.message(prompt.runId, mode, message),
+      () =>
+        this.options.actions.message(
+          prompt.runId,
+          mode,
+          message,
+          captureSubagentControlExpectation(prompt.run),
+        ),
       (delivery): FleetNotice =>
         delivery === "delivered"
           ? { kind: "success", text: `${label} sent to ${name}.` }
@@ -248,6 +287,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   handleInput(data: string): void {
+    if (!this.current()) return;
     const projection = this.options.getProjection();
     const rows = this.tree(projection).rows;
     this.reconcile(rows);
@@ -298,11 +338,11 @@ export class SubagentFleetComponent implements Component, Focusable {
         this.performAction(
           `Stopping ${name} and its subagents…`,
           `Stopped ${name} and its subagents`,
-          () => this.options.actions.stop(run.id),
+          () => this.options.actions.stop(run.id, captureSubagentControlExpectation(pending.run)),
         );
       else
         this.performAction(`Interrupting ${name}…`, `Interrupted ${name}; it is paused`, () =>
-          this.options.actions.interrupt(run.id),
+          this.options.actions.interrupt(run.id, captureSubagentControlExpectation(pending.run)),
         );
       return;
     }
@@ -352,9 +392,10 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   private applyRunShortcut(key: string, selected: SubagentRunView): boolean {
     const mode = runMessageMode(selected);
-    if (key === "x" && canStop(selected)) this.pending = { action: "stop", id: selected.id };
+    if (key === "x" && canStop(selected))
+      this.pending = { action: "stop", id: selected.id, run: selected };
     else if (key === "i" && canInterruptRun(selected))
-      this.pending = { action: "interrupt", id: selected.id };
+      this.pending = { action: "interrupt", id: selected.id, run: selected };
     else if (key === "u" && canResumeRun(selected)) this.openPrompt(selected, "resume");
     else if (key === "m" && mode) this.openPrompt(selected, mode);
     else if (key === "e" && canRenameRun(selected)) this.openPrompt(selected, "rename");
@@ -395,6 +436,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   render(width: number): string[] {
+    if (!this.current()) return [];
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
@@ -534,6 +576,16 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.options.onDispose?.();
+  }
+
+  private current(): boolean {
+    if (this.disposed) return false;
+    if (this.options.isCurrent?.() !== false) return true;
+    this.dispose();
+    this.options.close();
+    return false;
   }
 }

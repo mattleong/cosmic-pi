@@ -6,7 +6,11 @@ import type * as Schema from "effect/Schema";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { LocalPiParentControl } from "../../src/backend/local-pi-protocol.ts";
 import { withLocalSupervisorInstructions } from "../../src/backend/local-cli-driver.ts";
-import { canonicalResultJson, compileResultContract } from "../../src/domain/result-contract.ts";
+import {
+  canonicalResultJson,
+  compileResultContract,
+  ResultContractViolation,
+} from "../../src/domain/result-contract.ts";
 import { makeRunStructuredResults } from "../../src/run/structured-result.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
@@ -15,6 +19,7 @@ import { view } from "../fixtures/run-view.ts";
 import {
   launchFixture,
   makeRunContext,
+  makeTestSettlement,
   runningAssignment,
   runRecordFixture,
 } from "./fixtures/run-context.ts";
@@ -232,6 +237,87 @@ describe("local Pi structured results", () => {
 });
 
 describe("structured result admission", () => {
+  for (const source of ["settlement", "report"] as const)
+    it.effect(`ignores an earlier assignment's ${source} validation failure after resume`, () =>
+      Effect.gen(function* () {
+        const decoding = yield* Deferred.make<void>();
+        const decoded = yield* Deferred.make<void>();
+        const contract = yield* contractFor(FINDINGS);
+        const record = yield* runRecordFixture({
+          view: view({ state: "running" }),
+          assignment: runningAssignment(1),
+          launch: launchFixture({
+            resultContract: {
+              ...contract,
+              decode: () =>
+                Deferred.succeed(decoding, undefined).pipe(
+                  Effect.andThen(Deferred.await(decoded)),
+                  Effect.andThen(
+                    Effect.fail(new ResultContractViolation({ message: "Invalid result" })),
+                  ),
+                ),
+            },
+          }),
+        });
+        const settlement = yield* makeTestSettlement();
+        const settling =
+          source === "settlement"
+            ? settlement.runSettledFromBackend(record, 1, {
+                stopReason: "stop",
+                text: canonicalResultJson(OK),
+              })
+            : settlement.acceptBackendReport(record, {
+                runId: record.view.id,
+                assignmentEpoch: 1,
+                sequence: 1,
+                deliveryId: "old-report",
+                text: canonicalResultJson(OK),
+              });
+        const pending = yield* settling.pipe(Effect.forkScoped);
+        yield* Deferred.await(decoding);
+        record.assignment = runningAssignment(2);
+        yield* Deferred.succeed(decoded, undefined);
+        yield* Fiber.join(pending);
+        expect(record.view.state).toBe("running");
+        expect(record.cleanupPending).toBe(false);
+        expect(record.backendFailure).toBeUndefined();
+      }).pipe(Effect.scoped),
+    );
+
+  it.effect("rechecks assignment ownership after waiting for the run lock", () =>
+    Effect.gen(function* () {
+      const record = yield* runRecordFixture({
+        view: view({ state: "running" }),
+        assignment: runningAssignment(1),
+        launch: launchFixture({ resultContract: yield* contractFor(FINDINGS) }),
+      });
+      const context = yield* makeRunContext();
+      const waiting = yield* Deferred.make<void>();
+      const answers: boolean[] = [];
+      const accept = makeRunStructuredResults({
+        withLock: (effect) =>
+          Deferred.succeed(waiting, undefined).pipe(Effect.andThen(context.withLock(effect))),
+      });
+      const submission = yield* context.withLock(
+        Effect.gen(function* () {
+          const pending = yield* accept(record, {
+            type: "structured_result",
+            assignmentEpoch: 1,
+            valueJson: canonicalResultJson(OK),
+            respond: (ok) => Effect.sync(() => void answers.push(ok)),
+          }).pipe(Effect.forkScoped);
+          yield* Deferred.await(waiting);
+          expect(record.structuredResult).toBeUndefined();
+          record.assignment = runningAssignment(2);
+          return pending;
+        }),
+      );
+      yield* Fiber.join(submission);
+      expect(answers).toEqual([false]);
+      expect(record.structuredResult).toBeUndefined();
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("refuses submissions from an earlier assignment or an inactive run", () =>
     Effect.gen(function* () {
       const contract = yield* contractFor(FINDINGS);

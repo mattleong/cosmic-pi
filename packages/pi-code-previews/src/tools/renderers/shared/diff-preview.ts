@@ -13,14 +13,16 @@ export function formatDiffPreview(
     totalLines: number;
     invalidate?: (() => void) | undefined;
     proposed?: boolean;
+    highlight?: boolean;
   },
 ): string {
   const syntaxHighlightSkipped = shouldSkipHighlight(diff);
   const lineNumbers = options.proposed !== true;
   const noun = lineNumbers ? "diff" : "proposed diff";
-  let text = syntaxHighlightSkipped
-    ? renderPlainDiff(diff, theme, limit, lineNumbers)
-    : renderSyntaxHighlightedDiff(diff, lang, theme, limit, options.invalidate, lineNumbers);
+  let text =
+    syntaxHighlightSkipped || options.highlight === false
+      ? renderPlainDiff(diff, theme, limit, lineNumbers)
+      : renderSyntaxHighlightedDiff(diff, lang, theme, limit, options.invalidate, lineNumbers);
   if (options.totalLines > limit)
     text += showingFooter(theme, limit, options.totalLines, `${noun} lines`);
   if (syntaxHighlightSkipped)

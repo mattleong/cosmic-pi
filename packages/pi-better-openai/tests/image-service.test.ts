@@ -16,7 +16,6 @@ import { SharpAdapter } from "../src/boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../src/config/schema.ts";
 import { OpenAIImageService } from "../src/image/service.ts";
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from "../src/image/types.ts";
-import { initialProjection } from "../src/usage/projection.ts";
 import { makeResolvedConfig, testContext, testModel } from "./helpers.ts";
 
 const registryToken = JSON.stringify({ access: "test-token", accountId: "acct_test" });
@@ -56,7 +55,7 @@ function imageServiceLayer(options: {
   );
   return OpenAIImageService.layer({
     context: MutableRef.make(options.context),
-    projection: MutableRef.make({ ...initialProjection(), config: options.config }),
+    config: () => options.config,
   }).pipe(
     Layer.provide(Layer.merge(sharp, SafeFile.layer)),
     Layer.provide(Layer.mergeAll(nodePlatformLayer, http, AgentDirectory.layer("/agent"))),

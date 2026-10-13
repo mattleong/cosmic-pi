@@ -228,8 +228,12 @@ export const readWorkflowRunJournal = (
     const chunks = yield* fs
       .stream(journal, { bytesToRead: Math.max(0, maximumBytes) })
       .pipe(Stream.runCollect);
-    const decoder = new TextDecoder();
-    const text =
-      chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") + decoder.decode();
-    return text.split("\n").slice(0, -1);
+    const bytes = Buffer.concat(chunks);
+    const complete = bytes.lastIndexOf(0x0a);
+    if (complete === -1) return [];
+    const text = yield* Effect.try({
+      try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, complete)),
+      catch: () => new WorkflowRunFileError({ message: "The results journal isn't valid UTF-8." }),
+    });
+    return text.split("\n");
   }).pipe(Effect.mapError(runFileError("read the results journal")));

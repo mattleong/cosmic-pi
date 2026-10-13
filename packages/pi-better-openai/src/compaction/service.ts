@@ -18,8 +18,8 @@ import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
+import type { ResolvedConfig } from "../config/schema.ts";
 import { FAST_SERVICE_TIER } from "../fast/models.ts";
-import type { OpenAIProjection } from "../usage/projection.ts";
 import { OpenAICompactionClient, type OpenAICompactUsage } from "../boundary/openai-compaction.ts";
 import {
   findActiveOpenAICompactionCheckpoint,
@@ -92,7 +92,7 @@ const compactionError = (operation: OpenAICompactionError["operation"], message:
 
 interface OpenAICompactionServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
-  readonly projection: MutableRef.MutableRef<OpenAIProjection>;
+  readonly config: () => ResolvedConfig | undefined;
   readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
 }
 
@@ -136,7 +136,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
         const compactOpenAI = Effect.fn("OpenAICompaction.compactOpenAI")(function* (
           event: SessionBeforeCompactEvent,
         ) {
-          const config = MutableRef.get(options.projection).config;
+          const config = options.config();
           if (!config?.compaction.enabled) return undefined;
           const current = yield* readContext(event.willRetry);
           if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
@@ -213,7 +213,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
           );
         });
         const inject = Effect.fn("OpenAICompaction.inject")(function* <Payload>(payload: Payload) {
-          const config = MutableRef.get(options.projection).config;
+          const config = options.config();
           if (!config?.compaction.enabled) return undefined;
           const current = yield* Effect.try({
             try: () => {

@@ -7,7 +7,7 @@ import {
   wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
-import { expandedSection, previewIssuesSlot } from "pi-code-previews";
+import { escapeControlChars, expandedSection, previewIssuesSlot } from "pi-code-previews";
 import { sanitizeTerminalLine, synchronousNow, countLabel } from "pi-cosmic-core";
 import {
   managerStateGlyph,
@@ -60,7 +60,17 @@ export const renderSubagentStartCall = (
   for (const [index, agent] of agents.entries()) {
     const request = `${requestedName(agent, index)} · ${requestedProfile(agent)} · route/model selected at launch`;
     container.addChild(new Text(theme.fg("toolOutput", request), 0, 0));
-    container.addChild(new Text(theme.fg("dim", `  Task: ${boundedLine(agent.task, 512)}`), 0, 0));
+    container.addChild(
+      new Text(theme.fg("dim", `  Task: ${escapeControlChars(agent.task)}`), 0, 0),
+    );
+    if (agent.writes !== undefined)
+      container.addChild(
+        new Text(
+          theme.fg("dim", `  File claims:\n${escapeControlChars(agent.writes.join("\n"))}`),
+          0,
+          0,
+        ),
+      );
   }
   return container;
 };

@@ -23,6 +23,7 @@ export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView 
   runtime: "pi",
   closeOnReport: true,
   reportGeneration: 0,
+  assignmentEpoch: 1,
   capabilities: [
     "steer",
     "interrupt",

@@ -21,10 +21,21 @@ export type FleetPromptKind = RunMessageMode | "resume" | "rename";
 
 export const FLEET_SHORTCUTS = new Set(["e", "i", "m", "t", "u", "x"]);
 
-export type PendingConfirmation = { readonly action: "stop" | "interrupt"; readonly id: string };
+export type PendingConfirmation = {
+  readonly action: "stop" | "interrupt";
+  readonly id: string;
+  readonly run: SubagentRunView;
+};
 export const CONFIRMATION_KEYS = { stop: "x", interrupt: "i" } as const;
+export const sameFleetAssignment = (before: SubagentRunView, after: SubagentRunView): boolean =>
+  before.assignmentEpoch === after.assignmentEpoch &&
+  before.sessionId === after.sessionId &&
+  before.state === after.state &&
+  before.question?.requestId === after.question?.requestId;
+
 export const canConfirm = (pending: PendingConfirmation, run: SubagentRunView) =>
-  pending.action === "stop" ? canStop(run) : canInterruptRun(run);
+  sameFleetAssignment(pending.run, run) &&
+  (pending.action === "stop" ? canStop(run) : canInterruptRun(run));
 
 const UNAVAILABLE_REASONS = new Map([
   ["m", "This run cannot receive guidance, a reply, or a new assignment in its current state."],
@@ -102,6 +113,7 @@ export type FleetPrompt = {
   readonly kind: FleetPromptKind;
   readonly runId: string;
   readonly runName: string;
+  readonly run: SubagentRunView;
   readonly input: Input;
   readonly context?: string | undefined;
   feedback?: string | undefined;

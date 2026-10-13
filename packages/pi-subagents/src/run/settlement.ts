@@ -35,7 +35,10 @@ import {
 } from "./settlement-outcome.ts";
 import { foldRunWarnings, recordRunWarning } from "./warnings.ts";
 
-export interface RunSettlementDependencies extends RunContext {
+export interface RunSettlementDependencies extends Pick<
+  RunContext,
+  "ownerScope" | "withLock" | "publish" | "sendPeerNotices"
+> {
   readonly delivery: RunNotificationDelivery;
   readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
 }
@@ -164,12 +167,20 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     });
   };
 
-  const settle = (record: RunRecord, state: SettlementState, error?: string) =>
+  const settle = (
+    record: RunRecord,
+    state: SettlementState,
+    error?: string,
+    assignmentEpoch?: number,
+  ) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const result = yield* withLock(
         Effect.gen(function* () {
-          if (settlementBlocked(record, state))
+          if (
+            settlementBlocked(record, state) ||
+            (assignmentEpoch !== undefined && record.assignment.epoch !== assignmentEpoch)
+          )
             return { transitioned: false as const, view: snapshotView(record.view) };
           if (record.initializationPending && state !== "stopped") {
             record.pendingInitializationSettlement = { state, ...(error && { error }) };
@@ -207,11 +218,20 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       return view;
     });
 
-  const failRun = (record: RunRecord, message: string, pendingError?: SubagentError) => {
+  const failRun = (
+    record: RunRecord,
+    message: string,
+    pendingError?: SubagentError,
+    assignmentEpoch?: number,
+  ) => {
     const diagnostic = sanitizeDiagnosticText(message, MAX_ERROR_CHARS);
     return withLock(
       Effect.sync(() => {
-        if (isInactiveRunRecord(record)) return false;
+        if (
+          isInactiveRunRecord(record) ||
+          (assignmentEpoch !== undefined && record.assignment.epoch !== assignmentEpoch)
+        )
+          return false;
         const failure =
           pendingError ?? new SubagentProcessError({ operation: "run", message: diagnostic });
         record.cleanupPending = true;
@@ -232,10 +252,11 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           record.backendFailure?.message ?? diagnostic,
           MAX_ERROR_CHARS,
         );
-        if (record.initializationPending) return settle(record, "failed", primaryDiagnostic);
+        if (record.initializationPending)
+          return settle(record, "failed", primaryDiagnostic, assignmentEpoch);
         return (
           record.process ? record.process.terminate("force").pipe(Effect.ignore) : Effect.void
-        ).pipe(Effect.andThen(settle(record, "failed", primaryDiagnostic)));
+        ).pipe(Effect.andThen(settle(record, "failed", primaryDiagnostic, assignmentEpoch)));
       }),
     );
   };
@@ -309,7 +330,12 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         }),
       );
       if (!prepared) return snapshotView(record.view);
-      const completed = yield* settle(record, "completed");
+      const completed = yield* settle(
+        record,
+        "completed",
+        undefined,
+        decision.report.assignmentEpoch,
+      );
       if (completed.state === "completed")
         yield* withLock(
           Effect.sync(() => {
@@ -366,6 +392,13 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
 
   const acceptBackendReport = (record: RunRecord, rawReport: BackendReport) =>
     Effect.gen(function* () {
+      const current = yield* withLock(
+        Effect.sync(
+          () =>
+            !isInactiveRunRecord(record) && record.assignment.epoch === rawReport.assignmentEpoch,
+        ),
+      );
+      if (!current) return snapshotView(record.view);
       if (
         rawReport.runId !== record.view.id ||
         !Number.isSafeInteger(rawReport.assignmentEpoch) ||
@@ -396,7 +429,17 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         deliveryId: rawReport.deliveryId.trim(),
         text,
       });
-    });
+    }).pipe(
+      Effect.catch((error) =>
+        withLock(
+          Effect.suspend(() =>
+            isInactiveRunRecord(record) || record.assignment.epoch !== rawReport.assignmentEpoch
+              ? Effect.succeed(snapshotView(record.view))
+              : Effect.fail(error),
+          ),
+        ),
+      ),
+    );
 
   const runStartedFromBackend = (record: RunRecord, assignmentEpoch: number) =>
     Effect.gen(function* () {
@@ -451,22 +494,27 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           : { text: undefined, problem: undefined };
       const outcome = yield* withLock(
         Effect.sync(() => {
-          const finalText = acceptedResult(record, assignmentEpoch) ?? written.text;
-          if (!finalText) return "failed";
           if (
             isInactiveRunRecord(record) ||
             record.assignment.epoch !== assignmentEpoch ||
             record.assignment.phase !== "running"
           )
             return "ignored";
+          const finalText = acceptedResult(record, assignmentEpoch) ?? written.text;
+          if (!finalText) return "failed";
           record.latestAssistantText = finalText;
           record.pausedAssignmentEpoch = undefined;
           return "completed";
         }),
       );
-      if (outcome === "completed") yield* settle(record, "completed");
+      if (outcome === "completed") yield* settle(record, "completed", undefined, assignmentEpoch);
       if (outcome === "failed")
-        yield* failRun(record, settledFailureMessage(record, terminal, written.problem));
+        yield* failRun(
+          record,
+          settledFailureMessage(record, terminal, written.problem),
+          undefined,
+          assignmentEpoch,
+        );
     });
 
   return {

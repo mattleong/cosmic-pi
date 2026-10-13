@@ -9,6 +9,7 @@ import { writerConflictError } from "./admission.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import { isTerminalRunState, type SubagentRunView } from "./model.ts";
+import type { WriterPools } from "./writer-pool.ts";
 import { snapshotView } from "./state.ts";
 
 const isBlockingClaimQuestionTool = (toolName: string): boolean => {
@@ -48,7 +49,14 @@ const normalizePaths = (paths: ReadonlyArray<string>) => {
     : Effect.fail(invalid(normalized.code, normalized.message));
 };
 
-export function makeRunWriteClaimControl(dependencies: RunContext) {
+export function makeRunWriteClaimControl(
+  dependencies: Pick<
+    RunContext,
+    "records" | "withLock" | "publish" | "requireRecord" | "sendPeerNotices"
+  > & {
+    readonly writerPools: Pick<WriterPools, "get" | "values" | "size" | "resumeAdmissionLocked">;
+  },
+) {
   const { records, writerPools, withLock, publish, requireRecord, sendPeerNotices } = dependencies;
 
   const claimChangeTarget = (id: string) =>
@@ -164,9 +172,7 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
   };
 
   const reopenWriterAdmissionLocked = (pool: WriterPool) => {
-    pool.admissionPaused = false;
-    pool.violationRunIds.clear();
-    pool.pauseReason = undefined;
+    writerPools.resumeAdmissionLocked(pool);
     for (const member of records.values()) {
       if (member.canonicalWriterCwd?.digest !== pool.cwd.digest) continue;
       member.writeViolationContainmentStarted = false;
@@ -176,9 +182,6 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
           writeAdmissionPaused: undefined,
           writeViolationOffender: undefined,
         };
-    }
-    if (pool.state === "paused" && pool.members.size === 0) {
-      if (writerPools.get(pool.cwd.digest) === pool) writerPools.delete(pool.cwd.digest);
     }
   };
 

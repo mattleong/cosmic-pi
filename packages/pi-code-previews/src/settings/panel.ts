@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type SettingsList, type SettingItem } from "@earendil-works/pi-tui";
-import { constVoid } from "effect/Function";
+import { constTrue, constVoid } from "effect/Function";
 import type { CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
 import { updateSetting } from "../config/values";
@@ -19,6 +19,7 @@ interface SettingsListControllerOptions {
   notify: (message: string, level: "info" | "warning") => void;
   done: () => void;
   loadOptions: LoadSettingsOptions;
+  isCurrent?: () => boolean;
   effects?: SettingsPanelSaveEffects;
 }
 
@@ -26,6 +27,7 @@ interface SettingsPanelSaveEffects {
   readonly queueSave: (
     settings: CodePreviewSettings,
     options: LoadSettingsOptions,
+    previous: CodePreviewSettings,
   ) => Promise<void>;
   readonly queueReset: (options: LoadSettingsOptions) => Promise<void>;
   readonly initializeSyntax: (theme: CodePreviewSettings["shikiTheme"]) => Promise<void>;
@@ -39,13 +41,14 @@ const liveSettingsPanelSaveEffects: SettingsPanelSaveEffects = {
 
 export function persistSettingsChange(
   settings: CodePreviewSettings,
-  previousTheme: CodePreviewSettings["shikiTheme"],
+  previous: CodePreviewSettings,
   loadOptions: LoadSettingsOptions,
   effects: SettingsPanelSaveEffects = liveSettingsPanelSaveEffects,
+  isCurrent: () => boolean = constTrue,
 ): Promise<void> {
-  return effects.queueSave(settings, loadOptions).then(() => {
-    if (settings.shikiTheme !== previousTheme)
-      void effects.initializeSyntax(settings.shikiTheme).catch(() => undefined);
+  return effects.queueSave(settings, loadOptions, previous).then(() => {
+    if (isCurrent() && codePreviewSettings.shikiTheme !== previous.shikiTheme)
+      void effects.initializeSyntax(codePreviewSettings.shikiTheme).catch(() => undefined);
     return undefined;
   });
 }
@@ -62,31 +65,35 @@ export function createCodePreviewSettingsModel({
   done,
   loadOptions,
   theme,
+  isCurrent = constTrue,
   effects = liveSettingsPanelSaveEffects,
 }: SettingsListControllerOptions): CodePreviewSettingsModel {
   let activeList: SettingsList | undefined;
   let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
   let revision = 0;
   const sync = (list: SettingsList) => {
+    if (!isCurrent()) return;
     for (const item of createSettingsCategoryItems(() => draftSettings, constVoid))
       list.updateValue(item.id, item.currentValue);
   };
   const handleSettingChange = (list: SettingsList, id: string, value: string) => {
+    if (!isCurrent()) return;
     if (id === "resetToDefaults" && value !== "reset now") {
       if (value === "keep current") sync(list);
       return;
     }
-    const previousTheme = draftSettings.shikiTheme;
+    const previous = draftSettings;
     const changeRevision = ++revision;
     let saved: Promise<void>;
     if (id === "resetToDefaults") {
       sync(list);
       saved = effects.queueReset(loadOptions).then(() => {
+        if (!isCurrent()) return undefined;
         if (revision === changeRevision) {
           draftSettings = cloneCodePreviewSettings(codePreviewSettings);
           sync(list);
         }
-        if (codePreviewSettings.shikiTheme !== previousTheme)
+        if (codePreviewSettings.shikiTheme !== previous.shikiTheme)
           void effects.initializeSyntax(codePreviewSettings.shikiTheme).catch(() => undefined);
         notify("Code preview settings restored to defaults", "info");
         return undefined;
@@ -95,9 +102,16 @@ export function createCodePreviewSettingsModel({
       const next = updateSetting(draftSettings, id, value);
       draftSettings = next;
       sync(list);
-      saved = persistSettingsChange(next, previousTheme, loadOptions, effects);
+      saved = persistSettingsChange(next, previous, loadOptions, effects, isCurrent).then(() => {
+        if (isCurrent() && revision === changeRevision) {
+          draftSettings = cloneCodePreviewSettings(codePreviewSettings);
+          sync(list);
+        }
+        return undefined;
+      });
     }
     void saved.catch((cause: unknown) => {
+      if (!isCurrent()) return;
       if (revision === changeRevision) {
         draftSettings = cloneCodePreviewSettings(codePreviewSettings);
         sync(list);

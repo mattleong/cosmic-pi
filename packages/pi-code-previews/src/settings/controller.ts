@@ -84,11 +84,11 @@ function codePreviewSettingsCommand(isCurrent: () => boolean): ExtensionSubcomma
     apply: (ctx, id, value) => {
       if (!config()) return rejectInactiveCodePreviewSession("settings");
       const setting = SCRIPTED_SETTINGS.find((entry) => entry.id === id);
-      const previousTheme = codePreviewSettings.shikiTheme;
-      const next = updateSetting(codePreviewSettings, id, value);
+      const previous = codePreviewSettings;
+      const next = updateSetting(previous, id, value);
       if (!setting || formatSettingValue(next, setting.id) !== value)
         return Promise.resolve(Result.fail({ message: `${id} can't be set to ${value}` }));
-      return persistSettingsChange(next, previousTheme, loadOptions(ctx)).then(
+      return persistSettingsChange(next, previous, loadOptions(ctx), undefined, isCurrent).then(
         () => Result.succeed(undefined),
         (cause: unknown) => Result.fail({ message: formatSettingsSaveError(cause) }),
       );
@@ -103,6 +103,7 @@ function codePreviewSettingsCommand(isCurrent: () => boolean): ExtensionSubcomma
             notify: (message, level) => notifyAtHostBoundary(ctx, message, level),
             done: () => finish(undefined),
             loadOptions: loadOptions(ctx),
+            isCurrent,
           });
           return {
             header: "Code Previews settings",

@@ -188,12 +188,6 @@ const makeHerdrBtwService = (
             ? yield* prepareFreshLaunchTarget(target.childSessionId)
             : target.link;
         const agentName = makeAgentName(sessionId, btwPane.pane_id);
-        if (!isDistinctChildSessionPath(childSessionPath, sessionFile, compareSessionFileIdentity))
-          return yield* confirmedFailure(
-            "validate child session identity",
-            "herdr_btw_child_identity_invalid",
-            "Couldn't prepare a separate session file, so Pi wasn't started",
-          );
         if (target.mode === "resume") {
           const newlyLive = (yield* herdr.inspectLiveAgents()).filter((agent) =>
             isLinkedAgentConflictCandidate(agent, target.link, compareSessionFileIdentity),
@@ -204,7 +198,19 @@ const makeHerdrBtwService = (
               "herdr_btw_live_agent_race",
               "The side session started elsewhere while its pane was being prepared, so a second one wasn't started",
             );
+          if (!isValidBlankChildProbe(probeSessionHeader(childSessionPath), childSessionId))
+            return yield* failClosedLink(
+              "validate linked child session",
+              "herdr_btw_link_child_invalid",
+              "The linked side session's file is missing or was replaced",
+            );
         }
+        if (!isDistinctChildSessionPath(childSessionPath, sessionFile, compareSessionFileIdentity))
+          return yield* confirmedFailure(
+            "validate child session identity",
+            "herdr_btw_child_identity_invalid",
+            "Couldn't prepare a separate session file, so Pi wasn't started",
+          );
         const startedAgent = yield* herdr.startSideSessionPi({
           agentName,
           paneId: btwPane.pane_id,

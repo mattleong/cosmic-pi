@@ -16,7 +16,6 @@ import { provideBuiltLayer } from "../index.ts";
 import { AgentDirectory } from "../src/platform/agent-directory.ts";
 import { JsonHttpClient, type JsonHttpClientContract } from "../src/platform/json-http.ts";
 import { extensionContextFixture } from "../src/testing/host.ts";
-import { makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { yieldUntil } from "../src/testing/polling.ts";
 import {
   makeUsageRefreshController,
@@ -24,24 +23,16 @@ import {
   type UsageControllerConfig,
   type UsageRefreshControllerOptions,
 } from "../src/usage-controller.ts";
-import { initialUsageProjection, type UsageProjectionBase } from "../src/usage-projection.ts";
+import {
+  initialUsageProjection,
+  withUsageEligibility,
+  type UsageProjectionBase,
+} from "../src/usage-projection.ts";
 
 type Projection = UsageProjectionBase<UsageControllerConfig, number>;
-type Options<R> = UsageRefreshControllerOptions<
-  Projection,
-  UsageControllerConfig,
-  number,
-  never,
-  never,
-  R
->;
+type Options<R> = UsageRefreshControllerOptions<Projection, UsageControllerConfig, number, R>;
 
 const config: UsageControllerConfig = {
-  configPath: "/agent/usage.json",
-  projectConfigPath: "/project/usage.json",
-  globalConfigPath: "/agent/usage.json",
-  projectConfigExists: false,
-  globalConfigExists: true,
   usage: { refreshIntervalMs: 60_000, showOnlyOnSubscriptionModels: true },
 };
 const unusedHttp = JsonHttpClient.of({
@@ -50,7 +41,6 @@ const unusedHttp = JsonHttpClient.of({
 });
 const testLayer = Layer.mergeAll(
   Path.layer,
-  makeInMemoryDocuments().layer,
   AgentDirectory.layer("/agent"),
   Layer.succeed(JsonHttpClient, unusedHttp),
 );
@@ -59,77 +49,35 @@ const fixture = <R = never>(overrides: Partial<Options<R>> & Pick<Options<R>, "d
   Effect.gen(function* () {
     const projection = MutableRef.make(initialUsageProjection<UsageControllerConfig, number>());
     const notifications: string[] = [];
-    let observedTrust: boolean | undefined;
     const host = { hasUI: true, ui: { notify: (text: string) => void notifications.push(text) } };
     const controller = yield* makeUsageRefreshController<
       Projection,
       UsageControllerConfig,
       number,
-      never,
-      never,
       R
     >({
       spanPrefix: "test.usage",
       logLabel: "Test",
       context: MutableRef.make(extensionContextFixture(host)),
-      cwd: "/project",
       projection,
       onChange: () => undefined,
-      startPolling: false,
+      initialConfig: config,
       initialProjection: () => initialUsageProjection(),
       hiddenStatusText: "ineligible",
       missingCredentialsMessage: "missing",
       clearAuthPatch: {},
-      store: {
-        resolveConfig: (_cwd, _agentDir, projectTrusted) => {
-          observedTrust = projectTrusted;
-          return Effect.succeed(config);
-        },
-        readRawConfig: () => Effect.succeed({}),
-        resolveCommittedConfig: (current) => current,
-        modifyConfig: () => Effect.die("unexpected mutation"),
-      },
-      decodeSettingUpdate: () => Effect.die("unexpected setting"),
       eligibility: () => Effect.succeed(true),
       fetchOutcome: () => Effect.die("unexpected fetch"),
       formatStatusLine: (snapshot) => String(snapshot),
       formatStatusText: (snapshot) => String(snapshot),
       ...overrides,
     });
-    return { controller, projection, notifications, observedTrust: () => observedTrust };
+    return { controller, projection, notifications };
   });
 
 const nextConfig: UsageControllerConfig = {
   ...config,
   usage: { ...config.usage, refreshIntervalMs: 30_000 },
-};
-
-const committingSettings = (beforeHook: Effect.Effect<void> = Effect.void) => {
-  let durable = config;
-  let mutations = 0;
-  const overrides: Pick<Options<never>, "decodeSettingUpdate" | "store"> = {
-    decodeSettingUpdate: () => Effect.succeed((raw) => raw),
-    store: {
-      resolveConfig: () => Effect.succeed(durable),
-      readRawConfig: () => Effect.succeed({}),
-      resolveCommittedConfig: () => nextConfig,
-      modifyConfig: (_path, modify) =>
-        Effect.suspend(() => {
-          const modification = modify({});
-          return Effect.uninterruptible(
-            Effect.sync(() => {
-              mutations++;
-              durable = nextConfig;
-            }).pipe(
-              Effect.andThen(beforeHook),
-              Effect.andThen(modification.afterCommit ?? Effect.void),
-              Effect.as(modification.value),
-            ),
-          );
-        }),
-    },
-  };
-  return { overrides, durable: () => durable, mutations: () => mutations };
 };
 
 const fetching = (fetch: Effect.Effect<number>) => ({
@@ -138,38 +86,34 @@ const fetching = (fetch: Effect.Effect<number>) => ({
   dependencies: Context.empty(),
 });
 
-it.effect(
-  "captures dependencies for an escaped refresh and defaults project trust to false",
-  () => {
-    const conflictingHttp = JsonHttpClient.of({
-      request: () => Effect.die("provider HTTP client must not escape"),
-      requestJson: () => Effect.die("provider HTTP client must not escape"),
-    });
-    let observedHttp: JsonHttpClientContract | undefined;
-    return Effect.gen(function* () {
-      const h = yield* fixture({
-        fetchOutcome: () =>
-          Effect.gen(function* () {
-            observedHttp = yield* JsonHttpClient;
-            return { _tag: "Missing" } as const;
-          }),
-        dependencies: Context.make(JsonHttpClient, conflictingHttp),
-      }).pipe(provideBuiltLayer(testLayer));
+it.effect("captures dependencies for an escaped refresh", () => {
+  const conflictingHttp = JsonHttpClient.of({
+    request: () => Effect.die("provider HTTP client must not escape"),
+    requestJson: () => Effect.die("provider HTTP client must not escape"),
+  });
+  let observedHttp: JsonHttpClientContract | undefined;
+  return Effect.gen(function* () {
+    const h = yield* fixture({
+      fetchOutcome: () =>
+        Effect.gen(function* () {
+          observedHttp = yield* JsonHttpClient;
+          return { _tag: "Missing" } as const;
+        }),
+      dependencies: Context.make(JsonHttpClient, conflictingHttp),
+    }).pipe(provideBuiltLayer(testLayer));
 
-      yield* h.controller.refresh({ force: true });
+    yield* h.controller.refresh({ force: true });
 
-      expect(h.observedTrust()).toBe(false);
-      expect(observedHttp).toBe(unusedHttp);
-      expect(MutableRef.get(h.projection)).toMatchObject({
-        config,
-        authPath: "/agent/auth.json",
-        eligible: true,
-        snapshot: undefined,
-        error: "missing",
-      });
+    expect(observedHttp).toBe(unusedHttp);
+    expect(MutableRef.get(h.projection)).toMatchObject({
+      config,
+      authPath: "/agent/auth.json",
+      eligible: true,
+      snapshot: undefined,
+      error: "missing",
     });
-  },
-);
+  });
+});
 
 it.effect("composes the default synchronizeState from eligibility and hiddenStatusText", () =>
   Effect.gen(function* () {
@@ -236,7 +180,74 @@ it.effect("a request completing after usage is hidden cannot publish its stale r
   }).pipe(provideBuiltLayer(testLayer)),
 );
 
-for (const invalidation of ["context", "settings"] as const) {
+for (const invalidate of [true, false]) {
+  it.effect(
+    `configuration changes atomically synchronize state with invalidate=${invalidate}`,
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const finish = yield* Deferred.make<void>();
+        const h = yield* fixture({
+          dependencies: Context.empty(),
+          synchronizeState: (current, _ctx, clearUsage) =>
+            Effect.gen(function* () {
+              if (current.config === nextConfig) {
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(finish);
+              }
+              return withUsageEligibility(current, true, clearUsage, {
+                hiddenStatusText: "ineligible",
+              });
+            }),
+        });
+        yield* h.controller.updateState((current) => ({ ...current, snapshot: 7 }));
+        const pending = yield* h.controller
+          .configure(nextConfig, { invalidate })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        expect(MutableRef.get(h.projection)).toMatchObject({ config, snapshot: 7 });
+        expect(yield* h.controller.getState).toMatchObject({ config, snapshot: 7 });
+        yield* Fiber.interrupt(pending);
+        expect(MutableRef.get(h.projection)).toMatchObject({ config, snapshot: 7 });
+        expect(yield* h.controller.getState).toMatchObject({ config, snapshot: 7 });
+
+        yield* Deferred.succeed(finish, undefined);
+        yield* h.controller.configure(nextConfig, { invalidate });
+        const expected = { config: nextConfig, snapshot: invalidate ? undefined : 7 };
+        expect(MutableRef.get(h.projection)).toMatchObject(expected);
+        expect(yield* h.controller.getState).toMatchObject(expected);
+      }).pipe(provideBuiltLayer(testLayer)),
+  );
+
+  it.effect(
+    `configuration changes ${invalidate ? "invalidate" : "preserve"} an in-flight usage result`,
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const finish = yield* Deferred.make<number>();
+        const h = yield* fixture({
+          ...fetching(
+            Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+          ),
+          formatStatusLine: (snapshot, cfg) => `${snapshot}:${cfg.usage.refreshIntervalMs}`,
+        });
+        const pending = yield* h.controller.refresh({ force: true }).pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        yield* h.controller.configure(nextConfig, invalidate ? undefined : { invalidate: false });
+        yield* Deferred.succeed(finish, 42);
+        yield* Fiber.join(pending);
+        const expected = {
+          config: nextConfig,
+          snapshot: invalidate ? undefined : 42,
+          statusLine: invalidate ? undefined : "42:30000",
+        };
+        expect(MutableRef.get(h.projection)).toMatchObject(expected);
+        expect(yield* h.controller.getState).toMatchObject(expected);
+      }).pipe(provideBuiltLayer(testLayer)),
+  );
+}
+
+for (const invalidation of ["context", "configuration"] as const) {
   it.effect(`serializes ${invalidation} clearing after the refresh's final key validation`, () =>
     Effect.gen(function* () {
       const paused = pausedScheduler();
@@ -263,11 +274,9 @@ for (const invalidation of ["context", "settings"] as const) {
           return true;
         },
       };
-      const settings = committingSettings();
       let requests = 0;
       const h = yield* fixture({
         ...fetching(Effect.sync(() => ++requests)),
-        ...settings.overrides,
       });
       yield* h.controller.updateState((current) => ({ ...current, snapshot: 7 }));
       const refresh = yield* h.controller
@@ -282,26 +291,20 @@ for (const invalidation of ["context", "settings"] as const) {
         const action =
           invalidation === "context"
             ? h.controller.contextChanged(true)
-            : h.controller.updateSetting("usage.refreshIntervalMs", "30000");
+            : h.controller.configure(nextConfig);
         const competing = yield* action.pipe(
           Effect.andThen(Deferred.succeed(invalidated, undefined)),
           Effect.forkScoped,
         );
         for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
-        if (invalidation === "settings") expect(settings.mutations()).toBe(1);
         expect(yield* Deferred.isDone(invalidated)).toBe(false);
         expect(MutableRef.get(h.projection).snapshot).toBe(7);
-        const interruption =
-          invalidation === "settings"
-            ? yield* Fiber.interrupt(competing).pipe(Effect.forkScoped)
-            : undefined;
         paused.resume();
         yield* Fiber.join(refresh);
-        if (interruption) yield* Fiber.join(interruption);
-        else yield* Fiber.join(competing);
+        yield* Fiber.join(competing);
         expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
         expect((yield* h.controller.getState).snapshot).toBeUndefined();
-        if (invalidation === "settings")
+        if (invalidation === "configuration")
           expect(MutableRef.get(h.projection).config?.usage.refreshIntervalMs).toBe(30_000);
         yield* h.controller.refresh({ force: true });
         expect(MutableRef.get(h.projection).snapshot).toBe(2);
@@ -314,34 +317,22 @@ for (const invalidation of ["context", "settings"] as const) {
 }
 
 it.effect(
-  "revoked publication authority leaves durable/private settings reusable but never republishes or notifies",
+  "revoked publication authority accepts private configuration without republishing or notifying",
   () =>
     Effect.gen(function* () {
       let live = true;
       let changes = 0;
-      const committed = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const settings = committingSettings(
-        Deferred.succeed(committed, undefined).pipe(Effect.andThen(Deferred.await(release))),
-      );
       const h = yield* fixture({
         ...fetching(Effect.succeed(42)),
         canPublish: () => live,
         onChange: () => {
           changes++;
         },
-        ...settings.overrides,
       });
-      const pending = yield* h.controller
-        .updateSetting("usage.refreshIntervalMs", "30000")
-        .pipe(Effect.forkScoped);
-      yield* Deferred.await(committed);
       live = false;
       const reset = initialUsageProjection<UsageControllerConfig, number>();
       MutableRef.set(h.projection, reset);
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(pending);
-      expect(settings.durable().usage.refreshIntervalMs).toBe(30_000);
+      yield* h.controller.configure(nextConfig);
       expect((yield* h.controller.getState).config?.usage.refreshIntervalMs).toBe(30_000);
       yield* h.controller.refresh({ notify: true, force: true });
       expect(MutableRef.get(h.projection)).toBe(reset);
@@ -403,9 +394,9 @@ it.effect("polling makes no requests while hidden and resumes after visibility c
     let requests = 0;
     const h = yield* fixture({
       backgroundEnabled: () => visible,
-      startPolling: true,
       ...fetching(Effect.sync(() => ++requests)),
     });
+    yield* h.controller.startPolling();
     yield* TestClock.adjust("2 minutes");
     expect(requests).toBe(0);
     visible = true;

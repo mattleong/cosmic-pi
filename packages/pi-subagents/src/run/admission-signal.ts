@@ -6,11 +6,11 @@ import { writerConflictError, writerConflictHoldings } from "./admission.ts";
 import { SubagentRuntimeClosedError, type SubagentWriterConflictError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import type { StartSubagentRequest } from "./model.ts";
-import type { WriterPoolEntry } from "./writer-pool.ts";
+import type { WriterPoolLookup } from "./writer-pool.ts";
 
 export function makeRunAdmissionSignal(
   records: ReadonlyMap<string, RunRecord>,
-  writerPools: ReadonlyMap<string, WriterPoolEntry>,
+  writerPools: WriterPoolLookup,
 ) {
   let revision = 0;
   const snapshot = (): ReadonlySet<string> => writerConflictHoldings(records, writerPools);
@@ -48,7 +48,14 @@ export function makeRunAdmissionSignal(
 }
 
 export const makeQueuedWriterCheck =
-  ({ records, writerPools, writerLeases, withLock }: RunContext) =>
+  ({
+    records,
+    writerPools,
+    writerLeases,
+    withLock,
+  }: Pick<RunContext, "records" | "writerLeases" | "withLock"> & {
+    readonly writerPools: WriterPoolLookup;
+  }) =>
   (request: StartSubagentRequest): Effect.Effect<SubagentWriterConflictError | undefined> =>
     Effect.gen(function* () {
       if (request.writeIntent !== "writer" || request.writerWorkspaceModeOverride === "worktree")

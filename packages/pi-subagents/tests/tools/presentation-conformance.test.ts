@@ -40,6 +40,58 @@ function registered(panel = false, runtime: Partial<SubagentToolRuntime> = {}) {
   ).tools;
 }
 
+it.each(["compact", "preview"] as const)(
+  "preserves complete launch tasks and file claims in %s expansion",
+  (style) => {
+    const tool = withPresentationSettings(
+      { toolCallCollapsedStyle: style },
+      () => registered().find((entry) => entry.name === "subagent_start")!,
+    );
+    const task = `${"Task context. ".repeat(60)}\nTASK_TAIL\n\u009dCONTROL_ADJACENT_EVIDENCE`;
+    const input = {
+      agents: [{ name: "Worker", profile: "worker", task, writes: ["src/claimed-file.ts"] }],
+    };
+    const original = structuredClone(input);
+    const harness = createToolPresentationHarness(tool, { width: 120 });
+    for (const expanded of [false, true, false, true]) {
+      harness.call(input, { expanded });
+      const text = harness.render().join("\n");
+      for (const evidence of ["TASK_TAIL", "CONTROL_ADJACENT_EVIDENCE", "src/claimed-file.ts"])
+        expect(text.includes(evidence)).toBe(expanded);
+      expect(text).not.toContain("\u009d");
+    }
+    expect(input).toEqual(original);
+  },
+);
+
+it.each(["compact", "preview"] as const)(
+  "preserves uneven retained report lengths in %s expansion",
+  (style) => {
+    const tool = withPresentationSettings(
+      { toolCallCollapsedStyle: style },
+      () => registered().find((entry) => entry.name === "subagent_await")!,
+    );
+    const finalText = `${"Report evidence. ".repeat(1_900)}\nLONG_REPORT_TAIL`;
+    const runs = [
+      view({ id: "long-report", state: "completed", finalText }),
+      view({ id: "short-report", state: "completed", finalText: "SHORT_REPORT_BODY" }),
+    ];
+    const details = makeAwaitDetails({ runs, awaitUntil: "all_finished" });
+    expect(details.contentOmitted).not.toBe(true);
+    expect(details.cards[0]?.finalText).toBe(finalText);
+    const result = { content: [], details };
+    const original = structuredClone(result);
+    const harness = createToolPresentationHarness(tool, { width: 120 });
+    for (const { expanded, text } of harness.cycle(
+      { runIds: runs.map((run) => run.id), until: "all_finished" },
+      result,
+    ))
+      for (const evidence of ["LONG_REPORT_TAIL", "SHORT_REPORT_BODY"])
+        expect(text.includes(evidence)).toBe(expanded);
+    expect(result).toEqual(original);
+  },
+);
+
 it("retains malformed and historical evidence through expansion for every root registration", () => {
   for (const tool of registered()) {
     const harness = createToolPresentationHarness(tool);

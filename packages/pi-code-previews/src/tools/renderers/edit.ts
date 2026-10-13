@@ -9,6 +9,8 @@ import { renderDisplayPath } from "../../paths/display";
 import { showingFooter } from "../../preview/format";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
+import type { CodePreviewSettings } from "../../config/schema";
+import { captureCodePreviewSessionCapability } from "../../application/capability";
 import { getWriteDiffGuard } from "../../write/diff";
 import { getEditPreviewOperations, getPathArg, type EditPreviewOperation } from "../data/args";
 import { getEditDiff, getTextContent } from "../data/results";
@@ -74,13 +76,17 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
         theme,
         codePreviewSettings.editCollapsedLines,
       );
-      const render = () =>
+      const settings = codePreviewSettings;
+      const owner = captureCodePreviewSessionCapability();
+      const render = (active: boolean) =>
         renderEditCallPreview(
           operations,
           proposedDiffs(state, operationsSource),
           path,
           expanded,
           theme,
+          settings,
+          active,
           invalidate,
         );
       const proposal = () =>
@@ -96,6 +102,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
           theme,
           render,
           invalidate,
+          owner,
         );
       preview.addChild(unlessResultDiffShown(state, proposal));
       return preview;
@@ -137,13 +144,16 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
       }
       setResultDiffShown(renderContext.state, !expanded);
       const { invalidate } = renderContext;
-      const render = () =>
+      const settings = codePreviewSettings;
+      const render = (active: boolean) =>
         new FullWidthDiffText(
           formatDiffPreview(diff, pathPreviewLanguage(filePath), theme, limit, {
             totalLines: summary.totalLines,
             invalidate,
+            highlight: active,
           }),
           theme,
+          settings.diffIntensity,
         );
       const previewKey = previewCacheKey(
         [diff],
@@ -161,6 +171,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
         theme,
         render,
         invalidate,
+        captureCodePreviewSessionCapability(),
       );
     },
   };
@@ -191,11 +202,13 @@ function renderEditCallPreview(
   path: string,
   expanded: boolean,
   theme: Theme,
+  settings: CodePreviewSettings,
+  active: boolean,
   invalidate?: () => void,
 ): FullWidthDiffText {
   const lang = pathPreviewLanguage(path);
   const shown = expanded ? operations.length : Math.min(operations.length, COLLAPSED_EDIT_BLOCKS);
-  const collapsedLines = codePreviewSettings.editCollapsedLines;
+  const collapsedLines = settings.editCollapsedLines;
   const blockLimit =
     operations.length > 1 && collapsedLines !== "all"
       ? Math.max(8, Math.floor(collapsedLines / shown))
@@ -223,6 +236,7 @@ function renderEditCallPreview(
         totalLines: summary.totalLines,
         invalidate,
         proposed: true,
+        highlight: active,
       }),
     );
   }
@@ -233,7 +247,7 @@ function renderEditCallPreview(
   let text = `${theme.fg("muted", "proposed edit")}${counts}${blocks}\n${sections.join("\n")}`;
   if (shown < operations.length)
     text += showingFooter(theme, shown, operations.length, "edit blocks");
-  return new FullWidthDiffText(text, theme);
+  return new FullWidthDiffText(text, theme, settings.diffIntensity);
 }
 
 function formatEditSummary(summary: DiffSummary, limit: number, theme: Theme): string {

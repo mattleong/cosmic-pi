@@ -17,6 +17,7 @@ import {
 import { FastModeService } from "../src/fast/service.ts";
 import { initialFastSnapshot, type FastSnapshot } from "../src/fast/controller.ts";
 import { OpenAIUsageService } from "../src/usage/controller.ts";
+import { OpenAIConfigService } from "../src/config/store.ts";
 import { initialProjection, type OpenAIProjection } from "../src/usage/projection.ts";
 import { makeResolvedConfig, testContext, testModel } from "./helpers.ts";
 
@@ -30,9 +31,9 @@ function makeContext(initialModel: string) {
   };
 }
 
-const fakeUsageLayer = Layer.succeed(OpenAIUsageService, {
-  refresh: () => Effect.void,
-  contextChanged: () => Effect.void,
+const fakeConfigLayer = Layer.succeed(OpenAIConfigService, {
+  get: Effect.succeed(makeResolvedConfig()),
+  observe: () => Effect.void,
   updateSetting: () => Effect.void,
   persistFast: (_desiredActive, afterCommit) => Effect.uninterruptible(afterCommit),
   readConfigDocument: Effect.succeed({}),
@@ -50,15 +51,20 @@ const persistedFastLayer = (
   },
   http: Parameters<typeof jsonHttpTestLayer>[0] = () => Effect.die("unexpected HTTP request"),
 ) =>
-  FastModeService.layer({ projection: projections.fast }).pipe(
+  Layer.mergeAll(
+    FastModeService.layer({ projection: projections.fast }),
+    OpenAIUsageService.layer({
+      context: MutableRef.make(ctx),
+      projection: projections.usage ?? MutableRef.make(initialProjection()),
+      onChange: () => undefined,
+      startPolling: false,
+    }),
+  ).pipe(
     Layer.provideMerge(
-      OpenAIUsageService.layer({
-        context: MutableRef.make(ctx),
+      OpenAIConfigService.layer({
         cwd: "/project",
-        projection: projections.usage ?? MutableRef.make(initialProjection()),
-        onChange: () => undefined,
-        startPolling: false,
         projectTrusted: true,
+        projection: MutableRef.make(undefined),
       }),
     ),
     Layer.provide(
@@ -226,7 +232,7 @@ describe("FastModeService", () => {
             Effect.provideService(Scheduler.Scheduler, scheduler),
           ),
         );
-      }).pipe(provideBuiltLayer(fakeUsageLayer));
+      }).pipe(provideBuiltLayer(fakeConfigLayer));
     },
   );
 
@@ -234,7 +240,7 @@ describe("FastModeService", () => {
     const projection = MutableRef.make<FastSnapshot>(initialFastSnapshot());
     const current = makeContext("gpt-5.5");
     let offer: ((event: { readonly model: string; readonly tier: string }) => void) | undefined;
-    const fastLayer = FastModeService.layer({ projection }).pipe(Layer.provide(fakeUsageLayer));
+    const fastLayer = FastModeService.layer({ projection }).pipe(Layer.provide(fakeConfigLayer));
 
     return Effect.gen(function* () {
       yield* Effect.scoped(

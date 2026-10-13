@@ -781,6 +781,12 @@ const scenarios: ReadonlyArray<
     result: text("tests/a.test.ts\ntests/b.test.ts"),
   },
   {
+    tool: "find",
+    title: "absolute and relative listing paths retain their identity",
+    args: { pattern: "*", path: "/project" },
+    result: text("/\n/etc/hosts\netc/passwd"),
+  },
+  {
     tool: "ls",
     title: "list a directory",
     args: { path: "/project" },

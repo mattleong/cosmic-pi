@@ -91,6 +91,30 @@ for (const change of ["growth", "shrink", "growth after EOF", "read failure"])
     }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
   );
 
+it.live(
+  "rejects a same-size overwrite between partial reads instead of returning mixed content",
+  () =>
+    Effect.gen(function* () {
+      const { root, file, handle } = yield* openedFile();
+      const read = handle.read.bind(handle);
+      let firstRead = true;
+      vi.spyOn(handle, "read").mockImplementation((options) =>
+        read({ ...options, length: Math.min(options?.length ?? 1, 2) }).then((result) => {
+          if (!firstRead) return result;
+          firstRead = false;
+          return fs
+            .writeFile(file, "evil")
+            .then(() => fs.utimes(file, 1, 1))
+            .then(() => result);
+        }),
+      );
+      const safeFile = yield* SafeFile;
+      const result = yield* Effect.result(safeFile.readContainedRegularFile(file, root, 4));
+      expect(result._tag).toBe("Failure");
+      expect(handle.fd).toBe(-1);
+    }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
+);
+
 it.live("closes the handle when an in-flight read is interrupted", () =>
   Effect.gen(function* () {
     const { root, file, handle } = yield* openedFile();

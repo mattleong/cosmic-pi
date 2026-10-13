@@ -8,7 +8,7 @@ import type { RunSettlement } from "./settlement.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 
-export interface RunAssignmentDependencies extends RunContext {
+export interface RunAssignmentDependencies extends Pick<RunContext, "withLock" | "publish"> {
   readonly startPrompt: RunProcessControls["startPrompt"];
   readonly activateAssignmentLocked: RunSettlement["activateAssignmentLocked"];
   readonly replayAssignmentActivation: RunSettlement["replayAssignmentActivation"];
@@ -39,6 +39,7 @@ export const beginNextAssignmentLocked = (
   record.view = {
     ...record.view,
     ...viewPatch,
+    assignmentEpoch: record.assignment.epoch,
     state: "starting",
     endedAt: undefined,
     warning: undefined,

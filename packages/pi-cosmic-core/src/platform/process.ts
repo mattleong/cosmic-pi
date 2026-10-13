@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import { signalProcessGroup } from "./process-tree.ts";
+import { confirmProcessGroupExit, signalProcessGroup } from "./process-tree.ts";
 
 export const nodeProcessLayer = NodeChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
@@ -110,14 +110,16 @@ const sweepExitedProcessTree = (
   timeoutMillis: number,
 ): Effect.Effect<boolean> => {
   if (process.platform !== "win32")
-    return Effect.sync(() => {
+    return Effect.suspend(() => {
       const group = signalProcessGroup(Number(handle.pid), "SIGKILL");
-      return group === "present" || group === "absent";
+      return group === "absent"
+        ? Effect.succeed(true)
+        : confirmProcessGroupExit(Number(handle.pid), timeoutMillis);
     });
   return handle.kill({ killSignal: "SIGKILL" }).pipe(
     Effect.timeoutOption(Math.max(1, timeoutMillis)),
     Effect.map(Option.isSome),
-    Effect.orElseSucceed(() => true),
+    Effect.orElseSucceed(() => false),
   );
 };
 
@@ -209,12 +211,13 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
       orElse: () => Effect.succeed({ _tag: "Timeout" as const }),
     }),
   );
+  const leaderClosed =
+    outcome._tag === "Completed" ||
+    (yield* confirmEffectProcessClose(handle, cleanupTimeoutMillis));
   const cleanupConfirmed =
-    outcome._tag === "Completed"
-      ? request.sweepProcessTreeOnExit
-        ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
-        : true
-      : yield* confirmEffectProcessClose(handle, cleanupTimeoutMillis);
+    leaderClosed && request.sweepProcessTreeOnExit
+      ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
+      : leaderClosed;
   return {
     ...(outcome._tag === "Completed"
       ? effectProcessExit(outcome.exit)

@@ -27,12 +27,13 @@ const outputFormats = {
 
 export const imageOutputMetadata = (format: ImageOutputFormat) => outputFormats[format];
 
+// Grouped repetition exhausts V8's regexp stack on ordinary multi-megabyte images.
 const decodeStrictBase64 = (value: string): Uint8Array | undefined => {
   if (
     value.length === 0 ||
     value.length > Math.ceil(MAX_GENERATED_IMAGE_BYTES / 3) * 4 ||
     value.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+    !/^[A-Za-z0-9+/]+={0,2}(?![\s\S])/.test(value)
   )
     return undefined;
   const bytes = Buffer.from(value, "base64");

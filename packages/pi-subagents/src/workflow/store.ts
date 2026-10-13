@@ -157,6 +157,15 @@ const roots = (locations: WorkflowLocations) => [
   { scope: "user" as const, directory: locations.user },
 ];
 
+const boundedJournalLines = (lines: ReadonlyArray<string>, maximumChars: number) => {
+  let characters = 0;
+  const end = lines.findIndex((line) => {
+    characters += line.length + 1;
+    return characters > maximumChars;
+  });
+  return end === -1 ? lines : lines.slice(0, end);
+};
+
 export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreContract>()(
   "pi-subagents/workflow/store/WorkflowStore",
 ) {
@@ -349,7 +358,10 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
           const path = workflowRunResultPath(paths, files, name);
           return path === undefined
             ? Effect.undefined
-            : readRunText(path, files, maximumChars).pipe(Effect.orElseSucceed(() => undefined));
+            : readRunText(path, files, maximumChars * 4).pipe(
+                Effect.map((text) => (text.length <= maximumChars ? text : undefined)),
+                Effect.orElseSucceed(() => undefined),
+              );
         };
 
         return WorkflowStore.of({
@@ -368,7 +380,9 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
             platform(writeWorkflowRunResult(files, ordinal, text)),
           readRunResult,
           readRunJournal: (files, maximumChars) =>
-            platform(readWorkflowRunJournal(files, maximumChars)),
+            platform(readWorkflowRunJournal(files, maximumChars * 4)).pipe(
+              Effect.map((lines) => boundedJournalLines(lines, maximumChars)),
+            ),
         });
       }),
     );

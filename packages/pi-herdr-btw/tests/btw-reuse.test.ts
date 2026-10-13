@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vitest";
 import { type HerdrPane } from "../src/boundary/herdr-client.ts";
+import type { SessionHeaderProbe } from "../src/boundary/session-file.ts";
 import {
   HERDR_BTW_LINK_ENTRY_TYPE,
   restoreHerdrBtwLink,
@@ -263,6 +264,40 @@ describe("herdr-btw reuse workflow", () => {
         childSessionPath: CHILD_FILE,
         agentName: result.agentName,
       });
+    }),
+  );
+
+  it.effect("revalidates the child file after preparation before resuming Pi", () =>
+    Effect.gen(function* () {
+      for (const replacement of ["missing", "different-session", "parent-alias"] as const) {
+        const probes: Record<string, SessionHeaderProbe> = {};
+        let replaced = false;
+        const test = fixture({
+          initialLinks: [LINK],
+          startedSession: CHILD_FILE,
+          probes,
+          onLiveAgentSnapshot: (index) => {
+            if (index !== 1) return;
+            replaced = true;
+            if (replacement !== "parent-alias")
+              probes[CHILD_FILE] =
+                replacement === "missing"
+                  ? { _tag: "invalid" }
+                  : { _tag: "valid", header: { id: "replacement-session" } };
+          },
+          compareSessionFileIdentity: (left, right) =>
+            replaced &&
+            replacement === "parent-alias" &&
+            [left, right].every((path) => path === CHILD_FILE || path === SESSION_FILE)
+              ? "same"
+              : left === right
+                ? "same"
+                : "distinct",
+        });
+        yield* Effect.flip(withReadiness(test.open()));
+        expect(operationNames(test.calls)).not.toContain("start side-session Pi");
+        expect(test.recordedLinks).toEqual([LINK]);
+      }
     }),
   );
 

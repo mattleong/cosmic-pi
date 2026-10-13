@@ -71,7 +71,7 @@ export interface OwnedRunCoordinatorContract {
   readonly workspaceBindingStatus: (workspaceId: string) => Effect.Effect<WorkspaceBindingStatus>;
 }
 
-export interface RunOwnedRunsDependencies extends RunContext {
+export interface RunOwnedRunsDependencies extends Pick<RunContext, "records" | "withLock"> {
   readonly allocateClaimToken: () => string;
   readonly isAllocatedRunId: (id: string) => boolean;
   readonly currentRevision: () => number;

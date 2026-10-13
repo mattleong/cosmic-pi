@@ -1,12 +1,24 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as MutableRef from "effect/MutableRef";
 import * as Number from "effect/Number";
+import type * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import {
+  AgentDirectory,
+  commitPreferredScope,
   decodeTolerantFields,
+  freezeSnapshot,
+  type JsonDocumentStore,
   makeScopedConfigStore,
   type JsonObject,
   type ScopedConfigMetadata,
 } from "pi-cosmic-core";
+import { prepareSettingUpdate } from "./options.ts";
 import {
   CONFIG_BASENAME,
   DEFAULT_COMPACTION_CONFIG,
@@ -116,3 +128,136 @@ export const {
   resolveConfig,
   writeConfig,
 } = store;
+
+interface ConfigChange {
+  readonly previous: ResolvedConfig;
+  readonly config: ResolvedConfig;
+  readonly reason: "load" | "setting" | "fast";
+}
+
+interface ConfigConsumer {
+  readonly commit: (change: ConfigChange) => Effect.Effect<void>;
+  readonly settled?: (change: ConfigChange) => Effect.Effect<void>;
+}
+
+const settle = ({
+  change,
+  listeners,
+}: {
+  readonly change: ConfigChange;
+  readonly listeners: ReadonlyArray<ConfigConsumer>;
+}) =>
+  Effect.forEach(listeners, (consumer) => consumer.settled?.(change) ?? Effect.void, {
+    discard: true,
+  });
+
+interface OpenAIConfigServiceOptions {
+  readonly cwd: string;
+  readonly projectTrusted?: boolean;
+  readonly projection: MutableRef.MutableRef<ResolvedConfig | undefined>;
+  readonly canPublish?: () => boolean;
+}
+
+export class OpenAIConfigService extends Context.Service<OpenAIConfigService>()(
+  "pi-better-openai/config/store/OpenAIConfigService",
+  {
+    make: Effect.fnUntraced(function* (options: OpenAIConfigServiceOptions) {
+      const dependencies = yield* Effect.context<Path.Path | JsonDocumentStore>();
+      const provide = <A, E>(effect: Effect.Effect<A, E, Path.Path | JsonDocumentStore>) =>
+        Effect.provideContext(effect, dependencies);
+      const agentDir = yield* AgentDirectory;
+      const load = resolveConfig(options.cwd, agentDir, options.projectTrusted === true);
+      const initial = freezeSnapshot(yield* load);
+      const state = yield* Ref.make(initial);
+      const consumers = yield* Ref.make<ReadonlyArray<ConfigConsumer>>([]);
+      const changes = yield* Semaphore.make(1);
+      const publish = (config: ResolvedConfig) => {
+        if (options.canPublish?.() !== false) MutableRef.set(options.projection, config);
+      };
+      yield* Effect.sync(() => publish(initial));
+
+      const install = (change: ConfigChange, listeners: ReadonlyArray<ConfigConsumer>) =>
+        Effect.uninterruptible(
+          Effect.forEach(listeners, (consumer) => consumer.commit(change), { discard: true }).pipe(
+            Effect.andThen(Ref.set(state, change.config)),
+            Effect.andThen(Effect.sync(() => publish(change.config))),
+          ),
+        );
+      const modify = (
+        current: ResolvedConfig,
+        update: (document: JsonObject) => JsonObject,
+        reason: "setting" | "fast",
+        afterCommit: Effect.Effect<void> = Effect.void,
+      ) =>
+        Effect.gen(function* () {
+          const previous = yield* Ref.get(state);
+          const listeners = yield* Ref.get(consumers);
+          const config = yield* commitPreferredScope(store, current, update, (next) =>
+            install({ previous, config: freezeSnapshot(next), reason }, listeners).pipe(
+              Effect.andThen(afterCommit),
+            ),
+          );
+          return { change: { previous, config, reason }, listeners };
+        });
+
+      return {
+        get: Ref.get(state),
+        readConfigDocument: provide(
+          Ref.get(state).pipe(Effect.flatMap((config) => readRawConfig(config.configPath))),
+        ),
+        observe: (consumer: ConfigConsumer) =>
+          Effect.acquireRelease(Effect.void, () =>
+            Ref.get(consumers).pipe(
+              Effect.flatMap((current) =>
+                current.includes(consumer)
+                  ? changes.withPermit(
+                      Ref.update(consumers, (entries) =>
+                        entries.filter((entry) => entry !== consumer),
+                      ),
+                    )
+                  : Effect.void,
+              ),
+            ),
+          ).pipe(
+            Effect.andThen(
+              changes.withPermit(
+                Effect.gen(function* () {
+                  const config = yield* Ref.get(state);
+                  yield* consumer.commit({ previous: config, config, reason: "load" });
+                  yield* Ref.update(consumers, (current) => [...current, consumer]);
+                }),
+              ),
+            ),
+          ),
+        updateSetting: (id: string, value: string) =>
+          provide(
+            prepareSettingUpdate(id, value).pipe(
+              Effect.flatMap((update) =>
+                changes.withPermit(
+                  load.pipe(Effect.flatMap((fresh) => modify(fresh, update, "setting"))),
+                ),
+              ),
+              Effect.flatMap(settle),
+            ),
+          ),
+        persistFast: (desiredActive: boolean, afterCommit: Effect.Effect<void>) =>
+          provide(
+            changes.withPermit(
+              Effect.gen(function* () {
+                const fresh = yield* load;
+                if (!fresh.persistState) {
+                  yield* Effect.uninterruptible(afterCommit);
+                  return;
+                }
+                yield* modify(fresh, (raw) => ({ ...raw, desiredActive }), "fast", afterCommit);
+              }),
+            ),
+          ),
+      };
+    }),
+  },
+) {
+  static layer(options: OpenAIConfigServiceOptions) {
+    return Layer.effect(this, this.make(options));
+  }
+}

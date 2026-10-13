@@ -29,14 +29,14 @@ export const makeSupervisorRpcSerialization = (
           let position = 0;
           let newline = buffer.indexOf("\n", position);
           while (newline !== -1) {
-            checkSize(newline - position);
             const line = buffer.slice(position, newline);
+            checkSize(Buffer.byteLength(line, "utf8"));
             if (line.length > 0) messages.push(decodeJson(line));
             position = newline + 1;
             newline = buffer.indexOf("\n", position);
           }
           buffer = buffer.slice(position);
-          checkSize(buffer.length);
+          checkSize(Buffer.byteLength(buffer, "utf8"));
           return messages;
         },
       };

@@ -120,7 +120,13 @@ const readContainedRegularFile = (paths: Path.Path) =>
 
           const bytes = yield* readExactly(handle, opened.size);
           const after = yield* readStep(() => handle.stat({ bigint: true }));
-          if (!sameFile(after, opened) || after.size !== opened.size) return yield* failRead();
+          if (
+            !sameFile(after, opened) ||
+            after.size !== opened.size ||
+            after.mtimeNs !== opened.mtimeNs ||
+            after.ctimeNs !== opened.ctimeNs
+          )
+            return yield* failRead();
           return { path: resolvedPath, bytes } satisfies SafeFileResult;
         }),
       (handle) =>

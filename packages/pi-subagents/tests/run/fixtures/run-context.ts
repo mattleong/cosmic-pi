@@ -14,6 +14,7 @@ import { WriterLeaseService } from "../../../src/boundary/writer-lease.ts";
 import { SubagentNotFoundError } from "../../../src/run/errors.ts";
 import type { RunContext, RunRecord } from "../../../src/run/internal.ts";
 import type { RunNotificationDelivery } from "../../../src/run/notification-delivery.ts";
+import { WriterPools } from "../../../src/run/writer-pool.ts";
 import { makeRunSettlement } from "../../../src/run/settlement.ts";
 import { view } from "../../fixtures/run-view.ts";
 import { fakeWriterLeaseLayer } from "./service-harness.ts";
@@ -28,7 +29,7 @@ export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
       withLock: lock.withPermits(1),
       publish: Effect.void,
       records,
-      writerPools: new Map(),
+      writerPools: new WriterPools(),
       writerLeases: yield* WriterLeaseService,
       requireRecord: (id) => {
         const record = records.get(id);

@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { afterEach, test } from "vitest";
 import {
   clearCodePreviewSessionCapability,
+  captureCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
 } from "../../src/application/capability";
 import { plainTheme } from "../support/render";
@@ -32,7 +33,16 @@ const preview = (
   source: string,
   ...rest: [PreviewArgs[6], PreviewArgs[7]]
 ) =>
-  cachedDeferredPreview(state, "preview", [source], source.length, "loading", plainTheme, ...rest);
+  cachedDeferredPreview(
+    state,
+    "preview",
+    [source],
+    source.length,
+    "loading",
+    plainTheme,
+    ...rest,
+    captureCodePreviewSessionCapability(),
+  );
 
 test("large previews remain synchronous before session acquisition", () => {
   const state = {};

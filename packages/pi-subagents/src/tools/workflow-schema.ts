@@ -65,7 +65,7 @@ export const WorkflowToolParameters = Type.Object(
     budget: Type.Optional(
       Type.Integer({
         description:
-          'start: a hard ceiling on the output tokens the run\'s agents produce, such as 500000 for "cap this at 500k". Pass it whenever the user states a token limit for the work.',
+          'start: an output-token admission ceiling, such as 500000 for "cap this at 500k". Running agents may overshoot it. Pass it whenever the user states a token limit for the work.',
         minimum: 1,
         maximum: BUDGET_MAX,
       }),

@@ -32,7 +32,7 @@ import {
 import type { ResolvedConfig } from "../config/schema.ts";
 import { settingsSummary, type FastSnapshot } from "../fast/controller.ts";
 import { FastModeService } from "../fast/service.ts";
-import { OpenAIUsageService } from "../usage/controller.ts";
+import { OpenAIConfigService } from "../config/store.ts";
 
 export function registerSettingsController(
   command: ExtensionCommand,
@@ -45,7 +45,7 @@ export function registerSettingsController(
     readonly resetFastRoutingTransport: (ctx: ExtensionContext) => void;
     readonly captureAuthority: () => () => boolean;
     readonly run: <A, E>(
-      effect: Effect.Effect<A, E, OpenAIUsageService | FastModeService>,
+      effect: Effect.Effect<A, E, OpenAIConfigService | FastModeService>,
       signal?: AbortSignal,
     ) => Promise<A>;
   },
@@ -70,7 +70,7 @@ export function registerSettingsController(
 
   const readRedactedConfig = (ctx: ExtensionContext) =>
     run(
-      OpenAIUsageService.use((service) => service.readConfigDocument).pipe(
+      OpenAIConfigService.use((service) => service.readConfigDocument).pipe(
         Effect.map((value) => redactDiagnosticValue(value)),
       ),
       safeHostSignal(ctx),
@@ -92,7 +92,7 @@ export function registerSettingsController(
         run(
           Effect.gen(function* () {
             if (id !== "fast.enabled")
-              return yield* OpenAIUsageService.use((service) => service.updateSetting(id, value));
+              return yield* OpenAIConfigService.use((service) => service.updateSetting(id, value));
             yield* FastModeService.use((service) => service.setDesired(ctx, value === "true"));
             yield* Effect.sync(() => {
               if (isCurrent()) resetFastRoutingTransport(ctx);

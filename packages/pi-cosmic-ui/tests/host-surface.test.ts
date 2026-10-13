@@ -272,6 +272,103 @@ describe("owned custom surfaces", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect(
+    "releases a dock component's owned cleanup on completion and pre-mount interruption",
+    () =>
+      Effect.gen(function* () {
+        for (const completed of [true, false]) {
+          const h = fakeCustomSurfaceHost();
+          const resources = new Set<object>();
+          let releases = 0;
+          let finish: (() => void) | undefined;
+          const fiber = yield* open(h, {
+            placement: "dock",
+            closedValue: undefined,
+            create: (host) => {
+              const resource = {};
+              resources.add(resource);
+              finish = () => host.finish(undefined);
+              return {
+                ...view(),
+                dispose: () => {
+                  releases++;
+                  if (!resources.delete(resource)) throw new Error("Resource released twice");
+                },
+              };
+            },
+          });
+          expect(resources.size).toBe(1);
+          if (completed) {
+            h.mount();
+            finish?.();
+            yield* Fiber.join(fiber);
+          } else yield* Fiber.interrupt(fiber);
+          expect(resources.size).toBe(0);
+          expect(h.widgets.size).toBe(0);
+          h.mount();
+          expect(h.overlays).toEqual([]);
+          expect(releases).toBe(1);
+        }
+      }),
+  );
+
+  it.effect("removes the dock widget and releases resources when focus cleanup throws", () =>
+    Effect.gen(function* () {
+      const h = fakeCustomSurfaceHost();
+      let releases = 0;
+      const fiber = yield* open(h, {
+        placement: "dock",
+        closedValue: undefined,
+        create: () => ({
+          ...view(),
+          get focused() {
+            return true;
+          },
+          set focused(_focused: boolean) {
+            throw new Error("Focus cleanup failed");
+          },
+          dispose: () => {
+            releases++;
+          },
+        }),
+      });
+      h.mount();
+      expect(h.widgets.size).toBe(1);
+      yield* Fiber.interrupt(fiber);
+      expect(h.widgets.size).toBe(0);
+      expect(releases).toBe(1);
+    }),
+  );
+
+  it.effect("releases a dock component returned after reentrant closure during creation", () =>
+    Effect.gen(function* () {
+      const h = fakeCustomSurfaceHost();
+      let close: (() => void) | undefined;
+      let releases = 0;
+      const fiber = yield* open(h, {
+        placement: "dock",
+        closedValue: undefined,
+        onControl: (control) => {
+          close = control;
+        },
+        create: () => {
+          close?.();
+          return {
+            ...view(),
+            dispose: () => {
+              releases++;
+            },
+          };
+        },
+      });
+      h.mount();
+      yield* Fiber.join(fiber);
+      expect(releases).toBe(1);
+      expect(h.widgets.size).toBe(0);
+      expect(h.overlays).toEqual([]);
+    }),
+  );
+
   it.effect("an external control closes a mounted surface with its closed value", () =>
     Effect.gen(function* () {
       const h = fakeCustomSurfaceHost();

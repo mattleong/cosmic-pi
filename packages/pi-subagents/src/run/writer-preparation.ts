@@ -20,7 +20,10 @@ const mapWriterLeaseConflict = ({ message }: WriterLeaseConflictError) =>
     message,
   });
 
-export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
+export function makeWriterPreparation({
+  withLock,
+  writerLeases,
+}: Pick<RunContext, "withLock" | "writerLeases">) {
   const prepareWriterLeaseForSpawn = (record: RunRecord): Effect.Effect<void, SubagentError> => {
     const canonicalCwd = record.canonicalWriterCwd;
     const pool = record.writerPool;
@@ -53,7 +56,7 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
               return Effect.fail(cancelled());
             switch (pool.state) {
               case "pending":
-                pool.state = "preparing";
+                pool.claimPreparationLocked();
                 return Effect.succeed("owner");
               case "preparing":
                 return Effect.succeed("wait");
@@ -91,14 +94,13 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
               ),
             ),
             (ownedLease) =>
-              !handedOff || pool.releaseState.authorized
+              !handedOff || pool.releaseAuthorized
                 ? writerLeases.release(ownedLease).pipe(Effect.orDie)
                 : Effect.void,
           ).pipe(Effect.provideService(Scope.Scope, pool.leaseScope));
           const attached = yield* withLock(
             Effect.sync(() => {
-              if (record.writerPool !== pool || pool.state !== "preparing") return false;
-              pool.lease = lease;
+              if (record.writerPool !== pool || !pool.adoptLeaseLocked(lease)) return false;
               handedOff = true;
               return true;
             }),
@@ -116,10 +118,7 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
           );
           yield* withLock(
             Effect.sync(() => {
-              if (pool.state !== "preparing") return;
-              pool.lease = marked;
-              pool.state = "held";
-              Deferred.doneUnsafe(pool.preparationSettled, Effect.void);
+              pool.completePreparationLocked(marked);
             }),
           );
           if (!(yield* stillAttached)) return yield* cancelled();
@@ -131,9 +130,7 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
               Effect.sync(() => {
                 if (pool.state !== "preparing") return;
                 const error = Option.getOrElse(Exit.findErrorOption(exit), cancelled);
-                pool.state = "failed";
-                pool.preparationError = error;
-                Deferred.doneUnsafe(pool.preparationSettled, Effect.fail(error));
+                pool.failPreparationLocked(error);
               }),
             ),
           ),

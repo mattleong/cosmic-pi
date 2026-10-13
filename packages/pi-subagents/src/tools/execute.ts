@@ -24,6 +24,7 @@ import {
 import {
   isParentActionRequiredRun,
   type StartSubagentRequest,
+  type SubagentControlExpectation,
   type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
@@ -160,6 +161,7 @@ export const executeSubagentActionEffect = (
   callerRunId?: string,
   awaitExecution?: AwaitExecution,
   scripted = false,
+  expected?: SubagentControlExpectation,
 ): Effect.Effect<
   AgentToolResult<unknown>,
   SubagentError,
@@ -322,10 +324,10 @@ export const executeSubagentActionEffect = (
         return presentLifecycle(
           yield* forEachOutcome(ids, (id) =>
             args.action === "interrupt"
-              ? service.interrupt(id)
+              ? service.interrupt(id, expected)
               : args.action === "resume"
-                ? service.resume(id, args.message)
-                : service.stop(id),
+                ? service.resume(id, args.message, expected)
+                : service.stop(id, expected),
           ),
         );
       });
@@ -395,13 +397,17 @@ export const executeSubagentActionEffect = (
         const ids = yield* requiredTargetIds(action, input.args.runIds);
         const message = yield* required(action, "message", input.args.message);
         yield* authorize(ids);
-        return present(yield* forEachOutcome(ids, (id) => service.send(id, message), true));
+        return present(
+          yield* forEachOutcome(ids, (id) => service.send(id, message, expected), true),
+        );
       }
       case SUBAGENT_TOOL_NAME.reply: {
         const id = yield* required(action, "runId", input.args.runId);
         const message = yield* required(action, "message", input.args.message);
         yield* authorize([id]);
-        return present(yield* forEachOutcome([id], (runId) => service.reply(runId, message)));
+        return present(
+          yield* forEachOutcome([id], (runId) => service.reply(runId, message, expected)),
+        );
       }
       case SUBAGENT_TOOL_NAME.lifecycle:
         return yield* executeLifecycle(input.args);
@@ -409,7 +415,7 @@ export const executeSubagentActionEffect = (
         const id = yield* required(action, "runId", input.args.runId);
         yield* authorize([id]);
         const result = yield* forEachOutcome([id], (runId) =>
-          service.rename(runId, input.args.name.trim()),
+          service.rename(runId, input.args.name.trim(), expected),
         );
         const [outcome] = result.outcomes;
         if (outcome === undefined)

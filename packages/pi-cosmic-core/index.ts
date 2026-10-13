@@ -132,6 +132,7 @@ export {
   type BoundedProcessResult,
 } from "./src/platform/process.ts";
 export {
+  confirmProcessGroupExit,
   processGroupSignalError,
   signalProcess,
   signalProcessGroup,

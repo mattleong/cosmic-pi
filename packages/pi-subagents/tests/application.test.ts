@@ -2,6 +2,7 @@ import { tmpdir } from "node:os";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
 import { ACTIVITY_VIEW_DISCOVER } from "pi-cosmic-ui/activity/view";
+import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import type { ModelsRefreshResult } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
@@ -26,14 +27,22 @@ import {
 } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
+import { SubagentBackendRegistry } from "../src/backend/service.ts";
+import * as SubagentLayers from "../src/layer.ts";
+import { captureSubagentControlExpectation } from "../src/run/model.ts";
+import { encodeFleetActionRequest } from "../src/tools/proxy-fleet.ts";
+import { view } from "./fixtures/run-view.ts";
 import { completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { subagentConfigDecoder } from "../src/config/schema.ts";
-import { makeSubagentProfileService } from "../src/profiles/service.ts";
+import { makeSubagentProfileService, SubagentProfileService } from "../src/profiles/service.ts";
 import { mountingCustomUi, sessionContextFixture as sessionContext } from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
+import { pickQuestionnaire } from "./support/questionnaire.ts";
+import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
+import { fallbackProfileService, testBackendRegistry } from "./tools/fixtures/tool-harness.ts";
 
 type RegisteredToolSummary = { readonly name: string; readonly defaultActive?: boolean };
 
@@ -133,6 +142,118 @@ describeActivationLifecycle("root application", (loadSettings = () => Promise.re
 const signalledContext = (signal?: AbortSignal) => sessionContext({ signal });
 
 describe("subagent Pi registration", () => {
+  effectTest(
+    "retired runtime callbacks cannot publish or notify into the next session",
+    function* () {
+      const captured: SubagentLayers.SubagentLayerOptions[] = [];
+      const makeLayer = SubagentLayers.makeSubagentLayer;
+      const capture = vi
+        .spyOn(SubagentLayers, "makeSubagentLayer")
+        .mockImplementation((options) => {
+          captured.push(options);
+          return makeLayer(options);
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore()));
+      const activity = fakeActivityHost("authority-session");
+      const sendMessage = vi.fn();
+      const ctx = sessionContext({ isProjectTrusted: () => false }, "authority-session");
+      const { emit } = applicationFixture({ events: activity.events, sendMessage });
+      yield* settle(() => emit("session_start", ctx));
+      const retired = captured[0]!;
+      yield* settle(() => emit("session_tree", ctx));
+      const current = captured[1]!;
+      current.publish({ revision: 1, runs: [view({ id: "current" })] });
+      const before = activity.get();
+      retired.publish({ revision: 99, runs: [view({ id: "retired" })] });
+      retired.workflowActivity.publish([]);
+      const rejected = retired.notify({
+        type: "question",
+        id: "retired",
+        name: "Retired run",
+        requestId: "question",
+        message: "No longer relevant",
+        generation: 1,
+      });
+      expect(activity.get()).toBe(before);
+      expect(rejected?.actionAccepted).toBe(false);
+      expect(sendMessage).not.toHaveBeenCalled();
+      const questionnaireFailure = yield* retired
+        .questionnaireHandler(pickQuestionnaire, {
+          runId: "retired",
+          assignmentEpoch: 1,
+          requestId: "questionnaire",
+        })
+        .pipe(Effect.flip, Effect.orDie);
+      expect(questionnaireFailure).toMatchObject({ code: "proxy_caller_disconnected" });
+      const pending = view({
+        id: "child",
+        parentRunId: "caller",
+        state: "waiting_for_parent",
+        question: { requestId: "current-question", message: "Proceed?" },
+      });
+      const expectation = captureSubagentControlExpectation(pending);
+      const reply = vi.fn(() => Effect.succeed(view({ id: pending.id })));
+      const service = subagentServiceDouble({
+        visibleList: () => Effect.succeed([view({ id: "caller" }), pending]),
+        authorizeTargets: () => Effect.void,
+        reply,
+      });
+      const fleetAction = encodeFleetActionRequest(
+        { tool: "subagent_reply", args: { runId: pending.id, message: "Yes" } },
+        expectation,
+      );
+      const dispatch = (options: SubagentLayers.SubagentLayerOptions) =>
+        options
+          .proxyHandler(service, "caller", { ...fleetAction, requestId: "fleet-action" })
+          .pipe(
+            Effect.provideService(SubagentProfileService, fallbackProfileService),
+            Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+          );
+      expect(yield* dispatch(retired).pipe(Effect.flip, Effect.orDie)).toMatchObject({
+        code: "proxy_caller_disconnected",
+      });
+      expect(reply).not.toHaveBeenCalled();
+      yield* dispatch(current).pipe(Effect.orDie);
+      expect(reply).toHaveBeenCalledWith(pending.id, "Yes", expectation);
+      current.notify({
+        type: "question",
+        id: "current",
+        name: "Current run",
+        requestId: "question",
+        message: "Current question",
+        generation: 1,
+      });
+      expect(sendMessage).toHaveBeenCalled();
+      yield* settle(() => emit("session_shutdown", ctx));
+    },
+  );
+
+  effectTest("retired tools cannot run against a replacement session", function* () {
+    const ctx = sessionContext({ isProjectTrusted: () => false });
+    const { emit, tools } = applicationFixture();
+    yield* settle(() => emit("session_start", ctx));
+    const oldModels = tools.get("subagent_models");
+    const oldWorkflow = tools.get("subagent_workflow");
+    expect(oldModels).toBeDefined();
+    expect(oldWorkflow).toBeDefined();
+    yield* settle(() => emit("session_tree", ctx));
+    const currentModels = tools.get("subagent_models");
+    expect(currentModels).not.toBe(oldModels);
+    yield* step(() =>
+      expect(oldModels!.execute("old-models", {}, undefined, undefined, ctx)).rejects.toThrow(),
+    );
+    yield* step(() =>
+      expect(
+        oldWorkflow!.execute("old-workflows", { action: "list" }, undefined, undefined, ctx),
+      ).rejects.toThrow(),
+    );
+    const currentResult = yield* step(() =>
+      currentModels!.execute("current-models", {}, undefined, undefined, ctx),
+    );
+    expect(currentResult.isError).not.toBe(true);
+    yield* settle(() => emit("session_shutdown", ctx));
+  });
+
   for (const outcome of ["accepted", "unavailable", "absent", "rejected", "replaced"] as const) {
     effectTest(`routes bare subagents to the shared view with ${outcome} admission`, function* () {
       const events = createEventBus();

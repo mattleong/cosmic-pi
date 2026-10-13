@@ -1,4 +1,4 @@
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import { constVoid } from "effect/Function";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -9,10 +9,11 @@ import {
   type JsonObject,
 } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { hasCustomSurface, openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
+import { hasCustomSurface, openOwnedSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import { makeAdaptiveHostRefreshTicker } from "../boundary/host-refresh-ticker.ts";
 import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
+import type { SubagentControlExpectation } from "../run/model.ts";
 import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
@@ -56,12 +57,28 @@ export interface FleetManagerActions {
     readonly isCurrent: () => boolean;
     readonly run: <A>(effect: Effect.Effect<A>, signal: AbortSignal) => Promise<A>;
   };
-  readonly stop: (id: string) => Promise<void>;
-  readonly interrupt: (id: string) => Promise<void>;
-  readonly resume: (id: string, message?: string) => Promise<void>;
-  readonly send: (id: string, message: string) => Promise<FleetMessageDelivery>;
-  readonly reply: (id: string, message: string) => Promise<void>;
-  readonly rename: (id: string, name: string) => Promise<void>;
+  readonly stop: (id: string, expected: SubagentControlExpectation) => Promise<void>;
+  readonly interrupt: (id: string, expected: SubagentControlExpectation) => Promise<void>;
+  readonly resume: (
+    id: string,
+    message: string | undefined,
+    expected: SubagentControlExpectation,
+  ) => Promise<void>;
+  readonly send: (
+    id: string,
+    message: string,
+    expected: SubagentControlExpectation,
+  ) => Promise<FleetMessageDelivery>;
+  readonly reply: (
+    id: string,
+    message: string,
+    expected: SubagentControlExpectation,
+  ) => Promise<void>;
+  readonly rename: (
+    id: string,
+    name: string,
+    expected: SubagentControlExpectation,
+  ) => Promise<void>;
   readonly inspectProfiles: (projectTrusted: boolean) => Promise<ProfileSettingsInspection>;
   readonly patchProfile: (patch: SubagentProfilePatch) => Promise<JsonObject>;
   readonly restoreProfileDeclaration: (patch: SubagentProfileRestorePatch) => Promise<JsonObject>;
@@ -104,47 +121,68 @@ function openFleetManager(
     );
     return Promise.resolve();
   }
-  return openCommandSurface(ctx, {
-    placement: "screen",
-    create: ({ tui, theme, keybindings, getHeight, finish }) => {
-      let unsubscribe: () => void = constVoid;
-      const manager = new SubagentFleetComponent({
-        theme,
-        getProjection: bridge.get,
-        getHeight,
-        getNow: synchronousNow,
-        ...fullScreenKeybindingOptions(keybindings),
-        requestRender: () => tui.requestRender(),
-        close: () => finish(undefined),
-        onDispose: () => {
-          refreshTicker.dispose();
-          unsubscribe();
-        },
-        actions: {
-          stop: actions.stop,
-          interrupt: actions.interrupt,
-          resume: actions.resume,
-          message: (id, mode, message) =>
-            mode === "reply"
-              ? actions.reply(id, message).then(() => "delivered" as const)
-              : actions.send(id, message),
-          rename: actions.rename,
-        },
-      });
-      const refreshTicker = makeAdaptiveHostRefreshTicker({
-        getCadence: () =>
-          subagentUiRefreshCadence(bridge.get().runs, { includeTerminalAges: true }),
-        startTicker: startHostUiTicker,
-        requestRender: () => tui.requestRender(),
-      });
-      unsubscribe = bridge.subscribe(() => {
-        manager.invalidate();
-        refreshTicker.sync();
-        tui.requestRender();
-      });
-      return manager;
-    },
-  });
+  const owner = actions.captureModelRefresh();
+  const isCurrent = () => owner.isCurrent() && !ctx.signal?.aborted;
+  let closeSurface: () => void = constVoid;
+  let dispose: () => void = constVoid;
+  return Effect.runPromise(
+    openOwnedSurface(ctx, {
+      closedValue: undefined,
+      placement: "screen",
+      isCurrent,
+      onControl: (close) => {
+        closeSurface = close;
+      },
+      onClose: () => {
+        dispose();
+      },
+      create: ({ tui, theme, keybindings, getHeight, finish }) => {
+        let unsubscribe: () => void = constVoid;
+        const manager = new SubagentFleetComponent({
+          theme,
+          getProjection: bridge.get,
+          getHeight,
+          getNow: synchronousNow,
+          ...fullScreenKeybindingOptions(keybindings),
+          requestRender: () => tui.requestRender(),
+          close: () => finish(undefined),
+          isCurrent,
+          onDispose: () => {
+            refreshTicker.dispose();
+            unsubscribe();
+          },
+          actions: {
+            stop: actions.stop,
+            interrupt: actions.interrupt,
+            resume: actions.resume,
+            message: (id, mode, message, expected) =>
+              mode === "reply"
+                ? actions.reply(id, message, expected).then(() => "delivered" as const)
+                : actions.send(id, message, expected),
+            rename: actions.rename,
+          },
+        });
+        const refreshTicker = makeAdaptiveHostRefreshTicker({
+          getCadence: () =>
+            subagentUiRefreshCadence(bridge.get().runs, { includeTerminalAges: true }),
+          startTicker: startHostUiTicker,
+          requestRender: () => {
+            if (isCurrent()) tui.requestRender();
+            else closeSurface();
+          },
+        });
+        dispose = () => manager.dispose();
+        unsubscribe = bridge.subscribe(() => {
+          if (!isCurrent()) return closeSurface();
+          manager.invalidate();
+          refreshTicker.sync();
+          tui.requestRender();
+        });
+        return manager;
+      },
+    }),
+    { signal: ctx.signal },
+  );
 }
 
 const profilesSubcommand = (

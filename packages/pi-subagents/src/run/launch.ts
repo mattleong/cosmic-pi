@@ -34,10 +34,10 @@ import {
 import type { RunAssignment } from "./assignment.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProcessInitializer } from "./process-lifecycle.ts";
+import type { WriterPoolLookup, WriterPools } from "./writer-pool.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
-import { addWriterPoolMemberLocked } from "./writer-pool.ts";
 import { failedStartRecoveryForRecord } from "./retry.ts";
 import { scriptOriginForStart, scriptedWriterAdmissionError } from "./launch-policy.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
@@ -55,7 +55,11 @@ const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
 export const getFailedStartRecovery = (error: SubagentError): FailedStartRecovery | undefined =>
   failedStartRecoveries.get(error);
 
-export interface RunLaunchDependencies extends RunContext {
+export interface RunLaunchDependencies extends Pick<
+  RunContext,
+  "writerLeases" | "withLock" | "publish" | "allocateAssignmentAttemptToken" | "sendPeerNotices"
+> {
+  readonly writerPools: WriterPoolLookup & Pick<WriterPools, "joinLocked">;
   readonly backendRegistry: SubagentBackendRegistryContract;
   readonly records: Map<string, RunRecord>;
   readonly delivery: RunNotificationDelivery;
@@ -271,7 +275,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const { id, name } = allocateRunIdentity(requestedName, ownership?.runId);
             const attemptToken = allocateAssignmentAttemptToken();
             const writerPool = canonicalWriterCwd
-              ? yield* addWriterPoolMemberLocked(writerPools, canonicalWriterCwd, id)
+              ? yield* writerPools.joinLocked(canonicalWriterCwd, id)
               : undefined;
             const record: RunRecord = {
               scriptOrigin: scriptOriginForStart(records, request, scriptedRoot),

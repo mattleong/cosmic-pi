@@ -75,6 +75,40 @@ const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedRep
     return { backend, childEvents, supervisorEvents };
   });
 
+it.effect("Codex never recounts usage after a cumulative snapshot regresses", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { backend, childEvents } = yield* startedCodex(() => Effect.succeed(true));
+      const totals: number[] = [];
+      for (const totalTokens of [10, 5, 10, 15]) {
+        const usage = {
+          inputTokens: totalTokens,
+          cachedInputTokens: 0,
+          outputTokens: 0,
+          reasoningOutputTokens: 0,
+          totalTokens,
+        };
+        Queue.offerUnsafe(childEvents, {
+          type: "message",
+          value: {
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId: "thread",
+              turnId: "turn",
+              tokenUsage: { total: usage, last: usage },
+            },
+          },
+        });
+        const event = yield* Queue.take(backend.events);
+        if (event.type !== "assistant_message") return yield* Effect.die("Missing usage event");
+        totals.push(event.usage.totalTokens);
+      }
+      expect(totals).toEqual([10, 0, 0, 5]);
+      return undefined;
+    }),
+  ),
+);
+
 it.effect("Codex preserves an accepted report behind a full queue and delayed consumer", () =>
   Effect.scoped(
     Effect.gen(function* () {

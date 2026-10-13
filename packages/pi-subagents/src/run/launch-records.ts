@@ -17,6 +17,7 @@ import {
 import { remainingRouteCandidates } from "./retry.ts";
 import { MAX_TASK_CHARS } from "./state.ts";
 import { childSystemPrompt } from "./tool-policy.ts";
+import type { WriterPoolLookup } from "./writer-pool.ts";
 import { descendantRunIds } from "./tree.ts";
 
 export interface LaunchPlan {
@@ -119,6 +120,7 @@ export const initialRunView = (
   runtime: request.runtime,
   closeOnReport: request.closeOnReport,
   reportGeneration: 0,
+  assignmentEpoch: 1,
   capabilities,
   model: request.model,
   effort: request.effort,
@@ -151,7 +153,10 @@ export const backendLaunchRequest = (
 });
 
 export const isEvictionEligible = (
-  { records, writerPools }: Pick<RunContext, "records" | "writerPools">,
+  {
+    records,
+    writerPools,
+  }: Pick<RunContext, "records"> & { readonly writerPools: WriterPoolLookup },
   record: RunRecord,
 ): boolean =>
   !record.cleanupPending &&

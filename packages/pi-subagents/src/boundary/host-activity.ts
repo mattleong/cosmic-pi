@@ -3,7 +3,11 @@ import { notifyListeners, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type { SubagentRunView } from "../run/model.ts";
+import {
+  captureSubagentControlExpectation,
+  type SubagentControlExpectation,
+  type SubagentRunView,
+} from "../run/model.ts";
 import type { SubagentProjectionBridge } from "./host-ui.ts";
 import { MAX_NAME_CHARS } from "../run/state.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
@@ -77,6 +81,7 @@ export const promptSubagentActivityInput = (
   });
 
 const sameAssignment = (before: SubagentRunView, after: SubagentRunView): boolean =>
+  before.assignmentEpoch === after.assignmentEpoch &&
   before.startedAt === after.startedAt &&
   before.reportGeneration === after.reportGeneration &&
   before.task === after.task &&
@@ -105,7 +110,8 @@ export function registerSubagentActivity(options: {
     id: string,
     action: SubagentActivityAction,
     signal: AbortSignal,
-    input?: string,
+    input: string | undefined,
+    expected: SubagentControlExpectation,
   ) => Promise<void>;
 }): () => void {
   let disposed = false;
@@ -142,10 +148,13 @@ export function registerSubagentActivity(options: {
           signal,
         );
       }
-      if (action === "stop" || action === "interrupt") return options.act(item.id, action, signal);
-      if (!isInputAction(action)) throw new Error("Subagent action is unavailable");
       const before = options.bridge.get().runs.find((run) => run.id === item.id);
-      if (!before || !options.input) throw new Error("Subagent input isn't available");
+      if (!before) throw new Error("Subagent action is unavailable");
+      const expected = captureSubagentControlExpectation(before);
+      if (action === "stop" || action === "interrupt")
+        return options.act(item.id, action, signal, undefined, expected);
+      if (!isInputAction(action)) throw new Error("Subagent action is unavailable");
+      if (!options.input) throw new Error("Subagent input isn't available");
       return options.input(before, action, signal).then((input) => {
         if (input === undefined) return undefined;
         const after = options.bridge.get().runs.find((run) => run.id === item.id);
@@ -165,7 +174,7 @@ export function registerSubagentActivity(options: {
           value.length > (action === "rename" ? MAX_NAME_CHARS : MAX_PARENT_MESSAGE_CHARS)
         )
           throw new Error("Subagent input is invalid");
-        return options.act(item.id, action, signal, value || undefined);
+        return options.act(item.id, action, signal, value || undefined, expected);
       });
     },
     subscriptions: [

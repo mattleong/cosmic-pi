@@ -1,19 +1,41 @@
 # Architecture
 
-`pi-directory-models` remembers the active model and thinking level for each canonical working directory.
+`pi-directory-models` remembers one model and thinking-level preference for each canonical
+working directory. It restores that preference in fresh sessions and records subsequent
+interactive changes.
 
-## Ownership
+## Ownership and boundaries
 
-`src/application.ts` owns Pi registration and the session runtime slot. `src/layer.ts` composes `Layer.effect` directly from the `Context.Service` `make` functions for `DirectoryModelPreferenceService` and `DirectoryModelStore`. The services do not export one-use Layer aliases. The preference service owns restore and remember policy, its one-permit semaphore, and its session-local directory identity cache. It caches only a successful identity lookup, so a later event retries after a failure.
+- [Application](src/application.ts) registers Pi events and owns the managed session-runtime
+  slot. [Layer composition](src/layer.ts) supplies the preference service and filesystem store.
+- [Preference service](src/preference/service.ts) owns restore/remember policy, serialized
+  updates, warning deduplication, and a session-local cache of successful directory lookups.
+- [Store](src/config/store.ts) canonicalizes the directory, validates saved documents, and
+  atomically replaces them through core's document store. [Schema](src/config/schema.ts) and
+  [path keys](src/config/path-key.ts) describe the persisted value and directory identity.
+- [Host adapters](src/boundary/) capture CLI preferences, classify the session, and read or
+  apply Pi's model and thinking level. The service determines when those operations happen.
 
-`src/config/store.ts` is the only persistence door. It canonicalizes the cwd and reads or atomically replaces one Schema-validated document per directory. Host argv, session, model registry, model selection, and thinking-level calls stay in `src/boundary/`. Fallback-only model capture uses core's no-throw host callback and tolerant decode helpers, while restoration keeps typed failures for reads and mutations. Schema and path-key modules remain pure.
+## Lifecycle and invariants
 
-## Lifecycle
+Each session start replaces the runtime. A fresh session restores or initializes its directory
+preference unless the launch explicitly supplied a model or thinking level. Either CLI value
+suppresses the whole restore because model and thinking are one preference. Startup uses Pi's
+resolved active context to distinguish fresh sessions; resume, fork, and reload retain their
+session choices. A failed startup-context read leaves this extension unavailable for that session.
 
-Registration checks Pi's argv once for an exact `--model <value>` or `--thinking <value>` pair before the end-of-options `--`. Bare terminal flags and tokens after the marker do not count. The service treats model and thinking as one atomic preference, so either explicit CLI value suppresses the whole restore or initialization. Every `session_start` first captures cwd and its optional signal. A `new` start is fresh without reading session entries. Only `startup` asks Pi's `buildSessionContext` helper to resolve the active leaf, and an empty resolved message list marks it as fresh. A startup context failure leaves directory preferences unavailable for that session. Resume, fork, and reload starts are nonfresh and do not read session entries or the leaf. Fresh sessions without an explicit CLI preference restore or initialize the directory preference.
+Restoration finishes before activation. Pi's model change cannot be cancelled, so replacement
+waits for its settlement before another runtime can restore a model. Events raised by restoration
+cannot overwrite the saved preference. Admitted changes capture the live selection under the
+service semaphore, preventing delayed events from writing stale event payloads.
 
-Restoration runs before slot activation. The slot activates only after startup and Pi's awaited `setModel` settlement complete, so restoration events are dropped before activation. The `source === "restore"` check remains as defense in depth. The noncancelable `setModel` settlement is the only uninterruptible region; replacement waits for it before starting the next runtime.
+Only successful directory identity lookups are cached; failures remain retryable. Saved documents
+include their canonical cwd and are rejected if it differs from the requested directory. Invalid
+documents are not overwritten. Read, restore, and write failures become bounded warnings rather
+than breaking the session. Shutdown disposes the runtime, and inactive events do not write.
+Interrupted persistence cannot report a late warning after its owning session retires.
 
-Admitted model and thinking events run `remember` under the service semaphore. The service snapshots the live model and thinking level at serialized capture time, so delayed events persist current state rather than stale event data. Events outside an active runtime and malformed host values do not write. `session_shutdown` disposes the runtime.
-
-Preference documents live under `<agent-dir>/pi-directory-models/` as `<readable-basename>--<12-char-sha256>.json`. Each document records its canonical cwd, which the store validates before use.
+[Application tests](tests/application.test.ts) exercise restoration, concurrent replacement,
+failure recovery, alias identity, and persistence. [Host model tests](tests/host-model.test.ts)
+cover the external model boundary; [CLI tests](tests/host-cli.test.ts) cover explicit preference
+detection. User-facing behavior is in the [README](README.md).

@@ -1,55 +1,60 @@
 # Architecture
 
-`pi-herdr-btw` is an Effect-managed Pi extension for one reusable blank side session per parent Pi session. `/herdr-btw` focuses or resumes the linked child. `/herdr-btw new` creates a fresh child and supersedes the link after confirmed startup and child-file validation. The extension never closes user-owned panes.
+`pi-herdr-btw` manages one reusable blank side session per parent Pi session. `/herdr-btw`
+focuses or resumes it; `/herdr-btw new` creates a replacement link after the new child starts.
+The extension never closes user-owned panes.
 
-## Ownership and lifecycle
+## Ownership and boundaries
 
-`src/extension.ts` is the registration entry. `src/application.ts` owns Pi event and command wiring. `src/layer.ts` composes `HerdrClient` into the session-scoped `HerdrBtwService` Layer, so the live application exposes only the workflow service.
+- [Application](src/application.ts) owns event wiring, the session-runtime slot, and
+  generation-checked publication of the child's parent-reference capability.
+- [Workflow service](src/btw/service.ts) serializes commands and coordinates creation, reuse,
+  prompt delivery, and focus. [Command controller](src/btw/controller.ts) adapts TUI commands
+  and reports bounded failures. [Layer composition](src/layer.ts) supplies the Herdr client.
+- [Herdr client](src/boundary/herdr-client.ts) owns the CLI transport, fixed argument arrays,
+  response decoding, deadlines, and mutation-outcome classification. Workflows and their tests
+  use semantic client operations rather than the transport protocol.
+- [Session-file boundary](src/boundary/session-file.ts) creates blank child files and verifies
+  headers and filesystem identity without opening a mutable Pi session manager.
+- [Link store](src/boundary/host-link-store.ts) owns persistence through parent custom entries.
+  [Link policy](src/btw/link.ts) filters entries by owner; [validation](src/btw/validation.ts)
+  establishes whether a live agent or session file is safe to reuse.
+- [Parent-reference bridge](src/boundary/host-parent-reference.ts) adapts launch markers and
+  the prompt hook. [Parent-link policy](src/parent-link/policy.ts) resolves candidates and
+  formats the reference without reading transcript content.
 
-`session_start` captures the guarded host session and constructs one managed runtime. The runtime owns command serialization and the Herdr workflows. The session slot publishes the immutable child parent-reference capability only from its generation-checked `onActivated` hook and clears it during deactivation. `session_shutdown` disposes the runtime but does not close panes or child sessions.
+## Lifecycle and commit points
 
-`src/btw/controller.ts` registers the one `/herdr-btw` command through core's `registerExtensionCommand`: free text goes to the linked side session and the `new` subcommand starts a fresh one. Both are TUI-only. A single Effect semaphore serializes calls within one extension runtime. Each command first probes the captured parent path through the bounded no-follow session-header boundary and requires its header ID to match the captured parent ID. Parent and child paths must also resolve to distinct regular files before startup or reuse. Command handlers resolve with `HerdrBtwResult`; typed workflow failures and runtime rejection remain Promise failures that the TUI controller reports through the same bounded notification path. Only typed workflow failures show their own message; any other rejection shows a fixed message so internal runtime text never reaches the user. Prompt text reaches the command directly and is passed to Herdr as one bounded argument.
+Session start captures the parent identity and creates one runtime. Commands revalidate that
+identity before using it. Command notifications retain their originating session's authority.
+Shutdown revokes that authority and the reference, and disposes workflow resources while leaving
+panes and child sessions available to the user.
 
-## Reusable side session
+Creation prepares a private blank Pi session file, starts the child with `--session`, verifies
+the reported pane, agent, and file identity, then records the link. It does not fork the parent
+transcript. Before link commit, failures preserve the previous link. After commit, optional
+prompt or focus failures leave the new link authoritative so the child is not orphaned.
 
-The parent stores a versioned `pi-herdr-btw/reusable-link` custom entry. Each link includes:
+Reuse validates the child file and checks live Herdr state before focusing an exact match or
+starting a replacement pane. Ambiguous or conflicting agents are rejected. A second snapshot
+before launch narrows duplicate-writer races; the child header and filesystem distinction are
+revalidated after that snapshot, before dispatch. This is not a cross-process file lease and
+cannot coordinate independently launched Pi processes.
 
-- the owning parent session ID and path
-- the child session ID and path
-- the live Herdr agent name and terminal ID
+## Critical invariants
 
-Parent ownership fields matter because native Pi forks copy custom entries. The application captures the launch owner once with the rest of the session input and passes that value into the link store. Store construction does not read the host again. Immediately before every restore or record, the store rechecks both live host values and the no-follow header ID against the captured owner. It filters copied ancestor entries before returning a restoration.
+- Native forks copy custom entries, so a link includes its parent owner. The store rechecks
+  the live host and parent header before every restore or record, rejecting copied ancestor links.
+- Parent and child must be distinct regular, non-symlink files. Descriptor identity catches
+  hardlink aliases and preserves filesystem resolution through directory symlinks; an unavailable
+  identity probe never counts as proof of distinction.
+- An append that throws may already have persisted. The store distinguishes `refused` from
+  `uncertain`; an uncertain mutation is not retried or followed by prompt/focus operations.
+  Created panes remain available for inspection after failure.
+- The parent-reference prompt section is revalidated for every child run and cleared on
+  revocation or failed identity checks. It conveys a reference only: no transcript import,
+  automatic synchronization, or return channel.
 
-Record accepts child facts only. The store stamps version 1 and the captured owner before calling `pi.appendEntry`. An owner mismatch or host failure before that call returns `refused`, which confirms that no append was attempted. A normal return reports `recorded`. Any throw from `appendEntry` reports `uncertain` because persistence may already have happened. The workflow does not reread, retry, prompt, focus, or close after an uncertain record. It reports the uncertainty and retains the pane for inspection.
-
-A new side session does not use `--fork`. After the new pane reaches a stable shell, the session-file boundary reads the Effect clock and exclusively creates a 0600 blank Pi header with `wx`, a preassigned child ID, and no `parentSession` lineage. The service validates that file, then starts Pi with `--session` so the child is resumable even before its first assistant message. Commit requires the launch response to contain the exact pane, terminal, Pi agent name, and path-based `agent_session` evidence. That reported path may be a lexical alias or hardlink, but it must resolve to the prepared child file and remain distinct from the parent file. ID-only startup evidence is not enough. Missing or mismatched session metadata leaves the pane retained and the prior link untouched. The service validates the child header again after startup and only then records the reusable link. A confirmed record remains authoritative if later optional prompt delivery or focus fails, because the child already exists and must not become orphaned.
-
-Reuse validates the linked child header and parent-child file distinction before reading live Herdr state. A snapshot agent becomes a conflict candidate when its name matches the recorded agent, its path metadata is not proven distinct from the child file, or its ID metadata equals the recorded child ID. An unavailable path comparison remains a conflict. This catches pending and wrong `agent_session` metadata instead of starting a duplicate name. One candidate is focused only when its recorded name and terminal, top-level Pi kind, and path-or-ID child identity all match. Multiple candidates or any mismatch fail closed. No candidate prepares a new sibling pane and reopens the child with `--session`.
-
-The resume path takes another snapshot immediately before `agent start` and applies the same conflict rule. If a candidate appeared while the pane was prepared, startup is refused and the empty pane is retained for inspection. This narrows the duplicate-writer race but is not a cross-process session-file lease. A manually launched Pi under an unrelated name and path remains outside this coordination boundary. Child files share the normal project session directory, so Pi's recency-based `--continue` selection may choose a side session.
-
-`/herdr-btw new` skips link reuse and creates a new blank child. It appends a replacement link only after startup and child validation. Failures before that commit leave the previous link authoritative.
-
-## Live parent reference
-
-Every child launch receives fixed extension flags containing the parent ID, parent file, and owning child ID. Pure parent-link policy resolves a bounded candidate from those markers and the current child identity. The host boundary activates it only when:
-
-- the current child session ID matches the child marker
-- the raw parent path differs from the raw child path as a cheap pure rejection
-- the bounded no-follow identity comparator confirms distinct parent and child files
-- a bounded no-follow parent-header probe succeeds
-- the probed parent ID matches the parent marker
-
-`before_agent_start` repeats the filesystem-identity comparison and header probe for every child run. A same-file result or unavailable probe deactivates the reference. It assigns only `systemPromptOptions.sections.herdr_btw_parent_reference`, containing the JSON-quoted parent path and expected ID. Every invocation removes that owned section before checking activation and identity, so clearing or failed revalidation removes stale instructions without touching other extensions' sections. Pi records section deltas rather than a whole-prompt override. No transcript content is read or imported. There is no polling, cursor, dedicated tool, automatic synchronization, or return channel.
-
-The synchronous reference value is a plain host projection. The generation-checked application slot controls activation and clearing; the Effect runtime remains the owner of session lifetime.
-
-## Boundaries
-
-- `src/boundary/herdr-client.ts` defines the typed `HerdrClient` service. It alone owns the fixed `herdr` executable, every argument array and deadline, the selected environment, mutation outcome classification, and Effect Schema decoding for pane, agent, process, layout, protocol, and snapshot responses. Workflows call semantic operations and tests replace this owned client rather than the CLI transport.
-- `src/boundary/session-file.ts` owns cryptographic child IDs, Effect-clock blank-session creation, header probes, and session-file identity. Creation rejects any child ID outside the `btw/marker.ts` session-ID grammar before the ID reaches a filename or argv marker. Its tri-state comparator bounds and normalizes absolute paths, opens regular files read-only with `O_NOFOLLOW` and nonblocking flags, and compares descriptor `dev` and `ino`. Any failed probe returns `unavailable`, never `distinct`. The boundary never uses `SessionManager`, so validation cannot migrate or rewrite a session.
-- `src/boundary/host-link-store.ts` is the single persistence door over `pi.appendEntry` and read-only parent session entries. It owns live-owner revalidation, version and parent-field stamping, and append uncertainty classification. `src/boundary/host-parent-reference.ts` owns the synchronous Pi flags, session getters, header probes, ID verification, and prompt-hook bridge.
-- `src/btw/service.ts` is the service door. `src/btw/validation.ts` contains preflight, shell readiness, and shared native identity predicates. `src/btw/link.ts`, `marker.ts`, and `policy.ts` hold schemas and pure policy, including child display-name derivation.
-- `src/parent-link/policy.ts` owns pure marker and child-candidate resolution plus prompt formatting. The application slot, not the host bridge, owns generation-checked publication.
-
-All Herdr commands use fixed argument arrays with no shell. Outputs and identifiers are bounded and schema-decoded. Parent and child session files must be regular non-symlink files. A mutation-side `BoundedProcessError` is confirmed only for `operation: "spawn"`, before dispatch; stream and later transport failures remain outcome-uncertain. Expected failures are typed `HerdrBtwError` values. Mutating requests with uncertain outcomes are never retried automatically, and any pane created before a later failure is retained rather than closed.
+[Reuse tests](tests/btw-reuse.test.ts), [link-store tests](tests/link-store.test.ts),
+[session-file tests](tests/session-file.test.ts), and [parent-reference tests](tests/parent-reference.test.ts)
+protect these boundaries. The [README](README.md) describes the commands and operational limits.

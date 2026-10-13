@@ -53,7 +53,10 @@ export function makeRunProcessControls(withLock: WithRunLock) {
 
 export type RunProcessControls = ReturnType<typeof makeRunProcessControls>;
 
-export interface RunProcessInitializerDependencies extends RunContext {
+export interface RunProcessInitializerDependencies extends Pick<
+  RunContext,
+  "ownerScope" | "withLock" | "publish"
+> {
   readonly initialize: RunProcessControls["initialize"];
   readonly handleBackendEvent: RunEventHandler;
   readonly prepareBackendSpawn: WriterPreparation;

@@ -32,7 +32,11 @@ export interface WorkspaceBinding {
   revision?: RevisionHold | undefined;
 }
 
-export type WorkspaceControlDependencies = RunContext & {
+export type WorkspaceControlDependencies = Pick<
+  RunContext,
+  "ownerScope" | "records" | "withLock" | "writerLeases"
+> & {
+  readonly writerPools: { readonly size: number };
   readonly engine: WorkspaceServiceContract | undefined;
   readonly initialMode: WriterWorkspaceMode;
   readonly ownerId: string;

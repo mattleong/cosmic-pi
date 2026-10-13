@@ -11,7 +11,7 @@ The run tree, nesting limits, delivery, and retention are documented in [ARCHITE
 - Claude stream input is confirmed only by exact native replay; the CLI may apply guidance at its next safe turn boundary.
 - Codex interruption waits for both the correlated JSON-RPC success and matching `turn/completed(status=interrupted)` in either order and emits no later settlement event.
 - Native Claude/Codex do not advertise resume, rename, peer notice, or fork.
-- Every Claude and Codex run may use native agents within that runtime's own limits; see [ARCHITECTURE.md](../ARCHITECTURE.md#invariants) and [Local Claude](local-backends.md#local-claude). Pi provides no native-agent controls.
+- Every Claude and Codex run may use native agents within that runtime's own limits; see [Local backends](local-backends.md) and [Local Claude](local-backends.md#local-claude). Pi provides no native-agent controls.
 
 ## Configuration details
 

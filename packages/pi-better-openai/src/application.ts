@@ -33,6 +33,7 @@ import { latestOwnedCheckpoint } from "./compaction/context.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
 import type { OpenAIConfigError } from "./config/store.ts";
+import type { ResolvedConfig } from "./config/schema.ts";
 import {
   fastDebugLines,
   fastStateText,
@@ -106,6 +107,7 @@ export function betterOpenAIWithDependencies(
   dependencies: BetterOpenAIExtensionDependencies = {},
 ): void {
   const projection = makeProjection();
+  const configProjection = MutableRef.make<ResolvedConfig | undefined>(undefined);
   const fastProjection = MutableRef.make(initialFastSnapshot());
   const resetProviderTransport =
     dependencies.resetOpenAICodexTransport ?? resetOpenAICodexTransport;
@@ -123,7 +125,7 @@ export function betterOpenAIWithDependencies(
   const noteImageCwd = registerOpenAIImageMessageRenderer(pi, dependencies.imageMessageRenderer);
   const replay = registerCodePreviewReplay(pi, { command: COMMAND, tools: [OPENAI_IMAGE_TOOL] });
   const config = () => {
-    const cfg = MutableRef.get(projection).config;
+    const cfg = MutableRef.get(configProjection);
     if (cfg) return cfg;
     throw sessionNotStarted("config");
   };
@@ -138,7 +140,7 @@ export function betterOpenAIWithDependencies(
   };
   const updateFooter = (fallback: ExtensionContext) => {
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
-    const cfg = MutableRef.get(projection).config;
+    const cfg = MutableRef.get(configProjection);
     if (!cfg) return;
     const nextUsageVisible = isUsageVisible();
     const fast = cosmicUi.isVisible("openai.fast")
@@ -187,6 +189,7 @@ export function betterOpenAIWithDependencies(
         pi,
         makeOpenAIApplicationLayer(input, {
           projection,
+          configProjection,
           fastProjection,
           isUsageVisible,
           onUsageChange: (context) => {
@@ -239,6 +242,7 @@ export function betterOpenAIWithDependencies(
       recordFastInjection = ignoreFastInjection;
       cosmicUi.shutdown();
       resetProjection(projection);
+      MutableRef.set(configProjection, undefined);
       MutableRef.set(fastProjection, initialFastSnapshot());
     },
     onStartFailure: ({ ctx }) => {
@@ -334,7 +338,7 @@ export function betterOpenAIWithDependencies(
     ].join("\n");
   };
   registerSettingsController(command, {
-    config: () => MutableRef.get(projection).config,
+    config: () => MutableRef.get(configProjection),
     updateContext,
     updateFooter,
     formatDebugStatus,
@@ -378,16 +382,22 @@ export function betterOpenAIWithDependencies(
   const runCompaction = <A, E>(
     use: (service: OpenAICompactionService["Service"]) => Effect.Effect<A, E>,
     signal: () => AbortSignal | undefined,
-  ) => Promise.resolve().then(() => run(OpenAICompactionService.use(use), signal()));
+    isCurrent: () => boolean,
+  ) => Promise.resolve().then(() => runWhen(isCurrent)(OpenAICompactionService.use(use), signal()));
   pi.on("session_before_compact", (event, ctx) => {
     updateContext(ctx);
     if (!currentContext) return needsContextRepair(ctx) ? { cancel: true } : undefined;
+    const isCurrent = slot.captureAuthority();
     return runCompaction(
       (service) => service.compact(event),
       () => event.signal,
+      isCurrent,
     )
-      .then((compaction) => (compaction ? { compaction } : undefined))
+      .then((compaction) =>
+        !isCurrent() ? { cancel: true } : compaction ? { compaction } : undefined,
+      )
       .catch(() => {
+        if (!isCurrent()) return { cancel: true };
         const cancel = event.signal.aborted || needsContextRepair(ctx);
         if (!event.signal.aborted)
           notifyAtHostBoundary(
@@ -411,6 +421,7 @@ export function betterOpenAIWithDependencies(
     return runCompaction(
       (service) => service.resetRetryOmissions(),
       () => safeHostSignal(ctx),
+      slot.captureAuthority(),
     ).catch(() => undefined);
   });
   pi.on("model_select", (_event, ctx) => {
@@ -445,13 +456,15 @@ export function betterOpenAIWithDependencies(
       if (needsContextRepair(ctx)) abortIncompleteContext(ctx);
       return undefined;
     }
+    const isCurrent = slot.captureAuthority();
     return runCompaction(
       (service) => service.filterContext(event.messages),
       () => safeHostSignal(ctx),
+      isCurrent,
     )
-      .then((messages) => (messages ? { messages } : undefined))
+      .then((messages) => (isCurrent() && messages ? { messages } : undefined))
       .catch(() => {
-        if (needsContextRepair(ctx)) abortIncompleteContext(ctx);
+        if (isCurrent() && needsContextRepair(ctx)) abortIncompleteContext(ctx);
         return undefined;
       });
   });
@@ -468,11 +481,12 @@ export function betterOpenAIWithDependencies(
       recordFastInjection,
     );
     if (!currentContext) return fastPayload;
+    const isCurrent = slot.captureAuthority();
     return run(
       OpenAICompactionService.use((service) => service.inject(fastPayload ?? event.payload)),
       safeHostSignal(ctx),
     )
-      .then((compactedPayload) => compactedPayload ?? fastPayload)
-      .catch(() => fastPayload);
+      .then((compactedPayload) => (isCurrent() ? (compactedPayload ?? fastPayload) : undefined))
+      .catch(() => (isCurrent() ? fastPayload : undefined));
   });
 }

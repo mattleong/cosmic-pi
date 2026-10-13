@@ -1,7 +1,12 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { hasSubagentCapability, isTerminalRunState, type SubagentRunView } from "./model.ts";
+import {
+  hasSubagentCapability,
+  isTerminalRunState,
+  type SubagentRunView,
+  type SubagentControlExpectation,
+} from "./model.ts";
 import {
   clearRunActivity,
   commitRunPauseLocked,
@@ -25,8 +30,12 @@ import { appendNoticeSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
+import { requireControlExpectation } from "./control-admission.ts";
 
-export interface RunControlDependencies extends RunContext {
+export interface RunControlDependencies extends Pick<
+  RunContext,
+  "ownerScope" | "withLock" | "requireRecord" | "publish" | "sendPeerNotices"
+> {
   readonly admitTurnInput: (record: RunRecord) => void;
   readonly releaseTurnInput: (record: RunRecord) => Effect.Effect<void>;
   readonly claimTurnInputDrain: (record: RunRecord, drained: Deferred.Deferred<void>) => void;
@@ -99,13 +108,18 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       );
     });
 
-  const send = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
+  const send = (
+    id: string,
+    message: string,
+    expected?: SubagentControlExpectation,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
       const normalized = yield* validateParentMessage(message, "Guidance message is required.");
       return yield* Effect.acquireUseRelease(
         withLock(
           Effect.gen(function* () {
             const selected = yield* requireRecord(id);
+            yield* requireControlExpectation(selected, expected);
             if (selected.view.state === "waiting_for_parent")
               return yield* invalidRequest(
                 "run_waiting_for_parent",
@@ -160,7 +174,11 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       );
     });
 
-  const reply = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
+  const reply = (
+    id: string,
+    message: string,
+    expected?: SubagentControlExpectation,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
     runSessionOwned(
       ownerScope,
       Effect.gen(function* () {
@@ -168,6 +186,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         const claimed = yield* withLock(
           Effect.gen(function* () {
             const record = yield* requireRecord(id);
+            yield* requireControlExpectation(record, expected);
             yield* requireCapability(record, "parent-contact");
             const question = record.view.question;
             if (record.view.state !== "waiting_for_parent" || !question)
@@ -260,7 +279,10 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         ),
     );
 
-  const interrupt = (id: string): Effect.Effect<SubagentRunView, SubagentError> =>
+  const interrupt = (
+    id: string,
+    expected?: SubagentControlExpectation,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
     runSessionOwned(
       ownerScope,
       Effect.gen(function* () {
@@ -269,6 +291,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         const record = yield* withLock(
           Effect.gen(function* () {
             const selected = yield* requireRecord(id);
+            yield* requireControlExpectation(selected, expected);
             yield* requireCapability(selected, "interrupt");
             if (selected.view.state !== "running" && selected.view.state !== "waiting_for_parent")
               return yield* invalidRequest(
@@ -341,13 +364,18 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     return publish.pipe(Effect.as(snapshotView(record.view)));
   };
 
-  const rename = (id: string, rawName: string): Effect.Effect<SubagentRunView, SubagentError> =>
+  const rename = (
+    id: string,
+    rawName: string,
+    expected?: SubagentControlExpectation,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
       const name = sanitizeName(rawName);
       if (!name) return yield* invalidRequest("name_required", "Subagent name is required.");
       const selected = yield* withLock(
         Effect.gen(function* () {
           const record = yield* requireRecord(id);
+          yield* requireControlExpectation(record, expected);
           yield* requireCapability(record, "rename-display");
           if (record.view.state === "stopping")
             return yield* invalidRequest(
@@ -381,12 +409,16 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       return view;
     });
 
-  const stop = (id: string): Effect.Effect<SubagentRunView, SubagentError> =>
+  const stop = (
+    id: string,
+    expected?: SubagentControlExpectation,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
     runSessionOwned(
       ownerScope,
       withLock(
         Effect.gen(function* () {
           const selected = yield* requireRecord(id);
+          yield* requireControlExpectation(selected, expected);
           if (isTerminalRunState(selected.view.state))
             return {
               record: selected,

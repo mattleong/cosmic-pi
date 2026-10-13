@@ -1,161 +1,68 @@
 # Effect v4 architecture
 
-## Definition
+Effect owns application resources, asynchronous work, expected failures, and coordinated state transitions. Pure policy, parsing of trusted values, reducers, and formatting remain ordinary functions. A function does not need a service or Layer merely to fit a directory pattern.
 
-Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, failures, concurrency, resources, state transitions, clocks, configuration, persistence, HTTP, logging, and tests. Pure deterministic functions remain pure and may use Effect data modules when they improve the model.
+This document defines shared lifecycle and concurrency guarantees. Package `ARCHITECTURE.md` files explain their owners and tradeoffs; the [boundary guide](pi-boundaries.md) maps integrations. Folder names and module size are navigation aids, not proof of a sound design. Introduce an abstraction when it clarifies ownership, isolates a changing dependency, or enables meaningful testing.
 
-## Code conventions
+## Services and boundaries
 
-- Import Effect modules through explicit namespace subpaths, for example `import * as Effect from "effect/Effect"`.
-- Declare services as classes with `Context.Service` and deterministic language-service keys.
-- Give every live implementation an explicit Layer. Compose the dependency graph before providing it.
-- Use `Layer.effect` with `Effect.acquireRelease` for layer-owned scoped resources.
-- Use `Effect.sync` only for operations that are total by contract. Wrap hostile or throwing
-  synchronous callbacks with `Effect.try` and a schema-backed boundary error, then recover that
-  typed failure deliberately where the host callback is best effort.
-- Use `Effect.promise` only when rejection is impossible by contract. Ordinary third-party and
-  Node Promises use `Effect.tryPromise`; cleanup failures are mapped to a redacted typed error
-  before they are propagated or deliberately recovered.
-- Register a resource finalizer only after acquisition establishes ownership. Generated names,
-  candidate paths, and other intentions to acquire are not resources; exclusive file creation,
-  opened handles, subscriptions, and child scopes are. For an ownership claim, install its
-  settlement handler before admission, with no-op cleanup while unclaimed, or narrowly mask the
-  claim-to-handler handoff. Permit waiting and driver work remain interruptible.
-- Default host and third-party Promises to interruptible. An ordered finalizer or irreversible
-  commit region may be uninterruptible only when it is narrowly documented, ownership is already
-  established, exact-once state publication is included, and the liveness tradeoff is explicit.
-  A memoized cleanup must protect the returned cached effect's first-caller handoff as well as
-  its body; otherwise interruption can become the permanent cached outcome before cleanup starts.
-  When a foreign API cannot be cancelled and ordering does not require waiting for settlement,
-  detach Effect ownership on interruption and arrange safe late cleanup instead of blocking scope
-  closure indefinitely.
-- Keep implementation-only requirements in Layer construction rather than leaking them through service methods.
-- Use `Schema.decodeUnknownEffect` at unknown boundaries. Do not cast decoded JSON. Core JSON HTTP requests require a provider-local response decoder and return an accepted typed body or a rejected status with preserved response text; no public `body: unknown` path exists.
-- Represent expected failures with schema-backed tagged errors. Reserve defects for violated invariants.
-- Use `Clock`, `Duration`, `Random`, `Config`, `Logger`, queues, deferred values, semaphores, refs, schedules, streams, and scopes instead of corresponding unmanaged globals.
-- Create one `ManagedRuntime` from `session_start` at the Pi host boundary. Internal services never call Effect runners.
-- The shared Pi session-runtime slot is the minimal imperative island: it creates, replaces, and disposes the runtime that cannot own its own creation. Everything acquired after runtime construction is scoped inside Effect. Startup returns any host activation value through the slot; only the current generation receives it in `onActivated`, so packages do not use temporary mutable mailboxes for scoped services or initial projections.
-- Production session-runtime facades carry the exact `Layer.Error` type and never cast a returned
-  Fiber to erase initialization failure. Exported compatibility types may default an omitted
-  error argument to conservative `unknown`, but every workspace call site supplies the exact type;
-  no runtime error may be defaulted or asserted to `never`.
-- Dispose runtimes and close session resources explicitly.
-- Effect services own state transitions in `Ref` or `SynchronizedRef`. When Pi requires synchronous rendering, services atomically publish immutable snapshots to a boundary `MutableRef`; renderers only read those snapshots.
-- Cosmic UI has one narrow synchronous-state exception: its footer contribution registry and working row are presentation state driven only by synchronous Pi events, and their only effect is a guarded host UI write. They may hold plain state instead of an Effect service, but they read time only through core's synchronous clock boundaries (`synchronousNow` for wall timestamps, `synchronousMonotonicNow` for durations) and repaint only through the shared host ticker pool.
-- A service may instead hold plain mutable state (`Map`, counters) behind a `Semaphore`
-  when the state is a keyed registry that a single `Ref` would serialize too coarsely.
-  That choice carries one invariant the type system cannot enforce: **every read-modify-write
-  that spans a yield point must hold the lock for its whole duration**. Re-validate after any
-  `await` — guards checked before an RPC are stale once it returns. `SubagentService` and
-  `BackgroundTaskService` use this pattern; new services should prefer `SynchronizedRef`
-  unless they have the same shape.
-- Shared refresh admission stays masked from owner registration through cleanup installation. Owner work and joiner waiting remain interruptible; identity-checked cleanup settles the shared Deferred and releases admission on interruption.
-- Keep stale-result validation, its commit, and consumer context/configuration invalidation
-  inside the same serialized transition. Likewise, persistence, private state replacement, and
-  projection publication share one commit whenever interruption or concurrent callers could
-  otherwise separate them. Publishing inside an effectful `SynchronizedRef` modification callback
-  alone does not protect the backing assignment that follows the callback.
-- For atomic file replacement, complete creation, writing, validation, and permissions before a
-  narrow uninterruptible rename commit. Nothing fallible follows the rename; owned temporary
-  cleanup is best effort and cannot change the committed result.
-- Prefer explicit one-argument callbacks such as `Effect.map((value) => decode(value))` over tacit
-  higher-order use when a function is overloaded, generic, or accepts optional extra arguments.
-- Add spans around provider requests, refreshes, image streams, and resource initialization without recording secrets.
+- Import Effect modules through explicit namespace subpaths. Use `Context.Service` with stable language-service keys for injected capabilities, and compose their implementations with Layers. Hide implementation dependencies in Layer construction rather than leaking them through service methods.
+- Keep runners at named Pi or standalone-process boundaries. A resource-owning extension uses core's session-runtime slot to create one runtime at `session_start`, replace it safely, and dispose it explicitly. Registration-only extensions do not need a runtime. Internal services never create or run one.
+- Carry the exact `Layer.Error` type through runtime facades. Do not erase initialization failures with casts or default them to `never`.
+- Decode unknown input with Effect Schema. Model expected failures with schema-backed tagged errors; reserve defects for broken invariants. Provider-local decoders accept HTTP response bodies. Rejected JSON responses retain their status; streaming boundaries retain only the response evidence their owner needs. Never copy raw bodies into errors or telemetry.
+- Use `Effect.try` for callbacks that may throw and `Effect.tryPromise` for Promises that may reject. `Effect.sync` and `Effect.promise` require a total or non-rejecting contract. Translate cleanup rejection into a typed failure even when the caller deliberately recovers it.
+- Use Effect clocks, randomness, configuration, scheduling, and scoped concurrency for application work. Narrow synchronous host capabilities are described in the boundary guide. Keep shared platform mechanisms in `pi-cosmic-core`; keep package policy with its owner.
 
-## Version policy
+## Resource ownership and cancellation
 
-Jointly released Effect packages use synchronized exact catalog pins in `pnpm-workspace.yaml`. Independently versioned tooling is pinned separately. Do not use ranges or moving tags for these dependencies. The workspace pins stable `4.0.0`; use its published domain subpaths (`effect/http`, `effect/process`, `effect/rpc`, `effect/socket`, and `effect/encoding`), not the former `effect/unstable/*` paths. Domain APIs may still be marked unstable within a stable release, so review their pinned declarations on upgrades. Keep Effect upgrades isolated and run the full validation gate.
+Use scoped acquisition and release, including `Layer.effect` with `Effect.acquireRelease` for Layer-owned resources. A finalizer releases only something the operation actually acquired: a generated filename is not ownership of a file. Install settlement handlers before admitting an ownership claim, or narrowly mask the claim-to-handler handoff. Waiting for a permit and performing driver work remain interruptible.
 
-## V4 API rules
+Host and third-party Promises are interruptible by default. Mask only an indivisible ownership transfer, ordered cleanup, or irreversible commit, and explain the reason and liveness cost beside non-obvious code. A memoized cleanup must protect both its first-caller handoff and its body; an interruption must not become a permanently cached non-cleanup result. If a foreign API cannot be cancelled, detach and safely handle late settlement when ordering allows it instead of holding scope closure indefinitely.
 
-Use Effect v4 documentation; pinned declarations are the source of truth when documentation disagrees:
+Shared work has an explicit owner independent of its waiters. Register that owner and its cleanup together; identity-checked cleanup must settle shared waiters and release admission even on interruption. Cancelling a waiter must not abandon an already-owned stop traversal or other required cleanup.
 
-- Services are `Context.Service`, not `ServiceMap.Service`.
-- Schema-backed yieldable errors use `Schema.TaggedError`; the earlier `Schema.TaggedErrorClass` name was removed before the RC.
-- Layer-owned resources use `Layer.effect` with `Effect.acquireRelease`; there is no `Layer.scoped` constructor.
-- `ManagedRuntime.make(layer, { memoMap })` uses an options object.
-- Pass parser policy (for example `onExcessProperty: "error"`) explicitly to schema decoders; `parseOptions` annotations no longer apply that policy.
-- `Effect.partition` returns successes first, then failures.
-- HTTP is imported from `effect/http` and provided separately by a Node HTTP layer. Streaming JSON bodies are encoded through a caller-supplied Codec; true streaming responses expose explicitly named raw bytes and discard operations.
-- `@effect/vitest` v4 requires Vitest 5 and provides `it.effect`, `it.live`, and `layer`; it does not provide the older `it.scoped` helpers.
+The host session slot is the small imperative owner of runtime creation and replacement. Startup returns activation data through the slot, and only the current generation may publish it. Deactivation synchronously revokes publication and callback authority before asynchronous cleanup. A late durable commit may finish private work, but cannot restore cleared projections or invoke a retired host callback. Check authority in the same synchronous callback as publication or delivery, not before a yielded continuation.
 
-## Package navigation
+## State, persistence, and projections
 
-Each extension exposes the same readable spine, applied proportionally to its size:
+Give each state transition one owner. Prefer `Ref` or `SynchronizedRef`; a keyed registry may use plain mutable state behind a semaphore when that makes independent ownership clearer. Every read-modify-write spanning a yield holds its lock for the full transition. Work prepared outside the lock must revalidate its evidence under that lock before committing. A guard checked before an RPC is stale when that RPC returns.
 
-- `src/extension.ts` is the thin Pi entrypoint or registration adapter;
-- `src/application.ts` or `src/application/` coordinates session/use-case flow;
-- `src/layer.ts` is the application composition root;
-- feature directories own vertical capabilities, domain modules hold deterministic policy/contracts,
-  `boundary/` wraps host/third-party APIs, and `ui/` or feature render modules consume synchronous
-  projections.
+Pi rendering is synchronous. Services publish immutable snapshots for renderers; local input, focus, selection, and layout state may remain in widgets. Rendering does not own application resources or run services. Frozen events and cached slices may be shared when later updates cannot mutate old snapshots.
 
-Each package's `ARCHITECTURE.md` maps its commands/events, state, resources, and concrete source
-layout. Compatibility re-exports may retain older internal paths, but stateful implementations have
-one owner. `pi-cosmic-core` remains infrastructure-only and documents its public runtime/platform
-layout separately.
+Keep stale-result validation, state replacement, and context/configuration invalidation in the same serialized transition. Persistence and projection publication must also commit together when interruption could otherwise expose contradictory state. Publishing inside an effectful `SynchronizedRef` callback alone does not protect the backing assignment that follows it.
 
-## Final service graph
+Core's shared projection primitive keeps preparation and lock waiting interruptible, then commits external publication, its internal snapshot, and authoritative state together. Failed preparation or publication leaves the old state intact. Use this contract rather than rebuilding it inside feature services.
 
-Each extension has one host-owned session runtime. `PiApi` and the package application Layer are composed once at startup; implementation Layers hide their dependencies before entering the runtime.
+For atomic file replacement, finish creation, writing, validation, and permissions before a narrow uninterruptible rename commit. Nothing fallible follows rename; best-effort cleanup of owned temporary files cannot change the committed result. Preserve supported public interfaces and saved-data contracts deliberately. Avoid accidental internal compatibility layers that leave two owners for the same responsibility.
 
-- `pi-cosmic-core` supplies the managed-runtime facade/session slot, typed HTTP and document adapters, `SafeFile`, `AgentDirectory`, subscription refresh coordination, security utilities, and deterministic test Layers.
-- `pi-cosmic-ui` composes its config store, narrow Pi process execution, project probing, footer host state, and the plain-data footer protocol client. Its session-scoped activity registry consumes checked provider capabilities and detached summaries, owns bounded history and the display clock, and publishes the unified persistent tree and `/activity` manager. Feature packages retain authoritative agent, process, and questionnaire state.
-- Better OpenAI composes provider-local config and request schemas with the shared refresh engine and Cosmic UI client. It reads subscription credentials only through Pi's model registry, which owns refresh and persistence. OpenAI fast-mode state and persistence are owned by `FastModeService`, with a frozen synchronous request projection and bounded diagnostic ingress returned only through current-session activation. OpenAI additionally scopes image streaming, Sharp, safe input reads, and atomic output writes.
-- `pi-code-previews` composes session capability, settings/environment services, scoped Shiki state, before-write state, and animation scheduling. One factory-time public renderer resolver handles builtin/native codemode/MCP and separately source-admitted third-party presentation; originating owner tokens bind replay readiness, captured appearance and scheduler retirement. Pi independently owns native managers, factories, authentication, connections, execution and result storage. Write alone registers a genuine before-write execution hook; owned questionnaire/task/subagent/image definitions keep their normal registrations. Pure diff/layout/rendering remains outside Effect. Pi 1.0.1 is the minimum and 1.0.2 is tested; standalone `pi-mcp-previews` is retired and existing installations require manual removal.
-- `pi-ask-user` composes a serialized questionnaire service, a private bounded async registry under that same service, abort-aware TUI/RPC boundaries, pure dialog presentation, scoped external editing, and cooperative questionnaire renderers. Async presenters and delivery fibers belong to a captured child scope, not a tool signal. Separate mount and completion Deferreds distinguish opening from answering; atomic waiter claims suppress automatic custom-message delivery while an await owns the answer. A final interruptible, owner-checked transition acknowledges delivery and releases the claim atomically, without tentative acknowledgement or late rollback. Interruption before that transition preserves delivery; cancellation afterward cannot revoke it. Failed sends retry at most twice through scoped sleeps; only unclaimed terminal entries marked `sent` or `waiter` can be evicted, including explicitly acknowledged failed openings. `sent` means host submission, not model acknowledgement. Tree navigation replaces the runtime, and context filtering uses active-branch custom-entry receipts, not answer messages, to preserve historical delivery while rejecting late revoked messages across repeated activations.
-- `pi-background-task` composes a session-scoped task registry, child-process boundary, bounded log buffers, cooperative tool renderer, and synchronous manager projection.
-- `pi-subagents` composes a session-scoped three-driver local Pi/Claude/Codex run registry, bounded RPC/JSONL/IPC/native-supervisor boundaries, parent-owned cwd writer pools over cross-process leases, cooperative exact-file claims for unchanged native tools and Bash, structured event timelines, report-generation delivery, cooperative tool renderers and local Pi proxies, and synchronous fleet projection. Subtree stop claims every target and its parent-stop flag, then forks the complete leaf-first traversal into the session scope before restoring caller interruption. Cancelling a waiter cannot abandon later targets. `WorkspaceService` serializes durable writer artifacts, immutable original-baseline revisions, and combined test preparations through the Git boundary. The coordinator owns session-wide worktree/shared-checkout admission, authenticated direct-parent review of exact revisions, and explicit source leases during uncommitted integration. Backend process cleanup and artifact disposal are separate lifecycles; stopping a writer or replacing its session does not discard its proposal or establish recovery authority over old artifacts. Its current package-level design is indexed from [`packages/pi-subagents/ARCHITECTURE.md`](../../packages/pi-subagents/ARCHITECTURE.md).
+## Versions and source loading
 
-No extension owns a telemetry exporter or process-wide Effect runtime. Sharp decoding has one module-private immediate semaphore across session runtimes, not a global runtime. Its fixed packaged `.mjs` helper owns native decoding in a one-shot process; the session holds admission through confirmed process cleanup.
+`pnpm-workspace.yaml` pins jointly released Effect packages to synchronized exact versions; independently versioned tooling is pinned separately. The workspace currently uses stable Effect `4.0.0`. Follow v4 documentation and treat the pinned declarations as authoritative when they differ. Domain APIs can still be marked unstable within a stable release.
 
-## State and projection contract
+Relevant v4 APIs:
 
-The shared projection primitive serializes a private authoritative `Ref` with a private `Semaphore`. Lock waiting, transition work, and cloned, deeply frozen snapshot preparation remain interruptible. External publication, internal snapshot publication, and authoritative state replacement share one narrow uninterruptible commit; rejected preparation or publication leaves state and the internal snapshot unchanged. Better OpenAI, Cosmic UI, code-preview settings/write state, background-task state, and subagent runs publish immutable snapshots while retaining synchronous renderer boundaries and pre-session snapshots. Better OpenAI and Cosmic UI revoke each session's publication authority synchronously before cleanup. Already-admitted durable commits may finish updating private state, but cannot republish a cleared boundary projection or call the retired owner's host callbacks. Authority checks run in the same synchronous callback as publication or delivery, not before a yielded Effect or Promise continuation. Immutable log events and frozen cached slices may be structurally shared; projection envelopes and scalar rows still detach and freeze. Code-preview syntax state uses one `SynchronizedRef` plus bounded ingress and publishes immutable metadata with only the current Shiki highlighter capability required by synchronous tokenization. Pure reducers, formatting, parsing of already trusted values, diffing, word matching, and TUI layout stay synchronous.
+- `Context.Service`, `Schema.TaggedError`, and `Layer.effect` are the current service, error, and scoped Layer APIs.
+- `ManagedRuntime.make(layer, { memoMap })` takes an options object.
+- Pass parser policy directly to schema decoders; annotations do not apply it.
+- `Effect.partition` returns successes before failures.
+- HTTP, process, RPC, socket, and encoding use published domain subpaths, not `effect/unstable/*`. HTTP receives its Node platform Layer separately; streaming JSON requests use a caller-supplied Codec.
+- `@effect/vitest` v4 uses Vitest 5 and exports `it.effect`, `it.live`, and `layer`.
 
-## Observability contract
+Packages run and publish TypeScript source through Pi/Jiti, with no generated `dist/` dependency or prerequisite build. Declare runtime imports directly in each package. Compiler tooling belongs at the workspace root. All packages inherit the Effect language-service plugin; new or migrated packages extend `tsconfig.effect.json`. Checked standalone JavaScript helpers retain TypeScript and lint coverage.
 
-Two things emit spans, and they use different names on purpose:
+## Observability
 
-- `Effect.withSpan` marks a **stable operation boundary**. These names are package-prefixed
-  (`pi-<package>.<area>.<operation>`), are treated as a public observability surface, and the
-  required families below must keep their exact names.
-- `Effect.fn("Name.method")` marks an **internal function boundary**, named after the service
-  and method it wraps. These are diagnostic aids, not a contract; renaming one alongside its
-  function is an ordinary refactor. `Effect.fnUntraced` creates neither an Effect stack-frame
-  boundary nor a span. Apply `Effect.withSpan` separately when a stable span is required.
+`Effect.withSpan` names stable operations; `Effect.fn("Service.method")` names internal function boundaries and may change with an ordinary refactor. Do not substitute one for the other to satisfy naming conventions. Existing stable operation families are:
 
-Do not convert between the two to satisfy a naming rule. If an internal boundary becomes
-something operators depend on, promote it deliberately: give it a package-prefixed
-`Effect.withSpan` and add it to the required families.
-
-Required `withSpan` families are:
-
-- `pi-cosmic-core.runtime.startup`, `pi-cosmic-core.http.{json,streaming}.*`, and `pi-cosmic-core.safe-file.initialize`;
-- `pi-better-openai.usage.{initialize,refresh}`;
-- `pi-better-openai.image.{request,stream,convert,write}`;
+- `pi-cosmic-core.runtime.startup`, `pi-cosmic-core.http.{json,streaming}.*`, `pi-cosmic-core.safe-file.initialize`;
+- `pi-better-openai.usage.{initialize,refresh}`, `pi-better-openai.image.{request,stream,convert,write}`;
 - `pi-cosmic-ui.probe.{git,pull-request}`;
-- `pi-code-previews.shiki.initialize`;
+- `pi-code-previews.shiki.initialize`.
 
-Only bounded enums, counts, methods, and status codes may be attributes. URLs, paths, prompts, bodies, credentials, auth values, account/team identifiers, and raw errors are forbidden. The core HTTP adapters disable the upstream client's URL-bearing automatic span and emit safe workspace spans instead. Unknown diagnostics pass through shared redaction before they reach logs or projections.
+Attributes contain only bounded enums, counts, methods, and status codes. Exclude URLs, paths, prompts, bodies, credentials, account identifiers, and raw errors. Core disables upstream URL-bearing HTTP spans and supplies safe spans instead. Redact unknown diagnostics before logs or projections. Extensions do not install process-wide telemetry exporters.
 
-## Dependency layout
+## Validation and upgrades
 
-Compiler tooling lives at the workspace root. Runtime dependencies are declared directly by every package that imports them, using the synchronized pnpm catalog. Every Cosmic Pi package publishes and runs TypeScript source through Pi/Jiti; there are no generated package distributions or prerequisite builds. TypeScript projects use ESNext/Bundler resolution. Packages that consume source containing constructor parameter properties explicitly relax `erasableSyntaxOnly`; the stricter workspace default remains in force elsewhere. `pi-cosmic-core` is a normal publishable source package and does not register a Pi extension.
+Run focused package checks, then `pnpm validate`, following the [testing guide](testing.md). TypeScript, Effect diagnostics, type-aware Oxlint, tests, and packaging checks protect different contracts; none replaces the others. Exact-file diagnostic exceptions belong at genuine host boundaries and should stay narrow.
 
-## Quality checks
-
-- `tsconfig.base.json` enables strict TypeScript and configures core Effect language-service diagnostics for every package.
-- `tsconfig.effect.json` enables the workspace's Effect-native diagnostics. The inherited `strictEffectProvide` override matches `**/packages/*/src/**/*.ts`; tests remain Effect entry points that intentionally provide complete test Layers. Exact-file exceptions cover the shared gallery writer, Code Previews' pre-session settings runner, and Ask User's standalone external-editor runner, which each compose their complete execution graph. Service constructors instead expose construction dependencies for their Layers to supply.
-- Each package's `check` runs TypeScript, `effect-tsgo diagnostics`, type-aware Oxlint, and formatting checks. The root `pnpm effect:diagnostics` command runs package diagnostics recursively. TypeScript and Effect diagnostics stay separate so Effect messages are not emitted twice.
-- Better OpenAI and Subagents enable `allowJs` and `checkJs` and include shipped and test `.mjs` helpers in their TypeScript projects; source loading still requires no build.
-- Oxlint, package tests, packaging smoke tests, and code review cover the remaining correctness and integration concerns.
-- `pnpm layout:check` checks package/test placement and rejects nested package manifests. Other architecture conventions remain documented guidance.
-
-## Upgrade procedure
-
-1. Update all synchronized Effect packages in one commit.
-2. Update `@effect/tsgo` to a release that supports the pinned TypeScript version.
-3. Review release notes and the pinned declarations.
-4. Run `pnpm typecheck` and `pnpm effect:diagnostics`.
-5. Run focused tests, pack checks, benchmarks, and `pnpm validate`.
+For an Effect upgrade, update synchronized packages together, select tooling compatible with the pinned TypeScript version, review release notes and declarations, then run focused tests, applicable benchmarks, and the complete validation gate. Keep the upgrade isolated from unrelated refactors so failures remain attributable.

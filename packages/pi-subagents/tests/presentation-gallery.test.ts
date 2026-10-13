@@ -876,6 +876,37 @@ const route = {
 } as const;
 
 const receiptScenarios: ReadonlyArray<ToolScenario> = [
+  {
+    tool: "subagent_start",
+    title: "expanded writer task and exact file claims",
+    args: {
+      agents: [
+        {
+          name: "refresh-fix",
+          profile: "worker",
+          task: [
+            "Fix the session refresh timeout handling.",
+            "Preserve the caller's cancellation and keep late responses from updating a newer session.",
+            "Add a regression for a refresh response arriving after a session switch.",
+            "Only change the files claimed below; report any other required changes to the parent.",
+          ].join("\n"),
+          writes: ["src/auth/session.ts", "tests/auth/session.test.ts"],
+        },
+      ],
+    },
+    phase: "pending",
+  },
+  {
+    tool: "subagent_workflow",
+    title: "expanded source and arguments with literal control characters",
+    args: {
+      action: "start",
+      script:
+        'export const meta = { name: "inspect-text", description: "Inspect literal text" };\nlog("before\u009dafter control");\nreturn args.scope;',
+      args: { scope: "src/auth", text: "before\u009dafter control", keep: "following field" },
+    },
+    phase: "pending",
+  },
   awaited("worker rate limited", [
     view({
       state: "failed",

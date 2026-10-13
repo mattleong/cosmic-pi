@@ -110,13 +110,14 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
             : Promise.reject(new Error("Subagents session was replaced.")),
       };
     },
-    stop: (id) => runAction((service) => service.stop(id)),
-    interrupt: (id) => runAction((service) => service.interrupt(id)),
-    resume: (id, message) => runAction((service) => service.resume(id, message)),
-    send: (id, message) =>
+    stop: (id, expected) => runAction((service) => service.stop(id, expected)),
+    interrupt: (id, expected) => runAction((service) => service.interrupt(id, expected)),
+    resume: (id, message, expected) =>
+      runAction((service) => service.resume(id, message, expected)),
+    send: (id, message, expected) =>
       run(
         SubagentService.use((service) =>
-          service.send(id, message).pipe(
+          service.send(id, message, expected).pipe(
             Effect.as<FleetMessageDelivery>("delivered"),
             Effect.catchIf(isPendingDeliveryError, () =>
               Effect.succeed<FleetMessageDelivery>("pending"),
@@ -124,8 +125,8 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
           ),
         ),
       ),
-    reply: (id, message) => runAction((service) => service.reply(id, message)),
-    rename: (id, name) => runAction((service) => service.rename(id, name)),
+    reply: (id, message, expected) => runAction((service) => service.reply(id, message, expected)),
+    rename: (id, name, expected) => runAction((service) => service.rename(id, name, expected)),
     inspectProfiles: (projectTrusted) =>
       withCurrentActivation((activation) =>
         run(

@@ -16,7 +16,7 @@ import { beforeAll, describe, vi } from "vitest";
 import { initialFastSnapshot } from "../src/fast/controller.ts";
 import { FastModeService } from "../src/fast/service.ts";
 import { registerSettingsController } from "../src/settings/controller.ts";
-import { OpenAIUsageService } from "../src/usage/controller.ts";
+import { OpenAIConfigService } from "../src/config/store.ts";
 import { makeResolvedConfig, waitUntil } from "./helpers.ts";
 
 beforeAll(() => initTheme(undefined, false));
@@ -43,9 +43,9 @@ function settingsHarness(options: SettingsHarnessOptions = {}) {
   });
   const host = recordingExtensionHost();
   const services = Layer.mergeAll(
-    Layer.succeed(OpenAIUsageService, {
-      refresh: () => Effect.void,
-      contextChanged: () => Effect.void,
+    Layer.succeed(OpenAIConfigService, {
+      get: Effect.sync(() => currentConfig),
+      observe: () => Effect.void,
       updateSetting: () =>
         options.updateSetting ? Effect.promise(options.updateSetting) : Effect.void,
       persistFast: (_desiredActive, afterCommit) => afterCommit,

@@ -190,6 +190,25 @@ test("native rendering reads the animation frame without invoking renderer state
 });
 
 for (const style of ["compact", "preview"] as const)
+  test(`native ${style} source rendering does not invoke argument accessors`, () => {
+    settings(style);
+    let invoked = false;
+    const args = Object.defineProperty({}, "code", {
+      enumerable: true,
+      get() {
+        invoked = true;
+        throw new Error("Argument accessors must remain inert");
+      },
+    });
+    const harness = createToolPresentationHarness(codemodeRenderers());
+    for (const expanded of [false, true]) {
+      harness.call(args, { expanded });
+      assert.doesNotThrow(() => harness.render(100));
+    }
+    assert.equal(invoked, false);
+  });
+
+for (const style of ["compact", "preview"] as const)
   test(`native ${style} expanded calls follow spinner frames, the timing setting and newer results`, () => {
     settings(style);
     const state = { codePreviewAnimationFrame: 0 };

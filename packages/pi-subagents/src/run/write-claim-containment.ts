@@ -36,9 +36,7 @@ export function makeRunWriteClaimContainment(dependencies: RunWriteClaimContainm
           const pool = record.writerPool;
           if (!pool) return false;
           record.writeViolationContainmentStarted = true;
-          pool.admissionPaused = true;
-          pool.violationRunIds.add(record.view.id);
-          pool.pauseReason = message;
+          pool.pauseAdmissionLocked(record.view.id, message);
           for (const memberId of pool.members.keys()) {
             const member = records.get(memberId);
             if (!member) continue;

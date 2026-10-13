@@ -34,6 +34,12 @@ Retry claims the failed predecessor exclusively. Exact writer claims travel with
 
 Retry fails closed for non-failed, later-assignment, already-superseded, exhausted, outcome-uncertain, cleanup-quarantined, eviction-claimed, or concurrently retry-claimed records. Writers create a fresh execution and may repeat partial side effects, so parent prompt guidance permits writer continuation only when the original handoff and current user intent authorize it. These gates preserve the invariant that no spawn, transport, lease, or cleanup uncertainty automatically launches duplicate work.
 
+Retry claim transfer is acknowledged only after the session-owned commit fiber is forked within the same interruption mask. Cancellation before transfer releases the caller's claim; cancellation afterward stops only the waiter, leaving the commit to release its claim. Retry successors preserve their predecessor's parent, while existing descendants stay attached to the predecessor.
+
+## Resume admission
+
+Completed respawn checks the current direct-child policy, including held worktree launch slots, under the admission lock before reserving its process slot. In-place paused resume keeps its existing slot and remains allowed at capacity. Writer respawn recanonicalizes the launch cwd interruptibly before taking the service lock and ownership mask. One locked claim then validates the run, assignment, process, cwd identity, stop state, owned-run guard, report backlog, writer conflict, capacity, and any workspace binding before assignment rollover. Refusal leaves the workspace unchanged. Binding and revision rules are detailed in [Local backends](local-backends.md#isolated-workspace-lifecycle).
+
 ## Public launch contract
 
 `subagent_start` accepts one required array of 1–32 agents, subject to the caller's effective direct-child capacity. Root calls create children of the virtual depth-0 root. Authenticated nested calls create children of the server-bound caller run; the public and proxy schemas contain no ancestry override. Each item contains:

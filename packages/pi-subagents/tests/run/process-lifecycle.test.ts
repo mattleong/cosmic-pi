@@ -14,7 +14,6 @@ import type { RunContext, RunRecord } from "../../src/run/internal.ts";
 import { makeRunProcessInitializer } from "../../src/run/process-lifecycle.ts";
 import { makeRunRecordCleanup } from "../../src/run/record-cleanup.ts";
 import { makeWriterPreparation } from "../../src/run/writer-preparation.ts";
-import { addWriterPoolMemberLocked } from "../../src/run/writer-pool.ts";
 import { view } from "../fixtures/run-view.ts";
 import { testBackendDriver } from "../tools/fixtures/tool-harness.ts";
 import { makeRunContext } from "./fixtures/run-context.ts";
@@ -57,7 +56,7 @@ const processFixture = () =>
     };
     const newRecord = (id: string) =>
       Effect.gen(function* () {
-        const pool = yield* addWriterPoolMemberLocked(context.writerPools, cwd, id);
+        const pool = yield* context.writerPools.joinLocked(cwd, id);
         const record: RunRecord = {
           scriptOrigin: false,
           view: view({ id, name: id, state: "starting", writeIntent: "writer", capabilities: [] }),

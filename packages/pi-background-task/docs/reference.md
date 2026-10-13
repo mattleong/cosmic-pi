@@ -16,7 +16,7 @@ The footer clears when no tasks remain active. Failed and timed-out tasks stay a
 
 ## Transcript cards
 
-Log results show a 12-line head/tail preview by default; use `Ctrl+O` (or the configured `app.tools.expand` binding) to reveal the full fetched output. Set `toolCallCollapsedStyle` to `compact` in `pi-code-previews` settings and reload to hide ordinary output until expansion. Compact summaries and their issues are described in [ARCHITECTURE.md](../ARCHITECTURE.md#source-map).
+Log results show a 12-line head/tail preview by default; use `Ctrl+O` (or the configured `app.tools.expand` binding) to reveal the full fetched output. Set `toolCallCollapsedStyle` to `compact` in `pi-code-previews` settings and reload to hide ordinary output until expansion. Compact rows distinguish a completed management action from task success and retain failure, timeout, cleanup, and output-loss issues. Expansion preserves the submitted arguments, fetched text, cursors, and recovery details.
 
 ## Native Code Mode results
 
@@ -33,7 +33,7 @@ Every successful result carries `contract: "pi-background-task/task"`, `version:
 
 A task has `id`, `state`, `finished`, `startedAt`, `logCursor`, and `droppedLogBytes`, plus optional `name`, `endedAt`, `exitCode` (an integer or `null`), `signal`, `error`, and `cause` (the output line that names why a failed task failed). `finished` is true for every terminal state, including failed, stopped, and timed out; read `state` and `exitCode` for the outcome.
 
-Invalid input, unknown IDs, capacity, spawn, and termination failures reject the call, so the script receives an error. Encoding failures and `stop_all` aggregation are described in [ARCHITECTURE.md](../ARCHITECTURE.md#source-map).
+Invalid input, unknown IDs, capacity, spawn, and termination failures reject the call, so the script receives an error. `stop_all` attempts every captured active task before reporting aggregate termination failures. If structured-result encoding fails after an action, the error retains the original text and display details but has no structured result; the action is not rolled back or repeated. Read that receipt before retrying.
 
 Scripts should follow these rules:
 
@@ -44,7 +44,7 @@ Scripts should follow these rules:
 - Never reuse checkpointed task IDs, such as values saved with `store()`, after reload, session switch or fork, `/tree` navigation, or shutdown: the fresh registry restarts at `task-1`, so an old ID may name a different, new task. Clear and recreate workflow checkpoints for the current runtime.
 - A `tool_result` hook that replaces a result's content without returning `structuredContent` removes the structured data; scripts then receive the text instead.
 
-`logs` `output` prefixes each stderr chunk with `[stderr] ` before clipping, so clipping can remove the first retained prefix; it is `""` when there is no output. With neither `afterCursor` nor `tailLines`, the slice is only the last 200 lines; use `afterCursor: 0` to request all retained output. `truncated` does not report tail selection, and `droppedBytes` separately counts output the task's log buffer already discarded. Clipping is not paging: `nextCursor` remains the latest cursor, so clipped bytes are not read again. Request smaller `tailLines` slices, read incrementally with `afterCursor`, or redirect complete output to a file. Sanitization, redaction, and size bounds for metadata and output are described in [ARCHITECTURE.md](../ARCHITECTURE.md#source-map).
+`logs` `output` prefixes each stderr chunk with `[stderr] ` before clipping, so clipping can remove the first retained prefix; it is `""` when there is no output. With neither `afterCursor` nor `tailLines`, the slice is only the last 200 lines; use `afterCursor: 0` to request all retained output. `truncated` does not report tail selection, and `droppedBytes` separately counts output the task's log buffer already discarded. Clipping is not paging: `nextCursor` remains the latest cursor, so clipped bytes are not read again. Request smaller `tailLines` slices, read incrementally with `afterCursor`, or redirect complete output to a file. Result metadata such as names, errors, and failure causes is terminal-sanitized, credential-redacted, and bounded. Log output is terminal-sanitized but not credential-redacted; native structured output keeps the newest 1 MiB of UTF-8 independently of the text result's bound.
 
 ## Settings and captured output
 

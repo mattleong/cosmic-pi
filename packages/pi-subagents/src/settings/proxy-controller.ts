@@ -1,14 +1,14 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { absurd } from "effect/Function";
+import * as Effect from "effect/Effect";
 import { synchronousNow, notifyAtHostBoundary } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
+import { openOwnedSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
-import { decodeCompactToolDetails } from "../tools/details-decode.ts";
-import type { SubagentRunCard } from "../tools/details-schema.ts";
+import { decodeFleetSnapshotResult, type SubagentFleetActionInput } from "../tools/proxy-fleet.ts";
 import { actionFailureDisposition, decodeSubagentOutcomeDetails } from "../tools/outcome.ts";
-import type { SubagentLifecycleInput, SubagentToolInput } from "../tools/schema.ts";
-import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
+import type { SubagentLifecycleInput } from "../tools/schema.ts";
+import type { SubagentControlExpectation, SubagentProjection } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
   SubagentFleetComponent,
@@ -17,7 +17,8 @@ import {
 } from "../ui/fleet.ts";
 
 export type SubagentProxyCall = (
-  input: SubagentToolInput,
+  input: SubagentFleetActionInput,
+  expected: SubagentControlExpectation,
   signal?: AbortSignal,
 ) => Promise<AgentToolResult<unknown>>;
 
@@ -66,64 +67,12 @@ const classifyProxyActionResult = (
   return absurd(disposition);
 };
 
-const cardView = (card: SubagentRunCard): SubagentRunView => ({
-  id: card.id,
-  name: card.name,
-  task: "Task details are shown in the root session",
-  selection: card.selection,
-  cwd: "",
-  state: card.state,
-  steeringDelivery: card.steeringDelivery,
-  context: card.context,
-  writeIntent: card.writeIntent,
-  openaiFastMode: card.openaiFastMode,
-  host: card.host,
-  runtime: card.runtime,
-  closeOnReport: card.closeOnReport,
-  reportGeneration: card.reportGeneration,
-  capabilities: card.capabilities,
-  model: card.model,
-  effort: card.effort,
-  startedAt: card.startedAt,
-  lastActivityAt: card.lastActivityAt,
-  sessionEvents: [],
-  usage: card.usage,
-  profile: card.profile,
-  parentRunId: card.parentRunId,
-  depth: card.depth,
-  directChildCount: card.directChildCount,
-  descendantCount: card.descendantCount,
-  nativeActivity: card.nativeActivity,
-  writeClaims: card.writeClaims,
-  writeAudit: card.writeAudit,
-  writeAdmissionPaused: card.writeAdmissionPaused,
-  endedAt: card.endedAt,
-  currentTool: card.currentTool,
-  progress: card.progress,
-  warning: card.warning,
-  warningSource: card.warningSource,
-  systemWarning: card.systemWarning,
-  question: card.question && {
-    requestId: "proxy-question",
-    message: card.question.message,
-  },
-  finalText: card.finalText,
-  error: card.error,
-});
-
-const projectionFromResult = (
-  result: AgentToolResult<unknown>,
-  revision: number,
-): SubagentProjection => {
-  const details = decodeCompactToolDetails(result.details);
-  const runs = details && details.action !== "models" ? details.cards.map(cardView) : [];
-  return { revision, runs };
-};
-
 export const registerSubagentProxyManagerCommand = (
   pi: ExtensionAPI,
   visibilityRootId: string,
   call: SubagentProxyCall,
+  snapshot: (signal: AbortSignal) => Promise<AgentToolResult<unknown>>,
+  isCurrent: () => boolean,
 ): void => {
   pi.registerCommand("subagents", {
     description: "Open the authenticated descendant subagent tree",
@@ -146,13 +95,28 @@ export const registerSubagentProxyManagerCommand = (
           );
         return Promise.resolve();
       }
+      const controller = new AbortController();
+      const signal = ctx.signal
+        ? AbortSignal.any([ctx.signal, controller.signal])
+        : controller.signal;
+      let closed = false;
+      let closeSurface: (() => void) | undefined;
+      const current = () => !closed && !signal.aborted && isCurrent();
+      const requireCurrent = () => {
+        if (current()) return true;
+        closeSurface?.();
+        return false;
+      };
       let revision = 0;
       let projection: SubagentProjection = { revision, runs: [] };
       let refreshInFlight: Promise<void> | undefined;
       const refresh = (): Promise<void> => {
         if (refreshInFlight) return refreshInFlight;
-        const pending = call({ tool: SUBAGENT_TOOL_NAME.list, args: {} }).then((result) => {
-          projection = projectionFromResult(result, ++revision);
+        const pending = snapshot(signal).then((result) => {
+          if (!requireCurrent()) return undefined;
+          const runs = decodeFleetSnapshotResult(result);
+          if (!runs) throw new Error("The complete fleet snapshot is unavailable.");
+          projection = { revision: ++revision, runs };
           return undefined;
         });
         refreshInFlight = pending;
@@ -168,95 +132,141 @@ export const registerSubagentProxyManagerCommand = (
         return prior ? prior.then(refreshAgain, refreshAgain) : refreshAgain();
       };
       let stopRefresh: (() => void) | undefined;
-      let closed = false;
-      return refresh().then(() =>
-        openCommandSurface(ctx, {
-          placement: "screen",
-          onClose: () => {
-            closed = true;
-            stopRefresh?.();
-          },
-          create: ({ tui, theme, keybindings, getHeight, finish }) => {
-            stopRefresh = startHostUiTicker(750, () => {
-              if (closed) return;
-              void refresh().then(
-                () => tui.requestRender(),
-                () => undefined,
-              );
-            });
-            const afterRefresh = <A>(outcome: () => Promise<A>): Promise<A> =>
-              (closed ? Promise.resolve() : refreshAfterAction().catch(() => undefined))
-                .then(outcome)
-                .finally(() => tui.requestRender());
-            const action = (
-              expected: ProxyFleetAction,
-              targetId: string,
-              input: SubagentToolInput,
-            ): Promise<ProxyActionOutcome> =>
-              call(input)
-                .then((result) => classifyProxyActionResult(expected, targetId, result))
-                .then(
-                  (outcome) => afterRefresh(() => Promise.resolve(outcome)),
-                  (cause: unknown) =>
-                    afterRefresh((): Promise<ProxyActionOutcome> => {
-                      throw cause;
-                    }),
-                );
-            const accepted = (outcome: ProxyActionOutcome): void => {
-              if (outcome !== "accepted") throw new Error(UNCONFIRMED_ACTION);
-            };
-            const lifecycle = (
-              lifecycleAction: "stop" | "interrupt" | "resume",
-              id: string,
-              resumeMessage?: string,
-            ) => {
-              const lifecycleArgs: SubagentLifecycleInput = resumeMessage
-                ? { action: lifecycleAction, runIds: [id], message: resumeMessage }
-                : { action: lifecycleAction, runIds: [id] };
-              return action(lifecycleAction, id, {
-                tool: SUBAGENT_TOOL_NAME.lifecycle,
-                args: lifecycleArgs,
-              }).then(accepted);
-            };
-            const message = (
-              id: string,
-              mode: FleetMessageMode,
-              text: string,
-            ): Promise<FleetMessageDelivery> =>
-              (mode === "reply"
-                ? action("reply", id, {
-                    tool: SUBAGENT_TOOL_NAME.reply,
-                    args: { runId: id, message: text },
-                  })
-                : action("send", id, {
-                    tool: SUBAGENT_TOOL_NAME.send,
-                    args: { runIds: [id], message: text },
-                  })
-              ).then((outcome) => (outcome === "pending" ? "pending" : "delivered"));
-            return new SubagentFleetComponent({
-              theme,
-              visibilityRootId,
-              getProjection: () => projection,
-              getHeight,
-              getNow: synchronousNow,
-              ...fullScreenKeybindingOptions(keybindings),
-              requestRender: () => tui.requestRender(),
-              close: () => finish(undefined),
-              actions: {
-                stop: (id) => lifecycle("stop", id),
-                interrupt: (id) => lifecycle("interrupt", id),
-                resume: (id, resumeMessage) => lifecycle("resume", id, resumeMessage),
-                message,
-                rename: (id, name) =>
-                  action("rename", id, {
-                    tool: SUBAGENT_TOOL_NAME.rename,
-                    args: { runId: id, name },
-                  }).then(accepted),
+      return refresh()
+        .then(() => {
+          if (!requireCurrent()) return undefined;
+          return Effect.runPromise(
+            openOwnedSurface(ctx, {
+              closedValue: undefined,
+              placement: "screen",
+              isCurrent: current,
+              onControl: (close) => {
+                closeSurface = close;
               },
-            });
-          },
-        }),
-      );
+              onClose: () => {
+                closed = true;
+                stopRefresh?.();
+                controller.abort();
+              },
+              create: ({ tui, theme, keybindings, getHeight, finish }) => {
+                stopRefresh = startHostUiTicker(750, () => {
+                  if (!requireCurrent()) return;
+                  void refresh().then(
+                    () => {
+                      if (requireCurrent()) tui.requestRender();
+                      return undefined;
+                    },
+                    () => undefined,
+                  );
+                });
+                const afterRefresh = <A>(outcome: () => Promise<A>): Promise<A> =>
+                  (!requireCurrent()
+                    ? Promise.resolve()
+                    : refreshAfterAction().catch(() => undefined)
+                  )
+                    .then(outcome)
+                    .finally(() => {
+                      if (requireCurrent()) tui.requestRender();
+                    });
+                const action = (
+                  actionName: ProxyFleetAction,
+                  targetId: string,
+                  input: SubagentFleetActionInput,
+                  expected: SubagentControlExpectation,
+                ): Promise<ProxyActionOutcome> => {
+                  if (!requireCurrent()) return Promise.reject(new Error("Subagent fleet closed."));
+                  return call(input, expected, signal)
+                    .then((result) => classifyProxyActionResult(actionName, targetId, result))
+                    .then(
+                      (outcome) => afterRefresh(() => Promise.resolve(outcome)),
+                      (cause: unknown) =>
+                        afterRefresh((): Promise<ProxyActionOutcome> => {
+                          throw cause;
+                        }),
+                    );
+                };
+                const accepted = (outcome: ProxyActionOutcome): void => {
+                  if (outcome !== "accepted") throw new Error(UNCONFIRMED_ACTION);
+                };
+                const lifecycle = (
+                  lifecycleAction: "stop" | "interrupt" | "resume",
+                  id: string,
+                  expected: SubagentControlExpectation,
+                  resumeMessage?: string,
+                ) => {
+                  const lifecycleArgs: SubagentLifecycleInput = resumeMessage
+                    ? { action: lifecycleAction, runIds: [id], message: resumeMessage }
+                    : { action: lifecycleAction, runIds: [id] };
+                  return action(
+                    lifecycleAction,
+                    id,
+                    {
+                      tool: SUBAGENT_TOOL_NAME.lifecycle,
+                      args: lifecycleArgs,
+                    },
+                    expected,
+                  ).then(accepted);
+                };
+                const message = (
+                  id: string,
+                  mode: FleetMessageMode,
+                  text: string,
+                  expected: SubagentControlExpectation,
+                ): Promise<FleetMessageDelivery> =>
+                  (mode === "reply"
+                    ? action(
+                        "reply",
+                        id,
+                        {
+                          tool: SUBAGENT_TOOL_NAME.reply,
+                          args: { runId: id, message: text },
+                        },
+                        expected,
+                      )
+                    : action(
+                        "send",
+                        id,
+                        {
+                          tool: SUBAGENT_TOOL_NAME.send,
+                          args: { runIds: [id], message: text },
+                        },
+                        expected,
+                      )
+                  ).then((outcome) => (outcome === "pending" ? "pending" : "delivered"));
+                return new SubagentFleetComponent({
+                  theme,
+                  visibilityRootId,
+                  isCurrent: current,
+                  getProjection: () => projection,
+                  getHeight,
+                  getNow: synchronousNow,
+                  ...fullScreenKeybindingOptions(keybindings),
+                  requestRender: () => tui.requestRender(),
+                  close: () => finish(undefined),
+                  actions: {
+                    stop: (id, expected) => lifecycle("stop", id, expected),
+                    interrupt: (id, expected) => lifecycle("interrupt", id, expected),
+                    resume: (id, resumeMessage, expected) =>
+                      lifecycle("resume", id, expected, resumeMessage),
+                    message,
+                    rename: (id, name, expected) =>
+                      action(
+                        "rename",
+                        id,
+                        {
+                          tool: SUBAGENT_TOOL_NAME.rename,
+                          args: { runId: id, name },
+                        },
+                        expected,
+                      ).then(accepted),
+                  },
+                });
+              },
+            }),
+            { signal: ctx.signal },
+          );
+        })
+        .finally(() => controller.abort());
     },
   });
 };

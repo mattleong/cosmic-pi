@@ -49,6 +49,7 @@ export type LoadSettingsOptions = {
 
 interface SaveSettingsOptions {
   readonly rehydrate?: LoadSettingsOptions;
+  readonly previous?: CodePreviewSettings;
 }
 
 export interface CodePreviewSettingsServiceContract {
@@ -96,6 +97,7 @@ function settingsDocument(
   settings: CodePreviewSettings,
   context: SettingsSaveContext,
   latestGlobalDocument: JsonObject,
+  previous: CodePreviewSettings = context.loaded,
 ): JsonObject {
   const document = withoutKnownSettings(latestGlobalDocument);
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
@@ -104,7 +106,7 @@ function settingsDocument(
   }
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
     const value = settings[key];
-    if (Equal.equals(value, context.loaded[key])) continue;
+    if (Equal.equals(value, previous[key])) continue;
     if (
       Equal.equals(value, context.baseline[key]) &&
       Equal.equals(value, context.globalBaseline[key])
@@ -226,11 +228,15 @@ export class CodePreviewSettingsService extends Context.Service<
           Effect.try({
             try: () => {
               const document = edit(latest);
+              const committed = {
+                ...next,
+                loaded: normalizeSettingsWithDiagnostics(document, next.baseline).settings,
+              };
               return {
-                value: next,
+                value: committed,
                 document,
                 write: !Equal.equals(document, latest),
-                afterCommit: commit(coordinator, next),
+                afterCommit: commit(coordinator, committed),
               } satisfies JsonDocumentModification<SettingsSaveContext>;
             },
             catch: () =>
@@ -246,10 +252,11 @@ export class CodePreviewSettingsService extends Context.Service<
         settings: CodePreviewSettings,
         context: SettingsSaveContext,
         coordinator: SettingsCoordinator,
+        previous?: CodePreviewSettings,
       ) {
         const loaded = yield* decodeCommittedSettings(settings, flatSettingsPath);
         return yield* commitDocument(coordinator, { ...context, loaded }, (latest) =>
-          settingsDocument(loaded, context, latest),
+          settingsDocument(loaded, context, latest, previous),
         );
       });
 
@@ -293,7 +300,7 @@ export class CodePreviewSettingsService extends Context.Service<
           ),
         save: (settings, admission, options = {}) =>
           modify(admission, options, (current, coordinator) =>
-            saveState(settings, current, coordinator),
+            saveState(settings, current, coordinator, options.previous),
           ),
         reset: (admission, options = {}) => modify(admission, options, resetState),
         flush: flushSettingsCoordinator,

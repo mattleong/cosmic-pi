@@ -27,12 +27,24 @@ const harness = () => {
   return {
     ctx,
     notify,
+    open: () => host.commands.get("herdr-btw")!.handler("", ctx),
     start: () => host.emit("session_start", ctx),
     shutdown: () => host.emit("session_shutdown", ctx),
   };
 };
 
 describe("herdr-btw session host capture", () => {
+  it.effect("does not report command settlement after the owning session shuts down", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* Effect.promise(() => h.start());
+      const pending = h.open();
+      yield* Effect.promise(() => h.shutdown());
+      yield* Effect.promise(() => Promise.resolve(pending));
+      expect(h.notify).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("materializes cwd and signal once without rereading raw host values", () =>
     Effect.gen(function* () {
       const h = harness();

@@ -6,6 +6,7 @@ import * as FiberSet from "effect/FiberSet";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import { confirmProcessGroupExit } from "pi-cosmic-core";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
@@ -41,15 +42,20 @@ export interface ProcessTransportHandle<Message, Frame> {
 const cleanupUnconfirmed = () =>
   processCauseError(
     "confirm subagent process cleanup",
-    new Error("Process exit was not confirmed after forced termination."),
+    new Error("Process tree exit was not confirmed after forced termination."),
     "cleanup_unconfirmed",
   );
 
 export interface ProcessTransportRuntime {
   readonly spawn: (...args: Parameters<typeof nodeSpawn>) => NodeChildProcess;
   readonly terminate: typeof terminateProcessTree;
+  readonly confirmGroupExit: typeof confirmProcessGroupExit;
 }
-const nodeRuntime: ProcessTransportRuntime = { spawn: nodeSpawn, terminate: terminateProcessTree };
+const nodeRuntime: ProcessTransportRuntime = {
+  spawn: nodeSpawn,
+  terminate: terminateProcessTree,
+  confirmGroupExit: confirmProcessGroupExit,
+};
 
 interface ProcessTransportOptions<Message, Frame, Attachment> {
   readonly spawn: (spawn: ProcessTransportRuntime["spawn"]) => NodeChildProcess;
@@ -65,7 +71,7 @@ interface ProcessTransportOptions<Message, Frame, Attachment> {
   ) => Effect.Effect<void>;
   readonly attach: (
     child: NodeChildProcess,
-    offer: (event: ProcessWireEvent<Message>) => void,
+    offer: (event: ProcessWireEvent<Message>, bytes?: number) => void,
   ) => Attachment;
 }
 
@@ -297,11 +303,16 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
             return undefined;
           }
           yield* Effect.sleep("100 millis");
-          return yield* terminate("force");
+          yield* terminate("force").pipe(Effect.ignore);
+          if (!(yield* runtime.confirmGroupExit(pid, 2_000))) return yield* cleanupUnconfirmed();
+          return undefined;
         }
         const forceAttempt = yield* Effect.exit(terminate("force"));
         const forcedExit = yield* waitForExit;
-        if (Exit.isFailure(forceAttempt) || !forcedExit) return yield* cleanupUnconfirmed();
+        if (!forcedExit || (platform === "win32" && Exit.isFailure(forceAttempt)))
+          return yield* cleanupUnconfirmed();
+        if (platform !== "win32" && !(yield* runtime.confirmGroupExit(pid, 2_000)))
+          return yield* cleanupUnconfirmed();
         return undefined;
       });
       yield* Effect.addFinalizer(() =>

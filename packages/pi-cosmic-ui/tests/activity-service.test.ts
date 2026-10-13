@@ -105,6 +105,42 @@ const near = (limit: number) => `${"a".repeat(limit - 8)} token=x`;
 
 describe("activity service", () => {
   it.effect(
+    "replaces an existing provider at capacity while rejecting an additional provider",
+    () =>
+      Effect.gen(function* () {
+        const { service, rows } = yield* recordingService();
+        const original = { ...registration({}), providerId: "provider-0" };
+        yield* service.receive(original);
+        const originalAction = action(rows()[0]!);
+        for (let index = 1; index < 32; index++)
+          yield* service.receive({ ...registration({}), providerId: `provider-${index}` });
+        yield* service.receive({ ...registration({}), providerId: "additional" });
+        expect(rows()).toHaveLength(32);
+        expect(rows().some((row) => row.providerId === "additional")).toBe(false);
+        let replacementAvailable = false;
+        let invoked = false;
+        yield* service.receive({
+          ...original,
+          token: {},
+          acknowledge: (available) => {
+            replacementAvailable = available;
+          },
+          invoke: () => {
+            invoked = true;
+            return Promise.resolve();
+          },
+        });
+        expect(replacementAvailable).toBe(true);
+        expect(rows()).toHaveLength(32);
+        expect(yield* service.invoke(originalAction).pipe(Effect.flip)).toMatchObject({
+          reason: "stale",
+        });
+        const replacement = rows().find((row) => row.providerId === original.providerId)!;
+        yield* service.invoke(action(replacement));
+        expect(invoked).toBe(true);
+      }),
+  );
+  it.effect(
     "publishes starting counts without rows and clears stale or invalid metadata atomically",
     () =>
       Effect.gen(function* () {

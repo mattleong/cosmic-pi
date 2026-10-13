@@ -1,5 +1,19 @@
 import { Schema } from "effect";
 
+export function isPackageVersion(version: string): boolean {
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/.exec(
+      version,
+    );
+  if (match === null || match[0] !== version) return false;
+  const prerelease = match[4]?.split(".") ?? [];
+  const build = match[5]?.split(".") ?? [];
+  return (
+    prerelease.every((identifier) => identifier.length > 0 && !/^0\d+$/.test(identifier)) &&
+    build.every((identifier) => identifier.length > 0)
+  );
+}
+
 const DependencyVersions = Schema.Record(Schema.String, Schema.String);
 
 const PackageManifest = Schema.Struct({

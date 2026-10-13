@@ -1,5 +1,10 @@
 import { fauxAssistantMessage, fauxToolCall, type AssistantMessage } from "@earendil-works/pi-ai";
-import { createCodemodeExtension, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  createCodemodeExtension,
+  defineTool,
+  SessionManager,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -7,6 +12,11 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import {
+  deferredPromise,
+  extensionContextFixture,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
 import {
   fauxModels,
   quietLoader,
@@ -22,6 +32,7 @@ import { canonicalResultJson, compileResultContract } from "../src/domain/result
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
 import {
   MAX_RESULT_REMINDERS,
+  registerChildResults,
   RESULT_REMINDER_MESSAGE_TYPE,
 } from "../src/boundary/host-child-result.ts";
 import type {
@@ -29,7 +40,7 @@ import type {
   LocalPiChildIpcHandlers,
 } from "../src/boundary/local-pi-ipc.ts";
 import { SUBAGENT_RESULT_TOOL_NAME } from "../src/run/tool-policy.ts";
-import { step } from "./support/effect-test.ts";
+import { effectTest, step } from "./support/effect-test.ts";
 
 const VERDICT = {
   type: "object",
@@ -166,6 +177,45 @@ const childTest = (
   it.live(name, () => Effect.gen(body).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)));
 
 describe("local Pi child result tool", () => {
+  effectTest(
+    "rejects an acknowledgment that settles after its child activation retires",
+    function* () {
+      let tool: ToolDefinition | undefined;
+      const host = recordingExtensionHost(
+        {},
+        {
+          registerTool: (definition) => {
+            tool = defineTool(definition);
+          },
+        },
+      );
+      const results = registerChildResults(host.pi, () => Promise.resolve(""));
+      const delivery = deferredPromise();
+      let current = true;
+      results.register(
+        { parameters: VERDICT, strictSafe: false },
+        {
+          isCurrent: () => current,
+          send: () => Effect.void,
+          run: () => delivery.promise,
+          scheduleAnimation: () => undefined,
+        },
+      );
+      if (!tool) throw new Error("Missing result tool");
+      const outcome = Promise.resolve(
+        tool.execute(
+          "retired-result",
+          { verdict: "ok" },
+          undefined,
+          undefined,
+          extensionContextFixture({}),
+        ),
+      );
+      delivery.resolve();
+      current = false;
+      yield* step(() => expect(outcome).rejects.toBeInstanceOf(Error));
+    },
+  );
   childTest("is absent, with no reminder, for a launch without a result contract", function* () {
     const child = yield* childSession();
     expect(child.session.getActiveToolNames()).not.toContain(SUBAGENT_RESULT_TOOL_NAME);

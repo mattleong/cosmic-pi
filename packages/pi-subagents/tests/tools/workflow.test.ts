@@ -405,6 +405,31 @@ describe("subagent_workflow presentation", () => {
     }
   });
 
+  it.each(["compact", "preview"] as const)(
+    "retains workflow source and arguments after terminal string controls in %s expansion",
+    (style) => {
+      applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallTiming: false });
+      const args = {
+        action: "start",
+        script: script('log("before\u009dSOURCE_AFTER_CONTROL");\nreturn "SOURCE_TAIL";'),
+        args: { value: "before\u009dARG_AFTER_CONTROL", next: "NEXT_ARGUMENT" },
+      };
+      const before = structuredClone(args);
+      const harness = createToolPresentationHarness(registeredTool(), { width: 160 });
+      harness.call(args, { expanded: true });
+      const text = harness.render().join("\n");
+      for (const evidence of [
+        "SOURCE_AFTER_CONTROL",
+        "SOURCE_TAIL",
+        "ARG_AFTER_CONTROL",
+        "NEXT_ARGUMENT",
+      ])
+        expect(text).toContain(evidence);
+      expect(text).not.toContain("\u009d");
+      expect(args).toEqual(before);
+    },
+  );
+
   it("previews an inline script within a bounded number of rows", () => {
     applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallTiming: false });
     const harness = createToolPresentationHarness(registeredTool());
@@ -413,6 +438,19 @@ describe("subagent_workflow presentation", () => {
     expect(collapsed).not.toContain("LAST_LINE_SENTINEL");
     harness.call({ action: "start", script: longScript }, { expanded: true });
     expect(harness.render(100).join("\n")).toContain("LAST_LINE_SENTINEL");
+  });
+
+  it("preserves script content after terminal string controls inside the bounded preview", () => {
+    applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallTiming: false });
+    const source = `log("before\u009dPREVIEW_AFTER_CONTROL");\n${longScript}`;
+    const harness = createToolPresentationHarness(registeredTool(), { width: 160 });
+    harness.call({ action: "start", script: source }, { expanded: false });
+    const collapsed = harness.render().join("\n");
+    expect(collapsed).toContain("PREVIEW_AFTER_CONTROL");
+    expect(collapsed).not.toContain("LAST_LINE_SENTINEL");
+    expect(collapsed).not.toContain("\u009d");
+    harness.call({ action: "start", script: source }, { expanded: true });
+    expect(harness.render().join("\n")).toContain("LAST_LINE_SENTINEL");
   });
 });
 

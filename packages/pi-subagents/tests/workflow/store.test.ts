@@ -351,6 +351,42 @@ describe("workflow run files", () => {
     }),
   );
 
+  it.effect("applies full-result character bounds after decoding UTF-8", () =>
+    onDisk(function* (setup) {
+      const value = JSON.stringify("結果🙂");
+      const reads = yield* withStore(setup, (store) =>
+        Effect.gen(function* () {
+          const files = yield* store.createRunFiles("wf-unicode-1", source, new Set());
+          const name = yield* store.writeRunResult(files, 1, value);
+          return [
+            yield* store.readRunResult(files, name, value.length),
+            yield* store.readRunResult(files, name, value.length - 1),
+          ];
+        }),
+      );
+      expect(reads).toEqual([value, undefined]);
+    }),
+  );
+
+  it.effect("keeps complete Unicode journal lines within the character budget", () =>
+    onDisk(function* (setup) {
+      const line = JSON.stringify({ result: "結果🙂" });
+      const reads = yield* withStore(setup, (store) =>
+        Effect.gen(function* () {
+          const files = yield* store.createRunFiles("wf-unicode-2", source, new Set());
+          yield* store.appendRunJournal(files, line);
+          yield* store.appendRunJournal(files, line);
+          return [
+            yield* store.readRunJournal(files, line.length),
+            yield* store.readRunJournal(files, line.length + 1),
+            yield* store.readRunJournal(files, (line.length + 1) * 2),
+          ];
+        }),
+      );
+      expect(reads).toEqual([[], [line], [line, line]]);
+    }),
+  );
+
   it.effect("refuses a results journal that links to a file elsewhere", () =>
     onDisk(function* (setup, fs) {
       const outside = setup.join(setup.root, "outside.jsonl");
@@ -364,6 +400,31 @@ describe("workflow run files", () => {
       );
       expect(refused._tag).toBe("WorkflowRunFileError");
     }),
+  );
+
+  it.effect(
+    "rejects malformed UTF-8 in completed journal lines but ignores an unfinished tail",
+    () =>
+      onDisk(function* (setup, fs) {
+        const line = JSON.stringify({ result: "結果🙂" });
+        yield* withStore(setup, (store) =>
+          Effect.gen(function* () {
+            const files = yield* store.createRunFiles("wf-unicode-3", source, new Set());
+            yield* fs.writeFile(
+              files.journal,
+              Buffer.concat([Buffer.from(`${line}\n{"result":"`), Buffer.from([0xf0, 0x9f])]),
+            );
+            expect(yield* store.readRunJournal(files, 1_024)).toEqual([line]);
+            yield* fs.writeFile(
+              files.journal,
+              Buffer.concat([Buffer.from('{"result":"'), Buffer.from([0xff]), Buffer.from('"}\n')]),
+            );
+            expect((yield* Effect.flip(store.readRunJournal(files, 1_024)))._tag).toBe(
+              "WorkflowRunFileError",
+            );
+          }),
+        );
+      }),
   );
 
   const runDirectories = (

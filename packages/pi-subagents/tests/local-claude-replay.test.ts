@@ -79,6 +79,7 @@ interface ReplayHarness {
   readonly replayGuidance: Effect.Effect<void>;
   readonly taskNotification: (form: TaskNotificationReplay, uuid?: string) => Effect.Effect<string>;
   readonly assignmentResult: Effect.Effect<void>;
+  readonly foreignResult: Effect.Effect<void>;
   readonly rejectReplay: (
     kind: "wrong-uuid" | "wrong-session" | "absent-session",
   ) => Effect.Effect<void>;
@@ -470,6 +471,17 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           total_cost_usd: 0.001,
         }),
       ),
+      foreignResult: Effect.sync(() =>
+        offerChild({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          session_id: "different-claude-session",
+          user_message_uuid: assignmentUuid,
+          usage: { input_tokens: 1000, output_tokens: 1000 },
+          total_cost_usd: 100,
+        }),
+      ),
       replayGuidance: Effect.sync(() => {
         if (pendingGuidance) offerReplay(pendingGuidance);
         offerChild({
@@ -568,6 +580,30 @@ const takeRejectedUserFrame = (scenario: ReplayScenario) =>
   withRunningBackend(scenario, 9, (backend) => take(backend));
 
 describe("local Claude steering acknowledgement lifecycle", () => {
+  it.effect(
+    "rejects a foreign result without consuming the assignment or accounting its usage",
+    () =>
+      withRunningBackend("steering", 12, (backend, harness) =>
+        Effect.gen(function* () {
+          yield* harness.foreignResult;
+          expect(yield* take(backend)).toMatchObject({ type: "protocol_error" });
+          yield* harness.assignmentResult;
+          expect(yield* take(backend)).toMatchObject({
+            type: "assistant_message",
+            assignmentEpoch: 12,
+            usage: {
+              input: 2,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: 0.001,
+            },
+          });
+          expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+        }),
+      ),
+  );
   for (const kind of [
     "assignment",
     "foreign-session",

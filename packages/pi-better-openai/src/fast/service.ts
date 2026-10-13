@@ -8,7 +8,7 @@ import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot, makeSynchronousIngress } from "pi-cosmic-core";
 import type { ResolvedConfig } from "../config/schema.ts";
 import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
-import { OpenAIUsageService } from "../usage/controller.ts";
+import { OpenAIConfigService } from "../config/store.ts";
 
 export interface FastInjectionEvent {
   readonly model: string;
@@ -35,7 +35,7 @@ export class FastModeService extends Context.Service<FastModeService>()(
   {
     make: (options: FastModeServiceOptions) =>
       Effect.gen(function* () {
-        const usage = yield* OpenAIUsageService;
+        const configStore = yield* OpenAIConfigService;
         const initialState = initialFastSnapshot();
         const state = yield* Ref.make(initialState);
         const transitions = yield* Semaphore.make(1);
@@ -55,7 +55,7 @@ export class FastModeService extends Context.Service<FastModeService>()(
           transitions.withPermit(
             prepare(update).pipe(
               Effect.flatMap((snapshot) =>
-                usage.persistFast(snapshot.desiredActive, commit(snapshot)),
+                configStore.persistFast(snapshot.desiredActive, commit(snapshot)),
               ),
             ),
           );

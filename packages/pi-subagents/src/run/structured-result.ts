@@ -57,7 +57,9 @@ export function makeRunStructuredResults(dependencies: { readonly withLock: With
   const { withLock } = dependencies;
   return (record: RunRecord, event: StructuredResultEvent): Effect.Effect<void> =>
     validate(record, event.valueJson).pipe(
-      Effect.flatMap((json) => withLock(acceptLocked(record, event.assignmentEpoch, json))),
+      Effect.flatMap((json) =>
+        withLock(Effect.suspend(() => acceptLocked(record, event.assignmentEpoch, json))),
+      ),
       Effect.matchEffect({
         onFailure: (error) => event.respond(false, error.message),
         onSuccess: () => event.respond(true),

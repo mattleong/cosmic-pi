@@ -1,5 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { countLabel, formatElapsed, formatRelativeAge } from "pi-cosmic-core";
+import {
+  countLabel,
+  formatElapsed,
+  formatRelativeAge,
+  sanitizeDiagnosticContent,
+  sanitizeTerminalLine,
+} from "pi-cosmic-core";
 import {
   detailFieldRows,
   listDetailHeading,
@@ -22,6 +28,8 @@ import { phaseLabels } from "./workflow-row.ts";
 
 const optionalField = (label: string, values: readonly string[]): ListDetailField[] =>
   values.length ? [{ label, value: values.join(" · ") }] : [];
+const technicalIdentity = (value: string): string =>
+  sanitizeDiagnosticContent(sanitizeTerminalLine(value));
 const memberFields = (
   summary: GroupSummary,
   label = "Agents",
@@ -128,8 +136,15 @@ function sourceDetail(
     showSummary ? (row.summary ?? "") : "",
     ...(options.technical
       ? detailFieldRows(theme, [
-          { label: "Source", value: `${row.providerId} / ${row.id}`, tone: managerTone.identity },
-          { label: "Revision", value: `${row.revision} · generation ${row.generation}` },
+          {
+            label: "Source",
+            value: `${technicalIdentity(row.providerId)} / ${technicalIdentity(row.id)}`,
+            tone: managerTone.identity,
+          },
+          {
+            label: "Revision",
+            value: `${technicalIdentity(row.revision)} · generation ${row.generation}`,
+          },
           ...(row.route ? [{ label: "Route", value: row.route, tone: managerTone.value }] : []),
           ...(context.length ? [{ label: "Ownership", value: sourcePath }] : []),
         ])

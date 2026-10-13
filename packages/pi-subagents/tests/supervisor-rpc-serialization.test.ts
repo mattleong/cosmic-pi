@@ -32,4 +32,15 @@ describe("private supervisor RPC framing", () => {
     expect(parser.decode("12345")).toEqual([]);
     expect(() => parser.decode("6789")).toThrow();
   });
+
+  it("enforces the byte budget for complete and fragmented multibyte input", () => {
+    for (const frame of ['"🌌🌌"\n', '"界界界']) {
+      const parser = makeSupervisorRpcSerialization(8).makeUnsafe();
+      expect(() => parser.decode(frame)).toThrow();
+    }
+    const parser = makeSupervisorRpcSerialization(8).makeUnsafe();
+    const bytes = new TextEncoder().encode('"🌌🌌"\n');
+    expect(parser.decode(bytes.subarray(0, 6))).toEqual([]);
+    expect(() => parser.decode(bytes.subarray(6))).toThrow();
+  });
 });

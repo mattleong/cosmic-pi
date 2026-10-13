@@ -6,7 +6,7 @@ Detailed presentation, configuration, and native-tool behavior behind the [READM
 
 The `/code-previews health` panel shows configured tools, available renderer presentation, write registration errors, unavailable tools, disabled previews, foreign-owner conflicts, and native MCP renderer availability. Individual builtin/codemode/tool-search preview toggles are available in the **Preview tools** submenu of `/code-previews settings`. `codemode` and `tool_search` are included in the default preview-tools selection; existing explicit `tools` lists must add them to opt in.
 
-Public metadata is rechecked when choosing renderers. Resolver precedence follows Pi's extension load order, without execution registration conflicts. Startup ordering, replay, and write's execution hook are covered in [ARCHITECTURE.md](../ARCHITECTURE.md#lifecycle-and-boundaries).
+Public metadata is rechecked when choosing renderers. Resolver precedence follows Pi's extension load order, without execution registration conflicts. Startup ordering, replay, and write's execution hook are covered in [ARCHITECTURE.md](../ARCHITECTURE.md#host-ownership-and-replay).
 
 ## Native tool search
 
@@ -36,7 +36,7 @@ Standalone native MCP previews share Code Previews' appearance settings and sess
 
 ## Configuration
 
-File locations and precedence are in the [README](../README.md#configuration). Invalid fields retain the preceding value. A choice in the settings panel applies globally: the panel removes an override only when every project would then inherit the chosen value. **Restore defaults** removes the panel's overrides, so values from `settings.json` and the built-in defaults apply again. See [settings and durable publication](../ARCHITECTURE.md#settings-and-durable-publication) for trust, persistence, and error reporting.
+File locations and precedence are in the [README](../README.md#configuration). Invalid fields retain the preceding value. A choice in the settings panel applies globally: the panel removes an override only when every project would then inherit the chosen value. **Restore defaults** removes the panel's overrides, so values from `settings.json` and the built-in defaults apply again. See [settings and state](../ARCHITECTURE.md#settings-and-state) for trust, persistence, and error reporting.
 
 ### Compact collapsed calls
 

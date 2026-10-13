@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { codePreviewPerformanceConfig, codePreviewSettings } from "../config/state";
+import type { CodePreviewSettings } from "../config/schema";
 import { wrapAnsiToWidth } from "../shared/terminal-text";
 import { DIFF_ADD_MARKER, DIFF_REMOVE_MARKER } from "./parse";
 
@@ -13,15 +14,18 @@ export class FullWidthDiffText implements Component {
   private cachedRows: string[] | undefined;
   private readonly text: string;
   private readonly theme: Theme | undefined;
+  private readonly intensity: CodePreviewSettings["diffIntensity"];
+  private readonly maxRows = codePreviewPerformanceConfig.diffWrapRows;
 
-  constructor(text: string, theme?: Theme) {
+  constructor(text: string, theme?: Theme, intensity = codePreviewSettings.diffIntensity) {
     this.text = text;
     this.theme = theme;
+    this.intensity = intensity;
   }
 
   render(width: number): string[] {
     if (this.cachedWidth === width && this.cachedRows) return this.cachedRows;
-    const diffBackground = createDiffBackgroundResolver(this.theme);
+    const diffBackground = createDiffBackgroundResolver(this.intensity, this.theme);
     const rows: string[] = [];
     for (const rawLine of this.text.split("\n")) {
       const { kind, line } = parseMarkedDiffLine(rawLine);
@@ -29,7 +33,7 @@ export class FullWidthDiffText implements Component {
       const wrappedRows = wrapAnsiToWidth(
         line,
         width,
-        codePreviewPerformanceConfig.diffWrapRows,
+        this.maxRows,
         visibleWidth(continuation) < width ? continuation : "",
       );
       if (!kind) {
@@ -66,8 +70,10 @@ function continuationPrefix(line: string): string {
   return " ".repeat(visibleWidth(line.slice(0, pipe + 2)));
 }
 
-function createDiffBackgroundResolver(theme?: Theme): DiffBackgroundResolver {
-  const intensity = codePreviewSettings.diffIntensity;
+function createDiffBackgroundResolver(
+  intensity: CodePreviewSettings["diffIntensity"],
+  theme?: Theme,
+): DiffBackgroundResolver {
   if (intensity === "off") return () => undefined;
   const cache: Partial<Record<DiffLineKind, string>> = {};
   return (kind) =>

@@ -5,10 +5,15 @@ import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import { processError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
+import type { WriterPools } from "./writer-pool.ts";
 import { isTerminalRunState } from "./model.ts";
 import { recordRunWarning } from "./warnings.ts";
 
-export function makeRunRecordCleanup(dependencies: RunContext) {
+export function makeRunRecordCleanup(
+  dependencies: Pick<RunContext, "withLock" | "publish"> & {
+    readonly writerPools: Pick<WriterPools, "completeReleaseLocked">;
+  },
+) {
   const { withLock, publish, writerPools } = dependencies;
 
   const reclaimRecordRunState = (record: RunRecord) =>
@@ -107,12 +112,7 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
           if (record.scope !== scope) return false;
           const ownershipQuarantined =
             record.process !== undefined || record.writerPool !== undefined;
-          if (record.writerPool) {
-            record.writerPool.state = "quarantined";
-            record.writerPool.admissionPaused = true;
-            record.writerPool.pauseReason =
-              "A writer process or lease cleanup could not be confirmed.";
-          }
+          record.writerPool?.quarantineLocked();
           const warning = ownershipQuarantined
             ? "Subagent cleanup could not be confirmed; process capacity and writer ownership remain quarantined for this session."
             : "Subagent cleanup could not be fully confirmed; this run remains quarantined for the session.";
@@ -148,33 +148,18 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
       const release = yield* withLock(
         Effect.sync(() => {
           if (record.scope !== scope || record.writerPool !== pool) return undefined;
-          if (!pool.members.has(record.view.id)) {
-            record.writerPool = undefined;
-            return undefined;
-          }
-          if (pool.members.size > 1) {
-            pool.members.delete(record.view.id);
-            record.writerPool = undefined;
-            return undefined;
-          }
-          pool.state = "releasing";
-          if (pool.lease) pool.releaseState.authorized = true;
-          return pool.leaseScope;
+          const releasing = pool.detachAfterCleanupLocked(record.view.id);
+          if (!releasing) record.writerPool = undefined;
+          return releasing;
         }),
       );
       if (!release) return;
       yield* Scope.close(release, Exit.void);
       yield* withLock(
         Effect.sync(() => {
-          if (record.writerPool !== pool || pool.state !== "releasing") return;
-          pool.members.delete(record.view.id);
-          record.writerPool = undefined;
-          pool.lease = undefined;
-          if (pool.admissionPaused) {
-            pool.state = "paused";
-            return;
-          }
-          if (writerPools.get(pool.cwd.digest) === pool) writerPools.delete(pool.cwd.digest);
+          if (record.writerPool !== pool) return;
+          if (writerPools.completeReleaseLocked(pool, record.view.id))
+            record.writerPool = undefined;
         }),
       );
     });

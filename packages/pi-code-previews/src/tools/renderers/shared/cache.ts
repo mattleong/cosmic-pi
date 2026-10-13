@@ -1,6 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { hasCodePreviewSessionCapability } from "../../../application/capability";
+import {
+  captureCodePreviewSessionCapability,
+  type CodePreviewSessionCapability,
+} from "../../../application/capability";
 import { DeferredPreview, shouldRenderDeferred } from "../../../preview/deferred";
 import type { RendererState } from "./types";
 
@@ -46,12 +49,14 @@ export function cachedDeferredPreview(
   sourceCharacters: number,
   loadingLabel: string,
   theme: Theme,
-  render: () => Component,
+  render: (active: boolean) => Component,
   invalidate: () => void,
+  owner: CodePreviewSessionCapability | undefined,
 ): Component {
+  const active = owner !== undefined && owner === captureCodePreviewSessionCapability();
   return cachedPreview(state, slot, dependencies, () =>
-    shouldRenderDeferred(sourceCharacters) && hasCodePreviewSessionCapability()
-      ? new DeferredPreview(loadingLabel, theme, render, invalidate)
-      : render(),
+    shouldRenderDeferred(sourceCharacters) && active
+      ? new DeferredPreview(loadingLabel, theme, render, invalidate, owner)
+      : render(active),
   );
 }

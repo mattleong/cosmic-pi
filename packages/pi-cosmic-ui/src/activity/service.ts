@@ -149,7 +149,13 @@ const decodeSnapshot = (event: ActivityEnvelope): DecodedSnapshot | undefined =>
 };
 const registeredProvider = (old: State, event: ActivityEnvelope): ProviderIdentity | undefined => {
   const { invoke, acknowledge, getDetail } = event;
-  if (!invoke || !acknowledge || old.providers.size >= 32 || old.serial >= 4096) return undefined;
+  if (
+    !invoke ||
+    !acknowledge ||
+    (old.providers.size >= 32 && !old.providers.has(event.providerId)) ||
+    old.serial >= 4096
+  )
+    return undefined;
   return {
     token: event.token,
     generation: old.serial + 1,

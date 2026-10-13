@@ -4,7 +4,7 @@ import { assert, vi } from "vitest";
 import { ACTIVITY_HOST } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { deferredPromise } from "pi-cosmic-core/testing";
-import type { SubagentRunView } from "../src/run/model.ts";
+import { captureSubagentControlExpectation, type SubagentRunView } from "../src/run/model.ts";
 import { registerSubagentActivity } from "../src/boundary/host-activity.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
 import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
@@ -44,6 +44,26 @@ const runActionIds = (patch: Partial<SubagentRunView>) =>
   );
 
 describe("subagent activity provider", () => {
+  effectTest("revokes an action capability when only its assignment epoch changes", function* () {
+    const selected = view({ id: "selected", assignmentEpoch: 1 });
+    const { bridge, transport, act, dispose, invoke } = promptedProvider([selected]);
+    const signal = new AbortController().signal;
+    const resumed = { ...selected, assignmentEpoch: 2 };
+    bridge.publish({ revision: 2, runs: [resumed] });
+    yield* step(() => expect(invoke("stop", signal)).rejects.toBeInstanceOf(Error));
+    expect(act).not.toHaveBeenCalled();
+    const item = subagentActivityItems(bridge.get(), bridge.getActivityPresentation())[0]!;
+    yield* step(() => transport.capability()!.invoke!(item.id, "stop", item.revision, signal));
+    expect(act).toHaveBeenCalledWith(
+      "selected",
+      "stop",
+      signal,
+      undefined,
+      captureSubagentControlExpectation(resumed),
+    );
+    dispose();
+  });
+
   it("preserves the fleet action matrix without enabling claims or unresolved steering", () => {
     expect(runActionIds({ state: "completed" })).toEqual(
       expect.arrayContaining(["resume", "rename"]),
@@ -89,6 +109,7 @@ describe("subagent activity provider", () => {
           action,
           signal,
           action === "resume" ? undefined : "user text",
+          captureSubagentControlExpectation(selected),
         );
         dispose();
       },
@@ -97,6 +118,7 @@ describe("subagent activity provider", () => {
 
   for (const changed of [
     "assignment",
+    "epoch",
     "question",
     "session",
     "cancel",
@@ -140,6 +162,7 @@ describe("subagent activity provider", () => {
             {
               ...selected,
               ...(changed === "assignment" && { reportGeneration: selected.reportGeneration + 1 }),
+              ...(changed === "epoch" && { assignmentEpoch: selected.assignmentEpoch + 1 }),
               ...(changed === "question" && {
                 question: { requestId: "q-new", message: "Another question" },
               }),
@@ -400,7 +423,13 @@ describe("subagent activity provider", () => {
       yield* step(() => expect(pending).rejects.toThrow());
       yield* step(() => expect(getDetail("run", revision, cancelled.signal)).rejects.toThrow());
       yield* step(() => invoke("run", "stop", revision, signal));
-      expect(act).toHaveBeenCalledWith("run", "stop", signal);
+      expect(act).toHaveBeenCalledWith(
+        "run",
+        "stop",
+        signal,
+        undefined,
+        captureSubagentControlExpectation(view({ id: "run" })),
+      );
       bridge.publish({ revision: 2, runs: [view({ id: "run", state: "completed" })] });
       expect(transport.get()?.items).toEqual(
         expect.arrayContaining([expect.objectContaining({ id: "run", status: "done" })]),

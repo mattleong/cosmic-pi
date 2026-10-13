@@ -30,16 +30,22 @@ import {
   type RunRecord,
   workflowOwnedRunError,
 } from "./internal.ts";
-import { isTerminalRunState, SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
+import {
+  isTerminalRunState,
+  SUBAGENT_ROOT_RUN_ID,
+  type SubagentRunView,
+  type SubagentControlExpectation,
+} from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProcessInitializer } from "./process-lifecycle.ts";
+import type { WriterPoolLookup, WriterPools } from "./writer-pool.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { snapshotView } from "./state.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
-import { addWriterPoolMemberLocked } from "./writer-pool.ts";
+import { requireControlExpectation } from "./control-admission.ts";
 
 const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | undefined => {
   const { id, state } = record.view;
@@ -74,7 +80,18 @@ interface ClaimedResume {
   readonly attemptToken: string;
 }
 
-export interface RunResumeDependencies extends RunContext {
+export interface RunResumeDependencies extends Pick<
+  RunContext,
+  | "ownerScope"
+  | "records"
+  | "withLock"
+  | "publish"
+  | "writerLeases"
+  | "requireRecord"
+  | "allocateAssignmentAttemptToken"
+  | "sendPeerNotices"
+> {
+  readonly writerPools: WriterPoolLookup & Pick<WriterPools, "joinLocked">;
   readonly currentChildLimit: Effect.Effect<number>;
   readonly delivery: RunNotificationDelivery;
   readonly initializeProcess: RunProcessInitializer;
@@ -168,11 +185,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
             )
               return false;
             const writerPool = record.canonicalWriterCwd
-              ? yield* addWriterPoolMemberLocked(
-                  writerPools,
-                  record.canonicalWriterCwd,
-                  record.view.id,
-                )
+              ? yield* writerPools.joinLocked(record.canonicalWriterCwd, record.view.id)
               : undefined;
             record.scope = nextScope;
             record.cleanupSettlement = nextCleanupSettlement;
@@ -262,7 +275,11 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
       ),
     );
 
-  const resume = (id: string, message?: string): Effect.Effect<SubagentRunView, SubagentError> =>
+  const resume = (
+    id: string,
+    message?: string,
+    expected?: SubagentControlExpectation,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
     waitForRunCleanup(id).pipe(
       Effect.andThen(
         withLock(
@@ -348,6 +365,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
             });
           const admitLocked = Effect.gen(function* () {
             const selected = yield* requireRecord(id);
+            yield* requireControlExpectation(selected, expected);
             if (!isCurrentCandidate(selected))
               return yield* invalidRequest(
                 "resume_state_invalid",

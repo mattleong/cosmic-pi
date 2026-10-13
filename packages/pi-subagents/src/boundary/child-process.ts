@@ -331,7 +331,11 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       requestAbort: requestCooperativeAbort,
       attach: (child, offer) =>
         attachLocalPiParentIpc(child, {
-          onContact: (contact) => offer({ type: "parent_contact", value: contact }),
+          onContact: (contact) =>
+            offer(
+              { type: "parent_contact", value: contact },
+              Buffer.byteLength(JSON.stringify(contact), "utf8"),
+            ),
           onProtocolError: (message) => offer({ type: "protocol_error", message }),
         }),
     },

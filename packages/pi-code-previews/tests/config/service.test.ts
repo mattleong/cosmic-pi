@@ -319,9 +319,55 @@ it.effect("save preserves concurrently changed known fields that the caller did 
         shikiTheme: "github-light",
         readCollapsedLines: 42,
       });
+      assert.equal(codePreviewSettings.shikiTheme, "github-light");
+      assert.equal(codePreviewSettings.readCollapsedLines, 42);
+      yield* saveSettings(service, { ...codePreviewSettings, pathIcons: "off" });
+      assert.equal(fake.documents.get("/agent/code-previews.json")?.shikiTheme, "github-light");
+      assert.equal(codePreviewSettings.shikiTheme, "github-light");
     }),
   );
 });
+
+it.effect.each(["failure", "reset"] as const)(
+  "a captured edit does not restore earlier draft changes after %s",
+  (operation) => {
+    const fake = makeInMemoryDocuments({
+      "/agent/code-previews.json": { readCollapsedLines: 17, shikiTheme: "github-dark" },
+    });
+    let failNext = operation === "failure";
+    const documents = JsonDocumentStore.of({
+      ...fake.service,
+      modifyObject: (path, modify) =>
+        Effect.suspend(() => {
+          if (!failNext) return fake.service.modifyObject(path, modify);
+          failNext = false;
+          return Effect.fail(
+            new JsonDocumentError({ operation: "write", path, message: "disk full" }),
+          );
+        }),
+    });
+    return usingSettings(documents, (service) =>
+      Effect.gen(function* () {
+        const loaded = yield* loadSettings(service);
+        const first = { ...loaded, readCollapsedLines: 40 };
+        const second = { ...first, readLineNumbers: false };
+        const save = service.save(first, makeSettingsAdmission(), { previous: loaded });
+        if (operation === "failure") yield* Effect.flip(save);
+        else {
+          yield* save;
+          yield* service.reset(makeSettingsAdmission());
+        }
+        yield* service.save(second, makeSettingsAdmission(), { previous: first });
+
+        const expected = operation === "failure" ? loaded : defaultCodePreviewSettings;
+        assert.equal(codePreviewSettings.readCollapsedLines, expected.readCollapsedLines);
+        assert.equal(codePreviewSettings.shikiTheme, expected.shikiTheme);
+        assert.equal(codePreviewSettings.readLineNumbers, false);
+        assert.equal(fake.documents.get("/agent/code-previews.json")?.readLineNumbers, false);
+      }),
+    );
+  },
+);
 
 it.effect("failed persistence leaves the published settings unchanged", () => {
   const fake = makeInMemoryDocuments();

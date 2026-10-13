@@ -48,6 +48,7 @@ import {
   type SubagentRetrySupersession,
   type SubagentProjection,
   type SubagentRunView,
+  type SubagentControlExpectation,
 } from "./model.ts";
 import { sortRuns } from "./projection.ts";
 import { closeRunsLeafFirst } from "./shutdown.ts";
@@ -62,7 +63,7 @@ import { makeRunWriteClaimContainment } from "./write-claim-containment.ts";
 import { makeRunProxyExecution } from "./proxy-execution.ts";
 import { makeRunStructuredResults } from "./structured-result.ts";
 import { makeWriterPreparation } from "./writer-preparation.ts";
-import type { WriterPoolEntry } from "./writer-pool.ts";
+import { WriterPools } from "./writer-pool.ts";
 import { makeRunWriteClaimControl } from "./write-claim-control.ts";
 import { makeWorkspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
 import { WorkspaceService } from "../workspace/service.ts";
@@ -168,12 +169,34 @@ export interface SubagentServiceContract
   readonly consumeCompletions: (
     receipts: ReadonlyArray<SubagentCompletionReceipt>,
   ) => Effect.Effect<void>;
-  readonly send: (id: string, message: string) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly reply: (id: string, message: string) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly interrupt: (id: string) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly resume: (id: string, message?: string) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly rename: (id: string, name: string) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly stop: (id: string) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly send: (
+    id: string,
+    message: string,
+    expected?: SubagentControlExpectation,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly reply: (
+    id: string,
+    message: string,
+    expected?: SubagentControlExpectation,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly interrupt: (
+    id: string,
+    expected?: SubagentControlExpectation,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly resume: (
+    id: string,
+    message?: string,
+    expected?: SubagentControlExpectation,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly rename: (
+    id: string,
+    name: string,
+    expected?: SubagentControlExpectation,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly stop: (
+    id: string,
+    expected?: SubagentControlExpectation,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly grantWriteClaims: (
     id: string,
     paths: ReadonlyArray<string>,
@@ -197,7 +220,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
-  const writerPools = new Map<string, WriterPoolEntry>();
+  const writerPools = new WriterPools();
   const frozenProjection = (revision: number): SubagentProjection =>
     Object.freeze({ revision, runs: Object.freeze(sortRuns(projectRunTree(records))) });
   const projectionRef = yield* SubscriptionRef.make(frozenProjection(0));

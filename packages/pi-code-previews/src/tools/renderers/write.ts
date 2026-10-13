@@ -2,7 +2,10 @@ import * as Predicate from "effect/Predicate";
 
 import { createWriteToolDefinition, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import { hasCodePreviewSessionCapability } from "../../application/capability";
+import {
+  captureCodePreviewSessionCapability,
+  hasCodePreviewSessionCapability,
+} from "../../application/capability";
 import { FullWidthDiffText } from "../../diff/full-width-text";
 import { createSimpleDiff } from "../../diff/structured";
 import { describeDiffContract, diffSummarySeparator, summarizeDiff } from "../../diff/summary";
@@ -11,6 +14,7 @@ import { metadata } from "../../preview/format";
 import { countContentLines } from "../../preview/line-counts";
 import { hiddenPreviewExpandHintForShell } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
+import type { CodePreviewSettings } from "../../config/schema";
 import { hostContainer, hostObject, ownField } from "../../shared/untrusted-value";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { normalizePreviewLanguageAlias } from "../../syntax/language";
@@ -81,13 +85,17 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
         return container;
       }
       const collapsedLines = codePreviewSettings.writeCollapsedLines;
+      const owner = captureCodePreviewSessionCapability();
       const previewKey = previewCacheKey([content], path, expanded, theme, collapsedLines);
       const preview = () =>
         cachedPreview(state, "writeCallPreview", previewKey, () =>
           renderContentPreview({
             content,
             limit: expanded ? 0 : collapsedLines,
-            lang,
+            lang:
+              owner !== undefined && owner === captureCodePreviewSessionCapability()
+                ? lang
+                : undefined,
             theme,
             invalidate,
             emptyLabel: "Empty content",
@@ -127,8 +135,18 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       if (plan.kind === "guarded") return new Text(diffSkippedNote(theme, plan.guard), 0, 0);
       const { previous, content } = plan;
       setResultDiffShown(state, !expanded);
-      const render = () =>
-        renderWriteDiffPreview(previous, content, path, expanded, theme, invalidate);
+      const settings = codePreviewSettings;
+      const render = (active: boolean) =>
+        renderWriteDiffPreview(
+          previous,
+          content,
+          path,
+          expanded,
+          theme,
+          settings,
+          active,
+          invalidate,
+        );
       const previewKey = previewCacheKey(
         [previous, content],
         path,
@@ -145,6 +163,7 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
         theme,
         render,
         invalidate,
+        captureCodePreviewSessionCapability(),
       );
     },
   };
@@ -156,19 +175,18 @@ function renderWriteDiffPreview(
   path: string,
   expanded: boolean,
   theme: Theme,
+  settings: CodePreviewSettings,
+  active: boolean,
   invalidate?: () => void,
 ): FullWidthDiffText {
   const diff = createSimpleDiff(before, content);
   const summary = summarizeDiff(diff);
-  const limit = diffPreviewLineLimit(
-    summary.totalLines,
-    expanded,
-    codePreviewSettings.writeCollapsedLines,
-  );
+  const limit = diffPreviewLineLimit(summary.totalLines, expanded, settings.writeCollapsedLines);
   const header = `${theme.fg("muted", describeDiffContract(summary))}${diffSummarySeparator(theme)}${diffCounts(theme, summary)}\n`;
   const preview = formatDiffPreview(diff, pathPreviewLanguage(path, content), theme, limit, {
     totalLines: summary.totalLines,
     invalidate,
+    highlight: active,
   });
-  return new FullWidthDiffText(header + preview, theme);
+  return new FullWidthDiffText(header + preview, theme, settings.diffIntensity);
 }

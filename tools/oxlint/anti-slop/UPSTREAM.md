@@ -10,8 +10,9 @@ pass its own rules. Identical scope lookup, parameter annotation unwrapping, fun
 and alias-name lookup mechanics are extracted into `shared/ast.ts`; rule policy stays local. The
 unused upstream helper `isPopulatedObjectExpression` was dropped from `shared/dictionary-types.ts`.
 
-Upstream files were also edited to satisfy workspace lint policy without changing behavior: all
-comments were removed, functions above the complexity limit were split into helpers, and
+Earlier workspace adaptations removed comments and split functions without changing behavior.
+Those comment, identifier-spelling, file-length, and complexity bans have been removed: they
+constrained presentation rather than protecting correctness.
 `shared/lexical-type-parameters.ts` finds `infer` declarations through tokens instead of an untyped
 visitor-key walk, so it needs no type assertion.
 
@@ -19,12 +20,10 @@ Upstream rules with a native Oxlint equivalent were removed in favor of the nati
 `no-reflect-get` and `no-reflect-apply` became `eslint/no-restricted-properties` entries, and
 Oxlint's `typescript/consistent-type-assertions` with `assertionStyle: "never"` bans every type
 assertion except `as const`. That ban made `no-chained-type-assertions`, `no-widen-then-assert`,
-and `require-safety-comment-for-type-assertion` unreachable, so they were removed too; `no-comments`
-also bans the comment the last one required.
+and `require-safety-comment-for-type-assertion` unreachable, so they were removed too.
 
-The upstream rule tests are retained, with local baseline coverage added for the upstream rules
-that had no tests, so Oxlint and `@oxlint/plugins` upgrades can be verified against the vendored
-behavior.
+Tests for the retained upstream rules remain, with local baseline coverage added where upstream
+had none, so Oxlint and `@oxlint/plugins` upgrades can be verified against the vendored behavior.
 
 Upstream is MIT-licensed; see [LICENSE](./LICENSE).
 
@@ -32,12 +31,8 @@ Upstream is MIT-licensed; see [LICENSE](./LICENSE).
 
 Workspace-owned rules supplement the upstream rules where no native Oxlint rule can express the
 policy. They run as errors in regular `pnpm lint` and
-use Oxlint's AST and lexical scopes. Only `no-comments` offers an automatic fix; the others report
-without fixes because each finding needs an author's decision:
+use Oxlint's AST and lexical scopes. They report without fixes because each finding needs an author's decision:
 
-- **`no-comments`** rejects every line, block, and JSDoc comment except a shebang. Names, types,
-  and tests carry intent instead. Its fix removes empty comment lines while retaining token separators
-  and embedded line terminators needed for parsing and automatic semicolon insertion.
 - **`no-eager-effect-finalizer-condition`** catches a conditional/logical `Effect.ensuring`
   decision that reads a binding mutated by a callback in its wrapped Effect pipeline. Defer the
   decision with `Effect.suspend`. Immutable decisions and reads inside lazy callbacks are valid.
@@ -52,10 +47,6 @@ without fixes because each finding needs an author's decision:
   whole context passed to same-file helpers, not imported helpers, classes, or wrappers. Its
   helper table lists exact callback positions; linting each definition verifies them, and the
   rule test fails when a definition moves.
-- **`no-legacy-names`** rejects identifiers, including properties, type names, and private names,
-  that contain `legacy`, `deprecated`, or a back/backward/backwards-compat word. The workspace keeps
-  no backwards-compatibility paths: delete the old path or rename it for its current role. A bare
-  `compat`, as in `model.compat`, remains valid.
 - **`no-lossy-expanded-arguments`** catches lossy or unescaped text in expanded tool output.
   Imported `stripTerminalControls` or `stripAnsi` output is reported when it reaches
   `theme.fg("toolOutput", ...)` anywhere, `theme.fg("error", ...)` inside a `renderCall` or

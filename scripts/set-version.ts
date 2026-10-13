@@ -2,14 +2,15 @@ import { readFile, writeFile } from "node:fs/promises";
 
 import { Effect } from "effect";
 
-import { decodeManifestDocument, decodePackageManifest } from "./package-manifest.ts";
+import {
+  decodeManifestDocument,
+  decodePackageManifest,
+  isPackageVersion,
+} from "./package-manifest.ts";
 import { workspaceManifestPaths } from "./workspace-manifest-paths.ts";
 
 const version = process.argv[2];
-const semverPattern =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-
-if (!version || !semverPattern.test(version)) {
+if (!version || !isPackageVersion(version)) {
   throw new Error("Usage: pnpm version:set <semver>");
 }
 

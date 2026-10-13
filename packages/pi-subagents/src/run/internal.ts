@@ -28,7 +28,7 @@ import {
 } from "./model.ts";
 import { snapshotView } from "./state.ts";
 import type { RunWarningSlots } from "./warnings.ts";
-import type { WriterPoolEntry } from "./writer-pool.ts";
+import type { WriterPoolEntry, WriterPools } from "./writer-pool.ts";
 
 export type WithRunLock = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 
@@ -37,7 +37,7 @@ export interface RunContext {
   readonly withLock: WithRunLock;
   readonly publish: Effect.Effect<void>;
   readonly records: ReadonlyMap<string, RunRecord>;
-  readonly writerPools: Map<string, WriterPoolEntry>;
+  readonly writerPools: WriterPools;
   readonly writerLeases: WriterLeaseContract;
   readonly requireRecord: (id: string) => Effect.Effect<RunRecord, SubagentNotFoundError>;
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;

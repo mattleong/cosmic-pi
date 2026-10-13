@@ -40,11 +40,21 @@ export const readExistingFileForPreviewEffect = Effect.fn("CodePreviewWrite.read
       if (size > BigInt(maxBytes))
         return skippedExistingFile("previous file too large", Number(size), true, maxBytes);
       const file = yield* fs.open(absolutePath, { flag: "r" });
-      const bytes = Option.getOrUndefined(yield* file.readAlloc(maxBytes + 1));
-      if (!bytes) return { kind: "content", content: "" } as const;
-      if (bytes.byteLength > maxBytes)
-        return skippedExistingFile("previous file too large", bytes.byteLength, true, maxBytes);
-      return { kind: "content", content: utf8.decode(bytes) } as const;
+      const chunks: Uint8Array[] = [];
+      let byteLength = 0;
+      while (byteLength <= maxBytes) {
+        const bytes = Option.getOrUndefined(
+          yield* file.readAlloc(Math.min(64 * 1024, maxBytes + 1 - byteLength)),
+        );
+        if (!bytes || bytes.byteLength === 0)
+          return {
+            kind: "content",
+            content: utf8.decode(Buffer.concat(chunks, byteLength)),
+          } as const;
+        chunks.push(bytes);
+        byteLength += bytes.byteLength;
+      }
+      return skippedExistingFile("previous file too large", byteLength, true, maxBytes);
     }).pipe(
       Effect.scoped,
       Effect.catch(() =>

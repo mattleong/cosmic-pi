@@ -132,6 +132,22 @@ describe("OpenAI image protocol", () => {
 });
 
 describe("OpenAI image byte and path validation", () => {
+  it.effect("accepts multi-megabyte generated images within the output limit", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const data = "A".repeat(8 * 1024 * 1024);
+      const output = makeImageOutput({ fs, path, sharp: pngSharp });
+      const result = yield* output.validatedGeneratedImage(
+        { id: "image", status: "completed", data, mimeType: "image/png" },
+        "png",
+      );
+
+      expect(result.data).toBe(data);
+      expect(result.bytes.byteLength).toBe(6 * 1024 * 1024);
+    }).pipe(provideBuiltLayer(nodePlatformLayer)),
+  );
+
   it.effect("rejects noncanonical base64 before image decoding", () => {
     let decodeCount = 0;
     const sharp: SharpAdapterContract = {
@@ -145,14 +161,15 @@ describe("OpenAI image byte and path validation", () => {
       const fs = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
       const output = makeImageOutput({ fs, path: pathService, sharp });
-      const failure = yield* output
-        .validatedGeneratedImage(
-          { id: "image", status: "completed", data: "Y Q==", mimeType: "image/png" },
-          "png",
-        )
-        .pipe(Effect.flip);
-
-      expect(failure.operation).toBe("response");
+      for (const data of ["Y Q==", "AAA\n", "AAA\r", "AA\r\n", "A===", "AA=A", "===="])
+        expect(
+          yield* output
+            .validatedGeneratedImage(
+              { id: "image", status: "completed", data, mimeType: "image/png" },
+              "png",
+            )
+            .pipe(Effect.flip),
+        ).toMatchObject({ operation: "response" });
       expect(decodeCount).toBe(0);
     }).pipe(provideBuiltLayer(nodePlatformLayer));
   });

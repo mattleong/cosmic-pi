@@ -155,6 +155,7 @@ export interface SubagentRunView {
   readonly runtime: SubagentRuntime;
   readonly closeOnReport: boolean;
   readonly reportGeneration: number;
+  readonly assignmentEpoch: number;
   readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly model: string;
   readonly effort: SubagentEffort;
@@ -177,6 +178,20 @@ export interface SubagentRunView {
   readonly usage: SubagentUsage;
   readonly toolUses?: number | undefined;
 }
+
+export type SubagentControlExpectation = Pick<
+  SubagentRunView,
+  "assignmentEpoch" | "sessionId" | "state"
+> & { readonly questionRequestId?: string | undefined };
+
+export const captureSubagentControlExpectation = (
+  run: SubagentRunView,
+): SubagentControlExpectation => ({
+  assignmentEpoch: run.assignmentEpoch,
+  sessionId: run.sessionId,
+  state: run.state,
+  questionRequestId: run.question?.requestId,
+});
 
 export const SUBAGENT_ROOT_RUN_ID = "root";
 

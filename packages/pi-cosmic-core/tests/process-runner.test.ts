@@ -7,6 +7,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { vi } from "vitest";
 import { provideNodeProcess, type BoundedProcessRequest } from "../index.ts";
 import { runBoundedProcessScoped } from "../src/platform/process.ts";
 
@@ -91,16 +92,125 @@ const fakeRequest = {
   timeoutMillis: 10,
   cleanupTimeoutMillis: 100,
 };
-const runFake = (spawn: Parameters<typeof ChildProcessSpawner.make>[0]) => {
+const runFake = (
+  spawn: Parameters<typeof ChildProcessSpawner.make>[0],
+  overrides: Partial<BoundedProcessRequest> = {},
+) => {
   const reports: boolean[] = [];
   const run = runBoundedProcessScoped({
     ...fakeRequest,
+    ...overrides,
     onCleanup: (confirmed) => void reports.push(confirmed),
   }).pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, ChildProcessSpawner.make(spawn)),
   );
   return { reports, run };
 };
+
+for (const outcome of ["completed", "timeout"] as const) {
+  it.effect.skipIf(process.platform === "win32")(
+    `retains uncertain cleanup when the ${outcome} leader leaves a live process group`,
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const sweepStarted = yield* Deferred.make<void>();
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+              expect(pid).toBe(-123);
+              if (signal === 0) Deferred.doneUnsafe(sweepStarted, Effect.void);
+              return true;
+            }),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        let running = outcome === "timeout";
+        const handle = fakeHandle({
+          exitCode:
+            outcome === "completed"
+              ? Effect.succeed(ChildProcessSpawner.ExitCode(0))
+              : Effect.never,
+          stdout: outcome === "completed" ? Stream.empty : Stream.never,
+          stderr: outcome === "completed" ? Stream.empty : Stream.never,
+          isRunning: Effect.sync(() => running),
+          kill: () =>
+            Effect.sync(() => {
+              running = false;
+            }),
+        });
+        const fake = runFake(() => Deferred.succeed(started, undefined).pipe(Effect.as(handle)), {
+          sweepProcessTreeOnExit: true,
+        });
+        const pending = yield* fake.run.pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        if (outcome === "timeout") yield* TestClock.adjust(10);
+        yield* Deferred.await(sweepStarted);
+        expect(fake.reports).toEqual([]);
+        yield* TestClock.adjust(200);
+        const result = yield* Fiber.join(pending);
+        expect(result.cleanupUnconfirmed).toBe(true);
+        expect(fake.reports).toEqual([false]);
+      }),
+  );
+}
+
+for (const settles of [true, false])
+  it.effect.skipIf(process.platform === "win32")(
+    `keeps a denied process-tree sweep ${settles ? "pending until its group disappears" : "uncertain while inspection remains denied"}`,
+    () =>
+      Effect.gen(function* () {
+        const inspected = yield* Deferred.make<void>();
+        let absent = false;
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+              if (signal === 0) Deferred.doneUnsafe(inspected, Effect.void);
+              throw Object.assign(new Error("group state"), { code: absent ? "ESRCH" : "EPERM" });
+            }),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        const handle = fakeHandle({
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          stdout: Stream.empty,
+          stderr: Stream.empty,
+          isRunning: Effect.succeed(false),
+        });
+        const fake = runFake(() => Effect.succeed(handle), { sweepProcessTreeOnExit: true });
+        const pending = yield* fake.run.pipe(Effect.forkScoped);
+        yield* Deferred.await(inspected);
+        expect(fake.reports).toEqual([]);
+        absent = settles;
+        yield* TestClock.adjust(200);
+        expect((yield* Fiber.join(pending)).cleanupUnconfirmed).toBe(!settles);
+        expect(fake.reports).toEqual([settles]);
+      }),
+  );
+
+it.effect("retains uncertain cleanup when a Windows tree sweep fails", () =>
+  Effect.gen(function* () {
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const platform = process.platform;
+        Object.defineProperty(process, "platform", { value: "win32" });
+        return platform;
+      }),
+      (platform) =>
+        Effect.sync(() => {
+          Object.defineProperty(process, "platform", { value: platform });
+        }),
+    );
+    const handle = fakeHandle({
+      exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+      stdout: Stream.empty,
+      stderr: Stream.empty,
+      isRunning: Effect.succeed(false),
+    });
+    const fake = runFake(() => Effect.succeed(handle), { sweepProcessTreeOnExit: true });
+    expect((yield* fake.run).cleanupUnconfirmed).toBe(true);
+    expect(fake.reports).toEqual([false]);
+  }),
+);
 
 for (const mode of ["denied", "ineffective", "confirmed"] as const) {
   it.effect(`reports ${mode} cancellation cleanup before releasing ownership`, () =>

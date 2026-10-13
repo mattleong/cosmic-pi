@@ -140,6 +140,14 @@ export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
     isSameClaudeSession(event.sessionId, state.nativeSessionId);
 
   const onResult = (event: ClaudeResultProtocolEvent, raw: LocalCliWireEvent) => {
+    if (!isSameClaudeSession(event.sessionId, state.nativeSessionId))
+      return offer(
+        {
+          type: "protocol_error",
+          message: "Claude Code emitted a result from a different native session.",
+        },
+        raw,
+      );
     const expectation = correlation.take(
       event.userMessageUuid,
       event.originKind,

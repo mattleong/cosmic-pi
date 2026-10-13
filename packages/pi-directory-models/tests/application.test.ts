@@ -519,6 +519,20 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
+  it.effect("does not warn when session shutdown interrupts an admitted preference write", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.start();
+      h.select(h.alternate, "high");
+      const remembering = yield* h
+        .emitModel(h.alternate, h.initial)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* h.shutdown();
+      yield* Fiber.join(remembering);
+      expect(h.notify).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("retries identity lookup after an earlier failure", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

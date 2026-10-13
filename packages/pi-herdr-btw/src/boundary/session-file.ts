@@ -71,8 +71,8 @@ const withRegularSessionDescriptor = <A>(
 export const compareSessionFileIdentity: SessionFileIdentityComparator = (leftPath, rightPath) => {
   if (!isBoundedSessionPath(leftPath) || !isBoundedSessionPath(rightPath)) return "unavailable";
 
-  const comparison = withRegularSessionDescriptor(pathApi.normalize(leftPath), (leftDescriptor) =>
-    withRegularSessionDescriptor(pathApi.normalize(rightPath), (rightDescriptor) => {
+  const comparison = withRegularSessionDescriptor(leftPath, (leftDescriptor) =>
+    withRegularSessionDescriptor(rightPath, (rightDescriptor) => {
       const left = fstatSync(leftDescriptor, { bigint: true });
       const right = fstatSync(rightDescriptor, { bigint: true });
       return left.dev === right.dev && left.ino === right.ino ? "same" : "distinct";

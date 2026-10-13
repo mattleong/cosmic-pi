@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Schema from "effect/Schema";
+import { SettingsList } from "@earendil-works/pi-tui";
 import type { JsonObject } from "pi-cosmic-core";
 import { deferredPromise, temporaryDirectory } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
@@ -22,10 +24,12 @@ import { runOneShotSettingsEffect } from "../../src/boundary/settings-one-shot";
 import {
   CodePreviewSettingsService,
   getSettingsPath,
+  queueSettingsReset,
   queueSettingsSave,
   type LoadSettingsOptions,
 } from "../../src/config/store";
 import type { CodePreviewSettings } from "../../src/config/schema";
+import { createCodePreviewSettingsModel } from "../../src/settings/panel";
 
 const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
@@ -157,6 +161,64 @@ effectTest("concurrent queued saves publish in invocation order", function* () {
   yield* step(() => Promise.all([first, second]));
   const saved = yield* readSavedDocument(join(agentDir, "code-previews.json"));
   assert.equal(saved.readCollapsedLines, 42);
+});
+
+effectTest("rapid panel edits preserve fields merged from an external settings edit", function* () {
+  const { agentDir, project } = yield* settingsRoots("pi-code-previews-panel-merge-");
+  const file = join(agentDir, "code-previews.json");
+  yield* writeJson(file, { shikiTheme: "github-dark", readCollapsedLines: 17 });
+  const runtime = ManagedRuntime.make(codePreviewApplicationLayer);
+  yield* Effect.addFinalizer(() => runtime.disposeEffect);
+  installRunOnlyCapability((effect, signal) => runtime.runPromise(effect, { signal }));
+  yield* loadPreviewSettings(project, true);
+  yield* writeJson(file, { shikiTheme: "github-light", readCollapsedLines: 17 });
+
+  const started = yield* Deferred.make<void>();
+  const release = yield* Deferred.make<void>();
+  const blocked = runtime.runPromise(
+    withSettingsCoordinator(makeSettingsAdmission(), () =>
+      Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    ),
+  );
+  yield* Deferred.await(started);
+  const saves: Promise<void>[] = [];
+  const model = createCodePreviewSettingsModel({
+    loadOptions: { projectCwd: project, projectTrusted: true },
+    notify: () => undefined,
+    done: () => undefined,
+    effects: {
+      queueSave: (...args) => {
+        const save = queueSettingsSave(...args);
+        saves.push(save);
+        return save;
+      },
+      queueReset: queueSettingsReset,
+      initializeSyntax: () => Promise.resolve(),
+    },
+  });
+  const list = new SettingsList(
+    model.items,
+    10,
+    {
+      label: (text) => text,
+      value: (text) => text,
+      description: (text) => text,
+      cursor: ">",
+      hint: (text) => text,
+    },
+    () => undefined,
+    () => undefined,
+  );
+  model.onChange("readCollapsedLines", "40", list);
+  model.onChange("readLineNumbers", "off", list);
+  yield* Deferred.succeed(release, undefined);
+  yield* step(() => Promise.all([blocked, ...saves]));
+
+  const committed = yield* readSavedDocument(file);
+  assert.equal(committed.shikiTheme, "github-light");
+  assert.equal(committed.readCollapsedLines, 40);
+  assert.equal(committed.readLineNumbers, false);
+  assert.equal(codePreviewSettings.shikiTheme, "github-light");
 });
 
 effectTest("loadSettingsFromDisk merges only current locations in precedence order", function* () {

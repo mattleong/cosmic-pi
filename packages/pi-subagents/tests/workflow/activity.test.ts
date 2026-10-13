@@ -186,7 +186,13 @@ describe("workflow activity", () => {
     workflows.publish([workflow({ state: "completed", endedAt: 9 })]);
     const released = member();
     yield* step(() => invoke(released.id, "resume", released.revision, signal));
-    expect(act.mock.calls).toEqual([["agent-r1-1", "resume", signal, "continue"]]);
+    expect(act).toHaveBeenCalledWith(
+      "agent-r1-1",
+      "resume",
+      signal,
+      "continue",
+      expect.objectContaining({ assignmentEpoch: 1, state: "completed" }),
+    );
     dispose();
   });
 

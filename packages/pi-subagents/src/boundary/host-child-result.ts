@@ -168,6 +168,8 @@ export function registerChildResults(
         document,
         (valueJson, signal) =>
           submit(transport, valueJson, signal).then(() => {
+            if (!transport.isCurrent())
+              throw new Error("Result delivery is unavailable for this session.");
             accepted = true;
             return undefined;
           }),

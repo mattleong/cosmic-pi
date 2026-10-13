@@ -18,7 +18,7 @@ effectTest("collapsed style edits persist without reinitializing syntax", functi
   for (const style of ["compact", "preview"]) {
     settings = updateSetting(settings, "toolCallCollapsedStyle", style);
     yield* step(() =>
-      persistSettingsChange(settings, defaultCodePreviewSettings.shikiTheme, loadOptions, {
+      persistSettingsChange(settings, defaultCodePreviewSettings, loadOptions, {
         queueSave: (next, options) => {
           assert.deepEqual(options, loadOptions);
           saved.push(next);
@@ -37,6 +37,34 @@ effectTest("collapsed style edits persist without reinitializing syntax", functi
     defaultCodePreviewSettings,
   ]);
   assert.equal(initializations, 0);
+});
+
+effectTest("syntax follow-up uses the theme resolved from the committed document", function* () {
+  const requested: CodePreviewSettings = {
+    ...defaultCodePreviewSettings,
+    readCollapsedLines: 40,
+  };
+  const initialized: string[] = [];
+  yield* step(() =>
+    persistSettingsChange(
+      requested,
+      defaultCodePreviewSettings,
+      {},
+      {
+        queueSave: () => {
+          setCodePreviewSettings({ ...requested, shikiTheme: "github-light" });
+          return Promise.resolve();
+        },
+        queueReset: () => Promise.resolve(),
+        initializeSyntax: (theme) => {
+          initialized.push(theme);
+          return Promise.resolve();
+        },
+      },
+    ),
+  );
+  assert.deepEqual(initialized, ["github-light"]);
+  setCodePreviewSettings(defaultCodePreviewSettings);
 });
 
 effectTest(
@@ -59,10 +87,13 @@ effectTest(
       yield* step(() =>
         persistSettingsChange(
           settings,
-          defaultCodePreviewSettings.shikiTheme,
+          defaultCodePreviewSettings,
           {},
           {
-            queueSave: () => Promise.resolve(),
+            queueSave: () => {
+              setCodePreviewSettings(settings);
+              return Promise.resolve();
+            },
             queueReset: () => Promise.resolve(),
             initializeSyntax: () => {
               initializations++;
@@ -80,6 +111,7 @@ effectTest(
       assert.deepEqual(unhandled, []);
     } finally {
       process.off("unhandledRejection", onUnhandled);
+      setCodePreviewSettings(defaultCodePreviewSettings);
     }
   },
 );
@@ -130,6 +162,84 @@ effectTest("restoring defaults waits for a second press and saves no values", fu
 });
 
 class DiskFull extends Data.TaggedError("DiskFull")<{ readonly message: string }> {}
+
+effectTest("a completed save adopts merged fields before the next panel edit", function* () {
+  setCodePreviewSettings(defaultCodePreviewSettings);
+  const saved: CodePreviewSettings[] = [];
+  const model = createCodePreviewSettingsModel({
+    notify: () => undefined,
+    done: () => undefined,
+    loadOptions: {},
+    effects: {
+      queueSave: (next) => {
+        saved.push(next);
+        setCodePreviewSettings({ ...next, shikiTheme: "github-light" });
+        return Promise.resolve();
+      },
+      queueReset: () => Promise.resolve(),
+      initializeSyntax: () => Promise.resolve(),
+    },
+  });
+  const list = listFor(model);
+  model.onChange("readCollapsedLines", "40", list);
+  yield* step(eventLoopTurn);
+  model.onChange("readLineNumbers", "off", list);
+  assert.equal(saved[1]?.shikiTheme, "github-light");
+  assert.equal(saved[1]?.readCollapsedLines, 40);
+  yield* step(eventLoopTurn);
+  setCodePreviewSettings(defaultCodePreviewSettings);
+});
+
+for (const operation of ["save", "reset", "failure"] as const)
+  effectTest(`retired settings panels suppress delayed ${operation} follow-up`, function* () {
+    setCodePreviewSettings(defaultCodePreviewSettings);
+    const pending = yield* Deferred.make<void, DiskFull>();
+    let current = true;
+    let writes = 0;
+    let repaints = 0;
+    let syntaxInitializations = 0;
+    const notifications: string[] = [];
+    const write = () => {
+      writes++;
+      return Effect.runPromise(Deferred.await(pending));
+    };
+    const model = createCodePreviewSettingsModel({
+      notify: (message) => notifications.push(message),
+      done: () => undefined,
+      loadOptions: {},
+      isCurrent: () => current,
+      effects: {
+        queueSave: write,
+        queueReset: write,
+        initializeSyntax: () => {
+          syntaxInitializations++;
+          return Promise.resolve();
+        },
+      },
+    });
+    const list = listFor(model);
+    list.updateValue = () => {
+      repaints++;
+    };
+    model.onChange(
+      operation === "reset" ? "resetToDefaults" : "shikiTheme",
+      operation === "reset" ? "reset now" : "github-light",
+      list,
+    );
+    const initialRepaints = repaints;
+    current = false;
+    setCodePreviewSettings({ ...defaultCodePreviewSettings, shikiTheme: "github-dark" });
+    if (operation === "failure")
+      yield* Deferred.fail(pending, new DiskFull({ message: "disk full" }));
+    else yield* Deferred.succeed(pending, undefined);
+    yield* step(eventLoopTurn);
+    model.onChange("readCollapsedLines", "40", list);
+    assert.equal(writes, 1);
+    assert.equal(repaints, initialRepaints);
+    assert.equal(syntaxInitializations, 0);
+    assert.deepEqual(notifications, []);
+    setCodePreviewSettings(defaultCodePreviewSettings);
+  });
 
 effectTest(
   "only the latest failed edit rolls the panel back to the published settings",

@@ -5,18 +5,11 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import type * as Result from "effect/Result";
-import * as Semaphore from "effect/Semaphore";
+import type * as Scope from "effect/Scope";
 import * as Tracer from "effect/Tracer";
 import type { RefreshRequest } from "./coordination/refresh-coordinator.ts";
 import { makeSubscriptionRefresh } from "./coordination/subscription-refresh.ts";
-import {
-  commitPreferredScope,
-  type PreferredScopeStore,
-  type ScopedConfigMetadata,
-  type ScopedConfigStore,
-} from "./config/scoped-config-store.ts";
 import { AgentDirectory } from "./platform/agent-directory.ts";
-import { JsonDocumentStore, type JsonObject } from "./platform/json-document.ts";
 import { JsonHttpClient } from "./platform/json-http.ts";
 import { invokeHostCallback } from "./host-session.ts";
 import { makeFrozenProjection } from "./projection.ts";
@@ -35,11 +28,11 @@ export interface SubscriptionUsageConfig extends UsageControllerConfigFields {
   readonly showResetTimes: boolean;
 }
 
-export type UsageControllerConfig = ScopedConfigMetadata & {
+export interface UsageControllerConfig {
   readonly usage: UsageControllerConfigFields;
-};
+}
 
-type UsageProviderRequirements = Path.Path | JsonDocumentStore | JsonHttpClient;
+type UsageProviderRequirements = JsonHttpClient;
 
 export type UsageFetchOutcome<Snapshot, Patch> =
   | { readonly _tag: "Missing" }
@@ -57,39 +50,24 @@ type RefreshValue<Snapshot, Patch> =
       readonly fetchedAt: number;
     });
 
-type UsageControllerStore<Resolved extends ScopedConfigMetadata, E> = PreferredScopeStore<
-  Resolved,
-  E
-> &
-  Pick<ScopedConfigStore<unknown, Resolved, E>, "resolveConfig">;
-
 export interface UsageRefreshControllerOptions<
   P extends UsageProjectionBase<Resolved, Snapshot>,
   Resolved extends UsageControllerConfig,
   Snapshot,
-  E,
-  EI,
-  R,
+  R = never,
 > {
   readonly spanPrefix: string;
   readonly logLabel: string;
   readonly context: MutableRef.MutableRef<ExtensionContext>;
-  readonly cwd: string;
   readonly projection: MutableRef.MutableRef<P>;
   readonly onChange: () => void;
   readonly canPublish?: (() => boolean) | undefined;
-  readonly startPolling?: boolean | undefined;
   readonly backgroundEnabled?: (() => boolean) | undefined;
-  readonly projectTrusted?: boolean | undefined;
+  readonly initialConfig: Resolved;
   readonly initialProjection: () => P;
   readonly hiddenStatusText: string;
   readonly missingCredentialsMessage: string;
   readonly clearAuthPatch: Partial<P>;
-  readonly store: UsageControllerStore<Resolved, E>;
-  readonly decodeSettingUpdate: (
-    id: string,
-    value: string,
-  ) => Effect.Effect<(document: JsonObject) => JsonObject, EI>;
   readonly eligibility: (
     ctx: ExtensionContext,
     cfg: Resolved,
@@ -116,23 +94,16 @@ interface UsageRefreshController<
   P extends UsageProjectionBase<Resolved, Snapshot>,
   Resolved extends UsageControllerConfig,
   Snapshot,
-  E,
-  EI,
-  R,
 > {
   readonly refresh: (request?: RefreshRequest) => Effect.Effect<void>;
+  readonly startPolling: () => Effect.Effect<void, never, Scope.Scope>;
   readonly contextChanged: (clearUsage?: boolean) => Effect.Effect<void>;
-  readonly updateSetting: (id: string, value: string) => Effect.Effect<void, E | EI>;
-  readonly agentDir: string;
   readonly getState: Effect.Effect<P>;
   readonly updateState: (f: (current: P) => P) => Effect.Effect<P>;
-  readonly installConfig: (config: Resolved) => Effect.Effect<void>;
-  readonly withSettingsPermit: <A, E2, R2>(
-    effect: Effect.Effect<A, E2, R2>,
-  ) => Effect.Effect<A, E2, R2>;
-  readonly provideDependencies: <A, E2>(
-    effect: Effect.Effect<A, E2, UsageProviderRequirements | R>,
-  ) => Effect.Effect<A, E2>;
+  readonly configure: (
+    config: Resolved,
+    options?: { readonly invalidate?: boolean },
+  ) => Effect.Effect<void>;
 }
 
 const mergeProjection = <Resolved, Snapshot, P extends UsageProjectionBase<Resolved, Snapshot>>(
@@ -145,36 +116,31 @@ export const makeUsageRefreshController = <
   P extends UsageProjectionBase<Resolved, Snapshot>,
   Resolved extends UsageControllerConfig,
   Snapshot,
-  E,
-  EI,
   R = never,
 >(
-  options: UsageRefreshControllerOptions<P, Resolved, Snapshot, E, EI, R>,
+  options: UsageRefreshControllerOptions<P, Resolved, Snapshot, R>,
 ) =>
   Effect.gen(function* () {
-    const { context, cwd, projection, onChange, logLabel, store } = options;
+    const { context, projection, onChange, logLabel } = options;
     const ambientDependencies = yield* Effect.context<UsageProviderRequirements>();
     const sharedDependencies = ambientDependencies.pipe(
-      Context.pick(Path.Path, JsonDocumentStore, JsonHttpClient, Tracer.Tracer),
+      Context.pick(JsonHttpClient, Tracer.Tracer),
     );
     const dependencies = Context.merge(options.dependencies, sharedDependencies);
-    const path = Context.get(sharedDependencies, Path.Path);
+    const path = yield* Path.Path;
     const provideDependencies = <A, E2>(
       effect: Effect.Effect<A, E2, UsageProviderRequirements | R>,
     ): Effect.Effect<A, E2> => Effect.provideContext(effect, dependencies);
     const agentDir = yield* AgentDirectory;
     const authPath = path.join(agentDir, "auth.json");
-    const projectTrusted = options.projectTrusted === true;
-    const config = yield* store.resolveConfig(cwd, agentDir, projectTrusted);
     const mergeState = mergeProjection<Resolved, Snapshot, P>;
     const state = yield* makeFrozenProjection<P, P>(
-      mergeState(options.initialProjection(), { config, authPath }),
+      mergeState(options.initialProjection(), { config: options.initialConfig, authPath }),
       (current) => current,
       (published) => {
         if (options.canPublish?.() !== false) MutableRef.set(projection, published);
       },
     );
-    const settingUpdates = yield* Semaphore.make(1);
     const updateState = (f: (current: P) => P) =>
       state
         .transition((current) => {
@@ -203,15 +169,17 @@ export const makeUsageRefreshController = <
             }),
           ),
         ));
-    const synchronize = (clearUsage = false) =>
+    const synchronize = (clearUsage = false, config?: Resolved) =>
       state
         .transition((current) =>
-          synchronizeState(current, MutableRef.get(context), clearUsage).pipe(
-            Effect.map((next) => [undefined, next] as const),
-          ),
+          synchronizeState(
+            config === undefined ? current : mergeState(current, { config }),
+            MutableRef.get(context),
+            clearUsage,
+          ).pipe(Effect.map((next) => [undefined, next] as const)),
         )
         .pipe(Effect.orDie, Effect.asVoid);
-    yield* synchronize(true);
+    yield* provideDependencies(synchronize(true));
 
     const key = Effect.gen(function* () {
       const ctx = MutableRef.get(context);
@@ -319,44 +287,27 @@ export const makeUsageRefreshController = <
       provideDependencies(refreshEngine.request(request));
     const contextChanged = (clearUsage = false) =>
       provideDependencies(refreshEngine.invalidateWith(synchronize(clearUsage)));
-    const installConfig = (installed: Resolved) =>
-      provideDependencies(
-        refreshEngine.invalidateWith(
-          updateState((latest) => mergeState(latest, { config: installed })).pipe(
-            Effect.andThen(synchronize(true)),
-          ),
-        ),
-      );
-    const updateSettingWithRequirements = Effect.fn(`${options.spanPrefix}.updateSetting`)(
-      function* (id: string, value: string) {
-        const update = yield* options.decodeSettingUpdate(id, value);
-        yield* settingUpdates.withPermit(
-          store
-            .resolveConfig(cwd, agentDir, projectTrusted)
-            .pipe(
-              Effect.flatMap((fresh) => commitPreferredScope(store, fresh, update, installConfig)),
-            ),
-        );
-        yield* refresh({ force: true });
-      },
-    );
-    const updateSetting = (id: string, value: string) =>
-      provideDependencies(updateSettingWithRequirements(id, value));
-    if (options.startPolling !== false)
-      yield* refresh({ force: true }).pipe(
+    const configure: UsageRefreshController<P, Resolved, Snapshot>["configure"] = (
+      config,
+      configureOptions,
+    ) => {
+      const invalidate = configureOptions?.invalidate !== false;
+      const install = synchronize(invalidate, config);
+      return provideDependencies(invalidate ? refreshEngine.invalidateWith(install) : install);
+    };
+    const startPolling = () =>
+      refresh({ force: true }).pipe(
         Effect.andThen(provideDependencies(refreshEngine.startPolling({}))),
         Effect.forkScoped,
+        Effect.asVoid,
       );
-    const controller: UsageRefreshController<P, Resolved, Snapshot, E, EI, R> = {
+    const controller: UsageRefreshController<P, Resolved, Snapshot> = {
       refresh,
+      startPolling,
       contextChanged,
-      updateSetting,
-      agentDir,
       getState: state.getState,
       updateState,
-      installConfig,
-      withSettingsPermit: (effect) => settingUpdates.withPermit(effect),
-      provideDependencies,
+      configure,
     };
     return controller;
   });

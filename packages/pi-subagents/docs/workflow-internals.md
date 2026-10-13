@@ -164,7 +164,7 @@ This page covers how the runner in `src/workflow/` owns runs, admits agents, per
 
 - `run-record-writer.ts` writes the record atomically (a temporary file renamed over it) before the script starts, on a stop request, when the run ends (`interrupted` under a teardown), and once its report or notice is accepted.
   Writes are serialized and best effort; the first failure logs one warning.
-- `recovery.ts` reads the files of runs memory doesn't hold, and only when their record names this session: resume replays (results journal and full results, up to 16 MiB), notices owed after a restart, and status summaries.
+- `recovery.ts` reads the files of runs memory doesn't hold, and only when their record names this session: resume replays (results journal and full results, sharing a 16 × 1024 × 1024 character budget), notices owed after a restart, and status summaries. Reads allow bounded UTF-8 expansion before enforcing the decoded character limit; only complete journal lines count, and malformed UTF-8 fails instead of changing a saved result.
 - At activation the service reads the runs memory left open, then forks one fiber that announces them, skipping (and closing) any whose record another Pi process of the session already marked notified, and then scans the run directories for this session's newest 32 runs that a teardown interrupted, or whose process died while they ran or before Pi accepted their report.
   Records are filtered by session before that limit, so other sessions' runs never crowd this session's out.
   It announces each until a notice is accepted and marks the record; a run that ended by itself carries its final state (`WorkflowInterruptedRun.ended`), so the notice says how it ended.

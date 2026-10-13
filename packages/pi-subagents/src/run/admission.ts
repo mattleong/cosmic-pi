@@ -5,7 +5,7 @@ import { firstWriteClaimConflict } from "../domain/write-claims.ts";
 import { invalidRequest, SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
-import type { WriterPoolEntry } from "./writer-pool.ts";
+import type { WriterPoolView, WriterPoolLookup } from "./writer-pool.ts";
 import { writerPoolUnavailable } from "./writer-pool.ts";
 
 export const canonicalizeWriterCwd = (writerLeases: WriterLeaseContract, cwd: string) =>
@@ -60,7 +60,7 @@ export const processCapacityError = (
 
 export const writerConflictError = (
   records: ReadonlyMap<string, RunRecord>,
-  pools: ReadonlyMap<string, WriterPoolEntry>,
+  pools: WriterPoolLookup,
   canonicalCwd: CanonicalWriterCwd,
   writeClaims: ReadonlyArray<string> | undefined,
   excluded?: RunRecord,
@@ -92,10 +92,10 @@ export const writerConflictError = (
   return undefined;
 };
 
-const writerPoolSettlesAlone = (pool: WriterPoolEntry | undefined): boolean =>
+const writerPoolSettlesAlone = (pool: WriterPoolView | undefined): boolean =>
   pool?.admissionPaused !== true && (pool?.state === "releasing" || pool?.state === "failed");
 
-const writerPoolUnavailableMessage = (pool: WriterPoolEntry | undefined): string => {
+const writerPoolUnavailableMessage = (pool: WriterPoolView | undefined): string => {
   const state = pool?.state;
   switch (state) {
     case "quarantined":
@@ -169,7 +169,7 @@ const claimHoldings = (record: RunRecord): ReadonlyArray<string> =>
 
 export const writerConflictHoldings = (
   records: ReadonlyMap<string, RunRecord>,
-  pools: ReadonlyMap<string, WriterPoolEntry>,
+  pools: WriterPoolLookup,
 ): ReadonlySet<string> => {
   const holdings = new Set<string>();
   for (const record of records.values()) {
@@ -181,7 +181,7 @@ export const writerConflictHoldings = (
     if (record.retryClaim) holdings.add(`retry:${id}`);
     if (record.evictionClaim) holdings.add(`eviction:${id}`);
   }
-  for (const [digest, pool] of pools)
-    if (writerPoolUnavailable(pool)) holdings.add(`pool:${digest}:${pool.state}`);
+  for (const pool of pools.values())
+    if (writerPoolUnavailable(pool)) holdings.add(`pool:${pool.cwd.digest}:${pool.state}`);
   return holdings;
 };

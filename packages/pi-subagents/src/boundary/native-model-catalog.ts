@@ -10,10 +10,12 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import {
   confirmEffectProcessClose,
+  confirmProcessGroupExit,
   hasControlCharacter,
   nodeFilePlatformLayer,
   provideNodeProcess,
   SafeFile,
+  signalProcessGroup,
 } from "pi-cosmic-core";
 import { readClaudeModelPreference } from "./claude-model-preference.ts";
 import { initializeRequest, initializedNotification } from "../backend/local-codex-protocol.ts";
@@ -299,7 +301,13 @@ const runCatalogProcess = (
         );
         const outcome = yield* restore(Effect.raceFirst(reply, diagnostics)).pipe(Effect.exit);
         const cleanupConfirmed = yield* confirmEffectProcessClose(child, 2_000);
-        if (!cleanupConfirmed)
+        const groupSignal =
+          process.platform === "win32"
+            ? "absent"
+            : signalProcessGroup(Number(child.pid), "SIGKILL");
+        const groupConfirmed =
+          groupSignal === "absent" || (yield* confirmProcessGroupExit(Number(child.pid), 2_000));
+        if (!cleanupConfirmed || !groupConfirmed)
           return yield* catalogError(
             runtime,
             "catalog_cleanup_unconfirmed",

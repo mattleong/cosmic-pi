@@ -25,7 +25,10 @@ import type {
 } from "./service.ts";
 import { snapshotView } from "./state.ts";
 
-export interface RunCompletionObservationDependencies extends RunContext {
+export interface RunCompletionObservationDependencies extends Pick<
+  RunContext,
+  "records" | "withLock"
+> {
   readonly withCompletionGate: WithRunLock;
   readonly currentProjection: () => SubagentProjection;
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;

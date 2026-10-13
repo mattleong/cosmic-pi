@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";
@@ -31,7 +32,7 @@ import {
   nativeEvidenceCoverage,
   type NativeCallEvidence,
 } from "./native-codemode-evidence";
-import { runningLine, safeContent } from "./native-safe-content";
+import { ownData, runningLine, safeContent } from "./native-safe-content";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import {
   createNativeDiscoveryProjector,
@@ -41,9 +42,7 @@ import {
 } from "./native-codemode-discovery";
 
 const programSource = (args: HostContainer | undefined): string =>
-  args !== undefined && Predicate.hasProperty(args, "code") && Predicate.isString(args.code)
-    ? args.code
-    : "";
+  ownData(args, "code", Schema.String) ?? "";
 
 const renderSource =
   (discovery: NativeDiscoveryProjector): RenderCall<unknown, RendererState> =>

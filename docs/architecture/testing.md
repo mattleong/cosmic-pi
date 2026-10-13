@@ -1,83 +1,45 @@
-# Effect testing
+# Behavioral testing
 
-## Test APIs
+Tests protect domain behavior, persistence, security, lifecycle, concurrency, cancellation, cleanup, and recovery. They should survive a behavior-preserving refactor. Package architecture documents identify owners; tests establish their observable guarantees.
 
-Effectful tests use the pinned stable `@effect/vitest` v4 API with Vitest 5:
+## What to test
 
-- `it.effect` for deterministic Effect tests with test services and Scope,
-- `it.live` only when live time or live platform behavior is intentional,
-- `layer(...)` for a shared test Layer,
-- ordinary Vitest tests for total deterministic functions.
+For resource-owning code, exercise success, failed acquisition, interruption, replacement, and repeated shutdown. Prove that cleanup completes, no owned work survives shutdown, and one operation never releases another's resource. Counts are useful when they demonstrate double cleanup or a leak, not as a substitute for observable behavior.
 
-Do not use stale examples containing `it.scoped` or `it.scopedLive`; those helpers are not exported by `@effect/vitest@4.0.0`.
+For state and persistence, cover failed writes, stale results, competing mutations, and publication during retirement. Durable state, private state, and synchronous projections must not diverge across the commit boundary. Atomic writers must preserve unacquired collisions and do no fallible work after rename. Persistence fakes clone JSON ingress and egress and must not commit failed mutations.
 
-## Required coverage
+At untrusted boundaries, exercise malformed and oversized input, schema rejection, redaction, and bounded retention. Include representative secrets in failure paths and inspect errors, logs, spans, and snapshots. Cleanup Promise rejection must remain a typed failure, not a defect.
 
-Resource-owning services test acquisition and release counts on success, failure, replacement, interruption, and repeated shutdown. Time-dependent behavior uses `TestClock`; sleeping work is forked before the clock is advanced. Tests cover interruption during auth lookup, HTTP requests, streams, configuration writes, image writes, Shiki initialization, session replacement, and shutdown. Shared deterministic platform fakes and acquisition probes live under the published `pi-cosmic-core/testing` test-kit subpath.
+Avoid tests for bare symbol existence, types already enforced by TypeScript or schemas, exact provider payloads/catalogs, internal call order without behavioral consequences, and exact UI wording, colors, layout, ANSI, or key hints. Test discovery or conditional registration when it can fail at runtime. Test command handlers and UI state transitions rather than wiring snapshots.
 
-Concurrency tests pause at the exact ownership or publication boundary with `Deferred`, then
-force the competing operation through that window. A test named atomic, serialized, stale-safe,
-or interruption-safe must fail if the lock, revision check, or finalizer ordering is removed.
-Wall-clock timeouts under `it.effect` are not promptness proofs because the test clock advances
-only when the test advances it; use completion probes and retain Vitest's timeout only as an outer
-hang guard.
+## Deterministic concurrency
 
-Each migrated package must prove:
+Use the pinned `@effect/vitest` v4 APIs: `it.effect` for scoped tests with test services, `it.live` when real time or platform behavior is intentional, and `layer` for shared test Layers. Ordinary Vitest tests suit pure functions. The older `it.scoped` helpers are not available.
 
-- no fibers survive shutdown,
-- finalizers run on success, failure, and interruption,
-- service requirements are fully supplied,
-- external data is schema-decoded,
-- secrets do not appear in errors, logs, spans, or snapshots.
-- cleanup Promises that reject become typed failures rather than defects,
-- failed acquisition never releases or deletes a resource owned by another operation,
-- atomic file writers never remove an unacquired collision and perform no fallible work after the
-  rename commit,
-- persistence fakes clone JSON ingress and egress, reject non-JSON values, and do not commit a
-  failed effectful mutation.
+Use `TestClock` for time-dependent behavior, forking sleeping work before advancing time. Use `Deferred` to pause at an actual ownership or publication boundary, then force a competing operation through the window. An atomicity or cancellation test should fail if its relevant lock, revision check, or cleanup handoff is removed. Completion probes establish prompt settlement; a wall-clock timeout around a test-clock effect is only a hang guard.
 
-## Shared test Layers and telemetry capture
+Compose complete test Layers at the test entry point so scopes match production. Mock owned domain boundaries rather than external provider protocols. Keep fault policies and package-specific probes local; move a helper into core only when multiple consumers need the same contract.
 
-`pi-cosmic-core/testing` publishes only helpers with multiple proven consumers: in-memory JSON documents, schema-aware JSON/streaming HTTP adapters, a lifecycle acquisition/release probe, bounded `yieldUntil` polling for scoped workers, paused and checkpoint-interrupting schedulers for deterministic interruption tests, capture logger/tracer Layers with a stable telemetry snapshot, a fake Windows `taskkill` helper, SAFETY-cast Pi host fixtures (`extensionApiFixture`, `extensionContextFixture`, `opaqueFixture`), a frozen identity `plainTheme` and hostile `failingTheme`, `deferredPromise`, the recording Pi extension host (`recordingExtensionHost`), runner-neutral Promise steps, the presentation-gallery writer, and the scoped real-process IPC harness (`temporaryDirectory`, `spawnIpcChild`). `pi-cosmic-core/testing/sdk` adds real Pi SDK sessions with faux inference and offline models. They have no Vitest dependency. Capture assertions serialize only log values plus span names and attributes, verify stable operation names, and inject representative URLs, paths, prompts, bodies, tokens, and account IDs to prove absence.
+## Shared fixtures and integration tests
 
-Test Layers are merged and provided once at the test entry point so resource lifetimes match production. No test installs a global telemetry exporter. Package-specific host extras (spies, restoring or busy host calls), fault policies, and fiber probes stay package-local as overrides on the shared host; a helper moves into core only when a second consumer would use the same contract. Custom-UI tests share `fakeCustomSurfaceHost` from `pi-cosmic-ui/testing`, which models Pi's custom UI host exactly (unchanged from 0.86 through the pinned 1.0.2): a synchronous factory, a separate `onHandle` mount, a global-pop `done`, non-capturing guards, `setWidget`, and one-shot faults at owned hide, guard creation, `done`, and guard hide. Each surface consumer keeps one real-shape integration test on it; the shared close protocol is proved once in `pi-cosmic-ui`. Schema boundaries are exercised through the shared schema-aware HTTP/document fakes rather than a second assertion DSL.
+`pi-cosmic-core/testing` supplies deterministic documents and HTTP adapters, lifecycle probes, schedulers, telemetry capture, host fixtures, and real-process helpers. `pi-cosmic-core/testing/sdk` supplies offline Pi sessions. These helpers have no Vitest dependency. Do not install a global telemetry exporter in tests.
 
-Async questionnaire tests separate the TUI factory from the `onHandle` mount handshake and protect the shared dialog permit, waiter claims, cancellation, opening failure, delivery failure, bounded retention, and scope shutdown. The host fake adapts the shared custom-surface fake, so submission and abort must preserve unrelated stacked overlays, including abort before a late mount, and every close fault must release the FIFO ticket. Low-yield-budget regressions interrupt before the final atomic waiter acknowledgement and claim release, requiring delivery to remain recoverable with no tentative acknowledgement. Cancellation after that transition cannot revoke its acknowledgement or a successor's claim. Explicitly acknowledged failed openings become evictable; unacknowledged failures remain retained. TestClock covers bounded retries, await recovery, and retry shutdown. History tests use branch receipts to preserve valid answers while rejecting late revoked steering messages across repeated tree navigation and reload. Prompt tests reject competing public prompts at admission and during lazy loading without stealing focus. A returned public `sendMessage` call is not tested as model acknowledgement.
+Keep focused integration tests where host behavior matters: Pi's mount/close lifecycle, retained history replay, native mutation-queue cancellation, process exit confirmation, packaged helper resolution, and public renderer/source ownership. These prove our adaptation of the pinned dependency; they are not snapshots of its private implementation. Reuse `pi-cosmic-ui/testing`'s custom-surface host to exercise late mounting and unrelated stacked overlays, and prove the shared close protocol once in Cosmic UI.
 
-## Ownership regression coverage
+Tool presentation tests use actual registered definitions or public renderer callbacks through `pi-code-previews/testing`. Exercise expansion, fallback, uncertainty, replay, and lifecycle without invoking execution. Preserve complete arguments, raw output, recovery evidence, and native images. Use `issueMessageStyleProblems` for producer message style, and `pnpm presentation:gallery` for human review of visible states; do not assert exact gallery text. See the [presentation contract](tool-presentation.md#retention-and-validation).
 
-- Projection tests interrupt update preparation and lock waiting, then require reuse. Publication tests require the external snapshot, internal snapshot, and authoritative state to commit together, including fast-mode durable commits. Refresh tests interrupt admission before work starts and require shared waiters to settle and later refreshes to proceed. Consumer tests pause after final key validation and compete with context, settings, and branch invalidation; removing the shared gate must expose stale publication.
-- Preview tests hold a predecessor in Pi's native mutation queue across cancellation, replacement, and shutdown. The caller must settle without that predecessor; releasing that predecessor must not execute the revoked write or enter the replacement runtime.
-- Ask User editor tests hold process cleanup through interruption and require file removal and TUI restoration before dialog-permit or session transfer, without waiting for the custom Promise.
-- Background process tests interrupt cwd inspection before spawn, exercise graceful-helper timeout and force escalation, and require process-scope helper cleanup. Subagent tests cancel a subtree-stop waiter between descendants and require the complete traversal to continue under session ownership. Failed or interrupted supervisor-connection opening must disconnect its peer while the parent scope stays open; a released scope or ended assignment watch must disconnect without redialing.
-- Settings tests replace the session during inspection and registry refresh, including a registry Promise that ignores abort. No stale picker or catalog may publish. Hold an old durable `afterCommit` through retirement and replacement startup failure; private state may finish, but projections, notifications, transport resets, and repaint callbacks must remain revoked. Image tests retire between generation settlement and the queued send, and reject retained old tool/command admission. Cosmic UI tests delay old shutdown and failed-start cleanup across replacement and require replacement state to survive.
-- Spawn tests pause a published claim before driver admission, then interrupt and join stop/compensation without leaving settlement or writer ownership pending. Cancellation before a claim must settle while the registry permit remains held.
-- Renderer tests exercise actual public resolver callbacks and Pi's `ToolExecutionComponent`, including pre-start replay, trusted first-ready adoption, complete call/result reconstruction, fixed self-shell framing, captured appearance, owner retirement, foreign-owner fallback, later native activation, and inactive selection. Actual SDK resume and normal user-entry fork reopen persisted tool history and retain the same pre-start row through adoption, preserving old-owner appearance, lazy fallback, native images, and tool authority without executing historical calls. Write tests preserve its real before-write hook, mutation-queue cancellation and mutate-then-refresh recovery; other presentation never registers execution definitions.
-- Native codemode/MCP SDK tests load Code Previews beside independently owned builtins in either order, preserving schemas, permission hooks, cancellation, stores, output/recovery and native images. Historical MCP aliases require a proven builtin manager rather than guessed remote identities. The packed-consumer check loads published TypeScript through Jiti and executes a real local MCP tool/resource fixture with no provider authentication, verifies builtin manager/tool source ownership and renderer output/image preservation, then requires a closed lifecycle marker and absent process. No production MCP manager factory is intercepted. Native protocol and authentication internals belong to Pi, not workspace tests. Code Previews requires Pi 1.0.1; the workspace pins/tests 1.0.2.
-- Background log tests attempt mutation through events, cached slices, clipped tails, and projection rows. Later appends/evictions must preserve old snapshots, UTF-8 byte accounting, and immutable structural sharing.
-- Decoder tests exercise full-page validation, malformed and oversized input, output and format-schema bounds, deadlines, cancellation, and immediate cross-runtime admission. Fault-injected kill failure and incomplete acquisition must leave decoding disabled unless cleanup explicitly confirms exit, on success, failure, and interruption. No raw pixels or native diagnostics may escape. Real-process fixtures prove termination and permit ownership through cleanup; they do not claim an OS memory sandbox or unconditional shutdown deadline.
-
-The packed-consumer check executes Better OpenAI's shipped `.mjs` decoder with a tiny PNG under plain Node in a clean consumer, with bounded time/output and an empty environment. It requires accepted format metadata and no stderr. This protects helper packaging and dependency resolution without a build prerequisite; it is not a Sharp protocol snapshot test.
-
-## Standalone JavaScript helpers
-
-Better OpenAI and Subagents include their shipped and fixture `.mjs` files in strict checked-JavaScript typechecking. The central Effect configuration makes exact-file exceptions only for the standalone Node operations these helpers must own: Subagents' two Jiti launchers scrub the environment before importing application code; the hanging-probe fixture reads its marker environment; that fixture and the Sharp-decoder fixture use native filesystem imports and deliberately persistent timers to exercise process cleanup. These exceptions do not disable other Effect diagnostics, TypeScript checking, or Oxlint.
+Real-process tests distinguish requesting termination from confirming exit. Keep readiness event-driven and cleanup bounded where the platform permits it. The packed-consumer gate loads published TypeScript through Jiti, exercises native MCP ownership and cleanup with a local fixture, and runs the shipped image decoder under plain Node. This protects source-only installation without depending on provider credentials or a build step.
 
 ## Validation order
 
-Workspace tests run at most two packages with four Vitest workers each. Without the worker cap,
-each package independently uses nearly every CPU, multiplying contention and starving real-process
-fixtures within their hang guards. Keep readiness checks event-driven; increasing test timeouts is
-not a substitute for a startup signal or bounded cleanup. The root test runner passes
-`--allowOnly=false`, so focused tests fail local validation as well as CI.
-
-Run the narrow package gate first, then the workspace gate:
+Run the narrowest relevant package checks before the full workspace gate:
 
 ```bash
-pnpm --filter <package> typecheck
 pnpm --filter <package> test
-pnpm --filter <package> lint
+pnpm --filter <package> check
 pnpm validate
 ```
 
-Package `check` runs typechecking, Effect diagnostics, type-aware lint, and format checks. `pnpm typecheck` checks every workspace project with the unmodified TypeScript 7 compiler, including Better OpenAI and Subagents' shipped and test `.mjs` helpers through `allowJs`/`checkJs`. Root `pnpm effect:diagnostics` runs `@effect/tsgo`'s dedicated diagnostics command recursively. Keeping the gates separate prevents duplicate Effect output and leaves suggestion-level messages visible without turning them into TypeScript failures. `@effect/tsgo@0.47.2` also reports upstream `unstableApiUsage` warnings for Effect HTTP, process, RPC, socket, and SSE APIs; these stay enabled and visible. A stable Effect package version does not stabilize those marked APIs, so exact pins, owned adapters, and lifecycle/compatibility tests remain required. `strictEffectProvide` matches inherited `**/packages/*/src/**/*.ts` paths, with exact-file exceptions for the shared gallery writer and the standalone settings/external-editor runners; test files are Effect entry points and intentionally provide complete test Layers. TypeScript, Oxlint, Effect diagnostics, tests, and review are complemented by `pnpm layout:check`, which checks package/test placement and rejects nested package manifests. The workspace Oxlint plugin in `tools/oxlint/anti-slop/` enforces the remaining mechanical conventions, including no comments, no type assertions, no legacy identifiers, the complexity and file-length caps, and the local regression rules described in its `UPSTREAM.md`. Other architecture conventions remain guidance. Pi/Jiti loads workspace and packed package TypeScript source directly; focused and root gates never depend on generated distributions or mutate shared build output.
+Package `check` includes TypeScript, Effect diagnostics, type-aware lint, and formatting. The root gate also checks synchronized package versions, workspace tests, and packed consumers. TypeScript and Effect diagnostics run separately to avoid duplicate messages. Upstream unstable-API diagnostics remain visible even with stable Effect packages; exact pins and boundary tests are still necessary.
+
+The workspace runner limits package and Vitest concurrency to avoid starving process fixtures, and disallows focused tests. Do not compensate for missing readiness or cleanup signals by merely raising timeouts. Source and packed-consumer checks must not require generated distributions or mutate shared build output. Run both focused tests and the full gate after architecture changes; broaden testing further only when failures or remaining risk justify it.

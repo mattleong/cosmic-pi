@@ -33,6 +33,7 @@ import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.t
 import { PARENT_REPLY_PREFIX } from "../supervisor/protocol.ts";
 import { clipUtf8Text } from "../run/state.ts";
 import { SUBAGENT_RESULT_TOOL_NAME, SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
+import { encodeFleetActionRequest, fleetSnapshotProxyRequest } from "../tools/proxy-fleet.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
 import { decodeSubagentContract, isSubagentContractTool } from "../tools/contract-schema.ts";
@@ -442,7 +443,15 @@ export function registerSubagentChildBridge(
             scheduleAnimation,
           });
         const runId = subagentChildRunId();
-        if (runId) registerSubagentProxyManagerCommand(pi, runId, call);
+        if (runId)
+          registerSubagentProxyManagerCommand(
+            pi,
+            runId,
+            (request, expected, signal) =>
+              proxyCall(input, token, encodeFleetActionRequest(request, expected), signal),
+            (signal) => proxyCall(input, token, fleetSnapshotProxyRequest, signal),
+            () => isActivationCurrent(input, token),
+          );
         if (!isActivationCurrent(input, token)) throw new Error("Stale child activation.");
         pi.setActiveTools([
           ...new Set([

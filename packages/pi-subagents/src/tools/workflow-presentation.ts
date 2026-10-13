@@ -8,6 +8,7 @@ import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
 import type { Static } from "typebox";
 import {
+  escapeControlChars,
   expandedSection,
   getTextContent,
   type CompactIssue,
@@ -168,8 +169,7 @@ export const workflowCompactSummary: CompactSummaryProvider<
   };
 };
 
-const scriptLines = (script: string): ReadonlyArray<string> => {
-  const source = stripTerminalControls(script);
+const scriptLines = (source: string): ReadonlyArray<string> => {
   try {
     return highlightCode(source, "javascript");
   } catch {
@@ -178,7 +178,7 @@ const scriptLines = (script: string): ReadonlyArray<string> => {
 };
 
 const scriptComponent = (script: string, theme: Theme, expanded: boolean): Component => {
-  const lines = scriptLines(script);
+  const lines = scriptLines(escapeControlChars(script));
   const shown = expanded ? lines : lines.slice(0, PREVIEW_LINES);
   const hidden = lines.length - shown.length;
   return new Text(
@@ -211,8 +211,9 @@ export const renderWorkflowCall = (
       return executionStarted && isPartial ? [...header, toolRunningLine(theme)] : header;
     }),
   );
-  if (workflowToolAction(args) === "start" && args.script)
-    container.addChild(scriptComponent(args.script, theme, expanded));
+  if (expanded) container.addChild(renderWorkflowInput(args, theme));
+  else if (workflowToolAction(args) === "start" && args.script)
+    container.addChild(scriptComponent(args.script, theme, false));
   return container;
 };
 
@@ -259,9 +260,7 @@ export const renderWorkflowInput = (args: Partial<WorkflowToolArgs>, theme: Them
   const container = new Container();
   const field = (label: string, value: string | undefined) => {
     if (value !== undefined)
-      container.addChild(
-        expandedSection(theme, label, new Text(stripTerminalControls(value), 0, 0)),
-      );
+      container.addChild(expandedSection(theme, label, new Text(escapeControlChars(value), 0, 0)));
   };
   field("Saved workflow", args.name);
   field("Script file", args.scriptPath);

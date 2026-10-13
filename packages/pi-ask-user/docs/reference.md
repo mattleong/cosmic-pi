@@ -90,7 +90,7 @@ With no earlier questionnaire, the tool opens and focuses the overlay and return
 
 `status` without an ID lists retained metadata; with an ID it returns the full result. Use `await` when independent work is exhausted, not repeated status polling. A full questionnaire queue rejects admission.
 
-Answer delivery, waiter ownership, retention, retries, and the shared queue are described in [ARCHITECTURE.md](../ARCHITECTURE.md#async-ownership-and-delivery); revocation and history receipts across reload, replacement, and tree navigation are in [its session lifecycle section](../ARCHITECTURE.md#session-lifecycle-and-history).
+Answer delivery, waiter ownership, retention, retries, and the shared queue are described in the [lifecycle note](lifecycle.md#admission-and-result-ownership); revocation and history receipts across reload, replacement, and tree navigation are in [the architecture map](../ARCHITECTURE.md#session-lifecycle-and-history).
 
 ## Native codemode results
 
@@ -139,7 +139,7 @@ This is an additive tool-result boundary: normal text, persisted details, render
 
 ## Activity view and child questions
 
-In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Run cancellation or session replacement cancels a child's waiting or mounted requests. Activity rows, hide/resume, and the authenticated child relay are described in [ARCHITECTURE.md](../ARCHITECTURE.md#tui-lifecycle-and-pinned-host-workaround).
+In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Hidden questionnaires keep their drafts and release keyboard focus until resumed. Run cancellation or session replacement cancels a child's waiting or mounted requests. Only authenticated child requests appear beneath their owning subagent run; their answers return to that caller rather than automatically steering the root agent. The [lifecycle note](lifecycle.md#branch-and-child-authority) explains ownership and revocation.
 
 ## TUI controls
 
@@ -153,4 +153,4 @@ RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, 
 
 ## Transcript cards
 
-All three questionnaire tools use the shared `pi-code-previews` tool shell and follow its `toolCallCollapsedStyle`: `preview` by default, or `compact` after `/reload`. Both styles, their issue wording, and expanded views are described in [ARCHITECTURE.md](../ARCHITECTURE.md#modes-security-and-rendering).
+All three questionnaire tools use the shared `pi-code-previews` tool shell and follow its `toolCallCollapsedStyle`: `preview` by default, or `compact` after `/reload`. Compact rows summarize questionnaire state without answer text or notes; preview bodies show answers and notes. Both styles retain failures and delivery warnings, and expansion shows the submitted arguments and full agent-facing result, including request/delivery metadata and recovery guidance.

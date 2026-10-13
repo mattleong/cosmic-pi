@@ -17,7 +17,6 @@ import {
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ImageSaveMode, type ResolvedConfig } from "../config/schema.ts";
-import type { OpenAIProjection } from "../usage/projection.ts";
 import { makeImageInputReader } from "./input.ts";
 import { imageOutputMetadata, makeImageOutput } from "./output.ts";
 import { buildImageRequest, ImageRequestSchema } from "./protocol.ts";
@@ -108,7 +107,7 @@ const customDirectory = (params: ToolParams, configured: Option.Option<string>) 
 
 interface OpenAIImageServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
-  readonly projection: MutableRef.MutableRef<OpenAIProjection>;
+  readonly config: () => ResolvedConfig | undefined;
 }
 
 export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
@@ -224,7 +223,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
         const safeGenerate = (params: ToolParams) =>
           Effect.suspend(() => {
             const ctx = MutableRef.get(options.context);
-            const cfg = MutableRef.get(options.projection).config;
+            const cfg = options.config();
             const timeoutMs = cfg?.image.timeoutMs ?? DEFAULT_IMAGE_CONFIG.timeoutMs;
             return generate(params, ctx, cfg).pipe(
               Effect.timeoutOrElse({

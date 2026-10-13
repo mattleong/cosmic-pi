@@ -44,6 +44,12 @@ import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import { isPendingDeliveryError } from "../tools/outcome.ts";
 import { decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
+import {
+  decodeFleetActionRequest,
+  executeFleetSnapshot,
+  FLEET_ACTION_TOOL_NAME,
+  FLEET_SNAPSHOT_TOOL_NAME,
+} from "../tools/proxy-fleet.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerWorkflowTool } from "../tools/workflow.ts";
 import {
@@ -189,6 +195,7 @@ export function registerSubagentApplication(
       PreparedActivation
     >({
       makeRuntime: (activation) => {
+        const ownsActivation = slot.captureAuthority();
         if (activation.trigger !== "tree") profileOverrideHandoff.clear();
         const owner = profileOverrideHandoff.open();
         const restoreReload = activation.trigger === "reload" || incompatibleReload;
@@ -208,7 +215,11 @@ export function registerSubagentApplication(
         const layer = makeSubagentLayer({
           sessionKey: activation.sessionKey,
           isProjectTrusted: () => isProjectTrusted(activation.ctx),
-          workflowActivity: workflowViews,
+          workflowActivity: {
+            publish: (runs) => {
+              if (ownsActivation()) workflowViews.publish(runs);
+            },
+          },
           workflowObserver: ultracode.observer(),
           cwd: activation.cwd,
           agentDirectory: activation.agentDirectory,
@@ -218,18 +229,46 @@ export function registerSubagentApplication(
             profileOverrideHandoff.publishBaseConfig(owner, config),
           initialSessionOverrides: restoredReload ?? profileOverrideHandoff.capture(),
           publishSessionOverrides: (seed) => profileOverrideHandoff.publish(owner, seed),
-          publish: bridge.publish,
-          notify,
+          publish: (projection) => {
+            if (ownsActivation()) bridge.publish(projection);
+          },
+          notify: (notification) =>
+            ownsActivation() && currentActivation === activation
+              ? notify(notification)
+              : { deliveredCompletionKeys: [], actionAccepted: false },
           questionnaireHandler: (request, questionnaireOwner) =>
-            askParentQuestionnaire(
-              pi.events,
-              activation.ctx.sessionManager.getSessionId(),
-              request,
-              questionnaireOwner,
+            Effect.suspend(() =>
+              ownsActivation() && currentActivation === activation
+                ? askParentQuestionnaire(
+                    pi.events,
+                    activation.ctx.sessionManager.getSessionId(),
+                    request,
+                    questionnaireOwner,
+                  )
+                : Effect.fail(
+                    new InvalidSubagentRequestError({
+                      code: "proxy_caller_disconnected",
+                      message: "The subagent session was replaced.",
+                    }),
+                  ),
             ),
           proxyHandler: (service, callerRunId, request) =>
             Effect.gen(function* () {
-              const input = decodeSubagentProxyRequest(request);
+              if (!ownsActivation() || currentActivation !== activation)
+                return yield* new InvalidSubagentRequestError({
+                  code: "proxy_caller_disconnected",
+                  message: "The subagent session was replaced.",
+                });
+              if (request.tool === FLEET_SNAPSHOT_TOOL_NAME)
+                return yield* executeFleetSnapshot(request, callerRunId).pipe(
+                  Effect.provideService(SubagentService, service),
+                );
+              const fleetAction =
+                request.tool === FLEET_ACTION_TOOL_NAME
+                  ? decodeFleetActionRequest(request)
+                  : undefined;
+              if (fleetAction instanceof InvalidSubagentRequestError) return yield* fleetAction;
+              const input = fleetAction?.input ?? decodeSubagentProxyRequest(request);
               if (input instanceof InvalidSubagentRequestError) return yield* input;
               const caller = (yield* service.visibleList(callerRunId)).find(
                 (run) => run.id === callerRunId,
@@ -246,6 +285,9 @@ export function registerSubagentApplication(
                 undefined,
                 activation.ctx,
                 callerRunId,
+                undefined,
+                false,
+                fleetAction?.expected,
               ).pipe(Effect.provideService(SubagentService, service));
             }),
         });
@@ -283,13 +325,17 @@ export function registerSubagentApplication(
         }),
       onActivated: (activation, token, prepared) => {
         if (!slot.isCurrent(token)) return;
+        const run: typeof slot.run = (effect, signal) =>
+          slot.isCurrent(token)
+            ? slot.run(effect, signal)
+            : Promise.reject(new Error("Subagents session was replaced."));
         try {
           const scheduleAnimation = (interval: number, tick: () => void) =>
             slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined;
           const keptActive = new Set(activeSubagentTools(pi));
           registerSubagentTools(
             pi,
-            { ...prepared.toolRuntime, scheduleAnimation },
+            { ...prepared.toolRuntime, scheduleAnimation, run },
             { receipts, owner: receipts.activate() },
             replay.shell,
           );
@@ -300,7 +346,7 @@ export function registerSubagentApplication(
               savedWorkflows: prepared.savedWorkflows,
               savedWorkflowLocations: prepared.savedWorkflowLocations,
               scheduleAnimation,
-              run: slot.run,
+              run,
             },
             replay.shell,
           );
@@ -352,15 +398,17 @@ export function registerSubagentApplication(
             isCurrent,
             input: (selected, action, signal) =>
               slot.run(promptSubagentActivityInput(activation.ctx, selected, action), signal),
-            act: (id, action, signal, input) =>
+            act: (id, action, signal, input, expected) =>
               slot.run(
                 SubagentService.use((service) => {
-                  if (action === "resume") return service.resume(id, input).pipe(Effect.asVoid);
+                  if (action === "resume")
+                    return service.resume(id, input, expected).pipe(Effect.asVoid);
                   if (action !== "message" && action !== "reply" && action !== "rename")
-                    return service[action](id).pipe(Effect.asVoid);
+                    return service[action](id, expected).pipe(Effect.asVoid);
                   if (input === undefined) return Effect.die(missingActivityInput(action));
-                  if (action !== "message") return service[action](id, input).pipe(Effect.asVoid);
-                  return service.send(id, input).pipe(
+                  if (action !== "message")
+                    return service[action](id, input, expected).pipe(Effect.asVoid);
+                  return service.send(id, input, expected).pipe(
                     Effect.catchIf(isPendingDeliveryError, () =>
                       Effect.sync(() => {
                         if (isCurrent())

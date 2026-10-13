@@ -17,7 +17,9 @@ export function createPathListRenderer(
   iconMode: PathIconMode,
 ): PathListRenderer {
   const renderLine = (line: string) => renderPathListLine(line, cwd, theme, iconMode);
-  const shouldTree = allLines.some((line) => isPathLine(line) && line.includes("/"));
+  const shouldTree =
+    !allLines.some((line) => isPathLine(line) && line.startsWith("/")) &&
+    allLines.some((line) => isPathLine(line) && line.includes("/"));
   if (!shouldTree) return { lines: allLines, renderChunk: (lines) => lines.map(renderLine) };
 
   const seenDirs = new Set<string>();
