@@ -127,7 +127,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Wait for selected subagents and return their reports, with live progress. Returns early when a run asks you a question, pauses, or has writer admission paused; follow the steps in the result, then await again.",
     promptSnippet: "Wait for subagent reports when your next step depends on them",
     promptGuidelines: [
-      "After starting subagents, keep working on independent parts. Call subagent_await only when your next step depends on a report; reports arrive on their own, so don't poll subagent_status.",
+      "After starting subagents, keep working on parts you didn't delegate; don't redo a subagent's slice while it runs. Call subagent_await only when your next step depends on a report; reports arrive on their own, so don't poll subagent_status.",
       "When a subagent tool result lists next steps, follow them in order before continuing. Use subagent_reply only for a real parent question.",
     ],
     renderCall: (args, theme) =>

@@ -24,19 +24,20 @@ const DELEGATION_PROMPTS = {
   normal: { startGuideline: NORMAL_START_GUIDELINE },
   encouraged: {
     startGuideline:
-      "Before any task beyond a quick lookup or a small edit, find the slices that can run independently and launch them together with subagent_start. Work directly only when the task is tightly serial, needs the user, or is faster to do than to brief.",
+      "Answer directly when a quick search and a read or two will do, such as finding where something is defined or checking a value, and make small edits yourself. For anything larger, find the slices that can run independently and launch them together with subagent_start. Also work directly when the task is tightly serial, needs the user, or is faster to do than to brief.",
     section:
-      "The user wants more delegation in this session. Hand exploration, research, planning, review, and well-scoped implementation to subagents, and keep the main thread for decisions, integration, and conversation with the user.",
+      "The user wants more delegation in this session, but not for quick questions: if a search and a read or two will answer it, answer it yourself. Hand exploration, research, planning, review, and well-scoped implementation to subagents, and keep the main thread for decisions, integration, and conversation with the user.",
   },
   orchestration: {
     startGuideline:
-      "Delegate by default: break each request into self-contained assignments and launch them with subagent_start, in parallel where they are independent.",
+      "Answer directly when a quick search and a read or two will do, such as finding where something is defined or checking a value. Otherwise delegate by default: break each request into self-contained assignments and launch them with subagent_start, in parallel where they are independent.",
     section: [
       "You are the orchestrator for this session. Delegate nearly all substantive work, including exploration, research, planning, implementation, and review, to subagents. Keep your own context for decomposition, coordination, verification, and conversation with the user.",
+      "- Answer quick questions yourself: if a search and a read or two will answer it, don't delegate.",
       "- Read only enough to write precise, self-contained tasks; let subagents explore in depth.",
-      "- Use worker for implementation and reviewer to check substantial results before you report them.",
-      "- Act directly only for trivial steps, such as a one-line fix or a quick check, or when briefing would cost more than doing.",
-      "- Verify subagent output yourself, by reading diffs and running tests, before calling work done.",
+      "- Use worker for implementation. Use a reviewer only for substantial or risky changes.",
+      "- Act directly for trivial steps, such as a one-line fix, or when briefing would cost more than doing.",
+      "- Check results in proportion to their risk: spot-check the key claims of an investigation instead of redoing it, and read the diff and run the tests for a change.",
     ].join("\n"),
   },
 } as const satisfies Record<DelegationMode, DelegationPrompt>;
