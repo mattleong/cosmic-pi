@@ -12,16 +12,16 @@ import { makeWorkingRow } from "../src/working/row.ts";
 import { ActivityComponent } from "../src/activity/component.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetHeight } from "../src/activity/widget-projection.ts";
-import { isFinished, type ActivityRow } from "../src/activity/model.ts";
-import { activityRow, memberRow, workflowRow } from "./support/activity.ts";
+import type { ActivityRow } from "../src/activity/model.ts";
+import { activityRow, memberRow } from "./support/activity.ts";
 
 const directory = galleryDirectory(process.env) ?? "";
 const stop = {
   id: "stop",
-  label: "Stop workflow",
-  confirmation: "Stop this workflow and its running agents?",
+  label: "Stop agent",
+  confirmation: "Stop this agent and its subagents?",
 };
-const skip = [{ id: "skip", label: "Skip" }];
+const stopQueued = [{ id: "stop", label: "Stop" }];
 const standalone = [
   activityRow("docs", "running", undefined, {
     title: "Update documentation",
@@ -34,21 +34,22 @@ const standalone = [
     startedAt: 0,
   }),
 ];
-const review = workflowRow("review", ["Find", "Review", "Verify"], "running", "Review", {
+const review = activityRow("review", "running", undefined, {
   title: "Review authentication",
+  profile: "planner",
   summary: "Found 5 call sites; reviewing each one for token reuse",
   detail: 'Args: { "scope": "src/auth" }\nfound 4 risky call sites',
   startedAt: 0,
   actions: [stop],
 });
-const found = memberRow("finder", review, "Find", "done", {
+const found = memberRow("finder", review, "done", {
   title: "Find call sites",
   profile: "scout",
   startedAt: 0,
   endedAt: 30_000,
 });
 const reviewers = ["Session handling", "Token refresh"].map((title, index) =>
-  memberRow(`reviewer-${index}`, review, "Review", "running", {
+  memberRow(`reviewer-${index}`, review, "running", {
     title,
     profile: "reviewer",
     startedAt: 35_000,
@@ -56,217 +57,107 @@ const reviewers = ["Session handling", "Token refresh"].map((title, index) =>
   }),
 );
 const queued = ["Password reset", "OAuth callback", "Rate limits"].map((title, index) =>
-  memberRow(`queued-${index}`, review, "Review", "pending", {
+  memberRow(`queued-${index}`, review, "pending", {
     title,
     profile: "reviewer",
-    actions: skip,
+    actions: stopQueued,
   }),
 );
 const running: readonly ActivityRow[] = [review, found, ...reviewers, ...queued];
-const stopped = workflowRow("stopped", ["Plan", "Implement", "Verify"], "cancelled", "Implement", {
+const stopped = activityRow("stopped", "cancelled", undefined, {
   title: "Migrate settings store",
+  profile: "planner",
   startedAt: 0,
   endedAt: 70_000,
 });
 const stoppedRows: readonly ActivityRow[] = [
   stopped,
-  memberRow("planner", stopped, "Plan", "done", {
+  memberRow("planner", stopped, "done", {
     title: "Draft migration plan",
     profile: "planner",
     startedAt: 0,
     endedAt: 20_000,
   }),
-  memberRow("implementer", stopped, "Implement", "cancelled", {
+  memberRow("implementer", stopped, "cancelled", {
     title: "Rewrite store",
     profile: "worker",
     startedAt: 25_000,
     endedAt: 70_000,
   }),
-  memberRow("queued-verify", stopped, "Implement", "cancelled", {
+  memberRow("queued-verify", stopped, "cancelled", {
     title: "Port callers",
     profile: "worker",
   }),
 ];
-const early = workflowRow("early", ["Triage", "Fix", "Verify"], "done", "Triage", {
-  title: "Fix flaky test",
-  summary: "returned early: nothing to fix",
-  startedAt: 0,
-  endedAt: 40_000,
-});
-const earlyRows: readonly ActivityRow[] = [
-  early,
-  memberRow("triage", early, "Triage", "done", {
-    title: "Reproduce failure",
-    profile: "scout",
-    startedAt: 0,
-    endedAt: 38_000,
-  }),
-];
-const failing = workflowRow("failing", ["Build", "Test"], "running", "Test", {
+const failing = activityRow("failing", "running", undefined, {
   title: "Release candidate",
+  profile: "planner",
   startedAt: 0,
   actions: [stop],
 });
 const failingRows: readonly ActivityRow[] = [
   failing,
-  memberRow("build", failing, "Build", "done", {
+  memberRow("build", failing, "done", {
     title: "Build packages",
     profile: "worker",
     startedAt: 0,
     endedAt: 50_000,
   }),
-  memberRow("unit", failing, "Test", "failed", {
+  memberRow("unit", failing, "failed", {
     title: "Unit tests",
     profile: "worker",
     summary: "3 assertions failed in session.test.ts",
     startedAt: 52_000,
     endedAt: 80_000,
   }),
-  memberRow("e2e", failing, "Test", "running", {
+  memberRow("e2e", failing, "running", {
     title: "End-to-end tests",
     profile: "worker",
     startedAt: 52_000,
   }),
 ];
-const halted = workflowRow("halted", [], "cancelled", "Implement", {
-  title: "Migrate settings store",
-  startedAt: 0,
-  endedAt: 70_000,
-  phases: [
-    { title: "Plan", work: { items: 2, finished: 2, stopped: 0 } },
-    { title: "Implement", work: { items: 3, finished: 3, stopped: 3 } },
-    { title: "Verify" },
-  ],
-});
-const haltedRows: readonly ActivityRow[] = [
-  halted,
-  memberRow("halted-plan", halted, "Plan", "done", {
-    title: "Draft migration plan",
-    profile: "planner",
-    startedAt: 0,
-    endedAt: 20_000,
-  }),
-  memberRow("halted-rewrite", halted, "Implement", "cancelled", {
-    title: "Rewrite store",
-    profile: "worker",
-    startedAt: 25_000,
-    endedAt: 70_000,
-  }),
-];
-const flaky = workflowRow("flaky", ["Build", "Test", "Report"], "running", "Test", {
-  title: "Nightly regression sweep",
-  summary: "Retrying failed suites once before reporting",
-  startedAt: 0,
-  actions: [stop],
-});
-const flakyRows: readonly ActivityRow[] = [
-  flaky,
-  memberRow("flaky-build", flaky, "Build", "done", {
-    title: "Build packages",
-    profile: "worker",
-    startedAt: 0,
-    endedAt: 20_000,
-  }),
-  ...["auth", "billing", "search", "mail"].map((suite, index) =>
-    memberRow(`flaky-${suite}`, flaky, "Test", "failed", {
-      title: `${suite} suite`,
-      profile: "worker",
-      summary: `${index + 2} tests failed; first: ${suite} handles expired sessions`,
-      startedAt: 22_000,
-      endedAt: 40_000 + index * 5_000,
-    }),
-  ),
-  memberRow("flaky-media", flaky, "Test", "running", {
-    title: "media suite",
-    profile: "worker",
-    startedAt: 22_000,
-  }),
-];
-const spread = workflowRow("spread", ["Lint", "Build", "Test"], "running", "Test", {
-  title: "Monorepo health check",
-  startedAt: 0,
-  actions: [stop],
-});
-const spreadFailure = (phase: string, name: string, endedAt: number): ActivityRow =>
-  memberRow(`spread-${name}`, spread, phase, "failed", {
-    title: `${name} check`,
-    profile: "worker",
-    summary: `${name} reported errors`,
-    startedAt: 1_000,
-    endedAt,
-  });
-const spreadRows: readonly ActivityRow[] = [
-  spread,
-  spreadFailure("Lint", "eslint", 8_000),
-  spreadFailure("Lint", "oxlint", 6_000),
-  spreadFailure("Build", "types", 30_000),
-  spreadFailure("Test", "unit", 70_000),
-  spreadFailure("Test", "e2e", 60_000),
-  spreadFailure("Test", "smoke", 50_000),
-  memberRow("spread-integration", spread, "Test", "running", {
-    title: "integration check",
-    profile: "worker",
-    startedAt: 40_000,
-  }),
-];
-const counted = workflowRow("counted", [], "running", "Verify", {
-  title: "Release candidate",
-  startedAt: 0,
-  actions: [stop],
-  phases: [
-    { title: "Build", work: { items: 4, finished: 4, stopped: 0, failed: 1 } },
-    { title: "Verify", work: { items: 1, finished: 0, stopped: 0 } },
-  ],
-});
-const countedRows: readonly ActivityRow[] = [
-  counted,
-  memberRow("counted-verify", counted, "Verify", "running", {
-    title: "Smoke test the release",
-    profile: "worker",
-    startedAt: 60_000,
-  }),
-];
-const lengthy = workflowRow("lengthy", ["Inventory", "Migrate", "Verify"], "running", "Migrate", {
+const lengthy = activityRow("lengthy", "running", undefined, {
   title: "Migrate every billing service to the consolidated settings schema",
+  profile: "planner",
   startedAt: 0,
   actions: [stop],
 });
 const lengthyRows: readonly ActivityRow[] = [
   lengthy,
-  memberRow("lengthy-inventory", lengthy, "Inventory", "done", {
+  memberRow("lengthy-inventory", lengthy, "done", {
     title: "Inventory billing services",
     profile: "scout",
     startedAt: 0,
     endedAt: 30_000,
   }),
-  memberRow("lengthy-invoices", lengthy, "Migrate", "failed", {
+  memberRow("lengthy-invoices", lengthy, "blocked", {
     title: "Migrate invoices",
     profile: "worker",
-    summary: "Schema check rejected the legacy currency field",
+    blockedReason: "write-containment",
     startedAt: 32_000,
-    endedAt: 60_000,
   }),
-  memberRow("lengthy-refunds", lengthy, "Migrate", "running", {
+  memberRow("lengthy-refunds", lengthy, "running", {
     title: "Migrate refunds",
     profile: "worker",
     startedAt: 32_000,
   }),
 ];
-const loose = workflowRow("loose", [], "running", undefined, {
+const fanout = activityRow("fanout", "running", undefined, {
   title: "Ad-hoc fan-out",
+  profile: "planner",
   startedAt: 0,
   actions: [stop],
 });
-const asking = memberRow("asking", loose, undefined, "needs-input", {
+const asking = memberRow("asking", fanout, "needs-input", {
   title: "Choose a library",
   profile: "researcher",
   startedAt: 10_000,
   inputTarget: "parent",
 });
-const looseRows: readonly ActivityRow[] = [
-  loose,
+const fanoutRows: readonly ActivityRow[] = [
+  fanout,
   asking,
-  memberRow("loose-worker", loose, undefined, "running", {
+  memberRow("fanout-worker", fanout, "running", {
     title: "Benchmark options",
     profile: "worker",
     startedAt: 10_000,
@@ -276,179 +167,27 @@ const looseRows: readonly ActivityRow[] = [
     title: "Approve the dependency",
   }),
 ];
-const plannedRow = (
-  id: string,
-  workflow: ActivityRow,
-  phase: string,
-  title: string,
-  profile: string,
-): ActivityRow =>
-  memberRow(id, workflow, phase, isFinished(workflow) ? "cancelled" : "pending", {
-    title,
-    profile,
-    planned: true,
-  });
-const plan = workflowRow("plan", ["Map", "Review", "Verify"], "running", "Map", {
-  title: "Audit payment flows",
-  summary: "Mapping checkout, refunds and payouts",
-  startedAt: 0,
-  actions: [stop],
-});
-const planRows: readonly ActivityRow[] = [
-  plan,
-  memberRow("mapper", plan, "Map", "running", {
-    title: "Map payment entry points",
-    profile: "scout",
-    startedAt: 10_000,
-  }),
-  plannedRow("plan-checkout", plan, "Review", "review:checkout", "reviewer"),
-  plannedRow("plan-refunds", plan, "Review", "review:refunds", "reviewer"),
-  plannedRow("plan-payouts", plan, "Review", "review:payouts", "reviewer"),
-  plannedRow("plan-verify", plan, "Verify", "Verify findings", "reviewer"),
-];
-const claimed = workflowRow("claimed", ["Map", "Review", "Verify"], "running", "Review", {
-  title: "Audit payment flows",
-  summary: "review:refunds is waiting for a free agent slot",
-  startedAt: 0,
-  actions: [stop],
-  phases: [{ title: "Map" }, { title: "Review" }, { title: "Verify", planned: 1 }],
-});
-const claimedRows: readonly ActivityRow[] = [
-  claimed,
-  memberRow("claimed-map", claimed, "Map", "done", {
-    title: "Map payment entry points",
-    profile: "scout",
-    startedAt: 10_000,
-    endedAt: 40_000,
-  }),
-  memberRow("claimed-checkout", claimed, "Review", "running", {
-    title: "review:checkout",
-    profile: "reviewer",
-    startedAt: 45_000,
-  }),
-  memberRow("claimed-refunds", claimed, "Review", "pending", {
-    title: "review:refunds",
-    profile: "reviewer",
-    actions: skip,
-  }),
-  plannedRow("claimed-payouts", claimed, "Review", "review:payouts", "reviewer"),
-  plannedRow("claimed-verify", claimed, "Verify", "Verify findings", "reviewer"),
-];
-const unrun = workflowRow("unrun", ["Map", "Review", "Verify"], "done", "Review", {
-  title: "Audit payment flows",
-  summary: "Returned early: no payment code changed",
-  startedAt: 0,
-  endedAt: 50_000,
-});
-const unrunRows: readonly ActivityRow[] = [
-  unrun,
-  memberRow("unrun-map", unrun, "Map", "done", {
-    title: "Map payment entry points",
-    profile: "scout",
-    startedAt: 0,
-    endedAt: 30_000,
-  }),
-  memberRow("unrun-checkout", unrun, "Review", "done", {
-    title: "review:checkout",
-    profile: "reviewer",
-    startedAt: 32_000,
-    endedAt: 50_000,
-  }),
-  plannedRow("unrun-refunds", unrun, "Review", "review:refunds", "reviewer"),
-  plannedRow("unrun-verify", unrun, "Verify", "Verify findings", "reviewer"),
-];
-const crowded = workflowRow(
-  "crowded",
-  ["Inventory", "Audit", "Fix", "Verify"],
-  "running",
-  "Inventory",
-  {
-    title: "Harden every service",
-    summary: "Listing services under services/",
-    startedAt: 0,
-    actions: [stop],
-  },
-);
-const crowdedRows: readonly ActivityRow[] = [
-  crowded,
-  memberRow("inventory", crowded, "Inventory", "running", {
-    title: "Inventory services",
-    profile: "scout",
-    startedAt: 5_000,
-  }),
-  ...["Audit", "Fix", "Verify"].flatMap((phase) =>
-    ["billing", "accounts", "search", "mail", "media"].map((service) =>
-      plannedRow(
-        `${phase}-${service}`,
-        crowded,
-        phase,
-        `${phase.toLowerCase()}:${service}`,
-        "worker",
-      ),
-    ),
-  ),
-];
-const passed = workflowRow("passed", ["Map", "Review", "Verify"], "running", "Verify", {
-  title: "Audit payment flows",
-  summary: "Verifying review findings",
-  startedAt: 0,
-  actions: [stop],
-  phases: [{ title: "Map", planned: 1 }, { title: "Review" }, { title: "Verify" }],
-  unphasedPlanned: 12,
-});
-const passedRows: readonly ActivityRow[] = [
-  passed,
-  plannedRow("passed-map", passed, "Map", "Map payout entry points", "scout"),
-  memberRow("passed-review", passed, "Review", "done", {
-    title: "review:checkout",
-    profile: "reviewer",
-    startedAt: 10_000,
-    endedAt: 40_000,
-  }),
-  memberRow("passed-verify", passed, "Verify", "running", {
-    title: "Verify findings",
-    profile: "reviewer",
-    startedAt: 45_000,
-  }),
-];
 const scenarios: ReadonlyArray<{
   readonly title: string;
   readonly rows: readonly ActivityRow[];
   readonly tiers?: boolean;
 }> = [
-  { title: "Later phases show the agents a workflow plans to call", rows: planRows },
-  { title: "Partly claimed plan with a narrator line", rows: claimedRows },
-  { title: "Finished workflow with planned agents it never ran", rows: unrunRows },
-  { title: "Planned agents that don't fit are counted on their phase", rows: crowdedRows },
+  { title: "Running parent with nested subagents and queued placeholders", rows: running },
   {
-    title: "A passed phase with planned agents, and planned agents in phases not shown",
-    rows: passedRows,
-  },
-  { title: "Running workflow with queued placeholders that can be skipped", rows: running },
-  {
-    title: "Running workflow beside standalone agents and tasks",
+    title: "Running parent beside standalone agents and tasks",
     rows: [...running, ...standalone],
   },
-  { title: "Stopped workflow", rows: stoppedRows },
+  { title: "Stopped parent with stopped and never-started subagents", rows: stoppedRows },
+  { title: "Failed subagent under a live parent", rows: failingRows },
   {
-    title: "A workflow stopped in its second phase counts only the first as done",
-    rows: haltedRows,
-    tiers: true,
-  },
-  { title: "Skipped phases after an early return", rows: earlyRows },
-  { title: "Failed member in a live phase", rows: failingRows },
-  { title: "Failures past the cap in a live workflow", rows: flakyRows, tiers: true },
-  { title: "Failures past the cap counted within each phase", rows: spreadRows, tiers: true },
-  { title: "A phase whose producer counts a failure it no longer shows", rows: countedRows },
-  {
-    title: "A long workflow name beside attention and phase counts",
+    title: "A long parent name beside attention counts",
     rows: lengthyRows,
     tiers: true,
   },
-  { title: "Workflow members without phases and an owned question", rows: looseRows },
+  { title: "Subagent waiting on its parent and an owned question", rows: fanoutRows },
   {
-    title: "Clipped workflows retain attention and hidden evidence",
-    rows: [...running, ...failingRows, ...looseRows, ...stoppedRows, ...standalone],
+    title: "Clipped activity retains attention and hidden evidence",
+    rows: [...running, ...failingRows, ...fanoutRows, ...stoppedRows, ...standalone],
   },
   {
     title: "Standalone queued and urgent questions",
@@ -481,33 +220,22 @@ const managerFrames = (rows: readonly ActivityRow[], tiers: boolean) => {
     ["manager · 140 cols", component.render(140)],
   ];
   if (tiers) frames.push(["stacked manager · 80 cols", component.render(80)]);
-  if (!rows.some((row) => row.kind === "workflow")) return frames;
+  if (!rows.some((row) => row.parent !== undefined)) return frames;
   component.handleInput("\r");
-  frames.push(["inspect workflow", component.render(140)]);
+  frames.push(["inspect parent", component.render(140)]);
   component.handleInput("h");
   component.handleInput("j");
   component.handleInput("\r");
   frames.push(["inspect first child", component.render(140)]);
   component.handleInput("h");
-  const inspected = [
-    [
-      rows.find(
-        (row) => row.status === "pending" && row.startedAt === undefined && row.planned !== true,
-      ),
-      "inspect queued placeholder",
-      11,
-    ],
-    [rows.find((row) => row.planned === true), "inspect planned agent", 15],
-  ] as const;
-  for (const [row, label, presses] of inspected) {
-    if (row && select(component, row.key, presses)) {
-      component.handleInput("\r");
-      frames.push([label, component.render(140)]);
-      component.handleInput("h");
-    }
-    component.handleInput("g");
-    component.handleInput("g");
+  const placeholder = rows.find((row) => row.status === "pending" && row.startedAt === undefined);
+  if (placeholder && select(component, placeholder.key, 11)) {
+    component.handleInput("\r");
+    frames.push(["inspect queued placeholder", component.render(140)]);
+    component.handleInput("h");
   }
+  component.handleInput("g");
+  component.handleInput("g");
   component.handleInput("j");
   component.handleInput("h");
   frames.push(["collapsed manager · 100 cols", component.render(100)]);
@@ -536,7 +264,7 @@ const crowdedActions = activityRow("crowded-actions", "running", undefined, {
 });
 const footerScenarios: ReadonlyArray<readonly [string, readonly ActivityRow[], string]> = [
   ["One stop action", running, review.key],
-  ["One skip action", running, queued[0]!.key],
+  ["Queued placeholder stop action", running, queued[0]!.key],
   ["Several direct actions", [steered], steered.key],
   ["More actions than one page", [crowdedActions], crowdedActions.key],
   ["No actions", stoppedRows, stopped.key],

@@ -116,26 +116,6 @@ describe("SubagentConfigStore activation", () => {
     }),
   );
 
-  it.effect("loads saved profiles with a retired workflow preference without rewriting them", () =>
-    Effect.gen(function* () {
-      const worker = declaredCandidate("openai/worker", { writeIntent: "writer" });
-      const original = {
-        ...v6({ worker }),
-        ultracode: true,
-        nesting: { maxDirectChildren: 4, maxDepth: 2 },
-        writerWorkspaceMode: "worktree",
-      };
-      const { memory, store } = yield* setup({ [GLOBAL]: original });
-      const config = yield* store.load(CWD, AGENT, false);
-      expect(config.profiles.worker).toEqual({ candidates: [worker] });
-      expect(config.nesting).toEqual(original.nesting);
-      expect(config.writerWorkspaceMode).toBe("worktree");
-      expect(config.diagnostics).toEqual([]);
-      expect(memory.documents.get(GLOBAL)).toEqual(original);
-      expect(memory.operations.filter((operation) => operation.startsWith("write:"))).toEqual([]);
-    }),
-  );
-
   it.effect("rejects unsupported or malformed documents at activation", () =>
     Effect.gen(function* () {
       for (const document of [

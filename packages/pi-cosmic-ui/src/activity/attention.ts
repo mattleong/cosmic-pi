@@ -1,5 +1,5 @@
 import { managerActivityLabel } from "../manager/chrome.ts";
-import { isFinished, type ActivityRow } from "./model.ts";
+import type { ActivityRow } from "./model.ts";
 import type { ActivityItem } from "./protocol.ts";
 
 export function activityAttention(item: ActivityItem): "user" | "parent" | "blocked" | undefined {
@@ -17,27 +17,18 @@ const blockedLabels = {
   "write-containment": "pausing writes for safety",
 } as const;
 
-export const activityPlanned = (item: Pick<ActivityItem, "planned">): boolean =>
-  item.planned === true;
-
 export const activityQueued = (item: ActivityItem): boolean =>
-  !activityPlanned(item) &&
   item.status === "pending" &&
   item.startedAt === undefined &&
   (item.kind === "agent" || item.kind === "command");
 
 export function activityStatus(item: ActivityItem): string {
-  if (activityPlanned(item)) return isFinished(item) ? "not run" : "planned";
   if (item.status === "needs-input")
     return item.inputTarget === "user" ? "waiting for you" : "waiting for parent";
   if (item.status === "blocked")
     return item.blockedReason ? blockedLabels[item.blockedReason] : "blocked";
   if (item.status === "cancelled")
-    return item.kind === "question"
-      ? "cancelled"
-      : item.skipped === true
-        ? "skipped"
-        : managerActivityLabel("stopped");
+    return item.kind === "question" ? "cancelled" : managerActivityLabel("stopped");
   if (item.status === "pending")
     return item.kind === "question" || activityQueued(item)
       ? "queued"

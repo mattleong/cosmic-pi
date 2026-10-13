@@ -93,8 +93,6 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
 
 If a candidate is unavailable at launch, such as an unauthenticated CLI, the next one is tried. After a run has started, fallback happens only through an explicit `retry`.
 
-Ultracode (`/ultracode` and `subagent_workflow`) has been removed. Ordinary subagents remain supported. Existing `ultracode` settings are ignored when loading saved profile documents; user configuration files are never rewritten automatically.
-
 ## How it works
 
 The root Pi session owns the coordinator: configuration, the run tree, backends, writer pools, and completion delivery. Nested Pi sessions use authenticated proxy tools instead of running their own. Pi children talk over an RPC bridge; Claude Code uses its stream-json protocol and Codex its app-server, both reporting through a private loopback MCP supervisor. Writer leases are keyed by directory identity and shared across Pi processes on the same machine. File claims coordinate writers but aren't a sandbox; Claude and Codex runs use their own native sandboxes. Stopping a run stops its subtree, and shutting down the root stops everything.

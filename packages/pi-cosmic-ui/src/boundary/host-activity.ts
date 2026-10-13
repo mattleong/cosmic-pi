@@ -36,7 +36,6 @@ const isDiscovery = Schema.is(
   Schema.Struct({ version: Schema.Literal(1), sessionId: Schema.String }),
 );
 const MANAGER_TITLES = {
-  workflows: "Activity",
   subagents: "Subagents",
   tasks: "Background tasks",
 } satisfies Record<ActivitySection, string>;

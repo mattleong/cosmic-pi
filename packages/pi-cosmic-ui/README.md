@@ -1,13 +1,13 @@
 # pi-cosmic-ui
 
-Shared, responsive UI for Pi: a composable footer, a unified Activity view for workflows, subagents, and tasks, and the manager building blocks the other Cosmic Pi extensions use.
+Shared, responsive UI for Pi: a composable footer, a unified Activity view for subagents and tasks, and the manager building blocks the other Cosmic Pi extensions use.
 
 ## Features
 
 - **Custom footer** combining location, Git branch and pull request, session, tokens, context, model, and thinking level with contributions from other extensions such as OpenAI usage.
 - **Responsive layout** with density, ordering, and per-item visibility settings.
 - **Working indicator** with elapsed time, a current-call estimate (`~18.4 tok/s`), or a reported completed-call average (`24.1 tok/s`).
-- **Activity view** that shows workflows, subagents, background tasks, and questions in one place, as a compact live panel above the editor and a full-screen manager.
+- **Activity view** that shows subagents, background tasks, and questions in one place, as a compact live panel above the editor and a full-screen manager.
 - **Shared manager chrome** for other extensions: Vim-style navigation, list/detail layouts, status glyphs, settings commands, and full-screen surfaces.
 
 ## Install

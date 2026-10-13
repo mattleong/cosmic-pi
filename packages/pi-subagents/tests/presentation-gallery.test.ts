@@ -1073,8 +1073,7 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
 ];
 
 const activityRowLine = (item: ActivityItem): string => {
-  const status = item.skipped ? `${item.status} (skipped)` : item.status;
-  const head = [status, item.kind, item.title, item.phase, item.profile, item.summary]
+  const head = [item.status, item.kind, item.title, item.profile, item.summary]
     .filter(Boolean)
     .join(" · ");
   const actions = item.actions?.length

@@ -10,7 +10,7 @@ export interface ActivityStatusPart {
   readonly drop?: number;
   readonly clip?: number;
 }
-export const STATUS_DROP = { state: 1, phases: 2, progress: 3, elapsed: 4 } as const;
+export const STATUS_DROP = { state: 1, progress: 2, elapsed: 3 } as const;
 
 const MINIMUM_TITLE_WIDTH = 14;
 const PROFILE_RESERVE_WIDTH = 12;
@@ -32,7 +32,6 @@ export interface ActivityRowVisual {
   readonly route?: string;
   readonly awaited?: boolean;
   readonly omittedChildren?: number;
-  readonly dim?: boolean;
   readonly history?: boolean;
 }
 
@@ -145,7 +144,7 @@ const rowName = (
 ): string => {
   const kind = row.kind ? `${row.kind} ` : "";
   if (focusedStyle) return focusedStyle(`${kind}${profile}${row.title}`);
-  const recede = row.dim ? "dim" : row.history && interactive ? "muted" : undefined;
+  const recede = row.history && interactive ? "muted" : undefined;
   const identityTone = recede ?? (interactive ? managerTone.identity : undefined);
   return `${paint(recede ?? row.typeColor, kind)}${paint(identityTone ?? "muted", profile)}${paint(identityTone ?? "text", row.title)}`;
 };

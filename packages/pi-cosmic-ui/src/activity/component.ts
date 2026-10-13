@@ -163,13 +163,9 @@ export class ActivityComponent {
     const all = this.allEntries();
     const section = this.options.initialSection;
     if (!section)
-      return this.shell.state.selectedId
-        ? undefined
-        : all.find((entry) => entry.type === "workflow" || entry.type === "member");
+      return this.shell.state.selectedId ? undefined : all.find((entry) => entry.type === "member");
     const matching = (entry: GroupedActivityRow) =>
-      section === "workflows"
-        ? entry.type === "workflow"
-        : source(entry)?.kind === (section === "tasks" ? "command" : "agent");
+      source(entry)?.kind === (section === "tasks" ? "command" : "agent");
     return (
       all.find((entry) => entry.section === section && matching(entry)) ??
       all.find(matching) ??

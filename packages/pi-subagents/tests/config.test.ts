@@ -29,30 +29,3 @@ describe("writer workspace configuration", () => {
     expect(JSON.stringify(decoded)).not.toContain("private-value");
   });
 });
-
-describe("removed workflow preferences", () => {
-  it("ignores the retired preference while preserving profile and nesting settings", () => {
-    const document = {
-      version: 6,
-      ultracode: true,
-      defaultProfileSet: "saved",
-      profileSets: { saved: { profiles: { worker: "disabled" } } },
-      nesting: { maxDirectChildren: 3, maxDepth: 1 },
-      writerWorkspaceMode: "worktree",
-    };
-    const decoded = decodeSubagentConfig(document);
-    expect(decoded.diagnostics).toEqual([]);
-    expect(decoded.file).toEqual({
-      version: 6,
-      defaultProfileSet: "saved",
-      profileSets: { saved: { profiles: { worker: "disabled" } } },
-      nesting: { maxDirectChildren: 3, maxDepth: 1 },
-      writerWorkspaceMode: "worktree",
-    });
-    expect(resolve(document)).toMatchObject({
-      profiles: { worker: { candidates: [] } },
-      nesting: { maxDirectChildren: 3, maxDepth: 1 },
-      writerWorkspaceMode: "worktree",
-    });
-  });
-});

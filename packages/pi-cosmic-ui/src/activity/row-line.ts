@@ -13,17 +13,14 @@ import {
   activityAttention,
   activityAttentionLabels,
   activityAttentionCounts,
-  activityPlanned,
   activityQueued,
   activityStatus,
   addAttention,
 } from "./attention.ts";
-import { isFinished, type ActivityRow } from "./model.ts";
+import type { ActivityRow } from "./model.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
 import { renderActivityRow, STATUS_DROP, type ActivityStatusPart } from "./row-render.ts";
 
-const PLANNED_GLYPH = "◦";
-const NOT_RUN_GLYPH = "–";
 const REASON_WIDTH = 32;
 const REASON_MINIMUM_WIDTH = 10;
 
@@ -32,8 +29,6 @@ export interface ActivityMark {
   readonly color: ManagerStatusColor;
 }
 export const activityMark = (row: ActivityRow, now = 0): ActivityMark => {
-  if (activityPlanned(row))
-    return { glyph: isFinished(row) ? NOT_RUN_GLYPH : PLANNED_GLYPH, color: "dim" };
   if (row.status === "needs-input" || row.status === "blocked")
     return { glyph: managerNoticeGlyph("warning"), color: "warning" };
   if (activityQueued(row)) return { glyph: "○", color: "muted" };
@@ -59,7 +54,6 @@ const activityTypes = {
   agent: "SUBAGENT",
   command: "TASK",
   question: "QUESTION",
-  workflow: "WORKFLOW",
 } as const;
 export const activityType = (row: ActivityRow): string => activityTypes[row.kind];
 
@@ -67,13 +61,11 @@ const widgetTypeColors = {
   command: "syntaxKeyword",
   agent: "thinkingHigh",
   question: "warning",
-  workflow: managerTone.identity,
 } as const;
 const managerTypeColors = {
   command: "muted",
   agent: managerTone.identity,
   question: "warning",
-  workflow: managerTone.identity,
 } as const;
 
 export interface RowPaint {
@@ -82,13 +74,12 @@ export interface RowPaint {
 }
 
 const memberReason = (row: ActivityRow, widget: boolean): string | undefined =>
-  (widget && row.status === "failed") ||
-  (row.status === "cancelled" && row.startedAt === undefined && !activityPlanned(row))
+  (widget && row.status === "failed") || (row.status === "cancelled" && row.startedAt === undefined)
     ? row.summary?.trim()
     : undefined;
 
-const memberAttention = (row: ActivityRow, planned: boolean): string =>
-  planned || activityAttention(row) !== undefined || row.status === "failed" || activityQueued(row)
+const memberAttention = (row: ActivityRow): string =>
+  activityAttention(row) !== undefined || row.status === "failed" || activityQueued(row)
     ? activityStatus(row)
     : "";
 
@@ -124,8 +115,7 @@ export function groupedMemberLine(
     : activityAttentionLabels(
         addAttention(entry.summary.attention, activityAttentionCounts(row), -1),
       ).join(" · ");
-  const planned = activityPlanned(row);
-  const attention = memberAttention(row, planned);
+  const attention = memberAttention(row);
   const ended = memberReason(row, !interactive);
   const reason = ended
     ? clipToWidth(ended, Math.min(REASON_WIDTH, Math.floor(width / 3)), "…")
@@ -146,7 +136,6 @@ export function groupedMemberLine(
       statusSeparator: reason ? " · " : " ",
       statusColor: warnings ? "warning" : !interactive && !attention ? "muted" : color,
       compactStatus: warnings.length > 0,
-      ...(planned && { dim: true }),
       ...(entry.history && { history: true }),
       ...(row.kind === "agent" && row.profile && { profile: row.profile }),
       ...(row.route && { route: row.route }),

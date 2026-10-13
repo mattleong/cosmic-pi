@@ -2,14 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
-import {
-  activityRow,
-  memberRow,
-  mountActivity,
-  withStatus,
-  workflowRow,
-} from "./support/activity.ts";
-import { activitySectionId, phaseRowId } from "../src/activity/grouped-tree.ts";
+import { activityRow, memberRow, mountActivity, withStatus } from "./support/activity.ts";
+import { activitySectionId } from "../src/activity/grouped-tree.ts";
 import type { ActivityActionRequest } from "../src/activity/service.ts";
 
 const routed = activityRow("Long task title ".repeat(30), "running", undefined, {
@@ -57,45 +51,30 @@ describe("activity presentation", () => {
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
   });
-  it("keeps the start of a long workflow title beside its attention at narrow widths", () => {
-    const workflow = workflowRow("workflow", ["Build", "Test"], "running", "Test", {
+  it("keeps the start of a long parent title beside its collapsed attention at narrow widths", () => {
+    const parent = activityRow("parent", "running", undefined, {
       title: "Migrate every billing service to the consolidated settings schema",
       startedAt: 0,
     });
     const rows = [
-      workflow,
-      memberRow("built", workflow, "Build", "done", { startedAt: 0, endedAt: 1000 }),
-      ...[0, 1, 2].map((index) => memberRow(`failed-${index}`, workflow, "Test", "failed")),
-      memberRow("live", workflow, "Test", "running", { startedAt: 0 }),
+      parent,
+      memberRow("built", parent, "done", { startedAt: 0, endedAt: 1000 }),
+      ...[0, 1, 2].map((index) => memberRow(`blocked-${index}`, parent, "blocked")),
+      memberRow("live", parent, "running", { startedAt: 0 }),
     ];
+    const collapsed = new Set([parent.key]);
     for (const width of [60, 80, 100]) {
-      const line = renderActivityWidget(rows, width, 8, { now: 90_000 })[0]!;
+      const line = renderActivityWidget(rows, width, 8, { now: 90_000, collapsed })[0]!;
       expect(line).toContain("Migrate");
       expect(line).toMatch(/\b3\b/u);
     }
     const { component } = mountActivity(() => rows, { height: 20 });
-    for (const key of ["g", "g", "j", "h"]) component.handleInput(key);
+    component.render(140);
+    component.handleInput("h");
     for (const width of [80, 100, 140]) {
       const line = component.render(width).find((text) => text.includes("Migrate"));
       expect(line).toMatch(/\b3\b/u);
     }
-  });
-  it("keeps every status part beside a short title when the whole row fits", () => {
-    const workflow = workflowRow("workflow", ["Plan", "Test"], "running", "Test", { startedAt: 0 });
-    const rows = [
-      workflow,
-      memberRow("running", workflow, "Test", "running", { startedAt: 0 }),
-      ...[0, 1].map((index) =>
-        memberRow(`done-${index}`, workflow, "Test", "done", { startedAt: 0, endedAt: 5 }),
-      ),
-      ...[0, 1, 2].map((index) =>
-        memberRow(`planned-${index}`, workflow, "Test", "pending", { planned: true }),
-      ),
-    ];
-    const line = renderActivityWidget(rows, 60, 12, { now: 10_000 }).find((text) =>
-      text.includes("Test"),
-    );
-    for (const count of [1, 2, 3]) expect(line).toMatch(new RegExp(`\\b${count}\\b`, "u"));
   });
   it("keeps route metadata visible beside long titles on wide widgets", () => {
     for (const width of [100, 120, 160])
@@ -170,12 +149,12 @@ describe("activity presentation", () => {
     expect(visibleLogs()).toEqual(scrolled);
   });
   it("says why work that never started was cancelled, on its row", () => {
-    const workflow = workflowRow("workflow", ["Build"], "running", "Build");
-    const refused = memberRow("refused", workflow, "Build", "cancelled", {
+    const parent = activityRow("parent");
+    const refused = memberRow("refused", parent, "cancelled", {
       summary: "over budget",
       endedAt: 5,
     });
-    const { component } = mountActivity(() => [workflow, refused], { height: 20 });
+    const { component } = mountActivity(() => [parent, refused], { height: 20 });
     const line = component.render(140).find((text) => text.includes("refused"));
     expect(line).toContain("over budget");
   });
@@ -369,36 +348,39 @@ describe("activity presentation", () => {
   });
 });
 
-const reviewWorkflow = (overrides: Partial<ActivityRow> = {}) =>
-  workflowRow("review", ["Find", "Verify"], "running", "Find", overrides);
+// A task parent keeps nested subagents out of the subagents section, so initial
+// section selection has to reveal them rather than pick the parent.
+const reviewParent = (overrides: Partial<ActivityRow> = {}) =>
+  activityRow("review", "running", undefined, { kind: "command", ...overrides });
 const mountGrouped = (
   snapshot: () => readonly ActivityRow[],
   options: Parameters<typeof mountActivity>[1] = {},
 ) => mountActivity(snapshot, { height: 24, ...options });
 
 describe("grouped activity interaction", () => {
-  it("traverses the workflow row, its phases and members, fetching only source details", () => {
-    const workflow = reviewWorkflow({ detail: "workflow-evidence" });
-    const worker = memberRow("worker", workflow, "Find");
-    const { component, closed, loads } = mountGrouped(() => [workflow, worker]);
+  it("traverses a parent row and its members, fetching only source details", () => {
+    const parent = reviewParent({ detail: "parent-evidence" });
+    const worker = memberRow("worker", parent);
+    const { component, closed, loads } = mountGrouped(() => [parent, worker]);
     component.render(140);
-    expect(component.shell.state.selectedId).toBe(workflow.key);
+    expect(component.shell.state.selectedId).toBe(parent.key);
     expect(loads).toEqual([]);
     component.handleInput("\r");
     expect(loads[0]!.request).toEqual({
-      key: workflow.key,
-      revision: workflow.revision,
-      generation: workflow.generation,
+      key: parent.key,
+      revision: parent.revision,
+      generation: parent.generation,
     });
-    loads[0]!.deliver("live-workflow-evidence");
-    expect(component.render(140).join("\n")).toContain("live-workflow-evidence");
+    loads[0]!.deliver("live-parent-evidence");
+    expect(component.render(140).join("\n")).toContain("live-parent-evidence");
     component.handleInput("h");
-    component.handleInput("j");
-    expect(component.shell.state.selectedId).toBe(phaseRowId(workflow.key, "Find"));
+    component.handleInput("k");
+    expect(component.shell.state.selectedId).toBe(activitySectionId("tasks"));
     component.handleInput("\r");
     for (const key of ["1", "x", "m", "r", "f"]) component.handleInput(key);
     expect(loads).toHaveLength(1);
     component.handleInput("h");
+    component.handleInput("j");
     component.handleInput("j");
     expect(component.shell.state.selectedId).toBe(worker.key);
     component.handleInput("\r");
@@ -407,28 +389,28 @@ describe("grouped activity interaction", () => {
     for (const width of [30, 80, 140])
       expect(component.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
   });
-  it("dispatches only displayed workflow actions with confirmation and captured revision", () => {
-    let workflow = reviewWorkflow({
-      actions: [{ id: "stop", label: "Stop workflow", confirmation: "Stop this workflow?" }],
+  it("dispatches only displayed parent actions with confirmation and captured revision", () => {
+    let parent = reviewParent({
+      actions: [{ id: "stop", label: "Stop task", confirmation: "Stop this task?" }],
     });
-    const { component, closed } = mountGrouped(() => [workflow]);
+    const { component, closed } = mountGrouped(() => [parent]);
     component.render(140);
     component.handleInput("m");
     expect(closed).toEqual([]);
     component.handleInput("x");
     expect(closed).toEqual([]);
-    workflow = { ...workflow, revision: "2", actions: [] };
+    parent = { ...parent, revision: "2", actions: [] };
     component.update();
     component.handleInput("\r");
     expect(closed).toEqual([
-      { key: workflow.key, revision: "1", generation: workflow.generation, actionId: "stop" },
+      { key: parent.key, revision: "1", generation: parent.generation, actionId: "stop" },
     ]);
   });
   it("confirms an action with the direct key that asked for it, never another key", () => {
-    const workflow = reviewWorkflow({
-      actions: [{ id: "stop", label: "Stop workflow", confirmation: "Stop this workflow?" }],
+    const parent = reviewParent({
+      actions: [{ id: "stop", label: "Stop task", confirmation: "Stop this task?" }],
     });
-    const { component, closed } = mountGrouped(() => [workflow]);
+    const { component, closed } = mountGrouped(() => [parent]);
     component.render(140);
     component.handleInput("1");
     component.handleInput("x");
@@ -440,28 +422,28 @@ describe("grouped activity interaction", () => {
     expect(closed).toEqual([]);
     component.handleInput("x");
     expect(closed).toEqual([
-      { key: workflow.key, revision: "1", generation: workflow.generation, actionId: "stop" },
+      { key: parent.key, revision: "1", generation: parent.generation, actionId: "stop" },
     ]);
   });
   it("runs only actions declared without handoff in place and closes first for the rest", () => {
-    const workflow = reviewWorkflow({
+    const parent = reviewParent({
       actions: [
         {
           id: "stop",
-          label: "Stop workflow",
-          confirmation: "Stop this workflow?",
+          label: "Stop task",
+          confirmation: "Stop this task?",
           handoff: false,
         },
       ],
     });
-    const queued = memberRow("queued", workflow, "Find", "pending", {
-      actions: [{ id: "skip", label: "Skip", handoff: false }],
+    const queued = memberRow("queued", parent, "pending", {
+      actions: [{ id: "stop", label: "Stop", handoff: false }],
     });
-    const asking = memberRow("asking", workflow, "Find", "needs-input", {
+    const asking = memberRow("asking", parent, "needs-input", {
       actions: [{ id: "reply", label: "Reply" }],
     });
     const invoked: ActivityActionRequest[] = [];
-    const { component, closed } = mountGrouped(() => [workflow, queued, asking], {
+    const { component, closed } = mountGrouped(() => [parent, queued, asking], {
       invoke: (request) => {
         invoked.push(request);
       },
@@ -478,13 +460,13 @@ describe("grouped activity interaction", () => {
     select(queued);
     component.handleInput("x");
     expect(invoked).toEqual([
-      { key: queued.key, generation: 1, revision: queued.revision, actionId: "skip" },
+      { key: queued.key, generation: 1, revision: queued.revision, actionId: "stop" },
     ]);
     expect(closed).toEqual([]);
-    select(workflow);
+    select(parent);
     component.handleInput("x");
     component.handleInput("\r");
-    expect(invoked.map((request) => request.actionId)).toEqual(["skip", "stop"]);
+    expect(invoked.map((request) => request.actionId)).toEqual(["stop", "stop"]);
     expect(closed).toEqual([]);
     select(asking);
     component.handleInput("m");
@@ -493,21 +475,21 @@ describe("grouped activity interaction", () => {
     ]);
     expect(invoked).toHaveLength(2);
   });
-  it("rejects stale workflow detail delivery and never offers retained actions", () => {
-    let workflow = reviewWorkflow({
+  it("rejects stale parent detail delivery and never offers retained actions", () => {
+    let parent = reviewParent({
       status: "done",
       actions: [{ id: "clear", label: "Clear" }],
     });
-    const { component, closed, loads } = mountGrouped(() => [workflow]);
+    const { component, closed, loads } = mountGrouped(() => [parent]);
     component.render(140);
     component.handleInput("\r");
-    workflow = { ...workflow, revision: "2" };
+    parent = { ...parent, revision: "2" };
     loads[0]!.deliver("outdated-detail");
     expect(component.render(140).join("\n")).not.toContain("outdated-detail");
     component.handleInput("r");
     loads[1]!.deliver("fresh-detail");
     expect(component.render(140).join("\n")).toContain("fresh-detail");
-    workflow = { ...workflow, retained: true };
+    parent = { ...parent, retained: true };
     component.update();
     loads[1]!.deliver("revoked-detail");
     component.render(140);
@@ -517,40 +499,39 @@ describe("grouped activity interaction", () => {
     expect(component.render(140).join("\n")).not.toContain("revoked-detail");
   });
   it.each(["subagents", "tasks"] as const)(
-    "opens %s on standalone work or reveals the matching workflow member",
+    "opens %s on standalone work or reveals the matching nested member",
     (section) => {
-      const workflow = reviewWorkflow();
       const kind = section === "tasks" ? "command" : "agent";
-      const member = memberRow("member", workflow, "Find", "running", { kind });
+      const parent = reviewParent({ kind: kind === "command" ? "agent" : "command" });
+      const member = memberRow("member", parent, "running", { kind });
       const standalone = activityRow("standalone", "running", undefined, { kind });
       for (const rows of [
-        [workflow, member],
-        [workflow, member, standalone],
+        [parent, member],
+        [parent, member, standalone],
       ]) {
         const { component } = mountGrouped(() => rows, { initialSection: section });
-        component.presentation.collapsed.add(workflow.key);
+        component.presentation.collapsed.add(parent.key);
         component.render(120);
         expect(component.shell.state.selectedId).toBe(
           rows.length === 3 ? standalone.key : member.key,
         );
         expect(component.presentation.focus).toBeUndefined();
-        if (rows.length === 2)
-          expect(component.presentation.collapsed.has(workflow.key)).toBe(false);
+        if (rows.length === 2) expect(component.presentation.collapsed.has(parent.key)).toBe(false);
         component.handleInput("g");
         component.handleInput("g");
-        expect(component.shell.state.selectedId).toBe(activitySectionId("workflows"));
+        expect(component.shell.state.selectedId).toBe(activitySectionId("subagents"));
       }
     },
   );
   it("keeps a selected member through settlement, history and resize", () => {
-    let workflow = reviewWorkflow();
-    let member = memberRow("member", workflow, "Find");
-    const { component } = mountGrouped(() => [workflow, member], {
+    let parent = reviewParent();
+    let member = memberRow("member", parent);
+    const { component } = mountGrouped(() => [parent, member], {
       initialSection: "subagents",
     });
     component.render(120);
     expect(component.shell.state.selectedId).toBe(member.key);
-    workflow = withStatus(workflow, "done", { revision: "2" });
+    parent = withStatus(parent, "done", { revision: "2" });
     member = withStatus(member, "done", { revision: "2" });
     component.update();
     for (const width of [20, 80, 160]) {
@@ -558,12 +539,12 @@ describe("grouped activity interaction", () => {
       expect(component.shell.state.selectedId).toBe(member.key);
     }
     component.handleInput("h");
-    expect(component.shell.state.selectedId).toBe(phaseRowId(workflow.key, "Find"));
+    expect(component.shell.state.selectedId).toBe(parent.key);
   });
   it("keeps a queued selection when its placeholder starts running", () => {
-    const workflow = reviewWorkflow();
-    let member = memberRow("member", workflow, "Find", "pending");
-    const { component } = mountGrouped(() => [workflow, member], {
+    const parent = reviewParent();
+    let member = memberRow("member", parent, "pending");
+    const { component } = mountGrouped(() => [parent, member], {
       initialSection: "subagents",
     });
     component.render(120);
@@ -572,18 +553,18 @@ describe("grouped activity interaction", () => {
     component.render(120);
     expect(component.shell.state.selectedId).toBe(member.key);
   });
-  it("reveals urgent owned questions across collapsed workflow and section headings", () => {
-    const workflow = reviewWorkflow();
-    const findMember = memberRow("owner", workflow, "Find");
+  it("reveals urgent owned questions across collapsed parent and section headings", () => {
+    const parent = reviewParent();
+    const findMember = memberRow("owner", parent);
     const human = activityRow("human", "needs-input", findMember.id, { kind: "question" });
-    const { component } = mountGrouped(() => [workflow, findMember, human]);
+    const { component } = mountGrouped(() => [parent, findMember, human]);
     component.render(120);
-    component.presentation.collapsed.add(workflow.key);
-    component.presentation.collapsed.add(activitySectionId("workflows"));
+    component.presentation.collapsed.add(parent.key);
+    component.presentation.collapsed.add(activitySectionId("tasks"));
     component.handleInput("w");
     expect(component.shell.state.selectedId).toBe(human.key);
-    expect(component.presentation.collapsed.has(workflow.key)).toBe(false);
-    expect(component.presentation.collapsed.has(activitySectionId("workflows"))).toBe(false);
+    expect(component.presentation.collapsed.has(parent.key)).toBe(false);
+    expect(component.presentation.collapsed.has(activitySectionId("tasks"))).toBe(false);
   });
   it("follows only by explicit opt-in plus host update, never during rendering or resize", () => {
     let row = activityRow("task", "running", undefined, { kind: "command" });
@@ -613,10 +594,10 @@ describe("grouped activity interaction", () => {
     expect(component.render(120).join("\n")).toContain("followed-log");
     expect(component.render(120).join("\n")).not.toContain("cancelled-log");
   });
-  it("cancels source loads on phase selection and never revives a stale callback", () => {
-    const workflow = reviewWorkflow();
-    const member = memberRow("member", workflow, "Find");
-    const { component, loads, cancels } = mountGrouped(() => [workflow, member], {
+  it("cancels source loads when selection moves to the parent and never revives a stale callback", () => {
+    const parent = reviewParent();
+    const member = memberRow("member", parent);
+    const { component, loads, cancels } = mountGrouped(() => [parent, member], {
       initialSection: "subagents",
     });
     component.render(120);
@@ -625,7 +606,7 @@ describe("grouped activity interaction", () => {
     component.handleInput("h");
     component.handleInput("h");
     expect(cancels()).toBeGreaterThan(0);
-    expect(component.shell.state.selectedId).toBe(phaseRowId(workflow.key, "Find"));
+    expect(component.shell.state.selectedId).toBe(parent.key);
     component.handleInput("j");
     loads[1]!.deliver("revoked-log");
     expect(component.render(120).join("\n")).not.toContain("revoked-log");
@@ -635,7 +616,6 @@ describe("grouped activity interaction", () => {
   });
   it.each([
     ["x", "stop"],
-    ["x", "skip"],
     ["i", "interrupt"],
     ["u", "resume"],
     ["m", "reply"],
@@ -643,11 +623,11 @@ describe("grouped activity interaction", () => {
     ["e", "rename"],
     ["c", "clear"],
   ])("keeps the %s source shortcut revision-safe for %s", (key, actionId) => {
-    const workflow = reviewWorkflow();
-    let row = memberRow("member", workflow, "Find", "running", {
+    const parent = reviewParent();
+    let row = memberRow("member", parent, "running", {
       actions: [{ id: actionId, label: "Action" }],
     });
-    const { component, closed } = mountGrouped(() => [workflow, row], {
+    const { component, closed } = mountGrouped(() => [parent, row], {
       initialSection: "subagents",
     });
     component.render(120);
@@ -670,12 +650,12 @@ describe("grouped activity interaction", () => {
     expect(closed[0]).toMatchObject({ generation: 2 });
   });
   it("keeps retained member evidence non-executable even if it still advertises actions", () => {
-    const workflow = reviewWorkflow({ status: "done" });
+    const parent = reviewParent({ status: "done" });
     const row = {
-      ...memberRow("old", workflow, "Find", "done", { actions: [{ id: "clear", label: "Clear" }] }),
+      ...memberRow("old", parent, "done", { actions: [{ id: "clear", label: "Clear" }] }),
       retained: true as const,
     };
-    const { component, closed, loads } = mountGrouped(() => [workflow, row], {
+    const { component, closed, loads } = mountGrouped(() => [parent, row], {
       initialSection: "subagents",
     });
     component.render(120);

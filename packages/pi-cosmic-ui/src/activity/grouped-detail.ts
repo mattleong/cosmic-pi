@@ -1,7 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   countLabel,
-  formatElapsed,
   formatRelativeAge,
   sanitizeDiagnosticContent,
   sanitizeTerminalLine,
@@ -15,31 +14,20 @@ import { managerTone } from "../manager/style.ts";
 import { ACTIVITY_ACTION_PAGE_SIZE, activityActionPages } from "./action-keys.ts";
 import { activityStatus } from "./attention.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
-import {
-  phaseCountLabels,
-  plannedLabels,
-  workflowMemberSpan,
-  workStateLabels,
-  type GroupSummary,
-} from "./group-summary.ts";
+import { workStateLabels, type GroupSummary } from "./group-summary.ts";
 import type { ActivityRow } from "./model.ts";
 import { activityElapsed, activityType } from "./row-line.ts";
-import { phaseLabels } from "./workflow-row.ts";
 
 const optionalField = (label: string, values: readonly string[]): ListDetailField[] =>
   values.length ? [{ label, value: values.join(" · ") }] : [];
 const technicalIdentity = (value: string): string =>
   sanitizeDiagnosticContent(sanitizeTerminalLine(value));
-const memberFields = (
-  summary: GroupSummary,
-  label = "Agents",
-  noun = "agent",
-): ListDetailField[] => [
-  { label, value: [countLabel(summary.items, noun), ...workStateLabels(summary)].join(" · ") },
-  ...optionalField("Progress", [
-    ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
-    ...plannedLabels(summary),
-  ]),
+const sectionFields = (summary: GroupSummary): ListDetailField[] => [
+  {
+    label: "Sources",
+    value: [countLabel(summary.items, "item"), ...workStateLabels(summary)].join(" · "),
+  },
+  ...optionalField("Progress", summary.awaited ? [`${summary.awaited} awaited`] : []),
 ];
 
 interface GroupedDetailOptions {
@@ -57,50 +45,12 @@ export function groupedDetail(options: GroupedDetailOptions): string {
   const breadcrumb = selected.breadcrumbs.join(" › ");
   if (selected.type === "member")
     return sourceDetail(options, selected.row, selected.context, breadcrumb);
-  if (selected.type === "workflow") {
-    const phases = selected.row.phases ?? [];
-    const narrator = selected.row.summary?.trim();
-    return sourceDetail(
-      options,
-      selected.row,
-      selected.context,
-      breadcrumb,
-      [
-        ...optionalField(
-          "Phases",
-          phases.length
-            ? phaseCountLabels(selected.phaseCounts, phases.length, "finished", true)
-            : [],
-        ),
-        ...(selected.row.phase ? [{ label: "Current phase", value: selected.row.phase }] : []),
-        ...memberFields(selected.summary),
-        ...(narrator ? [{ label: "Latest", value: narrator }] : []),
-      ],
-      false,
-    );
-  }
-  const heading = listDetailHeading(theme, selected.title, options.focused, managerTone.identity);
-  const summary = selected.summary;
-  if (selected.type === "section")
-    return [
-      heading,
-      breadcrumb,
-      ...detailFieldRows(theme, memberFields(summary, "Sources", "item")),
-      "Select a source to inspect its details and available actions.",
-    ].join("\n");
-  const span = workflowMemberSpan(selected.members, options.now);
   return [
-    heading,
+    listDetailHeading(theme, selected.title, options.focused, managerTone.identity),
     breadcrumb,
-    ...detailFieldRows(theme, [
-      { label: "State", value: capitalized(phaseLabels[selected.state]) },
-      ...memberFields(summary),
-      ...optionalField("Elapsed", span === undefined ? [] : [formatElapsed(span)]),
-    ]),
-    selected.phase.detail ?? "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    ...detailFieldRows(theme, sectionFields(selected.summary)),
+    "Select a source to inspect its details and available actions.",
+  ].join("\n");
 }
 
 function sourceDetail(
@@ -108,8 +58,6 @@ function sourceDetail(
   row: ActivityRow,
   context: readonly ActivityRow[],
   breadcrumb: string,
-  fields: readonly ListDetailField[] = [],
-  showSummary = true,
 ): string {
   const { theme } = options;
   const sourcePath = [...context, row].map((item) => item.title).join(" › ");
@@ -128,12 +76,11 @@ function sourceDetail(
           .filter(Boolean)
           .join(" · "),
       },
-      ...fields,
     ]),
     options.now !== undefined && row.updatedAt !== undefined
       ? `Updated ${formatRelativeAge(options.now - row.updatedAt)}`
       : "",
-    showSummary ? (row.summary ?? "") : "",
+    row.summary ?? "",
     ...(options.technical
       ? detailFieldRows(theme, [
           {
@@ -154,8 +101,6 @@ function sourceDetail(
     ...actionLines(row, options.actionPage),
   ].join("\n");
 }
-
-const capitalized = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 
 function actionLines(row: ActivityRow, page: number): string[] {
   const actions = row.retained ? [] : (row.actions ?? []);

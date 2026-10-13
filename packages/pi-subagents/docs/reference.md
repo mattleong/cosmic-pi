@@ -32,7 +32,7 @@ A route is exactly `"disabled"`, one candidate, or a non-empty ordered candidate
 
 Native selectors use one fail-closed 256-character grammar across config, settings, and all three local adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, including Pi registry context variants such as `cursor/gpt-5.5@1m`, plus Claude's optional exact long-context suffix such as `[1m]`.
 
-Unknown root keys fail document activation except the retired `ultracode` setting, which is ignored to preserve saved profile documents. Diagnostics redact profile-set names.
+Unknown root keys fail document activation. Diagnostics redact profile-set names.
 
 ### Current Session and saved sets
 

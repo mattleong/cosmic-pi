@@ -16,7 +16,6 @@ import {
   activityKey,
   type ActivityEnvelope,
   type ActivityItem,
-  type ActivityPhase,
   type ActivityProviderOptions,
 } from "./protocol.ts";
 import { retainActivity, type ActivityRow } from "./model.ts";
@@ -78,41 +77,9 @@ const cleanDetail = (text: string) =>
   );
 type Acknowledgement = readonly [Provider, boolean];
 const uniqueIds = (ids: readonly string[]) => new Set(ids).size === ids.length;
-const consistentWork = ({ work }: ActivityPhase) =>
-  !work ||
-  (work.finished <= work.items &&
-    work.stopped + (work.failed ?? 0) + (work.skipped ?? 0) <= work.finished);
-const consistentWorkflow = (item: ActivityItem) => {
-  if (item.kind !== "workflow")
-    return item.phases === undefined && item.unphasedPlanned === undefined;
-  const titles = item.phases?.map((phase) => phase.title) ?? [];
-  return (
-    uniqueIds(titles) &&
-    (item.phases ?? []).every(consistentWork) &&
-    (item.phase === undefined || titles.includes(item.phase)) &&
-    item.status !== "needs-input" &&
-    item.status !== "blocked"
-  );
-};
-const consistentPlan = (item: ActivityItem) =>
-  item.planned !== true ||
-  (item.kind !== "workflow" &&
-    (item.status === "pending" || (item.status === "cancelled" && !item.actions?.length)));
-const consistentSkip = (item: ActivityItem) =>
-  item.skipped !== true ||
-  (item.status === "cancelled" &&
-    item.planned !== true &&
-    item.kind !== "workflow" &&
-    item.kind !== "question");
 const consistentSnapshot = (items: readonly ActivityItem[]) =>
   uniqueIds(items.map((item) => item.id)) &&
-  items.every(
-    (item) =>
-      uniqueIds(item.actions?.map((action) => action.id) ?? []) &&
-      consistentWorkflow(item) &&
-      consistentPlan(item) &&
-      consistentSkip(item),
-  );
+  items.every((item) => uniqueIds(item.actions?.map((action) => action.id) ?? []));
 type Transition = readonly [readonly Acknowledgement[], State];
 type ProviderIdentity = Omit<Provider, "items" | "starting">;
 interface DecodedSnapshot {
@@ -201,8 +168,7 @@ const publishSnapshot = (
     },
   ];
 };
-const startingWork = (item: ActivityItem) =>
-  item.kind === "agent" && item.status === "pending" && item.planned !== true;
+const startingWork = (item: ActivityItem) => item.kind === "agent" && item.status === "pending";
 const currentRow = (rows: readonly ActivityRow[], request: ActivityDetailRequest) =>
   rows.find(
     (row) =>
@@ -355,10 +321,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
             const { rows, starting } = state.getSnapshot();
             return Effect.sleep(
               starting > 0 ||
-                rows.some(
-                  (row) =>
-                    row.status === "running" || (row.status === "pending" && row.planned !== true),
-                )
+                rows.some((row) => row.status === "running" || row.status === "pending")
                 ? `${SPINNER_FRAME_MS} millis`
                 : "1 second",
             ).pipe(Effect.andThen(updateClock));

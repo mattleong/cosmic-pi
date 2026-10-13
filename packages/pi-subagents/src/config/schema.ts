@@ -330,8 +330,6 @@ const ROOT_KEYS = new Set([
   "profileSets",
   "nesting",
   "writerWorkspaceMode",
-  // Saved profile documents may still contain the removed workflow preference.
-  "ultracode",
 ]);
 
 const readRootField = <S extends Schema.Constraint>(

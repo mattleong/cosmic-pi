@@ -1,10 +1,8 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { countLabel } from "pi-cosmic-core";
 import { managerActivityGlyph, clipToWidth, spinnerFrameAt } from "../manager/chrome.ts";
-import { activityPlanned, compactNotices, needsYou } from "./attention.ts";
+import { compactNotices, needsYou } from "./attention.ts";
 import { activityPath, isFinished, type ActivityRow } from "./model.ts";
-import type { GroupedActivityRow } from "./grouped-tree.ts";
 import {
   activeWorkLabels,
   addGroupSummaries,
@@ -14,20 +12,17 @@ import {
 } from "./group-summary.ts";
 import {
   activityWidgetSections,
-  isPlannedEntry,
-  workflowNarrator,
   type ActivityWidgetSection,
   type WidgetOptions,
 } from "./widget-projection.ts";
 import { groupedMemberLine } from "./row-line.ts";
-import { workflowRowLine } from "./workflow-row.ts";
 
 export const activityStartupGlyph = (
   rows: readonly ActivityRow[],
   starting: number,
   now = 0,
 ): string =>
-  starting > 0 && !rows.some((row) => !isFinished(row) && !activityPlanned(row))
+  starting > 0 && !rows.some((row) => !isFinished(row))
     ? managerActivityGlyph("pending", spinnerFrameAt(now))
     : "";
 export function activityOwnerLabel(
@@ -83,42 +78,8 @@ const widgetGroupLine = (
   return `${clipToWidth(title, Math.max(1, width - visibleWidth(evidence) - 3), "…")} · ${evidence}`;
 };
 
-type Omissions = Pick<
-  ActivityWidgetSection,
-  "hiddenSources" | "hiddenPhases" | "hiddenWorkflows" | "hiddenPlanned"
->;
-const omissionLabels = (hidden: Omissions): string[] => [
-  ...(hidden.hiddenSources ? [`+${countLabel(hidden.hiddenSources, "item")}`] : []),
-  ...(hidden.hiddenPhases ? [`+${countLabel(hidden.hiddenPhases, "phase")}`] : []),
-  ...(hidden.hiddenWorkflows ? [`+${countLabel(hidden.hiddenWorkflows, "workflow")}`] : []),
-  ...(hidden.hiddenPlanned ? [`+${hidden.hiddenPlanned} planned`] : []),
-];
-
-const narratorLine = (
-  text: string,
-  width: number,
-  continues: boolean,
-  theme: Pick<Theme, "fg"> | undefined,
-): string => {
-  const line = clipToWidth(`${continues ? "│  " : "   "}${text}`, width, "…");
-  return theme?.fg("dim", line) ?? line;
-};
-
-const hiddenFailuresLine = (
-  entry: GroupedActivityRow,
-  count: number,
-  width: number,
-  continues: boolean,
-  theme: Pick<Theme, "fg"> | undefined,
-): string => {
-  const guides = entry.continuations
-    .slice(1)
-    .map((continuing) => (continuing ? "│  " : "   "))
-    .join("");
-  const branch = entry.type === "member" ? "" : continues ? "│  " : "   ";
-  const line = clipToWidth(`${guides}${branch}+${count} failed`, width, "…");
-  return theme?.fg("warning", line) ?? line;
-};
+const omissionLabels = (hidden: number): string[] =>
+  hidden ? [`+${countLabel(hidden, "item")}`] : [];
 
 const overflowLine = (
   sections: readonly ActivityWidgetSection[],
@@ -128,31 +89,11 @@ const overflowLine = (
   const total = sections
     .map(({ heading }) => heading.summary)
     .reduce(addGroupSummaries, emptyGroupSummary);
-  const sum = (count: (section: ActivityWidgetSection) => number) =>
-    sections.reduce((subtotal, section) => subtotal + count(section), 0);
-  const shown = (matches: (entry: GroupedActivityRow) => boolean) =>
-    sum((section) => section.entries.filter(matches).length);
-  const hidden = (type: GroupedActivityRow["type"]) => shown((entry) => entry.type === type);
-  const shownPlanned = shown(isPlannedEntry);
-  const countedFailures = sum((section) =>
-    [...section.failureOverflow.values()].reduce((subtotal, overflow) => subtotal + overflow, 0),
+  const hidden = sections.reduce(
+    (subtotal, section) => subtotal + section.entries.length + section.omittedRows,
+    0,
   );
-  return style(
-    widgetGroupLine(
-      total,
-      width,
-      omissionLabels({
-        hiddenSources:
-          sum((section) => section.hiddenSources) +
-          hidden("member") -
-          shownPlanned +
-          countedFailures,
-        hiddenPhases: sum((section) => section.hiddenPhases) + hidden("phase"),
-        hiddenWorkflows: sum((section) => section.hiddenWorkflows) + hidden("workflow"),
-        hiddenPlanned: sum((section) => section.hiddenPlanned) + shownPlanned,
-      }),
-    ),
-  );
+  return style(widgetGroupLine(total, width, omissionLabels(hidden)));
 };
 
 const sectionLines = (
@@ -161,19 +102,13 @@ const sectionLines = (
   options: WidgetOptions,
   style: (text: string) => string,
 ): string[] => {
-  const lines: string[] = [];
-  for (const [index, entry] of section.entries.entries()) {
-    if (entry.type === "member") lines.push(groupedMemberLine(entry, width, options, "widget"));
-    else if (entry.type === "workflow" || entry.type === "phase")
-      lines.push(workflowRowLine(entry, width, options));
-    const continues = section.entries[index + 1]?.parentId === entry.id;
-    const narrator = section.narrators.has(entry.id) ? workflowNarrator(entry) : undefined;
-    if (narrator !== undefined) lines.push(narratorLine(narrator, width, continues, options.theme));
-    const failures = section.failureOverflow.get(entry.id);
-    if (failures) lines.push(hiddenFailuresLine(entry, failures, width, continues, options.theme));
-  }
+  const lines = section.entries.flatMap((entry) =>
+    entry.type === "member" ? [groupedMemberLine(entry, width, options, "widget")] : [],
+  );
   if (section.omittedRows)
-    lines.push(style(widgetGroupLine(section.heading.summary, width, omissionLabels(section))));
+    lines.push(
+      style(widgetGroupLine(section.heading.summary, width, omissionLabels(section.omittedRows))),
+    );
   return lines;
 };
 

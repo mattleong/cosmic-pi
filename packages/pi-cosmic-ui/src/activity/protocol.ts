@@ -14,36 +14,13 @@ export const ACTIVITY_HOST = "cosmic-ui:activity:host:v1";
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(ACTIVITY_LIMITS.id));
 const Text = Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.text));
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
-const PhaseTitle = Schema.String.check(
-  Schema.isMinLength(1),
-  Schema.isMaxLength(ACTIVITY_LIMITS.phaseTitle),
-);
-const Count = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(0),
-  Schema.isLessThanOrEqualTo(ACTIVITY_LIMITS.count),
-);
-const ActivityPhaseSchema = Schema.Struct({
-  title: PhaseTitle,
-  detail: Schema.optional(Text),
-  work: Schema.optional(
-    Schema.Struct({
-      items: Count,
-      finished: Count,
-      stopped: Count,
-      failed: Schema.optional(Count),
-      skipped: Schema.optional(Count),
-    }),
-  ),
-  planned: Schema.optional(Count),
-});
-export type ActivityPhase = typeof ActivityPhaseSchema.Type;
 export const ActivityStartingSchema = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
   Schema.isLessThanOrEqualTo(ACTIVITY_LIMITS.starting),
 );
 const ActivityFields = {
   id: Id,
-  kind: Schema.Literals(["agent", "command", "question", "workflow"]),
+  kind: Schema.Literals(["agent", "command", "question"]),
   title: Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.title)),
   profile: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.profile))),
   route: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.route))),
@@ -55,13 +32,6 @@ const ActivityFields = {
   parent: Schema.optional(Schema.Struct({ providerId: Id, itemId: Id })),
   summary: Schema.optional(Text),
   detail: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.detail))),
-  phases: Schema.optional(
-    Schema.Array(ActivityPhaseSchema).check(Schema.isMaxLength(ACTIVITY_LIMITS.phases)),
-  ),
-  phase: Schema.optional(PhaseTitle),
-  unphasedPlanned: Schema.optional(Count),
-  planned: Schema.optional(Schema.Boolean),
-  skipped: Schema.optional(Schema.Boolean),
   actions: Schema.optional(
     Schema.Array(
       Schema.Struct({
@@ -148,11 +118,7 @@ const ActivityHostSchema = Schema.Struct({
 const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityItem[] | undefined => {
   if (
     items.length > ACTIVITY_LIMITS.items ||
-    items.some(
-      (item) =>
-        (item.actions?.length ?? 0) > ACTIVITY_LIMITS.actions ||
-        (item.phases?.length ?? 0) > ACTIVITY_LIMITS.phases,
-    )
+    items.some((item) => (item.actions?.length ?? 0) > ACTIVITY_LIMITS.actions)
   )
     return undefined;
   return items.map((item) =>

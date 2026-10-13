@@ -27,7 +27,6 @@ import { activityActionHints, activityShortcuts, type ActivityActionHints } from
 import { activityAttentionLabels, needsYou } from "./attention.ts";
 import { activityStartupGlyph, activityOwnerLabel } from "./widget.ts";
 import { groupedMemberLine } from "./row-line.ts";
-import { workflowRowLine } from "./workflow-row.ts";
 import { groupedActivitySource, type GroupedActivityRow } from "./grouped-tree.ts";
 import { groupSummaryLabels, summarizeGroup } from "./group-summary.ts";
 import { groupedDetail } from "./grouped-detail.ts";
@@ -46,8 +45,6 @@ function rowLine(
   const paint = { now: options.now?.(), theme };
   if (entry.type === "member")
     return groupedMemberLine(entry, width, paint, "manager", focusedStyle);
-  if (entry.type !== "section")
-    return workflowRowLine(entry, width, paint, "manager", focusedStyle);
   const fold = entry.children ? (entry.expanded ? "▾ " : "▸ ") : "  ";
   const summary = groupSummaryLabels(entry.summary).join(" · ");
   return clipToWidth(

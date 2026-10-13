@@ -9,19 +9,21 @@ import {
 } from "../src/activity/protocol.ts";
 import { fakeActivityHost } from "../src/activity/testing.ts";
 
-const workflow = (phases: number): ActivityItem => ({
+const agent = (actions: number): ActivityItem => ({
   id: "flow",
   title: "Review",
-  kind: "workflow",
+  kind: "agent",
   status: "running",
   revision: "1",
-  phases: Array.from({ length: phases }, (_, index) => ({ title: `Phase ${index}` })),
-  actions: [{ id: "stop", label: "Stop workflow" }],
+  actions: Array.from({ length: actions }, (_, index) => ({
+    id: index ? `action-${index}` : "stop",
+    label: `Action ${index}`,
+  })),
 });
 
 describe("activity producer protocol", () => {
-  it("withholds snapshots beyond the phase limit and cleans phase text before sending", () => {
-    let items: readonly ActivityItem[] = [workflow(ACTIVITY_LIMITS.phases)];
+  it("withholds snapshots beyond the action limit and cleans text before sending", () => {
+    let items: readonly ActivityItem[] = [agent(ACTIVITY_LIMITS.actions)];
     const host = fakeActivityHost();
     const registration = registerActivityProvider(host.events, {
       sessionId: "session",
@@ -31,20 +33,12 @@ describe("activity producer protocol", () => {
     });
     registration.publish();
     expect(host.get()?.items).toHaveLength(1);
-    items = [workflow(ACTIVITY_LIMITS.phases + 1)];
+    items = [agent(ACTIVITY_LIMITS.actions + 1)];
     registration.publish();
     expect(host.get()?.items).toBeUndefined();
-    items = [
-      {
-        ...workflow(0),
-        phases: [{ title: "Find\u001b[31m", detail: "Look\u0007 around" }],
-        phase: "Find\u001b[31m",
-      },
-    ];
+    items = [{ ...agent(1), title: "Find\u001b[31m", summary: "Look\u0007 around" }];
     registration.publish();
-    expect(host.get()?.items).toMatchObject([
-      { phases: [{ title: "Find", detail: "Look around" }], phase: "Find" },
-    ]);
+    expect(host.get()?.items).toMatchObject([{ title: "Find", summary: "Look around" }]);
     registration.dispose();
   });
   it.effect("stops trusting an invocation once availability changes or the request aborts", () =>
@@ -55,7 +49,7 @@ describe("activity producer protocol", () => {
         sessionId: "session",
         providerId: "agents",
         isCurrent: () => true,
-        items: () => [workflow(1)],
+        items: () => [agent(1)],
         detail: () => "",
         act: (_item, _action, _signal, invocationCurrent) => {
           checks.push(invocationCurrent);

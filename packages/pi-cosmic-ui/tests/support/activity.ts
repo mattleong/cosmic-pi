@@ -37,32 +37,12 @@ export const withStatus = (
   overrides: Partial<ActivityRow> = {},
 ): ActivityRow => Object.assign({ ...row }, { status }, overrides);
 
-export const workflowRow = (
-  id: string,
-  phases: readonly string[] = [],
-  status: ActivityItem["status"] = "running",
-  phase?: string,
-  overrides: Partial<ActivityRow> = {},
-): ActivityRow => {
-  const value = activityRow(id, status, undefined, {
-    kind: "workflow",
-    phases: phases.map((title) => ({ title })),
-  });
-  if (phase !== undefined) Object.assign(value, { phase });
-  return Object.assign(value, overrides);
-};
-
 export const memberRow = (
   id: string,
-  workflow: ActivityRow,
-  phase?: string,
+  parent: ActivityRow,
   status: ActivityItem["status"] = "running",
   overrides: Partial<ActivityRow> = {},
-): ActivityRow => {
-  const value = activityRow(id, status, workflow.id);
-  if (phase !== undefined) Object.assign(value, { phase });
-  return Object.assign(value, overrides);
-};
+): ActivityRow => activityRow(id, status, parent.id, overrides);
 
 export const groupedDetailOf = (
   rows: readonly ActivityRow[],

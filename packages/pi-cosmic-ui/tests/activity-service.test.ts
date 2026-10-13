@@ -183,140 +183,27 @@ describe("activity service", () => {
         expect(starting()).toBe(0);
       }),
   );
-  it.effect("withdraws inconsistent workflow metadata and restores valid publication", () =>
+  it.effect("withdraws snapshots with duplicate item or action ids and restores publication", () =>
     Effect.gen(function* () {
       const { service, rows, available, register, rejectsEach } = yield* recordingService();
-      const workflow: ActivityItem = {
-        id: "flow",
-        title: "Review",
-        kind: "workflow",
-        status: "running",
-        revision: "1",
-        phases: [{ title: "Find" }, { title: "Verify", detail: "Run the checks" }],
-        phase: "Find",
-        actions: [{ id: "stop", label: "Stop workflow" }],
-      };
-      const member: ActivityItem = {
-        id: "queued",
-        title: "Queued agent",
-        kind: "agent",
-        status: "pending",
-        revision: "1",
-        parent: { providerId: "tasks", itemId: "flow" },
-        phase: "Find",
-        actions: [{ id: "skip", label: "Skip" }],
-      };
-      const event = register([workflow, member]);
+      const event = register([item()]);
       yield* rejectsEach(event, [
-        [workflow, { ...member, phases: [{ title: "Find" }] }],
-        [workflow, { ...member, unphasedPlanned: 1 }],
-        [{ ...workflow, phases: [{ title: "Find" }, { title: "Find" }] }],
-        [{ ...workflow, phases: [{ title: "Find" }, { title: "Find \u0007" }] }],
-        [{ ...workflow, phase: "Ship" }],
-        [{ ...workflow, phases: undefined }],
-        [{ ...workflow, phases: [{ title: "Find", work: { items: 1, finished: 2, stopped: 0 } }] }],
-        [{ ...workflow, phases: [{ title: "Find", work: { items: 2, finished: 1, stopped: 2 } }] }],
+        [item(), item()],
         [
           {
-            ...workflow,
-            phases: [{ title: "Find", work: { items: 3, finished: 2, stopped: 1, failed: 2 } }],
+            ...item(),
+            actions: [
+              { id: "stop", label: "Stop" },
+              { id: "stop", label: "Halt" },
+            ],
           },
         ],
-        [{ ...workflow, status: "needs-input", inputTarget: "user" }],
-        [{ ...workflow, status: "blocked" }],
       ]);
-      yield* service.receive({ ...event, items: [workflow, { ...member, phase: "Elsewhere" }] });
+      yield* service.receive({ ...event, items: [item(), { ...item(), id: "two" }] });
       expect(available()).toBe(true);
-      expect(rows()).toHaveLength(2);
-      const failing = { title: "Find", work: { items: 3, finished: 2, stopped: 1, failed: 1 } };
-      yield* service.receive({ ...event, items: [{ ...workflow, phases: [failing] }, member] });
-      expect(rows()[0]?.phases).toEqual([failing]);
-      yield* service.receive({ ...event, items: [{ ...workflow, unphasedPlanned: 3 }, member] });
-      expect(rows()[0]?.unphasedPlanned).toBe(3);
-      yield* service.invoke({ ...action(rows()[1]!), actionId: "skip" });
+      expect(rows().map((row) => row.id)).toEqual(["one", "two"]);
+      yield* service.invoke(action(rows()[0]!));
     }),
-  );
-  it.effect("accepts planned work that never runs and never counts it as starting", () =>
-    Effect.gen(function* () {
-      const { service, rows, starting, available, register, rejectsEach } =
-        yield* recordingService();
-      const invoked: string[] = [];
-      const planned: ActivityItem = {
-        id: "planned",
-        title: "Planned agent",
-        kind: "agent",
-        status: "pending",
-        revision: "1",
-        planned: true,
-      };
-      const skippable: ActivityItem = { ...planned, actions: [{ id: "skip", label: "Skip" }] };
-      const event = register([planned], {
-        invoke: (_itemId, actionId) => {
-          invoked.push(actionId);
-          return Promise.resolve();
-        },
-      });
-      yield* service.receive(event);
-      expect(available()).toBe(true);
-      expect(rows().map((row) => row.id)).toEqual(["planned"]);
-      expect(starting()).toBe(0);
-      yield* service.receive({ ...event, operation: "publish", items: [skippable] });
-      expect(starting()).toBe(0);
-      const offered = rows()[0]!;
-      yield* service.invoke({ ...action(offered), actionId: "skip" });
-      expect(invoked).toEqual(["skip"]);
-      yield* service.receive({
-        ...event,
-        operation: "publish",
-        items: [{ ...skippable, revision: "2" }],
-      });
-      const stale = yield* Effect.flip(service.invoke({ ...action(offered), actionId: "skip" }));
-      expect(stale.reason).toBe("stale");
-      expect(invoked).toEqual(["skip"]);
-      yield* rejectsEach(event, [
-        [{ ...planned, kind: "workflow", phases: [] }],
-        [{ ...skippable, status: "cancelled" }],
-        [{ ...planned, status: "running" }],
-        [{ ...planned, status: "done" }],
-      ]);
-      yield* service.receive({ ...event, items: [{ ...planned, status: "cancelled" }] });
-      expect(available()).toBe(true);
-      expect(rows()[0]).toMatchObject({ planned: true, status: "cancelled", actions: [] });
-    }),
-  );
-  it.effect(
-    "accepts skipped work only on cancelled work that isn't planned, a workflow or a question",
-    () =>
-      Effect.gen(function* () {
-        const { service, rows, register, rejectsEach } = yield* recordingService();
-        const skipped: ActivityItem = {
-          id: "skipped",
-          title: "Skipped agent",
-          kind: "agent",
-          status: "cancelled",
-          revision: "1",
-          skipped: true,
-        };
-        const event = register([skipped]);
-        yield* service.receive(event);
-        expect(rows()[0]).toMatchObject({ skipped: true, status: "cancelled" });
-        yield* rejectsEach(event, [
-          [{ ...skipped, status: "done" }],
-          [{ ...skipped, planned: true }],
-          [{ ...skipped, kind: "question" }],
-          [{ ...skipped, kind: "workflow", phases: [] }],
-          [
-            {
-              id: "workflow",
-              title: "Workflow",
-              kind: "workflow",
-              status: "running",
-              revision: "1",
-              phases: [{ title: "Find", work: { items: 2, finished: 2, stopped: 1, skipped: 2 } }],
-            },
-          ],
-        ]);
-      }),
   );
   it.effect("withdraws invalid attention metadata and restores valid publication and actions", () =>
     Effect.gen(function* () {

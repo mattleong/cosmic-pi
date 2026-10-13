@@ -16,15 +16,6 @@ export const detachActivityItem = (
   ...(item.route !== undefined && { route: cleanText(item.route, ACTIVITY_LIMITS.route) }),
   ...(item.summary !== undefined && { summary: cleanText(item.summary, ACTIVITY_LIMITS.text) }),
   ...(item.detail !== undefined && { detail: detail(item.detail) }),
-  ...(item.phase !== undefined && { phase: cleanText(item.phase, ACTIVITY_LIMITS.phaseTitle) }),
-  ...(item.phases && {
-    phases: item.phases.map((phase) => ({
-      ...phase,
-      title: cleanText(phase.title, ACTIVITY_LIMITS.phaseTitle),
-      ...(phase.detail !== undefined && { detail: cleanText(phase.detail, ACTIVITY_LIMITS.text) }),
-      ...(phase.work && { work: { ...phase.work } }),
-    })),
-  }),
   ...(item.actions && {
     actions: item.actions.map((action) => ({
       ...action,

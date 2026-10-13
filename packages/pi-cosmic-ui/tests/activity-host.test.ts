@@ -200,29 +200,35 @@ describe("activity host lifecycle", () => {
       provider.dispose();
     }),
   );
-  it.effect("keeps a published phase checklist visible and recalculates its budget on resize", () =>
+  it.effect("keeps awaited failures visible and recalculates the widget budget on resize", () =>
     Effect.gen(function* () {
       const fixture = harness();
       const service = yield* fixture.service();
       fixture.host.activate(fixture.ctx, service);
-      const phases = Array.from({ length: 12 }, (_, index) => ({
-        title: `Unique phase ${index} boundary`,
-      }));
-      const provider = fixture.register({
-        snapshot: () => [{ ...item("flow"), kind: "workflow", title: "Checklist", phases }],
-      });
+      const failures = Array.from(
+        { length: 12 },
+        (_, index): ActivityItem => ({
+          id: `failed-${index}`,
+          title: `Unique failure ${index} boundary`,
+          kind: "agent",
+          status: "failed",
+          revision: "1",
+          awaited: true,
+        }),
+      );
+      const provider = fixture.register({ snapshot: () => [item("live"), ...failures] });
       yield* fixture.drain();
       const redraws = fixture.redraws();
       fixture.tick(service, SPINNER_FRAME_MS);
       expect(fixture.redraws()).toBeGreaterThan(redraws);
       fixture.resizeWidget(60);
-      for (const phase of phases)
-        expect(fixture.renderWidget().some((line) => line.includes(phase.title))).toBe(true);
+      for (const failure of failures)
+        expect(fixture.renderWidget().some((line) => line.includes(failure.title))).toBe(true);
       fixture.resizeWidget(20);
       expect(fixture.renderWidget().length).toBeLessThanOrEqual(10);
       fixture.resizeWidget(60);
-      for (const phase of phases)
-        expect(fixture.renderWidget().some((line) => line.includes(phase.title))).toBe(true);
+      for (const failure of failures)
+        expect(fixture.renderWidget().some((line) => line.includes(failure.title))).toBe(true);
       provider.dispose();
       fixture.host.deactivate();
     }),
@@ -236,8 +242,7 @@ describe("activity host lifecycle", () => {
         snapshot: () => [
           {
             ...item("flow"),
-            kind: "workflow",
-            actions: [{ id: "stop", label: "Stop workflow", handoff: false }],
+            actions: [{ id: "stop", label: "Stop agent", handoff: false }],
           },
           {
             ...item("asking"),
@@ -278,13 +283,12 @@ describe("activity host lifecycle", () => {
         snapshot: () => [
           {
             ...item("flow"),
-            kind: "workflow",
             revision,
             actions: [
               {
                 id: "stop",
-                label: "Stop workflow",
-                confirmation: "Stop this workflow and its agents?",
+                label: "Stop agent",
+                confirmation: "Stop this agent and its subagents?",
                 handoff: false,
               },
             ],
@@ -504,31 +508,29 @@ describe("activity host lifecycle", () => {
       expect(fixture.surface.overlays).toEqual([]);
     }),
   );
-  it.effect(
-    "preserves ordinary Activity selection and zoom across reopening without workflows",
-    () =>
-      Effect.gen(function* () {
-        const fixture = harness();
-        fixture.host.activate(fixture.ctx, yield* fixture.service());
-        const provider = fixture.register({ snapshot: () => [item("alpha"), item("beta")] });
-        yield* fixture.drain();
-        const { open: first, component } = yield* fixture.openManager();
-        component.render(120);
-        expect(component.shell.state.selectedId).toBe(activityKey("agents", "alpha"));
-        component.handleInput("j");
-        component.handleInput("z");
-        const selected = activityKey("agents", "beta");
-        expect(component.presentation.focus).toBe(selected);
-        component.handleInput("q");
-        yield* Fiber.join(first);
-        const { open: reopened, component: next } = yield* fixture.openManager();
-        next.render(120);
-        expect(next.presentation.focus).toBe(selected);
-        expect(next.shell.state.selectedId).toBe(selected);
-        next.handleInput("q");
-        yield* Fiber.join(reopened);
-        provider.dispose();
-      }),
+  it.effect("preserves Activity selection and zoom across reopening", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      const provider = fixture.register({ snapshot: () => [item("alpha"), item("beta")] });
+      yield* fixture.drain();
+      const { open: first, component } = yield* fixture.openManager();
+      component.render(120);
+      expect(component.shell.state.selectedId).toBe(activityKey("agents", "alpha"));
+      component.handleInput("j");
+      component.handleInput("z");
+      const selected = activityKey("agents", "beta");
+      expect(component.presentation.focus).toBe(selected);
+      component.handleInput("q");
+      yield* Fiber.join(first);
+      const { open: reopened, component: next } = yield* fixture.openManager();
+      next.render(120);
+      expect(next.presentation.focus).toBe(selected);
+      expect(next.shell.state.selectedId).toBe(selected);
+      next.handleInput("q");
+      yield* Fiber.join(reopened);
+      provider.dispose();
+    }),
   );
   it.effect("admits one manager and closes only its owned overlay beneath a questionnaire", () =>
     Effect.gen(function* () {

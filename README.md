@@ -11,8 +11,8 @@ A pnpm workspace for Pi extensions.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
 - [`pi-herdr-btw`](packages/pi-herdr-btw) — deterministic reusable blank Pi side sessions in user-owned panes in the current Herdr tab.
-- [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements: the footer and information area, and the Activity view for workflows, subagents, and tasks.
-- [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents with supervisor communication, dynamic JavaScript workflows, and a `/subagents` fleet UI.
+- [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements: the footer and information area, and the Activity view for subagents and tasks.
+- [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents with supervisor communication and a `/subagents` fleet UI.
 
 ## Requirements
 

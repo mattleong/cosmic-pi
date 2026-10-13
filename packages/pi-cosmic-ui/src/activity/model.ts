@@ -134,11 +134,7 @@ const trimCompleted = (
       !protectedKeys.has(row.key) &&
       !childCounts.get(row.key),
   );
-  queue.sort(
-    (left, right) =>
-      Number(left.planned !== true) - Number(right.planned !== true) ||
-      endedAt(left) - endedAt(right),
-  );
+  queue.sort((left, right) => endedAt(left) - endedAt(right));
   for (const row of queue) {
     const root = roots.get(row.key) ?? row.key;
     if (
@@ -149,7 +145,7 @@ const trimCompleted = (
     keep.delete(row.key);
     completed--;
     branchCounts.set(root, (branchCounts.get(root) ?? 1) - 1);
-    if (row.planned !== true) omitted.set(root, (omitted.get(root) ?? 0) + 1);
+    omitted.set(root, (omitted.get(root) ?? 0) + 1);
     const parent = parents.get(row.key);
     if (parent) {
       childCounts.set(parent, (childCounts.get(parent) ?? 1) - 1);
