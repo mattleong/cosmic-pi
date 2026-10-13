@@ -88,7 +88,9 @@ function codePreviewSettingsCommand(isCurrent: () => boolean): ExtensionSubcomma
       const next = updateSetting(previous, id, value);
       if (!setting || formatSettingValue(next, setting.id) !== value)
         return Promise.resolve(Result.fail({ message: `${id} can't be set to ${value}` }));
-      return persistSettingsChange(next, previous, loadOptions(ctx), undefined, isCurrent).then(
+      return persistSettingsChange(next, previous, loadOptions(ctx), undefined, isCurrent, [
+        setting.id,
+      ]).then(
         () => Result.succeed(undefined),
         (cause: unknown) => Result.fail({ message: formatSettingsSaveError(cause) }),
       );

@@ -28,6 +28,7 @@ interface SettingsPanelSaveEffects {
     settings: CodePreviewSettings,
     options: LoadSettingsOptions,
     previous: CodePreviewSettings,
+    editedKeys?: readonly (keyof CodePreviewSettings)[],
   ) => Promise<void>;
   readonly queueReset: (options: LoadSettingsOptions) => Promise<void>;
   readonly initializeSyntax: (theme: CodePreviewSettings["shikiTheme"]) => Promise<void>;
@@ -45,8 +46,9 @@ export function persistSettingsChange(
   loadOptions: LoadSettingsOptions,
   effects: SettingsPanelSaveEffects = liveSettingsPanelSaveEffects,
   isCurrent: () => boolean = constTrue,
+  editedKeys?: readonly (keyof CodePreviewSettings)[],
 ): Promise<void> {
-  return effects.queueSave(settings, loadOptions, previous).then(() => {
+  return effects.queueSave(settings, loadOptions, previous, editedKeys).then(() => {
     if (isCurrent() && codePreviewSettings.shikiTheme !== previous.shikiTheme)
       void effects.initializeSyntax(codePreviewSettings.shikiTheme).catch(() => undefined);
     return undefined;

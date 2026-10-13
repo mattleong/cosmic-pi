@@ -328,7 +328,9 @@ export const runProbeEffect = (
     totalOutputLimitBytes: MAX_PROBE_OUTPUT_BYTES,
     timeoutMillis: PROBE_TIMEOUT_MILLIS,
     cleanupTimeoutMillis: 2_000,
-    sweepProcessTreeOnExit: true,
+    // Fixed readiness probes accept observed leader exit on Windows, where a dead PID
+    // cannot be used to sweep descendants. Writer admission still requires stronger ownership.
+    sweepProcessTreeOnExit: process.platform !== "win32",
     detached: process.platform !== "win32",
     windowsHide: true,
   }).pipe(

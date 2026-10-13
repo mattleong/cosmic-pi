@@ -50,6 +50,7 @@ export type LoadSettingsOptions = {
 interface SaveSettingsOptions {
   readonly rehydrate?: LoadSettingsOptions;
   readonly previous?: CodePreviewSettings;
+  readonly editedKeys?: readonly (keyof CodePreviewSettings)[];
 }
 
 export interface CodePreviewSettingsServiceContract {
@@ -98,6 +99,7 @@ function settingsDocument(
   context: SettingsSaveContext,
   latestGlobalDocument: JsonObject,
   previous: CodePreviewSettings = context.loaded,
+  editedKeys?: readonly (keyof CodePreviewSettings)[],
 ): JsonObject {
   const document = withoutKnownSettings(latestGlobalDocument);
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
@@ -106,7 +108,8 @@ function settingsDocument(
   }
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
     const value = settings[key];
-    if (Equal.equals(value, previous[key])) continue;
+    // Explicit assignments remain edits even while pending saves make the snapshot stale.
+    if (editedKeys ? !editedKeys.includes(key) : Equal.equals(value, previous[key])) continue;
     if (
       Equal.equals(value, context.baseline[key]) &&
       Equal.equals(value, context.globalBaseline[key])
@@ -253,10 +256,11 @@ export class CodePreviewSettingsService extends Context.Service<
         context: SettingsSaveContext,
         coordinator: SettingsCoordinator,
         previous?: CodePreviewSettings,
+        editedKeys?: readonly (keyof CodePreviewSettings)[],
       ) {
         const loaded = yield* decodeCommittedSettings(settings, flatSettingsPath);
         return yield* commitDocument(coordinator, { ...context, loaded }, (latest) =>
-          settingsDocument(loaded, context, latest, previous),
+          settingsDocument(loaded, context, latest, previous, editedKeys),
         );
       });
 
@@ -300,7 +304,7 @@ export class CodePreviewSettingsService extends Context.Service<
           ),
         save: (settings, admission, options = {}) =>
           modify(admission, options, (current, coordinator) =>
-            saveState(settings, current, coordinator, options.previous),
+            saveState(settings, current, coordinator, options.previous, options.editedKeys),
           ),
         reset: (admission, options = {}) => modify(admission, options, resetState),
         flush: flushSettingsCoordinator,

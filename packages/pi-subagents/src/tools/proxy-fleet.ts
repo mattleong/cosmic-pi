@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core";
 import { invalidRequest, InvalidSubagentRequestError } from "../run/errors.ts";
-import { MAX_PROTOCOL_ID_CHARS, MAX_RETAINED_RUNS } from "../run/limits.ts";
+import { MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
 import {
   SUBAGENT_RUN_STATES,
   type SubagentControlExpectation,
@@ -42,7 +42,8 @@ const FleetCardSchema = Schema.Struct({
 const FleetSnapshotSchema = Schema.Struct({
   version: Schema.Literal(1),
   kind: Schema.Literal(FLEET_SNAPSHOT_TOOL_NAME),
-  cards: Schema.Array(FleetCardSchema).check(Schema.isMaxLength(MAX_RETAINED_RUNS)),
+  // Live runs are additional to terminal history; serialized size bounds the complete fleet.
+  cards: Schema.Array(FleetCardSchema),
 });
 const decodeArguments = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Never)),

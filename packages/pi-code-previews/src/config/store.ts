@@ -70,12 +70,14 @@ export function queueSettingsSave(
   settings: CodePreviewSettings,
   loadOptions: LoadSettingsOptions = {},
   previous?: CodePreviewSettings,
+  editedKeys?: readonly (keyof CodePreviewSettings)[],
 ): Promise<void> {
   const admission = makeSettingsAdmission();
   const next = cloneCodePreviewSettings(settings);
   const options = {
     ...(!hasCodePreviewSessionCapability() && { rehydrate: loadOptions }),
     ...(previous && { previous: cloneCodePreviewSettings(previous) }),
+    ...(editedKeys && { editedKeys: [...editedKeys] }),
   };
   return runSettingsEffect(
     CodePreviewSettingsService.use((service) => service.save(next, admission, options)),
