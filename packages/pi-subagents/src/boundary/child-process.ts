@@ -16,8 +16,8 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import {
+  NESTED_SUBAGENT_TOOL_NAMES,
   PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
-  SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import { processCauseError as processError, type SubagentProcessError } from "../run/errors.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
@@ -110,7 +110,7 @@ const reclaimChildRunState = (
   });
 
 export const childToolPolicy = (rootActiveTools: ReadonlyArray<string>) => ({
-  enabled: [...new Set([...rootActiveTools, "contact_parent", ...SUBAGENT_TOOL_NAMES])],
+  enabled: [...new Set([...rootActiveTools, "contact_parent", ...NESTED_SUBAGENT_TOOL_NAMES])],
   excluded: PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
 });
 

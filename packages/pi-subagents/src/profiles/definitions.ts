@@ -39,7 +39,7 @@ export const PROFILE_DEFINITIONS = {
   },
   worker: {
     id: "worker",
-    description: "Implement an approved task and validate the changes.",
+    description: "Implement an assigned change and validate it.",
     defaultContext: "fresh",
     defaultWriteIntent: "writer",
     defaultEffort: "high",

@@ -5,6 +5,7 @@ import { StringEnum, validateToolArguments } from "@earendil-works/pi-ai";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
+import { PROFILE_DEFINITIONS } from "../profiles/definitions.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import {
@@ -35,18 +36,18 @@ const writePaths = (itemDescription?: string, description?: string) =>
 
 export const AWAIT_UNTIL = ["all_finished", "any_finished"] as const;
 
+const PROFILE_PARAMETER_DESCRIPTION = [
+  "Role and model route, chosen by the deliverable; omit for generalist.",
+  ...PROFILE_IDS.map((id) => `${id}: ${PROFILE_DEFINITIONS[id].description}`),
+].join(" ");
+
 const StartSpecFields = {
   task: nonblankString(
     MAX_TASK_CHARS,
     "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
   ),
   name: Type.Optional(nonblankString(MAX_NAME_CHARS, "Optional nonblank display name.")),
-  profile: Type.Optional(
-    StringEnum(PROFILE_IDS, {
-      description:
-        "Behavior and model-routing profile, selected by deliverable: scout locates and explains existing code; researcher investigates external sources; planner recommends implementation strategies and ordered changes; worker implements; reviewer evaluates code, plans, and simplification opportunities before or after implementation; oracle analyzes inherited decisions; generalist handles other work. Read-only or initial work is not automatically scouting. An explicit profile always wins. When omitted, the generalist fallback applies. The selected profile always determines the model route.",
-    }),
-  ),
+  profile: Type.Optional(StringEnum(PROFILE_IDS, { description: PROFILE_PARAMETER_DESCRIPTION })),
   writes: Type.Optional(
     writePaths(
       "Exact workspace-relative POSIX file path assigned to this writer.",
@@ -72,7 +73,7 @@ const ModelsParameters = Type.Object(
   {
     profile: Type.Optional(
       StringEnum(PROFILE_IDS, {
-        description: "Optional profile filter; omit to discover every built-in profile route.",
+        description: "Optional profile to show; omit for every profile.",
       }),
     ),
   },
@@ -98,8 +99,7 @@ const StatusParameters = Type.Object(
     runIds: RunIdsParameters,
     includeDeliveredReports: Type.Optional(
       Type.Boolean({
-        description:
-          "Read back the latest retained, already-delivered report without consuming or notifying again. Competing claims still redact it; no historical report storage is added.",
+        description: "Reread the latest report you already received, without another notification.",
       }),
     ),
   },
@@ -140,7 +140,7 @@ const LifecycleParameters = Type.Object(
   {
     action: StringEnum(["resume", "interrupt", "stop", "retry"] as const, {
       description:
-        "resume requires the resume capability; interrupt requires the interrupt capability; stop is always available for active runs; retry continues failed runs on the next candidate in their immutable launch-time profile route.",
+        "resume and interrupt need the run to support them; stop works on any active run; retry continues a failed run on its next route candidate. message applies only to resume.",
     }),
     runIds: RunIdsParameters,
     message: Type.Optional(MessageParameters),

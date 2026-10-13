@@ -11,6 +11,7 @@ import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import type { SubagentErrorReceiptOwner } from "../boundary/host-tool-result.ts";
 import {
+  NESTED_SUBAGENT_TOOL_NAMES,
   SUBAGENT_TOOL_NAME,
   SUBAGENT_TOOL_NAMES,
   type SubagentToolName,
@@ -36,7 +37,7 @@ import {
 } from "./schema.ts";
 import { countLabel, invokeHostCallback, toPiToolOutputSchema } from "pi-cosmic-core";
 import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
-import { NORMAL_START_GUIDELINE } from "../delegation/prompt.ts";
+import { NESTED_START_GUIDELINE, NORMAL_START_GUIDELINE } from "../delegation/prompt.ts";
 
 const quoted = (message: string | undefined) => (message ? `“${message}”` : "");
 
@@ -76,31 +77,28 @@ const TOOL_INPUTS: SubagentToolInputs = {
 };
 
 const SCRIPTED_SUBAGENT_GUIDELINE =
-  "For bounded root-session read-only delegation, native codemode can script subagent_start, subagent_await, subagent_status, lifecycle stop, subagent_models, subagent_list, and subagent_rename using version-1 structured results. List and rename never return report text; models reports static eligibility, not authentication readiness. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. The main agent chooses the appropriate profile for each scripted assignment.";
+  "Native codemode can script read-only delegation with subagent_start, subagent_await, subagent_status, subagent_models, subagent_list, subagent_rename, and lifecycle stop, which return version-1 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, claims, and integration to the main agent.";
+
+// The audience-specific delegation rule from delegation/prompt.ts is prepended at registration.
+const START_GUIDELINES = [
+  "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.",
+  "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Run several shared-checkout writers only with pairwise-disjoint `writes` claims.",
+];
 
 const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.models]: {
     label: "Inspect Profile Routes",
     description:
-      "Static preflight of complete version 6 profile-set candidates in declared order, including host, runtime, model, effort, context, write intent, OpenAI fast mode, closeOnReport, and implementation eligibility. Local Pi/Claude/Codex adapters are implemented; runtime authentication and native integration readiness are checked at launch.",
+      "Show each profile's configured route: its model candidates in fallback order, with runtime, effort, context, write intent, and fast mode. The user configures routes; you can't pick a model. Authentication is checked only at launch.",
     renderCall: (args, theme) =>
       renderSubagentCall("Inspect profile routes", args.profile ?? "all profiles", theme),
   },
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Launch one to thirty-two session-scoped background subagents, subject to the caller's configured direct-child capacity, for bounded independent workstreams such as codebase reconnaissance, research, planning, review, and disjoint implementation. Start is nonblocking. Every task must be self-contained with relevant paths, constraints, evidence, and a concrete deliverable. Each item accepts task, optional profile, optional name, and optional exact-file writes claims. The session uses shared-checkout mode by default or opt-in worktree isolation, with no per-worker override. Worktree writers currently require a root caller; nested read-only and shared-checkout launches remain supported. Script-started trees stay read-only, including model-issued descendants and retry successors; the root main agent may authorize separate writer work outside those trees. Shared-checkout writers are exclusive without claims or may share with disjoint claims. Native edit, write, and Bash are unchanged. Ordered readiness failures advance through the declared local route only before spawn. All runs close after reporting. An admitted failed start reports its run ID and settled cleanup/retry disposition. Post-ownership uncertainty never falls through.",
-    promptSnippet:
-      "Parallelize independent reconnaissance, research, planning, and review with background subagents",
-    promptGuidelines: [
-      NORMAL_START_GUIDELINE,
-      "Use subagent_start for bounded slices rather than the whole assignment. Choose the profile by the required deliverable, not whether the task is read-only or comes first: scout locates and explains existing code; planner recommends implementation strategies and ordered changes; reviewer evaluates code, plans, or simplification opportunities before or after implementation. Read-only does not imply scout. Do not assign scouts substantive reviews, safety judgments, or implementation design. Give each subagent a narrow question and concrete deliverable while allowing it to follow relevant evidence as deeply as needed. Use researcher for sourced external research, oracle for inherited-decision analysis, and generalist for work without a matching specialized role.",
-      "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. The selected version 6 profile-set route supplies runtime, model, effort, context, write intent, OpenAI fast mode, and local execution with closeOnReport=true; writes only narrows a writer to exact cooperative file claims.",
-      "After subagent_start, continue independent work instead of waiting idle. Use subagent_await only when progress or final synthesis depends on a report; unclaimed completion reports are delivered automatically.",
-      "Use profile=worker only for explicit implementation handoffs. While shared-checkout writers are active, the parent coordinates and reviews but does not edit. Isolated worktree writers do not share the parent cwd, so the parent may keep editing. Launch multiple shared-cwd writers only with pairwise-disjoint exact writes claims; native tools and Bash are cooperative rather than per-file sandboxed. Worktree reports are proposals, not approval: use subagent_workspace to review, test combined changes, and integrate.",
-      "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",
-      "When a profiled run fails and its start receipt or status reports an eligible remaining route candidate, call subagent_lifecycle with action=retry for that run before launching any generalist replacement. Retry creates a new run on the next candidate from the original frozen route and never re-attempts the failed candidate.",
-    ],
+      "Start 1–32 background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or isolated worktrees, per the session setting; only the main session can start worktree writers. A shared-checkout writer without `writes` claims has the checkout to itself; parallel writers need disjoint exact claims. Subagents started from a codemode script, and their descendants, stay read-only. A start that fails after launch reports whether cleanup finished and whether retry is available.",
+    promptSnippet: "Run bounded, independent tasks in background subagents",
+    promptGuidelines: START_GUIDELINES,
     prepareArguments: prepareSubagentStartArguments,
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(
@@ -114,23 +112,23 @@ const TOOL_SPECS: SubagentToolSpecs = {
   },
   [SUBAGENT_TOOL_NAME.list]: {
     label: "List Subagents",
-    description:
-      "List every visible session-scoped subagent run as a compact parent-before-child hierarchy.",
+    description: "List your visible subagent runs as a parent-before-child tree, without reports.",
     renderCall: (_args, theme) => renderSubagentCall("List subagents", "", theme),
   },
   [SUBAGENT_TOOL_NAME.status]: {
     label: "Subagent Status",
     description:
-      "Inspect up to twelve specific subagent run IDs, including each run's capabilities. includeDeliveredReports reads back the latest retained report without another notification or completion claim; competing ownership still redacts it.",
+      "Inspect up to 12 subagent runs, including which controls each one supports. Set includeDeliveredReports to reread a report you already received.",
     renderCall: (args, theme) => renderSubagentCall(`Inspect ${targetsLabel(args)}`, "", theme),
   },
   [SUBAGENT_TOOL_NAME.await]: {
     label: "Wait for Subagents",
     description:
-      "Wait for selected background subagents when progress or final synthesis depends on their reports, with live progress. Awaited targets control completion and report claims; bounded visible descendants appear only as hierarchy context. Returns early when a target has a real parent question, is paused, or has writer admission paused. Follow the returned parent-action steps, then await again.",
-    promptSnippet: "Wait at a dependency or synthesis barrier for selected subagent reports",
+      "Wait for selected subagents and return their reports, with live progress. Returns early when a run asks you a question, pauses, or has writer admission paused; follow the steps in the result, then await again.",
+    promptSnippet: "Wait for subagent reports when your next step depends on them",
     promptGuidelines: [
-      "Use subagent_await only when progress or final synthesis depends on selected reports; otherwise continue independent work and let unclaimed completion reports arrive automatically. Do not poll subagent_status. When await returns for parent action, execute the ordered recovery it prints, then await again. Reply only to a real parent question. For claim containment, review the audit, optionally grant only intended workspace-relative claims to the confirmed paused offender, resume admission, then lifecycle-resume with authoritative claims. If the backend cannot resume or the write was outside the workspace, stop and confirm cleanup, resume admission, launch a corrected replacement, and await it. For an ordinary pause, resume if supported or stop and replace. Use subagent_status only for troubleshooting or a user-requested snapshot.",
+      "After starting subagents, keep working on independent parts. Call subagent_await only when your next step depends on a report; reports arrive on their own, so don't poll subagent_status.",
+      "When a subagent tool result lists next steps, follow them in order before continuing. Use subagent_reply only for a real parent question.",
     ],
     renderCall: (args, theme) =>
       renderSubagentCall(
@@ -143,25 +141,23 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.send]: {
     label: "Send Subagent Guidance",
     description:
-      "Send the same guidance message to one or more running subagents. Mixed-target calls report each success and failure.",
+      "Send the same guidance to one or more running subagents. Each target's result is reported separately.",
     renderCall: (args, theme) =>
       renderSubagentCall(`Guide ${targetsLabel(args)}`, quoted(args.message), theme),
   },
   [SUBAGENT_TOOL_NAME.reply]: {
     label: "Reply to Subagent",
-    description: "Answer a blocking parent question from one subagent.",
+    description: "Answer a subagent's blocking question.",
     renderCall: (args, theme) =>
       renderSubagentCall("Reply to subagent", quoted(args.message), theme),
   },
   [SUBAGENT_TOOL_NAME.lifecycle]: {
     label: "Manage Subagents",
     description:
-      "Interrupt, resume, stop, or explicitly continue failed subagents on their next configured profile candidate. Retry creates a new linked run from the immutable launch-time route, never re-attempts the failed candidate, and fails closed on uncertain execution or cleanup. Use generalist only after retry reports route exhaustion. Interrupt and resume require reported capabilities; stop is available for active runs. Message is accepted only for resume. Mixed-target calls report each success and failure.",
-    promptSnippet:
-      "Continue failed subagents through their remaining configured profile candidates",
+      "Interrupt, resume, or stop subagents, or retry a failed run on its profile's next configured candidate. Retry starts a new linked run, never reuses the failed candidate, and refuses when execution or cleanup is uncertain. Each target's result is reported separately.",
+    promptSnippet: "Interrupt, resume, stop, or retry subagents",
     promptGuidelines: [
-      "For a failed profiled run with remaining candidates, use subagent_lifecycle action=retry before starting a generalist replacement. Each retry advances the frozen route by one selected candidate and creates a new run; repeat only on the new failed successor until the route is exhausted.",
-      "Never retry when the tool reports uncertain execution or unconfirmed cleanup. Writer retries may repeat partial side effects, so retry them only when the original handoff and current user intent authorize a fresh execution.",
+      "If a profiled run fails with route candidates left, retry it with action=retry before starting a generalist replacement, and don't replace a profile the user disabled. Never retry when execution or cleanup is uncertain; retry a writer only when a fresh run is still what the user wants.",
     ],
     renderCall: (args, theme) => {
       const verb = args.action ?? "manage";
@@ -172,19 +168,17 @@ const TOOL_SPECS: SubagentToolSpecs = {
   },
   [SUBAGENT_TOOL_NAME.rename]: {
     label: "Rename Subagent",
-    description: "Change one subagent's local display name.",
+    description: "Change one subagent's display name.",
     renderCall: (args, theme) =>
       renderSubagentCall("Rename subagent", args.name ? `to ${args.name}` : "", theme),
   },
   [SUBAGENT_TOOL_NAME.claims]: {
     label: "Manage Writer Claims",
     description:
-      "Inspect, grant, or revoke exact cooperative file claims for active shared-cwd writers, or resume writer admission after reviewing a claim violation. Grant and revoke require either a worker blocked on a parent claim question or the confirmed paused violation offender. In both cases no other tool may be active. Ordinary paused writers and non-offending peers remain ineligible. This coordinates native edit, write, and Bash; it does not replace or sandbox them.",
-    promptSnippet: "Coordinate exact file ownership for shared-cwd writer pools",
+      "Inspect, grant, or revoke exact file claims for shared-checkout writers, or reopen writer admission after a claim violation. Grant and revoke work only for a writer waiting on your claim question or the paused offender of a violation, while no other tool call is running. Claims coordinate writers; they don't sandbox file access.",
+    promptSnippet: "Coordinate exact file ownership for shared-checkout writers",
     promptGuidelines: [
-      "When a writer requests another file, grant it with subagent_claims before replying. Only the parent grants or transfers claims.",
-      "For a confirmed paused claim offender, inspect the audit and shared tree. Grant only intended workspace-relative missing files, if any. Then call resume_admission, lifecycle-resume with the authoritative claim set and guidance, and await again. Do not use subagent_reply for claim containment.",
-      "If the offender cannot resume or targeted an outside-workspace path, stop it and confirm cleanup before resume_admission. Launch a corrected replacement with exact safe claims, then await the replacement. Never reopen admission, resume work, or launch a replacement without the parent choosing that action.",
+      "Only you grant claims: when a writer asks for another file, grant it with subagent_claims before replying. For a claim violation, follow the recovery steps in the tool result instead of using subagent_reply.",
     ],
     renderCall: (args, theme) =>
       renderSubagentCall(
@@ -200,13 +194,11 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.workspace]: {
     label: "Manage Writer Workspace",
     description:
-      "Manage isolated writer proposals as their direct parent. list pages accessible workspaces and root-only unavailable-artifact diagnostics, which grant no recovery authority; review freezes after confirmed process cleanup and returns an immutable diff in pages of at most 16000 characters. Read ALL pages of the same revisionId. prepare builds a separate cwd combining that revision with current parent edits. Run relevant combined tests there before integrate with the exact revisionId and preparationId. Integration applies uncommitted edits and preserves the parent index; stale or conflicting inputs fail closed. revise requests another writer pass and invalidates previous review/preparation; discard deletes a rejected proposal after cleanup. Reports never imply approval. Caller identity is bound by the coordinator, not tool arguments.",
-    promptSnippet:
-      "Review isolated writer diffs, test combined changes, and integrate uncommitted edits",
+      "Review and integrate worktree writers' proposals as their direct parent. review freezes a finished writer's changes and returns the diff in pages; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. integrate applies the exact revisionId and preparationId as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. revise asks the writer for another pass; discard deletes a rejected proposal.",
+    promptSnippet: "Review, test, and integrate worktree writers' proposals",
     promptGuidelines: [
-      "After a worktree writer finishes, use subagent_workspace review and inspect every diff page using the returned revisionId and nextOffset. A report or summary is not a review or approval.",
-      "Use subagent_workspace prepare for the reviewed revision, then run relevant tests in its returned combined cwd. Do not edit that prepared tree. Only after review and passing tests, automatically call integrate with that exact revisionId and preparationId. Do not commit or stage parent changes.",
-      "If review or tests fail, use subagent_workspace revise with concrete feedback, then await its successor and review the new workspace revision from the beginning. Stale preparation or parent changes require a fresh prepare and test pass. Use discard only for a proposal you intend to delete.",
+      "A worktree writer's report is a proposal, not approval. Review every diff page of its revision, prepare it, and run the relevant tests in the prepared cwd without editing it; then integrate that exact revisionId and preparationId without asking first. Don't stage or commit parent changes.",
+      "If review or tests fail, revise with concrete feedback, await the successor, and review its new revision from the beginning. A stale preparation needs a fresh prepare and test run. Discard only proposals you mean to delete.",
     ],
     renderCall: (args, theme) => renderSubagentCall("Writer workspace", args.action ?? "", theme),
   },
@@ -245,16 +237,20 @@ export function registerSubagentTools(
     return owned;
   };
 
+  const nested = runtime.proxyCall !== undefined;
   const buildTool = <N extends SubagentToolName>(name: N) => {
     const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
-    const rootContract = !runtime.proxyCall && isSubagentContractTool(name);
+    const rootContract = !nested && isSubagentContractTool(name);
     const scriptable = rootContract;
     const tool = defineTool<SubagentToolParameters<N>>({
       ...spec,
-      ...(scriptable &&
-        name === SUBAGENT_TOOL_NAME.start && {
-          promptGuidelines: [...(spec.promptGuidelines ?? []), SCRIPTED_SUBAGENT_GUIDELINE],
-        }),
+      ...(name === SUBAGENT_TOOL_NAME.start && {
+        promptGuidelines: [
+          nested ? NESTED_START_GUIDELINE : NORMAL_START_GUIDELINE,
+          ...(spec.promptGuidelines ?? []),
+          ...(scriptable ? [SCRIPTED_SUBAGENT_GUIDELINE] : []),
+        ],
+      }),
       name,
       exposure: scriptable ? "direct" : "model-only",
       ...(rootContract && { outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[name]) }),
@@ -345,5 +341,6 @@ export function registerSubagentTools(
     });
     return wrapped;
   };
-  for (const name of SUBAGENT_TOOL_NAMES) pi.registerTool(buildTool(name));
+  for (const name of nested ? NESTED_SUBAGENT_TOOL_NAMES : SUBAGENT_TOOL_NAMES)
+    pi.registerTool(buildTool(name));
 }

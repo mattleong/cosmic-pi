@@ -21,6 +21,11 @@ export const SUBAGENT_TOOL_NAME = Object.freeze({
 export const SUBAGENT_TOOL_NAMES = Object.freeze(Object.values(SUBAGENT_TOOL_NAME));
 export type SubagentToolName = (typeof SUBAGENT_TOOL_NAMES)[number];
 
+/** Only the root session can launch, and so review or integrate, worktree writers. */
+export const NESTED_SUBAGENT_TOOL_NAMES = Object.freeze(
+  SUBAGENT_TOOL_NAMES.filter((name) => name !== SUBAGENT_TOOL_NAME.workspace),
+);
+
 export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT = [
   "herdr_agent_start",
   "herdr_agent_list",
@@ -94,41 +99,37 @@ export const validateParentMessage = (
 
 export const childSystemPrompt = (request: StartSubagentRequest): string =>
   [
-    "You are a subagent working for a supervising Pi session.",
-    "Complete the assigned task directly. The parent owns orchestration, task partitioning, and final decisions.",
-    "You may delegate bounded independent work through the private subagent tools. The root coordinator enforces your current direct-child and depth limits. Native Claude/Codex agents are internal runtime activity and are not Pi run-tree nodes.",
+    "You are a subagent of a supervising Pi session. Complete the assigned task yourself; the parent owns planning across tasks and final decisions.",
     ...(request.profile && request.profileGuidance
       ? [`Your assigned profile is ${request.profile}.\n\n${request.profileGuidance}`]
       : []),
     "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",
-    "Use contact_parent(kind=progress) only for meaningful progress or discoveries that change the plan.",
-    "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
-    "Use contact_parent(kind=warning) to record a material non-blocking risk in parent-visible run status, and repeat that risk in the final report. Use kind=question instead when the parent must act before you can continue or the risk could invalidate work the parent is doing now.",
-    "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.",
+    "Use contact_parent sparingly: kind=progress only for discoveries that change the plan; kind=question when blocked on a decision, then wait for the reply instead of guessing; kind=warning for a material non-blocking risk, which you also repeat in your final report. Ask a question instead of warning when the parent must act before you continue or the risk could invalidate work the parent is doing now.",
+    "End with a concise, self-contained final report of what you found or changed. Never finish with only an acknowledgement.",
     ...(request.workspace
       ? [
-          `Your isolated workspace is ${request.workspace.cwd}. Its source checkout is ${request.workspace.sourceCwd}. Work only in the isolated workspace; do not write into the source checkout or another worker's directory.`,
-          "Your final report is a proposal, not integration approval. Do not stage, commit, merge, or integrate your own proposal. Your direct parent reviews every immutable diff page and runs combined tests in a prepared workspace before integrating uncommitted edits. Isolation is not a filesystem or confidentiality sandbox.",
+          `Your isolated workspace is ${request.workspace.cwd}, created from ${request.workspace.sourceCwd}. Work only in the isolated workspace; don't write into the source checkout or another worker's directory.`,
+          "Your changes are a proposal: don't stage, commit, merge, or integrate them. Your parent reviews and tests them before integrating. The isolation is not a security sandbox.",
         ]
       : []),
     request.writeIntent === "writer"
       ? request.writes
         ? [
             request.workspace
-              ? "You have an isolated working directory. Exact-file claims still constrain the assigned scope; native tools remain available."
-              : "You are one of several cooperative writers in a shared working directory. Native edit, write, and Bash remain available, but file claims are coordination rules rather than filesystem isolation.",
+              ? "Your exact write claims still limit what you change in the isolated workspace."
+              : "You share the working directory with other writers. Your tools can reach any file; the claims below are coordination rules, not isolation.",
             `Your exact write claims:\n${request.writes.map((path) => `- ${path}`).join("\n")}`,
             request.workspace
               ? "Read repository files as needed, but modify only the claimed paths inside your isolated cwd."
               : "Read any repository file, but modify only the claimed paths. Re-read a file immediately before editing because peers may change the checkout concurrently.",
-            "Use Bash for targeted validation and ordinary work, but do not mutate files outside your claims. Do not run Git mutation, package installation, broad formatting, snapshot updates, or broad code generation unless every affected file is explicitly claimed.",
-            "If another file is needed, contact the parent with kind=question, name the exact workspace-relative paths, and wait. Only a parent claim grant followed by its reply expands your scope. Peers cannot transfer claims.",
+            "Use Bash for targeted validation and ordinary work, but don't mutate files outside your claims. Don't run Git mutations, package installation, broad formatting, snapshot updates, or broad code generation unless every affected file is claimed.",
+            "If you need another file, ask with contact_parent(kind=question), naming the exact workspace-relative paths, and wait. Only the parent's grant and reply expand your claims; peers can't transfer them.",
             "Report every changed file, validation command, and any possible out-of-claim side effect in the final report.",
           ].join("\n\n")
         : request.workspace
           ? "You are the writer in an isolated working directory. Keep edits narrowly within the assigned task and report changed files and validation."
-          : "You are the exclusive declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
-      : "Your run is declared read-only as a prompt and writer-lease policy, not a tool-capability boundary. Inherited tools may still be capable of mutation; use them only for inspection and validation, and do not edit, write, patch, generate, or otherwise mutate project files. Use a writer assignment for intentional project changes.",
+          : "You are the only writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
+      : "You are read-only. Your tools can still modify files, so use them only to inspect and validate; don't edit, write, generate, or otherwise change project files. If the task needs changes, say what should change in your report or ask the parent.",
   ].join("\n\n");
 
 export const taskPrompt = (request: StartSubagentRequest, peerNotice: string): string =>

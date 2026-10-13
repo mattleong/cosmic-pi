@@ -14,7 +14,8 @@ import {
   type SubagentChildBridgeBoundaries,
 } from "../src/boundary/host-child.ts";
 import { ParentContactError, type LocalPiChildIpcHandlers } from "../src/boundary/local-pi-ipc.ts";
-import { SUBAGENT_TOOL_NAME, SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
+import { NESTED_START_GUIDELINE, NORMAL_START_GUIDELINE } from "../src/delegation/prompt.ts";
+import { NESTED_SUBAGENT_TOOL_NAMES, SUBAGENT_TOOL_NAME } from "../src/run/tool-policy.ts";
 import { statusContract } from "../src/tools/contract.ts";
 import { view } from "./fixtures/run-view.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
@@ -165,7 +166,7 @@ describe("local Pi child bridge", () => {
     const bridge = makeHarness();
     try {
       yield* step(() => bridge.start());
-      for (const name of [...SUBAGENT_TOOL_NAMES, "contact_parent"]) {
+      for (const name of [...NESTED_SUBAGENT_TOOL_NAMES, "contact_parent"]) {
         const cycled = createToolPresentationHarness(bridge.latestTool(name)).cycle(
           { kind: "question", message: "input evidence" },
           { content: [{ type: "text", text: "reply evidence sentinel" }], details: {} },
@@ -179,6 +180,21 @@ describe("local Pi child bridge", () => {
       restore();
     }
   });
+  effectTest(
+    "gives nested sessions restrained delegation guidance and no worktree review tool",
+    function* () {
+      const bridge = makeHarness();
+      try {
+        yield* step(() => bridge.start());
+        const guidelines = bridge.latestTool(SUBAGENT_TOOL_NAME.start).promptGuidelines ?? [];
+        expect(guidelines).toContain(NESTED_START_GUIDELINE);
+        expect(guidelines).not.toContain(NORMAL_START_GUIDELINE);
+        expect(() => bridge.latestTool(SUBAGENT_TOOL_NAME.workspace)).toThrow();
+      } finally {
+        yield* step(bridge.shutdown);
+      }
+    },
+  );
   effectTest("cancels an owned questionnaire on reload and revokes the old relay", function* () {
     const harness = makeHarness();
     yield* step(() => harness.start("/old"));

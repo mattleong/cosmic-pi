@@ -7,7 +7,7 @@ import {
   requestCooperativeAbort,
   safeSubagentDirectorySegment,
 } from "../src/boundary/child-process.ts";
-import { piRootActiveToolSnapshot, SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
+import { NESTED_SUBAGENT_TOOL_NAMES, piRootActiveToolSnapshot } from "../src/run/tool-policy.ts";
 
 describe("subagent child process boundary", () => {
   it("keeps untrusted session identifiers inside one directory segment", () => {
@@ -40,7 +40,7 @@ describe("subagent child process boundary", () => {
         "edit",
         "bash",
         "contact_parent",
-        ...SUBAGENT_TOOL_NAMES,
+        ...NESTED_SUBAGENT_TOOL_NAMES,
       ]);
       expect(policy.excluded.split(",")).toEqual([
         "herdr_agent_start",

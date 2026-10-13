@@ -28,7 +28,7 @@ import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-p
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { PARENT_REPLY_PREFIX } from "../supervisor/protocol.ts";
 import { clipUtf8Text } from "../run/state.ts";
-import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
+import { NESTED_SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { encodeFleetActionRequest, fleetSnapshotProxyRequest } from "../tools/proxy-fleet.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
@@ -56,7 +56,7 @@ import {
 
 const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
-const CHILD_PROXY_TOOL_NAMES = [...SUBAGENT_TOOL_NAMES, "contact_parent"];
+const CHILD_PROXY_TOOL_NAMES = [...NESTED_SUBAGENT_TOOL_NAMES, "contact_parent"];
 const CHILD_PRIVATE_TOOL_NAME_SET: ReadonlySet<string> = new Set(CHILD_PROXY_TOOL_NAMES);
 let nextRequest = 1;
 
