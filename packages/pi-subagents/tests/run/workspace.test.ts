@@ -22,7 +22,6 @@ import {
   type WorkspaceTarget,
 } from "../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../src/workspace/service.ts";
-import { compileResultContract } from "../../src/domain/result-contract.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
@@ -246,7 +245,6 @@ function fixture({
               }),
         ),
       ),
-    discardUnchanged: () => Effect.succeed(false),
   };
   const acquired: string[] = [];
   const released: string[] = [];
@@ -948,31 +946,6 @@ describe("writer workspace orchestration", () => {
         });
       });
     });
-
-  it.effect(
-    "starts a revision successor without its workflow membership or result contract",
-    () => {
-      const f = fixture();
-      return withService(f.layer, function* (service) {
-        const resultContract = yield* compileResultContract({
-          type: "object",
-          properties: { fixed: { type: "boolean" } },
-          required: ["fixed"],
-          additionalProperties: false,
-        }).pipe(Effect.orDie);
-        const writer = yield* service.start(
-          repoWriter({ workflow: { workflowId: "workflow-1", name: "fix lint" }, resultContract }),
-        );
-        expect(writer.workflow?.workflowId).toBe("workflow-1");
-        expect(f.children.controls[0]?.launch.resultContract).toBeDefined();
-        yield* service.stop(writer.id);
-        const successor = yield* service.workspaceRevise(writer.workspaceId!, "Update the tests.");
-        expect(successor.workspaceId).toBe(writer.workspaceId);
-        expect(successor.workflow).toBeUndefined();
-        expect(f.children.controls[1]?.launch.resultContract).toBeUndefined();
-      });
-    },
-  );
 
   it.effect("keeps a committed integration when a source lease release fails", () => {
     const f = fixture({

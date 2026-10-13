@@ -1,6 +1,6 @@
 # pi-subagents reference
 
-Detailed behavior, configuration, and safety contracts behind the [README](../README.md). See [ARCHITECTURE.md](../ARCHITECTURE.md) for ownership and lifecycle. The other files in this directory are the canonical sources for routing, backends, delivery, settings, and workflows; this page links to them and records only the facts they don't state.
+Detailed behavior, configuration, and safety contracts behind the [README](../README.md). See [ARCHITECTURE.md](../ARCHITECTURE.md) for ownership and lifecycle. The other files in this directory are the canonical sources for routing, backends, delivery, settings, and native scripting; this page links to them and records only the facts they don't state.
 
 ## Implemented behavior
 
@@ -32,9 +32,7 @@ A route is exactly `"disabled"`, one candidate, or a non-empty ordered candidate
 
 Native selectors use one fail-closed 256-character grammar across config, settings, and all three local adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, including Pi registry context variants such as `cursor/gpt-5.5@1m`, plus Claude's optional exact long-context suffix such as `[1m]`.
 
-Unknown root keys fail document activation. Diagnostics redact profile-set names.
-
-The optional root boolean `ultracode` is described in [Ultracode switch](settings-workspace.md#ultracode-switch). A non-boolean value (including the string `"true"`) stops activation for that document; correct the JSON before reloading.
+Unknown root keys fail document activation except the retired `ultracode` setting, which is ignored to preserve saved profile documents. Diagnostics redact profile-set names.
 
 ### Current Session and saved sets
 
@@ -83,7 +81,7 @@ Repeat retry only on a failed successor, and use generalist only after `retry_ro
 
 Writer workspace mode, admission, snapshot limits, revise, resume, and post-integration cleanup are documented in [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle). The parent's procedure:
 
-A completed writer report does not approve its changes. Its direct parent follows this workflow automatically, without asking for routine user approval:
+A completed writer report does not approve its changes. Its direct parent follows this procedure automatically, without asking for routine user approval:
 
 1. Call `subagent_workspace` with `{"action":"review","workspaceId":"..."}` after process cleanup. Keep the returned `revisionId` and inspect every diff page, passing the same ID and each `nextOffset` back to `review`. Pages contain up to 16,000 characters and are not summaries.
 2. Call `prepare` with the workspace ID and exact reviewed revision ID. This creates a separate cwd combining the proposal with current parent edits.
@@ -115,6 +113,6 @@ A new pool created for a later respawn performs a fresh acquire and mark. Confli
 ## See also
 
 - Commands and agent tools: the [README](../README.md#usage); profile editor keys in [Settings workspace](settings-workspace.md#profile-editor); the `/subagents` fleet and Activity actions in [Activity provider and fleet](completion-delivery.md#activity-provider-and-fleet).
-- Scripted workflows: [Dynamic workflows](workflows.md#dynamic-workflows), [Opting in](workflows.md#opting-in), [Foreground codemode scripting](workflows.md#foreground-codemode-scripting), and the [workflow authoring guide](../skills/workflow-authoring/SKILL.md).
+- Native scripting with ordinary subagents: [Native Pi codemode scripting](native-codemode.md).
 - Diagnosing Claude steering: [Tool result certainty](completion-delivery.md#tool-result-certainty) and the [live steering timing probe](local-backends.md#live-steering-timing-probe).
 - Compact tool rows and issues: [Tool registration and compact presentation](completion-delivery.md#tool-registration-and-compact-presentation).

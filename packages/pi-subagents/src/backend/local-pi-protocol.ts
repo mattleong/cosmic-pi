@@ -9,8 +9,6 @@ const MAX_PROTOCOL_NAME_CHARS = 256;
 const MAX_PROTOCOL_ERROR_CHARS = 64 * 1024;
 const MAX_MESSAGE_DELTA_CHARS = 1024 * 1024;
 const MAX_PROXY_PAYLOAD_CHARS = 2 * 1024 * 1024;
-export const MAX_STRUCTURED_RESULT_WIRE_CHARS = 64 * 1024;
-export const MAX_STRUCTURED_RESULT_REJECTION_CHARS = 2_048;
 
 const ProtocolIdSchema = Schema.String.check(
   Schema.isMinLength(1),
@@ -127,17 +125,6 @@ const ProxyNotificationSchema = piSubagentsMessage("proxy_notification", {
 const TurnInputBarrierSchema = piSubagentsMessage("turn_input_barrier", {
   requestId: ProtocolIdSchema,
 });
-const StructuredResultSchema = piSubagentsMessage("structured_result", {
-  requestId: ProtocolIdSchema,
-  valueJson: Schema.String.check(Schema.isMaxLength(MAX_STRUCTURED_RESULT_WIRE_CHARS)),
-});
-const StructuredResultAckSchema = piSubagentsMessage("structured_result_ack", {
-  requestId: ProtocolIdSchema,
-  ok: Schema.Boolean,
-  message: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(MAX_STRUCTURED_RESULT_REJECTION_CHARS)),
-  ),
-});
 const LocalPiContactSchema = Schema.Union([
   ContactParentSchema,
   ContactCancelSchema,
@@ -146,7 +133,6 @@ const LocalPiContactSchema = Schema.Union([
   ProxyCancelSchema,
   ProxyNotificationAckSchema,
   TurnInputBarrierAckSchema,
-  StructuredResultSchema,
 ]);
 const LocalPiParentControlSchema = Schema.Union([
   ParentReplySchema,
@@ -154,7 +140,6 @@ const LocalPiParentControlSchema = Schema.Union([
   ProxyResponseSchema,
   ProxyNotificationSchema,
   TurnInputBarrierSchema,
-  StructuredResultAckSchema,
 ]);
 export type LocalPiContact = Schema.Schema.Type<typeof LocalPiContactSchema>;
 export type LocalPiParentControl = Schema.Schema.Type<typeof LocalPiParentControlSchema>;
@@ -162,14 +147,6 @@ export const decodeLocalPiContactOption = Schema.decodeUnknownOption(LocalPiCont
 export const decodeLocalPiParentControlOption = Schema.decodeUnknownOption(
   LocalPiParentControlSchema,
 );
-
-export const LOCAL_PI_RESULT_CONTRACT_FLAG = "pi-subagents-result-schema";
-
-export const LocalPiResultContractDocument = Schema.Struct({
-  parameters: Schema.Record(Schema.String, Schema.Json),
-  strictSafe: Schema.Boolean,
-});
-export type LocalPiResultContractDocument = typeof LocalPiResultContractDocument.Type;
 
 const IgnoredEventSchema = Schema.Struct({ type: Schema.String });
 const RpcDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });

@@ -63,7 +63,7 @@ Detailed integration constraints live with their owners:
 | [Code Previews](../../packages/pi-code-previews/ARCHITECTURE.md)       | Renderer resolution/replay, settings publication, syntax resources, and before-write evidence                               |
 | [Ask User](../../packages/pi-ask-user/ARCHITECTURE.md)                 | Questionnaire admission, TUI/RPC dialogs, answer delivery, and external-editor cleanup                                      |
 | [Background Tasks](../../packages/pi-background-task/ARCHITECTURE.md)  | Task process lifecycle, bounded logs, and manager projection                                                                |
-| [Subagents](../../packages/pi-subagents/ARCHITECTURE.md)               | Run coordination, child/native transports, workspace ownership, and scoped workflows                                        |
+| [Subagents](../../packages/pi-subagents/ARCHITECTURE.md)               | Run coordination, child/native transports, and workspace ownership                                                          |
 | [Better OpenAI](../../packages/pi-better-openai/ARCHITECTURE.md)       | Provider schemas/configuration, usage refresh, request policy, and image decoding/output                                    |
 | [Directory Models](../../packages/pi-directory-models/ARCHITECTURE.md) | Directory preferences and host model selection                                                                              |
 | [Herdr BTW](../../packages/pi-herdr-btw/ARCHITECTURE.md)               | Parent-session identity, child-session links, and fixed Herdr CLI interaction                                               |

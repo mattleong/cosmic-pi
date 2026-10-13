@@ -38,8 +38,6 @@ const bindingRequest = (
   ...request,
   cwd: handle.sourceCwd,
   workspace: undefined,
-  workflow: undefined,
-  resultContract: undefined,
 });
 
 const successorRequest = (binding: WorkspaceBinding, message: string): StartSubagentRequest => ({
@@ -89,7 +87,6 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
   };
   const worktreeCapacityLocked = (request: StartSubagentRequest, caller: string) =>
     Effect.gen(function* () {
-      if (request.workflow) return undefined;
       const limit = (request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY).maxDirectChildren;
       const capacityFailure = processCapacityError(records, caller, limit);
       if (capacityFailure) return yield* capacityFailure;
@@ -155,7 +152,7 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) => {
       const caller = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-      const slot: LaunchSlot | undefined = request.workflow ? undefined : { caller };
+      const slot: LaunchSlot = { caller };
       const select: Effect.Effect<WriterWorkspaceMode, SubagentError> = withLock(
         checkLaunchLocked(request).pipe(
           Effect.tap(({ mode, slotWait }) =>

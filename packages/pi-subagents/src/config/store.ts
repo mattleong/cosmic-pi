@@ -32,12 +32,9 @@ import {
   decodeProfileRoute,
   decodeSubagentNesting,
   isProfileSetName,
-  isSubagentFeatureToggle,
   isSupportedConfigVersion,
   subagentConfigDecoder,
-  SUBAGENT_FEATURE_TOGGLES,
   type DecodedSubagentConfig,
-  type SubagentFeatureToggle,
   MAX_PROFILE_SETS,
   SUBAGENT_CONFIG_BASENAME,
   SUBAGENT_CONFIG_VERSION,
@@ -112,11 +109,6 @@ export interface SubagentWriterWorkspacePatch extends SubagentConfigPatchBase {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
 }
 
-export interface SubagentFeatureTogglePatch extends SubagentConfigPatchBase {
-  readonly toggle: SubagentFeatureToggle;
-  readonly enabled?: boolean | undefined;
-}
-
 type ConfigRead<A> = (
   cwd: string,
   agentDirectory: string,
@@ -141,7 +133,6 @@ export interface SubagentConfigStoreContract {
   readonly deleteProfileSet: ConfigPatch<SubagentDeleteProfileSetPatch>;
   readonly patchWriterWorkspace: ConfigPatch<SubagentWriterWorkspacePatch>;
   readonly patchNesting: ConfigPatch<SubagentNestingPatch>;
-  readonly patchFeatureToggle: ConfigPatch<SubagentFeatureTogglePatch>;
 }
 
 export class SubagentConfigStore extends Context.Service<
@@ -179,12 +170,7 @@ const decodeDocument = (
 ): Effect.Effect<DecodedSubagentConfig, SubagentConfigStoreError> => {
   const decoded = subagentConfigDecoder(scope)(raw);
   if (decoded.unsupportedVersion) return Effect.fail(unsupportedVersionError(path));
-  const fatal = new Set([
-    `${scope}.<unknown>`,
-    `${scope}.nesting`,
-    `${scope}.writerWorkspaceMode`,
-    ...SUBAGENT_FEATURE_TOGGLES.map((toggle) => `${scope}.${toggle}`),
-  ]);
+  const fatal = new Set([`${scope}.<unknown>`, `${scope}.nesting`, `${scope}.writerWorkspaceMode`]);
   return decoded.diagnostics.some((diagnostic) => fatal.has(diagnostic))
     ? Effect.fail(
         configError(
@@ -417,19 +403,6 @@ const applyWriterWorkspacePatch: ApplyPatch<SubagentWriterWorkspacePatch> = Effe
   },
 );
 
-const applyFeatureTogglePatch: ApplyPatch<SubagentFeatureTogglePatch> = Effect.fnUntraced(
-  function* (current, patch, path) {
-    const toggle = ownTypedProperty(patch, "toggle");
-    if (!toggle.valid || !toggle.present || !isSubagentFeatureToggle(toggle.value))
-      return yield* mutationError(path, "Invalid feature setting.");
-    const enabled = ownTypedProperty(patch, "enabled");
-    const value = enabled.valid && enabled.present ? enabled.value : undefined;
-    if (!enabled.valid || (value !== undefined && !Predicate.isBoolean(value)))
-      return yield* mutationError(path, "A feature setting must be true, false, or inherited.");
-    return withEntry(current, toggle.value, Predicate.isBoolean(value) ? value : undefined);
-  },
-);
-
 export const subagentConfigStoreLayer = Layer.effect(
   SubagentConfigStore,
   Effect.gen(function* () {
@@ -527,7 +500,6 @@ export const subagentConfigStoreLayer = Layer.effect(
       deleteProfileSet: patchVoid(applyDeleteProfileSet),
       patchWriterWorkspace: patchVoid(applyWriterWorkspacePatch),
       patchNesting: patchVoid(applyNestingPatch),
-      patchFeatureToggle: patchVoid(applyFeatureTogglePatch),
     });
   }),
 );

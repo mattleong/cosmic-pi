@@ -114,8 +114,6 @@ export const fleetManagerActionsFixture = (
     renameProfileSet: unexpectedAction,
     deleteProfileSet: unexpectedAction,
     patchNesting: unexpectedAction,
-    patchFeatureToggle: unexpectedAction,
-    patchSessionFeatureToggle: unexpectedAction,
     inspectWriterWorkspace: unexpectedAction,
     setWriterWorkspaceMode: unexpectedAction,
     patchSessionProfile: unexpectedAction,

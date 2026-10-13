@@ -6,7 +6,6 @@ import { NativeModelCatalog } from "../boundary/native-model-catalog.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../config/store.ts";
 import type { SubagentApplication } from "../layer.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
-import type { SessionFeaturePatch, SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import {
   registerSubagentManagerCommand,
@@ -14,10 +13,6 @@ import {
 } from "../settings/controller.ts";
 import { isPendingDeliveryError } from "../tools/outcome.ts";
 import type { FleetMessageDelivery } from "../ui/fleet.ts";
-import { registerUltracodeCommand } from "../ultracode/command.ts";
-import { WorkflowStore } from "../workflow/store.ts";
-import type { UltracodeController } from "./ultracode.ts";
-import { isUltracodeWindowOpen } from "./ultracode-window.ts";
 
 export interface CommandActivation {
   readonly ctx: ExtensionContext;
@@ -28,7 +23,6 @@ export interface CommandActivation {
 
 export interface ApplicationCommandHost {
   readonly bridge: SubagentProjectionBridge;
-  readonly ultracode: UltracodeController;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SubagentApplication>,
     signal?: AbortSignal,
@@ -38,7 +32,7 @@ export interface ApplicationCommandHost {
 }
 
 export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationCommandHost): void {
-  const { bridge, ultracode, run, current, isActive } = host;
+  const { bridge, run, current, isActive } = host;
   const withCurrentActivation = <A>(
     operation: (activation: CommandActivation) => Promise<A>,
   ): Promise<A> => {
@@ -71,16 +65,6 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
           ),
         ),
       );
-
-  const applySessionFeature = (
-    patchFor: (snapshot: SessionProfileSnapshot) => SessionFeaturePatch,
-  ): Promise<void> =>
-    runCurrent(
-      Effect.gen(function* () {
-        const profiles = yield* SubagentProfileService;
-        return yield* profiles.patchSessionFeature(patchFor(yield* profiles.capture));
-      }),
-    ).then((snapshot) => ultracode.setEnabled(snapshot.effectiveConfig.ultracode));
 
   const managerActions: FleetManagerActions = {
     openActivity: (signal) => {
@@ -196,8 +180,6 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
     renameProfileSet: withConfigStore((store) => store.renameProfileSet),
     deleteProfileSet: withConfigStore((store) => store.deleteProfileSet),
     patchNesting: withConfigStore((store) => store.patchNesting),
-    patchFeatureToggle: withConfigStore((store) => store.patchFeatureToggle),
-    patchSessionFeatureToggle: (patch) => applySessionFeature(() => patch),
     patchSessionProfile: (patch) =>
       runCurrent(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))),
     replaceSessionProfiles: (patch) =>
@@ -215,28 +197,4 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
       ),
   };
   registerSubagentManagerCommand(pi, bridge, managerActions);
-  registerUltracodeCommand(pi, {
-    isAvailable: () => current() !== undefined,
-    status: () =>
-      runCurrent(
-        Effect.gen(function* () {
-          const session = yield* SubagentProfileService.use((profiles) => profiles.capture);
-          const saved = yield* WorkflowStore.use((store) => store.list);
-          const window = ultracode.window();
-          return {
-            enabled: session.effectiveConfig.ultracode,
-            source: session.effectiveConfig.featureSources.ultracode,
-            window: { open: isUltracodeWindowOpen(window), runs: window.runs.length },
-            saved,
-          };
-        }),
-      ),
-    setSession: (enabled) =>
-      applySessionFeature((snapshot) => ({
-        toggle: "ultracode",
-        enabled,
-        expectedRevision: snapshot.revision,
-      })),
-    send: ultracode.send,
-  });
 }

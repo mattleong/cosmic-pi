@@ -243,23 +243,6 @@ export const captureSnapshot = (
     return { entries, tree, commit, excludedPaths } satisfies WorkspaceSnapshot;
   });
 
-export const workerMatchesBaseline = (
-  root: string,
-  snapshot: WorkspaceSnapshot,
-  baselineTree: string,
-) =>
-  Effect.gen(function* () {
-    if (snapshot.tree !== baselineTree || snapshot.excludedPaths.length > 0) return false;
-    const untracked = yield* git(root, [
-      "ls-files",
-      "--others",
-      "--directory",
-      "--no-empty-directory",
-      "-z",
-    ]);
-    return untracked.length === 0;
-  });
-
 export const sourceIdentity = (root: string) =>
   Effect.gen(function* () {
     const head = yield* git(root, ["rev-parse", "--verify", "HEAD"]).pipe(Effect.flatMap(oid));

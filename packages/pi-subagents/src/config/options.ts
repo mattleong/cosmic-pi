@@ -9,14 +9,10 @@ import {
   type ProfileRouteSource,
 } from "../profiles/model.ts";
 import {
-  DEFAULT_SUBAGENT_FEATURE_TOGGLES,
   DEFAULT_SUBAGENT_NESTING_POLICY,
   DEFAULT_WRITER_WORKSPACE_MODE,
   type WriterWorkspaceMode,
   type DecodedSubagentConfig,
-  type SubagentFeatureSource,
-  type SubagentFeatureToggle,
-  type SubagentFeatureToggles,
   type SubagentNestingPolicy,
 } from "./schema.ts";
 
@@ -28,8 +24,7 @@ export type ResolvedProfileSetSelection =
       readonly invalid?: boolean | undefined;
     };
 
-export interface ResolvedSubagentConfig extends SubagentFeatureToggles {
-  readonly featureSources: Readonly<Record<SubagentFeatureToggle, SubagentFeatureSource>>;
+export interface ResolvedSubagentConfig {
   readonly globalConfigPath: string;
   readonly projectConfigPath: string;
   readonly fallbackProfile: ProfileId;
@@ -170,22 +165,6 @@ const declaredSelection = (
   };
 };
 
-interface UltracodeSetting {
-  readonly ultracode: boolean;
-  readonly source: SubagentFeatureSource;
-}
-
-const ultracodeSetting = (
-  project: DecodedSubagentConfig | undefined,
-  global: DecodedSubagentConfig,
-): UltracodeSetting => {
-  if (project?.file.ultracode !== undefined)
-    return { ultracode: project.file.ultracode, source: "project" };
-  if (global.file.ultracode !== undefined)
-    return { ultracode: global.file.ultracode, source: "global" };
-  return { ultracode: DEFAULT_SUBAGENT_FEATURE_TOGGLES.ultracode, source: "default" };
-};
-
 const layeredPolicy = (
   project: DecodedSubagentConfig | undefined,
   global: DecodedSubagentConfig,
@@ -203,11 +182,8 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
   const project = input.projectTrusted ? input.project : undefined;
   const global = resolveProfileSetLayer(input.global, "global", BUILTIN_PROFILE_LAYER);
   const effective = project ? resolveProfileSetLayer(project, "project", global) : global;
-  const { ultracode, source } = ultracodeSetting(project, input.global);
   const policy = layeredPolicy(project, input.global);
   return freezeSnapshot({
-    ultracode,
-    featureSources: { ultracode: source },
     globalConfigPath: input.globalConfigPath,
     projectConfigPath: input.projectConfigPath,
     fallbackProfile: "generalist",

@@ -3,36 +3,14 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import {
-  countLabel,
-  formatCost,
-  formatDuration,
-  formatTokens,
-  stripTerminalControls,
-} from "pi-cosmic-core";
+import { countLabel, stripTerminalControls } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { renderCompactRow, type CompactStatus, type CompactSummary } from "pi-code-previews";
-import { workflowStateLabel } from "./run-state.ts";
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(100_000));
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120));
-const WorkflowDetails = Schema.Struct({
-  version: Schema.Literal(1),
-  kind: Schema.Literal("workflow"),
-  name: Name,
-  outcome: Schema.Literals(["completed", "failed", "stopped", "interrupted"]),
-  durationMs: Schema.Natural,
-  totalTokens: Schema.optional(Schema.Natural),
-  cost: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
-  agents: Count,
-  failed: Count,
-  stopped: Schema.optional(Count),
-  skipped: Count,
-  reused: Count,
-});
 const Details = Schema.Union([
-  WorkflowDetails,
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("question"),
@@ -88,48 +66,10 @@ const completedRow = (
   return { summary: { subject, outcome } };
 };
 
-const WORKFLOW_OUTCOMES = {
-  completed: { verb: `${workflowStateLabel("completed")} in`, outcome: "success" },
-  failed: { verb: `${workflowStateLabel("failed")} after`, outcome: "error" },
-  stopped: { verb: `${workflowStateLabel("stopped")} after`, outcome: "cancelled" },
-  interrupted: { verb: workflowStateLabel("interrupted"), outcome: "cancelled" },
-} as const;
-
-const workflowRow = (details: typeof WorkflowDetails.Type): NotificationRow => {
-  const { verb, outcome } = WORKFLOW_OUTCOMES[details.outcome];
-  const problems = [
-    details.failed ? `${details.failed} failed` : "",
-    details.stopped ? `${details.stopped} stopped` : "",
-    details.skipped ? `${details.skipped} skipped` : "",
-  ].filter(Boolean);
-  const ended =
-    details.outcome === "interrupted" ? verb : `${verb} ${formatDuration(details.durationMs)}`;
-  const agents =
-    details.outcome === "interrupted"
-      ? `${countLabel(details.agents, "agent")} finished`
-      : countLabel(details.agents, "agent");
-  const tokens = details.totalTokens ? [`${formatTokens(details.totalTokens)} tokens`] : [];
-  const cost = details.cost === undefined ? [] : [`~${formatCost(details.cost)}`];
-  return {
-    summary: {
-      subject: details.name,
-      counters: [
-        [ended, agents, ...problems, ...tokens, ...cost].join(" · "),
-        [ended, agents, ...problems, ...tokens].join(" · "),
-        [ended, agents, ...problems].join(" · "),
-        `${ended} · ${agents}`,
-        ended,
-      ],
-      outcome: outcome === "success" && details.failed > 0 ? "warning" : outcome,
-    },
-  };
-};
-
 const notificationRow = (
   customType: string | undefined,
   details: NotificationDetails | undefined,
 ): NotificationRow => {
-  if (details?.kind === "workflow") return workflowRow(details);
   if (details?.kind === "question")
     return {
       summary: { subject: `${details.name ?? "A subagent"} needs a reply`, outcome: "warning" },
@@ -147,23 +87,14 @@ const notificationRow = (
   };
 };
 
-const WORKFLOW_EXPANSION = {
-  completed: "result",
-  failed: "error",
-  stopped: "details",
-  interrupted: "details",
-} as const;
-
 const expansionLabel = (details: NotificationDetails | undefined): string =>
-  details?.kind === "workflow"
-    ? WORKFLOW_EXPANSION[details.outcome]
-    : details?.kind === "question"
-      ? "question"
-      : details?.kind === "completed"
-        ? details.failed === details.total
-          ? countLabel(details.total, "failure detail")
-          : countLabel(details.total, "report")
-        : "message";
+  details?.kind === "question"
+    ? "question"
+    : details?.kind === "completed"
+      ? details.failed === details.total
+        ? countLabel(details.total, "failure detail")
+        : countLabel(details.total, "report")
+      : "message";
 
 export function renderSubagentNotification(
   input: Parameters<MessageRenderer>[0],
@@ -191,7 +122,7 @@ export function renderSubagentNotification(
     const inner = Math.max(1, width - options.outputPad * 2);
     const row = renderCompactRow(
       {
-        name: details?.kind === "workflow" ? "workflow" : "subagents",
+        name: "subagents",
         phase: "settled",
         summary,
         ...(status && { status }),

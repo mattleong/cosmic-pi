@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import type * as Schema from "effect/Schema";
-import { safeTextPrefix } from "pi-cosmic-core";
 import type { ChildProcessHandle } from "../boundary/child-process.ts";
 import { SubagentProcessError, type SubagentError } from "../run/errors.ts";
 import { emptyUsage } from "../run/model.ts";
@@ -14,7 +13,6 @@ import {
 import {
   assistantText,
   decodeAssistantMessage,
-  MAX_STRUCTURED_RESULT_REJECTION_CHARS,
   type LocalPiContact,
   type RpcChildEnvelope,
 } from "./local-pi-protocol.ts";
@@ -150,22 +148,6 @@ export const normalizeParentContact = (
       };
     case "proxy_cancel":
       return { type: "proxy_cancel", requestId: contact.requestId };
-    case "structured_result":
-      return {
-        type: "structured_result",
-        assignmentEpoch,
-        valueJson: contact.valueJson,
-        respond: (ok, message) =>
-          child.sendContactControl({
-            channel: "pi-subagents",
-            type: "structured_result_ack",
-            requestId: contact.requestId,
-            ok,
-            ...(message !== undefined && {
-              message: safeTextPrefix(message, MAX_STRUCTURED_RESULT_REJECTION_CHARS),
-            }),
-          }),
-      };
   }
   return absurd(contact);
 };

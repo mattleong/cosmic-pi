@@ -124,7 +124,6 @@ const loadedConfigStore = (config: ResolvedSubagentConfig): SubagentConfigStoreC
     deleteProfileSet: unexpectedStoreCall,
     patchWriterWorkspace: unexpectedStoreCall,
     patchNesting: unexpectedStoreCall,
-    patchFeatureToggle: unexpectedStoreCall,
   };
 };
 

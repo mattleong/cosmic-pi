@@ -6,7 +6,6 @@ import {
   sanitizeDiagnosticContent,
   sanitizeTerminalLine,
 } from "pi-cosmic-core";
-import type { SubagentWorkflowMembership } from "../run/model.ts";
 
 export interface SubagentCompletionNotification {
   readonly id: string;
@@ -33,26 +32,7 @@ export type SubagentNotification =
       readonly requestId: string;
       readonly message: string;
       readonly generation: number;
-      readonly workflow?: SubagentWorkflowMembership | undefined;
     };
-
-export interface SubagentWorkflowNotification {
-  readonly type: "workflow";
-  readonly runId: string;
-  readonly name: string;
-  readonly outcome: "completed" | "failed" | "stopped" | "interrupted";
-  readonly durationMs: number;
-  readonly usage?: { readonly totalTokens: number; readonly cost?: number | undefined } | undefined;
-  readonly content: string;
-  readonly agents: {
-    readonly total: number;
-    readonly failed: number;
-    readonly stopped: number;
-    readonly skipped: number;
-    readonly reused: number;
-  };
-  readonly workspaces: ReadonlyArray<string>;
-}
 
 export interface SubagentNotificationDelivery {
   readonly deliveredCompletionKeys?: ReadonlyArray<string> | undefined;
@@ -60,7 +40,7 @@ export interface SubagentNotificationDelivery {
 }
 
 export type SubagentNotifier = (
-  notification: SubagentNotification | SubagentWorkflowNotification,
+  notification: SubagentNotification,
 ) => SubagentNotificationDelivery | undefined;
 
 const MAX_NOTIFICATION_CHARS = 32 * 1024;
@@ -178,18 +158,10 @@ const questionContent = (
   notification: Extract<SubagentNotification, { readonly type: "question" }>,
 ): string => {
   const reply = `subagent_reply({ runId: "${notification.id}", message: "..." })`;
-  const workflow = notification.workflow;
-  if (!workflow)
-    return `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with ${reply}, then call subagent_await again.`;
-  const label = workflow.name ? `${workflow.name} (${workflow.workflowId})` : workflow.workflowId;
-  return `Workflow ${label} agent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with ${reply}; the workflow continues automatically after the reply.`;
+  return `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with ${reply}, then call subagent_await again.`;
 };
 
 const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
-
-export const workflowNotificationWakesAgent = (
-  notification: SubagentWorkflowNotification,
-): boolean => notification.outcome === "completed" || notification.outcome === "failed";
 
 const steer = (
   pi: ExtensionAPI,
@@ -201,41 +173,8 @@ const steer = (
     return true;
   }, false);
 
-const sendWorkflow = (
-  pi: ExtensionAPI,
-  notification: SubagentWorkflowNotification,
-): SubagentNotificationDelivery => ({
-  actionAccepted: steer(
-    pi,
-    {
-      customType: "pi-subagents-workflow",
-      content: clip(notification.content),
-      details: {
-        version: 1,
-        kind: "workflow",
-        name: displayName(notification.name),
-        outcome: notification.outcome,
-        durationMs: Math.max(0, Math.round(notification.durationMs)),
-        ...(notification.usage !== undefined && {
-          totalTokens: Math.max(0, Math.round(notification.usage.totalTokens)),
-        }),
-        ...(notification.usage?.cost !== undefined && {
-          cost: Math.max(0, notification.usage.cost),
-        }),
-        agents: notification.agents.total,
-        failed: notification.agents.failed,
-        stopped: notification.agents.stopped,
-        skipped: notification.agents.skipped,
-        reused: notification.agents.reused,
-      },
-    },
-    workflowNotificationWakesAgent(notification),
-  ),
-});
-
 export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
   return (notification) => {
-    if (notification.type === "workflow") return sendWorkflow(pi, notification);
     if (notification.type === "completed") {
       const deliveredCompletionKeys: string[] = [];
       for (const chunk of completionChunks(notification.runs)) {

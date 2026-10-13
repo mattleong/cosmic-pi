@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
-import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
+import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { makeLocalClaudeBackendDriver } from "./backend/local-claude.ts";
 import { makeLocalCodexBackendDriver } from "./backend/local-codex.ts";
 import { makeLocalPiBackendDriver } from "./backend/local-pi.ts";
@@ -20,11 +20,6 @@ import {
 } from "./profiles/service.ts";
 import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
-import { WorkflowJournal } from "./workflow/journal.ts";
-import type { WorkflowActivitySink } from "./workflow/runs.ts";
-import type { WorkflowRunObserver } from "./workflow/run-observer.ts";
-import { WorkflowService } from "./workflow/service.ts";
-import { WorkflowStore } from "./workflow/store.ts";
 
 const subagentBackendRegistryLayer = Layer.effect(
   SubagentBackendRegistry,
@@ -42,10 +37,7 @@ const subagentBackendRegistryLayer = Layer.effect(
 
 export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly sessionKey?: string | undefined;
-  readonly isProjectTrusted: () => boolean;
   readonly publish: (projection: SubagentProjection) => void;
-  readonly workflowActivity: WorkflowActivitySink;
-  readonly workflowObserver: WorkflowRunObserver;
   readonly notify: SubagentNotifier;
   readonly proxyHandler: NonNullable<SubagentServiceOptions["proxyHandler"]>;
   readonly questionnaireHandler: NonNullable<SubagentServiceOptions["questionnaireHandler"]>;
@@ -82,25 +74,7 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
       });
     }),
   ).pipe(Layer.provide(Layer.mergeAll(backend, writerLeases, profiles, workspaces, configStore)));
-  const workflowStore = WorkflowStore.layer({
-    cwd: options.cwd,
-    agentDirectory: options.agentDirectory,
-    isProjectTrusted: options.isProjectTrusted,
-  }).pipe(Layer.provide(SafeFile.layer), Layer.provide(nodeFilePlatformLayer));
-  const workflows = WorkflowService.layer({
-    activity: options.workflowActivity,
-    observer: options.workflowObserver,
-    notify: options.notify,
-    sessionKey: options.sessionKey,
-  }).pipe(
-    Layer.provide(
-      Layer.mergeAll(service, WorkflowJournal.layer(options.sessionKey), workflowStore),
-    ),
-    Layer.provide(nodeFilePlatformLayer),
-  );
   return Layer.mergeAll(
-    workflows,
-    workflowStore,
     service,
     profiles,
     configStore,

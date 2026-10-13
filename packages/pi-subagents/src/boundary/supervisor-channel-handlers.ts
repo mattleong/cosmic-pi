@@ -1,4 +1,3 @@
-import { clipText } from "pi-cosmic-core";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -6,7 +5,6 @@ import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { MAX_BACKEND_REPORT_EVIDENCE_CHARS, type BackendReport } from "../backend/model.ts";
-import { decodeResultText, type ResultContract } from "../domain/result-contract.ts";
 import {
   SUPERVISOR_CHANNEL_VERSION,
   type SupervisorRpcFailure,
@@ -28,24 +26,10 @@ import {
 } from "./supervisor-channel-state.ts";
 
 const MAX_REPORT_DELIVERIES = 128;
-const MAX_RPC_FAILURE_CHARS = 512;
 const REPORT_EVIDENCE = `supervisor-effect-rpc-v${SUPERVISOR_CHANNEL_VERSION}`.slice(
   0,
   MAX_BACKEND_REPORT_EVIDENCE_CHARS,
 );
-
-const validateReportResult = (contract: ResultContract | undefined, text: string) =>
-  contract
-    ? decodeResultText(contract, text).pipe(
-        Effect.asVoid,
-        Effect.mapError((error) =>
-          rpcFailure(
-            "report_schema_invalid",
-            clipText(`The report is not a valid result: ${error.message}`, MAX_RPC_FAILURE_CHARS),
-          ),
-        ),
-      )
-    : Effect.void;
 
 const dispatchContact = (
   state: SupervisorChannelState,
@@ -63,10 +47,7 @@ const dispatchContact = (
       : Effect.fail(eventQueueFull()),
   );
 
-export const makeSupervisorChannelHandlers = (
-  state: SupervisorChannelState,
-  resultContract: ResultContract | undefined,
-) =>
+export const makeSupervisorChannelHandlers = (state: SupervisorChannelState) =>
   SupervisorRpcGroup.toHandlers(
     SupervisorRpcGroup.of({
       SupervisorOpenSession: (payload, options) =>
@@ -228,7 +209,6 @@ export const makeSupervisorChannelHandlers = (
               "report_identity_capacity",
               "The report delivery identity map is full.",
             );
-          yield* validateReportResult(resultContract, payload.text);
           const sequence = state.nextReportSequence;
           const report: BackendReport & { readonly type: "report" } = {
             type: "report",

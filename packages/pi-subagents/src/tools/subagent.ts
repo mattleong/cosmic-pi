@@ -74,8 +74,8 @@ const TOOL_INPUTS: SubagentToolInputs = {
   [SUBAGENT_TOOL_NAME.workspace]: (args) => ({ tool: SUBAGENT_TOOL_NAME.workspace, args }),
 };
 
-const SCRIPTED_WORKFLOW_GUIDELINE =
-  "For bounded root-session read-only workflows, native codemode can script subagent_start, subagent_await, subagent_status, lifecycle stop, subagent_models, subagent_list, and subagent_rename using version-1 structured results. List and rename never return report text; models reports static eligibility, not authentication readiness. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. The main agent chooses the appropriate profile for each workflow assignment.";
+const SCRIPTED_SUBAGENT_GUIDELINE =
+  "For bounded root-session read-only delegation, native codemode can script subagent_start, subagent_await, subagent_status, lifecycle stop, subagent_models, subagent_list, and subagent_rename using version-1 structured results. List and rename never return report text; models reports static eligibility, not authentication readiness. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. The main agent chooses the appropriate profile for each scripted assignment.";
 
 const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.models]: {
@@ -252,7 +252,7 @@ export function registerSubagentTools(
       ...spec,
       ...(scriptable &&
         name === SUBAGENT_TOOL_NAME.start && {
-          promptGuidelines: [...(spec.promptGuidelines ?? []), SCRIPTED_WORKFLOW_GUIDELINE],
+          promptGuidelines: [...(spec.promptGuidelines ?? []), SCRIPTED_SUBAGENT_GUIDELINE],
         }),
       name,
       exposure: scriptable ? "direct" : "model-only",

@@ -1,8 +1,6 @@
 import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
 import { countLabel, formatCost, formatTokens, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { SubagentRunView } from "../run/model.ts";
-import type { WorkflowAgentView } from "../workflow/model.ts";
-import { workflowEndReasonLine, workflowMemberLine } from "./workflow-activity-detail.ts";
 
 const RECENT_EVENTS = 12;
 
@@ -11,25 +9,6 @@ const bounded = (text: string, maximumLength: number): string =>
 
 const section = (title: string, body: string, maximumLength: number): string =>
   body.trim() ? `${title}:\n${bounded(body, maximumLength)}` : "";
-
-interface RunActivityPlacement {
-  readonly call?: WorkflowAgentView | undefined;
-  readonly nested: boolean;
-}
-
-const workflowLines = (run: SubagentRunView, placement: RunActivityPlacement): string => {
-  if (run.workflow === undefined) return "";
-  const call = placement.call;
-  const repeated = call?.reason !== undefined && run.error?.startsWith(call.reason) === true;
-  return [
-    placement.nested
-      ? undefined
-      : workflowMemberLine(run.workflow.name ?? run.workflow.workflowId, run.workflow.phase),
-    call && !repeated ? workflowEndReasonLine(call) : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
-};
 
 const outcome = (run: SubagentRunView): string =>
   [
@@ -88,13 +67,10 @@ const technical = (run: SubagentRunView): string =>
     .filter(Boolean)
     .join("\n");
 
-export const runActivityDetail = (run: SubagentRunView, placement: RunActivityPlacement): string =>
+export const runActivityDetail = (run: SubagentRunView): string =>
   bounded(
     [
-      bounded(
-        [`Model: ${run.model}:${run.effort}`, workflowLines(run, placement)].join("\n").trim(),
-        1_024,
-      ),
+      bounded(`Model: ${run.model}:${run.effort}`, 1_024),
       run.question ? `Question for parent: ${bounded(run.question.message, 1_000)}` : "",
       outcome(run),
       section("Task", run.task, 2_000),

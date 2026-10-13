@@ -162,7 +162,7 @@ const admissionError = (
   readOnly && request.writeIntent !== "read-only"
     ? invalidRequest(
         "scripted_writer_not_supported",
-        "Codemode scripts can only start read-only agents\n\nStart writers from the main agent directly or inside a subagent_workflow script.",
+        "Codemode scripts can only start read-only agents\n\nStart writers from the main agent directly.",
       )
     : undefined;
 

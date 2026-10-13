@@ -9,9 +9,6 @@ catalogs:
     '@earendil-works/pi-ai':
       specifier: 1.0.2
       version: 1.0.2
-    '@earendil-works/pi-codemode':
-      specifier: 1.0.2
-      version: 1.0.2
     '@earendil-works/pi-coding-agent':
       specifier: 1.0.2
       version: 1.0.2
@@ -388,15 +385,9 @@ importers:
 
   packages/pi-subagents:
     dependencies:
-      '@earendil-works/pi-codemode':
-        specifier: 'catalog:'
-        version: 1.0.2
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.0))
-      acorn:
-        specifier: 8.15.0
-        version: 8.15.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0

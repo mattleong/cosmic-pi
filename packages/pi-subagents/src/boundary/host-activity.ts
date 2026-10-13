@@ -1,5 +1,5 @@
 import { registerRevisionedActivityProvider, type ActivityEvents } from "pi-cosmic-ui/activity";
-import { notifyListeners, sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -11,43 +11,13 @@ import {
 import type { SubagentProjectionBridge } from "./host-ui.ts";
 import { MAX_NAME_CHARS } from "../run/state.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
-import type { WorkflowRunView } from "../workflow/model.ts";
-import type { WorkflowActivitySink } from "../workflow/runs.ts";
 import {
-  EMPTY_WORKFLOWS,
-  isOwnedByLiveWorkflow,
-  liveWorkflowIds,
   runActions,
   SUBAGENT_ACTIVITY_PROVIDER,
   subagentActivityDetail,
   subagentActivityItems,
-  type WorkflowActivitySnapshot,
 } from "../ui/run-activity.ts";
-import { workflowRunIdOf } from "../ui/workflow-activity.ts";
 
-export interface WorkflowActivitySource extends WorkflowActivitySink {
-  readonly get: () => WorkflowActivitySnapshot;
-  readonly subscribe: (listener: () => void) => () => void;
-  readonly clear: () => void;
-}
-
-export const makeWorkflowActivitySource = (): WorkflowActivitySource => {
-  let snapshot = EMPTY_WORKFLOWS;
-  const listeners = new Set<() => void>();
-  const replace = (runs: ReadonlyArray<WorkflowRunView>) => {
-    snapshot = Object.freeze({ runs });
-    notifyListeners(listeners);
-  };
-  return {
-    publish: replace,
-    get: () => snapshot,
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => void listeners.delete(listener);
-    },
-    clear: () => replace([]),
-  };
-};
 type SubagentActivityAction = "stop" | "interrupt" | "resume" | "message" | "reply" | "rename";
 type SubagentActivityInput = "resume" | "message" | "reply" | "rename";
 
@@ -92,14 +62,13 @@ const sameAssignment = (before: SubagentRunView, after: SubagentRunView): boolea
 const isInputAction = (action: string): action is SubagentActivityInput =>
   action === "resume" || action === "message" || action === "reply" || action === "rename";
 
+const offers = (run: SubagentRunView, title: string, action: string): boolean =>
+  runActions(run, title).some((candidate) => candidate.id === action);
+
 export function registerSubagentActivity(options: {
   readonly events: ActivityEvents;
   readonly sessionId: string;
   readonly bridge: SubagentProjectionBridge;
-  readonly workflows?: WorkflowActivitySource | undefined;
-  readonly actWorkflow?:
-    | ((action: "stop" | "skip", id: string, signal: AbortSignal) => Promise<void>)
-    | undefined;
   readonly isCurrent: () => boolean;
   readonly input?: (
     run: SubagentRunView,
@@ -115,39 +84,18 @@ export function registerSubagentActivity(options: {
   ) => Promise<void>;
 }): () => void {
   let disposed = false;
-  const offers = (run: SubagentRunView, title: string, action: string): boolean => {
-    const live = liveWorkflowIds(options.workflows?.get() ?? EMPTY_WORKFLOWS);
-    return runActions(run, title, isOwnedByLiveWorkflow(run, live)).some(
-      (candidate) => candidate.id === action,
-    );
-  };
   const dispose = registerRevisionedActivityProvider(options.events, {
     sessionId: options.sessionId,
     providerId: SUBAGENT_ACTIVITY_PROVIDER,
     isCurrent: options.isCurrent,
     items: () =>
-      subagentActivityItems(
-        options.bridge.get(),
-        options.bridge.getActivityPresentation(),
-        options.workflows?.get(),
-      ),
+      subagentActivityItems(options.bridge.get(), options.bridge.getActivityPresentation()),
     starting: () =>
       options.bridge
         .getActivityPresentation()
         .starts.reduce((total, lease) => total + lease.requestedCount, 0),
-    detail: (item) =>
-      subagentActivityDetail(options.bridge.get(), item.id, options.workflows?.get()) ?? item.title,
+    detail: (item) => subagentActivityDetail(options.bridge.get(), item.id) ?? item.title,
     act: (item, action, signal, invocationCurrent) => {
-      const workflowRunId = workflowRunIdOf(item.id);
-      if (item.kind === "workflow" || action === "skip") {
-        if (!options.actWorkflow || (item.kind === "workflow" && action !== "stop"))
-          throw new Error("Workflow action is unavailable");
-        return options.actWorkflow(
-          action === "skip" ? "skip" : "stop",
-          workflowRunId ?? item.id,
-          signal,
-        );
-      }
       const before = options.bridge.get().runs.find((run) => run.id === item.id);
       if (!before) throw new Error("Subagent action is unavailable");
       const expected = captureSubagentControlExpectation(before);
@@ -177,11 +125,7 @@ export function registerSubagentActivity(options: {
         return options.act(item.id, action, signal, value || undefined, expected);
       });
     },
-    subscriptions: [
-      options.bridge.subscribe,
-      options.bridge.subscribeActivityPresentation,
-      ...(options.workflows ? [options.workflows.subscribe] : []),
-    ],
+    subscriptions: [options.bridge.subscribe, options.bridge.subscribeActivityPresentation],
     onAvailability: (available, current) =>
       options.bridge.setActivityAvailable(current() && available),
   });

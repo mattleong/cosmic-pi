@@ -116,6 +116,26 @@ describe("SubagentConfigStore activation", () => {
     }),
   );
 
+  it.effect("loads saved profiles with a retired workflow preference without rewriting them", () =>
+    Effect.gen(function* () {
+      const worker = declaredCandidate("openai/worker", { writeIntent: "writer" });
+      const original = {
+        ...v6({ worker }),
+        ultracode: true,
+        nesting: { maxDirectChildren: 4, maxDepth: 2 },
+        writerWorkspaceMode: "worktree",
+      };
+      const { memory, store } = yield* setup({ [GLOBAL]: original });
+      const config = yield* store.load(CWD, AGENT, false);
+      expect(config.profiles.worker).toEqual({ candidates: [worker] });
+      expect(config.nesting).toEqual(original.nesting);
+      expect(config.writerWorkspaceMode).toBe("worktree");
+      expect(config.diagnostics).toEqual([]);
+      expect(memory.documents.get(GLOBAL)).toEqual(original);
+      expect(memory.operations.filter((operation) => operation.startsWith("write:"))).toEqual([]);
+    }),
+  );
+
   it.effect("rejects unsupported or malformed documents at activation", () =>
     Effect.gen(function* () {
       for (const document of [
@@ -134,8 +154,6 @@ describe("SubagentConfigStore activation", () => {
         { version: 6, nesting: { maxDirectChildren: 12, maxDepth: 9 } },
         { version: 6, nesting: { maxDirectChildren: 12.5, maxDepth: 3 } },
         { version: 6, writerWorkspaceMode: "invalid" },
-        { version: 6, ultracode: "true" },
-        { version: 6, ultracode: null },
         { version: 6, automaticProfileRouting: false },
       ]) {
         const { store } = yield* setup({ [GLOBAL]: document });
@@ -151,10 +169,10 @@ describe("SubagentConfigStore activation", () => {
   it.effect("never reads an untrusted project, so its invalid values cannot block activation", () =>
     Effect.gen(function* () {
       const { memory, store } = yield* setup({
-        [GLOBAL]: { version: 6, ultracode: true },
-        [PROJECT]: { version: 6, ultracode: "on" },
+        [GLOBAL]: { version: 6, writerWorkspaceMode: "worktree" },
+        [PROJECT]: { version: 6, writerWorkspaceMode: "invalid" },
       });
-      expect((yield* store.load(CWD, AGENT, false)).ultracode).toBe(true);
+      expect((yield* store.load(CWD, AGENT, false)).writerWorkspaceMode).toBe("worktree");
       expect(memory.operations).not.toContain(`read:${PROJECT}`);
       yield* rejects(store.load(CWD, AGENT, true), "activate", PROJECT);
     }),
@@ -435,7 +453,6 @@ describe("SubagentConfigStore profile writes", () => {
         yield* store.patchDefaultProfileSet(CWD, AGENT, at(scope));
         yield* store.patchWriterWorkspace(CWD, AGENT, at(scope));
         yield* store.deleteProfileSet(CWD, AGENT, { ...at(scope), profileSet: "missing" });
-        yield* store.patchFeatureToggle(CWD, AGENT, { ...at(scope), toggle: "ultracode" });
         expect(memory.documents.has(pathOf(scope))).toBe(false);
         yield* rejects(
           store.deleteProfileSet(CWD, AGENT, { ...at(scope), profileSet: "bad/name" }),
@@ -454,12 +471,11 @@ describe("SubagentConfigStore profile writes", () => {
           "Invalid profile target",
         );
       }
-      yield* store.patchFeatureToggle(CWD, AGENT, {
+      yield* store.patchWriterWorkspace(CWD, AGENT, {
         ...at("global"),
-        toggle: "ultracode",
-        enabled: true,
+        writerWorkspaceMode: "worktree",
       });
-      expect(memory.documents.get(GLOBAL)).toEqual({ version: 6, ultracode: true });
+      expect(memory.documents.get(GLOBAL)).toEqual({ version: 6, writerWorkspaceMode: "worktree" });
       yield* rejects(
         store.patchProfile(CWD, AGENT, {
           ...at("global"),
@@ -704,7 +720,7 @@ describe("SubagentConfigStore preferences", () => {
       }),
   );
 
-  it.effect("saves and clears one switch and nesting while preserving every other field", () =>
+  it.effect("saves nesting while preserving every other field", () =>
     Effect.gen(function* () {
       const original = {
         version: 6,
@@ -714,19 +730,6 @@ describe("SubagentConfigStore preferences", () => {
         writerWorkspaceMode: "worktree",
       };
       const { memory, store } = yield* setup({ [PROJECT]: original });
-      yield* store.patchFeatureToggle(CWD, AGENT, {
-        ...at("project", original),
-        toggle: "ultracode",
-        enabled: true,
-      });
-      const saved = { ...original, ultracode: true };
-      expect(memory.documents.get(PROJECT)).toEqual(saved);
-      expect((yield* store.load(CWD, AGENT, true)).ultracode).toBe(true);
-
-      yield* store.patchFeatureToggle(CWD, AGENT, { ...at("project", saved), toggle: "ultracode" });
-      expect(memory.documents.get(PROJECT)).toEqual(original);
-      expect((yield* store.load(CWD, AGENT, true)).ultracode).toBe(false);
-
       const nesting = { maxDirectChildren: 8, maxDepth: 3 };
       for (const invalid of [
         { maxDirectChildren: 8, maxDepth: 99 },
@@ -741,21 +744,6 @@ describe("SubagentConfigStore preferences", () => {
       expect(memory.documents.get(PROJECT)).toEqual(original);
       yield* store.patchNesting(CWD, AGENT, { ...at("project", original), nesting });
       expect(memory.documents.get(PROJECT)).toEqual({ ...original, nesting });
-    }),
-  );
-
-  it.effect("refuses stale and untrusted switch writes without changing the file", () =>
-    Effect.gen(function* () {
-      const current = { version: 6, ultracode: true };
-      const { memory, store } = yield* setup({ [PROJECT]: current });
-      const base = { ...at("project", current), toggle: "ultracode", enabled: false } as const;
-      for (const invalid of [{ expectedDocument: { version: 6 } }, { projectTrusted: false }])
-        yield* rejects(
-          store.patchFeatureToggle(CWD, AGENT, { ...base, ...invalid }),
-          "update",
-          PROJECT,
-        );
-      expect(memory.documents.get(PROJECT)).toEqual(current);
     }),
   );
 });

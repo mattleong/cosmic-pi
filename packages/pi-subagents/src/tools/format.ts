@@ -171,13 +171,6 @@ const statusField = (label: string, value: string): string =>
 const optionalStatusField = (label: string, value: string | undefined): string | undefined =>
   value ? statusField(label, value) : undefined;
 
-const workflowOwnerText = (run: SubagentRunView): string => {
-  const workflow = run.workflow;
-  if (!workflow) return "";
-  const id = sanitizeTerminalLine(workflow.workflowId);
-  return workflow.name ? `${sanitizeTerminalLine(workflow.name)} (${id})` : id;
-};
-
 const formatRunHeader = (run: SubagentRunView, route: string): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
   const tree = run.depth
@@ -190,8 +183,7 @@ const formatRunHeader = (run: SubagentRunView, route: string): string => {
     ? ` · workspace=${run.writerWorkspaceMode}${run.workspaceId ? `:${sanitizeTerminalLine(run.workspaceId)}` : ""}`
     : "";
   const steering = run.steeringDelivery ? ` · steeringDelivery=${run.steeringDelivery}` : "";
-  const workflow = run.workflow ? ` · workflow=${workflowOwnerText(run)}` : "";
-  return `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}${workspace}${steering}${workflow}`;
+  return `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}${workspace}${steering}`;
 };
 
 const identityStatusFields = (
@@ -203,12 +195,6 @@ const identityStatusFields = (
   statusField("ID", run.id),
   statusField("State", runStateLabel(run.state)),
   optionalStatusField("Parent", run.parentRunId),
-  run.workflow
-    ? statusField(
-        "Workflow",
-        `${workflowOwnerText(run)}${run.workflow.phase ? ` · phase ${run.workflow.phase}` : ""}`,
-      )
-    : undefined,
   run.depth === undefined
     ? undefined
     : statusField(

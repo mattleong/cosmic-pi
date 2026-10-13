@@ -32,10 +32,6 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
 ];
 const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   SCRIPTED_WRITER_RECOVERY,
-  [
-    ["workflow_owned_run"],
-    "The run reports to its workflow, whose notification starts your next turn; end your turn rather than waiting on it, and stop the workflow with subagent_workflow only when the user asks or it is clearly broken.",
-  ],
   [["notfound", "not_found"], "Refresh run IDs with subagent_list.", ["not found"]],
   [
     ["completion_claim_conflict"],
@@ -122,7 +118,6 @@ export const failureRecovery = (
 type Phrase = (subject: string) => string;
 
 const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> = [
-  [["workflow_owned_run"], (subject) => `${subject} reports to its workflow`],
   [["notfound", "not_found"], () => "A requested subagent was not found"],
   [["run_waiting_for_parent"], (subject) => `${subject} is waiting for a reply`],
   [["parent_question_missing"], (subject) => `${subject} has no question waiting for a reply`],

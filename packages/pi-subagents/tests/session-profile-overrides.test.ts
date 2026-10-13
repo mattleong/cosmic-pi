@@ -14,7 +14,6 @@ import {
   decodeSessionProfileOverrideSeed,
   makeSessionProfileSnapshot,
   MAX_SESSION_PROFILE_REVISION,
-  patchSessionFeatureSnapshot,
   patchSessionProfileSnapshot,
   replaceSessionProfileSnapshot,
   sessionProfileSeed,
@@ -55,14 +54,6 @@ const baseConfig = (projectReviewerModel = "openai/project") =>
       nesting: { maxDirectChildren: 4, maxDepth: 2 },
     },
   );
-
-const withUltracode = (ultracode: boolean) =>
-  resolveTestConfig({
-    version: 6,
-    defaultProfileSet: "default",
-    profileSets: { default: { profiles: { reviewer: candidate("openai/global") } } },
-    ultracode,
-  });
 
 describe("session profile overrides", () => {
   it.effect("rejects retired or hostile typed mutations before revision or publication", () =>
@@ -650,84 +641,6 @@ describe("session profile overrides", () => {
       });
       expect(repaired.effectiveConfig.profileSources.reviewer).toBe("session");
       expect(repaired.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe("openai/repair");
-    }),
-  );
-
-  it.effect("keeps session edits across reload while adopting reloaded saved switches", () =>
-    Effect.gen(function* () {
-      const initial = makeSessionProfileSnapshot(withUltracode(true));
-      const edited = yield* patchSessionProfileSnapshot(initial, {
-        profile: "worker",
-        route: route("openai/session"),
-        expectedRevision: 0,
-      });
-      expect(edited.effectiveConfig.ultracode).toBe(true);
-
-      const reloaded = makeSessionProfileSnapshot(withUltracode(false), sessionProfileSeed(edited));
-      expect(reloaded.effectiveConfig.ultracode).toBe(false);
-      expect(reloaded.effectiveConfig.profileSources.worker).toBe("session");
-      expect(reloaded.effectiveConfig.profiles.worker.candidates[0]?.model).toBe("openai/session");
-    }),
-  );
-
-  it.effect("sets and clears the session's own ultracode over the saved value", () =>
-    Effect.gen(function* () {
-      const saved = resolveTestConfig({ version: 6, ultracode: true });
-      const service = yield* makeSubagentProfileService(saved);
-      const off = yield* service.patchSessionFeature({
-        toggle: "ultracode",
-        enabled: false,
-        expectedRevision: 0,
-      });
-      expect(off.effectiveConfig).toMatchObject({
-        ultracode: false,
-        featureSources: { ultracode: "session" },
-      });
-      expect(
-        (yield* service.patchSessionFeature({
-          toggle: "ultracode",
-          enabled: false,
-          expectedRevision: off.revision,
-        })).revision,
-      ).toBe(off.revision);
-      expect(
-        Exit.isFailure(
-          yield* Effect.exit(
-            service.patchSessionFeature({
-              toggle: "ultracode",
-              enabled: true,
-              expectedRevision: 0,
-            }),
-          ),
-        ),
-      ).toBe(true);
-
-      const cleared = yield* service.patchSessionFeature({
-        toggle: "ultracode",
-        expectedRevision: off.revision,
-      });
-      expect(cleared.effectiveConfig).toMatchObject({
-        ultracode: true,
-        featureSources: { ultracode: "global" },
-      });
-    }),
-  );
-
-  it.effect("carries the session's ultracode through tree and reload handoffs", () =>
-    Effect.gen(function* () {
-      const initial = makeSessionProfileSnapshot(resolveTestConfig({ version: 6 }));
-      const on = yield* patchSessionFeatureSnapshot(initial, {
-        toggle: "ultracode",
-        enabled: true,
-        expectedRevision: 0,
-      });
-      const handedOff = decodeSessionProfileOverrideSeed(sessionProfileSeed(on));
-      expect(handedOff?.features).toEqual({ ultracode: true });
-      const restored = makeSessionProfileSnapshot(resolveTestConfig({ version: 6 }), handedOff);
-      expect(restored.effectiveConfig.ultracode).toBe(true);
-      expect(
-        decodeSessionProfileOverrideSeed({ revision: 0, overrides: {}, features: { other: true } }),
-      ).toBeUndefined();
     }),
   );
 });

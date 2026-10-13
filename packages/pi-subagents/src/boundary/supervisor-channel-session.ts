@@ -7,7 +7,6 @@ import * as Latch from "effect/Latch";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import type { BackendReport } from "../backend/model.ts";
-import type { ResultContract } from "../domain/result-contract.ts";
 import {
   SupervisorChannelIdSchema,
   type SupervisorEvent,
@@ -48,17 +47,15 @@ export const makeSupervisorChannelSession = ({
   runId,
   verifyToken,
   events,
-  resultContract,
 }: {
   readonly runId: SupervisorRunId;
   readonly verifyToken: TokenVerifier;
   readonly events: Queue.Queue<SupervisorEvent, Cause.Done>;
-  readonly resultContract?: ResultContract | undefined;
 }) =>
   Effect.gen(function* () {
     const state = yield* makeSupervisorChannelState(runId, verifyToken, events);
     const { peers, assignmentEpochs, reports, epochAcknowledgements, readiness } = state;
-    const handlers = makeSupervisorChannelHandlers(state, resultContract);
+    const handlers = makeSupervisorChannelHandlers(state);
 
     const shutdown = Effect.gen(function* () {
       state.closed = true;

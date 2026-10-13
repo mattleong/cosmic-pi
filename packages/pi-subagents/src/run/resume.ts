@@ -3,12 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
-import {
-  canonicalizeWriterCwd,
-  processCapacityError,
-  workflowOwned,
-  writerConflictError,
-} from "./admission.ts";
+import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
 import { beginNextAssignmentLocked, type RunAssignment } from "./assignment.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateParentMessage } from "./tool-policy.ts";
@@ -27,7 +22,6 @@ import {
   requireCapability,
   type RunContext,
   type RunRecord,
-  workflowOwnedRunError,
 } from "./internal.ts";
 import {
   isTerminalRunState,
@@ -62,9 +56,6 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
     return invalidRequest("resume_state_invalid", `Subagent ${id} cannot resume while ${state}.`);
   if (record.stoppedByParent)
     return invalidRequest("resume_cancelled", `Subagent ${id} was stopped and cannot resume.`);
-  const ownedFailure =
-    state === "completed" ? workflowOwnedRunError(record, "resume after completing") : undefined;
-  if (ownedFailure) return ownedFailure;
   if (!hasCompletionGenerationCapacity(record))
     return invalidRequest(
       "report_delivery_backlog",
@@ -342,7 +333,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                   "backend_resume_unavailable",
                   `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
                 );
-              if (workflowOwned(selected)) return undefined;
               const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
               const capacityFailure = processCapacityError(
                 records,

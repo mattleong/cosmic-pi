@@ -1,6 +1,4 @@
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import type {
   WorkspacePreparation,
   WorkspaceRevision,
@@ -11,8 +9,6 @@ import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
   mapWorkspaceError,
-  runHoldsCwd,
-  runsWithin,
   type WorkspaceBinding,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
@@ -29,28 +25,6 @@ export interface WorkspaceReviewOptions {
   readonly limit?: number;
 }
 
-const WRITER_CLEANUP_WAIT = "10 seconds";
-
-const abandoned = (abandon: Deferred.Deferred<void>): Effect.Effect<boolean> =>
-  Deferred.isDone(abandon).pipe(
-    Effect.flatMap((done) =>
-      done
-        ? Effect.succeed(true)
-        : Effect.interruptible(Effect.void).pipe(Effect.exit, Effect.map(Exit.isFailure)),
-    ),
-  );
-
-const awaitUnlessAbandoned = <A>(
-  wait: Effect.Effect<A>,
-  abandon: Deferred.Deferred<void>,
-): Effect.Effect<boolean> =>
-  Effect.interruptible(
-    wait.pipe(Effect.as(true), Effect.raceFirst(Deferred.await(abandon).pipe(Effect.as(false)))),
-  ).pipe(
-    Effect.exit,
-    Effect.map((exit) => Exit.isSuccess(exit) && exit.value),
-  );
-
 interface HeldBinding {
   readonly binding: WorkspaceBinding;
   readonly heldLocked: () => Effect.Effect<void, SubagentError>;
@@ -66,7 +40,7 @@ const engineRevision = (service: WorkspaceServiceContract, { handle }: Workspace
   );
 
 export function makeWorkspaceReview(context: WorkspaceControlContext) {
-  const { withLock, state, records, requireBinding, requireEngine, operations } = context;
+  const { withLock, state, requireBinding, requireEngine, operations } = context;
   const hold = <A>(
     workspaceId: string,
     caller: string,
@@ -231,85 +205,5 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
         }),
       );
     });
-  const pendingCleanup = (workspaceId: string) =>
-    withLock(
-      Effect.sync(() => {
-        const record = state.bindings.get(workspaceId)?.record;
-        return record && (record.cleanupPending || record.cleanupDisposition === "pending")
-          ? record.cleanupSettlement
-          : undefined;
-      }),
-    );
-  const takeOperation = (abandon: Deferred.Deferred<void>): Effect.Effect<boolean> =>
-    Effect.gen(function* () {
-      if (yield* abandoned(abandon)) return false;
-      if (yield* operations.takeIfAvailable(1)) return true;
-      if (!(yield* awaitUnlessAbandoned(operations.withPermits(1)(Effect.void), abandon)))
-        return false;
-      return yield* takeOperation(abandon);
-    });
-  const discardIfUnchanged = (service: WorkspaceServiceContract, held: HeldBinding) =>
-    Effect.gen(function* () {
-      const { binding } = held;
-      const trees = [binding.handle.cwd, ...(binding.record ? [binding.record.view.cwd] : [])];
-      const before = yield* withLock(Effect.sync(() => runsWithin(records, trees, binding.record)));
-      if ([...before.keys()].some(runHoldsCwd)) return false;
-      return yield* service
-        .discardUnchanged(
-          {
-            workspaceId: binding.handle.workspaceId,
-            ownerId: binding.handle.ownerId,
-            processCleanupConfirmed: true,
-          },
-          (discard) =>
-            withLock(
-              Effect.gen(function* () {
-                yield* held.heldLocked();
-                const after = runsWithin(records, trees, binding.record);
-                if (
-                  [...after.keys()].some(runHoldsCwd) ||
-                  after.size !== before.size ||
-                  [...after].some(([record, view]) => before.get(record) !== view)
-                )
-                  return false;
-                yield* discard.pipe(
-                  Effect.mapError((error) =>
-                    invalid("workspace_discard_incomplete", error.message),
-                  ),
-                );
-                binding.finished = true;
-                return true;
-              }),
-            ),
-        )
-        .pipe(
-          Effect.mapError((error) =>
-            error._tag === "WorkspaceError" ? mapWorkspaceError(error) : error,
-          ),
-        );
-    });
-  const workspaceDiscardUnchanged = (
-    workspaceId: string,
-    abandon: Deferred.Deferred<void>,
-    caller = SUBAGENT_ROOT_RUN_ID,
-  ): Effect.Effect<boolean, SubagentError> =>
-    Effect.uninterruptible(
-      Effect.gen(function* () {
-        const service = yield* requireEngine;
-        const cleanup = yield* pendingCleanup(workspaceId);
-        if (
-          cleanup &&
-          !(yield* awaitUnlessAbandoned(
-            Deferred.await(cleanup).pipe(Effect.timeoutOption(WRITER_CLEANUP_WAIT)),
-            abandon,
-          ))
-        )
-          return false;
-        if (!(yield* takeOperation(abandon))) return false;
-        return yield* hold(workspaceId, caller, (held) => discardIfUnchanged(service, held)).pipe(
-          Effect.ensuring(operations.release(1)),
-        );
-      }),
-    );
-  return { workspaceReview, workspacePrepare, workspaceDiscard, workspaceDiscardUnchanged };
+  return { workspaceReview, workspacePrepare, workspaceDiscard };
 }

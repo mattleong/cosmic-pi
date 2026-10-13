@@ -14,8 +14,6 @@ import type {
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
 import type { ProfileRouteContinuation } from "../profiles/model.ts";
 import {
-  invalidRequest,
-  type InvalidSubagentRequestError,
   type SubagentError,
   type SubagentNotFoundError,
   UnsupportedSubagentCapabilityError,
@@ -78,23 +76,8 @@ interface BackendReportWatermark {
   readonly deliveryId: string;
 }
 
-export interface RunOwnership {
-  readonly runId?: string | undefined;
-  readonly checkLocked: Effect.Effect<void, InvalidSubagentRequestError>;
-  readonly admittedLocked: (record: RunRecord) => void;
-}
-
-interface RunOwnerClaim {
-  readonly ownerId: string;
-  readonly claimToken: string;
-  readonly generation: number;
-  live: boolean;
-}
-
 export interface RunRecord {
   readonly scriptOrigin: boolean;
-  owner?: RunOwnerClaim | undefined;
-  readonly releasedSystemPrompt?: string | undefined;
   view: SubagentRunView;
   scope: Scope.Closeable;
   readonly driver: BackendDriver;
@@ -112,7 +95,6 @@ export interface RunRecord {
   retryClaim?: { readonly token: string } | undefined;
   pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
   latestAssistantText?: string | undefined;
-  structuredResult?: { readonly assignmentEpoch: number; readonly json: string } | undefined;
   pauseRequested: boolean;
   pausedAssignmentEpoch?: number | undefined;
   stoppedByParent: boolean;
@@ -193,21 +175,6 @@ export const commitRunInitialization = (record: RunRecord, state: BackendStartup
     ...(state.sessionFile && { sessionFile: state.sessionFile }),
   };
   return pending;
-};
-
-export const workflowOwnedRunError = (
-  record: RunRecord,
-  operation: string,
-): InvalidSubagentRequestError | undefined => {
-  const owner = record.owner;
-  if (!owner?.live) return undefined;
-  const workflow = record.view.workflow?.name
-    ? `${record.view.workflow.name} (${owner.ownerId})`
-    : owner.ownerId;
-  return invalidRequest(
-    "workflow_owned_run",
-    `Subagent ${record.view.id} belongs to workflow ${workflow}, which receives its result, so it cannot ${operation}. The workflow's notification starts your next turn with its result, so end your turn rather than waiting on this subagent; stop the workflow with subagent_workflow only when the user asks or it is clearly broken. Stopping this subagent resolves its agent() call to null as stopped.`,
-  );
 };
 
 const unsupportedCapabilityMessage = (

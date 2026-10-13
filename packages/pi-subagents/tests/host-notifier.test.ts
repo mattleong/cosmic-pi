@@ -161,23 +161,6 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toEqual(steer);
   });
 
-  it("names the workflow and never asks the root to await a workflow agent's run", () => {
-    const { notify, content } = notifier();
-    const delivery = notify({
-      type: "question",
-      id: "agent-r1-4",
-      name: "find-issues",
-      requestId: "question-1",
-      message: "Which module?",
-      generation: 1,
-      workflow: { workflowId: "wf-r1-1", name: "review", phase: "Find" },
-    });
-    expect(delivery?.actionAccepted).toBe(true);
-    expect(content()).toContain("wf-r1-1");
-    expect(content()).toContain('subagent_reply({ runId: "agent-r1-4", message: "..." })');
-    expect(content()).not.toContain("subagent_await");
-  });
-
   it("explains a single completion without a final report", () => {
     const { notify, content } = notifier();
 

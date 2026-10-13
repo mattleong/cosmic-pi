@@ -38,18 +38,6 @@ export type WriterWorkspaceMode = (typeof WRITER_WORKSPACE_MODES)[number];
 export const DEFAULT_WRITER_WORKSPACE_MODE: WriterWorkspaceMode = "shared-checkout";
 export const WriterWorkspaceModeSchema = Schema.Literals(WRITER_WORKSPACE_MODES);
 
-export const SUBAGENT_FEATURE_TOGGLES = ["ultracode"] as const;
-export type SubagentFeatureToggle = (typeof SUBAGENT_FEATURE_TOGGLES)[number];
-export type SubagentFeatureToggles = Readonly<Record<SubagentFeatureToggle, boolean>>;
-export const DEFAULT_SUBAGENT_FEATURE_TOGGLES: SubagentFeatureToggles = Object.freeze({
-  ultracode: false,
-});
-export type SubagentFeatureSource = "default" | "global" | "project" | "session";
-export const isSubagentFeatureToggle = <Value>(
-  value: Value,
-): value is Value & SubagentFeatureToggle =>
-  SUBAGENT_FEATURE_TOGGLES.some((toggle) => toggle === value);
-
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
 export const MIN_SUBAGENT_DEPTH = 0;
@@ -74,7 +62,6 @@ export interface SubagentConfigFile {
   readonly profileSets?: Readonly<Record<string, SubagentProfileSet>> | undefined;
   readonly nesting?: SubagentNestingPolicy | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
-  readonly ultracode?: boolean | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -343,7 +330,8 @@ const ROOT_KEYS = new Set([
   "profileSets",
   "nesting",
   "writerWorkspaceMode",
-  ...SUBAGENT_FEATURE_TOGGLES,
+  // Saved profile documents may still contain the removed workflow preference.
+  "ultracode",
 ]);
 
 const readRootField = <S extends Schema.Constraint>(
@@ -385,11 +373,6 @@ const decodeCurrentBody = (
     diagnostics,
     WriterWorkspaceModeSchema,
   );
-  const toggles: Partial<Record<SubagentFeatureToggle, boolean>> = {};
-  for (const toggle of SUBAGENT_FEATURE_TOGGLES) {
-    const enabled = readRootField(rawRoot, toggle, scope, diagnostics, Schema.Boolean);
-    if (enabled !== undefined) toggles[toggle] = enabled;
-  }
   const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
   const decoded = setsField.present
     ? decodeProfileSets(probeFields(setsField.value), `${scope}.profileSets`, diagnostics)
@@ -404,7 +387,6 @@ const decodeCurrentBody = (
       ...(decoded && Object.keys(decoded.sets).length > 0 && { profileSets: decoded.sets }),
       ...(defaultProfileSet !== undefined && { defaultProfileSet }),
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
-      ...toggles,
     },
     invalidProfileSetRoutes: decoded?.invalidProfileSetRoutes ?? {},
     invalidProfileSets: decoded?.invalidProfileSets ?? [],

@@ -57,7 +57,6 @@ describe("subagent tool activation", () => {
       const { loadout, emit } = yield* restoringApplication(["mcp__docs__search"]);
       yield* emit("session_start", { type: "session_start", reason: "reload" });
       expect(loadout.active()).toEqual(expect.arrayContaining(["read", "subagent_start"]));
-      expect(loadout.active()).not.toContain("subagent_workflow");
       expect(loadout.restoring.has("mcp__docs__search")).toBe(true);
     },
   );
@@ -70,22 +69,6 @@ describe("subagent tool activation", () => {
       loadout.restoring.add("mcp__docs__search");
       yield* emit("session_shutdown", { type: "session_shutdown", reason: "reload" });
       expect(loadout.restoring.has("mcp__docs__search")).toBe(true);
-    },
-  );
-
-  effectTest(
-    "leaves a restored workflow runner active until the next agent run starts",
-    function* () {
-      const { loadout, emit } = yield* restoringApplication([
-        "subagent_workflow",
-        "mcp__docs__search",
-      ]);
-      yield* emit("session_start", { type: "session_start", reason: "reload" });
-      expect(loadout.active()).toContain("subagent_workflow");
-      expect(loadout.restoring.has("mcp__docs__search")).toBe(true);
-      yield* emit("agent_start");
-      expect(loadout.active()).not.toContain("subagent_workflow");
-      expect(loadout.active()).toEqual(expect.arrayContaining(["read", "subagent_start"]));
     },
   );
 

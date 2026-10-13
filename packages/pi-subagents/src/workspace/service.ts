@@ -41,10 +41,6 @@ export interface WorkspaceServiceContract {
     target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
   ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
-  readonly discardUnchanged: <E>(
-    target: WorkspaceSettledTarget,
-    confirm: (discard: Effect.Effect<void, WorkspaceError>) => Effect.Effect<boolean, E>,
-  ) => Effect.Effect<boolean, WorkspaceError | E>;
   readonly inspect: (target: WorkspaceTarget) => Effect.Effect<WorkspaceRecord, WorkspaceError>;
   readonly list: (input: {
     readonly ownerId: string;
@@ -74,12 +70,6 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           revise: (input) => run(engine.revise(input)),
           fork: (input) => run(engine.fork(input)),
           discard: (input) => run(engine.discard(input)),
-          discardUnchanged: (input, confirm) =>
-            run(
-              engine.discardUnchanged(input, (discard) =>
-                confirm(discard.pipe(Effect.provideService(SafeFile, safe))),
-              ),
-            ),
           inspect: (input) => run(engine.inspect(input)),
           list: (input) => run(engine.list(input)),
           listAll: run(engine.listAll),

@@ -1,6 +1,6 @@
 # pi-subagents
 
-Background subagents for Pi on macOS and Linux. The main agent delegates work to profile-routed agents running on Pi, Claude Code, or Codex, keeps working, and gets their reports back automatically. Scripted workflows can coordinate many agents at once.
+Background subagents for Pi on macOS and Linux. The main agent delegates work to profile-routed agents running on Pi, Claude Code, or Codex, keeps working, and gets their reports back automatically.
 
 ## Features
 
@@ -10,7 +10,6 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Two-way supervision:** children can ask the parent questions and report progress; the parent can guide, interrupt, resume, rename, retry, or stop them.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
 - **Safe parallel writes:** writers share the checkout under exact file claims, or opt into isolated worktrees that the parent reviews, tests, and integrates.
-- **Scripted workflows:** `subagent_workflow` runs a JavaScript script that fans agents out with `agent()`, `parallel()`, and `pipeline()`.
 - **Live view:** a run tree above the editor and the shared Activity manager.
 
 ## Install
@@ -47,15 +46,13 @@ Ask for work that splits into independent pieces, and the agent launches subagen
 | `oracle`     | fork    | read-only | high          |
 | `generalist` | fresh   | read-only | parent effort |
 
-| Command               | Action                                                 |
-| --------------------- | ------------------------------------------------------ |
-| `/subagents`          | Open the fleet in the Activity manager                 |
-| `/subagents profiles` | Choose models and fallbacks for each profile           |
-| `/subagents settings` | Nesting limits, writer workspace mode, and `ultracode` |
-| `/ultracode on\|off`  | Turn scripted workflows on or off for this session     |
-| `/ultracode <task>`   | Run one request as a workflow                          |
+| Command               | Action                                       |
+| --------------------- | -------------------------------------------- |
+| `/subagents`          | Open the fleet in the Activity manager       |
+| `/subagents profiles` | Choose models and fallbacks for each profile |
+| `/subagents settings` | Nesting limits and writer workspace mode     |
 
-The agent's tools are `subagent_start`, `subagent_await`, `subagent_status`, `subagent_list`, `subagent_send`, `subagent_reply`, `subagent_lifecycle`, `subagent_rename`, `subagent_models`, `subagent_claims`, `subagent_workspace`, and `subagent_workflow`. Workflows are opt-in: `subagent_workflow` is available only while `ultracode` is on or for a single `/ultracode` request.
+The agent's tools are `subagent_start`, `subagent_await`, `subagent_status`, `subagent_list`, `subagent_send`, `subagent_reply`, `subagent_lifecycle`, `subagent_rename`, `subagent_models`, `subagent_claims`, and `subagent_workspace`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
 
 ## Configuration
 
@@ -90,12 +87,13 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
     }
   },
   "nesting": { "maxDirectChildren": 12, "maxDepth": 3 },
-  "writerWorkspaceMode": "shared-checkout",
-  "ultracode": false
+  "writerWorkspaceMode": "shared-checkout"
 }
 ```
 
 If a candidate is unavailable at launch, such as an unauthenticated CLI, the next one is tried. After a run has started, fallback happens only through an explicit `retry`.
+
+Ultracode (`/ultracode` and `subagent_workflow`) has been removed. Ordinary subagents remain supported. Existing `ultracode` settings are ignored when loading saved profile documents; user configuration files are never rewritten automatically.
 
 ## How it works
 
@@ -106,4 +104,4 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle, and the docs
 - [Reference](docs/reference.md): full behavior, configuration, worktree review, and safety notes
 - [Routing](docs/routing.md), [local backends](docs/local-backends.md), and [completion delivery](docs/completion-delivery.md)
 - [Settings workspace](docs/settings-workspace.md)
-- [Workflows](docs/workflows.md), [workflow internals](docs/workflow-internals.md), and the [authoring guide](skills/workflow-authoring/SKILL.md)
+- [Native Pi codemode scripting](docs/native-codemode.md)

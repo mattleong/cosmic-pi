@@ -15,12 +15,10 @@ import {
 import {
   conflict,
   makeSessionProfileSnapshot,
-  patchSessionFeatureSnapshot,
   patchSessionNestingSnapshot,
   patchSessionProfileSnapshot,
   replaceSessionProfileSnapshot,
   sessionProfileSeed,
-  type SessionFeaturePatch,
   type SessionProfileConflictError,
   type SessionNestingPatch,
   type SessionProfileOverrideSeed,
@@ -49,9 +47,6 @@ export interface SubagentProfileServiceContract {
   ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
   readonly patchSessionNesting: (
     patch: SessionNestingPatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
-  readonly patchSessionFeature: (
-    patch: SessionFeaturePatch,
   ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
 }
 
@@ -127,8 +122,6 @@ export const makeSubagentProfileService = (
         commit((current) => replaceSessionProfileSnapshot(current, patch)),
       patchSessionNesting: (patch) =>
         commit((current) => patchSessionNestingSnapshot(current, patch)),
-      patchSessionFeature: (patch) =>
-        commit((current) => patchSessionFeatureSnapshot(current, patch)),
     });
   });
 

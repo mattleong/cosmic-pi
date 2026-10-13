@@ -203,7 +203,7 @@ export const executeSubagentActionEffect = (
         if (scripted && attentionRequired)
           return yield* invalidRequest(
             "scripted_parent_attention_required",
-            `Subagents need parent attention\n\nEnd the workflow and handle this directly.\n\n${attentionRecoveryText(runs)}`,
+            `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(runs)}`,
           );
         const prefix = [...sections, attentionRecoveryText(runs)].filter(Boolean).join("\n\n");
         const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
@@ -271,7 +271,7 @@ export const executeSubagentActionEffect = (
         if (scripted && args.action !== "stop")
           return yield* invalidRequest(
             "scripted_lifecycle_not_supported",
-            "Workflow lifecycle supports stopping only. Hand retry, resume, and interrupt decisions back to the parent agent.",
+            "Codemode scripts support lifecycle stop only. Hand retry, resume, and interrupt decisions back to the parent agent.",
           );
         const presentLifecycle = (result: AwaitedLifecycleResult) =>
           present({

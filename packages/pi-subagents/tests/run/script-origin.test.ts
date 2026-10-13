@@ -64,7 +64,7 @@ describe("immutable script-origin subtree policy", () => {
   it.effect("preserves model-started nested writers and separately authorized root writers", () => {
     const f = localServiceFixture();
     return withService(f.layer, function* (service) {
-      const scripted = yield* service.startScriptSessionOwned(request({ cwd: "/workflow" }));
+      const scripted = yield* service.startScriptSessionOwned(request({ cwd: "/scripted" }));
       const model = yield* service.startSessionOwned(request({ cwd: "/model" }));
       const delegated = yield* service.startSessionOwnedFrom(
         model.id,

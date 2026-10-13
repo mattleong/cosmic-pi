@@ -24,7 +24,6 @@ import {
   type SubagentNotFoundError,
   SubagentRuntimeClosedError,
 } from "./errors.ts";
-import { makeQueuedWriterCheck, makeRunAdmissionSignal } from "./admission-signal.ts";
 import { makeRunAssignment } from "./assignment.ts";
 import { makeRunCompletionObservations } from "./completion-observations.ts";
 import { makeRunPeerNotifier } from "./coordination.ts";
@@ -36,7 +35,6 @@ import {
   makeRunNotificationDelivery,
   type QuestionNotificationReceipt,
 } from "./notification-delivery.ts";
-import { makeRunOwnedRuns, type OwnedRunCoordinatorContract } from "./owned-runs.ts";
 import { makeRunProcessControls, makeRunProcessInitializer } from "./process-lifecycle.ts";
 import { makeRunRecordCleanup, type RunRecordCleanup } from "./record-cleanup.ts";
 import { makeRunResume } from "./resume.ts";
@@ -61,7 +59,6 @@ import { makeRunTurnInputs } from "./turn-input.ts";
 import { makeRunVisibility } from "./visibility.ts";
 import { makeRunWriteClaimContainment } from "./write-claim-containment.ts";
 import { makeRunProxyExecution } from "./proxy-execution.ts";
-import { makeRunStructuredResults } from "./structured-result.ts";
 import { makeWriterPreparation } from "./writer-preparation.ts";
 import { WriterPools } from "./writer-pool.ts";
 import { makeRunWriteClaimControl } from "./write-claim-control.ts";
@@ -118,8 +115,7 @@ export interface SubagentStatusObservationOptions {
   readonly includeDeliveredReports?: boolean | undefined;
 }
 
-export interface SubagentServiceContract
-  extends WorkspaceCoordinatorContract, OwnedRunCoordinatorContract {
+export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly start: (request: StartSubagentRequest) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly startSessionOwned: (
     request: StartSubagentRequest,
@@ -227,11 +223,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const runtimeNamespace = allocateRuntimeNamespace();
   let closed = false;
   const questionnaires = makeQuestionnaireLifetimes(() => closed);
-  const admission = makeRunAdmissionSignal(records, writerPools);
-  const recheckAdmission = Effect.sync(admission.observe);
-
-  const withLock: WithRunLock = (effect) =>
-    lock.withPermits(1)(Effect.ensuring(effect, recheckAdmission));
+  const withLock: WithRunLock = lock.withPermits(1);
   const withCompletionGate = completionGate.withPermits(1);
   const { admitTurnInput, releaseTurnInput, claimTurnInputDrain } = makeRunTurnInputs(withLock);
   const {
@@ -239,12 +231,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     allocateRetryClaimToken,
     allocateAssignmentAttemptToken,
     allocateRunIdentity,
-    reserveRunId,
-    isAllocatedRunId,
   } = makeRunIdentities(runtimeNamespace);
   const publish = Effect.uninterruptible(
     questionnaires.invalidate.pipe(
-      Effect.andThen(recheckAdmission),
       Effect.andThen(
         Effect.suspend(() =>
           closed
@@ -379,7 +368,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     queueQuestionLocked: delivery.queueActionNotificationLocked,
     onWriteClaimViolation: containWriteClaimViolation,
     onProxyEvent: handleProxyEvent,
-    onStructuredResult: makeRunStructuredResults({ withLock }),
   });
 
   const initializeProcess = makeRunProcessInitializer({
@@ -426,24 +414,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ...runContext,
     launch,
     workspaces,
-    sessionNesting: profileService.capture.pipe(
-      Effect.map((snapshot) => snapshot.effectiveConfig.nesting),
-    ),
     redactCompletionReport: observations.redactCompletionReport,
     releaseRetryClaim: retry.releaseRetryClaim,
   });
-  const ownedRuns = makeRunOwnedRuns({
-    ...runContext,
-    allocateClaimToken,
-    isAllocatedRunId,
-    currentRevision: () => SubscriptionRef.getUnsafe(projectionRef).revision,
-    waitForRevision,
-    delivery,
-    start: starts.startOwned,
-    stop,
-  });
-  const queuedWriterConflict = makeQueuedWriterCheck(runContext);
-
   const list = SubscriptionRef.get(projectionRef).pipe(Effect.map((current) => current.runs));
   const status: SubagentServiceContract["status"] = (id) =>
     observations
@@ -471,7 +444,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     workspacePrepare: workspaces.workspacePrepare,
     workspaceIntegrate: workspaces.workspaceIntegrate,
     workspaceDiscard: workspaces.workspaceDiscard,
-    workspaceDiscardUnchanged: workspaces.workspaceDiscardUnchanged,
     workspaceRevise: workspaces.revise(launch.start),
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
     setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,
@@ -490,20 +462,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     revokeWriteClaims: writeClaims.revoke,
     resumeWriterAdmission: writeClaims.resumeAdmission,
     projection,
-    ...ownedRuns,
-    reserveRunId,
-    waitForRevision,
-    admissionRevision: admission.current,
-    waitForAdmissionChange: admission.waitForChange,
-    queuedWriterConflict,
-    workspaceBindingStatus: workspaces.workspaceBindingStatus,
   };
 
   yield* Effect.addFinalizer(() =>
     withLock(
       Effect.sync(() => {
         closed = true;
-        admission.close();
       }),
     ).pipe(
       Effect.andThen(questionnaires.invalidate),

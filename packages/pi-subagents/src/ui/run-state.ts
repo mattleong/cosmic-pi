@@ -11,7 +11,6 @@ import {
   type SubagentRunState,
   type SubagentRunView,
 } from "../run/model.ts";
-import type { WorkflowRunState } from "../workflow/model.ts";
 
 const RUN_STATE_KINDS = {
   starting: "pending",
@@ -35,17 +34,6 @@ export const runStateLabel = (state: SubagentRunState): string =>
 
 export const runStateColor = (state: SubagentRunState): ManagerStatusColor =>
   managerActivityColor(RUN_STATE_KINDS[state]);
-
-const WORKFLOW_STATE_KINDS = {
-  running: "running",
-  stopping: "stopping",
-  completed: "done",
-  failed: "failed",
-  stopped: "stopped",
-} as const satisfies Readonly<Record<WorkflowRunState, ManagerActivityKind>>;
-
-export const workflowStateLabel = (state: WorkflowRunState | "interrupted"): string =>
-  state === "interrupted" ? "interrupted" : managerActivityLabel(WORKFLOW_STATE_KINDS[state]);
 
 export type RunMessageMode = "guidance" | "reply";
 

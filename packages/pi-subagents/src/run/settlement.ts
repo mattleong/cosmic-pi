@@ -22,13 +22,16 @@ import type { SubagentRunView, SubagentUsage } from "./model.ts";
 import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
-import { addUsage, MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
 import {
-  acceptedResult,
-  reportFinalText,
+  addUsage,
+  MAX_ERROR_CHARS,
+  sanitizeDiagnosticText,
+  sanitizeOutputText,
+  snapshotView,
+} from "./state.ts";
+import {
   settledAssignmentLocked,
   settledFailureMessage,
-  settledText,
   settlementBlocked,
   viewForSettlement,
   type SettlementState,
@@ -134,8 +137,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           !record.pauseRequested ||
           isInactiveRunRecord(record) ||
           record.assignment.epoch !== assignmentEpoch ||
-          record.assignment.phase !== "running" ||
-          acceptedResult(record, assignmentEpoch) !== undefined
+          record.assignment.phase !== "running"
         )
           return undefined;
         const view = commitRunPauseLocked(record, now);
@@ -417,7 +419,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           "backend_report_invalid",
           `Subagent ${record.view.id} emitted an invalid bounded report event.`,
         );
-      const text = yield* reportFinalText(record, rawReport.text);
+      const text = sanitizeOutputText(rawReport.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim();
       if (!text)
         return yield* processError(
           "accept report from",
@@ -488,10 +490,10 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         if (yield* pauseFromEvent(record, now, assignmentEpoch)) return;
       }
       if (record.stoppedByParent) return;
-      const written =
-        acceptedResult(record, assignmentEpoch) === undefined
-          ? yield* settledText(record, terminal)
-          : { text: undefined, problem: undefined };
+      const finalText =
+        terminal?.stopReason === "stop" && terminal.text
+          ? sanitizeOutputText(terminal.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim()
+          : undefined;
       const outcome = yield* withLock(
         Effect.sync(() => {
           if (
@@ -500,7 +502,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
             record.assignment.phase !== "running"
           )
             return "ignored";
-          const finalText = acceptedResult(record, assignmentEpoch) ?? written.text;
           if (!finalText) return "failed";
           record.latestAssistantText = finalText;
           record.pausedAssignmentEpoch = undefined;
@@ -509,12 +510,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       );
       if (outcome === "completed") yield* settle(record, "completed", undefined, assignmentEpoch);
       if (outcome === "failed")
-        yield* failRun(
-          record,
-          settledFailureMessage(record, terminal, written.problem),
-          undefined,
-          assignmentEpoch,
-        );
+        yield* failRun(record, settledFailureMessage(terminal), undefined, assignmentEpoch);
     });
 
   return {

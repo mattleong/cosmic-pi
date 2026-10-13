@@ -30,7 +30,6 @@ import {
   type SupervisorChannelLayerOptions,
 } from "../src/boundary/supervisor-channel.ts";
 import { SupervisorChannelError } from "../src/boundary/supervisor-channel-errors.ts";
-import { compileResultContract, type ResultContract } from "../src/domain/result-contract.ts";
 import {
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
   SupervisorAuthTokenSchema,
@@ -40,7 +39,7 @@ import {
   SupervisorDeliveryIdSchema,
   SupervisorRpcGroup,
 } from "../src/supervisor/protocol.ts";
-import { anyString, anything, stringContaining } from "./support/matchers.ts";
+import { anything, stringContaining } from "./support/matchers.ts";
 
 type JsonRpcValue = Schema.Json;
 interface JsonRpcObject {
@@ -110,20 +109,12 @@ const stageAgentHome = (prefix: string) =>
     }),
   );
 
-const openIn = (
-  scope: Scope.Closeable,
-  options: SupervisorChannelLayerOptions,
-  runId: string,
-  resultContract?: ResultContract,
-) =>
-  makeSupervisorChannel(options)
-    .open({ runId, resultContract })
-    .pipe(Effect.provideService(Scope.Scope, scope));
+const openIn = (scope: Scope.Closeable, options: SupervisorChannelLayerOptions, runId: string) =>
+  makeSupervisorChannel(options).open({ runId }).pipe(Effect.provideService(Scope.Scope, scope));
 
 const openChannel = (
   runId = "agent-supervisor-test",
   options: Omit<SupervisorChannelLayerOptions, "agentDirectory"> = {},
-  resultContract?: ResultContract,
 ): Promise<OpenTestChannel> =>
   stageAgentHome("pi-subagents-supervisor-").then(({ root, agentDirectory, scope }) => {
     const projectDirectory = nodePath.join(root, "project");
@@ -131,9 +122,7 @@ const openChannel = (
       .then(() =>
         writeFile(nodePath.join(projectDirectory, "marker.txt"), "project-only\n", "utf8"),
       )
-      .then(() =>
-        Effect.runPromise(openIn(scope, { agentDirectory, ...options }, runId, resultContract)),
-      )
+      .then(() => Effect.runPromise(openIn(scope, { agentDirectory, ...options }, runId)))
       .then((handle) => ({ handle, scope, agentDirectory, projectDirectory }));
   });
 
@@ -1175,48 +1164,6 @@ describe("private supervisor channel", () => {
       });
 
       yield* step(() => direct.close());
-    },
-    20_000,
-  );
-
-  liveTest(
-    "rejects a report that is not a valid result, recording no delivery identity",
-    function* () {
-      const contract = yield* compileResultContract({
-        type: "object",
-        properties: { verdict: { type: "string", enum: ["ok", "bad"] } },
-        required: ["verdict"],
-        additionalProperties: false,
-      }).pipe(Effect.orDie);
-      const { handle } = yield* step(() => openChannel("agent-supervisor-result", {}, contract));
-      const { rpc } = yield* readyHelper(handle);
-
-      for (const [id, report] of [
-        ["prose-result", "The verdict is ok."],
-        ["mismatched-result", '{"verdict":"maybe"}'],
-      ] as const) {
-        const rejected = yield* step(() =>
-          toolCall(rpc, id, "supervisor_submit_report", { delivery_id: "result-1", report }),
-        );
-        expect(rejected).toMatchObject({ result: { isError: true } });
-      }
-      const noEvent = yield* Queue.poll(handle.events);
-      expect(Option.isNone(noEvent)).toBe(true);
-
-      const accepted = yield* step(() =>
-        toolCall(rpc, "valid-result", "supervisor_submit_report", {
-          delivery_id: "result-1",
-          report: '{"verdict":"ok"}',
-        }),
-      );
-      expect(accepted).toMatchObject({ result: { content: [{ text: anyString() }] } });
-      expect(accepted).not.toMatchObject({ result: { isError: true } });
-      expect(yield* step(() => takeEvent(handle))).toMatchObject({
-        type: "report",
-        sequence: 1,
-        deliveryId: "result-1",
-        text: '{"verdict":"ok"}',
-      });
     },
     20_000,
   );

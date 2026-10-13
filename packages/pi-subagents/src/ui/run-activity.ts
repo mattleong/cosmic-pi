@@ -1,18 +1,12 @@
 import { ACTIVITY_LIMITS, type ActivityItem } from "pi-cosmic-ui/activity";
-import { sanitizeDiagnosticContent, synchronousNow } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import {
   isActiveRunState,
   isParentActionRequiredRun,
-  isTerminalRunState,
   type SubagentProjection,
   type SubagentRunState,
   type SubagentRunView,
 } from "../run/model.ts";
-import {
-  isWorkflowRunFinished,
-  type WorkflowAgentView,
-  type WorkflowRunView,
-} from "../workflow/model.ts";
 import {
   EMPTY_ACTIVITY_PRESENTATION,
   type SubagentActivityPresentationSnapshot,
@@ -28,34 +22,7 @@ import {
   type RunMessageMode,
 } from "./run-state.ts";
 import { projectFleetTree } from "./run-tree-rows.ts";
-import {
-  activityReasonLine,
-  isWorkflowAgentUnstarted,
-  settledWorkflowCalls,
-  workflowActivityItems,
-  workflowMembership,
-  workflowRunIdOf,
-} from "./workflow-activity.ts";
-import {
-  plannedAgentDetail,
-  queuedAgentDetail,
-  settledAgentDetail,
-  workflowActivityDetail,
-} from "./workflow-activity-detail.ts";
-
 export const SUBAGENT_ACTIVITY_PROVIDER = "pi-subagents";
-
-export interface WorkflowActivitySnapshot {
-  readonly runs: ReadonlyArray<WorkflowRunView>;
-}
-
-export const EMPTY_WORKFLOWS: WorkflowActivitySnapshot = Object.freeze({ runs: [] });
-
-export const liveWorkflowIds = (snapshot: WorkflowActivitySnapshot): ReadonlySet<string> =>
-  new Set(snapshot.runs.filter((run) => !isWorkflowRunFinished(run.state)).map((run) => run.id));
-
-export const isOwnedByLiveWorkflow = (run: SubagentRunView, live: ReadonlySet<string>): boolean =>
-  run.workflow !== undefined && live.has(run.workflow.workflowId);
 
 const RUN_STATUS = {
   starting: "pending",
@@ -85,14 +52,6 @@ function activityAttention(run: SubagentRunView) {
   return { status: RUN_STATUS[run.state] } as const;
 }
 
-function memberAttention(run: SubagentRunView, call: WorkflowAgentView | undefined) {
-  const attention = activityAttention(run);
-  return call?.state === "failed" &&
-    (attention.status === "done" || attention.status === "cancelled")
-    ? ({ status: "failed" } as const)
-    : attention;
-}
-
 const handoff = (id: string, label: string) => ({ id, label, handoff: true as const });
 
 const MESSAGE_ACTIONS = {
@@ -100,7 +59,7 @@ const MESSAGE_ACTIONS = {
   guidance: handoff("message", "Message"),
 } satisfies Readonly<Record<RunMessageMode, ReturnType<typeof handoff>>>;
 
-export function runActions(run: SubagentRunView, title: string, owned: boolean) {
+export function runActions(run: SubagentRunView, title: string) {
   const mode = run.writeAdmissionPaused ? undefined : runMessageMode(run);
   return [
     ...(isActiveRunState(run.state)
@@ -108,7 +67,7 @@ export function runActions(run: SubagentRunView, title: string, owned: boolean) 
           {
             id: "stop",
             label: "Stop",
-            confirmation: `Stop "${title}" and all its subagents?${owned ? " The workflow continues without its result." : ""}`,
+            confirmation: `Stop "${title}" and all its subagents?`,
             handoff: false as const,
           },
         ]
@@ -123,9 +82,7 @@ export function runActions(run: SubagentRunView, title: string, owned: boolean) 
           },
         ]
       : []),
-    ...(canResumeRun(run) && !run.writeAdmissionPaused && !(owned && run.state === "completed")
-      ? [handoff("resume", "Resume")]
-      : []),
+    ...(canResumeRun(run) && !run.writeAdmissionPaused ? [handoff("resume", "Resume")] : []),
     ...(mode && (mode !== "reply" || run.question) ? [MESSAGE_ACTIONS[mode]] : []),
     ...(canRenameRun(run) ? [handoff("rename", "Rename")] : []),
   ];
@@ -139,61 +96,33 @@ const runIdentity = (run: SubagentRunView): string =>
     run.question?.requestId ?? null,
   ]);
 
-const runSummary = (
-  run: SubagentRunView,
-  call: WorkflowAgentView | undefined,
-): Pick<ActivityItem, "summary"> => {
-  const reason =
-    call?.reason !== undefined && call.state !== "completed"
-      ? call.reason
-      : run.state === "failed"
-        ? run.error
-        : undefined;
-  const summary = reason ? activityReasonLine(reason) : (run.currentTool ?? run.progress);
+const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
+  const reason = run.state === "failed" ? run.error : undefined;
+  const summary = reason ? reason.split("\n", 1)[0] : (run.currentTool ?? run.progress);
   return summary
     ? { summary: sanitizeDiagnosticContent(summary, { maximumLength: ACTIVITY_LIMITS.text }) }
     : {};
 };
 
-const workflowPlacement = (run: SubagentRunView, owned: boolean) =>
-  run.workflow !== undefined &&
-  (run.parentRunId ?? "root") === "root" &&
-  (owned || isTerminalRunState(run.state))
-    ? workflowMembership(run.workflow, SUBAGENT_ACTIVITY_PROVIDER)
-    : undefined;
-
 export function subagentActivityItems(
   projection: SubagentProjection,
   presentation: SubagentActivityPresentationSnapshot = EMPTY_ACTIVITY_PRESENTATION,
-  workflowSnapshot: WorkflowActivitySnapshot = EMPTY_WORKFLOWS,
 ): readonly ActivityItem[] {
   const awaited = new Set(presentation.awaits.flatMap((lease) => lease.runIds));
   const rows = projectFleetTree(projection.runs, "root").rows;
-  const workflows = workflowActivityItems({
-    runs: workflowSnapshot.runs,
-    visibleRunIds: new Set(rows.map(({ run }) => run.id)),
-    providerId: SUBAGENT_ACTIVITY_PROVIDER,
-    budget: Math.max(0, ACTIVITY_LIMITS.items - rows.length),
-  });
-  const live = liveWorkflowIds(workflowSnapshot);
-  const callOf = settledWorkflowCalls(workflowSnapshot.runs);
   const runs = rows.map(({ run }) => {
     const title = sanitizeDiagnosticContent(run.name, { maximumLength: ACTIVITY_LIMITS.title });
-    const owned = isOwnedByLiveWorkflow(run, live);
-    const call = callOf(run);
     return withActivityRevision(
       {
         id: run.id,
         kind: "agent" as const,
         title,
-        ...memberAttention(run, call),
+        ...activityAttention(run),
         awaited: awaited.has(run.id),
         startedAt: run.startedAt,
         updatedAt: run.lastActivityAt,
-        ...runSummary(run, call),
-        actions: Object.freeze(
-          runActions(run, title, owned).map((action) => Object.freeze(action)),
-        ),
+        ...runSummary(run),
+        actions: Object.freeze(runActions(run, title).map((action) => Object.freeze(action))),
         route: sanitizeDiagnosticContent(formatRunRoute(run), {
           maximumLength: ACTIVITY_LIMITS.route,
         }),
@@ -206,48 +135,17 @@ export function subagentActivityItems(
               itemId: run.parentRunId,
             }),
           }),
-        ...workflowPlacement(run, owned),
       },
       runIdentity(run),
     );
   });
-  return Object.freeze([...workflows, ...runs].slice(0, ACTIVITY_LIMITS.items));
+  return Object.freeze(runs.slice(0, ACTIVITY_LIMITS.items));
 }
-
-const workflowDetail = (
-  workflows: WorkflowActivitySnapshot,
-  id: string,
-  projection: SubagentProjection,
-  now: number,
-): string | undefined => {
-  const runId = workflowRunIdOf(id);
-  if (runId !== undefined) {
-    const run = workflows.runs.find((candidate) => candidate.id === runId);
-    if (!run) return undefined;
-    const usage = new Map(projection.runs.map((view) => [view.id, view.usage]));
-    return workflowActivityDetail(run, now, (agentRunId) => usage.get(agentRunId));
-  }
-  for (const run of workflows.runs) {
-    const agent = run.agents.find((candidate) => candidate.runId === id);
-    if (agent?.state === "queued") return queuedAgentDetail(agent);
-    if (agent && isWorkflowAgentUnstarted(agent)) return settledAgentDetail(agent);
-    const planned = run.planned.find((candidate) => candidate.runId === id);
-    if (planned) return plannedAgentDetail(run, planned);
-  }
-  return undefined;
-};
 
 export function subagentActivityDetail(
   projection: SubagentProjection,
   id: string,
-  workflows: WorkflowActivitySnapshot = EMPTY_WORKFLOWS,
-  now: number = synchronousNow(),
 ): string | undefined {
   const run = projectFleetTree(projection.runs, "root").rows.find((row) => row.run.id === id)?.run;
-  if (!run) return workflowDetail(workflows, id, projection, now);
-  const owned = isOwnedByLiveWorkflow(run, liveWorkflowIds(workflows));
-  return runActivityDetail(run, {
-    call: settledWorkflowCalls(workflows.runs)(run),
-    nested: workflowPlacement(run, owned) !== undefined,
-  });
+  return run && runActivityDetail(run);
 }

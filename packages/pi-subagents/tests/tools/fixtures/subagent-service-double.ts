@@ -44,21 +44,10 @@ const unexpectedService: SubagentServiceContract = {
   workspacePrepare: () => unexpected("workspacePrepare"),
   workspaceIntegrate: () => unexpected("workspaceIntegrate"),
   workspaceDiscard: () => unexpected("workspaceDiscard"),
-  workspaceDiscardUnchanged: () => unexpected("workspaceDiscardUnchanged"),
   workspaceRevise: () => unexpected("workspaceRevise"),
   inspectWriterWorkspace: unexpected("inspectWriterWorkspace"),
   setWriterWorkspaceMode: () => unexpected("setWriterWorkspaceMode"),
   projection: unexpected("projection"),
-  reserveRunId: unexpected("reserveRunId"),
-  openOwner: () => unexpected("openOwner"),
-  startOwned: () => unexpected("startOwned"),
-  awaitOwned: () => unexpected("awaitOwned"),
-  closeOwner: () => unexpected("closeOwner"),
-  waitForRevision: () => unexpected("waitForRevision"),
-  admissionRevision: unexpected("admissionRevision"),
-  waitForAdmissionChange: () => unexpected("waitForAdmissionChange"),
-  queuedWriterConflict: () => unexpected("queuedWriterConflict"),
-  workspaceBindingStatus: () => unexpected("workspaceBindingStatus"),
 };
 
 const statusObservations =

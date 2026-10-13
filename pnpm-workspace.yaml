@@ -3,7 +3,6 @@ packages:
 
 catalog:
   "@earendil-works/pi-ai": 1.0.2
-  "@earendil-works/pi-codemode": 1.0.2
   "@earendil-works/pi-coding-agent": 1.0.2
   "@earendil-works/pi-tui": 1.0.2
   "@effect/platform-node": 4.0.0

@@ -13,7 +13,6 @@ import type {
   ProfileRouteContinuation,
   SubagentSelectionProvenance,
 } from "../profiles/model.ts";
-import type { ResultContract } from "../domain/result-contract.ts";
 
 export type RuntimeApiKey = Redacted.Redacted;
 
@@ -115,12 +114,6 @@ export const hasUnresolvedSteeringDelivery = (run: {
   readonly steeringDelivery?: SteeringDeliveryState | undefined;
 }): boolean => run.steeringDelivery === "pending" || run.steeringDelivery === "unresolved";
 
-export interface SubagentWorkflowMembership {
-  readonly workflowId: string;
-  readonly name?: string | undefined;
-  readonly phase?: string | undefined;
-}
-
 export interface SubagentRunView {
   readonly steeringDelivery?: SteeringDeliveryState | undefined;
   readonly id: string;
@@ -142,7 +135,6 @@ export interface SubagentRunView {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly workspaceId?: string | undefined;
   readonly sourceCwd?: string | undefined;
-  readonly workflow?: SubagentWorkflowMembership | undefined;
   readonly state: SubagentRunState;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
@@ -242,8 +234,6 @@ export interface StartSubagentRequest {
   readonly workspace?: WorkspaceHandle | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly writerWorkspaceModeOverride?: WriterWorkspaceMode | undefined;
-  readonly workflow?: SubagentWorkflowMembership | undefined;
-  readonly resultContract?: ResultContract | undefined;
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;

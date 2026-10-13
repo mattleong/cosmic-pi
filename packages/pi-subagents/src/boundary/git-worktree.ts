@@ -17,12 +17,7 @@ import {
   workspaceFailure,
   workspaceIO,
 } from "./git-worktree-process.ts";
-import {
-  captureSnapshot,
-  inspectSource,
-  sourceIdentity,
-  workerMatchesBaseline,
-} from "./git-worktree-snapshot.ts";
+import { captureSnapshot, inspectSource, sourceIdentity } from "./git-worktree-snapshot.ts";
 import {
   initializeWorkspaceStore,
   newWorkspaceId,
@@ -447,21 +442,6 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         return undefined;
       });
     const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target));
-    const discardUnchanged = <E, R>(
-      target: WorkspaceSettledTarget,
-      confirm: (discard: ReturnType<typeof discardInternal>) => Effect.Effect<boolean, E, R>,
-    ) =>
-      locked(
-        Effect.gen(function* () {
-          yield* settled(target);
-          const record = yield* checked(target);
-          if (record.status !== "active") return false;
-          const snapshot = yield* capture(record, worker(record), "verify-worker");
-          const baseline = yield* treeOf(repository(record), record.baseline);
-          if (!(yield* workerMatchesBaseline(worker(record), snapshot, baseline))) return false;
-          return yield* confirm(discardInternal(target));
-        }),
-      );
     const inspect = (target: WorkspaceTarget) => checked(target, false);
     const listAll = listWorkspaceRecords(registry);
     const list = (input: { readonly ownerId: string }) =>
@@ -478,7 +458,6 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
       revise,
       fork,
       discard,
-      discardUnchanged,
       inspect,
       list,
       listAll,

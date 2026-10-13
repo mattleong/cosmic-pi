@@ -6,7 +6,7 @@ import {
   type InvalidSubagentRequestError,
   type SubagentNotFoundError,
 } from "./errors.ts";
-import { type RunContext, type RunRecord, workflowOwnedRunError } from "./internal.ts";
+import { type RunContext, type RunRecord } from "./internal.ts";
 import {
   hasUnresolvedSteeringDelivery,
   type FailedStartRecovery,
@@ -166,8 +166,6 @@ export function makeRunRetry(
     withLock(
       Effect.gen(function* () {
         const record = yield* requireRecord(id);
-        const ownedFailure = workflowOwnedRunError(record, "be retried");
-        if (ownedFailure) return yield* ownedFailure;
         const sourceFailure = retrySourceFailure(record, id);
         if (sourceFailure) return yield* sourceFailure;
         const continuation = record.routeContinuation;

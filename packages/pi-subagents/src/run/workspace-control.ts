@@ -1,4 +1,3 @@
-import type * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type {
@@ -12,7 +11,6 @@ import {
   isWithin,
   makeWorkspaceControlContext,
   mapWorkspaceError,
-  type WorkspaceBindingStatus,
   type WorkspaceControlDependencies,
 } from "./workspace-binding.ts";
 import {
@@ -64,11 +62,6 @@ export interface WorkspaceCoordinatorContract {
     workspaceId: string,
     callerRunId?: string,
   ) => Effect.Effect<void, SubagentError>;
-  readonly workspaceDiscardUnchanged: (
-    workspaceId: string,
-    abandon: Deferred.Deferred<void>,
-    callerRunId?: string,
-  ) => Effect.Effect<boolean, SubagentError>;
   readonly workspaceRevise: (
     workspaceId: string,
     message: string,
@@ -219,15 +212,6 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
     workspaceList,
     inspectWriterWorkspace,
     setWriterWorkspaceMode,
-    workspaceBindingStatus: (workspaceId: string) =>
-      withLock(
-        Effect.sync((): WorkspaceBindingStatus => {
-          const binding = state.bindings.get(workspaceId);
-          if (!binding) return "unbound";
-          if (!binding.finished) return "pending";
-          return binding.integrated ? "integrated" : "closed";
-        }),
-      ),
   };
 }
 

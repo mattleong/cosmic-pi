@@ -30,34 +30,29 @@ describe("writer workspace configuration", () => {
   });
 });
 
-describe("feature switch configuration", () => {
-  it("leaves ultracode off by default", () => {
-    expect(resolve({ version: 6 })).toMatchObject({
-      ultracode: false,
-      featureSources: { ultracode: "default" },
-    });
-  });
-
-  it("resolves ultracode with trusted Project over Global", () => {
-    const global = { version: 6, ultracode: true };
-    expect(resolve(global)).toMatchObject({
+describe("removed workflow preferences", () => {
+  it("ignores the retired preference while preserving profile and nesting settings", () => {
+    const document = {
+      version: 6,
       ultracode: true,
-      featureSources: { ultracode: "global" },
+      defaultProfileSet: "saved",
+      profileSets: { saved: { profiles: { worker: "disabled" } } },
+      nesting: { maxDirectChildren: 3, maxDepth: 1 },
+      writerWorkspaceMode: "worktree",
+    };
+    const decoded = decodeSubagentConfig(document);
+    expect(decoded.diagnostics).toEqual([]);
+    expect(decoded.file).toEqual({
+      version: 6,
+      defaultProfileSet: "saved",
+      profileSets: { saved: { profiles: { worker: "disabled" } } },
+      nesting: { maxDirectChildren: 3, maxDepth: 1 },
+      writerWorkspaceMode: "worktree",
     });
-    expect(resolve(global, { version: 6 }).ultracode).toBe(true);
-    expect(resolve(global, { version: 6, ultracode: false })).toMatchObject({
-      ultracode: false,
-      featureSources: { ultracode: "project" },
+    expect(resolve(document)).toMatchObject({
+      profiles: { worker: { candidates: [] } },
+      nesting: { maxDirectChildren: 3, maxDepth: 1 },
+      writerWorkspaceMode: "worktree",
     });
-    expect(resolve(global, { version: 6, ultracode: false }, false).ultracode).toBe(true);
-    expect(resolve({ version: 6 }, { version: 6, ultracode: true }).ultracode).toBe(true);
-  });
-
-  it("reports non-boolean ultracode values without retaining them", () => {
-    for (const value of ["true", 1, null, { enabled: true }]) {
-      const decoded = decodeSubagentConfig({ version: 6, ultracode: value });
-      expect(decoded.file.ultracode).toBeUndefined();
-      expect(decoded.diagnostics).toContain("config.ultracode");
-    }
   });
 });

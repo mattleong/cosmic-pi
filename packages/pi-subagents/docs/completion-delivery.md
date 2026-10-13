@@ -42,15 +42,9 @@ Root models, start, list, await, status, rename, and lifecycle registrations dec
 
 Native execution-start and admission `parentToolCallId` provenance identifies scripted execution. Start preserves empty parent IDs that pinned Pi may omit at admission. Script evidence cannot be downgraded, and model origin requires both observations; missing or capacity-lost start evidence stays fail-closed. Scripted starts enforce read-only intent after route resolution and before admission; lifecycle permits only stop. Scripted awaits and status reject parent attention before consumption; awaits also leave questions unacknowledged, allowing scoped release to wake the existing outbox. Scripted list returns the complete report-free hierarchy without claiming or consuming reports. Models and rename are also script-callable at root with structured results and unchanged text/details; models only inspects configured routes, while rename retains backend capability checks and peer notices. Other coordinator tools are model-only. These gates do not confine arbitrary native tools or child capability.
 
-Scripted root starts seed immutable, record-only `scriptOrigin`, inherited from authenticated parents and retry predecessors, never request fields or serialized views. Service validation rejects these writers before workspace acquisition; locked admission rechecks before eviction or writer-pool creation. Resume preserves the restriction, and workspace revise cannot admit a script-origin writer. Workflow owned starts retain their own authorization even when the workflow began through native codemode.
+Scripted root starts seed immutable, record-only `scriptOrigin`, inherited from authenticated parents and retry predecessors, never request fields or serialized views. Service validation rejects these writers before workspace acquisition; locked admission rechecks before eviction or writer-pool creation. Resume preserves the restriction, and workspace revise cannot admit a script-origin writer.
 
 `includeDeliveredReports` is an explicit status-observation option. It reveals the latest retained final text only after the current outcome has already been delivered and when no competing completion claim owns any generation. No receipt is returned, no outbox entry is added, and assistant events stay redacted. Default status/await redaction is unchanged. The accepted-report generation remains available to distinguish later assignments; this is bounded in-memory read-back, not historical or restart-persistent storage.
-
-`subagent_workflow` has a separate success-only version-1 `pi-subagents/workflow` contract. Its direct exposure is callable only while Ultracode makes it active; the default remains inactive. Native calls retain ordinary workflow writer authorization and the existing owned-run launch path, never script-origin read-only admission. `workflow-contract.ts` explicitly projects authoritative service values; `workflow-contract-schema.ts` validates them through a strict Effect JSON codec and detaches/freezes the result. The shared `toPiToolOutputSchema` derives Pi's declaration, independently of content and persisted details.
-
-Start returns a receipt, not completion. Status distinguishes full live `view`, full current `unchanged` (with `sinceMs` and empty attention), and `recorded` summaries; recorded `finished` counts reusable agent results, and `runningIn` names another process. Stop preserves the actual state, even completed. Live snapshots retain all domain arrays, actionable workspaces, failure provenance and exact `{ text, clipped, path? }` results, never parse text or expose execution args/private runner state. List keeps complete saved metadata including args schemas and diagnostics, with compact run references/counts. Saved-name truncation is independent of diagnostic retention. Terminal state never confirms child process cleanup.
-
-Typed workflow failures remain unstructured Pi errors, so native calls reject. An encoding invariant failure after an action keeps its original receipt/details and adds neutral uncertainty, with no codec dump or rollback claim. Scripts print start IDs immediately, then end the turn for the normal notification; there is no wait action or polling loop. Rejection/cancellation hands existing-run recovery to the main agent, not automatic replay. Questions, claim recovery and workspace integration still require the main agent.
 
 ## Tool result certainty
 
@@ -92,8 +86,8 @@ Finished observations classify `reportStatus` before redacting text: `available`
   Root factories await that import and registration; private child entrypoints remain separate.
 - Runtime startup runs preview settings as an interruptible best-effort bootstrap, then returns the initial projection, tool runtime, and preview scheduler as prepared activation data.
   The shared session-runtime slot owns latest-start replacement and cancellation, and only its current token may register tools or publish activation state.
-- Factory-time `registerCodePreviewReplay`, anchored to `/subagents`, owns historical coordinator and workflow rows drawn before `session_start`.
-  Both registrations wrap through its `shell`; adoption publishes only after both succeed, including the inactive workflow tool without changing activation.
+- Factory-time `registerCodePreviewReplay`, anchored to `/subagents`, owns historical coordinator rows drawn before `session_start`.
+  Coordinator registrations wrap through its `shell`; adoption publishes only after registration succeeds.
   Failed or aborted first startup closes adoption, shutdown retires it, and `/tree` registrations never republish. Child proxies use the plain shell.
 - Pi drops its pending tool-restore list whenever a tool is deactivated, so subagent tools stay active through `/tree` and the outgoing instance's `/reload` shutdown.
   They are deactivated only when an activation is lost or on another shutdown, and a later registration deactivates only tools it activated that the session had not kept active.
@@ -115,8 +109,7 @@ Finished observations classify `reportStatus` before redacting text: `available`
 - `execute-result.ts` separates text, persisted display details, and version-1 script results.
   `contract-schema.ts` defines the authoritative Effect output schemas, and `contract.ts` projects domain facts.
 - `execute-workspace.ts` dispatches strict workspace operations through the coordinator, pages complete immutable diffs, and keeps patches out of persisted detail metadata.
-- `workflow.ts` registers root-only, direct, initially inactive `subagent_workflow`, with its input/display schema, text, and compact presentation in `workflow-schema.ts`, `workflow-format.ts`, and `workflow-presentation.ts`; `workflow-contract-schema.ts` and `workflow-contract.ts` own its separate native output channel. `result-presentation.ts` renders the child-only, model-only `subagent_result`.
-- Root scripts may inspect profile routes, launch read-only assignments, list runs, await, inspect status, rename, and stop; ultracode gates only `subagent_workflow`, whose active native calls retain ordinary writer-capable workflow semantics.
+- Root scripts may inspect profile routes, launch read-only assignments, list runs, await, inspect status, rename, and stop; see [Native Pi codemode scripting](native-codemode.md).
   All other coordinator tools and every nested-Pi coordinator definition remain model-only.
 - `boundary/host-tool-result.ts` owns bounded activation, call, and detail-identity receipts that set Pi's tool error flag without discarding returned evidence, including decoded child-proxy results.
   It also tracks native host-derived call identity from execution-start and admission events, never argument fields or ID spelling.
@@ -127,7 +120,7 @@ Finished observations classify `reportStatus` before redacting text: `available`
 
 ### Shell coverage
 
-- All 11 root coordinator registrations and their local-child proxies, root-only `subagent_workflow`, and child-only `subagent_result` use the shared presentation shell, and `tools/compact-summary.ts` opts all 11 coordinator tools into the shared compact setting using decoded domain details.
+- All 11 root coordinator registrations and their local-child proxies use the shared presentation shell, and `tools/compact-summary.ts` opts all 11 coordinator tools into the shared compact setting using decoded domain details.
   Root and local-child proxy registration share this provider.
 - The shell owns semantic headings and attention in both compact states.
   Content callbacks retain tasks, reports, hierarchy, usage, routes, and audits without adding a competing status banner.
@@ -181,12 +174,11 @@ Finished observations classify `reportStatus` before redacting text: `available`
 - `application/messages.ts` registers root and child message renderers.
   Pure `ui/notification.ts` shows one human row in both collapsed styles (typed counts and the lone run's display name, or a neutral mark for untyped forwarded and peer notices) and the full content only once expanded.
 - `host-notifier.ts` attaches display-only counts and a lone run's name without altering message content, delivery keys, or acknowledgement behavior.
-- Workflow results use the same notifier with their own `pi-subagents-workflow` message: completed and failed runs join or start a turn, while a user's stop and an interrupted-run notice wait for the next one.
 
 ## Activity provider and fleet
 
 - `boundary/host-activity.ts` registers the root session's Cosmic UI Activity provider through Cosmic UI's `registerRevisionedActivityProvider`, prompts for action input and dispatches actions.
-  Pure `ui/run-activity.ts` projects frozen fleet projections into items, details and the action policy: the complete authorized root tree, including terminal history and completed ancestors, and workflows from `ui/workflow-activity.ts` (see [Workflow internals](workflow-internals.md#activity-projection)).
+  Pure `ui/run-activity.ts` projects frozen fleet projections into items, details and the action policy: the complete authorized root tree, including terminal history and completed ancestors.
   Its actions build on the run-state predicates `ui/run-state.ts` shares with `/subagents`.
   A row's summary never repeats the state Activity draws beside it: it is why a member's call or a run failed, or what the run is doing.
 - Launch leases are published as provider count metadata and await leases as exact-target row metadata, without synthetic selectable rows or moving run ownership.
@@ -202,7 +194,7 @@ Finished observations classify `reportStatus` before redacting text: `available`
   The producer uses the authoritative parent-action predicate without treating an older question as claim recovery.
   Ordinary pauses and missing-question waits require parent review.
   These remain blocked rows, preserving unresolved recovery visibility and existing action safeguards.
-- Message, reply, rename, and resume declare handoff and use the owned abort-aware Pi input boundary after the shared manager closes; stop, interrupt, and workflow actions run in place.
+- Message, reply, rename, and resume declare handoff and use the owned abort-aware Pi input boundary after the shared manager closes; stop and interrupt run in place.
   Post-input checks compare the captured assignment and question identity and current capabilities, claim, and steering policy, not the item revision, which the run's own progress changes while the user types.
   Pending native guidance remains a warning, never claimed delivery.
 - `host-ui.ts` removes the legacy widget only after Cosmic UI acknowledges installed provider UI, restores it when that acknowledgement is lost, and keeps presentation leases and footer fallback intact.
@@ -226,9 +218,9 @@ Finished observations classify `reportStatus` before redacting text: `available`
   The service wires producer operations by explicit name, so consumers receive the questionnaire-draining `closeRecordScope`, never the raw cleanup result.
 - `writer-pool.ts` owns the pool registry through `WriterPools` and each pool's private membership, preparation, release, pause, and quarantine state through `WriterPoolEntry`. Named `Locked` transitions change that state under the existing service lock. Admission receives `WriterPoolLookup` for registry inspection; writer lifecycle factories receive the operations they need without direct map or field mutation.
 - `src/run/model.ts` holds the one pure predicate for runs that need parent action, `isParentActionRequiredRun`, covering real questions, pauses, and paused writer admission, so service awaits and tool results agree.
-- `src/run/attention.ts` resolves the one attention state a run is in (containment, a paused writer peer, paused, a question, or a missing question) by a single precedence, which recovery steps, compact issue lines, the preview renderer, and workflow status all use.
+- `src/run/attention.ts` resolves the one attention state a run is in (containment, a paused writer peer, paused, a question, or a missing question) by a single precedence, which recovery steps, compact issue lines, the preview renderer, and tool status all use.
 - `src/run/tree.ts` owns pure ancestry, visibility, count, and leaf-first ordering rules.
-- `src/run/assignment.ts`, `settlement.ts`, and `resume.ts` own assignment epochs, prompt confirmation, report commit, terminal settlement, and supported resume/respawn generation rollover; `settlement-outcome.ts` holds settlement's pure decisions (terminal and structured-result text, failure messages, blocked settlements, and the settled view).
+- `src/run/assignment.ts`, `settlement.ts`, and `resume.ts` own assignment epochs, prompt confirmation, report commit, terminal settlement, and supported resume/respawn generation rollover; `settlement-outcome.ts` holds settlement's pure decisions (terminal report text, failure messages, blocked settlements, and the settled view).
 - `src/run/coordination.ts` formats ownership notices and sends bounded best-effort updates. Each send snapshots eligible recipients, then renders recipient text from the live run registry without holding the service lock during process I/O.
 - `src/run/process-lifecycle.ts` owns locked backend-control admission, outside-lock joins, process acquisition, event acknowledgment, scoped event and exit fibers, and cleanup handoff.
 - `src/run/service.ts` owns the run registry, locks, projection publication, runtime cleanup, and direct factory composition; subtree stop (`subtree-stop.ts`), write-violation containment (`write-claim-containment.ts`), ancestor-first notification routing (`notification-routing.ts`), turn-input admission (`turn-input.ts`), run identities (`identity.ts`), session starts (`session-starts.ts`), visibility (`visibility.ts`), and leaf-first record closing (`shutdown.ts`) are factories it composes over that state. It acquires the proxy FiberMap before registering leaf-first shutdown and provides authenticated service dispatch and questionnaire lifetime callbacks to `proxy-execution.ts`.

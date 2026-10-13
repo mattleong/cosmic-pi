@@ -7,7 +7,7 @@ import type { SubagentBackendRegistryContract } from "../backend/service.ts";
 import { DEFAULT_SUBAGENT_NESTING_POLICY, type SubagentNestingPolicy } from "../config/schema.ts";
 import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
-import { childSystemPrompt, taskPrompt } from "./tool-policy.ts";
+import { taskPrompt } from "./tool-policy.ts";
 import {
   invalidRequest,
   processError,
@@ -19,7 +19,6 @@ import {
   commitRunInitialization,
   completeRunInitialization,
   type RunContext,
-  type RunOwnership,
   type RunRecord,
 } from "./internal.ts";
 import { MAX_RETAINED_RUNS } from "./limits.ts";
@@ -64,10 +63,7 @@ export interface RunLaunchDependencies extends Pick<
   readonly records: Map<string, RunRecord>;
   readonly delivery: RunNotificationDelivery;
   readonly isClosed: () => boolean;
-  readonly allocateRunIdentity: (
-    requestedName: string,
-    reservedId?: string,
-  ) => {
+  readonly allocateRunIdentity: (requestedName: string) => {
     readonly id: string;
     readonly name: string;
   };
@@ -121,7 +117,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
   const start = (
     request: StartSubagentRequest,
     scriptedRoot = false,
-    ownership?: RunOwnership,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -215,15 +210,13 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           predecessor: RunRecord | undefined,
         ) =>
           Effect.gen(function* () {
-            const capacityFailure = request.workflow
-              ? undefined
-              : processCapacityError(
-                  records,
-                  parentRunId,
-                  nestingPolicy.maxDirectChildren,
-                  ownReservation,
-                  workspaces.heldLaunchSlots(parentRunId, request),
-                );
+            const capacityFailure = processCapacityError(
+              records,
+              parentRunId,
+              nestingPolicy.maxDirectChildren,
+              ownReservation,
+              workspaces.heldLaunchSlots(parentRunId, request),
+            );
             if (capacityFailure) return yield* capacityFailure;
             if (!canonicalWriterCwd) return undefined;
             const writerFailure = writerConflictError(
@@ -240,7 +233,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
 
         const checkAdmissionLocked = (ownReservation?: RunRecord) =>
           Effect.gen(function* () {
-            if (ownership) yield* ownership.checkLocked;
             yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
             const predecessor = yield* retryPredecessorLocked();
             const parent = yield* parentLocked(predecessor);
@@ -252,12 +244,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         const promptRequest = (base: StartSubagentRequest) => withWriteClaims(base, writeClaims);
         const evictionEligible = (record: RunRecord) =>
           isEvictionEligible({ records, writerPools }, record);
-        const releasedSystemPrompt =
-          request.workflow === undefined && request.resultContract === undefined
-            ? undefined
-            : childSystemPrompt(
-                promptRequest({ ...request, workflow: undefined, resultContract: undefined }),
-              );
 
         const admitLocked = (
           evicted: RunRecord | undefined,
@@ -272,7 +258,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const scope = yield* Scope.make();
             const initializationSettled = yield* Deferred.make<void>();
             const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
-            const { id, name } = allocateRunIdentity(requestedName, ownership?.runId);
+            const { id, name } = allocateRunIdentity(requestedName);
             const attemptToken = allocateAssignmentAttemptToken();
             const writerPool = canonicalWriterCwd
               ? yield* writerPools.joinLocked(canonicalWriterCwd, id)
@@ -294,7 +280,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               runStateReclaimState: "pending",
               writeViolationContainmentStarted: false,
               ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
-              ...(releasedSystemPrompt !== undefined && { releasedSystemPrompt }),
               initializationPending: true,
               initializationSettled,
               notificationGeneration: 0,
@@ -316,7 +301,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               predecessor.retryClaim = undefined;
               predecessor.view = { ...predecessor.view, supersededByRunId: id };
             }
-            ownership?.admittedLocked(record);
             records.set(id, record);
             workspaces.bind(request, record);
             yield* publish;
@@ -347,7 +331,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                       )[0];
               if (candidate && candidate.runStateReclaimState !== "reclaimed") {
                 candidate.evictionClaim = {
-                  ...(request.workflow === undefined && { parentRunId }),
+                  parentRunId,
                   ...(canonicalWriterCwd && {
                     writerCwdDigest: canonicalWriterCwd.digest,
                     writeClaims,

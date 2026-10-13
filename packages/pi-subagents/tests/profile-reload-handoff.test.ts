@@ -78,6 +78,51 @@ describe("profile reload handoff", () => {
     expect(handoff.capture("session-one")).not.toBe(seed);
   });
 
+  it.each([true, false])(
+    "restores the previous runtime's profile settings while retiring ultracode=%s",
+    (ultracode) => {
+      const seed = {
+        revision: 7,
+        overrides: { worker: { candidates: [candidate("openai/override")] } },
+        nesting: { maxDirectChildren: 3, maxDepth: 1 },
+        baseline: completeBaseline("project", "openai/baseline"),
+      };
+      writeSlot({
+        value: {
+          version: 2,
+          sessionKey: "session-one",
+          seed: { ...seed, features: { ultracode } },
+        },
+      });
+
+      const restored = handoff.capture("session-one");
+      expect(restored).toEqual(seed);
+      expect(handoff.capture("session-one")).toEqual(seed);
+      expect(restored).not.toHaveProperty("features");
+      handoff.publish("session-one", restored!);
+      expect(slotDescriptor()?.value).toEqual({ version: 2, sessionKey: "session-one", seed });
+    },
+  );
+
+  it("refuses unknown or malformed legacy features and unrelated seed fields", () => {
+    for (const legacy of [
+      { features: { other: true } },
+      { features: { ultracode: true, other: false } },
+      { features: { ultracode: "true" } },
+      { features: { ultracode: false }, other: true },
+    ]) {
+      const envelope = {
+        version: 2,
+        sessionKey: "session-one",
+        seed: { ...completeSeed(), ...legacy },
+      };
+      writeSlot({ value: envelope });
+      expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
+      expect(slotDescriptor()?.value).toBe(envelope);
+      handoff.clear();
+    }
+  });
+
   it("rejects an envelope without its complete baseline", () => {
     writeSlot({
       value: { version: 2, sessionKey: "session-one", seed: { revision: 2, overrides: {} } },

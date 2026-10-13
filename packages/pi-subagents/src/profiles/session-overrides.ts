@@ -14,9 +14,7 @@ import {
   decodeProfileRoute,
   decodeSubagentNesting,
   isProfileSetName,
-  SUBAGENT_FEATURE_TOGGLES,
   SubagentNestingSchema,
-  type SubagentFeatureToggle,
   type SubagentNestingPolicy,
 } from "../config/schema.ts";
 import { BUILTIN_PROFILE_ROUTES } from "./definitions.ts";
@@ -34,10 +32,6 @@ import {
 } from "./model.ts";
 
 export type SessionProfileOverrides = Partial<Readonly<Record<ProfileId, ProfileRoute>>>;
-export type SessionFeatureOverrides = Partial<
-  Readonly<Record<SubagentFeatureToggle, boolean | undefined>>
->;
-
 export const MAX_SESSION_PROFILE_REVISION = Number.MAX_SAFE_INTEGER;
 
 export interface SessionProfileBaseline {
@@ -50,7 +44,6 @@ export interface SessionProfileOverrideSeed {
   readonly revision: number;
   readonly overrides: SessionProfileOverrides;
   readonly nesting?: SubagentNestingPolicy | undefined;
-  readonly features?: SessionFeatureOverrides | undefined;
   readonly baseline?: SessionProfileBaseline | undefined;
 }
 
@@ -75,12 +68,6 @@ export interface SessionNestingPatch {
   readonly expectedRevision: number;
 }
 
-export interface SessionFeaturePatch {
-  readonly toggle: SubagentFeatureToggle;
-  readonly enabled?: boolean | undefined;
-  readonly expectedRevision: number;
-}
-
 export class SessionProfileConflictError extends Schema.TaggedError<SessionProfileConflictError>()(
   "SessionProfileConflictError",
   {
@@ -98,9 +85,8 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
   ),
   overrides: Schema.Unknown,
   nesting: Schema.optional(SubagentNestingSchema),
-  features: Schema.optional(
-    Schema.Record(Schema.Literals(SUBAGENT_FEATURE_TOGGLES), Schema.optional(Schema.Boolean)),
-  ),
+  // Discard the previous runtime's preference until version-2 reload envelopes retire.
+  features: Schema.optional(Schema.Struct({ ultracode: Schema.Boolean })),
   baseline: Schema.optional(
     Schema.Struct({
       origin: Schema.Union([
@@ -195,17 +181,6 @@ const isDetachedBaselineProvenanceValid = (baseline: SessionProfileBaseline): bo
   });
 };
 
-const cloneFeatures = (
-  features: SessionFeatureOverrides | undefined,
-): SessionFeatureOverrides | undefined => {
-  const cloned: Partial<Record<SubagentFeatureToggle, boolean>> = {};
-  for (const toggle of SUBAGENT_FEATURE_TOGGLES) {
-    const value = features?.[toggle];
-    if (value !== undefined) cloned[toggle] = value;
-  }
-  return Object.keys(cloned).length > 0 ? cloned : undefined;
-};
-
 export const emptySessionProfileOverrideSeed = (): SessionProfileOverrideSeed =>
   freezeSnapshot({ revision: 0, overrides: {} });
 
@@ -220,12 +195,10 @@ export const cloneSessionProfileOverrideSeed = (
   const revision = Number.isFinite(seed.revision)
     ? Math.min(MAX_SESSION_PROFILE_REVISION, Math.max(0, Math.floor(seed.revision)))
     : 0;
-  const features = cloneFeatures(seed.features);
   return freezeSnapshot({
     revision,
     overrides,
     ...(seed.nesting !== undefined && { nesting: { ...seed.nesting } }),
-    ...(features !== undefined && { features }),
     ...(seed.baseline !== undefined && { baseline: cloneBaseline(seed.baseline) }),
   });
 };
@@ -273,7 +246,6 @@ export const makeSessionProfileSnapshot = (
     revision,
     overrides,
     nesting,
-    features,
     baseline = baselineFromConfig(baseConfig),
   } = cloneSessionProfileOverrideSeed(seed);
   return freezeSnapshot({
@@ -283,11 +255,6 @@ export const makeSessionProfileSnapshot = (
     baseConfig,
     effectiveConfig: {
       ...baseConfig,
-      ultracode: features?.ultracode ?? baseConfig.ultracode,
-      featureSources: {
-        ultracode:
-          features?.ultracode === undefined ? baseConfig.featureSources.ultracode : "session",
-      },
       currentProfileSet: baseline.origin,
       profiles: mapProfileIds((id) => overrides[id] ?? baseline.profiles[id]),
       profileSources: mapProfileIds((id) =>
@@ -295,7 +262,6 @@ export const makeSessionProfileSnapshot = (
       ),
       nesting: nesting ?? baseConfig.nesting,
     },
-    ...(features && { features }),
     ...(nesting && { nesting }),
   });
 };
@@ -416,13 +382,3 @@ export const patchSessionNestingSnapshot = (
       ? undefined
       : { nesting };
   });
-
-export const patchSessionFeatureSnapshot = (
-  snapshot: SessionProfileSnapshot,
-  patch: SessionFeaturePatch,
-): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> =>
-  editSnapshot(snapshot, patch.expectedRevision, STALE_SETTINGS, () =>
-    snapshot.features?.[patch.toggle] === patch.enabled
-      ? undefined
-      : { features: { ...snapshot.features, [patch.toggle]: patch.enabled } },
-  );

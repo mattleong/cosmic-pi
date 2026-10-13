@@ -20,7 +20,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { Type } from "typebox";
-import type { ActivityItem, ActivityPhase } from "pi-cosmic-ui/activity";
+import type { ActivityItem } from "pi-cosmic-ui/activity";
 import { activityGalleryFrames } from "pi-cosmic-ui/activity/testing";
 import { renderSubagentMessage } from "../src/application/messages.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
@@ -29,9 +29,7 @@ import {
   makeHostNotifier,
   type SubagentCompletionNotification,
   type SubagentNotification,
-  type SubagentWorkflowNotification,
 } from "../src/boundary/host-notifier.ts";
-import { subagentResultTool } from "../src/boundary/host-child-result.ts";
 import type { DeclaredProfileCandidate, ProfileRouteContinuation } from "../src/profiles/model.ts";
 import {
   SubagentProfileService,
@@ -53,44 +51,14 @@ import {
   contactParentExpandedContent,
   contactParentRenderers,
 } from "../src/tools/render-parent.ts";
-import { RESULT_ACCEPTED_TEXT } from "../src/tools/result-presentation.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../src/tools/execute.ts";
 import { makeAwaitExecution } from "../src/tools/execute-await.ts";
 import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../src/tools/outcome.ts";
 import { subagentToolAction, type SubagentToolInput } from "../src/tools/schema.ts";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
-import { registerWorkflowTool, type WorkflowToolRuntime } from "../src/tools/workflow.ts";
-import type { WorkflowToolArgs } from "../src/tools/workflow-presentation.ts";
-import type { WorkflowAgentAttention } from "../src/workflow/attention.ts";
-import {
-  emptyWorkflowUsage,
-  type WorkflowAgentView,
-  type WorkflowRunView,
-} from "../src/workflow/model.ts";
-import {
-  interruptedWorkflowNotification,
-  workflowNotification,
-} from "../src/workflow/notification.ts";
-import {
-  parseWorkflowScript,
-  workflowPlannedAgents,
-  type WorkflowScript,
-} from "../src/workflow/script.ts";
-import { requireWorkflowArgs } from "../src/workflow/args.ts";
-import { WORKFLOW_BUDGET_REASON } from "../src/workflow/budget.ts";
-import { WORKFLOW_BUDGET_ERROR } from "../src/workflow/prelude.ts";
-import { WorkflowNotFoundError } from "../src/workflow/errors.ts";
-import type { WorkflowRecordedRun } from "../src/workflow/run-record.ts";
-import {
-  WorkflowService,
-  type WorkflowServiceContract,
-  type WorkflowStatus,
-  type WorkflowToolStatus,
-} from "../src/workflow/service.ts";
-import { WorkflowStore } from "../src/workflow/store.ts";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
-import { containedWriter, view, workflowAgentView, workflowRunView } from "./fixtures/run-view.ts";
+import { containedWriter, view } from "./fixtures/run-view.ts";
 import {
   subagentServiceDouble,
   type SubagentServiceDoubleInput,
@@ -338,13 +306,13 @@ const startScenarios = Effect.gen(function* () {
     {
       tool: "subagent_start",
       args: {
-        agents: [{ profile: "worker", name: "workflow-edit", task: "Implement the change" }],
+        agents: [{ profile: "worker", name: "script-edit", task: "Implement the change" }],
       },
     },
     { scripted: true },
   );
   const blockedDescendant = yield* scenario(
-    "workflow descendant cannot delegate writer work",
+    "script-origin descendant cannot delegate writer work",
     {
       tool: "subagent_start",
       args: {
@@ -896,17 +864,6 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     },
     phase: "pending",
   },
-  {
-    tool: "subagent_workflow",
-    title: "expanded source and arguments with literal control characters",
-    args: {
-      action: "start",
-      script:
-        'export const meta = { name: "inspect-text", description: "Inspect literal text" };\nlog("before\u009dafter control");\nreturn args.scope;',
-      args: { scope: "src/auth", text: "before\u009dafter control", keep: "following field" },
-    },
-    phase: "pending",
-  },
   awaited("worker rate limited", [
     view({
       state: "failed",
@@ -1033,647 +990,9 @@ const parentScenarios: ReadonlyArray<ToolScenario> = [
   }),
 ];
 
-const resultTool = () =>
-  subagentResultTool(
-    {
-      parameters: {
-        type: "object",
-        properties: {
-          verdict: { type: "string", enum: ["safe", "unsafe"] },
-          findings: { type: "array", items: { type: "string" } },
-        },
-        required: ["verdict", "findings"],
-        additionalProperties: false,
-      },
-      strictSafe: true,
-    },
-    () => Promise.reject(new Error("Rendering must not execute")),
-  );
-
-const verdict = { verdict: "unsafe", findings: ["session.ts:118 swallows a refresh timeout"] };
-
-const resultScenarios: ReadonlyArray<ToolScenario> = [
-  {
-    tool: "subagent_result",
-    title: "submitting",
-    args: verdict,
-    phase: "running",
-  },
-  {
-    tool: "subagent_result",
-    title: "accepted",
-    args: verdict,
-    result: textResult(RESULT_ACCEPTED_TEXT),
-  },
-  {
-    tool: "subagent_result",
-    title: "rejected by its schema",
-    args: { verdict: "risky", findings: [] },
-    isError: true,
-    result: textResult(
-      'Validation failed for tool "subagent_result":\n  - verdict: must be equal to one of the allowed values\n\nReceived arguments:\n{"verdict":"risky","findings":[]}',
-    ),
-  },
-  {
-    tool: "subagent_result",
-    title: "second result refused",
-    args: verdict,
-    isError: true,
-    result: textResult(
-      "A result was already accepted for this run, and the first one is final. Stop now.",
-    ),
-  },
-];
-
-const reviewScript = `export const meta = {
-  name: "review-changes",
-  description: "Review the diff by dimension, then verify each finding",
-  phases: [{ title: "Review" }, { title: "Verify" }],
-};
-const found = await parallel(["correctness", "security"].map((area) => () =>
-  agent(\`Review the uncommitted diff for \${area} bugs.\`, { phase: "Review", profile: "reviewer" })));
-phase("Verify");
-return found.filter(Boolean);`;
-
-const workflowRun = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView =>
-  workflowRunView({
-    id: "wf-mg3k2l-1",
-    name: "review-changes",
-    description: "Review the diff by dimension, then verify each finding",
-    phases: [{ title: "Review" }, { title: "Verify" }],
-    currentPhase: "Review",
-    state: "running",
-    startedAt: now - 3 * 60_000,
-    agents: [
-      {
-        callId: 1,
-        runId: "agent-7",
-        label: "review:correctness",
-        phase: "Review",
-        profile: "reviewer",
-        state: "completed",
-        queuedAt: now - 180_000,
-        startedAt: now - 179_000,
-        endedAt: now - 60_000,
-      },
-      {
-        callId: 2,
-        runId: "agent-8",
-        label: "review:security",
-        phase: "Review",
-        profile: "reviewer",
-        state: "running",
-        queuedAt: now - 180_000,
-        startedAt: now - 179_000,
-      },
-      {
-        callId: 3,
-        runId: "agent-9",
-        label: "verify:1",
-        phase: "Verify",
-        profile: "reviewer",
-        state: "queued",
-        queuedAt: now - 30_000,
-        waiting: { kind: "slot" },
-      },
-    ],
-    logs: [{ at: now - 60_000, level: "info", message: "correctness review found 2 findings" }],
-    usage: {
-      ...emptyWorkflowUsage(),
-      input: 152_300,
-      output: 4_200,
-      cacheRead: 29_900,
-      totalTokens: 186_400,
-      cost: 0.62,
-      toolUses: 41,
-    },
-    args: { scope: "src/auth" },
-    ...patch,
-  });
-
-const completedWorkflow = workflowRun({
-  id: "wf-mg3k2l-2",
-  state: "completed",
-  currentPhase: "Verify",
-  endedAt: now,
-  agents: workflowRun().agents.map((agent) =>
-    Object.assign({}, agent, { state: "completed" as const, endedAt: now }),
-  ),
-  result: {
-    text: JSON.stringify(
-      [{ file: "src/auth/session.ts", line: 118, claim: "Timeout is swallowed" }],
-      null,
-      2,
-    ),
-    clipped: false,
-  },
-});
-const failedWorkflow = workflowRun({
-  id: "wf-mg3k2l-3",
-  state: "failed",
-  endedAt: now,
-  agents: workflowRun().agents.map(({ waiting: _waiting, ...agent }) =>
-    agent.state === "completed"
-      ? agent
-      : Object.assign({}, agent, {
-          state: "stopped" as const,
-          reason: "the workflow stopped",
-          endedAt: now,
-        }),
-  ),
-  failure: {
-    name: "TypeError",
-    message: "found.filter is not a function",
-    stack: "at <workflow>:9:14",
-  },
-});
-const runtimeFailedWorkflow = workflowRun({
-  id: "wf-runtime-1",
-  state: "failed",
-  endedAt: now,
-  agents: [],
-  scriptPath: "/home/user/.pi/agent/subagents/workflow-runs/wf-runtime-1/script.js",
-  failure: {
-    kind: "sandbox",
-    name: "Error",
-    message: "Cannot find module '/runtime/pi-codemode/dist/runtime/worker.js'",
-  },
-});
-const stoppedWorkflow = workflowRun({
-  state: "stopped",
-  endedAt: now,
-  agents: workflowRun().agents.map((agent) =>
-    agent.state === "completed"
-      ? agent
-      : Object.assign({}, agent, {
-          state: "stopped" as const,
-          reason: "the workflow stopped",
-          endedAt: now,
-        }),
-  ),
-});
-const writerWorkflow = workflowRun({
-  ...completedWorkflow,
-  id: "wf-mg3k2l-6",
-  name: "fix-findings",
-  agents: [
-    {
-      callId: 1,
-      runId: "agent-12",
-      label: "fix:session-timeout",
-      profile: "worker",
-      state: "completed",
-      queuedAt: now - 120_000,
-      workspaceId: "workspace-4",
-    },
-  ],
-  reused: 2,
-  resumedFrom: "wf-mg3k2l-1",
-  result: { text: "Fixed 1 finding; proposal in workspace-4.", clipped: false },
-});
-
-const migrateWorkflow = workflowRun({
-  ...completedWorkflow,
-  name: "migrate-call-sites",
-  agents: ["billing", "invoices", "ledger", "payroll"].map((site, index) =>
-    Object.assign(
-      {
-        callId: index + 1,
-        runId: `agent-${30 + index}`,
-        label: `migrate:${site}`,
-        profile: "worker",
-        state: "completed" as const,
-        queuedAt: now - 120_000,
-        workspaceId: `workspace-${10 + index}`,
-      },
-      site === "ledger" ? {} : { unchanged: true as const },
-    ),
-  ),
-  result: {
-    text: "Migrated 1 of 4 call sites; the rest already used the new API.",
-    clipped: false,
-  },
-});
-
-const budgetedWorkflow = workflowRun({
-  id: "wf-mg3k2l-4",
-  name: "fix-findings",
-  budget: { total: 500_000, spent: 512_340, refused: 3 },
-  usage: {
-    ...emptyWorkflowUsage(),
-    input: 8_400_000,
-    output: 512_340,
-    cacheRead: 3_100_000,
-    totalTokens: 12_012_340,
-    cost: 38.4,
-    toolUses: 2_140,
-    unpriced: 1,
-  },
-  agents: [
-    ...workflowRun().agents.slice(0, 2),
-    {
-      callId: 3,
-      runId: "agent-9",
-      label: "fix:session-timeout",
-      phase: "Verify",
-      profile: "worker",
-      state: "queued",
-      queuedAt: now - 30_000,
-      waiting: { kind: "writer", runId: "agent-4", name: "fix:token-refresh", paused: true },
-    },
-    {
-      callId: 4,
-      runId: "agent-10",
-      label: "verify:2",
-      phase: "Verify",
-      profile: "reviewer",
-      state: "queued",
-      queuedAt: now - 20_000,
-      waiting: { kind: "slot" },
-    },
-  ],
-});
-
-const budgetWarning = {
-  at: now - 20_000,
-  level: "warning" as const,
-  message:
-    "The token budget of 500000 output tokens is spent (512340 so far), so agent() calls that haven't started throw a budget error, which yields null inside parallel() and pipeline(); agents already running finish.",
-};
-const budgetFailedWorkflow = workflowRun({
-  id: "wf-mg3k2l-7",
-  name: "fix-findings",
-  state: "failed",
-  endedAt: now,
-  scriptPath: "/home/me/.pi/agent/subagents/workflow-runs/wf-mg3k2l-7/script.js",
-  journalPath: "/home/me/.pi/agent/subagents/workflow-runs/wf-mg3k2l-7/journal.jsonl",
-  budget: { total: 500_000, spent: 512_340, refused: 1 },
-  usage: { ...completedWorkflow.usage, output: 512_340, totalTokens: 9_812_340, cost: 31.2 },
-  agents: workflowRun().agents.map(({ waiting: _waiting, ...agent }) =>
-    agent.state === "queued"
-      ? Object.assign({}, agent, {
-          state: "skipped" as const,
-          reason: WORKFLOW_BUDGET_REASON,
-          endedAt: now,
-        })
-      : Object.assign({}, agent, { state: "completed" as const, endedAt: now }),
-  ),
-  logs: [...workflowRun().logs, budgetWarning],
-  warnings: [budgetWarning],
-  failure: {
-    kind: "script",
-    name: WORKFLOW_BUDGET_ERROR,
-    message:
-      "The workflow's token budget is spent: 512340 of 500000 output tokens. agent() can't start more agents; check budget.remaining() before calling it.",
-    stack: "at <anonymous> (line 9:16)",
-  },
-});
-
-const stuckAgent = (index: number, patch: Partial<WorkflowAgentView> = {}): WorkflowAgentView =>
-  workflowAgentView({
-    callId: index,
-    runId: `agent-s${index}`,
-    label: `migrate:module-${index}`,
-    phase: "Migrate",
-    profile: "worker",
-    state: "completed",
-    queuedAt: now - 40 * 60_000,
-    startedAt: now - 39 * 60_000,
-    endedAt: now - 30 * 60_000,
-    ...patch,
-  });
-const stuckWorkflow = workflowRun({
-  id: "wf-mg3k2l-5",
-  name: "migrate-modules",
-  phases: [{ title: "Migrate" }, { title: "Verify" }],
-  currentPhase: "Migrate",
-  startedAt: now - 40 * 60_000,
-  agents: [
-    ...Array.from({ length: 194 }, (_, index) => stuckAgent(index + 1)),
-    stuckAgent(195, { state: "running", endedAt: undefined, startedAt: now - 20 * 60_000 }),
-    stuckAgent(196, { state: "running", endedAt: undefined, startedAt: now - 15 * 60_000 }),
-    stuckAgent(197, { state: "running", endedAt: undefined, startedAt: now - 38 * 60_000 }),
-    stuckAgent(198, { state: "running", endedAt: undefined, startedAt: now - 12 * 60_000 }),
-    stuckAgent(199, { state: "failed", reason: "Tests failed in src/billing/invoice.ts" }),
-    stuckAgent(200, {
-      state: "queued",
-      startedAt: undefined,
-      endedAt: undefined,
-      waiting: { kind: "writer", runId: "agent-s198", name: "migrate:module-198", paused: true },
-    }),
-  ],
-  logs: [{ at: now - 30 * 60_000, level: "info", message: `${"x".repeat(1_800)} long log line` }],
-  usage: {
-    ...emptyWorkflowUsage(),
-    input: 21_400_000,
-    output: 610_000,
-    cacheRead: 9_800_000,
-    totalTokens: 31_810_000,
-    cost: 41.7,
-    toolUses: 3_880,
-  },
-});
-const stuckAttention: ReadonlyArray<WorkflowAgentAttention> = [
-  {
-    kind: "question",
-    runId: "agent-s197",
-    message: "The billing module has two invoice formats. Should I migrate both or only v2?",
-    writer: true,
-  },
-  { kind: "containment", runId: "agent-s195", writer: true },
-  { kind: "paused", runId: "agent-s196", writer: false, canResume: false },
-  { kind: "paused", runId: "agent-s198", writer: true, canResume: true },
-];
-
-const workflowRuns: ReadonlyArray<WorkflowRunView> = [
-  completedWorkflow,
-  failedWorkflow,
-  runtimeFailedWorkflow,
-];
-
-const runDirectory = "/home/me/.pi/agent/subagents/workflow-runs/wf-mg3k2l-1";
-
-const plannedReviewScript = `export const meta = {
-  name: "review-changes",
-  description: "Review the diff by dimension, then verify each finding",
-  phases: [
-    { title: "Review", agents: ["correctness", "security", { label: "performance", profile: "reviewer" }] },
-    { title: "Verify", agents: ["verifier"] },
-  ],
-};
-const found = await parallel(["correctness", "security", "performance"].map((area) => () =>
-  agent(\`Review the uncommitted diff for \${area} bugs.\`, { label: area, phase: "Review", profile: "reviewer" })));
-phase("Verify");
-return await agent(\`Verify: \${JSON.stringify(found)}\`);`;
-
-const targetedScript = `export const meta = {
-  name: "audit-module",
-  description: "Audit one module for a concern",
-  args: {
-    type: "object",
-    properties: {
-      module: { type: "string" },
-      concern: { enum: ["security", "performance"] },
-      depth: { type: "integer" },
-    },
-    required: ["module", "concern"],
-  },
-};
-return await agent(\`Audit \${args.module} for \${args.concern} issues.\`);`;
-
-const startedRun = (script: WorkflowScript) =>
-  workflowRun({
-    agents: [],
-    logs: [],
-    phases: script.meta.phases ?? [],
-    planned: (script.meta.phases ?? [])
-      .flatMap((phase) => workflowPlannedAgents(phase))
-      .map((agent, index) => Object.assign({}, agent, { runId: `agent-${20 + index}` })),
-    scriptPath: `${runDirectory}/script.js`,
-  });
-
-const recordedWorkflow: WorkflowRecordedRun = {
-  id: "wf-k3c9-2",
-  name: "fix-findings",
-  source: { kind: "inline" },
-  scriptPath: "/home/user/.pi/agent/subagents/workflow-runs/wf-k3c9-2/script.js",
-  state: "interrupted",
-  startedAt: 1_767_225_600_000,
-  finished: 3,
-  journalPath: "/home/user/.pi/agent/subagents/workflow-runs/wf-k3c9-2/journal.jsonl",
-};
-
-const recordedElsewhere: WorkflowRecordedRun = {
-  id: "wf-k3c9-3",
-  name: "fix-findings",
-  source: { kind: "inline" },
-  scriptPath: "/home/user/.pi/agent/subagents/workflow-runs/wf-k3c9-3/script.js",
-  state: "running",
-  runningIn: 48_213,
-  startedAt: now - 12 * 60_000,
-  finished: 1,
-  journalPath: "/home/user/.pi/agent/subagents/workflow-runs/wf-k3c9-3/journal.jsonl",
-};
-
-const galleryWorkflowStatus: WorkflowServiceContract["status"] = (runId) => {
-  if (runId === stuckWorkflow.id)
-    return Effect.succeed<WorkflowStatus>({
-      kind: "view",
-      run: stuckWorkflow,
-      attention: stuckAttention,
-    });
-  const found = [
-    workflowRun(),
-    workflowRun({
-      id: "wf-contract-unavailable",
-      usage: { ...emptyWorkflowUsage(), input: Number.NaN },
-    }),
-    budgetedWorkflow,
-    budgetFailedWorkflow,
-    ...workflowRuns,
-  ].find((run) => run.id === runId);
-  if (found) return Effect.succeed<WorkflowStatus>({ kind: "view", run: found, attention: [] });
-  const recorded = [recordedWorkflow, recordedElsewhere].find((run) => run.id === runId);
-  if (recorded) return Effect.succeed<WorkflowStatus>({ kind: "recorded", run: recorded });
-  return Effect.fail(
-    new WorkflowNotFoundError({ message: `No workflow run ${runId} in this session.` }),
-  );
-};
-
-const repeatedWorkflow = workflowRun({ id: "wf-mg3k2l-9" });
-
-const galleryWorkflows: WorkflowServiceContract = {
-  start: (request) =>
-    request.source.kind === "inline"
-      ? parseWorkflowScript(request.source.script).pipe(
-          Effect.tap((script) => requireWorkflowArgs(script.args, script.meta.name, request.args)),
-          Effect.map((script) => ({
-            ...startedRun(script),
-            ...(request.budget !== undefined && {
-              budget: { total: request.budget, spent: 0, refused: 0 },
-            }),
-          })),
-        )
-      : Effect.succeed(workflowRun({ agents: [], logs: [] })),
-  stop: () => Effect.succeed({ ...stoppedWorkflow, stoppedBy: "tool" }),
-  status: galleryWorkflowStatus,
-  toolStatus: (runId) =>
-    runId === repeatedWorkflow.id
-      ? Effect.succeed<WorkflowToolStatus>({
-          kind: "unchanged",
-          run: repeatedWorkflow,
-          sinceMs: 14_000,
-        })
-      : galleryWorkflowStatus(runId),
-  list: Effect.succeed(workflowRuns),
-  skip: () => Effect.void,
-};
-
-const galleryWorkflowLocations = {
-  project: "/project/.pi/workflows",
-  projectTrusted: true,
-  user: "/home/user/.pi/agent/workflows",
-};
-
-const workflowRuntime: WorkflowToolRuntime = {
-  environment: { cwd: "/project", projectTrusted: true },
-  savedWorkflowLocations: galleryWorkflowLocations,
-  run: (effect) =>
-    Effect.runPromise(
-      effect.pipe(
-        Effect.provideService(WorkflowService, galleryWorkflows),
-        Effect.provideService(WorkflowStore, {
-          load: () => Effect.die(new Error("unused")),
-          loadPath: () => Effect.die(new Error("unused")),
-          createRunFiles: () => Effect.die(new Error("unused")),
-          appendRunJournal: () => Effect.die(new Error("unused")),
-          touchRunFiles: () => Effect.void,
-          writeRunRecord: () => Effect.die(new Error("unused")),
-          readRunRecord: () => Effect.die(new Error("unused")),
-          hasRunFiles: () => Effect.succeed(false),
-          listRunRecords: () => Effect.succeed([]),
-          writeRunResult: () => Effect.die(new Error("unused")),
-          readRunResult: () => Effect.undefined,
-          readRunJournal: () => Effect.succeed([]),
-          locations: Effect.succeed(galleryWorkflowLocations),
-          list: Effect.succeed({
-            workflows: [
-              {
-                name: "review-changes",
-                scope: "project" as const,
-                path: "/project/.pi/workflows/review-changes.js",
-                meta: {
-                  name: "review-changes",
-                  description: "Review the diff by dimension, then verify each finding",
-                  whenToUse: "Before committing a change that touches more than one module",
-                  phases: [{ title: "Review" }, { title: "Verify" }],
-                  args: {
-                    type: "object",
-                    properties: { scope: { type: "string" }, strict: { type: "boolean" } },
-                    required: ["scope"],
-                  },
-                },
-              },
-            ],
-            diagnostics: [
-              {
-                path: "/project/.pi/workflows/draft.js",
-                message: "Invalid meta: missing description",
-              },
-            ],
-            truncated: false,
-            locations: galleryWorkflowLocations,
-          }),
-        }),
-        Effect.provideService(SubagentProfileService, fallbackProfileService),
-        Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
-      ),
-    ),
-};
-
-const workflowScenarios = Effect.gen(function* () {
-  const [tool] = captureRegistrations((pi) => registerWorkflowTool(pi, workflowRuntime)).tools;
-  const executeWorkflow = (
-    title: string,
-    args: Partial<WorkflowToolArgs>,
-  ): Effect.Effect<ToolScenario> =>
-    Effect.promise(() => tool!.execute("call", args, undefined, undefined, context)).pipe(
-      Effect.map((result) => ({
-        tool: "subagent_workflow",
-        title,
-        args,
-        result,
-        ...(result.isError === true && { isError: true }),
-      })),
-    );
-  return [
-    yield* executeWorkflow("start an inline script", {
-      action: "start",
-      script: reviewScript,
-      args: { scope: "src/auth" },
-    }),
-    yield* executeWorkflow("start a script that declares its agents", {
-      action: "start",
-      script: plannedReviewScript,
-      args: { scope: "src/auth" },
-    }),
-    yield* executeWorkflow("script without meta is rejected", {
-      action: "start",
-      script: "return 1;",
-    }),
-    yield* executeWorkflow("start with args that don't match the script's meta.args", {
-      action: "start",
-      script: targetedScript,
-      args: { module: "src/auth", concern: "style" },
-    }),
-    yield* executeWorkflow("script with a syntax error is rejected", {
-      action: "start",
-      script: 'export const meta = { name: "broken", description: "d" };\nconst x: number = 1;',
-    }),
-    yield* executeWorkflow("status while agents run", {
-      action: "status",
-      runId: workflowRun().id,
-    }),
-    yield* executeWorkflow("status past its token budget, agents waiting", {
-      action: "status",
-      runId: budgetedWorkflow.id,
-    }),
-    yield* executeWorkflow("status repeated within a minute while nothing changed", {
-      action: "status",
-      runId: repeatedWorkflow.id,
-    }),
-    yield* executeWorkflow("status of a stuck fan-out that needs the user", {
-      action: "status",
-      runId: stuckWorkflow.id,
-    }),
-    yield* executeWorkflow("start with a token budget", {
-      action: "start",
-      script: reviewScript,
-      budget: 500_000,
-    }),
-    yield* executeWorkflow("status after completion", {
-      action: "status",
-      runId: completedWorkflow.id,
-    }),
-    yield* executeWorkflow("status after a script error", {
-      action: "status",
-      runId: failedWorkflow.id,
-    }),
-    yield* executeWorkflow("status after a runtime dependency failure", {
-      action: "status",
-      runId: runtimeFailedWorkflow.id,
-    }),
-    yield* executeWorkflow(
-      "status after its token budget was spent and the script didn't catch it",
-      {
-        action: "status",
-        runId: budgetFailedWorkflow.id,
-      },
-    ),
-    yield* executeWorkflow("status of a run from before a Pi restart", {
-      action: "status",
-      runId: recordedWorkflow.id,
-    }),
-    yield* executeWorkflow("status of a run another Pi process runs", {
-      action: "status",
-      runId: recordedElsewhere.id,
-    }),
-    yield* executeWorkflow("status receipt retained when structured encoding fails", {
-      action: "status",
-      runId: "wf-contract-unavailable",
-    }),
-    yield* executeWorkflow("unknown run", { action: "status", runId: "wf-old-3" }),
-    yield* executeWorkflow("stop", { action: "stop", runId: "wf-mg3k2l-1" }),
-    yield* executeWorkflow("list saved workflows and runs", { action: "list" }),
-  ];
-});
-
 type SentMessage = Pick<GalleryMessage, "customType" | "content" | "display" | "details">;
 
-const notified = (
-  title: string,
-  notification: SubagentNotification | SubagentWorkflowNotification,
-) => {
+const notified = (title: string, notification: SubagentNotification) => {
   const messages: GalleryMessage[] = [];
   makeHostNotifier(
     extensionApiFixture({
@@ -1721,98 +1040,6 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
       completion(migrationReview),
     ],
   }),
-  ...notified("workflow completed", workflowNotification(completedWorkflow)!),
-  ...notified(
-    "workflow completed with a results journal",
-    workflowNotification({
-      ...completedWorkflow,
-      scriptPath: `${runDirectory}/script.js`,
-      journalPath: `${runDirectory}/journal.jsonl`,
-      planned: [{ runId: "agent-23", phase: "Verify", label: "verifier" }],
-    })!,
-  ),
-  ...notified(
-    "workflow script failed with a saved script",
-    workflowNotification({
-      ...failedWorkflow,
-      scriptPath: `${runDirectory}/script.js`,
-      journalPath: `${runDirectory}/journal.jsonl`,
-    })!,
-  ),
-  ...notified("resumed workflow with a worktree proposal", workflowNotification(writerWorkflow)!),
-  ...notified(
-    "workflow whose worktree writers mostly made no changes",
-    workflowNotification(migrateWorkflow)!,
-  ),
-  ...notified(
-    "workflow completed over its token budget",
-    workflowNotification({
-      ...completedWorkflow,
-      budget: { total: 500_000, spent: 512_340, refused: 3 },
-      usage: { ...completedWorkflow.usage, output: 512_340, totalTokens: 9_812_340, cost: 31.2 },
-    })!,
-  ),
-  ...notified("workflow script failed", workflowNotification(failedWorkflow)!),
-  ...notified("workflow runtime failed", workflowNotification(runtimeFailedWorkflow)!),
-  ...notified(
-    "workflow failed when its token budget was spent",
-    workflowNotification(budgetFailedWorkflow)!,
-  ),
-  ...notified("workflow stopped", workflowNotification(stoppedWorkflow)!),
-  ...notified(
-    "workflow stopped by the user",
-    workflowNotification({ ...stoppedWorkflow, stoppedBy: "user" })!,
-  ),
-  ...notified(
-    "workflow interrupted while it was stopping",
-    interruptedWorkflowNotification({
-      runId: "wf-k3c9-3",
-      name: "review-changes",
-      finished: 2,
-      workspaces: [],
-      stopped: true,
-      origin: { source: { kind: "inline" } },
-    }),
-  ),
-  ...notified(
-    "workflow interrupted by a reload",
-    interruptedWorkflowNotification({
-      runId: "wf-k3c9-2",
-      name: "fix-findings",
-      finished: 3,
-      workspaces: ["ws-7f2a"],
-      origin: { source: { kind: "inline" } },
-    }),
-  ),
-  ...notified(
-    "workflow interrupted before a Pi restart",
-    interruptedWorkflowNotification({
-      runId: "wf-k3c9-2",
-      name: "fix-findings",
-      finished: 3,
-      workspaces: ["ws-7f2a"],
-      origin: {
-        source: { kind: "inline" },
-        scriptPath: recordedWorkflow.scriptPath,
-      },
-      restarted: true,
-    }),
-  ),
-  ...notified(
-    "workflow whose report Pi never accepted before a restart",
-    interruptedWorkflowNotification({
-      runId: "wf-k3c9-4",
-      name: "review-changes",
-      finished: 4,
-      workspaces: [],
-      ended: "completed",
-      origin: {
-        source: { kind: "inline" },
-        scriptPath: recordedWorkflow.scriptPath,
-      },
-      restarted: true,
-    }),
-  ),
   ...notified("worker needs a reply", {
     type: "question",
     id: dbMigration.id,
@@ -1845,104 +1072,6 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
   },
 ];
 
-const member = (agent: WorkflowAgentView, overrides: Partial<SubagentRunView> = {}) =>
-  view({
-    id: agent.runId,
-    name: agent.label,
-    task: `Verify the finding: ${agent.label}`,
-    profile: "reviewer",
-    workflow: { workflowId: "wf-mg3k2l-1", name: "review-changes", phase: agent.phase },
-    ...timing(3),
-    ...overrides,
-  });
-
-const [correctness, security] = workflowRun().agents;
-const correctnessRun = member(correctness!, {
-  state: "completed",
-  finalText:
-    "Two findings:\n\n- src/auth/session.ts:118 swallows a refresh timeout\n- src/auth/token.ts:40 logs the raw token",
-  sessionEvents: [
-    {
-      type: "tool",
-      toolCallId: "t1",
-      toolName: "read",
-      target: "src/auth/session.ts",
-      state: "completed",
-      startedAt: now - 170_000,
-      endedAt: now - 169_000,
-    },
-    {
-      type: "tool",
-      toolCallId: "t2",
-      toolName: "grep",
-      target: "refreshToken",
-      state: "completed",
-      startedAt: now - 120_000,
-      endedAt: now - 119_000,
-    },
-  ],
-  usage: usage(84_200, 0.61),
-  toolUses: 14,
-  ...timing(3, 1),
-});
-const securityRun = member(security!, {
-  progress: "Reading src/auth/token.ts",
-  currentTool: "read",
-});
-const queuedVerifier: WorkflowAgentView = {
-  callId: 4,
-  runId: "agent-10",
-  label: "verify:2",
-  phase: "Verify",
-  profile: "reviewer",
-  state: "queued",
-  queuedAt: now - 20_000,
-  waiting: { kind: "slot" },
-};
-const couldNotStart = {
-  callId: 3,
-  runId: "agent-9",
-  label: "verify:1",
-  phase: "Verify",
-  profile: "reviewer",
-  state: "failed",
-  queuedAt: now - 30_000,
-  endedAt: now - 25_000,
-  reason:
-    "couldn't start: No eligible route for profile reviewer: every candidate is over its rate limit",
-} satisfies WorkflowAgentView;
-const skippedWhileQueued: WorkflowAgentView = {
-  ...couldNotStart,
-  state: "skipped",
-  reason: "skipped by the user",
-};
-const failedMemberAgent: WorkflowAgentView = {
-  ...security!,
-  state: "failed",
-  endedAt: now - 10_000,
-  reason: "Error: 429 Too Many Requests: rate limit exceeded",
-};
-const failedMemberRun = member(failedMemberAgent, {
-  state: "failed",
-  error: "Error: 429 Too Many Requests: rate limit exceeded\n    at Client.request",
-  ...timing(3, 0.2),
-});
-
-const reviewWorkflow = (
-  agents: ReadonlyArray<WorkflowAgentView>,
-  patch: Partial<WorkflowRunView> = {},
-): WorkflowRunView =>
-  workflowRun({
-    currentPhase: "Verify",
-    agents: [correctness!, security!, ...agents],
-    ...patch,
-  });
-
-const workParts = (phase: ActivityPhase): string =>
-  phase.work
-    ? `${phase.work.finished}/${phase.work.items} finished, ${phase.work.stopped} stopped, ${phase.work.failed ?? 0} failed, ${phase.work.skipped ?? 0} skipped`
-    : "no work count";
-
 const activityRowLine = (item: ActivityItem): string => {
   const status = item.skipped ? `${item.status} (skipped)` : item.status;
   const head = [status, item.kind, item.title, item.phase, item.profile, item.summary]
@@ -1951,132 +1080,75 @@ const activityRowLine = (item: ActivityItem): string => {
   const actions = item.actions?.length
     ? `  [${item.actions.map((action) => action.label).join(", ")}]`
     : "";
-  const phases = (item.phases ?? []).map(
-    (phase) => `    phase ${phase.title}: ${workParts(phase)}`,
-  );
-  return [`${item.parent ? "  " : ""}${head}${actions}`, ...phases].join("\n");
+  return `${item.parent ? "  " : ""}${head}${actions}`;
 };
 
 interface ActivityScenario {
   readonly title: string;
   readonly runs: ReadonlyArray<SubagentRunView>;
-  readonly workflows: ReadonlyArray<WorkflowRunView>;
   readonly details: ReadonlyArray<string>;
 }
 
-const budgetRefused = (index: number): WorkflowAgentView => ({
-  ...couldNotStart,
-  callId: 10 + index,
-  runId: `agent-${40 + index}`,
-  label: `verify:${index}`,
-  state: "skipped",
-  endedAt: now - 15_000,
-  reason: WORKFLOW_BUDGET_REASON,
+const worktreeProposal = view({
+  id: "agent-10",
+  name: "refresh-fix",
+  profile: "worker",
+  writeIntent: "writer",
+  writerWorkspaceMode: "worktree",
+  workspaceId: "ws-1",
+  state: "completed",
+  finalText: "Fixed the refresh timeout; changes are ready for parent review.",
+  usage: usage(105_000, 0.82),
+  ...timing(5, 1),
 });
 
 const activityScenarios: ReadonlyArray<ActivityScenario> = [
   {
-    title: "a workflow being stopped by the user",
-    runs: [correctnessRun, { ...securityRun, state: "stopping" }],
-    workflows: [reviewWorkflow([queuedVerifier], { state: "stopping", stoppedBy: "user" })],
-    details: ["workflow:wf-mg3k2l-1", securityRun.id],
+    title: "active agents with descendants and completed reports",
+    runs: [authReview, docsSweep, apiAudit, schemaCheck],
+    details: [authReview.id, docsSweep.id, schemaCheck.id],
   },
   {
-    title: "agents the token budget refused",
-    runs: [correctnessRun, securityRun],
-    workflows: [
-      reviewWorkflow([budgetRefused(1), budgetRefused(2)], {
-        budget: { total: 200_000, spent: 212_340, refused: 2 },
-      }),
+    title: "a writer question and file-claim recovery",
+    runs: [dbMigration, apiWriter],
+    details: [dbMigration.id, apiWriter.id],
+  },
+  {
+    title: "failed and completed native agents",
+    runs: [migrationReview, apiAudit],
+    details: [migrationReview.id, apiAudit.id],
+  },
+  {
+    title: "a completed worktree writer proposal",
+    runs: [worktreeProposal],
+    details: [worktreeProposal.id],
+  },
+  {
+    title: "a subtree being stopped",
+    runs: [
+      { ...authReview, state: "stopping" },
+      { ...schemaCheck, state: "stopping" },
     ],
-    details: [budgetRefused(1).runId],
-  },
-  {
-    title: "a call that couldn't start keeps a failed row",
-    runs: [correctnessRun, securityRun],
-    workflows: [reviewWorkflow([couldNotStart, queuedVerifier])],
-    details: [couldNotStart.runId],
-  },
-  {
-    title: "an agent skipped while queued keeps a skipped row",
-    runs: [correctnessRun, securityRun],
-    workflows: [reviewWorkflow([skippedWhileQueued, queuedVerifier])],
-    details: [skippedWhileQueued.runId],
-  },
-  {
-    title: "a planned agent skipped before it started",
-    runs: [correctnessRun, securityRun],
-    workflows: [
-      reviewWorkflow([queuedVerifier], {
-        planned: [
-          { runId: "agent-11", phase: "Verify", label: "verify:3", skippedAt: now - 12_000 },
-          { runId: "agent-12", phase: "Verify", label: "verify:4", profile: "reviewer" },
-        ],
-      }),
-    ],
-    details: ["agent-11", "agent-12"],
-  },
-  {
-    title: "a member that failed in a live workflow",
-    runs: [correctnessRun, failedMemberRun],
-    workflows: [
-      workflowRun({
-        currentPhase: "Verify",
-        agents: [correctness!, failedMemberAgent, queuedVerifier],
-      }),
-    ],
-    details: [failedMemberRun.id],
-  },
-  {
-    title: "a workflow agent's detail",
-    runs: [correctnessRun, securityRun],
-    workflows: [reviewWorkflow([queuedVerifier])],
-    details: [correctnessRun.id, securityRun.id],
-  },
-  {
-    title: "a workflow's detail with failures, files and a budget",
-    runs: [correctnessRun, failedMemberRun],
-    workflows: [
-      workflowRun({
-        currentPhase: "Verify",
-        agents: [correctness!, failedMemberAgent, couldNotStart, queuedVerifier],
-        scriptPath: `${runDirectory}/script.js`,
-        journalPath: `${runDirectory}/journal.jsonl`,
-        budget: { total: 500_000, spent: 212_340, refused: 0 },
-        lastLog: "verifying 2 findings",
-        logs: [
-          { at: now - 60_000, level: "info", message: "correctness review found 2 findings" },
-          {
-            at: now - 25_000,
-            level: "warning",
-            message: `agent "verify:1" failed: ${couldNotStart.reason}`,
-          },
-          { at: now - 20_000, level: "info", message: "verifying 2 findings" },
-        ],
-      }),
-    ],
-    details: ["workflow:wf-mg3k2l-1"],
+    details: [authReview.id, schemaCheck.id],
   },
 ];
 
 const activityLines = (): ReadonlyArray<string> =>
   activityScenarios.flatMap((activity) => {
     const projection = { revision: 1, runs: activity.runs };
-    const workflows = { runs: activity.workflows };
-    const items = subagentActivityItems(projection, undefined, workflows);
+    const items = subagentActivityItems(projection);
     const gallery = {
       title: activity.title,
       providerId: "pi-subagents",
       items,
-      detail: (id: string) => subagentActivityDetail(projection, id, workflows, now),
+      detail: (id: string) => subagentActivityDetail(projection, id),
       now,
     };
-    const opened = new Set([`workflow:${activity.workflows[0]?.id ?? ""}`, ...activity.details]);
     return [`── activity · ${activity.title} · published rows`].concat(
       items.map(activityRowLine),
       [""],
       activityGalleryFrames({ ...gallery, widths: [60, 80, 100], maxRows: [8] }),
-      activityGalleryFrames({ ...gallery, widths: [80], maxRows: [3], open: [...opened] }),
+      activityGalleryFrames({ ...gallery, widths: [80], maxRows: [3], open: activity.details }),
     );
   });
 
@@ -2096,9 +1168,8 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...(yield* lifecycleScenarios),
         ...(yield* claimsScenarios),
         ...(yield* workspaceScenarios),
-        ...(yield* workflowScenarios),
       ];
-      const scenarios = [...executed, ...receiptScenarios, ...parentScenarios, ...resultScenarios];
+      const scenarios = [...executed, ...receiptScenarios, ...parentScenarios];
       const lines: string[] = [];
       for (const style of ["compact", "preview"] as const) {
         const restore = applyPresentationSettings({
@@ -2108,9 +1179,8 @@ describe.skipIf(!directory)("presentation gallery", () => {
         try {
           const registered = captureRegistrations((pi) => {
             registerSubagentTools(pi, runtime);
-            registerWorkflowTool(pi, workflowRuntime);
           });
-          const tools = [...registered.tools, contactParentTool(), resultTool()];
+          const tools = [...registered.tools, contactParentTool()];
           for (const { tool, ...entry } of scenarios)
             lines.push(
               ...galleryFrames(tools.find((definition) => definition.name === tool)!, {

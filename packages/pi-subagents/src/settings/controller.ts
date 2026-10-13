@@ -23,7 +23,6 @@ import type {
   SubagentCreateProfileSetFromSnapshotPatch,
   SubagentDefaultProfileSetPatch,
   SubagentDeleteProfileSetPatch,
-  SubagentFeatureTogglePatch,
   SubagentNestingPatch,
   SubagentProfilePatch,
   SubagentProfileRestorePatch,
@@ -31,7 +30,6 @@ import type {
 } from "../config/store.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import type {
-  SessionFeaturePatch,
   SessionNestingPatch,
   SessionProfilePatch,
   SessionProfileSetPatch,
@@ -88,8 +86,6 @@ export interface FleetManagerActions {
   readonly renameProfileSet: (patch: SubagentRenameProfileSetPatch) => Promise<void>;
   readonly deleteProfileSet: (patch: SubagentDeleteProfileSetPatch) => Promise<void>;
   readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
-  readonly patchFeatureToggle: (patch: SubagentFeatureTogglePatch) => Promise<void>;
-  readonly patchSessionFeatureToggle: (patch: SessionFeaturePatch) => Promise<void>;
   readonly inspectWriterWorkspace: () => Promise<WriterWorkspaceInspection>;
   readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;
   readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<SessionProfileSnapshot>;

@@ -38,7 +38,6 @@ import {
   tomlString,
   writeExclusive,
 } from "./harness-shared.ts";
-import type { ResultContract } from "../domain/result-contract.ts";
 import { makeSupervisorRpcServerProtocol } from "./supervisor-rpc-protocol.ts";
 import { channelError, type SupervisorChannelError } from "./supervisor-channel-errors.ts";
 import {
@@ -91,7 +90,6 @@ export interface SupervisorChannelContract {
 
 export interface SupervisorChannelOpenRequest {
   readonly runId: string;
-  readonly resultContract?: ResultContract | undefined;
 }
 
 export interface SupervisorChannelLayerOptions {
@@ -275,7 +273,6 @@ const acquireNodeChannelEffect = (
   options: SupervisorChannelLayerOptions,
   runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
-  resultContract: ResultContract | undefined,
 ): Effect.Effect<
   {
     readonly handle: SupervisorChannelHandle;
@@ -346,7 +343,6 @@ const acquireNodeChannelEffect = (
           runId,
           verifyToken,
           events,
-          resultContract,
         });
         const close = Effect.gen(function* () {
           yield* session.shutdown;
@@ -431,7 +427,7 @@ export const makeSupervisorChannel = (
     const runId: SupervisorRunId = request.runId;
     const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
     const { handle } = yield* Effect.acquireRelease(
-      acquireNodeChannelEffect(options, runId, events, request.resultContract),
+      acquireNodeChannelEffect(options, runId, events),
       ({ close }) => close.pipe(Effect.orDie),
       { interruptible: true },
     );

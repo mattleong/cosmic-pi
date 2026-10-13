@@ -8,7 +8,6 @@ import type { SubagentRunView } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProxyExecution } from "./proxy-execution.ts";
 import type { RunSettlement } from "./settlement.ts";
-import type { RunStructuredResults } from "./structured-result.ts";
 import {
   bashCommandMayMutate,
   decodeToolArguments,
@@ -34,7 +33,6 @@ import {
   sanitizeDiagnosticText,
   sanitizeOutputText,
 } from "./state.ts";
-import { SUBAGENT_RESULT_TOOL_NAME } from "./tool-policy.ts";
 import { recordRunWarning } from "./warnings.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
@@ -44,12 +42,11 @@ export interface RunEventDependencies {
   readonly queueQuestionLocked: RunNotificationDelivery["queueActionNotificationLocked"];
   readonly onWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
   readonly onProxyEvent: RunProxyExecution;
-  readonly onStructuredResult: RunStructuredResults;
 }
 
 type HandledBackendEvent = Exclude<
   BackendEvent,
-  { readonly type: "usage" | "proxy_request" | "proxy_cancel" | "structured_result" }
+  { readonly type: "usage" | "proxy_request" | "proxy_cancel" }
 >;
 
 const DELEGATED_EVENT_TYPES = [
@@ -75,13 +72,7 @@ const isDelegatedEvent = (event: HandledBackendEvent): event is DelegatedBackend
   DELEGATED_EVENT_TYPES.some((type) => type === event.type);
 
 export function makeRunEventHandler(dependencies: RunEventDependencies) {
-  const {
-    settlement,
-    queueQuestionLocked,
-    onWriteClaimViolation,
-    onProxyEvent,
-    onStructuredResult,
-  } = dependencies;
+  const { settlement, queueQuestionLocked, onWriteClaimViolation, onProxyEvent } = dependencies;
 
   const mutateAt = (
     record: RunRecord,
@@ -123,7 +114,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         name: current.name,
         requestId: envelope.requestId,
         message,
-        ...(current.workflow && record.owner?.live && { workflow: current.workflow }),
       });
       return {
         ...current,
@@ -218,10 +208,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             ? recordRunWarning(record, sessionEvents, "system", violationMessage, now)
             : { sessionEvents }),
           currentTool: [...record.activeTools.values()].at(-1),
-          toolUses:
-            event.toolName === SUBAGENT_RESULT_TOOL_NAME
-              ? current.toolUses
-              : Math.min(Number.MAX_SAFE_INTEGER, (current.toolUses ?? 0) + 1),
+          toolUses: Math.min(Number.MAX_SAFE_INTEGER, (current.toolUses ?? 0) + 1),
           lastActivityAt: now,
         };
       }).pipe(
@@ -406,7 +393,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       return settlement.mergeProcessUsage(record, source, event.usage).pipe(Effect.asVoid);
     if (event.type === "proxy_request" || event.type === "proxy_cancel")
       return onProxyEvent(record, event).pipe(Effect.asVoid);
-    if (event.type === "structured_result") return onStructuredResult(record, event);
     return handleEvent(record, event).pipe(Effect.asVoid);
   };
 }

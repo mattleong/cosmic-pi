@@ -17,7 +17,6 @@ import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import {
   PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
-  SUBAGENT_RESULT_TOOL_NAME,
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import { processCauseError as processError, type SubagentProcessError } from "../run/errors.ts";
@@ -31,8 +30,6 @@ import {
 import { nodeErrorCode } from "./harness-shared.ts";
 import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
 import {
-  LOCAL_PI_RESULT_CONTRACT_FLAG,
-  LocalPiResultContractDocument,
   type LocalPiContact,
   type LocalPiParentControl,
   type RpcCommand,
@@ -112,36 +109,10 @@ const reclaimChildRunState = (
     );
   });
 
-export const childToolPolicy = (rootActiveTools: ReadonlyArray<string>, returnsResult = false) => ({
-  enabled: [
-    ...new Set([
-      ...rootActiveTools,
-      "contact_parent",
-      ...SUBAGENT_TOOL_NAMES,
-      ...(returnsResult ? [SUBAGENT_RESULT_TOOL_NAME] : []),
-    ]),
-  ],
+export const childToolPolicy = (rootActiveTools: ReadonlyArray<string>) => ({
+  enabled: [...new Set([...rootActiveTools, "contact_parent", ...SUBAGENT_TOOL_NAMES])],
   excluded: PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
 });
-
-const encodeResultContractDocument = Schema.encodeEffect(
-  Schema.fromJsonString(LocalPiResultContractDocument),
-);
-
-const writeResultContract = (request: ChildLaunchRequest, runDir: string) =>
-  Effect.gen(function* () {
-    const contract = request.resultContract;
-    if (!contract) return [];
-    const path = nodePath.join(runDir, "result-schema.json");
-    const source = yield* encodeResultContractDocument({
-      parameters: contract.parameters,
-      strictSafe: contract.strictSafe,
-    }).pipe(Effect.mapError((error) => processError("encode subagent result schema", error)));
-    yield* fileStep("write subagent result schema", () =>
-      writeFile(path, source, { encoding: "utf8", mode: 0o600 }),
-    );
-    return [`--${LOCAL_PI_RESULT_CONTRACT_FLAG}`, path];
-  });
 
 export const requestCooperativeAbort = (
   send: (command: RpcCommand) => Effect.Effect<void, SubagentProcessError>,
@@ -277,14 +248,13 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   yield* fileStep("write subagent system prompt", () =>
     writeFile(promptPath, request.systemPrompt, { encoding: "utf8", mode: 0o600 }),
   );
-  const resultContractArgs = yield* writeResultContract(request, runDir);
   const sessionFile =
     request.resumeSessionFile === undefined && request.context === "fork"
       ? yield* createForkedSession(request, runDir)
       : undefined;
 
   const cliEntry = nodePath.join(getPackageDir(), "dist", "bundle", "cli.js");
-  const toolPolicy = childToolPolicy(request.activeTools, request.resultContract !== undefined);
+  const toolPolicy = childToolPolicy(request.activeTools);
   const cliArgs = [
     "--mode",
     "rpc",
@@ -293,7 +263,6 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
     "--thinking",
     request.effort,
     ...(request.openaiFastMode ? ["--pi-subagents-fast-mode"] : []),
-    ...resultContractArgs,
     "--tools",
     toolPolicy.enabled.join(","),
     "--exclude-tools",

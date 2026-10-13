@@ -7,11 +7,7 @@ import {
   requestCooperativeAbort,
   safeSubagentDirectorySegment,
 } from "../src/boundary/child-process.ts";
-import {
-  piRootActiveToolSnapshot,
-  SUBAGENT_RESULT_TOOL_NAME,
-  SUBAGENT_TOOL_NAMES,
-} from "../src/run/tool-policy.ts";
+import { piRootActiveToolSnapshot, SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 
 describe("subagent child process boundary", () => {
   it("keeps untrusted session identifiers inside one directory segment", () => {
@@ -58,8 +54,6 @@ describe("subagent child process boundary", () => {
         "workflow_control",
       ]);
       expect(policy.excluded).not.toContain("subagent_");
-      expect(policy.enabled).not.toContain(SUBAGENT_RESULT_TOOL_NAME);
-      expect(childToolPolicy(snapshot, true).enabled).toContain(SUBAGENT_RESULT_TOOL_NAME);
     }),
   );
 

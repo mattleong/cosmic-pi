@@ -28,11 +28,6 @@ const SAMPLES = [
     args: { agents: [{ task: "COMPLETE_TASK_INPUT", profile: "scout" }] },
     evidence: ["COMPLETE_TASK_INPUT", "COMPLETE_OUTPUT recovery /tmp/evidence.txt"],
   },
-  {
-    name: "subagent_workflow",
-    args: { action: "start", script: "return 'COMPLETE_SCRIPT_INPUT';" },
-    evidence: ["COMPLETE_SCRIPT_INPUT", "COMPLETE_OUTPUT recovery /tmp/evidence.txt"],
-  },
 ] as const;
 type Sample = (typeof SAMPLES)[number];
 
@@ -109,7 +104,6 @@ describe("subagent tool history replay", () => {
       const retired = SAMPLES.map((sample) => ({ sample, row: app.coldRow(sample) }));
       yield* app.emit("session_start", { type: "session_start", reason: "startup" });
       expect(app.host.active()).toContain("subagent_start");
-      expect(app.host.active()).not.toContain("subagent_workflow");
       const first = new Map(SAMPLES.map((sample) => [sample, app.registeredFrames(sample)]));
       for (const { sample, row, cold } of drawn) {
         const adopted = frames(row, sample);
@@ -121,7 +115,6 @@ describe("subagent tool history replay", () => {
 
       treeStyle = true;
       yield* app.emit("session_tree");
-      expect(app.host.active()).not.toContain("subagent_workflow");
       for (const { sample, row } of [...drawn, ...lazy]) {
         expect(app.registeredFrames(sample)).not.toEqual(first.get(sample));
         expect(frames(row, sample)).toEqual(first.get(sample));

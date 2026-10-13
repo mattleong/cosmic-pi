@@ -16,19 +16,10 @@ import {
   MIN_SUBAGENT_DEPTH,
   WRITER_WORKSPACE_MODES,
   WriterWorkspaceModeSchema,
-  isSubagentFeatureToggle,
-  type SubagentFeatureToggle,
   type SubagentNestingPolicy,
 } from "../config/schema.ts";
 import type { WriterWorkspaceBlockCode } from "../run/workspace-control.ts";
 import type { FleetManagerActions } from "./controller.ts";
-import {
-  FEATURE_VALUES,
-  INHERIT,
-  featureToggleDescriptors,
-  featureToggleItems,
-  featureToggleStatusLines,
-} from "./feature-settings.ts";
 import {
   SCOPE_LABELS,
   type ProfileSettingsInspection,
@@ -43,6 +34,7 @@ type SettingsResult = Result.Result<
 type NestingField = keyof SubagentNestingPolicy;
 
 const WORKSPACE = "writerWorkspace";
+const INHERIT = "inherit";
 
 interface NestingFieldInfo {
   readonly label: string;
@@ -74,9 +66,9 @@ const isNestingField = (id: string): id is NestingField => Object.hasOwn(NESTING
 const NESTING_FIELD_IDS = Object.keys(NESTING_FIELDS).filter(isNestingField);
 
 const SCOPES = [
-  { name: "session", description: "Change features and nesting limits for this session only" },
-  { name: "global", description: "Change features and nesting limits for new sessions everywhere" },
-  { name: "project", description: "Change features and nesting limits for this trusted project" },
+  { name: "session", description: "Change nesting limits for this session only" },
+  { name: "global", description: "Change nesting limits for new sessions everywhere" },
+  { name: "project", description: "Change nesting limits for this trusted project" },
 ] as const;
 
 const UNTRUSTED = "Trust this project before changing its subagent settings";
@@ -209,21 +201,6 @@ function subagentSettingsCommand(
         }),
     );
 
-  const applyFeatureToggle = (
-    ctx: ExtensionCommandContext,
-    toggle: SubagentFeatureToggle,
-    value: string,
-    scope: ProfileSettingsScope,
-  ): Promise<SettingsResult> => {
-    if (!FEATURE_VALUES.includes(value))
-      return Promise.resolve(failed(`${toggle} must be true, false, or ${INHERIT}`));
-    const enabled = value === INHERIT ? {} : { enabled: value === "true" };
-    return saveToScope(ctx, scope, `save ${toggle}`, () => ({ toggle, ...enabled }), {
-      session: actions.patchSessionFeatureToggle,
-      saved: actions.patchFeatureToggle,
-    });
-  };
-
   const applyNesting = (
     ctx: ExtensionCommandContext,
     field: NestingField,
@@ -273,7 +250,6 @@ function subagentSettingsCommand(
           `  maxDirectChildren = ${effective.maxDirectChildren}, maxDepth = ${effective.maxDepth} (in effect)`,
           "Nesting limits by scope:",
           ...scopes.map(scopeLine),
-          ...featureToggleStatusLines(inspection, scopes),
         ].join("\n");
       },
     );
@@ -297,7 +273,6 @@ function subagentSettingsCommand(
             currentValue: workspace.mode,
             values: [...WRITER_WORKSPACE_MODES],
           },
-          ...featureToggleItems(inspection, scopes),
           ...scopes.flatMap((scope) =>
             NESTING_FIELD_IDS.map((field) => {
               const own = scopeNesting(inspection, scope);
@@ -325,7 +300,6 @@ function subagentSettingsCommand(
     scope: ProfileSettingsScope,
   ): Promise<SettingsResult> => {
     if (id === WORKSPACE) return applyWorkspace(value);
-    if (isSubagentFeatureToggle(id)) return applyFeatureToggle(ctx, id, value, scope);
     if (!isNestingField(id)) return Promise.resolve(failed(`Unknown setting: ${id}`));
     return applyNesting(ctx, id, value, scope);
   };
@@ -333,7 +307,7 @@ function subagentSettingsCommand(
   return settingsSubcommand<undefined>({
     root: "subagents",
     isCurrent,
-    description: "Configure the writer workspace, subagent features, and nesting limits",
+    description: "Configure the writer workspace and nesting limits",
     title: "Subagents",
     descriptors: [
       {
@@ -342,7 +316,6 @@ function subagentSettingsCommand(
         values: [...WRITER_WORKSPACE_MODES],
         currentValue: () => "",
       },
-      ...featureToggleDescriptors,
       ...NESTING_FIELD_IDS.map((field) => ({
         id: field,
         description: NESTING_FIELDS[field].description,
@@ -353,14 +326,11 @@ function subagentSettingsCommand(
     ],
     examples: [
       "writerWorkspace worktree",
-      "ultracode true",
-      "global ultracode true",
-      "project ultracode inherit",
       "global maxDepth 2",
       "session maxDirectChildren inherit",
     ],
     notes: () => [
-      "Feature switches and nesting limits apply to the named scope, session by default. Session",
+      "Nesting limits apply to the named scope, session by default. Session",
       `changes apply now; global and project changes after /reload, and project wins. ${INHERIT}`,
       "clears a scope's own value. The writer workspace applies to new sessions and ignores the scope.",
     ],

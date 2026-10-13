@@ -91,7 +91,6 @@ export const initialRunView = (
     workspaceId: request.workspace.workspaceId,
     sourceCwd: request.workspace.sourceCwd,
   }),
-  ...(request.workflow && { workflow: request.workflow }),
   state: "starting",
   context: request.context,
   writeIntent: request.writeIntent,
@@ -137,7 +136,6 @@ export const backendLaunchRequest = (
   ...(request.parentSessionFile && { parentSessionFile: request.parentSessionFile }),
   ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
   systemPrompt: childSystemPrompt(withWriteClaims(request, writeClaims)),
-  ...(request.resultContract && { resultContract: request.resultContract }),
 });
 
 export const isEvictionEligible = (

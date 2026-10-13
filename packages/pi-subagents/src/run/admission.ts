@@ -27,16 +27,11 @@ const ownsWriterSlot = (record: RunRecord): boolean =>
   record.view.writeIntent === "writer" &&
   (record.cleanupPending || isActiveRunState(record.view.state));
 
-export const workflowOwned = (record: RunRecord): boolean =>
-  record.view.workflow !== undefined && record.owner?.live === true;
-
 const holdsChildSlot = (record: RunRecord, parentRunId: string): boolean => {
   const claim = record.evictionClaim;
   if (claim) return claim.parentRunId === parentRunId;
   return (
-    (record.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === parentRunId &&
-    !workflowOwned(record) &&
-    ownsProcessSlot(record)
+    (record.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === parentRunId && ownsProcessSlot(record)
   );
 };
 
@@ -158,30 +153,4 @@ const writerConflict = (
         : `${writer} already claims ${conflict.right ?? "the requested file"}.`,
     transient: true,
   };
-};
-
-const claimHoldings = (record: RunRecord): ReadonlyArray<string> =>
-  ownsWriterSlot(record) || record.retryClaim
-    ? (record.view.writeClaims ?? ["<exclusive>"]).map(
-        (claim) => `claim:${record.view.id}:${claim}`,
-      )
-    : [];
-
-export const writerConflictHoldings = (
-  records: ReadonlyMap<string, RunRecord>,
-  pools: WriterPoolLookup,
-): ReadonlySet<string> => {
-  const holdings = new Set<string>();
-  for (const record of records.values()) {
-    const id = record.view.id;
-    if (ownsWriterSlot(record)) holdings.add(`writer:${id}`);
-    for (const claim of claimHoldings(record)) holdings.add(claim);
-    if (record.cleanupPending && record.cleanupDisposition !== "quarantined")
-      holdings.add(`cleanup:${id}`);
-    if (record.retryClaim) holdings.add(`retry:${id}`);
-    if (record.evictionClaim) holdings.add(`eviction:${id}`);
-  }
-  for (const pool of pools.values())
-    if (writerPoolUnavailable(pool)) holdings.add(`pool:${pool.cwd.digest}:${pool.state}`);
-  return holdings;
 };

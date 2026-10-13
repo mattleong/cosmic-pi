@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { SubagentNestingPolicy } from "../config/schema.ts";
-import type { RunContext, RunOwnership } from "./internal.ts";
+import type { RunContext } from "./internal.ts";
 import type { makeRunLaunch } from "./launch.ts";
 import type { StartSubagentRequest, SubagentRetrySupersession, SubagentRunView } from "./model.ts";
 import { runSessionOwned } from "./session-owned.ts";
@@ -12,7 +11,6 @@ interface RunSessionStartDependencies extends Pick<
 > {
   readonly launch: Pick<ReturnType<typeof makeRunLaunch>, "validate" | "start">;
   readonly workspaces: Pick<RunWorkspaceControl, "withLaunch">;
-  readonly sessionNesting: Effect.Effect<SubagentNestingPolicy>;
   readonly redactCompletionReport: (view: SubagentRunView) => SubagentRunView;
   readonly releaseRetryClaim: (id: string, claimToken: string) => Effect.Effect<void>;
 }
@@ -24,36 +22,21 @@ export function makeRunSessionStarts(dependencies: RunSessionStartDependencies) 
     requireRecord,
     launch,
     workspaces,
-    sessionNesting,
     redactCompletionReport,
     releaseRetryClaim,
   } = dependencies;
 
-  const startWithWorkspace = (
-    request: StartSubagentRequest,
-    scriptedRoot = false,
-    ownership?: RunOwnership,
-  ) =>
+  const startWithWorkspace = (request: StartSubagentRequest, scriptedRoot = false) =>
     launch
       .validate(request, scriptedRoot)
       .pipe(
         Effect.andThen(
-          workspaces.withLaunch(request, (prepared) =>
-            launch.start(prepared, scriptedRoot, ownership),
-          ),
+          workspaces.withLaunch(request, (prepared) => launch.start(prepared, scriptedRoot)),
         ),
       );
   const startWorkspaceSessionOwned = (request: StartSubagentRequest, scriptedRoot = false) =>
     runSessionOwned(ownerScope, Effect.void, () => startWithWorkspace(request, scriptedRoot)).pipe(
       Effect.map((view) => redactCompletionReport(view)),
-    );
-  const withSessionNesting = (request: StartSubagentRequest) =>
-    request.nestingPolicy
-      ? Effect.succeed(request)
-      : sessionNesting.pipe(Effect.map((nestingPolicy) => ({ ...request, nestingPolicy })));
-  const startOwned = (request: StartSubagentRequest, ownership: RunOwnership) =>
-    withSessionNesting(request).pipe(
-      Effect.flatMap((complete) => startWithWorkspace(complete, false, ownership)),
     );
   const startRetrySessionOwned = (
     request: StartSubagentRequest & { readonly supersedes: SubagentRetrySupersession },
@@ -84,6 +67,5 @@ export function makeRunSessionStarts(dependencies: RunSessionStartDependencies) 
       startWorkspaceSessionOwned(request, true),
     startSessionOwnedFrom,
     startRetrySessionOwned,
-    startOwned,
   };
 }

@@ -23,7 +23,6 @@ import {
   extensionContextFixture,
   plainTheme,
   recordingExtensionHost,
-  temporaryDirectory,
 } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
@@ -39,7 +38,7 @@ import { makeSubagentProfileService, SubagentProfileService } from "../src/profi
 import { mountingCustomUi, sessionContextFixture as sessionContext } from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
-import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
+import { nodePath } from "./support/node-builtins.ts";
 import { pickQuestionnaire } from "./support/questionnaire.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import { fallbackProfileService, testBackendRegistry } from "./tools/fixtures/tool-harness.ts";
@@ -165,7 +164,6 @@ describe("subagent Pi registration", () => {
       current.publish({ revision: 1, runs: [view({ id: "current" })] });
       const before = activity.get();
       retired.publish({ revision: 99, runs: [view({ id: "retired" })] });
-      retired.workflowActivity.publish([]);
       const rejected = retired.notify({
         type: "question",
         id: "retired",
@@ -233,19 +231,12 @@ describe("subagent Pi registration", () => {
     const { emit, tools } = applicationFixture();
     yield* settle(() => emit("session_start", ctx));
     const oldModels = tools.get("subagent_models");
-    const oldWorkflow = tools.get("subagent_workflow");
     expect(oldModels).toBeDefined();
-    expect(oldWorkflow).toBeDefined();
     yield* settle(() => emit("session_tree", ctx));
     const currentModels = tools.get("subagent_models");
     expect(currentModels).not.toBe(oldModels);
     yield* step(() =>
       expect(oldModels!.execute("old-models", {}, undefined, undefined, ctx)).rejects.toThrow(),
-    );
-    yield* step(() =>
-      expect(
-        oldWorkflow!.execute("old-workflows", { action: "list" }, undefined, undefined, ctx),
-      ).rejects.toThrow(),
     );
     const currentResult = yield* step(() =>
       currentModels!.execute("current-models", {}, undefined, undefined, ctx),
@@ -513,10 +504,7 @@ describe("subagent Pi registration", () => {
       callInActivation = 0;
       throwAt = Number.POSITIVE_INFINITY;
       yield* settle(start);
-      expect(tools.active()).toEqual([
-        "read",
-        ...new Set(tools.registered.filter((name) => name !== "subagent_workflow")),
-      ]);
+      expect(tools.active()).toEqual(["read", ...new Set(tools.registered)]);
       yield* settle(() => emit("session_shutdown", ctx));
     },
   );
@@ -540,9 +528,7 @@ describe("subagent Pi registration", () => {
       const disabledName = tools.registered[0]!;
       const expectedActive = () => [
         "read",
-        ...new Set(
-          tools.registered.filter((name) => name !== disabledName && name !== "subagent_workflow"),
-        ),
+        ...new Set(tools.registered.filter((name) => name !== disabledName)),
       ];
       tools.setActive(tools.active().filter((name) => name !== disabledName));
 
@@ -747,62 +733,6 @@ describe("subagent Pi registration", () => {
       );
     },
   );
-
-  effectTest("applies a saved ultracode switch after reload, not on tree navigation", function* () {
-    const agentDirectory = yield* temporaryDirectory("pi-subagents-features-");
-    const configPath = nodePath.join(agentDirectory, "pi-subagents.json");
-    const readConfig = () => nodeFsPromises.readFile(configPath, "utf8").then(JSON.parse);
-    const activeTools = activeToolTracker();
-    const registerFreshApplication = () =>
-      applicationFixture(activeTools.overrides, {
-        getAgentDirectory: () => agentDirectory,
-        loadSettings: () => Promise.resolve(),
-      });
-    const notify = vi.fn();
-    const ctx = sessionContext(
-      { hasUI: true, mode: "tui", isProjectTrusted: () => false, ui: { notify } },
-      "application-feature-switch-session",
-    );
-    const scriptable = () => app.tools.get("subagent_start")?.exposure === "direct";
-    const ultracodeOn = () => scriptable() && activeTools.active().includes("subagent_workflow");
-    const ultracodeOff = () =>
-      scriptable() &&
-      app.tools.get("subagent_workflow")?.exposure === "direct" &&
-      !activeTools.active().includes("subagent_workflow");
-    let app = registerFreshApplication();
-    const reload = function* () {
-      yield* settle(() =>
-        app.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
-      );
-      app = registerFreshApplication();
-      yield* settle(() =>
-        app.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
-      );
-    };
-    yield* Effect.addFinalizer(() =>
-      settle(() => app.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" })),
-    );
-    yield* settle(() =>
-      app.emit("session_start", ctx, { type: "session_start", reason: "startup" }),
-    );
-    expect(ultracodeOff()).toBe(true);
-
-    const settings = (args: string) => app.subagents(`settings ${args}`, ctx);
-    yield* step(() => settings("global ultracode true"));
-    expect(yield* step(readConfig)).toEqual({ version: 6, ultracode: true });
-    expect(notify).not.toHaveBeenCalledWith(expect.any(String), "error");
-    yield* settle(() => app.emit("session_tree", ctx));
-    expect(ultracodeOff()).toBe(true);
-
-    yield* reload();
-    expect(ultracodeOn()).toBe(true);
-
-    yield* step(() => settings("global ultracode inherit"));
-    expect(yield* step(readConfig)).toEqual({ version: 6 });
-    yield* reload();
-    yield* settle(() => app.emit("agent_start", ctx));
-    expect(ultracodeOff()).toBe(true);
-  });
 
   effectTest("owns the activity widget across activation, turns, and shutdown", function* () {
     const setWidget = vi.fn();

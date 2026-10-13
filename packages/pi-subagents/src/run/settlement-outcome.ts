@@ -1,16 +1,11 @@
 import { absurd } from "effect/Function";
-import * as Effect from "effect/Effect";
-import * as Result from "effect/Result";
-import { MAX_BACKEND_REPORT_TEXT_CHARS, type BackendAssistantTerminal } from "../backend/model.ts";
-import { canonicalResultJson, decodeResultText } from "../domain/result-contract.ts";
-import { processError } from "./errors.ts";
+import type { BackendAssistantTerminal } from "../backend/model.ts";
 import {
   isInactiveRunRecord,
   type PendingInitializationSettlement,
   type RunRecord,
 } from "./internal.ts";
 import { isTerminalRunState, type SubagentRunView } from "./model.ts";
-import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
 
 export type SettlementState = PendingInitializationSettlement["state"];
 
@@ -32,11 +27,6 @@ const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => 
   return absurd(stopReason);
 };
 
-export const acceptedResult = (record: RunRecord, assignmentEpoch: number): string | undefined =>
-  record.structuredResult?.assignmentEpoch === assignmentEpoch
-    ? record.structuredResult.json
-    : undefined;
-
 export const settledAssignmentLocked = (
   record: RunRecord,
   assignmentEpoch: number,
@@ -44,8 +34,7 @@ export const settledAssignmentLocked = (
 ): "ignored" | "buffered" | "running" => {
   if (
     record.assignment.epoch !== assignmentEpoch ||
-    (record.pausedAssignmentEpoch === assignmentEpoch &&
-      acceptedResult(record, assignmentEpoch) === undefined) ||
+    record.pausedAssignmentEpoch === assignmentEpoch ||
     record.assignment.phase === "preparing" ||
     record.assignment.phase === "reported" ||
     isInactiveRunRecord(record)
@@ -58,53 +47,8 @@ export const settledAssignmentLocked = (
   return "running";
 };
 
-export const settledText = (record: RunRecord, terminal?: BackendAssistantTerminal) =>
-  Effect.gen(function* () {
-    const text =
-      terminal?.stopReason === "stop" && terminal.text
-        ? sanitizeOutputText(terminal.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim()
-        : undefined;
-    const contract = record.launch.resultContract;
-    if (!contract || !text) return { text, problem: undefined };
-    const decoded = yield* Effect.result(decodeResultText(contract, text));
-    return Result.isSuccess(decoded)
-      ? { text: canonicalResultJson(decoded.success), problem: undefined }
-      : { text: undefined, problem: decoded.failure.message };
-  });
-
-export const settledFailureMessage = (
-  record: RunRecord,
-  terminal: BackendAssistantTerminal | undefined,
-  problem: string | undefined,
-): string => {
-  const reason =
-    record.launch.resultContract && terminal?.stopReason === "stop"
-      ? problem
-        ? `Assignment finished without submitting its structured result, and its final text is not a valid result: ${problem}`
-        : "Assignment finished without submitting its structured result."
-      : terminalFailureMessage(terminal);
-  return `${reason} Work and writes may already exist; inspect them before an explicit retry.`;
-};
-
-export const reportFinalText = (record: RunRecord, text: string) => {
-  const contract = record.launch.resultContract;
-  if (!contract)
-    return Effect.succeed(sanitizeOutputText(text, MAX_BACKEND_REPORT_TEXT_CHARS).trim());
-  return decodeResultText(contract, text).pipe(
-    Effect.mapBoth({
-      onFailure: (error) =>
-        processError(
-          "accept report from",
-          "backend_report_schema_invalid",
-          sanitizeDiagnosticText(
-            `Subagent ${record.view.id} reported a result that does not match its schema: ${error.message}`,
-            MAX_ERROR_CHARS,
-          ),
-        ),
-      onSuccess: canonicalResultJson,
-    }),
-  );
-};
+export const settledFailureMessage = (terminal: BackendAssistantTerminal | undefined): string =>
+  `${terminalFailureMessage(terminal)} Work and writes may already exist; inspect them before an explicit retry.`;
 
 export const settlementBlocked = (record: RunRecord, state: SettlementState): boolean =>
   isTerminalRunState(record.view.state) ||

@@ -98,8 +98,6 @@ export const workspaceBusyError = () =>
     "Another operation on this workspace is still running. Retry once it finishes.",
   );
 
-export type WorkspaceBindingStatus = "pending" | "integrated" | "closed" | "unbound";
-
 export function makeWorkspaceControlContext(
   dependencies: WorkspaceControlDependencies,
 ): WorkspaceControlContext {

@@ -38,7 +38,7 @@ Retry claim transfer is acknowledged only after the session-owned commit fiber i
 
 ## Resume admission
 
-Completed respawn checks the current direct-child policy, including held worktree launch slots, under the admission lock before reserving its process slot. In-place paused resume keeps its existing slot and remains allowed at capacity. Writer respawn recanonicalizes the launch cwd interruptibly before taking the service lock and ownership mask. One locked claim then validates the run, assignment, process, cwd identity, stop state, owned-run guard, report backlog, writer conflict, capacity, and any workspace binding before assignment rollover. Refusal leaves the workspace unchanged. Binding and revision rules are detailed in [Local backends](local-backends.md#isolated-workspace-lifecycle).
+Completed respawn checks the current direct-child policy, including held worktree launch slots, under the admission lock before reserving its process slot. In-place paused resume keeps its existing slot and remains allowed at capacity. Writer respawn recanonicalizes the launch cwd interruptibly before taking the service lock and ownership mask. One locked claim then validates the run, assignment, process, cwd identity, stop state, report backlog, writer conflict, capacity, and any workspace binding before assignment rollover. Refusal leaves the workspace unchanged. Binding and revision rules are detailed in [Local backends](local-backends.md#isolated-workspace-lifecycle).
 
 ## Public launch contract
 
