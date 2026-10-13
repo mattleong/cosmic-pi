@@ -5,10 +5,8 @@ import {
   nodeProcessLayer,
   signalProcess,
   signalProcessGroup,
-  terminateWindowsProcessTree,
   utf8ByteLength,
   utf8Suffix,
-  type ProcessTreeTerminatorSpawn,
 } from "pi-cosmic-core";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -21,7 +19,6 @@ import type * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -98,22 +95,14 @@ const processError = (reason: LocalProcessError["reason"], subject?: string) =>
       : PROCESS_FAILURES[reason].message,
   });
 
-export function makeBackgroundProcessEnvironment(
-  source: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform,
-): NodeJS.ProcessEnv {
+export function makeBackgroundProcessEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const environment = Object.fromEntries(
     Object.entries(source).filter(
-      ([key, value]) =>
-        value !== undefined &&
-        !BLOCKED_ENVIRONMENT_KEYS.has(platform === "win32" ? key.toUpperCase() : key),
+      ([key, value]) => value !== undefined && !BLOCKED_ENVIRONMENT_KEYS.has(key),
     ),
   );
-  const hasKey = (name: string): boolean =>
-    platform === "win32"
-      ? Object.keys(environment).some((key) => key.toUpperCase() === name)
-      : environment[name] !== undefined;
-  if (!hasKey("FORCE_COLOR") && !hasKey("NO_COLOR")) environment.FORCE_COLOR = "1";
+  if (environment.FORCE_COLOR === undefined && environment.NO_COLOR === undefined)
+    environment.FORCE_COLOR = "1";
   return environment;
 }
 
@@ -125,48 +114,6 @@ interface ProcessTreeTermination {
 const dispatchGracefulTermination = (pid: number) => {
   if (signalProcessGroup(pid, "SIGTERM") !== "present") signalProcess(pid, "SIGTERM");
 };
-
-export const makeWindowsTreeTermination = (
-  pid: number,
-  spawnTaskkill?: ProcessTreeTerminatorSpawn,
-) =>
-  Effect.gen(function* () {
-    const ownerScope = yield* Effect.scope;
-    let exited = false;
-    const taskkill = (mode: "graceful" | "force") =>
-      terminateWindowsProcessTree({ pid, mode, spawnTaskkill, targetExited: () => exited }).pipe(
-        Effect.mapError(() => processError("terminate")),
-      );
-    let gracefulFiber: Fiber.Fiber<void> | undefined;
-    let dispatched = false;
-    const forceLock = yield* Semaphore.make(1);
-    const force = forceLock.withPermits(1)(
-      Effect.suspend(() => {
-        dispatched = true;
-        return (gracefulFiber ? Fiber.interrupt(gracefulFiber) : Effect.void).pipe(
-          Effect.andThen(taskkill("force")),
-        );
-      }).pipe(Effect.uninterruptible),
-    );
-    return {
-      terminate: (mode) =>
-        mode === "force"
-          ? force
-          : Effect.uninterruptible(
-              Effect.gen(function* () {
-                if (dispatched) return;
-                dispatched = true;
-                gracefulFiber = yield* taskkill("graceful").pipe(
-                  Effect.ignore,
-                  Effect.forkIn(ownerScope, { startImmediately: true }),
-                );
-              }),
-            ),
-      settleExit: Effect.sync(() => {
-        exited = true;
-      }),
-    } satisfies ProcessTreeTermination;
-  });
 
 const terminateLingeringGroup = (pid: number) =>
   Effect.sync(() => void signalProcessGroup(pid, "SIGKILL"));
@@ -257,14 +204,13 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
 
   const command = ChildProcess.make(request.command, [], {
     cwd: request.cwd,
-    detached: process.platform !== "win32",
+    detached: true,
     env: makeBackgroundProcessEnvironment(process.env),
     extendEnv: false,
     shell: request.shellPath ?? true,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    windowsHide: true,
     killSignal: "SIGTERM",
     forceKillAfter: 1_000,
   });
@@ -273,10 +219,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     Effect.catchDefect(() => Effect.fail(processError("spawn"))),
   );
   const pid = Number(child.pid);
-  const tree: ProcessTreeTermination =
-    process.platform === "win32"
-      ? yield* makeWindowsTreeTermination(pid)
-      : yield* makePosixGroupTermination(pid, child);
+  const tree = yield* makePosixGroupTermination(pid, child);
 
   const offer = (stream: BackgroundLogStream, original: string) => {
     if (!original || outputClosed) return;

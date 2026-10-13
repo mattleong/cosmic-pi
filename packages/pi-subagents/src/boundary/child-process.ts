@@ -317,12 +317,10 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       spawn: (spawn) =>
         spawn(process.execPath, args, {
           cwd: request.cwd,
-          detached: process.platform !== "win32",
+          detached: true,
           env: sanitizedEnvironment(request),
           stdio: ["pipe", "pipe", "pipe", "ipc"],
-          windowsHide: true,
         }),
-      platform: process.platform,
       label: "Subagent RPC",
       error: processError,
       message: (value): ChildWireEvent => ({ type: "rpc_message", value }),

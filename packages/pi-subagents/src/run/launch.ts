@@ -110,7 +110,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
       return undefined;
     });
   const validate = (request: StartSubagentRequest, scriptedRoot = false) =>
-    validateStartRequest(request, writerLeases.platform).pipe(
+    validateStartRequest(request).pipe(
       Effect.tap(() =>
         request.writeIntent === "writer"
           ? withLock(enforceScriptedAdmissionLocked(request, scriptedRoot))

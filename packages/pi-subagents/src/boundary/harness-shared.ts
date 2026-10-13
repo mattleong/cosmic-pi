@@ -29,9 +29,12 @@ export const ensurePrivateDirectory = (path: string): Promise<void> =>
     });
 
 export const writeExclusive = (path: string, source: string): Promise<void> => {
-  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
   return fs
-    .open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow, 0o600)
+    .open(
+      path,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    )
     .then((handle) =>
       handle
         .writeFile(source, { encoding: "utf8" })

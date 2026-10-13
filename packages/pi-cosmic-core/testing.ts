@@ -58,5 +58,4 @@ export { galleryDirectory, writeGallerySection } from "./src/testing/gallery.ts"
 export { spawnIpcChild, temporaryDirectory } from "./src/testing/ipc-child.ts";
 export { yieldUntil } from "./src/testing/polling.ts";
 export { eventLoopTurn, macrotask, maybe, settle, step } from "./src/testing/steps.ts";
-export { fakeProcessTreeTerminator } from "./src/testing/process-tree.ts";
 export { interruptingScheduler, pausedScheduler } from "./src/testing/scheduler.ts";

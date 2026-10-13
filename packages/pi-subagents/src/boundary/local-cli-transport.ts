@@ -34,7 +34,6 @@ export interface LocalCliTransportRequest {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
   readonly cwd: string;
-  readonly platform?: NodeJS.Platform | undefined;
 }
 
 export const processError = (
@@ -48,18 +47,15 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
   request: LocalCliTransportRequest,
   runtime?: ProcessTransportRuntime,
 ) {
-  const platform = request.platform ?? process.platform;
   const { attachment: _attachment, ...transport } = yield* acquireProcessTransport(
     {
       spawn: (spawn) =>
         spawn(request.executable, [...request.args], {
           cwd: request.cwd,
-          detached: platform !== "win32",
+          detached: true,
           env: request.env,
           stdio: ["pipe", "pipe", "pipe"],
-          windowsHide: true,
         }),
-      platform,
       label: "Local CLI",
       error: (operation, cause, code) =>
         processError(

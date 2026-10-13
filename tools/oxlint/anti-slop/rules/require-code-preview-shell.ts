@@ -29,9 +29,7 @@ const WRITE_HOOK = `packages/${PREVIEWS}/src/tools/renderers/registration.ts`;
 const MAX_DEPTH = 8;
 
 function exempt(filename: string): boolean {
-  return (
-    isWorkspaceFile(filename, [WRITE_HOOK]) || filename.replaceAll("\\", "/").includes("/tests/")
-  );
+  return isWorkspaceFile(filename, [WRITE_HOOK]) || filename.includes("/tests/");
 }
 
 function previewsExport(

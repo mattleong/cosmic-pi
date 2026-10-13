@@ -38,11 +38,6 @@ export interface WorkspaceSnapshot {
 
 export const inspectSource = (cwd: string) =>
   Effect.gen(function* () {
-    if (process.platform === "win32")
-      return yield* workspaceFailure(
-        "source",
-        "Git workspaces require POSIX filesystem semantics.",
-      );
     const sourceCwd = yield* checkDirectory(cwd);
     const sourceRoot = (yield* git(sourceCwd, ["rev-parse", "--show-toplevel"])).trim();
     yield* checkDirectory(sourceRoot);

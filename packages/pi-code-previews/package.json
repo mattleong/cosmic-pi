@@ -27,6 +27,10 @@
     "README.md",
     "LICENSE"
   ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "type": "module",
   "sideEffects": false,
   "main": "./index.ts",

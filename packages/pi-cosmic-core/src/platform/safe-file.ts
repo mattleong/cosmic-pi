@@ -91,10 +91,9 @@ const readContainedRegularFile = (paths: Path.Path) =>
     if (!before.isFile()) return yield* safeFileError("open", OPEN_FAILURE)();
     if (before.size > maximumSize) return yield* safeFileError("size", OPEN_FAILURE)();
 
-    const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
     return yield* Effect.acquireUseRelease(
       nodePromise("open", OPEN_FAILURE, () =>
-        fs.open(path, constants.O_RDONLY | constants.O_NONBLOCK | noFollow),
+        fs.open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW),
       ),
       (handle) =>
         Effect.gen(function* () {

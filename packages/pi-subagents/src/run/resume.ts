@@ -18,7 +18,6 @@ import {
   processError,
   type SubagentError,
   SubagentProcessError,
-  UnsupportedSafeWriterOwnershipError,
 } from "./errors.ts";
 import {
   clearRunActivity,
@@ -294,7 +293,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
               validateCwd:
                 record.view.writeIntent === "writer" &&
                 record.process === undefined &&
-                writerLeases.platform !== "win32" &&
                 (record.view.state === "paused" || record.view.state === "completed"),
             };
           }),
@@ -316,13 +314,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
             currentCwd.digest === record.canonicalWriterCwd?.digest;
           const writerFailureLocked = (selected: RunRecord, needsRespawn: boolean) =>
             Effect.gen(function* () {
-              if (writerLeases.platform === "win32")
-                return yield* new UnsupportedSafeWriterOwnershipError({
-                  code: "unsupported_safe_writer_ownership",
-                  platform: writerLeases.platform,
-                  message:
-                    "Writer subagents cannot respawn on Windows because descendant termination cannot yet be proven without Job Object ownership.",
-                });
               const canonicalCwd = selected.canonicalWriterCwd;
               if (!canonicalCwd)
                 return yield* invalidRequest(

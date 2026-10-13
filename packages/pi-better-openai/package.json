@@ -29,6 +29,10 @@
     "README.md",
     "LICENSE"
   ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "type": "module",
   "imports": {
     "#pi-ai-openai-codex-responses": "@earendil-works/pi-ai/api/openai-codex-responses",

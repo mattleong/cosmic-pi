@@ -31,15 +31,6 @@ export class SubagentWriterConflictError extends Schema.TaggedError<SubagentWrit
   },
 ) {}
 
-export class UnsupportedSafeWriterOwnershipError extends Schema.TaggedError<UnsupportedSafeWriterOwnershipError>()(
-  "UnsupportedSafeWriterOwnershipError",
-  {
-    code: Schema.Literal("unsupported_safe_writer_ownership"),
-    platform: Schema.String,
-    message: Schema.String,
-  },
-) {}
-
 export class SubagentProcessError extends Schema.TaggedError<SubagentProcessError>()(
   "SubagentProcessError",
   {
@@ -106,7 +97,6 @@ export type SubagentError =
   | SubagentCapacityError
   | SubagentHistoryCapacityError
   | SubagentWriterConflictError
-  | UnsupportedSafeWriterOwnershipError
   | SubagentProcessError
   | SubagentProtocolError
   | SubagentRuntimeClosedError

@@ -11,8 +11,6 @@ export type WriteClaimNormalizationResult =
   | { readonly ok: true; readonly claims: ReadonlyArray<string> }
   | { readonly ok: false; readonly code: string; readonly message: string };
 
-const windowsAbsolutePath = /^[a-zA-Z]:\//;
-
 const claimKey = (claim: string): string => claim.normalize("NFC").toLocaleLowerCase("en-US");
 const outsideWorkspaceMarkerKey = claimKey(OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER);
 
@@ -37,7 +35,7 @@ export const normalizeWriteClaim = (input: string): WriteClaimNormalizationResul
       "write_claim_invalid",
       `Write claim "${value}" must use workspace-relative POSIX separators.`,
     );
-  if (value.startsWith("/") || windowsAbsolutePath.test(value))
+  if (value.startsWith("/"))
     return invalid(
       "write_claim_absolute",
       `Write claim "${value}" must be relative to the workspace.`,

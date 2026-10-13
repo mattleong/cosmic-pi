@@ -20,6 +20,6 @@ it("treats dot-prefixed child names as inside the working directory", () => {
   );
 });
 
-it.skipIf(process.platform === "win32")("keeps POSIX names that start with ..\\ inside cwd", () => {
+it("keeps POSIX names that start with ..\\ inside cwd", () => {
   expect(formatDisplayPath("/tmp/project/..\\notes.md", "/tmp/project", "/h")).toBe("..\\notes.md");
 });

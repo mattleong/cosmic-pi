@@ -93,16 +93,14 @@ it.effect("previous content stays complete and bounded across short filesystem r
   }).pipe(provideBuiltLayer(previewFileLayer)),
 );
 
-it.effect.skipIf(process.platform === "win32")(
-  "a named pipe is skipped without waiting for a writer",
-  () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-fifo-" });
-      childProcessModule.execFileSync("mkfifo", [join(dir, "pipe")]);
-      const skipped = yield* readExistingFileForPreviewEffect(join(dir, "pipe"), "after");
-      assert.match(getWriteDiffSkipReason(skipped, "after") ?? "", /not a regular file/);
-    }).pipe(provideBuiltLayer(previewFileLayer)),
+it.effect("a named pipe is skipped without waiting for a writer", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-fifo-" });
+    childProcessModule.execFileSync("mkfifo", [join(dir, "pipe")]);
+    const skipped = yield* readExistingFileForPreviewEffect(join(dir, "pipe"), "after");
+    assert.match(getWriteDiffSkipReason(skipped, "after") ?? "", /not a regular file/);
+  }).pipe(provideBuiltLayer(previewFileLayer)),
 );
 
 test("write diff skip reasons reject malformed or non-current skipped details", () => {

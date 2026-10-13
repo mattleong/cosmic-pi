@@ -11,7 +11,7 @@ import type { FooterHostProjection } from "../boundary/host-footer-projection.ts
 import type { FooterTotals } from "../boundary/host-usage.ts";
 
 function basename(path: string): string {
-  const normalized = path.replaceAll("\\", "/").replace(/\/$/, "");
+  const normalized = path.replace(/\/$/, "");
   return normalized.slice(normalized.lastIndexOf("/") + 1) || normalized;
 }
 

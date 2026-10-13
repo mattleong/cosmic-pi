@@ -28,6 +28,10 @@
     "ARCHITECTURE.md",
     "LICENSE"
   ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "type": "module",
   "exports": {
     ".": "./index.ts",

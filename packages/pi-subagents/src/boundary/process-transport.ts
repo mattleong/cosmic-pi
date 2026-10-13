@@ -1,7 +1,6 @@
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as FiberSet from "effect/FiberSet";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -59,7 +58,6 @@ const nodeRuntime: ProcessTransportRuntime = {
 
 interface ProcessTransportOptions<Message, Frame, Attachment> {
   readonly spawn: (spawn: ProcessTransportRuntime["spawn"]) => NodeChildProcess;
-  readonly platform: NodeJS.Platform;
   readonly label: string;
   readonly error: (operation: string, cause?: unknown, code?: string) => SubagentProcessError;
   readonly message: (value: Schema.Json) => Message;
@@ -87,7 +85,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
   const ready = yield* Deferred.make<void, SubagentProcessError>();
   const exited = yield* Deferred.make<ProcessExit>();
   const runFork = yield* FiberSet.makeRuntime();
-  const { platform, label, error: processError } = options;
+  const { label, error: processError } = options;
   const stderr: Buffer[] = [];
   const weights = new WeakMap<ProcessWireEvent<Message>, number>();
   let queuedBytes = 0;
@@ -106,11 +104,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         catch: (error) => processError("spawn", error),
       });
       const force = () => {
-        runFork(
-          Effect.uninterruptible(runtime.terminate(child, "force", { platform })).pipe(
-            Effect.ignore,
-          ),
-        );
+        runFork(Effect.uninterruptible(runtime.terminate(child, "force")).pipe(Effect.ignore));
       };
       const appendStderr = (chunk: Buffer) => {
         stderr.push(chunk);
@@ -286,7 +280,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         );
       const terminate = (mode: "graceful" | "force") =>
         runtime
-          .terminate(child, mode, { platform })
+          .terminate(child, mode)
           .pipe(Effect.mapError((error) => processError("terminate", error)));
       const waitForExit = Deferred.await(exited).pipe(
         Effect.interruptible,
@@ -296,23 +290,17 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
       const release = Effect.gen(function* () {
         yield* options.requestAbort?.(send) ?? Effect.void;
         yield* Effect.sleep("100 millis");
-        const gracefulAttempt = yield* Effect.exit(terminate("graceful"));
+        yield* Effect.exit(terminate("graceful"));
         if (yield* waitForExit) {
-          if (platform === "win32") {
-            if (Exit.isFailure(gracefulAttempt)) return yield* cleanupUnconfirmed();
-            return undefined;
-          }
           yield* Effect.sleep("100 millis");
           yield* terminate("force").pipe(Effect.ignore);
           if (!(yield* runtime.confirmGroupExit(pid, 2_000))) return yield* cleanupUnconfirmed();
           return undefined;
         }
-        const forceAttempt = yield* Effect.exit(terminate("force"));
+        yield* Effect.exit(terminate("force"));
         const forcedExit = yield* waitForExit;
-        if (!forcedExit || (platform === "win32" && Exit.isFailure(forceAttempt)))
-          return yield* cleanupUnconfirmed();
-        if (platform !== "win32" && !(yield* runtime.confirmGroupExit(pid, 2_000)))
-          return yield* cleanupUnconfirmed();
+        if (!forcedExit) return yield* cleanupUnconfirmed();
+        if (!(yield* runtime.confirmGroupExit(pid, 2_000))) return yield* cleanupUnconfirmed();
         return undefined;
       });
       yield* Effect.addFinalizer(() =>

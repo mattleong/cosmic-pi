@@ -32,8 +32,7 @@ export const imageRecord = flow(
   Option.getOrUndefined,
 );
 
-const savedFileName = (path: string | undefined): string =>
-  path?.split(/[\\/]/u).pop()?.trim() ?? "";
+const savedFileName = (path: string | undefined): string => path?.split("/").pop()?.trim() ?? "";
 
 type StatusSummary = Pick<CompactSummary, "outcome" | "issues">;
 const uncertain = (code: string, message: string): StatusSummary => ({

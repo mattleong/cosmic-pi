@@ -17,10 +17,7 @@ export const makeAgentName = (sessionId: string, paneId: string): string => {
 };
 
 export const parentBtwDisplayName = (cwd: string): string => {
-  const directoryName = cwd
-    .replaceAll(/[\\/]+$/gu, "")
-    .split(/[\\/]/gu)
-    .at(-1);
+  const directoryName = cwd.replaceAll(/\/+$/gu, "").split("/").at(-1);
   return `BTW · ${directoryName === undefined || directoryName === "" ? "Pi" : directoryName}`;
 };
 

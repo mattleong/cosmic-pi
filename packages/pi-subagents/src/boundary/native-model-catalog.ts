@@ -216,12 +216,11 @@ const runCatalogProcess = (
         const child = yield* restore(
           ChildProcess.make(executable, [...args], {
             cwd,
-            detached: process.platform !== "win32",
+            detached: true,
             env,
             stdin: { stream: Stream.make(input), endOnDone: false },
             stdout: "pipe",
             stderr: "pipe",
-            windowsHide: true,
             killSignal: "SIGTERM",
             forceKillAfter: 1_000,
           }),
@@ -301,10 +300,7 @@ const runCatalogProcess = (
         );
         const outcome = yield* restore(Effect.raceFirst(reply, diagnostics)).pipe(Effect.exit);
         const cleanupConfirmed = yield* confirmEffectProcessClose(child, 2_000);
-        const groupSignal =
-          process.platform === "win32"
-            ? "absent"
-            : signalProcessGroup(Number(child.pid), "SIGKILL");
+        const groupSignal = signalProcessGroup(Number(child.pid), "SIGKILL");
         const groupConfirmed =
           groupSignal === "absent" || (yield* confirmProcessGroupExit(Number(child.pid), 2_000));
         if (!cleanupConfirmed || !groupConfirmed)

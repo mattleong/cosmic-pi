@@ -101,7 +101,7 @@ function within(node: ESTree.Node, ancestor: ESTree.Node): boolean {
 
 function modulePath(source: string, filename: string): string {
   if (!source.startsWith(".")) return source;
-  const parts = filename.replaceAll("\\", "/").split("/");
+  const parts = filename.split("/");
   parts.pop();
   for (const part of source.split("/")) {
     if (part === "..") parts.pop();
@@ -414,7 +414,7 @@ export const noEscapingRenderContextRule = defineRule({
     let program: ESTree.Program | null = null;
 
     const verifyDefinitions = (node: ESTree.Program) => {
-      const module = withoutExtension(context.filename.replaceAll("\\", "/"));
+      const module = withoutExtension(context.filename);
       for (const helper of knownHelpers) {
         if (!module.endsWith(`/packages/${helper.definition}`)) continue;
         const parameters = declaredParameters(node, helper.name);

@@ -1,11 +1,7 @@
 import * as Effect from "effect/Effect";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
-import {
-  invalidRequest,
-  type SubagentError,
-  UnsupportedSafeWriterOwnershipError,
-} from "./errors.ts";
+import { invalidRequest, type SubagentError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import {
   emptyUsage,
@@ -34,7 +30,6 @@ export interface LaunchIdentity {
 
 export const validateStartRequest = (
   request: StartSubagentRequest,
-  platform: NodeJS.Platform,
 ): Effect.Effect<ReadonlyArray<string> | undefined, SubagentError> =>
   Effect.gen(function* () {
     if (!request.task.trim())
@@ -58,13 +53,6 @@ export const validateStartRequest = (
         "retained_report_capability_invalid",
         "closeOnReport=false is unsupported; local subagents close after reporting.",
       );
-    if (request.writeIntent === "writer" && platform === "win32")
-      return yield* new UnsupportedSafeWriterOwnershipError({
-        code: "unsupported_safe_writer_ownership",
-        platform,
-        message:
-          "Writer subagents are disabled on Windows because descendant termination cannot yet be proven without Job Object ownership. Read-only subagents remain available.",
-      });
     return normalizedClaims?.claims;
   });
 

@@ -62,7 +62,7 @@ const adapter = (outcomes?: Array<LockOutcome>) =>
     };
   });
 
-describe.skipIf(process.platform === "win32")("writer lease adapter", () => {
+describe("writer lease adapter", () => {
   it.effect("maps each core admission outcome onto one typed acquire result", () =>
     Effect.gen(function* () {
       const { service, cwd, acquire, calls } = yield* adapter([

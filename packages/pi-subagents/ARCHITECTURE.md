@@ -1,6 +1,6 @@
 # Architecture
 
-`pi-subagents` owns session-scoped background agents on local Pi, Claude, and Codex, plus optional workflows that coordinate those agents.
+`pi-subagents` owns session-scoped background agents on local Pi, Claude, and Codex, plus optional workflows that coordinate those agents on macOS and Linux.
 
 ## Ownership and boundaries
 

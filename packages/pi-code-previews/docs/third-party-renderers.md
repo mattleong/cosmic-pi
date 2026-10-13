@@ -28,7 +28,7 @@ scenarios. No builtin settings or execution wiring needs migration.
 The initial adapter covers `web_enable`, `web_search`, `source_check`, `fetch_content`, and
 `get_search_content`, based on 0.36.0's public arguments/results. It accepts `npm:pi-web-access`
 (including version/tag selectors), `origin: package`, and the exact public package-root-relative
-`dist/index.js` or `index.ts` entry. Windows path separators are supported. Arbitrary local/git
+`dist/index.js` or `index.ts` entry. Arbitrary local/git
 installs, configured renamed tools, unfamiliar metadata, and duplicate names fall through.
 Unknown/malformed result evidence keeps generic presentation and full downstream/raw expansion.
 Recovery references are displayed as evidence, not a guarantee that stored content is available.

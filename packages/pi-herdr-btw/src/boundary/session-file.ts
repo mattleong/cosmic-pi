@@ -52,10 +52,7 @@ const withRegularSessionDescriptor = <A>(
   let descriptor: number | undefined;
   try {
     if (!lstatSync(path).isFile()) return undefined;
-    descriptor = openSync(
-      path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
-    );
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     if (!fstatSync(descriptor).isFile()) return undefined;
     return use(descriptor);
   } catch {

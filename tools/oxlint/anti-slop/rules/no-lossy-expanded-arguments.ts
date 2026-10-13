@@ -25,7 +25,7 @@ const STYLED_TEXT = new Map([
 const MAX_DEPTH = 12;
 
 function testFile(filename: string): boolean {
-  return filename.replaceAll("\\", "/").includes("/tests/");
+  return filename.includes("/tests/");
 }
 
 type RendererRole = "renderCall" | "renderResult";

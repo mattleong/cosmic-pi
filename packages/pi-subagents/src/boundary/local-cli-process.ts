@@ -60,16 +60,11 @@ export interface LocalCliProcessContract {
   ) => Effect.Effect<LocalCliProcessHandle, SubagentProcessError, Scope.Scope>;
 }
 
-export interface LocalCliProcessLayerOptions extends LocalCliHarnessOptions {
-  readonly platform?: NodeJS.Platform | undefined;
-}
-
 const validateLocalPreflightRequest = (
-  options: LocalCliProcessLayerOptions,
+  options: LocalCliHarnessOptions,
   request: LocalCliPreflightRequest,
 ) =>
   Effect.gen(function* () {
-    const platform = options.platform ?? process.platform;
     if (request.context !== "fresh")
       return yield* preflightError(
         "context_unsupported",
@@ -80,13 +75,8 @@ const validateLocalPreflightRequest = (
         "local_close_on_report_required",
         `local/${request.runtime} requires closeOnReport=true.`,
       );
-    if (request.writeIntent === "writer" && platform === "win32")
-      return yield* preflightError(
-        "unsupported_safe_writer_ownership",
-        "Local CLI writers are unavailable on Windows until native Job Object cleanup is implemented.",
-      );
     const claudeSandboxPlatforms: ReadonlyArray<NodeJS.Platform> = ["darwin", "linux"];
-    if (request.runtime === "claude" && !claudeSandboxPlatforms.includes(platform))
+    if (request.runtime === "claude" && !claudeSandboxPlatforms.includes(process.platform))
       return yield* preflightError(
         "claude_shell_confinement_unsupported",
         "Local Claude subagents require a current supported strict Bash sandbox platform.",
@@ -139,7 +129,7 @@ const resolveCodexApiKeyFallback = (
   });
 
 const runLocalPreflightProbe = (
-  options: LocalCliProcessLayerOptions,
+  options: LocalCliHarnessOptions,
   request: LocalCliPreflightRequest,
   environment: NodeJS.ProcessEnv,
   codexApiKeyFallback: boolean,
@@ -209,7 +199,7 @@ const validateLocalProbeResult = (
   });
 
 const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
-  options: LocalCliProcessLayerOptions,
+  options: LocalCliHarnessOptions,
   request: LocalCliHarnessRequest,
 ) {
   const harness = yield* Effect.acquireRelease(
@@ -240,14 +230,11 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
     args: harness.args,
     env: harness.env,
     cwd: request.launch.cwd,
-    platform: options.platform,
   });
   return claudeDebug ? { ...transport, claudeDebug } : transport;
 });
 
-export const makeLocalCliProcess = (
-  options: LocalCliProcessLayerOptions,
-): LocalCliProcessContract => ({
+export const makeLocalCliProcess = (options: LocalCliHarnessOptions): LocalCliProcessContract => ({
   preflight: Effect.fn("LocalCliProcess.preflight")(function* (request: LocalCliPreflightRequest) {
     yield* validateLocalPreflightRequest(options, request);
     const environment = options.environment ?? process.env;
@@ -266,6 +253,6 @@ export const makeLocalCliProcess = (
 export class LocalCliProcess extends Context.Service<LocalCliProcess, LocalCliProcessContract>()(
   "pi-subagents/boundary/local-cli-process/LocalCliProcess",
 ) {
-  static readonly layer = (options: LocalCliProcessLayerOptions): Layer.Layer<LocalCliProcess> =>
+  static readonly layer = (options: LocalCliHarnessOptions): Layer.Layer<LocalCliProcess> =>
     Layer.succeed(this, makeLocalCliProcess(options));
 }

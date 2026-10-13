@@ -26,7 +26,7 @@ export function admitsWebAccessSource(tool: ToolInfo): boolean {
     !sourceInfo.baseDir
   )
     return false;
-  const root = sourceInfo.baseDir.replaceAll("\\", "/").replace(/\/$/, "");
-  const path = sourceInfo.path.replaceAll("\\", "/");
+  const root = sourceInfo.baseDir.replace(/\/$/, "");
+  const path = sourceInfo.path;
   return path === `${root}/dist/index.js` || path === `${root}/index.ts`;
 }

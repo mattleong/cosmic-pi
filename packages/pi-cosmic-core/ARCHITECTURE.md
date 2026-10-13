@@ -59,10 +59,11 @@ Default seeding rechecks existence inside the modification, and trust gates excl
 paths before any read. Atomic file replacement prepares and validates before its rename commit.
 
 Process and safe-file capabilities are explicit dependencies; file or network Layers do not silently
-supply process execution. Scoped process cleanup reports confirmed exit separately from a successful
-kill request. POSIX tree sweeps wait for observed process-group absence; inspection failures and
-deadlines remain uncertain. A failed acquisition may leave cleanup uncertain, so callers must not infer resource
-release from an error alone. Safe-file access validates containment, file identity, bounded reads,
+supply process execution. Platform support is limited to macOS and Linux. Scoped process cleanup
+reports confirmed exit separately from a successful kill request. Process-tree sweeps wait for
+observed process-group absence; inspection failures and deadlines remain uncertain. A failed
+acquisition may leave cleanup uncertain, so callers must not infer resource release from an error
+alone. Safe-file access validates containment, file identity, bounded reads,
 and unchanged size/modification metadata across the read.
 
 [Cross-process locks](src/platform/cross-process-lock.ts) are an opt-in, same-host capability.

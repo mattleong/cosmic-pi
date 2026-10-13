@@ -31,7 +31,6 @@ describe("herdr-btw policy", () => {
 
   it("derives the child display name without host path state", () => {
     expect(parentBtwDisplayName("/work/project/")).toBe("BTW · project");
-    expect(parentBtwDisplayName("C:\\work\\project")).toBe("BTW · project");
     expect(parentBtwDisplayName("/")).toBe("BTW · Pi");
   });
 });

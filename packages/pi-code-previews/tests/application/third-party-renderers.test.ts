@@ -134,20 +134,12 @@ it("foreign, missing, duplicate, lookalike, renamed, and unsupported sources fal
   }
 });
 
-it("supports the declared source entry and Windows package paths through public metadata only", () => {
-  for (const [baseDir, path] of [
-    ["/agent/npm/node_modules/pi-web-access", "/agent/npm/node_modules/pi-web-access/index.ts"],
-    [
-      "C:\\agent\\node_modules\\pi-web-access",
-      "C:\\agent\\node_modules\\pi-web-access\\dist\\index.js",
-    ],
-  ] as const) {
-    const tool = info();
-    tool.sourceInfo = { ...tool.sourceInfo, baseDir, path };
-    const { owner, resolver } = setup(() => [tool]);
-    assert.notEqual(resolver("web_search", () => downstream)?.renderCall, downstream.renderCall);
-    owner.retire();
-  }
+it("supports the declared source entry through public metadata only", () => {
+  const tool = info();
+  tool.sourceInfo.path = "/agent/npm/node_modules/pi-web-access/index.ts";
+  const { owner, resolver } = setup(() => [tool]);
+  assert.notEqual(resolver("web_search", () => downstream)?.renderCall, downstream.renderCall);
+  owner.retire();
 });
 
 it("later registration is picked up without changing activation or borrowing a retired owner", () => {

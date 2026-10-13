@@ -1,6 +1,6 @@
 # pi-subagents
 
-Background subagents for Pi. The main agent delegates work to profile-routed agents running on Pi, Claude Code, or Codex, keeps working, and gets their reports back automatically. Scripted workflows can coordinate many agents at once.
+Background subagents for Pi on macOS and Linux. The main agent delegates work to profile-routed agents running on Pi, Claude Code, or Codex, keeps working, and gets their reports back automatically. Scripted workflows can coordinate many agents at once.
 
 ## Features
 

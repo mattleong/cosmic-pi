@@ -522,7 +522,6 @@ export const leaseCounts = () => ({ canonicalize: 0, acquire: 0, mark: 0, releas
 export function fakeWriterLeaseLayer(
   options: {
     readonly counts?: ReturnType<typeof leaseCounts> | undefined;
-    readonly platform?: NodeJS.Platform | undefined;
     readonly canonicalize?: ((cwd: string) => string) | undefined;
     readonly filesystemIdentity?: ((cwd: string, canonicalPath: string) => string) | undefined;
     readonly onCanonicalize?: ((cwd: string) => void) | undefined;
@@ -544,7 +543,6 @@ export function fakeWriterLeaseLayer(
   const canonicalize = options.canonicalize ?? ((cwd: string) => cwd);
   const counts = options.counts ?? leaseCounts();
   return Layer.succeed(WriterLeaseService, {
-    platform: options.platform ?? "linux",
     canonicalize: (cwd) => {
       counts.canonicalize += 1;
       options.onCanonicalize?.(cwd);

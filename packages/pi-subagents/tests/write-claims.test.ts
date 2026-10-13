@@ -21,7 +21,6 @@ describe("write claims", () => {
 
   it.each([
     "/tmp/file.ts",
-    "C:/tmp/file.ts",
     "../file.ts",
     "a/../file.ts",
     "a//file.ts",

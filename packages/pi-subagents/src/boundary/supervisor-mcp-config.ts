@@ -48,10 +48,9 @@ export const readConfig = (
       (directoryStat.mode & 0o077) !== 0
     )
       return yield* helperConfigError("unsafe-config-directory");
-    const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
     return yield* Effect.acquireUseRelease(
       Effect.tryPromise({
-        try: () => open(path, constants.O_RDONLY | noFollow),
+        try: () => open(path, constants.O_RDONLY | constants.O_NOFOLLOW),
         catch: () => helperConfigError("unsafe-config-file"),
       }),
       (handle) =>

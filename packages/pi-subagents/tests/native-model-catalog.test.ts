@@ -51,32 +51,30 @@ const selectorAt = (catalog: NativeModelCatalogContract, cwd: string, index: num
   );
 
 describe("Claude catalog preference", () => {
-  it.live.skipIf(process.platform === "win32")(
-    "reaps a catalog descendant that outlives its terminated leader",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const test = yield* setup;
-          const descendantFixture = fileURLToPath(
-            new URL("./fixtures/model-catalog-descendant-fixture.ts", import.meta.url),
-          );
-          const pidFile = nodePath.join(test.cwd, "catalog-descendant.pid");
-          yield* Effect.addFinalizer(() =>
-            step(() => fs.readFile(pidFile, "utf8")).pipe(
-              Effect.map((pid) => signalProcess(Number(pid), "SIGKILL")),
-              Effect.ignoreCause,
-            ),
-          );
-          const catalog = yield* makeNativeModelCatalog({
-            ...test.options,
-            executables: { claude: descendantFixture, codex: descendantFixture },
-          });
-          yield* catalog.list("claude", test.cwd).pipe(Effect.orDie);
-          const pid = Number(yield* step(() => fs.readFile(pidFile, "utf8")));
-          expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
-          expect(processAlive(pid)).toBe(false);
-        }),
-      ),
+  it.live("reaps a catalog descendant that outlives its terminated leader", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* setup;
+        const descendantFixture = fileURLToPath(
+          new URL("./fixtures/model-catalog-descendant-fixture.ts", import.meta.url),
+        );
+        const pidFile = nodePath.join(test.cwd, "catalog-descendant.pid");
+        yield* Effect.addFinalizer(() =>
+          step(() => fs.readFile(pidFile, "utf8")).pipe(
+            Effect.map((pid) => signalProcess(Number(pid), "SIGKILL")),
+            Effect.ignoreCause,
+          ),
+        );
+        const catalog = yield* makeNativeModelCatalog({
+          ...test.options,
+          executables: { claude: descendantFixture, codex: descendantFixture },
+        });
+        yield* catalog.list("claude", test.cwd).pipe(Effect.orDie);
+        const pid = Number(yield* step(() => fs.readFile(pidFile, "utf8")));
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+        expect(processAlive(pid)).toBe(false);
+      }),
+    ),
   );
   effectTest(
     "preserves both selectors and refreshes after user preference edits without reload",

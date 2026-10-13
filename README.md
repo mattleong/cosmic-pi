@@ -16,6 +16,7 @@ A pnpm workspace for Pi extensions.
 
 ## Requirements
 
+- macOS or Linux
 - Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`
 - pnpm 10.33.0 (declared in `packageManager`)
 - Pi 1.0.1 or later for Code Previews; tested with Pi 1.0.2

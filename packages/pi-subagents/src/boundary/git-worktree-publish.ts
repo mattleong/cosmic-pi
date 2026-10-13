@@ -42,7 +42,6 @@ const launch = <A, E>(
   decode: (stdout: string) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
-    if (process.platform === "win32") return yield* failure();
     const encoded = yield* encodeRequest(request).pipe(Effect.mapError(failure));
     const stdin = Buffer.from(encoded);
     if (stdin.length > publicationInputLimit) return yield* failure();

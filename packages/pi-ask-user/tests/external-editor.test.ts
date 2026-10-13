@@ -103,38 +103,36 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
     }),
   );
 
-  it.effect.skipIf(process.platform === "win32")(
-    "force-kills an editor that ignores graceful cancellation",
-    () =>
-      Effect.gen(function* () {
-        const { fs, path, directory, command, tui, start } = yield* editorScript(
-          '#!/usr/bin/env node\nimport { writeFileSync } from "node:fs"; process.on("SIGTERM", () => {}); writeFileSync(process.argv[2], JSON.stringify({ pid: process.pid, target: process.argv[3] })); setInterval(() => {}, 1000);\n',
-          "hanging-editor.mjs",
-        );
-        const statePath = path.join(directory, "state");
-        const services = yield* Effect.context();
-        const controller = new AbortController();
-        const editing = editWithExternalEditor(
-          tui,
-          `${command} ${statePath}`,
-          "initial",
-          controller.signal,
-        );
-        yield* Effect.promise(() =>
-          vi.waitFor(() =>
-            Effect.runPromiseWith(services)(fs.readFileString(statePath)).then((raw) => {
-              decodeHangingEditorState(raw);
-              return undefined;
-            }),
-          ),
-        );
-        controller.abort();
-        const result = yield* Effect.promise(() => editing);
-        expect(result).toBeUndefined();
-        expect(start).toHaveBeenCalledOnce();
-        const state = decodeHangingEditorState(yield* fs.readFileString(statePath));
-        expect(() => process.kill(state.pid, 0)).toThrow();
-        expect(yield* fs.exists(path.dirname(state.target))).toBe(false);
-      }),
+  it.effect("force-kills an editor that ignores graceful cancellation", () =>
+    Effect.gen(function* () {
+      const { fs, path, directory, command, tui, start } = yield* editorScript(
+        '#!/usr/bin/env node\nimport { writeFileSync } from "node:fs"; process.on("SIGTERM", () => {}); writeFileSync(process.argv[2], JSON.stringify({ pid: process.pid, target: process.argv[3] })); setInterval(() => {}, 1000);\n',
+        "hanging-editor.mjs",
+      );
+      const statePath = path.join(directory, "state");
+      const services = yield* Effect.context();
+      const controller = new AbortController();
+      const editing = editWithExternalEditor(
+        tui,
+        `${command} ${statePath}`,
+        "initial",
+        controller.signal,
+      );
+      yield* Effect.promise(() =>
+        vi.waitFor(() =>
+          Effect.runPromiseWith(services)(fs.readFileString(statePath)).then((raw) => {
+            decodeHangingEditorState(raw);
+            return undefined;
+          }),
+        ),
+      );
+      controller.abort();
+      const result = yield* Effect.promise(() => editing);
+      expect(result).toBeUndefined();
+      expect(start).toHaveBeenCalledOnce();
+      const state = decodeHangingEditorState(yield* fs.readFileString(statePath));
+      expect(() => process.kill(state.pid, 0)).toThrow();
+      expect(yield* fs.exists(path.dirname(state.target))).toBe(false);
+    }),
   );
 });

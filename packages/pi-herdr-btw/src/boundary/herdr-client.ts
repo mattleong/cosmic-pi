@@ -254,7 +254,6 @@ export const makeHerdrClient = (
       timeoutMillis: request.timeoutMillis ?? COMMAND_TIMEOUT_MILLIS,
       cleanupTimeoutMillis: PROCESS_CLEANUP_MILLIS,
       detached: false,
-      windowsHide: true,
     }).pipe(
       Effect.mapError((failure) => herdrTransportFailure(request, failure)),
       Effect.flatMap((output) => {

@@ -44,7 +44,6 @@ export interface BoundedProcessRequest {
   readonly onCleanup?: (confirmed: boolean) => void;
   readonly sweepProcessTreeOnExit?: boolean;
   readonly detached?: boolean;
-  readonly windowsHide?: boolean;
 }
 
 export interface BoundedProcessResult {
@@ -108,20 +107,13 @@ export const effectProcessExit = (
 const sweepExitedProcessTree = (
   handle: ChildProcessSpawner.ChildProcessHandle,
   timeoutMillis: number,
-): Effect.Effect<boolean> => {
-  if (process.platform !== "win32")
-    return Effect.suspend(() => {
-      const group = signalProcessGroup(Number(handle.pid), "SIGKILL");
-      return group === "absent"
-        ? Effect.succeed(true)
-        : confirmProcessGroupExit(Number(handle.pid), timeoutMillis);
-    });
-  return handle.kill({ killSignal: "SIGKILL" }).pipe(
-    Effect.timeoutOption(Math.max(1, timeoutMillis)),
-    Effect.map(Option.isSome),
-    Effect.orElseSucceed(() => false),
-  );
-};
+): Effect.Effect<boolean> =>
+  Effect.suspend(() => {
+    const group = signalProcessGroup(Number(handle.pid), "SIGKILL");
+    return group === "absent"
+      ? Effect.succeed(true)
+      : confirmProcessGroupExit(Number(handle.pid), timeoutMillis);
+  });
 
 export const confirmEffectProcessClose = (
   handle: ChildProcessSpawner.ChildProcessHandle,
@@ -150,7 +142,6 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
     env: request.environment ? { ...request.environment } : undefined,
     extendEnv: false,
     detached: request.detached,
-    windowsHide: request.windowsHide,
     stdin: request.stdin ? Stream.make(request.stdin) : "ignore",
     stdout: "pipe",
     stderr: "pipe",

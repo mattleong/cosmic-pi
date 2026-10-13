@@ -136,9 +136,6 @@ export {
   processGroupSignalError,
   signalProcess,
   signalProcessGroup,
-  terminateWindowsProcessTree,
-  type ProcessTreeTerminatorSpawn,
-  type WindowsProcessTreeTermination,
 } from "./src/platform/process-tree.ts";
 export { synchronousMonotonicNow, synchronousNow } from "./src/platform/native-clock.ts";
 export { synchronousRandomHex, synchronousRandomUuid } from "./src/platform/native-crypto.ts";

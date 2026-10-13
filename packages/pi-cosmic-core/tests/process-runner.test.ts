@@ -108,7 +108,7 @@ const runFake = (
 };
 
 for (const outcome of ["completed", "timeout"] as const) {
-  it.effect.skipIf(process.platform === "win32")(
+  it.effect(
     `retains uncertain cleanup when the ${outcome} leader leaves a live process group`,
     () =>
       Effect.gen(function* () {
@@ -155,7 +155,7 @@ for (const outcome of ["completed", "timeout"] as const) {
 }
 
 for (const settles of [true, false])
-  it.effect.skipIf(process.platform === "win32")(
+  it.effect(
     `keeps a denied process-tree sweep ${settles ? "pending until its group disappears" : "uncertain while inspection remains denied"}`,
     () =>
       Effect.gen(function* () {
@@ -186,31 +186,6 @@ for (const settles of [true, false])
         expect(fake.reports).toEqual([settles]);
       }),
   );
-
-it.effect("retains uncertain cleanup when a Windows tree sweep fails", () =>
-  Effect.gen(function* () {
-    yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const platform = process.platform;
-        Object.defineProperty(process, "platform", { value: "win32" });
-        return platform;
-      }),
-      (platform) =>
-        Effect.sync(() => {
-          Object.defineProperty(process, "platform", { value: platform });
-        }),
-    );
-    const handle = fakeHandle({
-      exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-      stdout: Stream.empty,
-      stderr: Stream.empty,
-      isRunning: Effect.succeed(false),
-    });
-    const fake = runFake(() => Effect.succeed(handle), { sweepProcessTreeOnExit: true });
-    expect((yield* fake.run).cleanupUnconfirmed).toBe(true);
-    expect(fake.reports).toEqual([false]);
-  }),
-);
 
 for (const mode of ["denied", "ineffective", "confirmed"] as const) {
   it.effect(`reports ${mode} cancellation cleanup before releasing ownership`, () =>

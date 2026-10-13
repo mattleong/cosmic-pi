@@ -31,7 +31,6 @@ const nativeRequest = {
   args: [],
   env: {},
   cwd: "/fixture",
-  platform: "linux" as const,
 };
 const acquireNative = () => acquireLocalCliTransport(nativeRequest, boundary);
 const notification = { method: "initialized" as const };
@@ -228,7 +227,7 @@ describe("shared process transport", () => {
       expect(f.writes).toEqual([]);
       f.stdout.emit("data", Buffer.alloc(MAX_PROCESS_LINE_BYTES + 1, "x"));
       expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
-      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force", { platform: "linux" });
+      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force");
       yield* release;
       expect(f.writes).toEqual([]);
     }),
@@ -251,7 +250,7 @@ describe("shared process transport", () => {
       expect(boundary.terminate).not.toHaveBeenCalled();
       f.stdout.emit("data", Buffer.from(line));
       expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
-      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force", { platform: "linux" });
+      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force");
       yield* release;
     }),
   );
@@ -261,12 +260,12 @@ describe("shared process transport", () => {
       const f = fixture();
       const { release } = yield* openNative(f);
       for (let i = 0; i < 513; i++) f.stdout.emit("data", Buffer.from("{}\n"));
-      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force", { platform: "linux" });
+      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force");
       yield* release;
     }),
   );
 
-  it.effect("lets an in-flight forced Windows termination finish after the scope closes", () =>
+  it.effect("lets an in-flight forced termination finish after the scope closes", () =>
     Effect.gen(function* () {
       const f = fixture();
       const forced = yield* Deferred.make<void>();
@@ -284,10 +283,9 @@ describe("shared process transport", () => {
           : Effect.sync(f.finish),
       );
       const scope = yield* Scope.make();
-      const request = { ...nativeRequest, platform: "win32" as const };
-      yield* start(f.child, acquireLocalCliTransport(request, boundary).pipe(Scope.provide(scope)));
+      yield* start(f.child, acquireNative().pipe(Scope.provide(scope)));
       for (let i = 0; i < 513; i++) f.stdout.emit("data", Buffer.from("{}\n"));
-      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force", { platform: "win32" });
+      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force");
       const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void));
       yield* TestClock.adjust("5 seconds");
       expect(outcome).toBeUndefined();

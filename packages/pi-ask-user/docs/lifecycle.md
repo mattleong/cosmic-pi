@@ -57,6 +57,10 @@ termination, temporary-file cleanup, and TUI restoration. This join is necessary
 replacement first could stop its TUI before the previous editor restarts it. Late editor results
 cannot modify a revoked dialog.
 
+On macOS and Linux, editor commands run through `/bin/sh`, with `nano` as the default. The
+temporary answer path is passed as a positional argument, preserving its literal filename.
+Cancellation sends `SIGTERM` and escalates to `SIGKILL` if needed before the TUI is restored.
+
 Cleanup waits for owned settlement, not a possibly nonsettling Pi custom-UI Promise. A failed
 host close can still leave an overlay or public prompt span behind. The gate waits for a real
 prompt-end event or session replacement instead of inventing a reset that could steal foreign

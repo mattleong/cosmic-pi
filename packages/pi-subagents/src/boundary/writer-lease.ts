@@ -58,7 +58,6 @@ export interface WriterLeaseAcquireRequest {
 }
 
 export interface WriterLeaseContract {
-  readonly platform: NodeJS.Platform;
   readonly canonicalize: (
     cwd: string,
   ) => Effect.Effect<CanonicalWriterCwd, WriterCwdCanonicalizationError>;
@@ -148,8 +147,8 @@ export const makeWriterLease = (
 
   const acquire: WriterLeaseContract["acquire"] = ({ cwd, runId }) =>
     Effect.gen(function* () {
-      if (process.platform === "win32" || !validFilesystemIdentity(cwd))
-        return yield* denied("Writer-lease ownership input or platform was invalid");
+      if (!validFilesystemIdentity(cwd))
+        return yield* denied("Writer-lease ownership input was invalid");
       yield* Effect.interruptible(prepare);
       return yield* lock.tryAcquire(cwd.digest).pipe(
         Effect.mapError((error) =>
@@ -181,7 +180,6 @@ export const makeWriterLease = (
     });
 
   return {
-    platform: process.platform,
     canonicalize,
     acquire,
     markSpawnStarted: (lease) =>

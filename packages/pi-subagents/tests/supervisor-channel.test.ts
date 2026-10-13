@@ -400,17 +400,15 @@ describe("private supervisor channel", () => {
         ).rejects.toMatchObject({ code: "channel_open_failed" }),
       );
 
-      if (process.platform !== "win32") {
-        const linkedAgentDirectory = nodePath.join(root, "linked-agent-home");
-        yield* step(() => symlink(agentDirectory, linkedAgentDirectory, "dir"));
-        yield* step(() =>
-          expect(
-            Effect.runPromise(
-              openIn(scope, { agentDirectory: linkedAgentDirectory }, "agent-path-test"),
-            ),
-          ).rejects.toMatchObject({ code: "channel_open_failed" }),
-        );
-      }
+      const linkedAgentDirectory = nodePath.join(root, "linked-agent-home");
+      yield* step(() => symlink(agentDirectory, linkedAgentDirectory, "dir"));
+      yield* step(() =>
+        expect(
+          Effect.runPromise(
+            openIn(scope, { agentDirectory: linkedAgentDirectory }, "agent-path-test"),
+          ),
+        ).rejects.toMatchObject({ code: "channel_open_failed" }),
+      );
       expect(yield* step(() => readdir(agentDirectory))).toEqual([]);
     },
   );

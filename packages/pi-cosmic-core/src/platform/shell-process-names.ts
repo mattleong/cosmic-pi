@@ -11,15 +11,9 @@ const INTERACTIVE_SHELL_PROCESS_NAMES = new Set([
   "elvish",
   "xonsh",
   "nu",
-  "pwsh",
-  "powershell",
-  "cmd",
 ]);
 
 export const isInteractiveShellProcessName = (name: string): boolean =>
   INTERACTIVE_SHELL_PROCESS_NAMES.has(
-    (name.split(/[\\/]/gu).at(-1) ?? name)
-      .replace(/^-+/gu, "")
-      .replace(/\.exe$/giu, "")
-      .toLowerCase(),
+    (name.split("/").at(-1) ?? name).replace(/^-+/gu, "").toLowerCase(),
   );

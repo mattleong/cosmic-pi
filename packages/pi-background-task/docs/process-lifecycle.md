@@ -27,33 +27,16 @@ work, so late settlement cannot restore rows from an abandoned runtime.
 and [lifecycle stress tests](../tests/lifecycle-stress.test.ts) exercise pending acquisition,
 interrupted stops, aggregate failures, and runtime replacement.
 
-## Platform termination
+## Process-group termination
 
 [The local-process boundary](../src/boundary/local-process.ts) dispatches graceful termination
-immediately and owns escalation and release. On POSIX it signals the process group, with a leader
-fallback, and sweeps descendants after leader exit. A graceful stop gives the entire group its
-grace window even if the shell exits first; force escalation ends that wait and kills the group.
+immediately and owns escalation and release. On macOS and Linux it signals the process group,
+with a leader fallback, and sweeps descendants after leader exit. A graceful stop gives the entire
+group its grace window even if the shell exits first; force escalation ends that wait and kills the group.
 Ordinary leader exit instead triggers an immediate group sweep, preventing descendants with
 inherited pipes from keeping the task open indefinitely.
 
-On Windows, one process-scope fiber owns the graceful `taskkill` helper. Repeated graceful stops
-reuse it; force escalation interrupts and joins it before serialized force attempts. A failed
-attempt remains retryable. Core's bounded terminator requests helper cleanup without waiting for
-a hung helper's exit, so interruption cannot block that join forever.
-
-The boundary records leader exit and refuses its own later `taskkill`, because Windows may
-reuse the PID. A helper racing natural exit treats an unsuccessful termination as settled once
-the target exit is known. Release unrefs the upstream handle before the boundary's force attempt.
-These guards apply to this boundary, not all behavior of the pinned Effect spawner.
-
-The pinned spawner independently runs an untimed `taskkill /T /F` after nonzero leader exit and
-again during finalization, even after unref. Failed or force-stopped Windows tasks therefore
-retain a PID-reuse and shutdown-duration limitation outside this adapter's bound. Without Job
-Objects, descendants that outlive the leader cannot be reliably cleaned up. Recheck this
-dependency behavior when upgrading the process platform; do not describe the adapter's timeout
-as a bound on all upstream finalization.
-
-[Local-process tests](../tests/local-process.test.ts) cover helper escalation, exit races, bounded
-ingress, and real descendant cleanup where supported. Cleanup cannot be guaranteed after host
-`SIGKILL` or machine loss. Commands run with local-user authority; inherited environment values,
-commands, paths, and output are not telemetry, and output is not persisted automatically.
+[Local-process tests](../tests/local-process.test.ts) cover group escalation, exit races, bounded
+ingress, and real descendant cleanup. Cleanup cannot be guaranteed after host `SIGKILL` or machine
+loss. Commands run with local-user authority; inherited environment values, commands, paths,
+and output are not telemetry, and output is not persisted automatically.

@@ -52,7 +52,6 @@ const runDecoder: SharpProcessRunner = (bytes, onCleanup) =>
     timeoutMillis: 30_000,
     cleanupTimeoutMillis: 2_000,
     onCleanup,
-    windowsHide: true,
   });
 
 export const makeSharpAdapter = (run: SharpProcessRunner = runDecoder): SharpAdapterContract => ({

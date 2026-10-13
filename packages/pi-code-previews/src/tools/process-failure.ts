@@ -16,7 +16,7 @@ const shortenCause = (line: string): string => {
   const [, path, parenLine, colonLine] = location;
   const lineNumber = parenLine ?? colonLine;
   if (path === undefined || lineNumber === undefined) return rest;
-  const file = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+  const file = path.slice(path.lastIndexOf("/") + 1);
   return `${file}:${lineNumber} ${rest}`;
 };
 

@@ -49,24 +49,19 @@ const editWithExternalEditorEffect = (
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const command = configuredCommand ?? (process.platform === "win32" ? "notepad" : "nano");
+      const command = configuredCommand ?? "nano";
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-ask-user-" });
       const file = path.join(directory, "answer.md");
-      if (process.platform === "win32" && (file.includes('"') || /[%\p{Cc}]/u.test(file)))
-        return yield* new ExternalEditorError({
-          message: "External-editor temporary path contains unsupported characters.",
-        });
       yield* fs.writeFileString(file, value);
       yield* Effect.acquireRelease(
         Effect.try(() => tui.stop()),
         () => restoreTui(tui),
       );
-      const child = yield* process.platform === "win32"
-        ? ChildProcess.make(`${command} "${file}"`, { ...inheritedTerminalOptions, shell: true })
-        : ChildProcess.make("/bin/sh", ["-c", `exec ${command} "$1"`, "pi-ask-user-editor", file], {
-            ...inheritedTerminalOptions,
-            detached: false,
-          });
+      const child = yield* ChildProcess.make(
+        "/bin/sh",
+        ["-c", `exec ${command} "$1"`, "pi-ask-user-editor", file],
+        { ...inheritedTerminalOptions, detached: false },
+      );
       const status = yield* child.exitCode;
       if (status !== 0)
         return yield* new ExternalEditorError({

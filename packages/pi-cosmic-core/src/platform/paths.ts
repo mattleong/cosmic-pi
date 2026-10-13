@@ -26,8 +26,7 @@ export const isStrictlyInsidePath = (root: string, candidate: string): boolean =
 export function abbreviateHomePath(path: string, home?: string): string {
   if (!home) return path;
   if (path === home) return "~";
-  const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
-  const prefix = home.endsWith(separator) ? home : `${home}${separator}`;
+  const prefix = home.endsWith("/") ? home : `${home}/`;
   return path.startsWith(prefix) ? `~/${path.slice(prefix.length)}` : path;
 }
 

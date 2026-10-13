@@ -47,37 +47,6 @@ const harnessEntries = (agentDirectory: string) =>
   });
 
 describe("local CLI harness ownership", () => {
-  it.live("admits a successful read-only Codex readiness probe on Windows", () =>
-    Effect.gen(function* () {
-      const test = yield* setup;
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          const platform = process.platform;
-          Object.defineProperty(process, "platform", { value: "win32" });
-          return platform;
-        }),
-        (platform) =>
-          Effect.sync(() => {
-            Object.defineProperty(process, "platform", { value: platform });
-          }),
-      );
-      const service = makeLocalCliProcess({
-        agentDirectory: test.agentDirectory,
-        environment: {
-          ...test.environment,
-          CODEX_HOME: test.directory,
-          OPENAI_API_KEY: "fixture-key",
-        },
-        executables: { claude: process.execPath, codex: process.execPath },
-      });
-      yield* service.preflight({
-        ...backendLaunch(),
-        runtime: "codex",
-        closeOnReport: true,
-      });
-    }),
-  );
-
   it("keeps adapter debug controls out of the child environment", () => {
     const sanitized = sanitizeLocalCliEnvironment(
       {

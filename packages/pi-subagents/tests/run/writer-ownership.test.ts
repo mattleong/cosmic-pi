@@ -309,30 +309,6 @@ describe("SubagentService", () => {
       });
     });
 
-  it.effect("rejects Windows writers before canonicalization, lease acquisition, or spawn", () => {
-    const counts = leaseCounts();
-    const { fake, layer } = leaseFixture({ platform: "win32", counts });
-    return withService(layer, function* (service) {
-      const failure = yield* service.start(writer("windows-writer")).pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "UnsupportedSafeWriterOwnershipError",
-        code: "unsupported_safe_writer_ownership",
-        platform: "win32",
-      });
-      expect(counts.canonicalize).toBe(0);
-      expect(counts.acquire).toBe(0);
-      expect(fake.controls).toHaveLength(0);
-      expect(yield* service.list).toEqual([]);
-
-      const reader = yield* service.start(
-        request({ name: "windows-reader", writeIntent: "read-only" }),
-      );
-      expect(reader.state).toBe("running");
-      expect(fake.controls).toHaveLength(1);
-      yield* service.stop(reader.id);
-    });
-  });
-
   it.effect("does not canonicalize or acquire a lease for read-only runs", () => {
     const counts = leaseCounts();
     const { layer } = leaseFixture({ counts });

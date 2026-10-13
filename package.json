@@ -12,6 +12,10 @@
     "type": "git",
     "url": "git+https://github.com/mattleong/cosmic-pi.git"
   },
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "type": "module",
   "scripts": {
     "check": "pnpm typecheck && pnpm effect:diagnostics && pnpm lint && pnpm format:check",

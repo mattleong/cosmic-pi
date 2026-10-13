@@ -4,6 +4,8 @@
 
 This is a pnpm workspace. Shared configuration lives at the root; package source and tests live inside each package.
 
+The workspace supports macOS and Linux. Use POSIX paths and process-group lifecycle behavior.
+
 - `packages/pi-ask-user/`: structured user questionnaires.
 - `packages/pi-background-task/`: session-scoped background tasks.
 - `packages/pi-better-openai/`: Better OpenAI extension.
