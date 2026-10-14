@@ -6,6 +6,7 @@ import type {
   WorkspaceRecord,
   WorkspaceRevisionTarget,
   WorkspaceSettledTarget,
+  WorkspaceSetupTarget,
   WorkspaceTarget,
 } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
@@ -442,6 +443,46 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         return undefined;
       });
     const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target));
+    // A setup command may only add ignored or excluded files such as dependencies; anything else
+    // would enter the worker's proposal or invalidate the prepared tree.
+    const setupChanges = Effect.fn("GitWorkspaceEngine.setupChanges")(function* (
+      target: WorkspaceSetupTarget,
+    ) {
+      const record = yield* checked(target);
+      const preparation = target.preparationId;
+      if (preparation === undefined) {
+        if (record.status !== "active")
+          return yield* workspaceFailure("setup", "Only a new active workspace may run setup.");
+        const snapshot = yield* capture(record, worker(record), "setup-worker");
+        return yield* gitFields(repository(record), [
+          "diff",
+          "--name-only",
+          "-z",
+          "--no-renames",
+          record.baseline,
+          snapshot.commit,
+          "--",
+        ]);
+      }
+      if (
+        record.status !== "prepared" ||
+        record.preparation?.preparationId !== preparation ||
+        record.preparedTree === undefined
+      )
+        return yield* workspaceFailure("setup", "Preparation is stale or unknown.");
+      const prepared = path.join(directory(record), `prepare-${preparation}`);
+      const snapshot = yield* capture(record, prepared, `setup-prepared-${preparation}`);
+      if (snapshot.tree === record.preparedTree) return [];
+      return yield* gitFields(repository(record), [
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        record.preparedTree,
+        snapshot.tree,
+        "--",
+      ]);
+    }, locked);
     const inspect = (target: WorkspaceTarget) => checked(target, false);
     const listAll = listWorkspaceRecords(registry);
     const list = (input: { readonly ownerId: string }) =>
@@ -458,6 +499,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
       revise,
       fork,
       discard,
+      setupChanges,
       inspect,
       list,
       listAll,

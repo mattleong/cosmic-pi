@@ -65,10 +65,11 @@ import { WriterPools } from "./writer-pool.ts";
 import { makeRunWriteClaimControl } from "./write-claim-control.ts";
 import { makeWorkspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
 import { WorkspaceService } from "../workspace/service.ts";
-import type { WriterWorkspaceMode } from "../config/schema.ts";
+import type { WorkspaceSetup, WriterWorkspaceMode } from "../config/schema.ts";
 
 export interface SubagentServiceOptions {
   readonly writerWorkspaceMode?: WriterWorkspaceMode;
+  readonly workspaceSetup?: WorkspaceSetup | undefined;
   readonly workspaceOwnerId?: string;
   readonly workspaceSourceCwd?: string;
   readonly publish?: (projection: SubagentProjection) => void;
@@ -284,6 +285,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ...runContext,
     engine: Option.getOrUndefined(workspaceEngine),
     initialMode: options.writerWorkspaceMode ?? initialProfiles.effectiveConfig.writerWorkspaceMode,
+    workspaceSetup: options.workspaceSetup,
     ownerId: options.workspaceOwnerId ?? runtimeNamespace,
     ...(options.workspaceSourceCwd && { sourceCwd: options.workspaceSourceCwd }),
     isClosed: () => closed,

@@ -174,6 +174,7 @@ function fixture({
     }).pipe(Effect.tap(() => hooks.afterCreate));
   const engine: WorkspaceServiceContract = {
     create,
+    setupChanges: () => Effect.succeed([]),
     inspect: requireEntry,
     list: ({ ownerId }) =>
       Effect.sync(() => [...entries.values()].filter((entry) => entry.handle.ownerId === ownerId)),

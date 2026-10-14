@@ -459,3 +459,27 @@ test("captures removed tracked directories as deletions and starts read-only wit
   expect(yield* exists(path.join(handle.cwd, "src"))).toBe(false);
   expect((yield* service.inspect(workspaceTarget(handle))).excludedPaths).toContain(".env");
 });
+
+test("lets setup add excluded dependencies but reports project files it changes", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* io(() => fs.mkdir(path.join(handle.cwd, "node_modules/pkg"), { recursive: true }));
+  yield* writeFile(path.join(handle.cwd, "node_modules/pkg/index.js"), "dependency\n");
+  yield* writeFile(path.join(handle.cwd, "ignored.ts"), "ignored\n");
+  expect(yield* service.setupChanges(workspaceTarget(handle))).toEqual([]);
+
+  yield* writeFile(path.join(handle.cwd, "generated.ts"), "generated\n");
+  expect(yield* service.setupChanges(workspaceTarget(handle))).toEqual(["generated.ts"]);
+});
+
+test("checks the prepared tree against what prepare captured", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "changed\n");
+  const { prepared } = yield* prepareIntegration(handle);
+  const target = { ...workspaceTarget(handle), preparationId: prepared.preparationId };
+  yield* io(() => fs.mkdir(path.join(prepared.cwd, "node_modules"), { recursive: true }));
+  yield* writeFile(path.join(prepared.cwd, "node_modules/dep.js"), "dependency\n");
+  expect(yield* service.setupChanges(target)).toEqual([]);
+
+  yield* writeFile(path.join(prepared.cwd, "src/main.ts"), "rewritten by setup\n");
+  expect(yield* service.setupChanges(target)).toEqual(["src/main.ts"]);
+});

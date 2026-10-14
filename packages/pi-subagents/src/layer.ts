@@ -70,6 +70,7 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
         notify: options.notify,
         questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: inspection.config.writerWorkspaceMode,
+        workspaceSetup: inspection.config.workspaceSetup,
         proxyHandler: options.proxyHandler,
       });
     }),

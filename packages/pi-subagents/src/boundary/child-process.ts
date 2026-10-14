@@ -1,5 +1,6 @@
 import { sha256Text, synchronousRandomUuid } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
+import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 import { nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
   getAgentDir,
@@ -46,25 +47,7 @@ const BLOCKED_ENV_KEYS = new Set([
   "PI_SESSION_ID",
   RUNTIME_API_KEY_ENV,
   RUNTIME_API_PROVIDER_ENV,
-  // Git's repository-local variables (`git rev-parse --local-env-vars`) would aim a child's Git
-  // at the parent's repository, index, or config instead of the child's own cwd.
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_COMMON_DIR",
-  "GIT_CONFIG",
-  "GIT_CONFIG_COUNT",
-  "GIT_CONFIG_PARAMETERS",
-  "GIT_DIR",
-  "GIT_GRAFT_FILE",
-  "GIT_IMPLICIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_NO_REPLACE_OBJECTS",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_PREFIX",
-  "GIT_REPLACE_REF_BASE",
-  "GIT_SHALLOW_FILE",
-  "GIT_WORK_TREE",
 ]);
-const GIT_CONFIG_ENTRY_KEY = /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u;
 
 export type ChildLaunchRequest = Omit<BackendLaunchRequest, "resumeToken"> & {
   readonly resumeSessionFile?: string | undefined;
@@ -145,7 +128,7 @@ export function childProcessEnvironment(
     ...Object.fromEntries(
       Object.entries(source).filter(
         ([key, value]) =>
-          value !== undefined && !BLOCKED_ENV_KEYS.has(key) && !GIT_CONFIG_ENTRY_KEY.test(key),
+          value !== undefined && !BLOCKED_ENV_KEYS.has(key) && !isGitLocalEnvironmentKey(key),
       ),
     ),
     PI_SUBAGENT_CHILD: "1",

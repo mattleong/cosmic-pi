@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
+import { describeWorkspaceSetup } from "../boundary/workspace-setup.ts";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { failureMessage, isProjectTrusted, type ExtensionSubcommand } from "pi-cosmic-core";
@@ -316,6 +317,7 @@ function subagentSettingsCommand(
           `  ${WORKSPACE} = ${workspace.mode}${workspace.blockedCode ? ` (${WORKSPACE_BLOCKS[workspace.blockedCode]})` : ""}`,
           `  ${DELEGATION} = ${effective.delegation} (in effect)`,
           `  maxDirectChildren = ${effective.nesting.maxDirectChildren}, maxDepth = ${effective.nesting.maxDepth} (in effect)`,
+          `  workspaceSetup = ${effective.workspaceSetup ? describeWorkspaceSetup(effective.workspaceSetup) : "none"} (project; applies after /reload)`,
           "Delegation by scope:",
           ...scopes.map(delegationLine),
           "Nesting limits by scope:",

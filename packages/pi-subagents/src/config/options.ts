@@ -14,6 +14,7 @@ import {
   DEFAULT_WRITER_WORKSPACE_MODE,
   type DelegationMode,
   type WriterWorkspaceMode,
+  type WorkspaceSetup,
   type DecodedSubagentConfig,
   type SubagentNestingPolicy,
 } from "./schema.ts";
@@ -34,6 +35,8 @@ export interface ResolvedSubagentConfig {
   readonly nesting: SubagentNestingPolicy;
   readonly writerWorkspaceMode: WriterWorkspaceMode;
   readonly delegation: DelegationMode;
+  /** Only a trusted project document can declare a setup command. */
+  readonly workspaceSetup?: WorkspaceSetup | undefined;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
   readonly diagnostics: ReadonlyArray<string>;
@@ -198,6 +201,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     nesting: policy.nesting,
     writerWorkspaceMode: policy.writerWorkspaceMode,
     delegation: policy.delegation,
+    ...(project?.file.workspaceSetup && { workspaceSetup: project.file.workspaceSetup }),
     profiles: effective.profiles,
     profileSources: effective.profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],

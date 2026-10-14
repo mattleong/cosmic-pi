@@ -1,7 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
-import type { WriterWorkspaceMode } from "../config/schema.ts";
+import type { WorkspaceSetup, WriterWorkspaceMode } from "../config/schema.ts";
 import type { WorkspaceHandle } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
@@ -39,6 +39,7 @@ export type WorkspaceControlDependencies = Pick<
   readonly writerPools: { readonly size: number };
   readonly engine: WorkspaceServiceContract | undefined;
   readonly initialMode: WriterWorkspaceMode;
+  readonly workspaceSetup?: WorkspaceSetup | undefined;
   readonly ownerId: string;
   readonly sourceCwd?: string;
   readonly isClosed: () => boolean;

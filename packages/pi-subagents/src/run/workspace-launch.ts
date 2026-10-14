@@ -7,6 +7,7 @@ import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { SUBAGENT_ROOT_RUN_ID, type StartSubagentRequest, type SubagentRunView } from "./model.ts";
 import { runSessionOwned } from "./session-owned.ts";
+import { provisionWorkspaceTree } from "./workspace-setup.ts";
 import {
   type LaunchSlot,
   mapWorkspaceError,
@@ -54,6 +55,7 @@ const releaseRevisionLocked = ({ binding, revision }: Succession) => {
 
 export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
   const { records, withLock, isClosed, state, ownerFor, requireEngine, requireBinding } = context;
+  const { workspaceSetup } = context;
   const { operations, ownerScope } = context;
   const releaseSlotLocked = (slot: LaunchSlot | undefined) => {
     if (!slot || !state.launchSlots.delete(slot)) return;
@@ -205,6 +207,8 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
             : service.create({ sourceCwd: request.cwd, ownerId: ownerFor(caller), onAcquired });
           const handle = yield* restore(acquiring.pipe(Effect.mapError(mapWorkspaceError)));
           yield* withLock(Effect.sync(() => onAcquired(handle)));
+          if (workspaceSetup)
+            yield* restore(provisionWorkspaceTree(service, workspaceSetup, handle, handle));
           return handle;
         });
         return yield* Effect.gen(function* () {

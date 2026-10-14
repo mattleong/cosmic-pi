@@ -12,6 +12,7 @@ import {
   type WorkspaceBinding,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
+import { provisionWorkspaceTree } from "./workspace-setup.ts";
 
 export interface WorkspaceReview extends WorkspaceRevision {
   readonly offset: number;
@@ -40,7 +41,7 @@ const engineRevision = (service: WorkspaceServiceContract, { handle }: Workspace
   );
 
 export function makeWorkspaceReview(context: WorkspaceControlContext) {
-  const { withLock, state, requireBinding, requireEngine, operations } = context;
+  const { withLock, state, requireBinding, requireEngine, operations, workspaceSetup } = context;
   const hold = <A>(
     workspaceId: string,
     caller: string,
@@ -175,9 +176,12 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
               "workspace_review_incomplete",
               "Read every page of this exact immutable revision before preparing integration.",
             );
-          return yield* service
+          const preparation = yield* service
             .prepare({ workspaceId, ownerId: binding.handle.ownerId, revisionId })
             .pipe(Effect.mapError(mapWorkspaceError));
+          if (workspaceSetup)
+            yield* provisionWorkspaceTree(service, workspaceSetup, binding.handle, preparation);
+          return preparation;
         }),
       );
     });

@@ -16,6 +16,7 @@ import type {
   WorkspaceRevision,
   WorkspaceRevisionTarget,
   WorkspaceSettledTarget,
+  WorkspaceSetupTarget,
   WorkspaceTarget,
 } from "./model.ts";
 
@@ -41,6 +42,10 @@ export interface WorkspaceServiceContract {
     target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
   ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
+  /** Paths a setup command changed relative to the tree it ran in. */
+  readonly setupChanges: (
+    target: WorkspaceSetupTarget,
+  ) => Effect.Effect<ReadonlyArray<string>, WorkspaceError>;
   readonly inspect: (target: WorkspaceTarget) => Effect.Effect<WorkspaceRecord, WorkspaceError>;
   readonly list: (input: {
     readonly ownerId: string;
@@ -70,6 +75,7 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           revise: (input) => run(engine.revise(input)),
           fork: (input) => run(engine.fork(input)),
           discard: (input) => run(engine.discard(input)),
+          setupChanges: (input) => run(engine.setupChanges(input)),
           inspect: (input) => run(engine.inspect(input)),
           list: (input) => run(engine.list(input)),
           listAll: run(engine.listAll),

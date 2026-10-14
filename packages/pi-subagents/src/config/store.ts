@@ -182,6 +182,7 @@ const decodeDocument = (
     `${scope}.nesting`,
     `${scope}.writerWorkspaceMode`,
     `${scope}.delegation`,
+    `${scope}.workspaceSetup`,
   ]);
   return decoded.diagnostics.some((diagnostic) => fatal.has(diagnostic))
     ? Effect.fail(

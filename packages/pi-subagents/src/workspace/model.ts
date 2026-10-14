@@ -84,6 +84,10 @@ export interface WorkspaceTarget {
   readonly workspaceId: string;
   readonly ownerId: string;
 }
+export interface WorkspaceSetupTarget extends WorkspaceTarget {
+  /** Checks the prepared test tree instead of the worker tree. */
+  readonly preparationId?: string | undefined;
+}
 export interface WorkspaceSettledTarget extends WorkspaceTarget {
   readonly processCleanupConfirmed: true;
 }

@@ -43,6 +43,26 @@ export type DelegationMode = (typeof DELEGATION_MODES)[number];
 export const DEFAULT_DELEGATION_MODE: DelegationMode = "normal";
 export const DelegationModeSchema = Schema.Literals(DELEGATION_MODES);
 
+export const MAX_WORKSPACE_SETUP_ARGUMENTS = 64;
+export const MAX_WORKSPACE_SETUP_ARGUMENT_CHARS = 4_096;
+export const DEFAULT_WORKSPACE_SETUP_TIMEOUT_SECONDS = 600;
+export const MAX_WORKSPACE_SETUP_TIMEOUT_SECONDS = 3_600;
+/** A trusted project's command that installs dependencies in isolated writer and test trees. */
+export const WorkspaceSetupSchema = Schema.Struct({
+  command: Schema.Array(
+    Schema.String.check(Schema.isBetweenLength(1, MAX_WORKSPACE_SETUP_ARGUMENT_CHARS)),
+  ).check(Schema.isBetweenLength(1, MAX_WORKSPACE_SETUP_ARGUMENTS)),
+  timeoutSeconds: Schema.optionalKey(
+    Schema.Finite.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(MAX_WORKSPACE_SETUP_TIMEOUT_SECONDS),
+    ),
+  ),
+});
+export type WorkspaceSetup = typeof WorkspaceSetupSchema.Type;
+const WORKSPACE_SETUP_KEYS = new Set(["command", "timeoutSeconds"]);
+
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
 export const MIN_SUBAGENT_DEPTH = 0;
@@ -68,6 +88,7 @@ export interface SubagentConfigFile {
   readonly nesting?: SubagentNestingPolicy | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly delegation?: DelegationMode | undefined;
+  readonly workspaceSetup?: WorkspaceSetup | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -337,6 +358,7 @@ const ROOT_KEYS = new Set([
   "nesting",
   "writerWorkspaceMode",
   "delegation",
+  "workspaceSetup",
 ]);
 
 const readRootField = <S extends Schema.Constraint>(
@@ -366,6 +388,27 @@ const decodeDefaultProfileSet = (rawRoot: ProbedFields, scope: string, diagnosti
   return { defaultProfileSet, invalidDefaultProfileSet };
 };
 
+// Setup commands are repository-specific, so only a project document may declare one.
+const decodeWorkspaceSetup = (
+  rawRoot: ProbedFields,
+  scope: string,
+  diagnostics: string[],
+): WorkspaceSetup | undefined => {
+  const path = `${scope}.workspaceSetup`;
+  const field = readField(rawRoot, "workspaceSetup", path, diagnostics);
+  if (!field.present) return undefined;
+  const fields = probeFields(field.value);
+  if (
+    scope === "project" &&
+    fields !== undefined &&
+    ownKeysAre(fields, WORKSPACE_SETUP_KEYS) &&
+    Schema.is(WorkspaceSetupSchema)(fields)
+  )
+    return Object.freeze({ ...fields, command: Object.freeze([...fields.command]) });
+  diagnostics.push(path);
+  return undefined;
+};
+
 const decodeCurrentBody = (
   rawRoot: ProbedFields,
   scope: string,
@@ -379,6 +422,7 @@ const decodeCurrentBody = (
     WriterWorkspaceModeSchema,
   );
   const delegation = readRootField(rawRoot, "delegation", scope, diagnostics, DelegationModeSchema);
+  const workspaceSetup = decodeWorkspaceSetup(rawRoot, scope, diagnostics);
   const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
   const decoded = setsField.present
     ? decodeProfileSets(probeFields(setsField.value), `${scope}.profileSets`, diagnostics)
@@ -394,6 +438,7 @@ const decodeCurrentBody = (
       ...(defaultProfileSet !== undefined && { defaultProfileSet }),
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
       ...(delegation !== undefined && { delegation }),
+      ...(workspaceSetup !== undefined && { workspaceSetup }),
     },
     invalidProfileSetRoutes: decoded?.invalidProfileSetRoutes ?? {},
     invalidProfileSets: decoded?.invalidProfileSets ?? [],
