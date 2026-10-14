@@ -37,6 +37,7 @@ export interface ResolvedSubagentConfig {
   readonly delegation: DelegationMode;
   /** Only a trusted project document can declare a setup command. */
   readonly workspaceSetup?: WorkspaceSetup | undefined;
+  readonly sessionSpendLimit?: number | undefined;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
   readonly diagnostics: ReadonlyArray<string>;
@@ -202,6 +203,9 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     writerWorkspaceMode: policy.writerWorkspaceMode,
     delegation: policy.delegation,
     ...(project?.file.workspaceSetup && { workspaceSetup: project.file.workspaceSetup }),
+    ...((project?.file.sessionSpendLimit ?? input.global.file.sessionSpendLimit) !== undefined && {
+      sessionSpendLimit: project?.file.sessionSpendLimit ?? input.global.file.sessionSpendLimit,
+    }),
     profiles: effective.profiles,
     profileSources: effective.profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],

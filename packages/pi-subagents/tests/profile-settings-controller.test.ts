@@ -712,6 +712,7 @@ describe("profile settings controller", () => {
       expect(vi.mocked(unset.managerActions.patchNesting).mock.calls[0]?.[0].nesting).toEqual({
         maxDirectChildren: 12,
         maxDepth: 5,
+        maxActiveRuns: 16,
       });
     },
   );

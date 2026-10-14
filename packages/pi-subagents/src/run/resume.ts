@@ -3,7 +3,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
-import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
+import {
+  canonicalizeWriterCwd,
+  processCapacityError,
+  treeCapacityError,
+  writerConflictError,
+} from "./admission.ts";
+import { DEFAULT_MAX_ACTIVE_RUNS, type SubagentNestingPolicy } from "../config/schema.ts";
 import { beginNextAssignmentLocked, type RunAssignment } from "./assignment.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateParentMessage } from "./tool-policy.ts";
@@ -82,7 +88,7 @@ export interface RunResumeDependencies extends Pick<
   | "sendPeerNotices"
 > {
   readonly writerPools: WriterPoolLookup & Pick<WriterPools, "joinLocked">;
-  readonly currentChildLimit: Effect.Effect<number>;
+  readonly currentNesting: Effect.Effect<SubagentNestingPolicy>;
   readonly delivery: RunNotificationDelivery;
   readonly initializeProcess: RunProcessInitializer;
   readonly assignment: RunAssignment;
@@ -334,13 +340,21 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                   `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
                 );
               const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-              const capacityFailure = processCapacityError(
-                records,
-                parentRunId,
-                yield* dependencies.currentChildLimit,
-                selected,
-                workspaces.heldLaunchSlots(parentRunId),
-              );
+              const nesting = yield* dependencies.currentNesting;
+              const capacityFailure =
+                processCapacityError(
+                  records,
+                  parentRunId,
+                  nesting.maxDirectChildren,
+                  selected,
+                  workspaces.heldLaunchSlots(parentRunId),
+                ) ??
+                treeCapacityError(
+                  records,
+                  nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
+                  selected,
+                  workspaces.heldLaunchSlots(parentRunId),
+                );
               if (capacityFailure) return yield* capacityFailure;
               return undefined;
             });

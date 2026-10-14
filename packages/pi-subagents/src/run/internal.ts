@@ -1,4 +1,5 @@
 import { closeOpenToolSessionEvents } from "./session-events.ts";
+import type { SessionUsageLedger } from "./session-usage.ts";
 import { absurd } from "effect/Function";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -41,6 +42,7 @@ export interface RunContext {
   readonly requireRecord: (id: string) => Effect.Effect<RunRecord, SubagentNotFoundError>;
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
   readonly allocateAssignmentAttemptToken: () => string;
+  readonly sessionUsage: SessionUsageLedger;
 }
 
 export interface PendingInitializationSettlement {

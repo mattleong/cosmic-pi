@@ -47,6 +47,19 @@ describe("SubagentService", () => {
     });
   });
 
+  it.effect("caps active runs across the whole tree, not only per parent", () => {
+    const { layer } = localServiceFixture();
+    const nestingPolicy = { maxDirectChildren: 12, maxDepth: 3, maxActiveRuns: 2 };
+    return withService(layer, function* (service) {
+      const parent = yield* service.start(request({ nestingPolicy }));
+      yield* service.start(request({ nestingPolicy, parentRunId: parent.id }));
+      expect(yield* service.start(request({ nestingPolicy })).pipe(Effect.flip)).toMatchObject({
+        code: "tree_capacity",
+        limit: 2,
+      });
+    });
+  });
+
   it.effect("resumes an in-place paused process at its parent's capacity", () => {
     const { fake, layer } = localServiceFixture(
       {},

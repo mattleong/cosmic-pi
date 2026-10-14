@@ -65,6 +65,15 @@ const WORKSPACE_SETUP_KEYS = new Set(["command", "timeoutSeconds"]);
 
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
+/** Optional cap, in US dollars, on what one session's subagents may spend before new starts stop. */
+export const SessionSpendLimitSchema = Schema.Finite.check(
+  Schema.isGreaterThan(0),
+  Schema.isLessThanOrEqualTo(100_000),
+);
+
+export const MIN_ACTIVE_RUNS = 1;
+export const MAX_ACTIVE_RUNS = 64;
+export const DEFAULT_MAX_ACTIVE_RUNS = 16;
 export const MIN_SUBAGENT_DEPTH = 0;
 export const MAX_SUBAGENT_DEPTH = 8;
 
@@ -89,6 +98,7 @@ export interface SubagentConfigFile {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly delegation?: DelegationMode | undefined;
   readonly workspaceSetup?: WorkspaceSetup | undefined;
+  readonly sessionSpendLimit?: number | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -111,15 +121,24 @@ export const SubagentNestingSchema = Schema.Struct({
     Schema.isGreaterThanOrEqualTo(MIN_SUBAGENT_DEPTH),
     Schema.isLessThanOrEqualTo(MAX_SUBAGENT_DEPTH),
   ),
+  /** Active subagent processes allowed at once across the whole tree. */
+  maxActiveRuns: Schema.optionalKey(
+    Schema.Finite.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(MIN_ACTIVE_RUNS),
+      Schema.isLessThanOrEqualTo(MAX_ACTIVE_RUNS),
+    ),
+  ),
 });
 export type SubagentNestingPolicy = typeof SubagentNestingSchema.Type;
 
 export const DEFAULT_SUBAGENT_NESTING_POLICY: SubagentNestingPolicy = Object.freeze({
   maxDirectChildren: 12,
   maxDepth: 3,
+  maxActiveRuns: DEFAULT_MAX_ACTIVE_RUNS,
 });
 
-const NESTING_KEYS = new Set(["maxDirectChildren", "maxDepth"]);
+const NESTING_KEYS = new Set(["maxDirectChildren", "maxDepth", "maxActiveRuns"]);
 
 const nullPrototypeRecord = <Value>() => {
   const record: Record<string, Value> = {};
@@ -359,6 +378,7 @@ const ROOT_KEYS = new Set([
   "writerWorkspaceMode",
   "delegation",
   "workspaceSetup",
+  "sessionSpendLimit",
 ]);
 
 const readRootField = <S extends Schema.Constraint>(
@@ -423,6 +443,13 @@ const decodeCurrentBody = (
   );
   const delegation = readRootField(rawRoot, "delegation", scope, diagnostics, DelegationModeSchema);
   const workspaceSetup = decodeWorkspaceSetup(rawRoot, scope, diagnostics);
+  const sessionSpendLimit = readRootField(
+    rawRoot,
+    "sessionSpendLimit",
+    scope,
+    diagnostics,
+    SessionSpendLimitSchema,
+  );
   const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
   const decoded = setsField.present
     ? decodeProfileSets(probeFields(setsField.value), `${scope}.profileSets`, diagnostics)
@@ -439,6 +466,7 @@ const decodeCurrentBody = (
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
       ...(delegation !== undefined && { delegation }),
       ...(workspaceSetup !== undefined && { workspaceSetup }),
+      ...(sessionSpendLimit !== undefined && { sessionSpendLimit }),
     },
     invalidProfileSetRoutes: decoded?.invalidProfileSetRoutes ?? {},
     invalidProfileSets: decoded?.invalidProfileSets ?? [],

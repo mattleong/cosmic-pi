@@ -54,6 +54,7 @@ import { projectRunTree } from "./tree.ts";
 import { allocateRuntimeNamespace, makeRunIdentities } from "./identity.ts";
 import { makeRunNotificationRouting } from "./notification-routing.ts";
 import { makeParentDrain } from "./parent-drain.ts";
+import { makeSessionUsageLedger, sessionUsageLocked } from "./session-usage.ts";
 import { makeRunSessionStarts } from "./session-starts.ts";
 import { makeRunSubtreeStop } from "./subtree-stop.ts";
 import { makeRunTurnInputs } from "./turn-input.ts";
@@ -222,9 +223,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
+  const sessionUsage = makeSessionUsageLedger();
   const writerPools = new WriterPools();
   const frozenProjection = (revision: number): SubagentProjection =>
-    Object.freeze({ revision, runs: Object.freeze(sortRuns(projectRunTree(records))) });
+    Object.freeze({
+      revision,
+      runs: Object.freeze(sortRuns(projectRunTree(records))),
+      sessionUsage: sessionUsageLocked(sessionUsage, records),
+    });
   const projectionRef = yield* SubscriptionRef.make(frozenProjection(0));
   const runtimeNamespace = allocateRuntimeNamespace();
   let closed = false;
@@ -282,6 +288,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     requireRecord,
     sendPeerNotices: makeRunPeerNotifier(records),
     allocateAssignmentAttemptToken,
+    sessionUsage,
   };
   const workspaces = makeWorkspaceControl({
     ...runContext,
@@ -399,10 +406,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     submitPrompt: assignment.submitPrompt,
     initializeProcess,
     workspaces,
+    currentSpendLimit: profileService.capture.pipe(
+      Effect.map((snapshot) => snapshot.effectiveConfig.sessionSpendLimit),
+    ),
   });
 
-  const rootChildLimit = profileService.capture.pipe(
-    Effect.map((snapshot) => snapshot.effectiveConfig.nesting.maxDirectChildren),
+  const rootNesting = profileService.capture.pipe(
+    Effect.map((snapshot) => snapshot.effectiveConfig.nesting),
   );
   const resume = makeRunResume({
     ...runContext,
@@ -412,7 +422,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     settlement,
     closeRecordScope,
     workspaces,
-    currentChildLimit: rootChildLimit,
+    currentNesting: rootNesting,
   });
 
   const writeClaims = makeRunWriteClaimControl(runContext);

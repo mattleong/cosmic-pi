@@ -53,6 +53,24 @@ export const processCapacityError = (
   });
 };
 
+/** Caps active subagent processes across the whole tree, whatever their parent. */
+export const treeCapacityError = (
+  records: ReadonlyMap<string, RunRecord>,
+  limit: number,
+  excluded?: RunRecord,
+  held = 0,
+): SubagentCapacityError | undefined => {
+  const occupied = [...records.values()].filter(
+    (record) => record !== excluded && ownsProcessSlot(record),
+  ).length;
+  if (occupied + held < limit) return undefined;
+  return new SubagentCapacityError({
+    limit,
+    code: "tree_capacity",
+    message: `Active subagent limit reached (${limit}). Wait for a run to finish or stop one first; nesting.maxActiveRuns sets the limit.`,
+  });
+};
+
 export const writerConflictError = (
   records: ReadonlyMap<string, RunRecord>,
   pools: WriterPoolLookup,

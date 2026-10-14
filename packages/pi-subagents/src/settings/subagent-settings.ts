@@ -16,6 +16,9 @@ import {
   MAX_DIRECT_CHILDREN,
   MAX_SUBAGENT_DEPTH,
   MIN_DIRECT_CHILDREN,
+  DEFAULT_MAX_ACTIVE_RUNS,
+  MIN_ACTIVE_RUNS,
+  MAX_ACTIVE_RUNS,
   MIN_SUBAGENT_DEPTH,
   WRITER_WORKSPACE_MODES,
   WriterWorkspaceModeSchema,
@@ -66,6 +69,13 @@ const NESTING_FIELDS = {
     minimum: MIN_SUBAGENT_DEPTH,
     maximum: MAX_SUBAGENT_DEPTH,
     presets: ["0", "1", "2", "3", "5", "8"],
+  },
+  maxActiveRuns: {
+    label: "max active",
+    description: "How many subagents may run at once across the whole tree.",
+    minimum: MIN_ACTIVE_RUNS,
+    maximum: MAX_ACTIVE_RUNS,
+    presets: ["4", "8", "16", "32", "64"],
   },
 } as const satisfies Record<NestingField, NestingFieldInfo>;
 
@@ -162,7 +172,9 @@ const scopedSettingItem = (
       values: [...DELEGATION_MODES, INHERIT],
     };
   const own = scopeNesting(inspection, scope);
-  const currentValue = own ? String(own[id]) : INHERIT;
+  const currentValue = own
+    ? String(own[id] ?? DEFAULT_SUBAGENT_NESTING_POLICY[id] ?? DEFAULT_MAX_ACTIVE_RUNS)
+    : INHERIT;
   return {
     id: `${scope}:${id}`,
     label: `${SCOPE_LABELS[scope]} · ${NESTING_FIELDS[id].label}`,
@@ -306,7 +318,7 @@ function subagentSettingsCommand(
         const nestingLine = (scope: ProfileSettingsScope) => {
           const own = scopeNesting(inspection, scope);
           return own
-            ? `  ${scope}: maxDirectChildren = ${own.maxDirectChildren}, maxDepth = ${own.maxDepth}`
+            ? `  ${scope}: maxDirectChildren = ${own.maxDirectChildren}, maxDepth = ${own.maxDepth}, maxActiveRuns = ${own.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS}`
             : `  ${scope}: ${INHERIT}`;
         };
         const delegationLine = (scope: ProfileSettingsScope) =>
@@ -316,7 +328,7 @@ function subagentSettingsCommand(
           "Subagents settings",
           `  ${WORKSPACE} = ${workspace.mode}${workspace.blockedCode ? ` (${WORKSPACE_BLOCKS[workspace.blockedCode]})` : ""}`,
           `  ${DELEGATION} = ${effective.delegation} (in effect)`,
-          `  maxDirectChildren = ${effective.nesting.maxDirectChildren}, maxDepth = ${effective.nesting.maxDepth} (in effect)`,
+          `  maxDirectChildren = ${effective.nesting.maxDirectChildren}, maxDepth = ${effective.nesting.maxDepth}, maxActiveRuns = ${effective.nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS} (in effect)`,
           `  workspaceSetup = ${effective.workspaceSetup ? describeWorkspaceSetup(effective.workspaceSetup) : "none"} (project; applies after /reload)`,
           "Delegation by scope:",
           ...scopes.map(delegationLine),

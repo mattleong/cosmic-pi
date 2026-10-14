@@ -193,6 +193,8 @@ export const SUBAGENT_ROOT_RUN_ID = "root";
 export interface SubagentProjection {
   readonly revision: number;
   readonly runs: ReadonlyArray<SubagentRunView>;
+  /** Every run this session started, including runs already evicted from `runs`. */
+  readonly sessionUsage?: SubagentUsage | undefined;
 }
 
 export const FAILED_START_CLEANUP_DISPOSITIONS = ["pending", "confirmed", "quarantined"] as const;

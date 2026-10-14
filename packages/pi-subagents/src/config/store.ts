@@ -183,6 +183,7 @@ const decodeDocument = (
     `${scope}.writerWorkspaceMode`,
     `${scope}.delegation`,
     `${scope}.workspaceSetup`,
+    `${scope}.sessionSpendLimit`,
   ]);
   return decoded.diagnostics.some((diagnostic) => fatal.has(diagnostic))
     ? Effect.fail(

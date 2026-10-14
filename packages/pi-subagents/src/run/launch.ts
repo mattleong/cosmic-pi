@@ -1,16 +1,31 @@
+import {
+  retireRunUsageLocked,
+  sessionUsageLocked,
+  type SessionUsageLedger,
+} from "./session-usage.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
-import { DEFAULT_SUBAGENT_NESTING_POLICY, type SubagentNestingPolicy } from "../config/schema.ts";
-import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
+import {
+  DEFAULT_MAX_ACTIVE_RUNS,
+  DEFAULT_SUBAGENT_NESTING_POLICY,
+  type SubagentNestingPolicy,
+} from "../config/schema.ts";
+import {
+  canonicalizeWriterCwd,
+  processCapacityError,
+  treeCapacityError,
+  writerConflictError,
+} from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
 import { taskPrompt } from "./tool-policy.ts";
 import {
   invalidRequest,
   processError,
+  SubagentCapacityError,
   type SubagentError,
   SubagentHistoryCapacityError,
   SubagentRuntimeClosedError,
@@ -72,6 +87,8 @@ export interface RunLaunchDependencies extends Pick<
   readonly submitPrompt: RunAssignment["submitPrompt"];
   readonly initializeProcess: RunProcessInitializer;
   readonly workspaces: Pick<RunWorkspaceControl, "bind" | "heldLaunchSlots">;
+  readonly sessionUsage: SessionUsageLedger;
+  readonly currentSpendLimit: Effect.Effect<number | undefined>;
 }
 
 const runtimeClosedError = () =>
@@ -124,6 +141,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
         const nestingPolicy: SubagentNestingPolicy =
           request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
+        const spendLimit = yield* dependencies.currentSpendLimit;
         const driver = yield* restore(
           backendRegistry.resolve({
             host: request.host,
@@ -218,6 +236,20 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               workspaces.heldLaunchSlots(parentRunId, request),
             );
             if (capacityFailure) return yield* capacityFailure;
+            const treeFailure = treeCapacityError(
+              records,
+              nestingPolicy.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
+              ownReservation,
+              workspaces.heldLaunchSlots(parentRunId, request),
+            );
+            if (treeFailure) return yield* treeFailure;
+            const spent = sessionUsageLocked(dependencies.sessionUsage, records).cost ?? 0;
+            if (spendLimit !== undefined && spent >= spendLimit)
+              return yield* new SubagentCapacityError({
+                limit: spendLimit,
+                code: "session_spend_limit",
+                message: `This session's subagents have spent $${spent.toFixed(2)} of its $${spendLimit.toFixed(2)} limit (sessionSpendLimit); no new runs start.`,
+              });
             if (!canonicalWriterCwd) return undefined;
             const writerFailure = writerConflictError(
               records,
@@ -252,6 +284,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           Effect.gen(function* () {
             if (evicted) {
               evicted.evictionClaim = undefined;
+              retireRunUsageLocked(dependencies.sessionUsage, evicted);
               records.delete(evicted.view.id);
               delivery.discardQuestionLocked(evicted.view.id);
             }

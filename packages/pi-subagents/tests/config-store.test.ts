@@ -112,7 +112,7 @@ describe("SubagentConfigStore activation", () => {
       expect(config.profiles.worker).toEqual({ candidates: [worker] });
       expect(config.profileSources.worker).toBe("global");
       expect(config.fallbackProfile).toBe("generalist");
-      expect(config.nesting).toEqual({ maxDirectChildren: 12, maxDepth: 3 });
+      expect(config.nesting).toEqual({ maxDirectChildren: 12, maxDepth: 3, maxActiveRuns: 16 });
     }),
   );
 

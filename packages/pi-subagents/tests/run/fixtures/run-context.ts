@@ -18,6 +18,7 @@ import { WriterPools } from "../../../src/run/writer-pool.ts";
 import { makeRunSettlement } from "../../../src/run/settlement.ts";
 import { view } from "../../fixtures/run-view.ts";
 import { fakeWriterLeaseLayer } from "./service-harness.ts";
+import { makeSessionUsageLedger } from "../../../src/run/session-usage.ts";
 
 export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
   Effect.gen(function* () {
@@ -41,6 +42,7 @@ export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
       },
       sendPeerNotices: () => Effect.void,
       allocateAssignmentAttemptToken: () => `assignment-test-${++attempts}`,
+      sessionUsage: makeSessionUsageLedger(),
       ...overrides,
     };
     return context;
