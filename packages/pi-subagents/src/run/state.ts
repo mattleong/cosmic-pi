@@ -89,6 +89,9 @@ export const addUsage = (left: SubagentUsage, right: SubagentUsage): SubagentUsa
     cacheWrite: left.cacheWrite + right.cacheWrite,
     totalTokens: left.totalTokens + right.totalTokens,
     ...(cost !== undefined && { cost }),
+    ...((right.contextPercent ?? left.contextPercent) !== undefined && {
+      contextPercent: right.contextPercent ?? left.contextPercent,
+    }),
   };
   return isValidUsage(combined) ? combined : left;
 };

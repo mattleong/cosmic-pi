@@ -1,3 +1,4 @@
+import { toolOutputPreview } from "./tool-output-preview.ts";
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import type * as Schema from "effect/Schema";
@@ -73,6 +74,7 @@ export const normalizeRpcEvent = (
         toolCallId: envelope.toolCallId,
         toolName: envelope.toolName,
         isError: envelope.isError,
+        outputPreview: toolOutputPreview(envelope.result),
       });
     case "extension_error":
       return Effect.succeed<BackendEvent>({

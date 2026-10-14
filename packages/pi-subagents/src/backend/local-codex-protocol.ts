@@ -115,6 +115,7 @@ const Item = Schema.Struct({
   status: Schema.optional(Method),
   arguments: Schema.optional(Schema.Unknown),
   changes: Schema.optional(FileChanges),
+  aggregatedOutput: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const NativeItemEnvelope = Schema.Struct({
   threadId: Id,

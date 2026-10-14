@@ -1127,6 +1127,41 @@ const activityScenarios: ReadonlyArray<ActivityScenario> = [
     details: [worktreeProposal.id],
   },
   {
+    title: "a running child's messages and tool output",
+    runs: [
+      view({
+        id: "agent-30",
+        name: "token-parser",
+        state: "running",
+        usage: { ...usage(84_000, 0.21), contextPercent: 83 },
+        ...timing(4),
+        sessionEvents: [
+          {
+            type: "assistant",
+            text: "Checking the **token parser** before touching the lexer.",
+            createdAt: now - 200_000,
+          },
+          {
+            type: "tool",
+            toolCallId: "t1",
+            toolName: "bash",
+            target: "pnpm test token",
+            state: "failed",
+            startedAt: now - 150_000,
+            endedAt: now - 140_000,
+            outputPreview: "FAIL tests/token.test.ts > parses escapes\nexpected 2 but got 3",
+          },
+          {
+            type: "assistant",
+            text: "The escape handling double-counts backslashes; fixing that next.",
+            createdAt: now - 100_000,
+          },
+        ],
+      }),
+    ],
+    details: ["agent-30"],
+  },
+  {
     title: "a subtree being stopped",
     runs: [
       { ...authReview, state: "stopping" },

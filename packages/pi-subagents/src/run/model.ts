@@ -47,6 +47,8 @@ export interface SubagentUsage {
   readonly cacheWrite: number;
   readonly totalTokens: number;
   readonly cost?: number | undefined;
+  /** Latest share of the child's context window in use, when the runtime reports it. */
+  readonly contextPercent?: number | undefined;
 }
 
 export type SubagentSessionEvent =
@@ -63,6 +65,7 @@ export type SubagentSessionEvent =
       readonly state: "running" | "completed" | "failed";
       readonly startedAt: number;
       readonly endedAt?: number | undefined;
+      readonly outputPreview?: string | undefined;
     }
   | {
       readonly type: "notice";

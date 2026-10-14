@@ -117,6 +117,7 @@ export type BackendEvent =
       readonly toolCallId: string;
       readonly toolName: string;
       readonly isError: boolean;
+      readonly outputPreview?: string | undefined;
     }
   | {
       readonly type: "supervisor_contact";

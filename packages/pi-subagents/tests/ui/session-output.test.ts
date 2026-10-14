@@ -35,6 +35,39 @@ describe("subagent session output projection", () => {
     expect(text).not.toContain("agent-1");
   });
 
+  it("shows what a running child is saying and its tool output, without repeating the report", () => {
+    const running = render(
+      baseRun({
+        sessionEvents: [
+          { type: "assistant", text: "Checking the **token parser** first.", createdAt: 1_000 },
+          {
+            type: "tool",
+            toolCallId: "t1",
+            toolName: "bash",
+            target: "pnpm test",
+            state: "failed",
+            startedAt: 2_000,
+            endedAt: 3_000,
+            outputPreview: "FAIL tests/token.test.ts\nexpected 2 but got 3",
+          },
+        ],
+      }),
+    );
+    expect(running).toContain("token parser");
+    expect(running).toContain("expected 2 but got 3");
+
+    const report = "Parser fixed; tests pass.";
+    const finished = render(
+      baseRun({
+        state: "completed",
+        endedAt: 60_000,
+        finalText: report,
+        sessionEvents: [{ type: "assistant", text: report, createdAt: 59_000 }],
+      }),
+    );
+    expect(finished.match(/Parser fixed; tests pass\./g)).toHaveLength(1);
+  });
+
   it("differentiates paused guidance by resume capability", () => {
     const resumable = render(baseRun({ state: "paused" }));
     expect(render(baseRun({ state: "paused", capabilities: ["interrupt"] }))).not.toBe(resumable);

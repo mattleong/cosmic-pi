@@ -49,6 +49,10 @@ Resolved generation records are removed, while the immutable public projection r
 
 The root notifier writes each delivered report generation to a private file, `<agent dir>/subagents/reports/<session>/<run>-<generation>.md` (directory 0700, file 0600), keyed by the Pi session so a resumed session can re-read it after compaction, `/reload`, or record eviction. Reports up to 4,000 characters arrive whole with the file path; longer reports arrive as a whole-line preview with a marker giving the shown and total characters, the line count, and the path. If the file cannot be written, the report is inlined within the 32 KiB notification bound as before. Activation prunes reports older than seven days and then the oldest beyond 64 MiB. Session shutdown holds wakes and hands every eligible completion to the notifier immediately (bounded to two seconds), so pending reports are appended to the transcript without starting a turn before the tree closes.
 
+## Live transcript in the fleet
+
+Each runtime's tool completion carries a bounded output preview (the first seven lines, at most 1,000 characters) decoded from Pi's tool result, Claude's `tool_result` content, or Codex's `aggregatedOutput`; the run sanitizes it and keeps it within the session-event byte budget. The fleet and Activity details interleave the child's assistant messages (the start of each, up to 1,200 characters) with tool groups and show a single tool's preview beneath it. The latest assistant message is omitted once it is the delivered final report, which appears in full below. Pi children also report how full their context window is; the usage line shows it and turns to a warning at 80%.
+
 ## Stalls, wait timeouts, and partial output
 
 `run/stall.ts` derives presentation-only stall signals from a running child's projection: a tool open for five minutes, three consecutive failed tool calls, or two minutes without activity while no tool is open. The widget shows the signal in warning color in place of the activity text, keeping it ahead of the route on narrow rows. Nothing stops or retries a run because of elapsed time.

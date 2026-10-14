@@ -1,3 +1,4 @@
+import { toolOutputPreview } from "./tool-output-preview.ts";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
@@ -28,6 +29,7 @@ const ToolResultPart = Schema.Struct({
   type: Schema.Literal("tool_result"),
   tool_use_id: Id,
   is_error: Schema.optional(Schema.Boolean),
+  content: Schema.optional(Schema.Unknown),
 });
 const Usage = Schema.Struct({
   input_tokens: Schema.optional(Token),
@@ -156,7 +158,11 @@ export type ClaudeProtocolEvent =
   | {
       readonly type: "user";
       readonly text: string;
-      readonly toolResults: ReadonlyArray<{ readonly id: string; readonly isError: boolean }>;
+      readonly toolResults: ReadonlyArray<{
+        readonly id: string;
+        readonly isError: boolean;
+        readonly outputPreview?: string | undefined;
+      }>;
       readonly uuid?: string | undefined;
       readonly sessionId?: string | undefined;
       readonly parentToolUseId?: string | undefined;
@@ -231,7 +237,15 @@ const userProtocolEvent = (event: typeof User.Type): ClaudeProtocolEvent => {
     ? []
     : event.message.content.flatMap((part) => {
         const result = decodeToolResultPart(part);
-        return result ? [{ id: result.tool_use_id, isError: result.is_error === true }] : [];
+        return result
+          ? [
+              {
+                id: result.tool_use_id,
+                isError: result.is_error === true,
+                outputPreview: toolOutputPreview(result.content),
+              },
+            ]
+          : [];
       });
   const text = textFromContent(event.message.content);
   return {

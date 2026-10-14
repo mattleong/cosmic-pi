@@ -45,9 +45,14 @@ interface SessionOutputRenderOptions {
 
 type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
 type NoticeEvent = Extract<SubagentSessionEvent, { readonly type: "notice" }>;
+type AssistantEvent = Extract<SubagentSessionEvent, { readonly type: "assistant" }>;
 type ActivityItem =
   | { readonly type: "tools"; readonly events: ReadonlyArray<ToolEvent> }
-  | { readonly type: "notice"; readonly event: NoticeEvent };
+  | { readonly type: "notice"; readonly event: NoticeEvent }
+  | { readonly type: "assistant"; readonly event: AssistantEvent };
+
+// The live view shows the start of each message; the final report appears in full below it.
+const MAX_LIVE_ASSISTANT_CHARS = 1_200;
 
 const HANGING_PADDING = 2;
 
@@ -76,11 +81,16 @@ const markdownBlock = (text: string, theme: Theme): Markdown =>
 
 const activityItems = (
   events: ReadonlyArray<SubagentSessionEvent>,
+  finalText: string | undefined,
 ): ReadonlyArray<ActivityItem> => {
   const items: ActivityItem[] = [];
   let openGroup: ToolEvent[] | undefined;
   for (const event of events) {
-    if (event.type === "assistant") continue;
+    if (event.type === "assistant") {
+      if (event.text !== finalText?.trim()) items.push({ type: "assistant", event });
+      openGroup = undefined;
+      continue;
+    }
     if (event.type === "notice") {
       if (event.kind !== "progress") {
         items.push({ type: "notice", event });
@@ -119,6 +129,10 @@ function addToolGroup(
   const elapsedLabel = elapsed > 0 ? formatDuration(elapsed) : "";
   const body = `${theme.fg("toolTitle", sanitizeTerminalLine(first.toolName))}${theme.fg("muted", count)}${theme.fg("dim", target)}${elapsedLabel ? theme.fg("dim", `  ${elapsedLabel}`) : ""}`;
   container.addChild(hangingText(`${glyph} `, body));
+  if (events.length === 1 && first.outputPreview)
+    container.addChild(
+      hangingText("  ", theme.fg("dim", sanitizeTerminalText(first.outputPreview))),
+    );
   if (events.length > 1) {
     const targets = [
       ...new Set(
@@ -187,16 +201,26 @@ const emptyActivityLabel = (run: SubagentRunView): string =>
       : "Interrupted; stop this run and start a replacement when needed."
     : EMPTY_ACTIVITY_LABELS[run.state];
 
+const addAssistantMessage = (container: Container, text: string, theme: Theme): void => {
+  const shown =
+    text.length > MAX_LIVE_ASSISTANT_CHARS ? `${text.slice(0, MAX_LIVE_ASSISTANT_CHARS)}…` : text;
+  container.addChild(markdownBlock(shown, theme));
+};
+
 const addLiveActivity = (
   container: Container,
   run: SubagentRunView,
   theme: Theme,
   now: number,
 ): void => {
-  const items = activityItems(run.sessionEvents);
+  const items = activityItems(
+    run.sessionEvents,
+    isAssignmentFinishedRunState(run.state) ? run.finalText : undefined,
+  );
   const frame = spinnerFrameAt(now);
   for (const item of items) {
     if (item.type === "tools") addToolGroup(container, item.events, theme, frame);
+    else if (item.type === "assistant") addAssistantMessage(container, item.event.text, theme);
     else addStyledRow(container, NOTICE_STYLES[item.event.kind], item.event.text, theme);
   }
   const noticeKinds = new Set(
@@ -232,7 +256,16 @@ const addAssistantConclusion = (container: Container, run: SubagentRunView, them
   if (run.error)
     addBlock(container, theme.fg("error", `Error: ${sanitizeTerminalLine(run.error)}`));
   const usage = aggregateUsage([run]);
-  if (usage) addBlock(container, theme.fg("dim", usage));
+  const context =
+    run.usage.contextPercent === undefined
+      ? undefined
+      : `context ${Math.round(run.usage.contextPercent)}% full`;
+  const usageLine = [usage, context].filter(Boolean).join(" · ");
+  if (usageLine)
+    addBlock(
+      container,
+      theme.fg((run.usage.contextPercent ?? 0) >= 80 ? "warning" : "dim", usageLine),
+    );
 };
 
 const addDetailLine = (

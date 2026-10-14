@@ -18,6 +18,9 @@ const Stats = Schema.Struct({
     total: Count,
   }),
   cost: Cost,
+  contextUsage: Schema.optional(
+    Schema.Struct({ percent: Schema.NullOr(Schema.Number.check(Schema.isFinite())) }),
+  ),
 });
 
 const decodeStats = decodeUnknownOrUndefined(Stats);
@@ -28,6 +31,9 @@ export const makeLocalPiUsage = () => {
     const decoded = decodeStats(value);
     if (!decoded) return undefined;
     const { tokens, cost } = decoded;
+    const percent = decoded.contextUsage?.percent;
+    const contextPercent =
+      percent === null || percent === undefined ? undefined : Math.min(100, Math.max(0, percent));
     const next = { ...tokens, totalTokens: tokens.total, cost };
     if (!previous) {
       previous = next;
@@ -44,7 +50,9 @@ export const makeLocalPiUsage = () => {
     const components = Object.values(delta);
     if (components.some((component) => component < 0)) return undefined;
     previous = next;
-    return components.some((component) => component > 0) ? delta : undefined;
+    return components.some((component) => component > 0)
+      ? { ...delta, ...(contextPercent !== undefined && { contextPercent }) }
+      : undefined;
   };
   return { account, hasBaseline: () => previous !== undefined };
 };

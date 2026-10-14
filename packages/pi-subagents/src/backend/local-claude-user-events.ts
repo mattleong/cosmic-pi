@@ -76,6 +76,7 @@ export const makeLocalClaudeUserEvents = (context: LocalClaudeHandleContext) => 
               toolCallId: result.id,
               toolName: toolNames.get(result.id) ?? "ClaudeTool",
               isError: result.isError,
+              outputPreview: result.outputPreview,
             };
         if (!nativeName) toolNames.delete(result.id);
         yield* offer(finished, index === toolResults.length - 1 ? raw : undefined);

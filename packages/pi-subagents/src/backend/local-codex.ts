@@ -1,3 +1,4 @@
+import { toolOutputPreview } from "./tool-output-preview.ts";
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -145,6 +146,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         toolCallId: event.item.id,
         toolName: tool,
         isError: event.item.status === "failed" || event.item.status === "declined",
+        outputPreview: toolOutputPreview(event.item.aggregatedOutput ?? undefined),
       },
       raw,
     );

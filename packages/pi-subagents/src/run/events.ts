@@ -341,6 +341,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               toolName: event.toolName,
               isError: event.isError,
               endedAt: now,
+              outputPreview: event.outputPreview,
             }),
           };
         });

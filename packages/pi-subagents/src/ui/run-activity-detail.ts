@@ -33,7 +33,10 @@ const recentActivity = (run: SubagentRunView): string =>
       .slice(-RECENT_EVENTS)
       .map((event) =>
         event.type === "tool"
-          ? `${event.toolName}: ${event.state}${event.target ? ` · ${event.target}` : ""}`
+          ? [
+              `${event.toolName}: ${event.state}${event.target ? ` · ${event.target}` : ""}`,
+              ...(event.outputPreview?.split("\n").map((line) => `  ${line}`) ?? []),
+            ].join("\n")
           : event.text.slice(-600),
       ),
     ...(run.progress && run.finalText === undefined ? [`Progress: ${run.progress}`] : []),
@@ -48,6 +51,9 @@ const usageLine = (run: SubagentRunView): string =>
         `Usage: ${formatTokens(run.usage.totalTokens)} tokens (${formatTokens(run.usage.output)} output)`,
         run.usage.cost === undefined ? "" : `~${formatCost(run.usage.cost)}`,
         run.toolUses === undefined ? "" : countLabel(run.toolUses, "tool use"),
+        run.usage.contextPercent === undefined
+          ? ""
+          : `context ${Math.round(run.usage.contextPercent)}% full`,
       ]
         .filter(Boolean)
         .join(" · ");

@@ -8,6 +8,7 @@ const MAX_SESSION_BYTES = 192 * 1024;
 const MAX_TOOL_TARGET_CHARS = 500;
 const MAX_ASSISTANT_TEXT_CHARS = 16 * 1024;
 const MAX_NOTICE_CHARS = 4 * 1024;
+const MAX_TOOL_PREVIEW_CHARS = 1_200;
 
 const eventBytes = new WeakMap<SubagentSessionEvent, number>();
 
@@ -56,7 +57,13 @@ function appendSessionEvent(
   event: SubagentSessionEvent,
 ): ReadonlyArray<SubagentSessionEvent> {
   if (bytes(event) > MAX_SESSION_BYTES) return current;
-  const next = [...current, event].slice(-MAX_SESSION_EVENTS);
+  return fitSessionEvents([...current, event].slice(-MAX_SESSION_EVENTS));
+}
+
+// Keeps the newest events that fit the byte budget.
+function fitSessionEvents(
+  next: ReadonlyArray<SubagentSessionEvent>,
+): ReadonlyArray<SubagentSessionEvent> {
   let retainedBytes = 0;
   let start = next.length;
   while (start > 0) {
@@ -123,9 +130,12 @@ export function finishToolSessionEvent(
     readonly toolName: string;
     readonly isError: boolean;
     readonly endedAt: number;
+    readonly outputPreview?: string | undefined;
   },
 ): ReadonlyArray<SubagentSessionEvent> {
   const toolCallId = sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS);
+  const outputPreview =
+    input.outputPreview && sanitizeOutputText(input.outputPreview, MAX_TOOL_PREVIEW_CHARS).trim();
   const index = current.findLastIndex(
     (event) => event.type === "tool" && event.toolCallId === toolCallId,
   );
@@ -137,14 +147,18 @@ export function finishToolSessionEvent(
       state: input.isError ? "failed" : "completed",
       startedAt: input.endedAt,
       endedAt: input.endedAt,
+      ...(outputPreview && { outputPreview }),
     });
-  return current.map((event, eventIndex) =>
-    eventIndex === index && event.type === "tool"
-      ? {
-          ...event,
-          state: input.isError ? "failed" : "completed",
-          endedAt: input.endedAt,
-        }
-      : event,
+  return fitSessionEvents(
+    current.map((event, eventIndex) =>
+      eventIndex === index && event.type === "tool"
+        ? {
+            ...event,
+            state: input.isError ? "failed" : "completed",
+            endedAt: input.endedAt,
+            ...(outputPreview && { outputPreview }),
+          }
+        : event,
+    ),
   );
 }
