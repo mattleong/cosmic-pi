@@ -46,11 +46,12 @@ Ask for work that splits into independent pieces, and the agent launches subagen
 | `oracle`     | fork    | read-only | high          |
 | `generalist` | fresh   | read-only | parent effort |
 
-| Command               | Action                                       |
-| --------------------- | -------------------------------------------- |
-| `/subagents`          | Open the fleet in the Activity manager       |
-| `/subagents profiles` | Choose models and fallbacks for each profile |
-| `/subagents settings` | Delegation, nesting limits, writer workspace |
+| Command               | Action                                                      |
+| --------------------- | ----------------------------------------------------------- |
+| `/subagents`          | Open the fleet in the Activity manager                      |
+| `/subagents profiles` | Choose models and fallbacks for each profile                |
+| `/subagents settings` | Delegation, nesting limits, writer workspace                |
+| `/subagents doctor`   | Check Pi, configuration, and each profile's route readiness |
 
 ### Delegation
 

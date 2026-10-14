@@ -1,6 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { isProjectTrusted } from "pi-cosmic-core";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
+import { runSubagentDoctor } from "./doctor.ts";
 import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import { NativeModelCatalog } from "../boundary/native-model-catalog.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../config/store.ts";
@@ -129,6 +131,22 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
       ),
     inspectWriterWorkspace: () =>
       run(SubagentService.use((service) => service.inspectWriterWorkspace)),
+    runDoctor: (ctx) =>
+      withCurrentActivation((activation) =>
+        run(
+          runSubagentDoctor({
+            pi,
+            ctx,
+            agentDirectory: activation.agentDirectory,
+            activityViewAvailable:
+              ctx.mode !== "tui"
+                ? undefined
+                : activation.sessionKey !== undefined &&
+                  discoverActivityView(pi.events, activation.sessionKey) !== undefined,
+            projectTrusted: isProjectTrusted(ctx),
+          }),
+        ),
+      ),
     setWriterWorkspaceMode: (mode) =>
       withCurrentActivation((activation) =>
         run(

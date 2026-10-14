@@ -98,3 +98,7 @@ The `subagents` footer item shows Current Session's profile set, `*` when the se
 - Editor rows declare candidate or profile scope.
   Cursor bookkeeping stays pure, and render and action boundaries resolve Undo availability.
 - Profile styling delegates to `pi-cosmic-ui/manager/style` and the shared frame helpers; saved-set previews never acquire focus, and profile detail fields reuse shared alignment and styling.
+
+## Doctor
+
+`/subagents doctor` reports, each check independently: Pi's version against the 1.2.0 minimum; configuration diagnostics and the current profile set; project trust; for every profile, the same readiness preflight a launch runs (CLI presence and sign-in for Claude and Codex, model availability for Pi) against its first eligible route, each distinct route probed once and bounded to 20 seconds; whether private agent state is writable; the worktree setup command; and whether the shared Activity view is installed. A failing first route is a warning when a fallback exists. The report is a user notification and never enters the model's context. It launches nothing.

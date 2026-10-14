@@ -1,3 +1,4 @@
+import { formatDoctorReport, type DoctorCheck } from "../application/doctor.ts";
 import * as Effect from "effect/Effect";
 import { constVoid } from "effect/Function";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -90,6 +91,7 @@ export interface FleetManagerActions {
   readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
   readonly patchDelegation: (patch: SubagentDelegationPatch) => Promise<void>;
   readonly inspectWriterWorkspace: () => Promise<WriterWorkspaceInspection>;
+  readonly runDoctor: (ctx: ExtensionCommandContext) => Promise<ReadonlyArray<DoctorCheck>>;
   readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;
   readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<SessionProfileSnapshot>;
   readonly replaceSessionProfiles: (
@@ -215,6 +217,26 @@ const profilesSubcommand = (
   },
 });
 
+const doctorSubcommand = (actions: FleetManagerActions): ExtensionSubcommand => ({
+  name: "doctor",
+  description: "Check subagent setup and route readiness",
+  handler: (_args, ctx) =>
+    actions.runDoctor(ctx).then(
+      (checks) =>
+        notifyAtHostBoundary(
+          ctx,
+          formatDoctorReport(checks),
+          checks.some((item) => item.status !== "ok") ? "warning" : "info",
+        ),
+      () =>
+        notifyAtHostBoundary(
+          ctx,
+          "Subagents doctor couldn't run; run /reload and try again",
+          "error",
+        ),
+    ),
+});
+
 export function registerSubagentManagerCommand(
   pi: ExtensionAPI,
   bridge: SubagentProjectionBridge,
@@ -231,6 +253,10 @@ export function registerSubagentManagerCommand(
               .then((opened) => (opened ? undefined : openFleetManager(ctx, bridge, actions)))
           : openFleetManager(ctx, bridge, actions),
     },
-    subcommands: [profilesSubcommand(pi, actions), subagentSettingsSubcommand(actions)],
+    subcommands: [
+      profilesSubcommand(pi, actions),
+      subagentSettingsSubcommand(actions),
+      doctorSubcommand(actions),
+    ],
   });
 }
