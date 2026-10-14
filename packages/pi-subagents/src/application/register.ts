@@ -28,6 +28,7 @@ import {
   registerSubagentActivity,
 } from "../boundary/host-activity.ts";
 import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
+import { registerActiveRunsPrompt } from "../boundary/host-active-runs-prompt.ts";
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
 import { registerParentWake } from "../boundary/host-parent-wake.ts";
@@ -185,6 +186,7 @@ export function registerSubagentApplication(
     sessionFooter.clear();
     bridge.clear();
   };
+  registerActiveRunsPrompt(pi, () => (currentActivation ? bridge.get() : undefined));
   registerDelegationPrompt(pi, () =>
     currentActivation
       ? profileOverrideHandoff.captureSnapshot()?.effectiveConfig.delegation
