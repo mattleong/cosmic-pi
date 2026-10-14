@@ -110,7 +110,7 @@ it.effect("settles blocking Activity rows as the presented outcome, failure or c
       const service = yield* AskUserService;
       expect((yield* service.ask(request)).outcome).toBe("cancelled");
       expect(yield* service.ask(request)).toEqual(outcome);
-      expect(yield* Effect.flip(service.ask(request))).toMatchObject({ _tag: "AskUserHostError" });
+      expect(yield* Effect.flip(service.ask(request))).toBeInstanceOf(AskUserHostError);
       const interrupted = yield* Effect.forkChild(service.ask(request), {
         startImmediately: true,
       });

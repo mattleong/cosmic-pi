@@ -16,13 +16,13 @@ import {
 import { PROFILE_IDS } from "../src/profiles/model.ts";
 import {
   fleetManagerActionsFixture,
-  makeProfileSettingsInspection,
+  profileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
 import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
 import { effectTest, eventLoopTurn, step } from "./support/effect-test.ts";
 
 const inspection = () =>
-  makeProfileSettingsInspection({
+  profileSettingsInspection({
     globalDocument: { version: 6, profileSets: { common: { profiles: {} } } },
     projectDocument: { version: 6, profileSets: { common: { profiles: {} } } },
     projectTrusted: true,
@@ -71,7 +71,7 @@ const fixture = () => {
 describe("profile dashboard actions", () => {
   effectTest("never applies or selects a saved set containing a retired route", function* () {
     const f = fixture();
-    const invalid = makeProfileSettingsInspection({
+    const invalid = profileSettingsInspection({
       globalDocument: {
         version: 6,
         profileSets: {
@@ -160,7 +160,7 @@ describe("profile dashboard actions", () => {
     "does not rebase a rename onto a document changed during the name dialog",
     function* () {
       const f = fixture();
-      const changed = makeProfileSettingsInspection({
+      const changed = profileSettingsInspection({
         globalDocument: {
           version: 6,
           profileSets: { common: { profiles: {} }, external: { profiles: {} } },
@@ -409,7 +409,7 @@ describe("persistent dashboard", () => {
   effectTest("conflict refresh advances the editable draft with its write guard", function* () {
     const f = dashboard();
     const worker = f.value.session.effectiveConfig.profiles.worker.candidates[0]!;
-    const latest = makeProfileSettingsInspection(
+    const latest = profileSettingsInspection(
       {
         globalDocument: f.value.globalDocument!,
         projectDocument: f.value.projectDocument!,
@@ -443,7 +443,7 @@ describe("persistent dashboard", () => {
       let profiles: JsonObject = {};
       let latest = f.value;
       const inspect = () =>
-        makeProfileSettingsInspection({
+        profileSettingsInspection({
           globalDocument: f.value.globalDocument!,
           projectDocument: { version: 6, profileSets: { [name]: { profiles } } },
           projectTrusted: true,
@@ -553,7 +553,7 @@ describe("persistent dashboard", () => {
       const disposed = vi.spyOn(ProfileWorkspaceComponent.prototype, "dispose");
       const f = dashboard();
       f.press("\t", "\r", "\u001b", "\u001b");
-      const deleted = makeProfileSettingsInspection({
+      const deleted = profileSettingsInspection({
         globalDocument: f.value.globalDocument!,
         projectDocument: { version: 6, profileSets: {} },
         projectTrusted: true,

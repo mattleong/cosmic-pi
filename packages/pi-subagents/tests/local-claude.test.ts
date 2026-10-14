@@ -7,7 +7,7 @@ import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { processError, SubagentProcessError } from "../src/run/errors.ts";
-import { makeLocalClaudeInputDelivery } from "../src/backend/local-claude-input-delivery.ts";
+import { localClaudeInputDelivery } from "../src/backend/local-claude-input-delivery.ts";
 
 const pendingGuidance = {
   operation: "steer",
@@ -21,13 +21,13 @@ const deliveryHarness = (
     readonly send?: Effect.Effect<void, SubagentProcessError>;
     readonly terminate?: Effect.Effect<void, SubagentProcessError>;
     readonly recordOutbound?: Effect.Effect<void>;
-    readonly observers?: Parameters<typeof makeLocalClaudeInputDelivery>[3];
+    readonly observers?: Parameters<typeof localClaudeInputDelivery>[3];
   } = {},
 ) => {
   const sent = Deferred.makeUnsafe<void>();
   const terminated = Deferred.makeUnsafe<void>();
   const counts = { sends: 0, terminations: 0 };
-  const inputs = makeLocalClaudeInputDelivery(
+  const inputs = localClaudeInputDelivery(
     {
       send: () =>
         Effect.suspend(() => {

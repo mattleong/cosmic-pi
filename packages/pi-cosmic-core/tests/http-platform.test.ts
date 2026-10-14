@@ -3,12 +3,19 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { JsonHttpClient, provideBuiltLayer, StreamingHttpClient } from "../index.ts";
+import {
+  JsonHttpClient,
+  JsonHttpResponse,
+  provideBuiltLayer,
+  StreamingHttpClient,
+} from "../index.ts";
 import type { StreamingHttpRequest } from "../src/platform/streaming-http.ts";
 import {
   capturedTelemetrySnapshot,
@@ -50,11 +57,9 @@ const countingClient = () => {
 it.effect("decodes JSON responses through the workspace adapter", () =>
   Effect.gen(function* () {
     const http = yield* JsonHttpClient;
-    expect(yield* http.request(okRequest)).toEqual({
-      _tag: "Accepted",
-      status: 200,
-      body: { ok: true },
-    });
+    expect(yield* http.request(okRequest)).toEqual(
+      JsonHttpResponse.Accepted({ status: 200, body: { ok: true } }),
+    );
   }).pipe(json('{"ok":true}')),
 );
 
@@ -107,7 +112,7 @@ it.effect.each([
 it.effect("returns rejected status without decoding the provider error body", () =>
   Effect.gen(function* () {
     const http = yield* JsonHttpClient;
-    expect(yield* http.request(okRequest)).toEqual({ _tag: "Rejected", status: 429 });
+    expect(yield* http.request(okRequest)).toEqual(JsonHttpResponse.Rejected({ status: 429 }));
   }).pipe(json("provider-error", 429)),
 );
 
@@ -123,14 +128,14 @@ it.effect(
           ),
         ),
       );
-      expect(rejected).toEqual({ _tag: "Rejected", status: 502 });
+      expect(rejected).toEqual(JsonHttpResponse.Rejected({ status: 502 }));
 
       const accepted = yield* request.pipe(
         provideBuiltLayer(
           jsonHttpTestLayer(() => Effect.succeed(jsonHttpRawResponse(200, '{"ok":true}'))),
         ),
       );
-      expect(accepted).toEqual({ _tag: "Accepted", status: 200, body: { ok: true } });
+      expect(accepted).toEqual(JsonHttpResponse.Accepted({ status: 200, body: { ok: true } }));
     }),
 );
 
@@ -150,7 +155,7 @@ it.effect("maps transport failure without exposing its URL or cause", () =>
       Effect.result(http.request({ ...okRequest, url: "https://secret.invalid/private" })),
     ).pipe(json(client));
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
+    if (Result.isFailure(result)) {
       expect(String(result.failure)).not.toContain("secret.invalid");
       expect(String(result.failure)).not.toContain("transport cause");
     }
@@ -161,7 +166,7 @@ it.effect("encodes JSON request bodies through their schema", () =>
   Effect.gen(function* () {
     const client = HttpClient.make((request) => {
       expect(request.body._tag).toBe("Uint8Array");
-      if (request.body._tag === "Uint8Array")
+      if (Predicate.isTagged(request.body, "Uint8Array"))
         expect(new TextDecoder().decode(request.body.body)).toBe('{"value":"42"}');
       return Effect.succeed(HttpClientResponse.fromWeb(request, new Response('{"ok":true}')));
     });
@@ -172,7 +177,7 @@ it.effect("encodes JSON request bodies through their schema", () =>
         { value: 42 },
       ),
     ).pipe(json(client));
-    expect(response).toEqual({ _tag: "Accepted", status: 200, body: { ok: true } });
+    expect(response).toEqual(JsonHttpResponse.Accepted({ status: 200, body: { ok: true } }));
   }),
 );
 
@@ -198,7 +203,7 @@ it.effect("bounds JSON response buffering before decoding", () =>
     const http = yield* JsonHttpClient;
     const result = yield* Effect.result(http.request({ ...okRequest, maxResponseBytes: 4 }));
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(result.failure.operation).toBe("response");
+    if (Result.isFailure(result)) expect(result.failure.operation).toBe("response");
   }).pipe(json('{"ok":true}')),
 );
 
@@ -228,10 +233,10 @@ it.effect("rejects non-JSON encodings before production or test transport", () =
 
     expect(productionResult._tag).toBe("Failure");
     expect(testResult._tag).toBe("Failure");
-    if (productionResult._tag === "Failure") {
+    if (Result.isFailure(productionResult)) {
       expect(productionResult.failure.operation).toBe("encode");
     }
-    if (testResult._tag === "Failure") expect(testResult.failure.operation).toBe("encode");
+    if (Result.isFailure(testResult)) expect(testResult.failure.operation).toBe("encode");
     expect(production.executions()).toBe(0);
     expect(testExecutions).toBe(0);
   }),
@@ -266,7 +271,7 @@ it.effect("maps a mid-stream failure without exposing its cause", () =>
       streaming(source),
     );
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(String(result.failure)).not.toContain("secret stream");
+    if (Result.isFailure(result)) expect(String(result.failure)).not.toContain("secret stream");
   }),
 );
 

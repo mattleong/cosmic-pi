@@ -1,6 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import type { ChildProcessHandle } from "../boundary/child-process.ts";
 import { isOutcomeUncertain, SubagentProcessError, type SubagentError } from "../run/errors.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "../run/state.ts";
@@ -18,7 +19,7 @@ const rpcOutcomeCode = (command: RpcCommand["type"]): string =>
   RPC_OUTCOME_CODES.get(command) ?? `${command}_outcome_uncertain`;
 
 const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): SubagentError =>
-  error._tag === "SubagentProcessError" && error.code === "transport_outcome_uncertain"
+  Predicate.isTagged(error, "SubagentProcessError") && error.code === "transport_outcome_uncertain"
     ? new SubagentProcessError({
         operation: `execute ${command.type} in`,
         code: rpcOutcomeCode(command.type),
@@ -34,7 +35,7 @@ interface PendingRpcResponse {
   readonly deferred: Deferred.Deferred<RpcResponse, SubagentError>;
 }
 
-export const makeLocalPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContactControl">) => {
+export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContactControl">) => {
   const responses = new Map<string, PendingRpcResponse>();
   const ipcAcks = new Map<string, Deferred.Deferred<void, SubagentError>>();
   let nextRpcId = 1;

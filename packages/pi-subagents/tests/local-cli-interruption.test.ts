@@ -7,7 +7,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   classifyLocalCliInterruptOwnership,
-  makeLocalCliInterrupts,
+  localCliInterrupts,
   type LocalCliInterrupt,
 } from "../src/backend/local-cli-interruption.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
@@ -46,7 +46,7 @@ describe("local CLI interruption ownership", () => {
     [
       "a defect shaped like an uncertain failure",
       "release",
-      Exit.die({ _tag: "SubagentProcessError", code: "interrupt_outcome_uncertain" }),
+      Exit.die(processFailure("interrupt_outcome_uncertain")),
     ],
   ])("classifies %s as %s", (_label, ownership, exit) => {
     expect(classifyLocalCliInterruptOwnership(exit)).toBe(ownership);
@@ -62,7 +62,7 @@ const settled = (rawOwner?: LocalCliWireEvent) => [
 const interruptHarness = () => {
   const offered: Array<[BackendEvent, LocalCliWireEvent | undefined]> = [];
   const released: LocalCliWireEvent[] = [];
-  const interrupts = makeLocalCliInterrupts<LocalCliInterrupt>(
+  const interrupts = localCliInterrupts<LocalCliInterrupt>(
     "Codex",
     {
       offer: (event, rawOwner) => Effect.sync(() => void offered.push([event, rawOwner])),

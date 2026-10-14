@@ -9,6 +9,7 @@ import {
 } from "../../testing";
 import { codemodeRenderers, nativeCall, scriptResult } from "../support/native-codemode";
 import { stripAnsi } from "../support/render";
+import * as Match from "effect/Match";
 
 const settings = (
   style: "compact" | "preview",
@@ -57,15 +58,14 @@ for (const style of ["compact", "preview"] as const)
             const h = createToolPresentationHarness(codemodeRenderers(probe.schedule));
             h.call({ code: "// SOURCE_RETAINED" }, { expanded });
             assert.equal(probe.scheduled, 0);
-            const partial =
-              progress === "none"
-                ? { content: [], details: { calls: [] } }
-                : progress === "returned"
-                  ? {
-                      ...running,
-                      details: { calls: [{ ...running.details.calls[0], status: "ok" }] },
-                    }
-                  : running;
+            const partial = Match.value(progress).pipe(
+              Match.when("none", () => ({ content: [], details: { calls: [] } })),
+              Match.when("returned", () => ({
+                ...running,
+                details: { calls: [{ ...running.details.calls[0], status: "ok" }] },
+              })),
+              Match.orElse(() => running),
+            );
             h.result(partial, { isPartial: true, expanded });
             const before = h.render(100).join("\n");
             assert.equal(probe.scheduled, 1);

@@ -95,7 +95,7 @@ interface HostStateWatch {
   readonly stop: () => void;
 }
 
-export function makeHostStateWatch(
+export function createHostStateWatch(
   client: Pick<CosmicFooterClient, "onHostStateChange">,
   listener: (state: CosmicUiHostState) => void,
 ): HostStateWatch {

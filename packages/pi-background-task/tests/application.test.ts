@@ -9,6 +9,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
+import * as Predicate from "effect/Predicate";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import {
@@ -181,11 +183,11 @@ describe("background-task Pi lifecycle", () => {
         const queryProtocol = makeSessionCapabilityProtocol({ version: 1, maxSessionIdChars: 256 });
         const pending = deferredPromise<boolean>();
         const open = vi.fn(() =>
-          outcome === "replaced"
-            ? pending.promise
-            : outcome === "rejected"
-              ? Promise.reject(new Error("Manager already open"))
-              : Promise.resolve(outcome === "accepted"),
+          Match.value(outcome).pipe(
+            Match.when("replaced", () => pending.promise),
+            Match.when("rejected", () => Promise.reject(new Error("Manager already open"))),
+            Match.orElse(() => Promise.resolve(outcome === "accepted")),
+          ),
         );
         if (outcome !== "absent")
           events.on(ACTIVITY_VIEW_DISCOVER, (data) => {
@@ -374,7 +376,7 @@ describe("background-task Pi lifecycle", () => {
             ctx,
           );
         yield* Effect.promise(() =>
-          expect(staleCall()).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+          expect(staleCall()).rejects.toSatisfy(Predicate.isTagged("PiSessionRuntimeError")),
         );
 
         replacement.resolve();
@@ -384,7 +386,7 @@ describe("background-task Pi lifecycle", () => {
           "background_task",
         ]);
         yield* Effect.promise(() =>
-          expect(staleCall()).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+          expect(staleCall()).rejects.toSatisfy(Predicate.isTagged("PiSessionRuntimeError")),
         );
         expect(yield* Effect.promise(() => app.execute({ action: "list" }, ctx))).toMatchObject({
           details: { action: "list", tasks: [] },

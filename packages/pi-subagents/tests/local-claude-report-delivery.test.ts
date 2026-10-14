@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
-import { makeLocalClaudeReportDelivery } from "../src/backend/local-claude-report-delivery.ts";
+import { localClaudeReportDelivery } from "../src/backend/local-claude-report-delivery.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
 
 const report = {
@@ -20,7 +20,7 @@ const report = {
 const makeDelivery = Effect.gen(function* () {
   const events = yield* Queue.bounded<BackendEvent>(1);
   const entered = yield* Deferred.make<void>();
-  const reports = makeLocalClaudeReportDelivery((event) =>
+  const reports = localClaudeReportDelivery((event) =>
     Deferred.succeed(entered, undefined).pipe(
       Effect.andThen(Queue.offer(events, event)),
       Effect.asVoid,

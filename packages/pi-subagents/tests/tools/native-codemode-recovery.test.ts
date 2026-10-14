@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import {
   acknowledgeCompletions,
@@ -72,11 +73,9 @@ describe("native scripted report recovery", () => {
             report: { status: "delivered", text: "Report printed before the failure" },
           },
         ]);
+        expect(awaitFailures).toEqual([expect.any(InvalidSubagentRequestError)]);
         expect(awaitFailures).toEqual([
-          expect.objectContaining({
-            _tag: "InvalidSubagentRequestError",
-            code: "subagent_runs_not_found",
-          }),
+          expect.objectContaining({ code: "subagent_runs_not_found" }),
         ]);
 
         const recovered = yield* h.run(`

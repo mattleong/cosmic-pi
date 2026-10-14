@@ -5,8 +5,12 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type { BackendDriver } from "../../src/backend/model.ts";
-import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "../../src/backend/service.ts";
-import { SubagentProcessError } from "../../src/run/errors.ts";
+import { backendRegistryFor, SubagentBackendRegistry } from "../../src/backend/service.ts";
+import {
+  SubagentProcessError,
+  InvalidSubagentRequestError,
+  SubagentWriterConflictError,
+} from "../../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
@@ -64,10 +68,7 @@ describe("SubagentService", () => {
             });
           }),
       };
-      const registry = Layer.succeed(
-        SubagentBackendRegistry,
-        makeSubagentBackendRegistry([driver]),
-      );
+      const registry = Layer.succeed(SubagentBackendRegistry, backendRegistryFor([driver]));
       const leases = fakeWriterLeaseLayer({ counts });
       const layer = SubagentService["layer"]({
         writerWorkspaceMode: "shared-checkout",
@@ -104,7 +105,7 @@ describe("SubagentService", () => {
             }),
           )
           .pipe(Effect.flip);
-        expect(conflict).toMatchObject({ _tag: "SubagentWriterConflictError" });
+        expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
       });
     },
   );
@@ -130,8 +131,8 @@ describe("SubagentService", () => {
       );
 
       const conflict = yield* service.start(writer("blocked-writer")).pipe(Effect.flip);
+      expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
       expect(conflict).toMatchObject({
-        _tag: "SubagentWriterConflictError",
         activeId: run.id,
         message: stringContaining("cleanup could not be confirmed"),
       });
@@ -295,10 +296,8 @@ describe("SubagentService", () => {
         const aliasConflict = yield* service
           .start(writer("alias-writer", { cwd: cwds[1] }))
           .pipe(Effect.flip);
-        expect(aliasConflict).toMatchObject({
-          _tag: "SubagentWriterConflictError",
-          activeId: first.id,
-        });
+        expect(aliasConflict).toBeInstanceOf(SubagentWriterConflictError);
+        expect(aliasConflict).toMatchObject({ activeId: first.id });
         expect(counts.acquire).toBe(1);
 
         const other = yield* service.start(writer("other-cwd-writer", { cwd: "/other-project" }));
@@ -325,10 +324,8 @@ describe("SubagentService", () => {
     const { fake, layer } = leaseFixture({ failCanonicalization: true });
     return withService(layer, function* (service) {
       const failure = yield* service.start(writer("bad-cwd-writer")).pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "writer_cwd_canonicalization_failed",
-      });
+      expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(failure).toMatchObject({ code: "writer_cwd_canonicalization_failed" });
       expect(fake.controls).toHaveLength(0);
       expect(yield* service.list).toEqual([]);
     });
@@ -340,10 +337,8 @@ describe("SubagentService", () => {
       const { fake, layer } = leaseFixture({ failAcquire: true });
       return withService(layer, function* (service) {
         const conflict = yield* service.start(writer("cross-process-conflict")).pipe(Effect.flip);
-        expect(conflict).toMatchObject({
-          _tag: "SubagentWriterConflictError",
-          activeId: "unknown-cross-process-writer",
-        });
+        expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
+        expect(conflict).toMatchObject({ activeId: "unknown-cross-process-writer" });
         expect(fake.controls).toHaveLength(0);
         expect(yield* service.list).toEqual([
           expect.objectContaining({ name: "cross-process-conflict", state: "failed" }),
@@ -420,10 +415,8 @@ describe("SubagentService", () => {
     );
     return withService(layer, function* (service) {
       const failure = yield* service.start(writer("mark-failure-writer")).pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "SubagentProcessError",
-        code: "writer_lease_mark_failed",
-      });
+      expect(failure).toBeInstanceOf(SubagentProcessError);
+      expect(failure).toMatchObject({ code: "writer_lease_mark_failed" });
       expect(order).toEqual(["lease-acquire", "lease-mark-attempt", "lease-release"]);
       expect(fake.controls).toHaveLength(0);
       expect(yield* service.list).toEqual([
@@ -473,10 +466,8 @@ describe("SubagentService", () => {
       const conflict = yield* service
         .start(writer("blocked-after-release-failure"))
         .pipe(Effect.flip);
-      expect(conflict).toMatchObject({
-        _tag: "SubagentWriterConflictError",
-        activeId: run.id,
-      });
+      expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
+      expect(conflict).toMatchObject({ activeId: run.id });
       expect(fake.controls).toHaveLength(1);
     });
   });
@@ -556,8 +547,8 @@ describe("SubagentService", () => {
       const conflict = yield* service
         .start(claimedWriter("claim-collision", ["packages/auth/src/TOKEN.ts"]))
         .pipe(Effect.flip);
+      expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
       expect(conflict).toMatchObject({
-        _tag: "SubagentWriterConflictError",
         activeId: first.id,
         message: stringContaining("already claims"),
       });
@@ -584,10 +575,8 @@ describe("SubagentService", () => {
       const conflict = yield* service
         .start(claimedWriter("disjoint-but-quarantined", ["src/c.ts"]))
         .pipe(Effect.flip);
-      expect(conflict).toMatchObject({
-        _tag: "SubagentWriterConflictError",
-        message: stringContaining("quarantined"),
-      });
+      expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
+      expect(conflict).toMatchObject({ message: stringContaining("quarantined") });
       expect(fake.controls).toHaveLength(2);
     });
   });
@@ -607,8 +596,8 @@ describe("SubagentService", () => {
       expect(fake.controls[0]?.released()).toBe(1);
 
       const conflict = yield* service.start(writer("replacement-writer")).pipe(Effect.flip);
+      expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
       expect(conflict).toMatchObject({
-        _tag: "SubagentWriterConflictError",
         activeId: first.id,
         message: stringContaining("cleanup could not be confirmed"),
       });

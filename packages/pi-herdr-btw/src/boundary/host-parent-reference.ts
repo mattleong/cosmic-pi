@@ -12,8 +12,8 @@ import {
 import {
   compareSessionFileIdentity,
   probeSessionHeader,
+  SessionHeaderProbe,
   type SessionFileIdentityComparator,
-  type SessionHeaderProbe,
 } from "./session-file.ts";
 
 export const registerHerdrBtwParentReference = (
@@ -52,7 +52,8 @@ export const registerHerdrBtwParentReference = (
       if (!candidate || !sessionFile) return undefined;
       if (compareIdentity(candidate.path, sessionFile) !== "distinct") return undefined;
       const parentHeader = probe(candidate.path);
-      return parentHeader._tag === "valid" && parentHeader.header.id === candidate.id
+      return SessionHeaderProbe.$is("valid")(parentHeader) &&
+        parentHeader.header.id === candidate.id
         ? candidate
         : undefined;
     } catch {

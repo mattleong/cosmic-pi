@@ -10,15 +10,14 @@ import * as Semaphore from "effect/Semaphore";
 import {
   freezeSnapshot,
   invokeHostCallback,
-  makeFrozenProjection,
-  makeSubscriptionRefresh,
+  frozenProjection,
+  createSubscriptionRefresh,
 } from "pi-cosmic-core";
-import type { PiExecContract } from "../boundary/host-exec.ts";
 import type { FooterTotals } from "../boundary/host-usage.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { CosmicUiConfigStore, type FooterPatch } from "../config/store.ts";
 import type { FooterRepositoryProjection } from "../footer/builtin-contributions.ts";
-import { makeRepositoryProbe } from "../probe/repository-probe.ts";
+import { RepositoryProbe } from "../probe/repository-probe.ts";
 
 const PULL_REQUEST_REFRESH_INTERVAL_MS = 30_000;
 export const emptyTotals = (): FooterTotals => ({
@@ -45,7 +44,7 @@ const initialProjection = (totals = emptyTotals()): CosmicUiProjection => ({
   probeRevision: 0,
   homeDirectory: undefined,
 });
-export const makeProjection = () =>
+export const createProjection = () =>
   MutableRef.make<CosmicUiProjection>(freezeSnapshot(initialProjection()));
 export const resetProjection = (
   projection: MutableRef.MutableRef<CosmicUiProjection>,
@@ -55,7 +54,6 @@ export const resetProjection = (
 export interface CosmicUiServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly cwd: string;
-  readonly exec: PiExecContract;
   readonly initialTotals?: FooterTotals;
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly onChange: () => void;
@@ -69,11 +67,11 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
   {
     make: Effect.fnUntraced(function* (options: CosmicUiServiceOptions) {
       const configStore = yield* CosmicUiConfigStore;
-      const probes = makeRepositoryProbe(options.exec);
+      const probes = yield* RepositoryProbe;
       const settingsLock = yield* Semaphore.make(1);
       const home = yield* Config.option(Config.String("HOME"));
       const config = yield* configStore.resolve(options.cwd, options.projectTrusted);
-      const state = yield* makeFrozenProjection<CosmicUiLiveState, CosmicUiProjection>(
+      const state = yield* frozenProjection<CosmicUiLiveState, CosmicUiProjection>(
         {
           ...initialProjection(),
           totals: options.initialTotals ?? MutableRef.get(options.projection).totals,
@@ -109,7 +107,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
       const currentKey = state.getState.pipe(
         Effect.map((current) => `${currentCwd()}\u0000${current.probeRevision}`),
       );
-      const gitRefresh = yield* makeSubscriptionRefresh({
+      const gitRefresh = yield* createSubscriptionRefresh({
         currentKey,
         interval: Effect.succeed(2_000),
         fetch: () =>
@@ -127,7 +125,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
         commit: (gitStatus) => commit((current) => ({ ...current, gitStatus })),
         spanName: "pi-cosmic-ui.refresh.git",
       });
-      const pullRefresh = yield* makeSubscriptionRefresh({
+      const pullRefresh = yield* createSubscriptionRefresh({
         currentKey,
         interval: Effect.succeed(PULL_REQUEST_REFRESH_INTERVAL_MS),
         fetch: (request) =>

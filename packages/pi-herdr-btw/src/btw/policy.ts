@@ -10,7 +10,7 @@ const safeNamePart = (value: string): string =>
     .replaceAll(/-+/gu, "-")
     .replaceAll(/^-|-$/gu, "");
 
-export const makeAgentName = (sessionId: string, paneId: string): string => {
+export const sideSessionAgentName = (sessionId: string, paneId: string): string => {
   const session = safeNamePart(sessionId).slice(0, 12) || "session";
   const pane = safeNamePart(paneId).slice(-8) || "pane";
   return `btw-${session}-${pane}`.slice(0, 32).replaceAll(/-$/gu, "");

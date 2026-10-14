@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
+import * as Match from "effect/Match";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import { invokeHostCallback } from "pi-cosmic-core";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
@@ -41,7 +42,7 @@ import {
   renderedCompletionReceipts,
 } from "./format.ts";
 import {
-  makeAwaitExecution,
+  awaitExecutionFor,
   observeAwaitInterruption,
   type AwaitExecution,
 } from "./execute-await.ts";
@@ -174,7 +175,7 @@ export const executeSubagentActionEffect = (
   const action = subagentToolAction(input);
   const awaitState =
     input.tool === SUBAGENT_TOOL_NAME.await
-      ? (awaitExecution ?? makeAwaitExecution(input.args.runIds, input.args.until, onUpdate))
+      ? (awaitExecution ?? awaitExecutionFor(input.args.runIds, input.args.until, onUpdate))
       : undefined;
   const requestedAwaitIds = awaitState?.requestedIds;
   const present = (result: SubagentExecutionResult) =>
@@ -323,11 +324,11 @@ export const executeSubagentActionEffect = (
         yield* authorize(ids);
         return presentLifecycle(
           yield* forEachOutcome(ids, (id) =>
-            args.action === "interrupt"
-              ? service.interrupt(id, expected)
-              : args.action === "resume"
-                ? service.resume(id, args.message, expected)
-                : service.stop(id, expected),
+            Match.value(args.action).pipe(
+              Match.when("interrupt", () => service.interrupt(id, expected)),
+              Match.when("resume", () => service.resume(id, args.message, expected)),
+              Match.orElse(() => service.stop(id, expected)),
+            ),
           ),
         );
       });
@@ -342,11 +343,11 @@ export const executeSubagentActionEffect = (
         yield* authorize([id]);
         return present(
           yield* forEachOutcome([id], (runId) =>
-            operation.action === "grant"
-              ? service.grantWriteClaims(runId, operation.paths ?? [])
-              : operation.action === "revoke"
-                ? service.revokeWriteClaims(runId, operation.paths ?? [])
-                : service.resumeWriterAdmission(runId),
+            Match.value(operation.action).pipe(
+              Match.when("grant", () => service.grantWriteClaims(runId, operation.paths ?? [])),
+              Match.when("revoke", () => service.revokeWriteClaims(runId, operation.paths ?? [])),
+              Match.orElse(() => service.resumeWriterAdmission(runId)),
+            ),
           ),
         );
       });
@@ -440,7 +441,7 @@ export const executeSubagentAction = (
 ): Promise<AgentToolResult<unknown>> => {
   const awaitState =
     input.tool === SUBAGENT_TOOL_NAME.await
-      ? makeAwaitExecution(input.args.runIds, input.args.until, onUpdate)
+      ? awaitExecutionFor(input.args.runIds, input.args.until, onUpdate)
       : undefined;
   const timeoutSeconds =
     input.tool === SUBAGENT_TOOL_NAME.await ? input.args.timeoutSeconds : undefined;

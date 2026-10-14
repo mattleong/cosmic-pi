@@ -98,9 +98,9 @@ const withCause = (line: string, task: BackgroundTaskStatus): TaskText => {
 };
 
 const causeSpans = (text: string, causes: ReadonlyArray<CauseText>) => {
-  const kept = causes
-    .filter((span) => text.slice(span.start, span.end) === span.cause)
-    .map(({ id, start, end }) => ({ id, start, end }));
+  const kept = causes.flatMap(({ id, start, end, cause }) =>
+    text.slice(start, end) === cause ? [{ id, start, end }] : [],
+  );
   return kept.length > 0 ? { causes: kept } : {};
 };
 

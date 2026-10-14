@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import { describe, expect, it } from "vitest";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { captureSubagentControlExpectation } from "../../src/run/model.ts";
@@ -84,7 +85,9 @@ describe("private fleet snapshots", () => {
       { ...fleetSnapshotProxyRequest, argumentsJson: '{"callerRunId":"root"}' },
       "caller",
     ).pipe(Effect.provideService(SubagentService, subagentServiceDouble({})), Effect.result);
-    expect(result).toMatchObject({ _tag: "Failure", failure: { code: "proxy_request_invalid" } });
+    expect(Result.isFailure(result) && result.failure).toMatchObject({
+      code: "proxy_request_invalid",
+    });
   });
 
   effectTest("reduces display density without dropping any authorized run", function* () {
@@ -125,9 +128,8 @@ describe("private fleet snapshots", () => {
         ),
         Effect.result,
       );
-      expect(result).toMatchObject({
-        _tag: "Failure",
-        failure: { code: "fleet_snapshot_unavailable" },
+      expect(Result.isFailure(result) && result.failure).toMatchObject({
+        code: "fleet_snapshot_unavailable",
       });
     },
   );

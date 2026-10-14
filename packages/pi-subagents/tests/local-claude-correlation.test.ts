@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   claudeTaskNotificationReplay,
   isInternalReplayOrigin,
-  makeClaudeResultCorrelation,
+  claudeResultCorrelation,
   SENT_UUID_LIMIT,
   uncorrelatedClaudeUserMessage,
 } from "../src/backend/local-claude-correlation.ts";
@@ -33,7 +33,7 @@ describe("local Claude result correlation", () => {
   });
 
   it("does not let a UUID-less ordinary result consume synthetic ownership", () => {
-    const correlation = makeClaudeResultCorrelation();
+    const correlation = claudeResultCorrelation();
     correlation.register({ uuid: "synthetic", kind: "synthetic", epoch: 2 }, zeroUsageComponents);
     correlation.register({ uuid: "assignment", kind: "assignment", epoch: 2 }, zeroUsageComponents);
 
@@ -79,7 +79,7 @@ describe("local Claude result correlation", () => {
   });
 
   it("never lets Claude-owned subturns evict an adapter-owned result expectation", () => {
-    const correlation = makeClaudeResultCorrelation();
+    const correlation = claudeResultCorrelation();
     correlation.register({ uuid: "assignment", kind: "assignment", epoch: 4 }, zeroUsageComponents);
     for (let index = 0; index <= SENT_UUID_LIMIT; index += 1)
       correlation.register(
@@ -96,7 +96,7 @@ describe("local Claude result correlation", () => {
   });
 
   it("keeps Claude-owned replay UUIDs separate from adapter-sent identity", () => {
-    const correlation = makeClaudeResultCorrelation();
+    const correlation = claudeResultCorrelation();
     correlation.rememberInternalReplayUuid("internal-notification");
     expect(correlation.hasInternalReplayUuid("internal-notification")).toBe(true);
     expect(correlation.hasSentUuid("internal-notification")).toBe(false);
@@ -109,7 +109,7 @@ describe("local Claude result correlation", () => {
   });
 
   it("classifies content only while its confirmed UUID remains in the bounded window", () => {
-    const correlation = makeClaudeResultCorrelation();
+    const correlation = claudeResultCorrelation();
     correlation.rememberSentUuid("probe", { contentDigest: "same", kind: "probe" });
     correlation.rememberSentUuid("assignment", {
       contentDigest: "same",

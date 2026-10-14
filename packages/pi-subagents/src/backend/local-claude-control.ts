@@ -61,7 +61,7 @@ interface PendingControl {
   readonly deferred: Deferred.Deferred<unknown, SubagentError>;
 }
 
-export const makeLocalClaudeControl = (
+export const localClaudeControl = (
   request: BackendLaunchRequest,
   context: Pick<LocalClaudeHandleContext, "child" | "inputs" | "release">,
   nativeInitialization: Deferred.Deferred<ClaudeInitProtocolEvent, SubagentError>,

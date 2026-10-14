@@ -9,7 +9,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { extensionApiFixture, extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
 import {
-  makeDefaultResolvedCosmicUiConfig,
+  defaultResolvedCosmicUiConfig,
   type ResolvedCosmicUiConfig,
 } from "../src/config/schema.ts";
 import type { CosmicUiService } from "../src/protocol/service.ts";
@@ -20,7 +20,7 @@ function settingsHarness() {
   initTheme();
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
   let command: RegisteredCommand["handler"] | undefined;
-  let config = makeDefaultResolvedCosmicUiConfig();
+  let config = defaultResolvedCosmicUiConfig();
   const updates: Array<Deferred.Deferred<void, Error>> = [];
   const notify = vi.fn();
   const afterApply = vi.fn();

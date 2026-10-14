@@ -4,7 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
-import { freezeSnapshot, makeFrozenProjection, ProjectionError } from "../src/projection.ts";
+import { freezeSnapshot, frozenProjection, ProjectionError } from "../src/projection.ts";
 import { interruptingScheduler } from "../testing.ts";
 import { thrownInstance } from "./support/thrown.ts";
 
@@ -14,7 +14,7 @@ it.effect("commits authoritative state when interrupted at publication", () =>
   Effect.gen(function* () {
     let published = 0;
     let interrupted = false;
-    const projection = yield* makeFrozenProjection(
+    const projection = yield* frozenProjection(
       0,
       (n) => n,
       (n) => {
@@ -37,7 +37,7 @@ it.effect("commits authoritative state when interrupted at publication", () =>
 
 it.effect("interrupts lock wait and update work without blocking later transitions", () =>
   Effect.gen(function* () {
-    const projection = yield* makeFrozenProjection(
+    const projection = yield* frozenProjection(
       0,
       (n) => n,
       () => undefined,
@@ -87,7 +87,7 @@ interface IndirectCycleFixture {
 it.effect("publishes cloned deeply frozen plain snapshots", () =>
   Effect.gen(function* () {
     const state = { count: 1, nested: { values: ["a"] } };
-    const projection = yield* makeFrozenProjection(
+    const projection = yield* frozenProjection(
       state,
       (current) => current,
       () => undefined,
@@ -146,7 +146,7 @@ it("preserves an own __proto__ property without changing the clone prototype", (
 
 it.effect("does not publish or commit a failed transition", () =>
   Effect.gen(function* () {
-    const projection = yield* makeFrozenProjection(
+    const projection = yield* frozenProjection(
       { count: 1 },
       (state) => ({ count: state.count }),
       () => undefined,
@@ -165,7 +165,7 @@ it.effect("does not publish or commit a failed transition", () =>
 it.effect("rejects invalid projection preparation without committing and releases the lock", () =>
   Effect.gen(function* () {
     let published = 0;
-    const projection = yield* makeFrozenProjection(
+    const projection = yield* frozenProjection(
       0,
       (n) => (n === 1 ? Number.NaN : n),
       (n) => {
@@ -193,7 +193,7 @@ interface RecordedValues {
 it.effect("serializes transitions and publishes each successful next state", () =>
   Effect.gen(function* () {
     const initial: RecordedValues = { values: [] };
-    const projection = yield* makeFrozenProjection(
+    const projection = yield* frozenProjection(
       initial,
       (state) => state,
       () => undefined,
@@ -236,7 +236,7 @@ it.each([
 it.effect("does not commit or publish when external publication fails", () =>
   Effect.gen(function* () {
     let published = 0;
-    const projection = yield* makeFrozenProjection(
+    const projection = yield* frozenProjection(
       { count: 1 },
       (state) => state,
       (snapshot) => {

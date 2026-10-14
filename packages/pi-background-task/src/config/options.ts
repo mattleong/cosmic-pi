@@ -1,3 +1,4 @@
+import * as Match from "effect/Match";
 import type { BackgroundTaskConfig } from "./schema.ts";
 import { DEFAULT_BACKGROUND_TASK_CONFIG } from "./schema.ts";
 
@@ -50,7 +51,12 @@ const onOff = (id: keyof BackgroundTaskConfig, label: string, description: strin
   description,
   values: ["true", "false"],
   openValues: false,
-  parse: (value: string) => (value === "true" ? true : value === "false" ? false : undefined),
+  parse: (value: string) =>
+    Match.value(value).pipe(
+      Match.when("true", () => true),
+      Match.when("false", () => false),
+      Match.orElse(() => undefined),
+    ),
   invalid: `${id} must be true or false`,
 });
 

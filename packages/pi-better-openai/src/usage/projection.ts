@@ -22,7 +22,7 @@ export const initialProjection = (): OpenAIProjection => ({
   accountId: undefined,
 });
 
-export const makeProjection = () => makeFrozenUsageProjection(initialProjection);
+export const usageProjectionRef = () => makeFrozenUsageProjection(initialProjection);
 
 export const resetProjection = (projection: MutableRef.MutableRef<OpenAIProjection>): void =>
   resetFrozenUsageProjection(projection, initialProjection);

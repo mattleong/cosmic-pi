@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { Match } from "effect";
 
 import { decodePackageManifest, type PackageManifest } from "./package-manifest.ts";
 
@@ -457,12 +458,11 @@ try {
       throw new Error(`Packed ${packageName} dependencies are not synchronized.`);
     }
     for (const [dependency, version] of Object.entries(source.dependencies ?? {})) {
-      const expected =
-        version === "catalog:"
-          ? catalogVersion(dependency)
-          : version === "workspace:*"
-            ? manifests.get(dependency)?.version
-            : version;
+      const expected = Match.value(version).pipe(
+        Match.when("catalog:", () => catalogVersion(dependency)),
+        Match.when("workspace:*", () => manifests.get(dependency)?.version),
+        Match.orElse(() => version),
+      );
       if (expected === undefined || packedManifest.dependencies[dependency] !== expected) {
         throw new Error(
           `Packed ${packageName} dependency ${dependency} does not match its source manifest.`,

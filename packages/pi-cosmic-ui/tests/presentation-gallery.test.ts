@@ -8,7 +8,7 @@ import {
   plainTheme,
   writeGallerySection,
 } from "pi-cosmic-core/testing";
-import { makeWorkingRow } from "../src/working/row.ts";
+import { createWorkingRow } from "../src/working/row.ts";
 import { ActivityComponent } from "../src/activity/component.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetHeight } from "../src/activity/widget-projection.ts";
@@ -300,7 +300,7 @@ const workingFrames = () => {
   let time = 0;
   let message: string | undefined;
   let tick = ignoreTick;
-  const row = makeWorkingRow({
+  const row = createWorkingRow({
     now: () => time,
     every: (_interval, callback) => {
       tick = callback;

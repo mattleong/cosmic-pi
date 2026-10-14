@@ -10,7 +10,8 @@ The extension never closes user-owned panes.
   generation-checked publication of the child's parent-reference capability.
 - [Workflow service](src/btw/service.ts) serializes commands and coordinates creation, reuse,
   prompt delivery, and focus. [Command controller](src/btw/controller.ts) adapts TUI commands
-  and reports bounded failures. [Layer composition](src/layer.ts) supplies the Herdr client.
+  and reports bounded failures. [Layer composition](src/layer.ts) supplies the Herdr client
+  and link store.
 - [Herdr client](src/boundary/herdr-client.ts) owns the CLI transport, fixed argument arrays,
   response decoding, deadlines, and mutation-outcome classification. Workflows and their tests
   use semantic client operations rather than the transport protocol.

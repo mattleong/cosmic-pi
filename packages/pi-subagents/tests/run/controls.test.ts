@@ -17,6 +17,11 @@ import {
   type FakeChildControl,
 } from "./fixtures/service-harness.ts";
 import { anyString } from "../support/matchers.ts";
+import {
+  InvalidSubagentRequestError,
+  SubagentProcessError,
+  SubagentProtocolError,
+} from "../../src/run/errors.ts";
 
 describe("SubagentService", () => {
   it.effect("clears a waiting parent question when its MCP caller cancels", () => {
@@ -127,10 +132,8 @@ describe("SubagentService", () => {
           .pipe(Effect.forkScoped({ startImmediately: true }));
 
         const rejected = yield* service.send(run.id, "Too late.").pipe(Effect.flip);
-        expect(rejected).toMatchObject({
-          _tag: "InvalidSubagentRequestError",
-          code: "interrupt_in_flight",
-        });
+        expect(rejected).toBeInstanceOf(InvalidSubagentRequestError);
+        expect(rejected).toMatchObject({ code: "interrupt_in_flight" });
         expect(fake.controls[0]?.sent("clear_queue")).toBe(false);
 
         yield* Deferred.succeed(steerGate, undefined);
@@ -232,7 +235,8 @@ describe("SubagentService", () => {
           yield* TestClock.adjust("10 seconds");
         }
         const failure = yield* Fiber.join(interrupting).pipe(Effect.flip);
-        expect(failure).toMatchObject({ _tag: "SubagentProcessError", ...fault.expected });
+        expect(failure).toBeInstanceOf(SubagentProcessError);
+        expect(failure).toMatchObject(fault.expected);
         if (fault.message) expect(failure.message).toContain(fault.message);
         expect(control.sent(fault.suppressed)).toBe(false);
         expect((yield* service.status(run.id)).state).toBe("running");
@@ -340,10 +344,8 @@ describe("SubagentService", () => {
       ]);
       yield* TestClock.adjust("10 seconds");
       const error = yield* Fiber.join(interrupting).pipe(Effect.flip);
-      expect(error).toMatchObject({
-        _tag: "SubagentProcessError",
-        code: "interrupt_outcome_uncertain",
-      });
+      expect(error).toBeInstanceOf(SubagentProcessError);
+      expect(error).toMatchObject({ code: "interrupt_outcome_uncertain" });
       expect(error.message).toContain("may still apply");
       expect(error.message).toContain("subagent_status");
 
@@ -367,22 +369,26 @@ describe("SubagentService", () => {
     {
       name: "fails an in-flight RPC promptly when stop sweeps its registration",
       end: "stop",
-      expected: { _tag: "SubagentProcessError", operation: "stop" },
+      errorClass: SubagentProcessError,
+      expected: { operation: "stop" },
     },
     {
       name: "fails an in-flight RPC promptly when the run protocol fails",
       end: "protocol",
-      expected: { _tag: "SubagentProtocolError" },
+      errorClass: SubagentProtocolError,
+      expected: {},
     },
     {
       name: "times out when an RPC transport write never completes",
       end: "clock",
-      expected: { _tag: "SubagentProcessError", operation: "await RPC response from" },
+      errorClass: SubagentProcessError,
+      expected: { operation: "await RPC response from" },
     },
     {
       name: "fails pending RPCs immediately after a schema-invalid event",
       end: "protocol",
-      expected: { _tag: "SubagentProtocolError" },
+      errorClass: SubagentProtocolError,
+      expected: {},
       awaitingResponse: true,
     },
   ] as const)
@@ -403,7 +409,9 @@ describe("SubagentService", () => {
         if (pending.end === "stop") expect((yield* service.stop(run.id)).state).toBe("stopped");
         if (pending.end === "protocol") control.offer({ type: "tool_execution_start" });
         if (pending.end === "clock") yield* TestClock.adjust("10 seconds");
-        expect(yield* Fiber.join(requesting).pipe(Effect.flip)).toMatchObject(pending.expected);
+        const failure = yield* Fiber.join(requesting).pipe(Effect.flip);
+        expect(failure).toBeInstanceOf(pending.errorClass);
+        expect(failure).toMatchObject(pending.expected);
         if (pending.end === "protocol")
           yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
         expect((yield* service.status(run.id)).name).toBe("in-flight-rpc");
@@ -451,10 +459,8 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => fake.controls[0]?.sentIpc("turn_input_barrier") === true);
 
       const rejected = yield* service.reply(run.id, "Continue.").pipe(Effect.flip);
-      expect(rejected).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "interrupt_in_flight",
-      });
+      expect(rejected).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(rejected).toMatchObject({ code: "interrupt_in_flight" });
 
       yield* Deferred.succeed(barrierGate, undefined);
       expect((yield* Fiber.join(interrupting)).state).toBe("paused");
@@ -514,10 +520,8 @@ describe("SubagentService", () => {
 
       yield* Deferred.succeed(steerGate, undefined);
       const failure = yield* Fiber.join(sending).pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "guidance_outcome_uncertain",
-      });
+      expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(failure).toMatchObject({ code: "guidance_outcome_uncertain" });
       expect(failure.message).toContain("may already have applied");
       expect(failure.message).toContain("subagent_status");
 
@@ -634,10 +638,8 @@ describe("SubagentService", () => {
       fake.controls[0]?.rejectNextParentReply();
 
       const failure = yield* service.reply(run.id, "Too late.").pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "SubagentProcessError",
-        code: "question_ownership_mismatch",
-      });
+      expect(failure).toBeInstanceOf(SubagentProcessError);
+      expect(failure).toMatchObject({ code: "question_ownership_mismatch" });
       const status = yield* service.status(run.id);
       expect(status.state).toBe("running");
       expect(

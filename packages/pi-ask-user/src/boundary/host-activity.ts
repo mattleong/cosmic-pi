@@ -15,7 +15,7 @@ interface Row {
   readonly token?: number | undefined;
 }
 
-export function makeQuestionnaireActivity(options: {
+export function createQuestionnaireActivity(options: {
   readonly bridge: AskUserDialogBridge;
   readonly isCurrent: () => boolean;
   readonly run: (effect: Effect.Effect<void>, signal: AbortSignal) => Promise<void>;
@@ -151,4 +151,4 @@ export function makeQuestionnaireActivity(options: {
   };
 }
 
-export type QuestionnaireActivityBridge = ReturnType<typeof makeQuestionnaireActivity>;
+export type QuestionnaireActivityBridge = ReturnType<typeof createQuestionnaireActivity>;

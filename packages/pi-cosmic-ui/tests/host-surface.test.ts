@@ -9,6 +9,8 @@ import {
   type OwnedSurfaceComponent,
   type OwnedSurfaceHost,
   type OwnedSurfaceOptions,
+  OwnedSurfaceError,
+  OwnedSurfaceOutcome,
 } from "../src/boundary/host-surface.ts";
 import {
   fakeCustomSurfaceHost,
@@ -444,7 +446,9 @@ describe("owned custom surfaces", () => {
       expect(h.overlayOptions).toBeUndefined();
       expect(h.overlays).toHaveLength(1);
       h.overlays[0]?.handleInput?.("q");
-      expect(yield* Effect.promise(() => outcome)).toEqual({ _tag: "Settled", value: undefined });
+      expect(yield* Effect.promise(() => outcome)).toEqual(
+        OwnedSurfaceOutcome.Settled({ value: undefined }),
+      );
     }).pipe(Effect.runPromise));
 
   it("keeps a factory failure's cause for Promise callers and types it for Effect callers", () =>
@@ -458,14 +462,12 @@ describe("owned custom surfaces", () => {
         },
       };
       const h = fakeCustomSurfaceHost();
-      expect(yield* Effect.promise(() => openOwnedSurfacePromise(h.ctx, options))).toEqual({
-        _tag: "Failed",
-        cause: failure,
-      });
-      expect(yield* openOwnedSurface(h.ctx, options).pipe(Effect.flip)).toMatchObject({
-        _tag: "OwnedSurfaceError",
-        reason: "failed",
-      });
+      expect(yield* Effect.promise(() => openOwnedSurfacePromise(h.ctx, options))).toEqual(
+        OwnedSurfaceOutcome.Failed({ cause: failure }),
+      );
+      const error = yield* openOwnedSurface(h.ctx, options).pipe(Effect.flip);
+      expect(error).toBeInstanceOf(OwnedSurfaceError);
+      expect(error.reason).toBe("failed");
     }).pipe(Effect.runPromise));
 
   it("reports custom-surface support fail-closed", () => {

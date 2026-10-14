@@ -4,6 +4,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
+import * as Match from "effect/Match";
+import * as Predicate from "effect/Predicate";
 import type { LocalCliProcessHandle } from "../boundary/local-cli-process.ts";
 import { processError, SubagentProcessError, type SubagentError } from "../run/errors.ts";
 import type { SteeringDeliveryState } from "../run/model.ts";
@@ -45,7 +47,7 @@ interface InputDeliveryObservers {
   readonly onFailure?: (error: SubagentProcessError) => Effect.Effect<void>;
 }
 
-export const makeLocalClaudeInputDelivery = (
+export const localClaudeInputDelivery = (
   child: Pick<LocalCliProcessHandle, "send" | "terminate">,
   scope: Scope.Scope,
   recordOutbound: (
@@ -62,7 +64,7 @@ export const makeLocalClaudeInputDelivery = (
   const closedError = () =>
     failure ??
     transportClosed ??
-    (scope.state._tag === "Closed"
+    (Predicate.isTagged(scope.state, "Closed")
       ? processError("send", "local_claude_closed", "Local Claude Code backend closed.")
       : undefined);
   const clear = (input: PendingUserReplay) => {
@@ -136,12 +138,12 @@ export const makeLocalClaudeInputDelivery = (
           epoch,
           emitRunStarted: operation === "start",
           contentDigest: userContentDigest(text),
-          resultKind:
-            operation === "initialize"
-              ? "initialization"
-              : operation === "start"
-                ? "assignment"
-                : undefined,
+          resultKind: Match.value(operation).pipe(
+            Match.when("initialize", () => "initialization" as const),
+            Match.when("start", () => "assignment" as const),
+            Match.when("steer", () => undefined),
+            Match.exhaustive,
+          ),
           acknowledgement: Deferred.makeUnsafe<void, SubagentError>(),
         };
         pending = input;

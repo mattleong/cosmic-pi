@@ -36,7 +36,7 @@ export const withoutGroupRowChanges = (
   items: readonly SettingsSurfaceItem[],
   onChange: (id: string, value: string) => void,
 ): ((id: string, value: string) => void) => {
-  const groupIds = new Set(items.filter((item) => item.kind === "group").map((item) => item.id));
+  const groupIds = new Set(items.flatMap((item) => (item.kind === "group" ? [item.id] : [])));
   return (id, value) => {
     if (!groupIds.has(id)) onChange(id, value);
   };

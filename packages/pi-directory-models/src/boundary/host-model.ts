@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 import {
-  makeDirectoryModelPreference,
+  directoryModelPreference,
   type DirectoryModelPreference,
   ThinkingLevelSchema,
   type ThinkingLevel,
@@ -51,7 +51,7 @@ export const preferenceFromSelectedModel = Effect.fn("DirectoryModelHost.fromSel
   selected: SelectedModel,
 ) {
   const thinkingLevel = yield* readThinkingLevel(pi);
-  return makeDirectoryModelPreference(canonicalCwd, selected.provider, selected.id, thinkingLevel);
+  return directoryModelPreference(canonicalCwd, selected.provider, selected.id, thinkingLevel);
 });
 
 export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(function* (

@@ -15,6 +15,7 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
+import { SubagentWriterConflictError } from "../../src/run/errors.ts";
 
 const writer = (name: string, writes: ReadonlyArray<string>) =>
   request({ name, writeIntent: "writer", writes: [...writes] });
@@ -58,7 +59,7 @@ describe("shared-cwd write claims", () => {
       yield* yieldUntil(() => latest(projections, first.id)?.state === "waiting_for_parent");
 
       const overlap = yield* service.grantWriteClaims(first.id, ["src/b.ts"]).pipe(Effect.flip);
-      expect(overlap).toMatchObject({ _tag: "SubagentWriterConflictError" });
+      expect(overlap).toBeInstanceOf(SubagentWriterConflictError);
       const tooMany = yield* service
         .grantWriteClaims(
           first.id,
@@ -96,15 +97,13 @@ describe("shared-cwd write claims", () => {
       const overlappingRepair = yield* service
         .grantWriteClaims(first.id, ["src/b.ts"])
         .pipe(Effect.flip);
-      expect(overlappingRepair).toMatchObject({ _tag: "SubagentWriterConflictError" });
+      expect(overlappingRepair).toBeInstanceOf(SubagentWriterConflictError);
 
       const blocked = yield* service
         .start(writer("new-disjoint-writer", ["src/c.ts"]))
         .pipe(Effect.flip);
-      expect(blocked).toMatchObject({
-        _tag: "SubagentWriterConflictError",
-        message: stringContaining("paused"),
-      });
+      expect(blocked).toBeInstanceOf(SubagentWriterConflictError);
+      expect(blocked).toMatchObject({ message: stringContaining("paused") });
 
       const resumed = yield* service.resumeWriterAdmission(first.id);
       expect(resumed.writeAdmissionPaused).toBeUndefined();
@@ -126,10 +125,8 @@ describe("shared-cwd write claims", () => {
       const stillBlocked = yield* service
         .start(writer("blocked-after-empty-pool", ["src/d.ts"]))
         .pipe(Effect.flip);
-      expect(stillBlocked).toMatchObject({
-        _tag: "SubagentWriterConflictError",
-        message: stringContaining("paused"),
-      });
+      expect(stillBlocked).toBeInstanceOf(SubagentWriterConflictError);
+      expect(stillBlocked).toMatchObject({ message: stringContaining("paused") });
       expect((yield* service.resumeWriterAdmission(first.id)).writeAdmissionPaused).toBeUndefined();
       expect(
         (yield* service.start(writer("admitted-after-empty-pool-review", ["src/d.ts"]))).state,
@@ -171,7 +168,7 @@ describe("shared-cwd write claims", () => {
         const blocked = yield* service
           .start(writer("blocked-after-starting-violation", ["src/b.ts"]))
           .pipe(Effect.flip);
-        expect(blocked).toMatchObject({ _tag: "SubagentWriterConflictError" });
+        expect(blocked).toBeInstanceOf(SubagentWriterConflictError);
       });
     }),
   );

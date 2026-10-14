@@ -13,7 +13,7 @@ import {
   type SubagentActivityPresentationSnapshot,
 } from "../ui/activity-panel.ts";
 import {
-  makeAdaptiveHostRefreshTicker,
+  adaptiveHostRefreshTicker,
   type AdaptiveHostRefreshTicker,
 } from "./host-refresh-ticker.ts";
 
@@ -45,7 +45,7 @@ export interface SubagentActivityPresentationController {
   readonly clear: () => void;
 }
 
-export const makeSubagentActivityPresentation = (): SubagentActivityPresentationController => {
+export const subagentActivityPresentation = (): SubagentActivityPresentationController => {
   let generation = 0;
   let panelAvailable = false;
   let nextLeaseId = 0;
@@ -163,7 +163,7 @@ class SubagentActivityWidgetComponent implements Component {
     };
     this.unsubscribeProjection = options.subscribeProjection(refresh);
     this.unsubscribePresentation = options.presentation.subscribe(refresh);
-    this.refreshTicker = makeAdaptiveHostRefreshTicker({
+    this.refreshTicker = adaptiveHostRefreshTicker({
       getCadence: () => subagentActivityPanelCadence(this.getPanel()),
       startTicker: options.startTicker,
       requestRender: () => {
@@ -231,7 +231,7 @@ export interface SubagentActivityWidgetHostOptions {
   readonly getNow?: (() => number) | undefined;
 }
 
-export const makeSubagentActivityWidgetHost = (
+export const subagentActivityWidgetHost = (
   options: SubagentActivityWidgetHostOptions,
 ): SubagentActivityWidgetHost => {
   let context: ExtensionContext | undefined;

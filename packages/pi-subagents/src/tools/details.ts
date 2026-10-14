@@ -86,7 +86,7 @@ const startDetailsCandidate = (
   };
 };
 
-export const makeStartDetails = (input: StartDetailsInput): SubagentStartDetails =>
+export const startDetails = (input: StartDetailsInput): SubagentStartDetails =>
   semanticCandidate(
     DENSITY_ORDER,
     (density) => startDetailsCandidate(input, density),
@@ -153,7 +153,7 @@ const awaitCandidate = (
   };
 };
 
-export const makeAwaitDetails = (input: AwaitDetailsInput): SubagentAwaitDetails =>
+export const awaitDetails = (input: AwaitDetailsInput): SubagentAwaitDetails =>
   semanticCandidate(
     ["reports", ...DENSITY_ORDER] as const,
     (stage) => awaitCandidate(input, stage === "reports" ? "full" : stage, stage === "reports"),
@@ -201,9 +201,7 @@ const modelDetailsCandidate = (
   return density === "full" ? base : { ...base, contentOmitted: true as const };
 };
 
-export const makeCompactToolDetails = (
-  input: CompactToolDetailsInput,
-): CompactSubagentToolDetails => {
+export const compactToolDetails = (input: CompactToolDetailsInput): CompactSubagentToolDetails => {
   if (input.action === "models")
     return semanticCandidate(
       DENSITY_ORDER,

@@ -6,6 +6,7 @@ import {
   type SubagentStartAwaitCardDetails,
 } from "./details-schema.ts";
 import { flow } from "effect/Function";
+import * as Predicate from "effect/Predicate";
 import { decodeOutcomeDetails } from "./details-decode.ts";
 
 export type SubagentOutcomeDetails = SubagentStartAwaitCardDetails | CompactSubagentToolDetails;
@@ -32,7 +33,8 @@ export const isUncertainToolFailure = (failure: { readonly code?: string | undef
   isOutcomeUncertain(failure) || isCleanupUnconfirmed(failure);
 
 export const isPendingDeliveryError = (error: SubagentError): boolean =>
-  error._tag === "SubagentProcessError" && actionFailureDisposition("send", error) === "pending";
+  Predicate.isTagged(error, "SubagentProcessError") &&
+  actionFailureDisposition("send", error) === "pending";
 
 export type ActionFailureDisposition = "pending" | "unconfirmed" | "failed";
 

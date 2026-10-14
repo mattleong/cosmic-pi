@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import type { Scope } from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
+import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import { SENT_UUID_LIMIT } from "../src/backend/local-claude-correlation.ts";
 import {
   decodeClaudeProtocolEvent,
@@ -582,7 +582,7 @@ const withStartedBackend = <A, E>(
       makeReplayHarness(scenario),
       (harness) =>
         Effect.gen(function* () {
-          const backend = yield* makeLocalClaudeBackendDriver(
+          const backend = yield* localClaudeBackendDriver(
             harness.processes,
             harness.supervisors,
           ).spawn(backendLaunch({ runId: `agent-${scenario}`, model: scenario }));

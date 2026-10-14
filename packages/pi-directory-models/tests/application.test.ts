@@ -22,7 +22,7 @@ import { registerDirectoryModelsApplication } from "../src/application.ts";
 import { preferenceFilename } from "../src/config/path-key.ts";
 import {
   DirectoryModelPreferenceSchema,
-  makeDirectoryModelPreference,
+  directoryModelPreference,
   type DirectoryModelPreference,
 } from "../src/config/schema.ts";
 
@@ -88,7 +88,7 @@ const writePreference = (
     const target = yield* preferencePath(agentDirectory, cwd);
     yield* fs.makeDirectory(path.join(agentDirectory, "pi-directory-models"), { recursive: true });
     const serialized = yield* Schema.encodeUnknownEffect(PreferenceFromJson)(
-      makeDirectoryModelPreference(
+      directoryModelPreference(
         documentCwd ?? (yield* fs.realPath(cwd)),
         preference.provider,
         preference.model,

@@ -12,7 +12,7 @@ import {
   tuiFixture,
 } from "pi-cosmic-core/testing";
 import { discoverActivityView } from "../src/activity/view-protocol.ts";
-import { makeActivityHost } from "../src/boundary/host-activity.ts";
+import { createActivityHost } from "../src/boundary/host-activity.ts";
 import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
 import { connectedActivityService } from "./support/activity.ts";
 import { eventBus } from "./support/host.ts";
@@ -27,7 +27,7 @@ const fixture = (mode: "tui" | "rpc" = "tui") =>
       theme: plainTheme,
       keybindings: piKeybindingsFixture(),
     });
-    const host = makeActivityHost(
+    const host = createActivityHost(
       extensionApiFixture({ events }),
       () => undefined,
       (effect, signal) => run(effect, signal ? { signal } : undefined),

@@ -10,7 +10,7 @@ export interface SessionUsageLedger {
   retired: SubagentUsage;
 }
 
-export const makeSessionUsageLedger = (): SessionUsageLedger => ({ retired: emptyUsage() });
+export const emptySessionUsageLedger = (): SessionUsageLedger => ({ retired: emptyUsage() });
 
 export const retireRunUsageLocked = (ledger: SessionUsageLedger, record: RunRecord): void => {
   ledger.retired = addUsage(ledger.retired, { ...record.view.usage, contextPercent: undefined });

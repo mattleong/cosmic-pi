@@ -7,7 +7,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import { disposeShikiHighlighter, ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
 import { codePreviewSettings } from "../config/state";
-import { makeSyntaxIngress } from "./ingress";
+import { acquireSyntaxIngress } from "./ingress";
 import {
   clearSyntaxProjection,
   publishSyntaxProjection,
@@ -292,7 +292,7 @@ export class CodePreviewSyntaxService extends Context.Service<
           ),
         );
 
-      const ingress = yield* makeSyntaxIngress(owner, {
+      const ingress = yield* acquireSyntaxIngress(owner, {
         initialize: requestInitialize,
         language: requestLanguage,
       });

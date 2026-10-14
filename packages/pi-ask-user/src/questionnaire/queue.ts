@@ -11,7 +11,7 @@ export interface QuestionnaireTicket {
   readonly close: Effect.Effect<void>;
 }
 
-export const makeQuestionnaireQueue = Effect.gen(function* () {
+export const acquireQuestionnaireQueue = Effect.gen(function* () {
   const parent = yield* Effect.scope;
   const scope = yield* Scope.fork(parent, "sequential");
   const state = yield* Ref.make<{
@@ -69,4 +69,4 @@ export const makeQuestionnaireQueue = Effect.gen(function* () {
   });
   return { admit };
 });
-export type QuestionnaireQueue = Effect.Success<typeof makeQuestionnaireQueue>;
+export type QuestionnaireQueue = Effect.Success<typeof acquireQuestionnaireQueue>;

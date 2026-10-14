@@ -44,7 +44,7 @@ export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
   return { offer, release, acknowledge, acknowledgeAll };
 };
 
-export const makeLocalCliEventIngress = <Raw = LocalCliWireEvent>(
+export const localCliEventIngress = <Raw = LocalCliWireEvent>(
   acknowledgeRaw: (raw: Raw) => void,
   label?: string,
 ) =>

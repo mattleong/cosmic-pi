@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { decodeFullScreenPrintable, FullScreenKeymap, pageSteps } from "../src/manager/keymap.ts";
+import {
+  decodeFullScreenPrintable,
+  FullScreenKeymap,
+  FullScreenResolution,
+  pageSteps,
+} from "../src/manager/keymap.ts";
 
 const ENTER = "\r";
 const ESC = "\x1b";
@@ -11,7 +16,7 @@ describe("FullScreenKeymap", () => {
       "screen-owned shortcuts",
       "x",
       { reservedKeys: new Set(["x"]) },
-      { _tag: "Shortcut", key: "x" },
+      FullScreenResolution.Shortcut({ key: "x" }),
     ],
     ["shared printable actions", "q", {}, { action: "quit" }],
   ])("keeps %s ahead of configured movement bindings", (_name, key, options, expected) => {

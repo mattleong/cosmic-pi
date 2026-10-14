@@ -7,6 +7,7 @@ import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/
 import { OPENAI_IMAGE_TOOL, registerOpenAIImage } from "../src/image/register.ts";
 import { OpenAIImageService } from "../src/image/service.ts";
 import type { CodexImageResult } from "../src/image/types.ts";
+import { OpenAIBoundaryError } from "../src/usage/controller.ts";
 
 const image: CodexImageResult = {
   id: "image-1",
@@ -111,7 +112,7 @@ describe("image command delivery authority", () => {
       const onUpdate = vi.fn();
       h.replace();
       yield* Effect.promise(() =>
-        expect(h.execute(onUpdate)).rejects.toMatchObject({ _tag: "OpenAIBoundaryError" }),
+        expect(h.execute(onUpdate)).rejects.toBeInstanceOf(OpenAIBoundaryError),
       );
       expect(h.runFixture).not.toHaveBeenCalled();
       expect(h.updateContext).not.toHaveBeenCalled();

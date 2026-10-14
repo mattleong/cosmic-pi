@@ -11,7 +11,7 @@ const expired = () =>
     "The questionnaire's owning Pi assignment is no longer active.",
   );
 
-export const makeQuestionnaireLifetimes = (isClosed: () => boolean) => {
+export const questionnaireLifetimes = (isClosed: () => boolean) => {
   const seen = new WeakMap<RunRecord, { epoch: number; ids: Set<string> }>();
   const entries = new Map<
     string,

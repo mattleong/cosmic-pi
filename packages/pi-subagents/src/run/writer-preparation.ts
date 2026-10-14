@@ -20,7 +20,7 @@ const mapWriterLeaseConflict = ({ message }: WriterLeaseConflictError) =>
     message,
   });
 
-export function makeWriterPreparation({
+export function writerSpawnPreparation({
   withLock,
   writerLeases,
 }: Pick<RunContext, "withLock" | "writerLeases">) {
@@ -83,15 +83,17 @@ export function makeWriterPreparation({
         const prepareOwner = Effect.gen(function* () {
           const lease = yield* Effect.acquireRelease(
             writerLeases.acquire({ cwd: canonicalCwd, runId: record.view.id }).pipe(
-              Effect.mapError((error) =>
-                error._tag === "WriterLeaseConflictError"
-                  ? mapWriterLeaseConflict(error)
-                  : new SubagentProcessError({
+              Effect.catchTags({
+                WriterLeaseConflictError: (error) => Effect.fail(mapWriterLeaseConflict(error)),
+                WriterLeaseAcquireError: (error) =>
+                  Effect.fail(
+                    new SubagentProcessError({
                       operation: "acquire writer lease",
                       code: "writer_lease_acquire_failed",
                       message: error.message,
                     }),
-              ),
+                  ),
+              }),
             ),
             (ownedLease) =>
               !handedOff || pool.releaseAuthorized
@@ -142,4 +144,4 @@ export function makeWriterPreparation({
   return prepareWriterLeaseForSpawn;
 }
 
-export type WriterPreparation = ReturnType<typeof makeWriterPreparation>;
+export type WriterPreparation = ReturnType<typeof writerSpawnPreparation>;

@@ -17,7 +17,7 @@ const INPUT_MIME_TYPES: ReadonlyMap<string, string> = new Map([
 const outsideWorkspace = (path: string) =>
   fail("input", `Image input must be a file inside the current workspace: ${path}`);
 
-export const makeImageInputReader = (dependencies: {
+export const imageInputReader = (dependencies: {
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly safeFile: SafeFileContract;

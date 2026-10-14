@@ -8,12 +8,12 @@ import {
   importedValue,
   isRuntimeFunction,
   resolveFunction,
-  resolveVariable,
   staticPropertyName,
   unwrapExpression,
   type ImportedValue,
   type RuntimeFunction,
 } from "../shared/ast.ts";
+import { resolveVariable } from "../shared/scope.ts";
 
 import {
   constructors,

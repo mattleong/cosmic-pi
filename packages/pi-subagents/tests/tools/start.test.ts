@@ -6,6 +6,7 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Match from "effect/Match";
 import { beforeAll, describe, expect, vi } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import {
@@ -418,11 +419,15 @@ describe("subagent tool", () => {
         },
       });
       const registry = preflightRegistry((selection) =>
-        selection.runtime === "claude"
-          ? invalidRequest("claude_unauthenticated", "Claude fixture auth unavailable.")
-          : selection.runtime === "codex"
-            ? invalidRequest("codex_effort_unsupported", "Codex fixture effort unavailable.")
-            : undefined,
+        Match.value(selection.runtime).pipe(
+          Match.when("claude", () =>
+            invalidRequest("claude_unauthenticated", "Claude fixture auth unavailable."),
+          ),
+          Match.when("codex", () =>
+            invalidRequest("codex_effort_unsupported", "Codex fixture effort unavailable."),
+          ),
+          Match.orElse(() => undefined),
+        ),
       );
       yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
         agents: [{ profile: "reviewer", task: "Review" }],
@@ -787,13 +792,19 @@ describe("subagent tool", () => {
     };
     const service = subagentServiceDouble({
       startSessionOwned: (input: StartSubagentRequest) =>
-        input.name === "launch-1"
-          ? Deferred.await(slowLaunch).pipe(Effect.as(view({ id: "agent-slow", name: "launch-1" })))
-          : input.name === "launch-2"
-            ? Effect.fail(
-                new SubagentProcessError({ operation: "start", message: "simulated failure" }),
-              )
-            : Effect.sync(() => view({ id: "agent-fast", name: "launch-3" })),
+        Match.value(input.name).pipe(
+          Match.when("launch-1", () =>
+            Deferred.await(slowLaunch).pipe(
+              Effect.as(view({ id: "agent-slow", name: "launch-1" })),
+            ),
+          ),
+          Match.when("launch-2", () =>
+            Effect.fail(
+              new SubagentProcessError({ operation: "start", message: "simulated failure" }),
+            ),
+          ),
+          Match.orElse(() => Effect.sync(() => view({ id: "agent-fast", name: "launch-3" }))),
+        ),
     });
     const tool = captureSubagentTools(service).get("subagent_start")!;
     const agents = ["launch-1", "launch-2", "launch-3"].map((name) => ({ task: "Review", name }));

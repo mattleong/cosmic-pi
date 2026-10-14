@@ -3,12 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   inheritedInvalidInspection,
   jsonObject,
-  makeProfileSettingsInspection,
+  profileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { profileCandidate } from "./fixtures/profiles.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../src/profiles/model.ts";
-import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
+import { sessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import {
   loadProfileRouteDraft,
   type ProfileSettingsInspection,
@@ -24,7 +24,7 @@ import {
   type ProfileWorkspaceRenderState,
 } from "../src/settings/ui/profile-workspace-render.ts";
 import {
-  makeProfileSearchSelector,
+  profileSearchSelector,
   type ProfileSearchSelectorOptions,
 } from "../src/settings/ui/profile-workspace-selectors.ts";
 
@@ -37,7 +37,7 @@ const route = [
 const inspection = (
   workerRoute: ReadonlyArray<ProfileCandidate> = route,
 ): ProfileSettingsInspection =>
-  makeProfileSettingsInspection({
+  profileSettingsInspection({
     globalDocument: jsonObject({
       version: 6,
       defaultProfileSet: "work",
@@ -57,7 +57,7 @@ const targetAwareInspection = (): ProfileSettingsInspection => {
   };
   return {
     ...saved,
-    session: makeSessionProfileSnapshot(saved.config, {
+    session: sessionProfileSnapshot(saved.config, {
       revision: 1,
       overrides: {},
       baseline,
@@ -89,7 +89,7 @@ const render = (overrides: Partial<ProfileWorkspaceRenderState>, width: number, 
   renderProfileWorkspace(state(overrides), { theme: plainTheme, width, height });
 
 const search = (overrides: Partial<ProfileSearchSelectorOptions>) =>
-  makeProfileSearchSelector({
+  profileSearchSelector({
     theme: plainTheme,
     inspection: inspection(),
     current: "worker",

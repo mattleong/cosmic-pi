@@ -26,7 +26,7 @@ import {
 import { decodeSupervisorToolCall, runSupervisorTool } from "../supervisor/tool-call.ts";
 import { openSupervisorClient } from "./supervisor-client.ts";
 import { configArgument, readConfig } from "./supervisor-mcp-config.ts";
-import { makeSerializedWriter } from "./supervisor-mcp-writer.ts";
+import { serializedWriter } from "./supervisor-mcp-writer.ts";
 
 const scrubEnvironment = (environment: NodeJS.ProcessEnv): void => {
   for (const key of Object.keys(environment)) delete environment[key];
@@ -62,7 +62,7 @@ const main = Effect.gen(function* () {
       startupFailure("Private supervisor helper could not open its bounded channel configuration."),
     ),
   );
-  const stdout = yield* makeSerializedWriter(process.stdout);
+  const stdout = yield* serializedWriter(process.stdout);
   const activeCalls = yield* FiberMap.make<string>();
   const done = yield* Deferred.make<void>();
   const runPromise = Effect.runPromiseWith(yield* Effect.context());

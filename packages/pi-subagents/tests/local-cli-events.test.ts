@@ -23,8 +23,8 @@ import {
   makeLocalCliRawEventOwnership,
   type LocalCliRawEventOwnership,
 } from "../src/backend/local-cli-events.ts";
-import { makeLocalCodexBackendDriver } from "../src/backend/local-codex.ts";
-import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
+import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
+import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { RpcCommand } from "../src/backend/local-pi-protocol.ts";
 import type { ChildProcessHandle, ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { ProcessExit } from "../src/boundary/process-transport.ts";
@@ -73,7 +73,7 @@ const piChild = (
 });
 
 const spawnPi = (child: Effect.Effect<ChildProcessHandle, never, Scope>) =>
-  makeLocalPiBackendDriver({ spawn: () => child, reclaimRunState: () => Effect.void }).spawn(
+  localPiBackendDriver({ spawn: () => child, reclaimRunState: () => Effect.void }).spawn(
     backendLaunch(),
   );
 
@@ -417,7 +417,7 @@ const withCodexEventDriver = <A>(
           acceptedReportForEpoch: () => Effect.undefined,
         },
       );
-      const backend = yield* makeLocalCodexBackendDriver(
+      const backend = yield* localCodexBackendDriver(
         { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
         { open: () => Effect.succeed(supervisor) },
       ).spawn(backendLaunch());

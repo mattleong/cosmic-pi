@@ -3,11 +3,11 @@ import type { AsyncDelivery } from "./questionnaire/async-service.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
-import { makeAskUserHost } from "./boundary/host-dialogs.ts";
+import { askUserHost } from "./boundary/host-dialogs.ts";
 import type { AskUserDialogBridge } from "./boundary/host-ui.ts";
 import { AskUserService, type QuestionnaireActivity } from "./questionnaire/service.ts";
 
-export const makeAskUserLayer = (
+export const askUserLayer = (
   ctx: ExtensionContext,
   bridge: AskUserDialogBridge,
   delivery?: AsyncDelivery,
@@ -16,11 +16,11 @@ export const makeAskUserLayer = (
   activity?: QuestionnaireActivity,
 ) =>
   AskUserService.layer(
-    makeAskUserHost(ctx, bridge, promptGate),
+    askUserHost(ctx, bridge, promptGate),
     ctx.mode === "tui" ? delivery : undefined,
     generation,
     activity,
   ).pipe(Layer.merge(CodePreviewSchedulerService.layer));
 
-export type AskUserApplication = Layer.Success<ReturnType<typeof makeAskUserLayer>>;
-export type AskUserRuntimeError = Layer.Error<ReturnType<typeof makeAskUserLayer>>;
+export type AskUserApplication = Layer.Success<ReturnType<typeof askUserLayer>>;
+export type AskUserRuntimeError = Layer.Error<ReturnType<typeof askUserLayer>>;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeLocalClaudeUsage, usageComponentsTotal } from "../src/backend/local-claude-usage.ts";
+import { localClaudeUsage, usageComponentsTotal } from "../src/backend/local-claude-usage.ts";
 
 const tokens = (input = 0, output = 0, cacheRead = 0, cacheWrite = 0) => ({
   input,
@@ -10,7 +10,7 @@ const tokens = (input = 0, output = 0, cacheRead = 0, cacheWrite = 0) => ({
 
 describe("Claude usage bookkeeping", () => {
   it("deduplicates cumulative messages, including caches, without subtracting regressions", () => {
-    const usage = makeLocalClaudeUsage();
+    const usage = localClaudeUsage();
     const first = tokens(3, 4, 5, 6);
     expect(usage.assistantDelta("message", first)).toEqual({ delta: first, inconsistent: false });
     expect(usage.assistantDelta("message", first)).toEqual({
@@ -27,7 +27,7 @@ describe("Claude usage bookkeeping", () => {
   });
 
   it("keeps the 32 most recently observed message IDs", () => {
-    const usage = makeLocalClaudeUsage();
+    const usage = localClaudeUsage();
     for (let index = 0; index < 32; index++) usage.assistantDelta(`message-${index}`, tokens(1));
     usage.assistantDelta("message-0", tokens(1));
     usage.assistantDelta("message-32", tokens(1));
@@ -37,7 +37,7 @@ describe("Claude usage bookkeeping", () => {
   });
 
   it("accounts anonymous messages separately and clears history without resetting totals", () => {
-    const usage = makeLocalClaudeUsage();
+    const usage = localClaudeUsage();
     usage.assistantDelta(undefined, tokens(2));
     usage.assistantDelta(undefined, tokens(2));
     usage.assistantDelta("message", tokens(3));
@@ -48,7 +48,7 @@ describe("Claude usage bookkeeping", () => {
   });
 
   it("returns detached registration baselines", () => {
-    const usage = makeLocalClaudeUsage();
+    const usage = localClaudeUsage();
     usage.assistantDelta("earlier", tokens(10));
     const baseline = usage.baseline();
     usage.assistantDelta("later", tokens(5));
@@ -58,7 +58,7 @@ describe("Claude usage bookkeeping", () => {
   });
 
   it("reconciles only the uncounted result remainder since the supplied query baseline", () => {
-    const usage = makeLocalClaudeUsage();
+    const usage = localClaudeUsage();
     usage.assistantDelta("earlier-query", tokens(100, 100, 100, 100));
     const baseline = usage.baseline();
     usage.assistantDelta("query-message", tokens(3, 4, 5, 6));
@@ -70,7 +70,7 @@ describe("Claude usage bookkeeping", () => {
   });
 
   it("ignores regressing result components and leaves cost-only token totals unchanged", () => {
-    const usage = makeLocalClaudeUsage();
+    const usage = localClaudeUsage();
     const baseline = usage.baseline();
     usage.assistantDelta("query-message", tokens(3, 4, 5, 6));
     expect(usage.resultDelta(baseline, tokens(1, 8, 2, 10))).toEqual({

@@ -40,7 +40,7 @@ const engineRevision = (service: WorkspaceServiceContract, { handle }: Workspace
     ),
   );
 
-export function makeWorkspaceReview(context: WorkspaceControlContext) {
+export function workspaceReviewOperations(context: WorkspaceControlContext) {
   const { withLock, state, requireBinding, requireEngine, operations, workspaceSetup } = context;
   const hold = <A>(
     workspaceId: string,

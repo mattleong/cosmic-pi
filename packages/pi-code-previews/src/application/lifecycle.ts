@@ -1,5 +1,6 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   captureSessionHost,
@@ -16,7 +17,7 @@ import {
   type CodePreviewRuntimeError,
 } from "../layer";
 import { registerCodePreviewsCommand } from "../commands/register";
-import { makeSettingsAdmission, type SettingsAdmission } from "../config/coordinator";
+import { nextSettingsAdmission, type SettingsAdmission } from "../config/coordinator";
 import type { CodePreviewSettings } from "../config/schema";
 import { CodePreviewSettingsService, describeSettingsProblem } from "../config/store";
 import { codePreviewSettings, codePreviewSettingsProblems } from "../config/state";
@@ -173,7 +174,7 @@ export function codePreviewsWithDependencies(
     const capturedHost = captureSessionHost(ctx);
     const projectTrusted = isProjectTrusted(ctx);
     if (
-      capturedHost["_tag"] === "Unavailable" ||
+      !Predicate.isTagged(capturedHost, "Captured") ||
       !invokeHostCallback(() => capturePreviewHostTools(pi), undefined)
     ) {
       presentation.retire();
@@ -189,7 +190,7 @@ export function codePreviewsWithDependencies(
     const input: SessionInput = {
       cwd: capturedHost.cwd,
       projectTrusted,
-      settingsAdmission: makeSettingsAdmission(),
+      settingsAdmission: nextSettingsAdmission(),
       presentation,
       signal: capturedHost.signal,
       notifyFailure,

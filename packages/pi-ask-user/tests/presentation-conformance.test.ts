@@ -18,6 +18,7 @@ import {
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 import { asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
 import { noExecution } from "./support/questionnaire.ts";
+import * as Match from "effect/Match";
 
 const args = {
   questions: [{ key: "decision", title: "Decision", prompt: "Explain", mode: "text" }],
@@ -53,7 +54,11 @@ function register(
 const restoreSettings = applyPresentationSettings({});
 afterEach(restoreSettings);
 const detailsFor = <Blocking, Row>(toolName: string, blocking: Blocking, row: Row) =>
-  toolName === "ask_user" ? blocking : toolName === "ask_user_async" ? row : { requests: [row] };
+  Match.value(toolName).pipe(
+    Match.when("ask_user", () => blocking),
+    Match.when("ask_user_async", () => row),
+    Match.orElse(() => ({ requests: [row] })),
+  );
 
 describe("registered questionnaire presentation", () => {
   it.each(["compact", "preview"] as const)(

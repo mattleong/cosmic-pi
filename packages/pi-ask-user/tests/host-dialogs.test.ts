@@ -7,9 +7,9 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { failureMessage } from "pi-cosmic-core";
-import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
+import { askUserHost } from "../src/boundary/host-dialogs.ts";
 import { AskUserHostError } from "../src/questionnaire/errors.ts";
-import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
+import { createAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import type { AskUserAnswer } from "../src/questionnaire/model.ts";
 import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schema.ts";
 
@@ -37,7 +37,7 @@ const run = (
   options?: { readonly bridge?: AskUserDialogBridge; readonly signal?: AbortSignal },
 ) =>
   Effect.runPromise(
-    makeAskUserHost(ctx, options?.bridge ?? makeAskUserDialogBridge())(selectedRequest),
+    askUserHost(ctx, options?.bridge ?? createAskUserDialogBridge())(selectedRequest),
     options?.signal ? { signal: options.signal } : undefined,
   );
 
@@ -248,8 +248,8 @@ describe("RPC questionnaire boundary", () => {
     rpc({ select: vi.fn(() => Promise.reject(new Error("secret host failure"))) }).then(
       () => expect.unreachable(),
       (cause: unknown) => {
-        expect(cause).toMatchObject({ _tag: "AskUserHostError", operation: "open" });
         if (!(cause instanceof AskUserHostError)) throw cause;
+        expect(cause.operation).toBe("open");
         expect(cause.message).not.toContain("secret");
         expect(issueMessageStyleProblems(failureMessage(cause.message, ""))).toEqual([]);
       },
@@ -285,7 +285,7 @@ describe("TUI questionnaire boundary", () => {
   effectIt.effect("stops an interrupted lazy open before settings or UI mutation", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() => import("../src/ui/dialog.ts"));
-      const bridge = makeAskUserDialogBridge();
+      const bridge = createAskUserDialogBridge();
       const resume = vi.fn();
       bridge.activate(resume);
       const host = makeTuiHost();
@@ -303,7 +303,7 @@ describe("TUI questionnaire boundary", () => {
 
   effectIt.effect("keeps normal dialog submission authoritative during cleanup", () =>
     Effect.gen(function* () {
-      const bridge = makeAskUserDialogBridge();
+      const bridge = createAskUserDialogBridge();
       const host = makeTuiHost();
       host.settleOnOpen((completed) => {
         host.component!.handleInput?.("1");
@@ -324,17 +324,16 @@ describe("TUI questionnaire boundary", () => {
 
   effectIt.effect("does not clear another bridge owner when custom rejects before activation", () =>
     Effect.gen(function* () {
-      const bridge = makeAskUserDialogBridge();
+      const bridge = createAskUserDialogBridge();
       const resume = vi.fn();
       bridge.activate(resume);
       const host = makeTuiHost();
       host.failOpen(new Error("custom unavailable"));
 
       yield* Effect.promise(() =>
-        expect(run(host.ctx, request, { bridge })).rejects.toMatchObject({
-          _tag: "AskUserHostError",
-          operation: "render",
-        }),
+        expect(run(host.ctx, request, { bridge })).rejects.toSatisfy(
+          (cause) => cause instanceof AskUserHostError && cause.operation === "render",
+        ),
       );
       expect(host.customCalls).toBe(1);
       expect(bridge.resume()).toBe(true);
@@ -347,7 +346,7 @@ describe("TUI questionnaire boundary", () => {
     ["clears only its bridge token when a replacement wins during the open", true],
   ] as const)("interrupts a nonsettling custom Promise and %s", ([, replacement]) =>
     Effect.gen(function* () {
-      const bridge = makeAskUserDialogBridge();
+      const bridge = createAskUserDialogBridge();
       const host = makeTuiHost();
       const replacementResume = vi.fn();
       host.settleOnOpen(() => {

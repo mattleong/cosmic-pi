@@ -2,11 +2,11 @@ import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import type * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
-import { makeAsyncQuestionnaires, type AsyncDelivery } from "./async-service.ts";
+import { acquireAsyncQuestionnaires, type AsyncDelivery } from "./async-service.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { makeQuestionnaireQueue } from "./queue.ts";
+import { acquireQuestionnaireQueue } from "./queue.ts";
 import type { AskUserRequest } from "./schema.ts";
 import type { AskUserHostError } from "./errors.ts";
 import type { QuestionnaireOwner } from "./protocol.ts";
@@ -52,9 +52,9 @@ const makeService = Effect.fn("AskUserService.make")(function* (
   idPrefix: string = "ask",
   activity: QuestionnaireActivity = noQuestionnaireActivity,
 ) {
-  const queue = yield* makeQuestionnaireQueue;
+  const queue = yield* acquireQuestionnaireQueue;
   const blockingCount = yield* Ref.make(0);
-  const async = yield* makeAsyncQuestionnaires(host, queue, delivery, idPrefix, activity);
+  const async = yield* acquireAsyncQuestionnaires(host, queue, delivery, idPrefix, activity);
   const askRequest = Effect.fn("AskUserService.ask")(function* (
     request: AskUserRequest,
     owner?: QuestionnaireOwner,

@@ -15,6 +15,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import type * as Socket from "effect/socket/Socket";
 import type * as SocketServer from "effect/socket/SocketServer";
+import * as Match from "effect/Match";
 import { SupervisorOpenSessionRpc } from "../supervisor/protocol.ts";
 
 const MAX_CONNECTIONS = 4;
@@ -85,7 +86,7 @@ const responseRequestId = (response: RpcMessage.FromServerEncoded): string | num
 
 const ignoreRequest = (): Effect.Effect<void> => Effect.void;
 
-export const makeSupervisorRpcServerProtocol = (
+export const supervisorRpcServerProtocol = (
   options: SupervisorRpcServerProtocolOptions,
 ): Effect.Effect<
   RpcServer.Protocol["Service"],
@@ -208,24 +209,24 @@ export const makeSupervisorRpcServerProtocol = (
               return Effect.forEach(
                 decoded.success,
                 (message) => {
-                  if (message._tag === "Request") {
-                    if (
-                      message.isNotification === true ||
-                      !validRequestId(message.id) ||
-                      activeRequests.has(message.id) ||
-                      activeRequests.size >= MAX_ACTIVE_REQUESTS ||
-                      (!guard.accepted && message.tag !== SupervisorOpenSessionRpc._tag)
-                    ) {
-                      guard.close();
-                      return Effect.void;
-                    }
-                    activeRequests.add(message.id);
-                  } else if (message._tag === "Ping") {
-                    if (!guard.accepted) {
-                      guard.close();
-                      return Effect.void;
-                    }
-                  } else if (message._tag !== "Eof" && !validRequestId(message.requestId)) {
+                  const admitted = Match.value(message).pipe(
+                    Match.tag("Request", (request) => {
+                      if (
+                        request.isNotification === true ||
+                        !validRequestId(request.id) ||
+                        activeRequests.has(request.id) ||
+                        activeRequests.size >= MAX_ACTIVE_REQUESTS ||
+                        (!guard.accepted && request.tag !== SupervisorOpenSessionRpc._tag)
+                      )
+                        return false;
+                      activeRequests.add(request.id);
+                      return true;
+                    }),
+                    Match.tag("Ping", () => guard.accepted),
+                    Match.tag("Eof", () => true),
+                    Match.orElse((reply) => validRequestId(reply.requestId)),
+                  );
+                  if (!admitted) {
                     guard.close();
                     return Effect.void;
                   }

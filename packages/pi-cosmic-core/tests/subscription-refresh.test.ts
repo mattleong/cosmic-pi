@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import { makeSubscriptionRefresh } from "../index.ts";
+import { createSubscriptionRefresh } from "../index.ts";
 import { yieldUntil } from "../testing.ts";
 
 it.effect("discards a response when its key or revision becomes stale", () =>
@@ -13,7 +13,7 @@ it.effect("discards a response when its key or revision becomes stale", () =>
     const started = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const commits: number[] = [];
-    const refresh = yield* makeSubscriptionRefresh({
+    const refresh = yield* createSubscriptionRefresh({
       currentKey: Ref.get(key),
       interval: Effect.succeed(60_000),
       fetch: () =>
@@ -38,7 +38,7 @@ it.effect("does not retain a wake pulse emitted before polling waits", () =>
     const intervalRead = yield* Deferred.make<void>();
     const fetched = yield* Deferred.make<void>();
     const calls = yield* Ref.make(0);
-    const refresh = yield* makeSubscriptionRefresh({
+    const refresh = yield* createSubscriptionRefresh({
       currentKey: Effect.succeed("key"),
       interval: Deferred.succeed(intervalRead, undefined).pipe(Effect.as(1_000)),
       fetch: () =>
@@ -70,7 +70,7 @@ it.effect("releases the current polling wait and applies the next interval", () 
     const firstFetch = yield* Deferred.make<void>();
     const secondFetch = yield* Deferred.make<void>();
     const calls = yield* Ref.make(0);
-    const refresh = yield* makeSubscriptionRefresh({
+    const refresh = yield* createSubscriptionRefresh({
       currentKey: Effect.succeed("key"),
       interval: Effect.gen(function* () {
         const read = yield* Ref.updateAndGet(intervalReads, (count) => count + 1);
@@ -112,7 +112,7 @@ it.effect("serializes final validation and commit with invalidation", () =>
     const invalidationFinished = yield* Deferred.make<void>();
     const events: string[] = [];
     let keyReads = 0;
-    const refresh = yield* makeSubscriptionRefresh({
+    const refresh = yield* createSubscriptionRefresh({
       currentKey: Effect.suspend(() => {
         keyReads++;
         return keyReads === 2
@@ -150,7 +150,7 @@ it.effect("allows a commit to invalidate the refresh without deadlocking its gat
   Effect.gen(function* () {
     const committed = yield* Deferred.make<void>();
     let invalidate: Effect.Effect<void> = Effect.void;
-    const refresh = yield* makeSubscriptionRefresh({
+    const refresh = yield* createSubscriptionRefresh({
       currentKey: Effect.succeed("key"),
       interval: Effect.succeed(60_000),
       fetch: () => Effect.succeed(1),
@@ -174,7 +174,7 @@ it.effect("keeps polling after the refresh it joined is interrupted", () =>
     const polled = yield* Deferred.make<void>();
     let intervalReads = 0;
     let calls = 0;
-    const refresh = yield* makeSubscriptionRefresh({
+    const refresh = yield* createSubscriptionRefresh({
       currentKey: Effect.succeed("key"),
       interval: Effect.sync(() => ++intervalReads).pipe(Effect.as(1_000)),
       fetch: () =>

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   inheritedInvalidInspection,
   INVALID_ROUTE,
-  makeProfileSettingsInspection,
+  profileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { declaredCandidate as candidate } from "./fixtures/profiles.ts";
@@ -33,10 +33,10 @@ const projectDocument = {
 };
 
 const inspection = (): ProfileSettingsInspection =>
-  makeProfileSettingsInspection({ globalDocument, projectDocument, projectTrusted: true });
+  profileSettingsInspection({ globalDocument, projectDocument, projectTrusted: true });
 
 const invalidInspection = (): ProfileSettingsInspection =>
-  makeProfileSettingsInspection({
+  profileSettingsInspection({
     globalDocument: {
       version: 6,
       profileSets: { broken: { profiles: { worker: INVALID_ROUTE } }, valid: { profiles: {} } },
@@ -46,7 +46,7 @@ const invalidInspection = (): ProfileSettingsInspection =>
 
 const malformedDefaultInspection = (scope: "global" | "project"): ProfileSettingsInspection => {
   const malformed = { version: 6, defaultProfileSet: 42, profileSets: { saved: { profiles: {} } } };
-  return makeProfileSettingsInspection({
+  return profileSettingsInspection({
     globalDocument: scope === "global" ? malformed : globalDocument,
     ...(scope === "project" && { projectDocument: malformed }),
     projectTrusted: true,
@@ -54,7 +54,7 @@ const malformedDefaultInspection = (scope: "global" | "project"): ProfileSetting
 };
 
 const structurallyInvalidInspection = (): ProfileSettingsInspection =>
-  makeProfileSettingsInspection({
+  profileSettingsInspection({
     globalDocument: { version: 6, profileSets: { broken: null, valid: { profiles: {} } } },
     projectTrusted: false,
   });
@@ -85,7 +85,7 @@ const menu = (value: ProfileSettingsInspection, key: string) => {
 };
 
 const modelInspection = (model: string) =>
-  makeProfileSettingsInspection({
+  profileSettingsInspection({
     globalDocument: {
       version: 6,
       profileSets: {
@@ -98,7 +98,7 @@ const modelInspection = (model: string) =>
 
 describe("saved profile-set library", () => {
   it("previews resolved routes with ordered models, inheritance, disabled and invalid states", () => {
-    const value = makeProfileSettingsInspection({
+    const value = profileSettingsInspection({
       globalDocument: {
         version: 6,
         defaultProfileSet: "base",
@@ -302,7 +302,7 @@ describe("saved profile-set library", () => {
   );
 
   it("keeps a set named invalid-default selected beside the repair row across refreshes", () => {
-    const value = makeProfileSettingsInspection({
+    const value = profileSettingsInspection({
       globalDocument: {
         version: 6,
         defaultProfileSet: 42,

@@ -1,3 +1,4 @@
+import * as Match from "effect/Match";
 import { decodeFullScreenPrintable } from "pi-cosmic-ui/manager/keymap";
 import type { ListDetailPane } from "pi-cosmic-ui/manager/list-detail";
 import { Key, matchesKey, type Input } from "@earendil-works/pi-tui";
@@ -95,11 +96,11 @@ export const PROMPTS = {
 
 export const promptAvailable = (kind: FleetPromptKind, run: SubagentRunView | undefined): boolean =>
   run !== undefined &&
-  (kind === "resume"
-    ? canResumeRun(run)
-    : kind === "rename"
-      ? canRenameRun(run)
-      : runMessageMode(run) === kind);
+  Match.value(kind).pipe(
+    Match.when("resume", () => canResumeRun(run)),
+    Match.when("rename", () => canRenameRun(run)),
+    Match.orElse((mode) => runMessageMode(run) === mode),
+  );
 
 export const promptUnavailableFeedback = (
   kind: FleetPromptKind,

@@ -1,3 +1,5 @@
+import * as Match from "effect/Match";
+import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
 import { pageSteps, type FullScreenResolution } from "pi-cosmic-ui/manager/keymap";
@@ -21,7 +23,7 @@ import {
   PROFILE_WORKSPACE_SHORTCUTS,
   isWorkspaceNavigationKey,
 } from "./ui/profile-workspace-keys.ts";
-import { makeRouteActionsSelector, selectHost } from "./ui/profile-workspace-selectors.ts";
+import { routeActionsSelector, selectHost } from "./ui/profile-workspace-selectors.ts";
 import { ProfileWorkspacePickers } from "./profile-workspace-pickers.ts";
 import type { ProfileWorkspaceSelectionMemory } from "./profile-workspace-state.ts";
 import type {
@@ -82,7 +84,7 @@ export class ProfileWorkspaceComponent
     if (!this.draft().candidates[this.candidateIndex]) return;
     if (this.pane === "fields" && this.rows()[this.fieldIndex]?.scope !== "candidate") return;
     this.showSelectPage(
-      makeRouteActionsSelector({
+      routeActionsSelector({
         ...selectHost(this.options),
         profile: this.profile(),
         candidateIndex: this.candidateIndex,
@@ -188,7 +190,14 @@ export class ProfileWorkspaceComponent
     }
     if (key === "m" || key === "e" || key === "r") {
       this.saveFocused = false;
-      this.selectField(key === "m" ? "model" : key === "e" ? "effort" : "runWith");
+      this.selectField(
+        Match.value(key).pipe(
+          Match.when("m", () => "model" as const),
+          Match.when("e", () => "effort" as const),
+          Match.when("r", () => "runWith" as const),
+          Match.exhaustive,
+        ),
+      );
       this.pane = "fields";
       this.openSelectedField();
     } else if (key === "a") this.openActions();
@@ -247,7 +256,7 @@ export class ProfileWorkspaceComponent
       this.handleHelpInput(resolution);
       return;
     }
-    if (resolution._tag === "Shortcut") {
+    if (Predicate.isTagged(resolution, "Shortcut")) {
       if (!this.handleShortcutKey(resolution.key)) this.renderSoon();
       return;
     }
@@ -267,7 +276,7 @@ export class ProfileWorkspaceComponent
   }
 
   protected handleHelpInput(resolution: FullScreenResolution): void {
-    if (resolution._tag !== "Action") return;
+    if (!Predicate.isTagged(resolution, "Action")) return;
     if (isMovementMotion(resolution.action)) {
       this.helpScroll = Math.max(
         0,

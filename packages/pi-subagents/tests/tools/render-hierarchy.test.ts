@@ -1,10 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import {
-  makeAwaitDetails,
-  makeCompactToolDetails,
-  makeStartDetails,
-} from "../../src/tools/details.ts";
+import { awaitDetails, compactToolDetails, startDetails } from "../../src/tools/details.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { renderContextFixture } from "pi-code-previews/testing";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
@@ -25,9 +21,9 @@ const child = view({
 });
 
 type HierarchyDetails =
-  | ReturnType<typeof makeAwaitDetails>
-  | ReturnType<typeof makeCompactToolDetails>
-  | ReturnType<typeof makeStartDetails>;
+  | ReturnType<typeof awaitDetails>
+  | ReturnType<typeof compactToolDetails>
+  | ReturnType<typeof startDetails>;
 type RenderOptions = {
   readonly partial?: boolean;
   readonly expanded?: boolean;
@@ -65,7 +61,7 @@ describe("hierarchical tool result rendering", () => {
       depth: 2,
       endedAt: 2,
     });
-    const details = makeAwaitDetails({
+    const details = awaitDetails({
       runs: [settledTarget],
       contextRuns: [settledChild],
       awaitedRunIds: [settledTarget.id],
@@ -82,15 +78,15 @@ describe("hierarchical tool result rendering", () => {
   });
 
   it("omits partial start and await hierarchy when the persistent panel owns it", () => {
-    const awaitDetails = makeAwaitDetails({
+    const awaitCard = awaitDetails({
       runs: [target],
       contextRuns: [child],
       awaitedRunIds: [target.id],
       awaitUntil: "all_finished",
     });
-    const hiddenAwait = render(awaitDetails, { partial: true, panel: true });
+    const hiddenAwait = render(awaitCard, { partial: true, panel: true });
 
-    const startDetails = makeStartDetails({
+    const startCard = startDetails({
       startEntries: [
         {
           index: 0,
@@ -101,10 +97,10 @@ describe("hierarchical tool result rendering", () => {
         },
       ],
     });
-    const hiddenStart = render(startDetails, { partial: true, panel: true });
+    const hiddenStart = render(startCard, { partial: true, panel: true });
 
-    const replayedAwait = render(awaitDetails, { panel: true });
-    const replayedStart = render(startDetails, { panel: true });
+    const replayedAwait = render(awaitCard, { panel: true });
+    const replayedStart = render(startCard, { panel: true });
 
     expect(hiddenAwait).toEqual([]);
     expect(hiddenStart).toEqual([]);
@@ -134,7 +130,7 @@ describe("hierarchical tool result rendering", () => {
       finalText: "Second report body.",
       progress: "Stale finished progress.",
     });
-    const details = makeAwaitDetails({
+    const details = awaitDetails({
       runs: [first, second],
       awaitedRunIds: [first.id, second.id],
       awaitUntil: "all_finished",
@@ -166,21 +162,21 @@ describe("hierarchical tool result rendering", () => {
       awaitedRunIds: [active.id, failure.id],
       awaitUntil: "all_finished" as const,
     };
-    const summarize = (details: ReturnType<typeof makeAwaitDetails>) =>
+    const summarize = (details: ReturnType<typeof awaitDetails>) =>
       createSubagentCompactSummary("subagent_await")({
         phase: "settled",
         args: { runIds: input.awaitedRunIds, until: input.awaitUntil },
         result: { content: [], details },
         context: renderContextFixture(),
       });
-    const signature = (details: ReturnType<typeof makeAwaitDetails>) => {
+    const signature = (details: ReturnType<typeof awaitDetails>) => {
       const summary = summarize(details);
       return [summary?.outcome, ...(summary?.issues ?? []).map((issue) => issue.code)];
     };
-    const ordinary = signature(makeAwaitDetails(input));
+    const ordinary = signature(awaitDetails(input));
 
     for (const outcome of ["cancelled", "attentionRequired"] as const) {
-      const details = makeAwaitDetails({ ...input, [outcome]: true });
+      const details = awaitDetails({ ...input, [outcome]: true });
       const expanded = text(details, { expanded: true });
 
       expect(signature(details)).not.toEqual(ordinary);
@@ -190,11 +186,11 @@ describe("hierarchical tool result rendering", () => {
   });
 
   it.each([20, 50, 100])("keeps list and await lines within width %i", (width) => {
-    const list = render(makeCompactToolDetails({ action: "list", runs: [child, target] }), {
+    const list = render(compactToolDetails({ action: "list", runs: [child, target] }), {
       width,
     });
     const awaitProgress = render(
-      makeAwaitDetails({
+      awaitDetails({
         runs: [target],
         contextRuns: [child],
         awaitedRunIds: [target.id],
@@ -220,7 +216,7 @@ describe("hierarchical tool result rendering", () => {
         parentRunId: busyTarget.id,
         depth: 2,
       });
-      const details = makeAwaitDetails({
+      const details = awaitDetails({
         runs: [busyTarget],
         contextRuns: [busyChild],
         awaitedRunIds: [busyTarget.id],
@@ -272,7 +268,7 @@ describe("hierarchical tool result rendering", () => {
 
   it("preserves complete action-failure text in expanded results", () => {
     const message = `Failure prefix ${"detail ".repeat(15)}failure tail`;
-    const details = makeCompactToolDetails({
+    const details = compactToolDetails({
       action: "stop",
       runs: [],
       actionFailures: [{ id: "agent-failed", code: "stop_failed", message }],
@@ -286,7 +282,7 @@ describe("hierarchical tool result rendering", () => {
 
   it("lists pending delivery under its own expanded section, never under failed targets", () => {
     const lines = render(
-      makeCompactToolDetails({
+      compactToolDetails({
         action: "send",
         runs: [],
         actionFailures: [

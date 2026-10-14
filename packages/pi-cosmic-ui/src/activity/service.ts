@@ -6,7 +6,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   decodeUnknownOrUndefined,
-  makeFrozenProjection,
+  frozenProjection,
   sanitizeTerminalLine,
   sanitizeDiagnosticContent,
 } from "pi-cosmic-core";
@@ -181,7 +181,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
   "pi-cosmic-ui/activity/service/ActivityService",
 ) {
   static make = Effect.fn("ActivityService.make")(function* (options: ActivityServiceOptions) {
-    const state = yield* makeFrozenProjection<State, ActivityViewSnapshot>(
+    const state = yield* frozenProjection<State, ActivityViewSnapshot>(
       { closed: false, serial: 0, providers: new Map(), retired: new Set(), rows: [] },
       (value) => ({
         rows: value.rows,

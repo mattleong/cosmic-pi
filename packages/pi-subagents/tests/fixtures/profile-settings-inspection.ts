@@ -12,7 +12,7 @@ import { resolveSubagentConfig } from "../../src/config/options.ts";
 import { subagentConfigDecoder } from "../../src/config/schema.ts";
 import type { ProfileCandidate, ProfileId } from "../../src/profiles/model.ts";
 import {
-  makeSessionProfileSnapshot,
+  sessionProfileSnapshot,
   type SessionProfileOverrideSeed,
 } from "../../src/profiles/session-overrides.ts";
 import type { FleetManagerActions } from "../../src/settings/controller.ts";
@@ -46,7 +46,7 @@ export const resolveTestConfig = (
       projectDocument === undefined ? undefined : subagentConfigDecoder("project")(projectDocument),
   });
 
-export const makeProfileSettingsInspection = (
+export const profileSettingsInspection = (
   {
     globalDocument,
     projectDocument,
@@ -64,7 +64,7 @@ export const makeProfileSettingsInspection = (
       projectDocument === undefined ? undefined : subagentConfigDecoder("project")(projectDocument),
     globalDocument,
     projectDocument,
-    session: makeSessionProfileSnapshot(config, seed),
+    session: sessionProfileSnapshot(config, seed),
   };
 };
 
@@ -74,7 +74,7 @@ export const inheritedInvalidInspection = (
   ownInvalid = false,
   profile: ProfileId = "worker",
 ): ProfileSettingsInspection =>
-  makeProfileSettingsInspection({
+  profileSettingsInspection({
     globalDocument: {
       version: 6,
       defaultProfileSet: "lower",

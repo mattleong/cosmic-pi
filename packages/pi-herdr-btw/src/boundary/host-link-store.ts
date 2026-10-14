@@ -1,12 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Context from "effect/Context";
+import * as Layer from "effect/Layer";
 import {
   HERDR_BTW_LINK_ENTRY_TYPE,
+  HerdrBtwLinkRestoration,
   restoreHerdrBtwLink,
   type HerdrBtwLink,
   type HerdrBtwLinkOwner,
-  type HerdrBtwLinkRestoration,
 } from "../btw/link.ts";
-import { probeSessionHeader, type SessionHeaderProbe } from "./session-file.ts";
+import { probeSessionHeader, SessionHeaderProbe } from "./session-file.ts";
 
 export type HerdrBtwLinkRecord = Pick<
   HerdrBtwLink,
@@ -15,7 +17,7 @@ export type HerdrBtwLinkRecord = Pick<
 
 export type HerdrBtwLinkRecordResult = "recorded" | "refused" | "uncertain";
 
-export interface HerdrBtwLinkStore {
+export interface HerdrBtwLinkStoreContract {
   readonly restore: () => HerdrBtwLinkRestoration;
   readonly record: (link: HerdrBtwLinkRecord) => HerdrBtwLinkRecordResult;
 }
@@ -25,7 +27,7 @@ export const makeHostHerdrBtwLinkStore = (
   ctx: ExtensionContext,
   capturedOwner: HerdrBtwLinkOwner,
   probe: (path: string) => SessionHeaderProbe = probeSessionHeader,
-): HerdrBtwLinkStore => {
+): HerdrBtwLinkStoreContract => {
   const revalidateOwner = (): boolean => {
     try {
       if (
@@ -34,7 +36,9 @@ export const makeHostHerdrBtwLinkStore = (
       )
         return false;
       const header = probe(capturedOwner.sessionPath);
-      return header._tag === "valid" && header.header.id === capturedOwner.sessionId;
+      return (
+        SessionHeaderProbe.$is("valid")(header) && header.header.id === capturedOwner.sessionId
+      );
     } catch {
       return false;
     }
@@ -42,10 +46,10 @@ export const makeHostHerdrBtwLinkStore = (
   return {
     restore: () => {
       try {
-        if (!revalidateOwner()) return { _tag: "malformed" };
+        if (!revalidateOwner()) return HerdrBtwLinkRestoration.malformed();
         return restoreHerdrBtwLink(ctx.sessionManager.getEntries(), capturedOwner);
       } catch {
-        return { _tag: "malformed" };
+        return HerdrBtwLinkRestoration.malformed();
       }
     },
     record: (link) => {
@@ -68,3 +72,13 @@ export const makeHostHerdrBtwLinkStore = (
     },
   };
 };
+
+/** Link persistence owned by one parent session's custom entries. */
+export class HerdrBtwLinkStore extends Context.Service<
+  HerdrBtwLinkStore,
+  HerdrBtwLinkStoreContract
+>()("pi-herdr-btw/boundary/host-link-store/HerdrBtwLinkStore") {
+  static layer(pi: ExtensionAPI, ctx: ExtensionContext, owner: HerdrBtwLinkOwner) {
+    return Layer.succeed(this, makeHostHerdrBtwLinkStore(pi, ctx, owner));
+  }
+}

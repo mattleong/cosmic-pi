@@ -7,7 +7,7 @@ import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-
 import { git } from "../../src/boundary/git-worktree-process.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
-import type { WorkspaceHandle } from "../../src/workspace/model.ts";
+import { WorkspaceError, type WorkspaceHandle } from "../../src/workspace/model.ts";
 import {
   exists,
   failureOf,
@@ -417,10 +417,9 @@ for (const mismatch of ["seed", "owner", "source", "registration"] as const) {
         JSON.stringify({ ...predecessor, handle }),
       );
     }
-    expect(yield* failureOf(service.discard(workspaceTarget(fork)))).toMatchObject({
-      _tag: "WorkspaceError",
-      operation: "recovery",
-    });
+    const failure = yield* failureOf(service.discard(workspaceTarget(fork)));
+    expect(failure).toBeInstanceOf(WorkspaceError);
+    expect(failure).toMatchObject({ operation: "recovery" });
     expect(yield* exists(fork.cwd)).toBe(true);
     expect((yield* service.inspect(workspaceTarget(fork))).status).toBe("active");
   });

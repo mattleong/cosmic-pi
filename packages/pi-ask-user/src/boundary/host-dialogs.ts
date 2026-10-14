@@ -1,5 +1,6 @@
 import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import {
   notifyAtHostBoundary,
   stripTerminalControls,
@@ -17,7 +18,7 @@ import {
 } from "../questionnaire/schema.ts";
 import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import type { AskUserPromptGate } from "./host-prompt.ts";
-import { makeAskUserTuiHost } from "./host-tui.ts";
+import { askUserTuiHost } from "./host-tui.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 const hostError = (operation: string) =>
@@ -212,16 +213,16 @@ const askRpcQuestion = (
 ): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
     const title = `[${stripTerminalControls(question.title)}] ${stripTerminalControls(question.prompt)}${previewText(question)}`;
-    const answer: AskUserAnswerDraft | undefined =
-      question.mode === "text"
-        ? yield* boundedInput(ui, title, "Your answer", "text").pipe(
-            Effect.map((text) =>
-              text === undefined ? undefined : { kind: "text" as const, text },
-            ),
-          )
-        : question.mode === "single"
-          ? yield* askSingleQuestion(ui, question, title)
-          : yield* askMultipleQuestion(ui, question, title);
+    const answer = yield* Match.value(question).pipe(
+      Match.when({ mode: "text" }, () =>
+        boundedInput(ui, title, "Your answer", "text").pipe(
+          Effect.map((text) => (text === undefined ? undefined : { kind: "text" as const, text })),
+        ),
+      ),
+      Match.when({ mode: "single" }, (choice) => askSingleQuestion(ui, choice, title)),
+      Match.when({ mode: "multiple" }, (choice) => askMultipleQuestion(ui, choice, title)),
+      Match.exhaustive,
+    );
     if (!answer) return undefined;
     return yield* askOptionalNote(ui, question, answer, existingNote);
   });
@@ -285,11 +286,9 @@ const runRpc = (
     }
   });
 
-export const makeAskUserHost = (
+export const askUserHost = (
   ctx: ExtensionContext,
   bridge: AskUserDialogBridge,
   promptGate?: AskUserPromptGate,
 ): AskUserHost =>
-  ctx.mode === "tui"
-    ? makeAskUserTuiHost(ctx, bridge, promptGate)
-    : (request) => runRpc(ctx, request);
+  ctx.mode === "tui" ? askUserTuiHost(ctx, bridge, promptGate) : (request) => runRpc(ctx, request);

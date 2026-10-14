@@ -15,7 +15,7 @@ import {
   type ProfileWorkspaceTarget,
 } from "./profile-route-editor.ts";
 import type { ProfileWorkspaceOptions } from "./profile-workspace.ts";
-import type { makeProfileModelPickerPage } from "./ui/model-picker.ts";
+import type { profileModelPickerPage } from "./ui/model-picker.ts";
 import { profileWorkspaceRows, type ProfileWorkspaceField } from "./ui/profile-workspace-model.ts";
 import { ProfileEditVisit } from "./profile-edit-visit.ts";
 import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
@@ -64,7 +64,7 @@ export abstract class ProfileWorkspaceState {
   protected helpScroll = 0;
   protected helpMaximum = 0;
   protected catalogLoad: AbortController | undefined;
-  protected modelPicker: ReturnType<typeof makeProfileModelPickerPage> | undefined;
+  protected modelPicker: ReturnType<typeof profileModelPickerPage> | undefined;
   protected selectPage: SearchableSelectPage<string> | undefined;
   protected focusState = false;
   protected disposed = false;

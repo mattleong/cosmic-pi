@@ -47,7 +47,7 @@ const dispatchContact = (
       : Effect.fail(eventQueueFull()),
   );
 
-export const makeSupervisorChannelHandlers = (state: SupervisorChannelState) =>
+export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
   SupervisorRpcGroup.toHandlers(
     SupervisorRpcGroup.of({
       SupervisorOpenSession: (payload, options) =>

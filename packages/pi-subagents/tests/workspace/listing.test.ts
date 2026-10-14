@@ -105,7 +105,7 @@ it.live(
         for (const artifact of listing.unavailable) {
           expect(
             yield* store.readWorkspaceRecord(registry, artifact.workspaceId).pipe(Effect.flip),
-          ).toMatchObject({ _tag: "WorkspaceError" });
+          ).toBeInstanceOf(WorkspaceError);
         }
       }),
     ),
@@ -131,9 +131,9 @@ for (const unsafe of [
             yield* io(() => fs.symlink(`${registry}-saved`, registry));
           else yield* io(() => fs.writeFile(registry, "not a directory"));
         }
-        expect(yield* listWorkspaceRecords(target).pipe(Effect.flip)).toMatchObject({
-          _tag: "WorkspaceError",
-        });
+        expect(yield* listWorkspaceRecords(target).pipe(Effect.flip)).toBeInstanceOf(
+          WorkspaceError,
+        );
       }),
     ),
   );
@@ -158,9 +158,9 @@ for (const change of ["permissions", "replacement", "missing", "symlink"] as con
             });
           }),
         );
-        expect(yield* listWorkspaceRecords(registry).pipe(Effect.flip)).toMatchObject({
-          _tag: "WorkspaceError",
-        });
+        expect(yield* listWorkspaceRecords(registry).pipe(Effect.flip)).toBeInstanceOf(
+          WorkspaceError,
+        );
       }),
     ),
   );
@@ -212,7 +212,7 @@ it.live("leaves healthy workspaces operable but never discards an incomplete art
           yield* service
             .discard({ workspaceId: incomplete, ownerId: "parent", processCleanupConfirmed: true })
             .pipe(Effect.flip),
-        ).toMatchObject({ _tag: "WorkspaceError" });
+        ).toBeInstanceOf(WorkspaceError);
         expect(yield* io(() => fs.readdir(artifact))).toEqual(["preserve-me"]);
         expect(yield* readText(source, "main.ts")).toBe("baseline\n");
       }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: root })));

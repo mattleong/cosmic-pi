@@ -4,6 +4,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Result from "effect/Result";
 import { BoundedProcessError, type BoundedProcessResult } from "pi-cosmic-core";
 import {
   makeSharpAdapter as makeOwnedSharpAdapter,
@@ -128,7 +129,7 @@ it.live("shares admission across independent Effect runtimes", () =>
     yield* Effect.gen(function* () {
       yield* Deferred.await(started);
       const second = makeSharpAdapter(() => Effect.succeed(success));
-      expect(yield* second.decode(bytes).pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+      expect(Result.isFailure(yield* second.decode(bytes).pipe(Effect.result))).toBe(true);
     }).pipe(
       Effect.ensuring(
         Deferred.succeed(release, undefined).pipe(
@@ -155,13 +156,13 @@ for (const outcome of ["error", "timeout", "missing-report"] as const) {
             : Effect.succeed({ ...success, timedOut: true, cleanupUnconfirmed: true });
         return result.pipe(Effect.ensuring(Effect.sync(() => onCleanup(false))));
       });
-      expect(yield* failed.decode(bytes).pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+      expect(Result.isFailure(yield* failed.decode(bytes).pipe(Effect.result))).toBe(true);
       let spawned = false;
       const next = makeFresh(() => {
         spawned = true;
         return Effect.succeed(success);
       });
-      expect(yield* next.decode(bytes).pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+      expect(Result.isFailure(yield* next.decode(bytes).pipe(Effect.result))).toBe(true);
       expect(spawned).toBe(false);
     }),
   );

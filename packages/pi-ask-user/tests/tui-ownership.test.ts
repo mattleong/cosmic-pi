@@ -14,16 +14,16 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
-import { makeQuestionnaireQueue } from "../src/questionnaire/queue.ts";
+import { acquireQuestionnaireQueue } from "../src/questionnaire/queue.ts";
 import { expect, vi } from "vitest";
-import { makeAskUserPromptGate } from "../src/boundary/host-prompt.ts";
-import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
-import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
+import { createAskUserPromptGate } from "../src/boundary/host-prompt.ts";
+import { askUserHost } from "../src/boundary/host-dialogs.ts";
+import { createAskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import { AskUserHostError } from "../src/questionnaire/errors.ts";
 import type { QuestionnairePresence } from "../src/questionnaire/service.ts";
 
 const open = (h: ReturnType<typeof hostFixture>, presence?: QuestionnairePresence) =>
-  openPresentation(h, (bridge) => makeAskUserHost(h.ctx, bridge)(request, presence));
+  openPresentation(h, (bridge) => askUserHost(h.ctx, bridge)(request, presence));
 
 it.effect(
   "docks the questionnaire without painting over the editor and retains hidden drafts",
@@ -126,11 +126,11 @@ it.effect("a throwing host done still removes the guard and owned questionnaire"
 for (const fault of ["ownedHide", "createGuard", "done", "guardHide"] as const) {
   it.effect(`normal submission rejects a throwing ${fault} and releases its FIFO ticket`, () =>
     Effect.gen(function* () {
-      const gate = makeAskUserPromptGate();
+      const gate = createAskUserPromptGate();
       const h = hostFixture(gate);
-      const bridge = makeAskUserDialogBridge();
-      const host = makeAskUserHost(h.ctx, bridge, gate);
-      const queue = yield* makeQuestionnaireQueue;
+      const bridge = createAskUserDialogBridge();
+      const host = askUserHost(h.ctx, bridge, gate);
+      const queue = yield* acquireQuestionnaireQueue;
       const first = yield* queue.admit;
       const second = yield* queue.admit;
       const firstFiber = yield* first
@@ -158,7 +158,7 @@ for (const fault of ["ownedHide", "createGuard", "done", "guardHide"] as const) 
       expect(Exit.isFailure(result)).toBe(true);
       if (Exit.isFailure(result)) {
         const error = Cause.squash(result.cause);
-        expect(error).toMatchObject({ _tag: "AskUserHostError" });
+        expect(error).toBeInstanceOf(AskUserHostError);
         expect(String(error)).not.toContain("secret");
         expect(error).toEqual(
           new AskUserHostError({
@@ -194,9 +194,9 @@ for (const fail of [false, true]) {
   it.effect(`a pre-mount answer finishes only after handle acquisition (failure: ${fail})`, () =>
     Effect.gen(function* () {
       const h = hostFixture();
-      const pending = yield* makeAskUserHost(
+      const pending = yield* askUserHost(
         h.ctx,
-        makeAskUserDialogBridge(),
+        createAskUserDialogBridge(),
       )(request).pipe(Effect.exit, Effect.forkChild);
       yield* waitMounted(h);
       h.showOverlay(foreign);
@@ -213,7 +213,7 @@ for (const fail of [false, true]) {
       if (fail) {
         expect(Exit.isFailure(result)).toBe(true);
         if (Exit.isFailure(result))
-          expect(Cause.squash(result.cause)).toMatchObject({ _tag: "AskUserHostError" });
+          expect(Cause.squash(result.cause)).toBeInstanceOf(AskUserHostError);
       } else {
         expect(Exit.isSuccess(result)).toBe(true);
         if (Exit.isSuccess(result)) expect(result.value.outcome).toBe("submitted");
@@ -237,8 +237,8 @@ for (const [lateResult, failFinish] of [
     () =>
       Effect.gen(function* () {
         const h = hostFixture();
-        const bridge = makeAskUserDialogBridge();
-        const host = makeAskUserHost(h.ctx, bridge);
+        const bridge = createAskUserDialogBridge();
+        const host = askUserHost(h.ctx, bridge);
         const terminated = yield* Deferred.make<void>();
         const restored = yield* Deferred.make<void>();
         const runEditor = Effect.runPromiseWith(yield* Effect.context());
@@ -272,7 +272,7 @@ for (const [lateResult, failFinish] of [
           });
         yield* Effect.addFinalizer(() => Effect.sync(() => edit.mockRestore()));
         yield* Effect.gen(function* () {
-          const queue = yield* makeQuestionnaireQueue;
+          const queue = yield* acquireQuestionnaireQueue;
           const first = yield* queue.admit;
           const second = yield* queue.admit;
           const firstFiber = yield* first
@@ -347,16 +347,14 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const h = hostFixture();
-      const gate = makeAskUserPromptGate();
+      const gate = createAskUserPromptGate();
       h.showOverlay(foreign);
       expect(gate.canOpen()).toBe(true);
       const pending = Effect.runPromise(
-        makeAskUserHost(h.ctx, makeAskUserDialogBridge(), gate)(request),
+        askUserHost(h.ctx, createAskUserDialogBridge(), gate)(request),
       );
       gate.started();
-      yield* Effect.promise(() =>
-        expect(pending).rejects.toMatchObject({ _tag: "AskUserHostError" }),
-      );
+      yield* Effect.promise(() => expect(pending).rejects.toBeInstanceOf(AskUserHostError));
       expect(h.mount).toBeUndefined();
       expect(h.stack).toEqual([foreign]);
       expect(gate.canOpen()).toBe(false);

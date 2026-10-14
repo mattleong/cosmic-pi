@@ -66,7 +66,7 @@ const isBasicColor = (code: number, base: number): boolean =>
 
 const sgrStatePrefix = (state: SgrState): string => {
   const parameters = [
-    ...SGR_ATTRIBUTES.filter((code) => state.attributes.has(code)).map(String),
+    ...SGR_ATTRIBUTES.flatMap((code) => (state.attributes.has(code) ? [String(code)] : [])),
     ...[state.foreground, state.background].filter((color) => color !== undefined),
   ];
   return parameters.length === 0 ? "" : `\u001b[${parameters.join(";")}m`;

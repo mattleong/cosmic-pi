@@ -26,6 +26,7 @@ import {
   awaitRuns,
 } from "./fixtures/service-harness.ts";
 import { anyString } from "../support/matchers.ts";
+import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "../../src/run/errors.ts";
 
 type CompletionPolicy = (
   attempt: number,
@@ -164,10 +165,8 @@ describe("SubagentService", () => {
       expect(updates.at(-1)?.[0]?.reportStatus).toBe("available");
 
       const conflict = yield* awaitRuns(service, [run.id], "all_finished").pipe(Effect.flip);
-      expect(conflict).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "completion_claim_conflict",
-      });
+      expect(conflict).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(conflict).toMatchObject({ code: "completion_claim_conflict" });
 
       yield* Fiber.interrupt(first);
       const replacement = yield* awaitRuns(service, [run.id], "all_finished").pipe(
@@ -286,17 +285,13 @@ describe("SubagentService", () => {
       const run = yield* service.start(request({ name: "revision-shutdown" }));
       let updates = 0;
       const waiting = yield* awaitRuns(service, [run.id], "all_finished", () => updates++).pipe(
-        Effect.result,
+        Effect.flip,
         Effect.forkScoped,
       );
       yield* yieldUntil(() => updates > 0);
 
       yield* Scope.close(serviceScope, Exit.void);
-      const result = yield* Fiber.join(waiting);
-      expect(result).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "SubagentRuntimeClosedError" },
-      });
+      expect(yield* Fiber.join(waiting)).toBeInstanceOf(SubagentRuntimeClosedError);
     }).pipe(Effect.scoped);
   });
 
@@ -505,10 +500,8 @@ describe("SubagentService", () => {
       const failure = yield* Effect.flip(
         awaitRuns(service, ["agent-missing-1", "agent-missing-2"], "all_finished"),
       );
-      expect(failure).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "subagent_runs_not_found",
-      });
+      expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(failure).toMatchObject({ code: "subagent_runs_not_found" });
       expect(failure.message).toContain("agent-missing-1, agent-missing-2");
       expect(failure.message).toContain("subagent_list");
     });

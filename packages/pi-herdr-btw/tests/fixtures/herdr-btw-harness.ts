@@ -9,17 +9,19 @@ import {
   type HerdrSplitPaneInput,
   type HerdrStartSideSessionInput,
 } from "../../src/boundary/herdr-client.ts";
-import type {
-  HerdrBtwLinkRecord,
-  HerdrBtwLinkRecordResult,
+import {
   HerdrBtwLinkStore,
+  type HerdrBtwLinkRecord,
+  type HerdrBtwLinkRecordResult,
+  type HerdrBtwLinkStoreContract,
 } from "../../src/boundary/host-link-store.ts";
-import type {
-  SessionFileIdentityComparator,
-  SessionFileIdentityComparison,
+import {
+  BlankChildSessionFileResult,
   SessionHeaderProbe,
+  type SessionFileIdentityComparator,
+  type SessionFileIdentityComparison,
 } from "../../src/boundary/session-file.ts";
-import type { HerdrBtwLink, HerdrBtwLinkRestoration } from "../../src/btw/link.ts";
+import { HerdrBtwLinkRestoration, type HerdrBtwLink } from "../../src/btw/link.ts";
 import { HerdrBtwService } from "../../src/btw/service.ts";
 import { HerdrBtwError } from "../../src/btw/errors.ts";
 
@@ -56,7 +58,7 @@ export const operationCount = (calls: ReadonlyArray<HerdrBtwClientCall>, operati
   calls.filter((call) => call.operation === operation).length;
 
 export const operationInputs = (calls: ReadonlyArray<HerdrBtwClientCall>, operation: string) =>
-  calls.filter((call) => call.operation === operation).map((call) => call.input);
+  calls.flatMap((call) => (call.operation === operation ? [call.input] : []));
 
 export const withShellReadiness = <A, E>(workflow: Effect.Effect<A, E>) =>
   Effect.gen(function* () {
@@ -230,12 +232,14 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
   const recordedLinks: HerdrBtwLink[] = [...(options.initialLinks ?? [])];
   const recordAttempts: HerdrBtwLinkRecord[] = [];
   let restoreCount = 0;
-  const linkStore: HerdrBtwLinkStore = {
+  const linkStore: HerdrBtwLinkStoreContract = {
     restore: () => {
       restoreCount += 1;
       if (options.restoreOverride) return options.restoreOverride;
       const link = recordedLinks.at(-1);
-      return link === undefined ? { _tag: "none" } : { _tag: "restored", link };
+      return link === undefined
+        ? HerdrBtwLinkRestoration.none()
+        : HerdrBtwLinkRestoration.restored({ link });
     },
     record: (link) => {
       recordAttempts.push(link);
@@ -255,11 +259,11 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
       const override = options.probes?.[path];
       if (override) return override;
       if (path === SESSION_FILE)
-        return { _tag: "valid", header: { id: options.sessionId ?? SESSION_ID } };
-      if (path === CHILD_FILE) return { _tag: "valid", header: { id: CHILD_ID } };
+        return SessionHeaderProbe.valid({ header: { id: options.sessionId ?? SESSION_ID } });
+      if (path === CHILD_FILE) return SessionHeaderProbe.valid({ header: { id: CHILD_ID } });
       return path === createdChildFile
-        ? { _tag: "valid", header: { id: createdChildId } }
-        : { _tag: "invalid" };
+        ? SessionHeaderProbe.valid({ header: { id: createdChildId } })
+        : SessionHeaderProbe.invalid();
     },
     compareSessionFileIdentity:
       options.compareSessionFileIdentity ??
@@ -267,10 +271,11 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
         leftPath === rightPath ? ("same" as const) : ("distinct" as const)),
     createChildSessionId: () => createdChildId,
     createBlankChildSessionFile: () =>
-      Effect.succeed({ _tag: "created" as const, path: createdChildFile }),
+      Effect.succeed(BlankChildSessionFileResult.created({ path: createdChildFile })),
   };
-  const makeService = HerdrBtwService.make({ ...input, linkStore }, serviceOptions).pipe(
+  const makeService = HerdrBtwService.make(input, serviceOptions).pipe(
     Effect.provideService(HerdrClient, client),
+    Effect.provideService(HerdrBtwLinkStore, linkStore),
   );
   const open = (prompt?: string) => Effect.flatMap(makeService, (service) => service.open(prompt));
   const openNew = (prompt?: string) =>

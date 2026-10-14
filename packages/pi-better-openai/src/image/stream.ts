@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
+import * as Predicate from "effect/Predicate";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -23,7 +24,7 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   const pendingEvents: Sse.Event[] = [];
   const parser = Sse.makeParser(
     (event) => {
-      if (event._tag === "Event") pendingEvents.push(event);
+      if (Predicate.isTagged(event, "Event")) pendingEvents.push(event);
     },
     { maxEventSize: MAX_SSE_EVENT_CHARS },
   );

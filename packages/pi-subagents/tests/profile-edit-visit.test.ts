@@ -10,7 +10,7 @@ import {
 } from "../src/settings/profile-route-editor.ts";
 import {
   jsonObject as json,
-  makeProfileSettingsInspection,
+  profileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
 import type { SessionProfileOverrideSeed } from "../src/profiles/session-overrides.ts";
 
@@ -27,7 +27,7 @@ const inspect = (
   seed?: SessionProfileOverrideSeed,
   project?: JsonObject,
 ) =>
-  makeProfileSettingsInspection(
+  profileSettingsInspection(
     {
       globalDocument: global,
       projectDocument: project,

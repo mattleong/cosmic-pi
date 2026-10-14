@@ -30,7 +30,7 @@ export interface OpenAIApplicationLayerOptions {
   readonly onUsageChange: (context: MutableRef.MutableRef<ExtensionContext>) => void;
 }
 
-export const makeOpenAIApplicationLayer = (
+export const openAIApplicationLayer = (
   { context, cwd, projectTrusted, publicationOwner }: OpenAISessionInput,
   options: OpenAIApplicationLayerOptions,
 ) => {
@@ -70,6 +70,6 @@ export const makeOpenAIApplicationLayer = (
   );
 };
 
-export type OpenAIApplicationLayer = ReturnType<typeof makeOpenAIApplicationLayer>;
+export type OpenAIApplicationLayer = ReturnType<typeof openAIApplicationLayer>;
 export type OpenAIApplication = Layer.Success<OpenAIApplicationLayer>;
 export type OpenAIRuntimeError = Layer.Error<OpenAIApplicationLayer>;

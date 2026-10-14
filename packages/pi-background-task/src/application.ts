@@ -25,12 +25,12 @@ import {
 } from "pi-cosmic-core";
 import { registerBackgroundTaskActivity } from "./boundary/host-activity.ts";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
-import { makeProjectionBridge } from "./boundary/host-ui.ts";
+import { taskProjectionBridge } from "./boundary/host-ui.ts";
 import { BackgroundTaskConfigStore, BackgroundTaskSettingsFiles } from "./config/store.ts";
 import type { BackgroundTaskConfig } from "./config/schema.ts";
 import { BackgroundTaskService } from "./task/service.ts";
 import {
-  makeBackgroundTaskLayer,
+  backgroundTaskLayer,
   type BackgroundTaskApplication,
   type BackgroundTaskRuntimeError,
   type BackgroundTaskSessionInput,
@@ -57,7 +57,7 @@ export function registerBackgroundTaskApplication(
   pi: ExtensionAPI,
   boundaries: BackgroundTaskApplicationBoundaries = { loadSettings: loadCodePreviewSettings },
 ): void {
-  const bridge = makeProjectionBridge(pi.events);
+  const bridge = taskProjectionBridge(pi.events);
   const replay = registerCodePreviewReplay(pi, { command: "tasks", tools: ["background_task"] });
   let releaseActivity: (() => void) | undefined;
   let openActivity: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
@@ -76,7 +76,7 @@ export function registerBackgroundTaskApplication(
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
-        makeBackgroundTaskLayer(input, (projection) => {
+        backgroundTaskLayer(input, (projection) => {
           if (MutableRef.get(input.publicationOwner)) bridge.publish(projection);
         }),
         { agentDirectory: getAgentDir, packageName: "pi-background-task" },
@@ -180,7 +180,7 @@ export function registerBackgroundTaskApplication(
 
   const startSession = (ctx: ExtensionContext, publishesReplay: boolean) => {
     const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable" || captured.aborted) return slot.shutdown();
+    if (!Predicate.isTagged(captured, "Captured") || captured.aborted) return slot.shutdown();
     return slot
       .start(
         {

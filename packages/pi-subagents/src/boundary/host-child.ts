@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Predicate from "effect/Predicate";
 import { Type } from "typebox";
 import {
   CodePreviewSchedulerService,
@@ -46,7 +47,7 @@ import {
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
-import { makeParentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
+import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
 import { nodeWriteSync } from "./node-builtins.ts";
 import { protocolMismatch } from "./protocol-fingerprint.ts";
@@ -131,8 +132,8 @@ export function registerSubagentChildBridge(
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
 
   const ipc = boundaries.openIpc();
-  const pending = makeParentCorrelations<string>();
-  const pendingProxy = makeParentCorrelations<AgentToolResult<unknown>>();
+  const pending = parentCorrelations<string>();
+  const pendingProxy = parentCorrelations<AgentToolResult<unknown>>();
   let currentSession: ChildSessionInput | undefined;
 
   const removeProxyNames = (): void =>
@@ -448,7 +449,7 @@ export function registerSubagentChildBridge(
   pi.on("session_start", (_event, ctx) => {
     deactivate(currentSession);
     const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable") return slot.shutdown();
+    if (!Predicate.isTagged(captured, "Captured")) return slot.shutdown();
     const sessionId = invokeHostCallback(() => ctx.sessionManager.getSessionId(), undefined);
     const input: ChildSessionInput = {
       sessionId,

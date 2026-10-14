@@ -25,7 +25,7 @@ const Stats = Schema.Struct({
 
 const decodeStats = decodeUnknownOrUndefined(Stats);
 
-export const makeLocalPiUsage = () => {
+export const localPiUsage = () => {
   let previous: SubagentUsage | undefined;
   const account = (value: Schema.Json | undefined): SubagentUsage | undefined => {
     const decoded = decodeStats(value);

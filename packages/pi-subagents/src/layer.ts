@@ -2,10 +2,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { makeLocalClaudeBackendDriver } from "./backend/local-claude.ts";
-import { makeLocalCodexBackendDriver } from "./backend/local-codex.ts";
-import { makeLocalPiBackendDriver } from "./backend/local-pi.ts";
-import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "./backend/service.ts";
+import { localClaudeBackendDriver } from "./backend/local-claude.ts";
+import { localCodexBackendDriver } from "./backend/local-codex.ts";
+import { localPiBackendDriver } from "./backend/local-pi.ts";
+import { backendRegistryFor, SubagentBackendRegistry } from "./backend/service.ts";
 import { ChildProcess } from "./boundary/child-process.ts";
 import { LocalCliProcess } from "./boundary/local-cli-process.ts";
 import { NativeModelCatalog } from "./boundary/native-model-catalog.ts";
@@ -27,10 +27,10 @@ const subagentBackendRegistryLayer = Layer.effect(
     const children = yield* ChildProcess;
     const localCli = yield* LocalCliProcess;
     const supervisor = yield* SupervisorChannel;
-    return makeSubagentBackendRegistry([
-      makeLocalPiBackendDriver(children),
-      makeLocalClaudeBackendDriver(localCli, supervisor),
-      makeLocalCodexBackendDriver(localCli, supervisor),
+    return backendRegistryFor([
+      localPiBackendDriver(children),
+      localClaudeBackendDriver(localCli, supervisor),
+      localCodexBackendDriver(localCli, supervisor),
     ]);
   }),
 );
@@ -43,7 +43,7 @@ export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly questionnaireHandler: NonNullable<SubagentServiceOptions["questionnaireHandler"]>;
 }
 
-export const makeSubagentLayer = (options: SubagentLayerOptions) => {
+export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
   const configStore = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
   const profiles = subagentProfileServiceLayer(options).pipe(Layer.provide(configStore));
   const directory = { agentDirectory: options.agentDirectory };
@@ -85,6 +85,6 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   );
 };
 
-export type SubagentApplicationLayer = ReturnType<typeof makeSubagentLayer>;
+export type SubagentApplicationLayer = ReturnType<typeof subagentApplicationLayer>;
 export type SubagentApplication = Layer.Success<SubagentApplicationLayer>;
 export type SubagentRuntimeError = Layer.Error<SubagentApplicationLayer>;

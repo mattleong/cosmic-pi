@@ -59,7 +59,7 @@ type LocalCliBackendHandle = Omit<BackendHandle, "controls"> & {
   readonly controls: Pick<BackendControls, "initialize" | "start" | "steer" | "interrupt">;
 };
 
-export const makeLocalCliBackendDriver =
+export const localCliBackendDriver =
   (
     runtime: LocalCliRuntime,
     unsupportedMessage: (capability: string) => string,

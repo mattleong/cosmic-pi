@@ -1,22 +1,15 @@
-import {
-  getAgentDir,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
-import { makeHostHerdrBtwLinkStore, type HerdrBtwLinkStore } from "./boundary/host-link-store.ts";
 import { notifyHerdrBtw } from "./boundary/host-notifier.ts";
 import { registerHerdrBtwParentReference } from "./boundary/host-parent-reference.ts";
-import { captureHerdrBtwSession, type HerdrBtwSessionInput } from "./boundary/host-session.ts";
+import { captureHerdrBtwSession } from "./boundary/host-session.ts";
 import { registerHerdrBtwCommands } from "./btw/controller.ts";
 import { HerdrBtwService } from "./btw/service.ts";
-import { makeHerdrBtwLayer } from "./layer.ts";
+import { herdrBtwLayer, type HerdrBtwLayerInput } from "./layer.ts";
 import type { HerdrBtwParentReference } from "./parent-link/policy.ts";
 
-interface HerdrBtwActivation extends HerdrBtwSessionInput {
-  readonly ctx: ExtensionContext;
-  readonly linkStore: HerdrBtwLinkStore;
+interface HerdrBtwActivation extends HerdrBtwLayerInput {
   readonly parentReference?: HerdrBtwParentReference | undefined;
 }
 
@@ -24,7 +17,7 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
   const parentReferenceBridge = registerHerdrBtwParentReference(pi);
   const slot = makePiSessionRuntimeSlot<HerdrBtwActivation, HerdrBtwService, never, never>({
     makeRuntime: (activation) =>
-      makePiManagedRuntime(pi, makeHerdrBtwLayer(activation), {
+      makePiManagedRuntime(pi, herdrBtwLayer(pi, activation), {
         agentDirectory: getAgentDir,
         packageName: "pi-herdr-btw",
       }),
@@ -49,17 +42,16 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
       notifyHerdrBtw(ctx, "Herdr BTW couldn't attach to this Pi session", "warning");
       return slot.shutdown();
     }
-    const launchOwner = {
-      sessionId: captured.sessionId ?? "",
-      sessionPath: captured.sessionFile ?? "",
-    };
     return slot
       .start(
         {
           ...captured,
           ctx,
           parentReference: parentReferenceBridge.capture(ctx),
-          linkStore: makeHostHerdrBtwLinkStore(pi, ctx, launchOwner),
+          linkOwner: {
+            sessionId: captured.sessionId ?? "",
+            sessionPath: captured.sessionFile ?? "",
+          },
         },
         captured.signal,
       )

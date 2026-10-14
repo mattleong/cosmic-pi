@@ -282,9 +282,10 @@ const activityMetadataVariants = (
     ...(stall ? [[themedActivity, themedElapsed], [themedActivity]] : []),
     [route, themedElapsed],
     [route],
-  ]
-    .map((parts) => parts.filter(Boolean).join(separator))
-    .filter(Boolean);
+  ].flatMap((parts) => {
+    const row = parts.filter(Boolean).join(separator);
+    return row ? [row] : [];
+  });
 };
 
 const clippedActivityRow = (

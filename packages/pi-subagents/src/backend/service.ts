@@ -22,7 +22,7 @@ export interface SubagentBackendRegistryContract {
 
 const driverKey = (host: SubagentHost, runtime: SubagentRuntime): string => `${host}/${runtime}`;
 
-export const makeSubagentBackendRegistry = (
+export const backendRegistryFor = (
   drivers: ReadonlyArray<BackendDriver>,
 ): SubagentBackendRegistryContract => {
   const bySelection = new Map(

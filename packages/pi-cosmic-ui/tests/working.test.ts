@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { describe, expect, it } from "vitest";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
-import { makeWorkingRow } from "../src/working/row.ts";
+import { createWorkingRow } from "../src/working/row.ts";
 
 function workingHarness() {
   let time = 0;
@@ -28,7 +28,7 @@ function workingHarness() {
       },
     }),
   );
-  const row = makeWorkingRow({
+  const row = createWorkingRow({
     now: () => time,
     every: (_intervalMs, tick) => {
       const subscription = () => tick();

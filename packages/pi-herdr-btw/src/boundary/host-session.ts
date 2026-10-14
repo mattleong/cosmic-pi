@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import { captureSessionHost } from "pi-cosmic-core";
 
 export interface HerdrBtwSessionInput {
@@ -11,7 +12,7 @@ export interface HerdrBtwSessionInput {
 
 export const captureHerdrBtwSession = (ctx: ExtensionContext) => {
   const host = captureSessionHost(ctx);
-  if (host._tag === "Unavailable") return undefined;
+  if (!Predicate.isTagged(host, "Captured")) return undefined;
   try {
     return {
       cwd: host.cwd,

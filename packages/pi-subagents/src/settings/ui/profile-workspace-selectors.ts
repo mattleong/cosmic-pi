@@ -90,7 +90,7 @@ const currentFieldValue = (
   return field === "openaiFastMode" ? String(candidate[field]) : candidate[field];
 };
 
-export const makeCandidateFieldSelector = (
+export const candidateFieldSelector = (
   options: CandidateFieldSelectorOptions,
 ): SearchableSelectPage<string> => {
   const row = candidateFieldRows(
@@ -137,7 +137,7 @@ export interface RouteActionsSelectorOptions extends SharedSelectorOptions {
   readonly cancel: () => void;
 }
 
-export const makeRouteActionsSelector = (
+export const routeActionsSelector = (
   options: RouteActionsSelectorOptions,
 ): SearchableSelectPage<string> => {
   const choices = profileWorkspaceActionChoices(options);
@@ -168,7 +168,7 @@ export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
   readonly cancel: () => void;
 }
 
-export const makeProfileSearchSelector = (
+export const profileSearchSelector = (
   options: ProfileSearchSelectorOptions,
 ): SearchableSelectPage<string> => {
   return new SearchableSelectPage<string>({

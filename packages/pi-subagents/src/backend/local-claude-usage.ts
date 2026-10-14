@@ -45,7 +45,7 @@ const cumulativeUsageDelta = (
 export const usageComponentsTotal = (components: UsageComponents): number =>
   components.input + components.output + components.cacheRead + components.cacheWrite;
 
-export const makeLocalClaudeUsage = () => {
+export const localClaudeUsage = () => {
   const assistantUsageByMessage = new Map<string, UsageComponents>();
   let emittedUsageTotals: UsageComponents = zeroUsageComponents;
 

@@ -15,8 +15,8 @@ import {
 } from "pi-cosmic-core/testing";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { expect, vi } from "vitest";
-import type { makeAskUserPromptGate } from "../../src/boundary/host-prompt.ts";
-import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../../src/boundary/host-ui.ts";
+import type { createAskUserPromptGate } from "../../src/boundary/host-prompt.ts";
+import { createAskUserDialogBridge, type AskUserDialogBridge } from "../../src/boundary/host-ui.ts";
 
 type SettleOpen = <Outcome>(completed: Promise<Outcome>) => Promise<Outcome>;
 type Surface = Component & { dispose?(): void };
@@ -36,7 +36,7 @@ const spyHide = (handle: OverlayHandle, spy: () => void): OverlayHandle => ({
   },
 });
 
-export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => {
+export const makeTuiHost = (gate?: ReturnType<typeof createAskUserPromptGate>) => {
   const host = fakeCustomSurfaceHost({
     columns: 200,
     rows: 60,
@@ -155,7 +155,7 @@ export const openPresentation = <A, E>(
   start: (bridge: AskUserDialogBridge) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
-    const bridge = makeAskUserDialogBridge();
+    const bridge = createAskUserDialogBridge();
     const controller = new AbortController();
     const pending = Effect.runPromise(start(bridge), { signal: controller.signal });
     yield* waitMounted(h);

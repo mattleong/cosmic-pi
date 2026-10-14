@@ -166,7 +166,7 @@ export function fakeCustomSurfaceHost(
       faults.add(fault);
     },
     get overlays() {
-      return stack.filter((entry) => !entry.hidden).map((entry) => entry.component);
+      return stack.flatMap((entry) => (entry.hidden ? [] : [entry.component]));
     },
     get widgets(): ReadonlyMap<string, Component> {
       return widgets;

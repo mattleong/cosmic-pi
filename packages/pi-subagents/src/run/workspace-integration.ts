@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type { WriterLease } from "../boundary/writer-lease.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
@@ -16,7 +17,7 @@ export interface WorkspaceIntegrationOutcome {
   readonly leaseReleaseUnconfirmed: boolean;
 }
 
-export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
+export function workspaceIntegrationOperations(context: WorkspaceControlContext) {
   const { records, withLock, writerLeases: leases, state, requireBinding, requireEngine } = context;
   return (
     workspaceId: string,
@@ -109,7 +110,7 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
                       const current = yield* service
                         .inspect({ workspaceId, ownerId: binding.handle.ownerId })
                         .pipe(Effect.option);
-                      if (current._tag === "None" || current.value.status === "integrating") {
+                      if (Option.isNone(current) || current.value.status === "integrating") {
                         state.integrationQuarantined = true;
                         binding.finished = true;
                         return;

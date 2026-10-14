@@ -1,4 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import * as Data from "effect/Data";
+import * as Predicate from "effect/Predicate";
 import type { ManagerLayoutTier } from "./chrome.ts";
 import {
   decodeFullScreenPrintable,
@@ -59,16 +61,17 @@ interface ListDetailMotionContext {
   readonly listSteps: PageSteps;
 }
 
-type ListDetailMotionResult =
-  | { readonly _tag: "Close" }
-  | { readonly _tag: "Ignored" }
-  | {
-      readonly _tag: "Update";
-      readonly state: ListDetailMotionState;
-      readonly resetChord: boolean;
-      readonly scrolledDetail: boolean;
-      readonly movedSelection: boolean;
-    };
+type ListDetailMotionResult = Data.TaggedEnum<{
+  Close: Record<never, never>;
+  Ignored: Record<never, never>;
+  Update: {
+    readonly state: ListDetailMotionState;
+    readonly resetChord: boolean;
+    readonly scrolledDetail: boolean;
+    readonly movedSelection: boolean;
+  };
+}>;
+const ListDetailMotionResult = Data.taggedEnum<ListDetailMotionResult>();
 
 type MotionFlags = Partial<{
   resetChord: boolean;
@@ -80,13 +83,13 @@ const motionUpdate = (
   state: ListDetailMotionState,
   next: Partial<ListDetailMotionState>,
   flags?: MotionFlags,
-): ListDetailMotionResult => ({
-  _tag: "Update",
-  state: { ...state, ...next },
-  resetChord: flags?.resetChord ?? false,
-  scrolledDetail: flags?.scrolledDetail ?? false,
-  movedSelection: flags?.movedSelection ?? false,
-});
+): ListDetailMotionResult =>
+  ListDetailMotionResult.Update({
+    state: { ...state, ...next },
+    resetChord: flags?.resetChord ?? false,
+    scrolledDetail: flags?.scrolledDetail ?? false,
+    movedSelection: flags?.movedSelection ?? false,
+  });
 
 const scrollDetail = (
   state: ListDetailMotionState,
@@ -117,7 +120,9 @@ const leaveDetail = (
 ): ListDetailMotionResult =>
   browsingDetail
     ? motionUpdate(state, { pane: "list", details: false, detailScroll: 0 }, { resetChord: true })
-    : { _tag: motion === "cancel" ? "Close" : "Ignored" };
+    : motion === "cancel"
+      ? ListDetailMotionResult.Close()
+      : ListDetailMotionResult.Ignored();
 
 const enterDetail = (
   state: ListDetailMotionState,
@@ -129,7 +134,7 @@ const enterDetail = (
         { pane: "detail", details: context.layout === "narrow" ? true : state.details },
         { resetChord: true },
       )
-    : { _tag: "Ignored" };
+    : ListDetailMotionResult.Ignored();
 
 type NamedMotion = Exclude<ListDetailMotion, Parameters<typeof movementOffset>[0]>;
 type NamedMotionHandler = (
@@ -141,7 +146,7 @@ type NamedMotionHandler = (
 const NAMED_MOTIONS = {
   cancel: (state, _context, browsingDetail) => leaveDetail(state, "cancel", browsingDetail),
   back: (state, _context, browsingDetail) => leaveDetail(state, "back", browsingDetail),
-  quit: () => ({ _tag: "Close" }),
+  quit: () => ListDetailMotionResult.Close(),
   forward: (state, context) => enterDetail(state, context),
   first: (state, context, browsingDetail) =>
     browsingDetail
@@ -251,6 +256,6 @@ export const confirmedReservedShortcut = (
   data: string,
   key: string,
 ): boolean =>
-  resolution?._tag === "Shortcut" &&
+  Predicate.isTagged(resolution, "Shortcut") &&
   resolution.key === key &&
   decodeFullScreenPrintable(data) === key;

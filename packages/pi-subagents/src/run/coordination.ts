@@ -18,12 +18,13 @@ const ownershipSummary = (record: RunRecord): string => {
 };
 
 const activePeerLines = (records: ReadonlyArray<RunRecord>, selfId?: string): string[] =>
-  records
-    .filter((record) => record.view.id !== selfId && isActiveRunState(record.view.state))
-    .map(
-      (record) =>
-        `- ${record.view.name} (${record.view.id}): ${ownershipSummary(record)}; ${record.view.state}; task: ${safeTextPrefix(record.view.task, 160)}`,
-    );
+  records.flatMap((record) =>
+    record.view.id !== selfId && isActiveRunState(record.view.state)
+      ? [
+          `- ${record.view.name} (${record.view.id}): ${ownershipSummary(record)}; ${record.view.state}; task: ${safeTextPrefix(record.view.task, 160)}`,
+        ]
+      : [],
+  );
 
 export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): string => {
   const records = [...source];
@@ -46,7 +47,7 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
   ].join("\n");
 };
 
-export const makeRunPeerNotifier =
+export const peerNotifier =
   (records: ReadonlyMap<string, RunRecord>) =>
   (changedRunId: string): Effect.Effect<void> =>
     Effect.suspend(() =>

@@ -30,7 +30,7 @@ const requestKey = (request: SyntaxRequest): string =>
 const invokeHostInvalidation = (callback: (() => void) | undefined): void =>
   invokeHostCallback(() => callback?.(), undefined);
 
-export const makeSyntaxIngress = (
+export const acquireSyntaxIngress = (
   owner: ProjectionOwnership,
   handlers: SyntaxIngressHandlers,
 ): Effect.Effect<SyntaxIngress, SynchronousIngressError, Scope.Scope> =>

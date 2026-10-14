@@ -7,7 +7,7 @@ import {
   type SessionProfileSnapshot,
 } from "../profiles/session-overrides.ts";
 
-export const makeProfileOverrideHandoff = () => {
+export const createProfileOverrideHandoff = () => {
   let seed = emptySessionProfileOverrideSeed();
   let seedIsAuthoritative = false;
   let snapshot: SessionProfileSnapshot | undefined;

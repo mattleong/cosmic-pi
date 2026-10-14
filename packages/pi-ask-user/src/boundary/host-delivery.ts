@@ -45,7 +45,7 @@ export const acceptsAsyncMessage = (
   );
 };
 
-export const makeAsyncDelivery =
+export const hostAsyncDelivery =
   (pi: ExtensionAPI, generation: string, isCurrent: () => boolean): AsyncDelivery =>
   (snapshot) =>
     Effect.try({

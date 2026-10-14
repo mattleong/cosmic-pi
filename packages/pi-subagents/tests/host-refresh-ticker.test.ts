@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { makeAdaptiveHostRefreshTicker } from "../src/boundary/host-refresh-ticker.ts";
+import { adaptiveHostRefreshTicker } from "../src/boundary/host-refresh-ticker.ts";
 import type { SubagentUiRefreshCadence } from "../src/ui/refresh.ts";
 
 describe("adaptive host refresh ticker", () => {
@@ -16,7 +16,7 @@ describe("adaptive host refresh ticker", () => {
       };
     });
     const requestRender = vi.fn();
-    const ticker = makeAdaptiveHostRefreshTicker({
+    const ticker = adaptiveHostRefreshTicker({
       getCadence: () => cadence,
       startTicker,
       requestRender,
@@ -48,7 +48,7 @@ describe("adaptive host refresh ticker", () => {
         throw new Error("ticker unavailable");
       })
       .mockImplementationOnce(() => stop);
-    const ticker = makeAdaptiveHostRefreshTicker({
+    const ticker = adaptiveHostRefreshTicker({
       getCadence: () => 160,
       startTicker,
       requestRender: vi.fn(),
@@ -64,7 +64,7 @@ describe("adaptive host refresh ticker", () => {
   it("ignores late ticks after disposal and contains host callback failures", () => {
     let tick: (() => void) | undefined;
     const stop = vi.fn();
-    const ticker = makeAdaptiveHostRefreshTicker({
+    const ticker = adaptiveHostRefreshTicker({
       getCadence: () => 160,
       startTicker: (_intervalMs, next) => {
         tick = next;

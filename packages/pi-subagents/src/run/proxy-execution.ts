@@ -25,7 +25,7 @@ interface RunProxyExecutionDependencies {
   ) => Effect.Effect<BackendProxyResult, SubagentError>;
 }
 
-export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencies) {
+export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencies) {
   const { ownerScope, executions, executeProxy, executeQuestionnaire } = dependencies;
   return (
     record: RunRecord,
@@ -97,4 +97,4 @@ export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencie
   };
 }
 
-export type RunProxyExecution = ReturnType<typeof makeRunProxyExecution>;
+export type RunProxyExecution = ReturnType<typeof proxyExecutionHandler>;

@@ -40,7 +40,7 @@ const decodeStrictBase64 = (value: string): Uint8Array | undefined => {
   return bytes.length <= MAX_GENERATED_IMAGE_BYTES ? bytes : undefined;
 };
 
-export const makeImageOutput = (dependencies: {
+export const imageOutput = (dependencies: {
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly sharp: SharpAdapterContract;

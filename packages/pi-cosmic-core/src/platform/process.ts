@@ -2,6 +2,7 @@ import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcess
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as Cause from "effect/Cause";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -16,6 +17,15 @@ import { confirmProcessGroupExit, signalProcessGroup } from "./process-tree.ts";
 export const nodeProcessLayer = NodeChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
 );
+
+type ObservedProcessOutcome = Data.TaggedEnum<{
+  Completed: {
+    readonly exit: Exit.Exit<ChildProcessSpawner.ExitCode, PlatformError.PlatformError>;
+  };
+  Overflow: Record<never, never>;
+  Timeout: Record<never, never>;
+}>;
+const ObservedProcessOutcome = Data.taggedEnum<ObservedProcessOutcome>();
 
 export class BoundedProcessError extends Schema.TaggedError<BoundedProcessError>()(
   "BoundedProcessError",
@@ -189,8 +199,10 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   const observed = Effect.all([stdout.drain, stderr.drain, Effect.exit(handle.exitCode)] as const, {
     concurrency: 3,
   }).pipe(
-    Effect.map(([, , exit]) => ({ _tag: "Completed" as const, exit })),
-    Effect.catchTag("BoundedProcessOverflow", () => Effect.succeed({ _tag: "Overflow" as const })),
+    Effect.map(([, , exit]) => ObservedProcessOutcome.Completed({ exit })),
+    Effect.catchTag("BoundedProcessOverflow", () =>
+      Effect.succeed(ObservedProcessOutcome.Overflow()),
+    ),
     Effect.mapError(
       () =>
         new BoundedProcessError({ operation: "stream", message: "Unable to read process output." }),
@@ -199,24 +211,26 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   const outcome = yield* observed.pipe(
     Effect.timeoutOrElse({
       duration: Math.max(1, request.timeoutMillis),
-      orElse: () => Effect.succeed({ _tag: "Timeout" as const }),
+      orElse: () => Effect.succeed(ObservedProcessOutcome.Timeout()),
     }),
   );
   const leaderClosed =
-    outcome._tag === "Completed" ||
+    ObservedProcessOutcome.$is("Completed")(outcome) ||
     (yield* confirmEffectProcessClose(handle, cleanupTimeoutMillis));
   const cleanupConfirmed =
     leaderClosed && request.sweepProcessTreeOnExit
       ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
       : leaderClosed;
   return {
-    ...(outcome._tag === "Completed"
-      ? effectProcessExit(outcome.exit)
-      : { code: null, signal: null }),
+    ...ObservedProcessOutcome.$match(outcome, {
+      Completed: ({ exit }) => effectProcessExit(exit),
+      Overflow: () => ({ code: null, signal: null }),
+      Timeout: () => ({ code: null, signal: null }),
+    }),
     stdout: stdout.text(),
     stderr: stderr.text(),
-    overflowed: outcome._tag === "Overflow",
-    timedOut: outcome._tag === "Timeout",
+    overflowed: ObservedProcessOutcome.$is("Overflow")(outcome),
+    timedOut: ObservedProcessOutcome.$is("Timeout")(outcome),
     cleanupUnconfirmed: !cleanupConfirmed,
   } satisfies BoundedProcessResult;
 });

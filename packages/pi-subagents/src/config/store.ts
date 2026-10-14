@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 import {
   invokeHostCallback,
   JsonDocumentStore,
-  makeConfigDocumentErrorFactory,
+  configDocumentErrorFactory,
   type JsonObject,
 } from "pi-cosmic-core";
 import {
@@ -147,7 +147,7 @@ export class SubagentConfigStore extends Context.Service<
   SubagentConfigStoreContract
 >()("pi-subagents/config/store/SubagentConfigStore") {}
 
-const storeError = makeConfigDocumentErrorFactory(SubagentConfigStoreError, "Subagents");
+const storeError = configDocumentErrorFactory(SubagentConfigStoreError, "Subagents");
 
 const configError = (operation: string, path: string, message: string) =>
   new SubagentConfigStoreError({ operation, path, message });

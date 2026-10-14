@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
@@ -926,13 +927,16 @@ describe("writer workspace orchestration", () => {
         });
         const { entered, release, pause } = yield* pauseAt;
         f.hooks.before[operation] = pause;
-        const running = yield* (
-          operation === "freeze"
-            ? service.workspaceReview(id).pipe(Effect.asVoid)
-            : operation === "prepare"
-              ? service.workspacePrepare(id, first.revisionId).pipe(Effect.asVoid)
-              : service.workspaceDiscard(id)
-        ).pipe(Effect.forkChild);
+        const running = yield* Match.value(operation)
+          .pipe(
+            Match.when("freeze", () => service.workspaceReview(id).pipe(Effect.asVoid)),
+            Match.when("prepare", () =>
+              service.workspacePrepare(id, first.revisionId).pipe(Effect.asVoid),
+            ),
+            Match.when("discard", () => service.workspaceDiscard(id)),
+            Match.exhaustive,
+          )
+          .pipe(Effect.forkChild);
         yield* Deferred.await(entered);
         f.hooks.before[operation] = undefined;
         yield* service.rename(writer.id, "still-responsive");

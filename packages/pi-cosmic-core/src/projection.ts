@@ -131,7 +131,7 @@ const projectSnapshot = <State, Snapshot>(
         : projectionError("$", "Unable to publish a plain immutable state snapshot."),
   });
 
-export const makeFrozenProjection = <State, Snapshot>(
+export const frozenProjection = <State, Snapshot>(
   initialState: State,
   project: (state: State) => Snapshot,
   publish: (snapshot: Snapshot) => void,

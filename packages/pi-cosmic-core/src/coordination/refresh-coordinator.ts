@@ -20,7 +20,7 @@ const mergeRefreshRequest = (
   force: current?.force === true || next.force === true,
 });
 
-export const makeRefreshCoordinator = <E = never>() =>
+export const createRefreshCoordinator = <E = never>() =>
   Effect.gen(function* () {
     const state = yield* Ref.make<State<E>>({
       active: undefined,

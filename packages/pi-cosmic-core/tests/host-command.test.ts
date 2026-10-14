@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { vi } from "vitest";
 import {
   completeExtensionCommand,
+  ExtensionCommandRoute,
   registerExtensionCommand,
   routeExtensionCommand,
   type ExtensionSubcommand,
@@ -48,29 +49,28 @@ describe("extension command routing", () => {
   const settings = subcommand("settings");
 
   it("sends each argument text to the part that owns it", () => {
-    expect(routeExtensionCommand("  settings  a b ", [usage, settings])).toEqual({
-      _tag: "Subcommand",
-      subcommand: settings,
-      args: "a b",
-    });
+    expect(routeExtensionCommand("  settings  a b ", [usage, settings])).toEqual(
+      ExtensionCommandRoute.Subcommand({ subcommand: settings, args: "a b" }),
+    );
     expect(routeExtensionCommand("", [usage])._tag).toBe("Overview");
     expect(routeExtensionCommand("unknown", [usage])._tag).toBe("Unknown");
     expect(routeExtensionCommand("usages", [usage])._tag).toBe("Unknown");
     const bare = { handler: vi.fn() };
-    expect(routeExtensionCommand("", [usage], bare)).toEqual({ _tag: "Bare", args: "" });
+    expect(routeExtensionCommand("", [usage], bare)).toEqual(
+      ExtensionCommandRoute.Bare({ args: "" }),
+    );
     expect(routeExtensionCommand("explain this", [usage], bare)._tag).toBe("Unknown");
-    expect(routeExtensionCommand("explain this", [usage], { ...bare, text: true })).toEqual({
-      _tag: "Bare",
-      args: "explain this",
-    });
+    expect(routeExtensionCommand("explain this", [usage], { ...bare, text: true })).toEqual(
+      ExtensionCommandRoute.Bare({ args: "explain this" }),
+    );
   });
 
   it("completes names, then the named subcommand's own arguments", () => {
     const withValues = subcommand("settings", {
       complete: (prefix) =>
-        ["mode", "limit"]
-          .filter((id) => id.startsWith(prefix))
-          .map((id) => ({ value: id, label: id })),
+        ["mode", "limit"].flatMap((id) =>
+          id.startsWith(prefix) ? [{ value: id, label: id }] : [],
+        ),
     });
     expect(completeExtensionCommand("", [usage, withValues])?.map((c) => c.value)).toEqual([
       "usage",

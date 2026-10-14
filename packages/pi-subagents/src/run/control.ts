@@ -1,6 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import {
   hasSubagentCapability,
   isTerminalRunState,
@@ -52,7 +53,7 @@ const recordParentNoticeLocked = (record: RunRecord, text: string, now: number) 
   };
 };
 
-export function makeRunControls(dependencies: RunControlDependencies) {
+export function controlOperations(dependencies: RunControlDependencies) {
   const {
     ownerScope,
     withLock,
@@ -162,7 +163,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         (admitted) =>
           processControls.steer(admitted, normalized).pipe(
             Effect.tapError((error) =>
-              error._tag === "SubagentProcessError" &&
+              Predicate.isTagged(error, "SubagentProcessError") &&
               isOutcomeUncertain(error) &&
               !error.pendingDelivery
                 ? retainControlWarning(admitted, error.message)
@@ -221,21 +222,24 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       }),
       ({ normalized, ...claimed }) =>
         claimed.process.controls.reply(claimed.question.requestId, normalized).pipe(
-          Effect.mapError((error) => {
-            if (error._tag !== "SubagentProcessError") return error;
+          Effect.catchTag("SubagentProcessError", (error) => {
             if (error.code === "transport_not_sent")
-              return processError(
-                "reply",
-                "reply_send_failed",
-                `The reply to subagent ${id} was not sent; the question remains open for a retry. (${error.message})`,
-              );
-            return error.code === "transport_outcome_uncertain"
-              ? processError(
+              return Effect.fail(
+                processError(
                   "reply",
-                  "reply_outcome_uncertain",
-                  `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (${error.message})`,
-                )
-              : error;
+                  "reply_send_failed",
+                  `The reply to subagent ${id} was not sent; the question remains open for a retry. (${error.message})`,
+                ),
+              );
+            return Effect.fail(
+              error.code === "transport_outcome_uncertain"
+                ? processError(
+                    "reply",
+                    "reply_outcome_uncertain",
+                    `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (${error.message})`,
+                  )
+                : error,
+            );
           }),
           Effect.andThen(Clock.currentTimeMillis),
           Effect.flatMap((now) =>
@@ -250,10 +254,13 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             ),
           ),
           Effect.tapError((error) => {
-            if (error._tag === "SubagentProcessError" && error.code === "reply_outcome_uncertain")
+            if (
+              Predicate.isTagged(error, "SubagentProcessError") &&
+              error.code === "reply_outcome_uncertain"
+            )
               return retainControlWarning(claimed.record, error.message);
             const questionClosed =
-              error._tag === "SubagentProcessError" &&
+              Predicate.isTagged(error, "SubagentProcessError") &&
               (error.code === "question_transport_closed" ||
                 error.code === "question_ownership_mismatch");
             return withLock(
@@ -323,7 +330,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                 Effect.gen(function* () {
                   if (record.view.state === "paused") return undefined;
                   const responseTimedOut =
-                    error._tag === "SubagentProcessError" &&
+                    Predicate.isTagged(error, "SubagentProcessError") &&
                     error.code === "interrupt_outcome_uncertain";
                   if (!responseTimedOut && record.pauseOutcome === pauseOutcome) {
                     record.pauseRequested = false;

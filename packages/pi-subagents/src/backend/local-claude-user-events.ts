@@ -27,8 +27,14 @@ import type { BackendEvent } from "./model.ts";
 
 type UserDecision = Extract<LocalClaudeDebugEntry, { readonly kind: "user-decision" }>["decision"];
 
+const SENT_KIND_BY_OPERATION = {
+  initialize: "probe",
+  start: "assignment",
+  steer: "steer",
+} as const satisfies Record<PendingUserReplay["operation"], ClaudeSentUserKind>;
+
 const sentKindForOperation = (operation: PendingUserReplay["operation"]): ClaudeSentUserKind =>
-  operation === "initialize" ? "probe" : operation === "start" ? "assignment" : "steer";
+  SENT_KIND_BY_OPERATION[operation];
 
 const isInterruptMarker = (event: ClaudeUserProtocolEvent, sameSession: boolean): boolean =>
   event.isReplay &&
@@ -37,7 +43,7 @@ const isInterruptMarker = (event: ClaudeUserProtocolEvent, sameSession: boolean)
   event.uuid === undefined &&
   sameSession;
 
-export const makeLocalClaudeUserEvents = (context: LocalClaudeHandleContext) => {
+export const localClaudeUserEvents = (context: LocalClaudeHandleContext) => {
   const {
     state,
     child,

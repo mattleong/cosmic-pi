@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { synchronousRandomHex, provideBuiltLayer } from "pi-cosmic-core";
 import { describe, expect, it } from "vitest";
-import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
+import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
 import {
   makeLocalCliProcess,
@@ -270,7 +270,7 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
           ),
       };
       const supervisors = yield* SupervisorChannel;
-      const driver = makeLocalClaudeBackendDriver(traced, supervisors);
+      const driver = localClaudeBackendDriver(traced, supervisors);
       const launch = backendLaunch({
         runId: `real-steering-${synchronousRandomHex(4)}`,
         parentSessionId: `real-steering-${process.pid}`,

@@ -1,3 +1,4 @@
+import * as Match from "effect/Match";
 import {
   defineTool,
   type ExtensionAPI,
@@ -182,11 +183,13 @@ const TOOL_SPECS: SubagentToolSpecs = {
     ],
     renderCall: (args, theme) =>
       renderSubagentCall(
-        args.action === "list"
-          ? "Inspect writer claims"
-          : args.action === "resume_admission"
-            ? "Resume writer admission"
-            : `${args.action === "grant" ? "Grant" : "Revoke"} writer claims`,
+        Match.value(args.action).pipe(
+          Match.when("list", () => "Inspect writer claims"),
+          Match.when("resume_admission", () => "Resume writer admission"),
+          Match.when("grant", () => "Grant writer claims"),
+          Match.when("revoke", () => "Revoke writer claims"),
+          Match.exhaustive,
+        ),
         args.action === "list" ? "" : (args.paths ?? []).join(", "),
         theme,
       ),

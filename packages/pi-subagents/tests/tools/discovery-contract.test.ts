@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
 import { PROFILE_IDS } from "../../src/profiles/model.ts";
 import { decodeSubagentContract, type SubagentContract } from "../../src/tools/contract-schema.ts";
@@ -100,16 +101,20 @@ describe("discovery contracts", () => {
       const tools = captureSubagentTools(
         subagentServiceDouble({
           rename: (id) =>
-            id === "parent"
-              ? Effect.succeed({ ...privateRun, name: "accepted-name" })
-              : id === "uncertain"
-                ? Effect.fail(
-                    new InvalidSubagentRequestError({
-                      code: "rename_outcome_uncertain",
-                      message: "Outcome is unknown.",
-                    }),
-                  )
-                : Effect.fail(new SubagentNotFoundError({ id, message: "Run not found" })),
+            Match.value(id).pipe(
+              Match.when("parent", () => Effect.succeed({ ...privateRun, name: "accepted-name" })),
+              Match.when("uncertain", () =>
+                Effect.fail(
+                  new InvalidSubagentRequestError({
+                    code: "rename_outcome_uncertain",
+                    message: "Outcome is unknown.",
+                  }),
+                ),
+              ),
+              Match.orElse(() =>
+                Effect.fail(new SubagentNotFoundError({ id, message: "Run not found" })),
+              ),
+            ),
           consumeCompletions: () => Effect.die("Rename must not consume reports"),
         }),
       );

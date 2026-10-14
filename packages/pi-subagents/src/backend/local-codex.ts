@@ -6,6 +6,7 @@ import { absurd } from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Predicate from "effect/Predicate";
 import type { LocalCliHandle, LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type { SupervisorChannelHandle } from "../boundary/supervisor-channel.ts";
 import { isOutcomeUncertain, processError, type SubagentError } from "../run/errors.ts";
@@ -29,11 +30,11 @@ import {
   type CodexNotification,
   type CodexRequest,
 } from "./local-codex-protocol.ts";
-import { makeLocalCliInterrupts, type LocalCliInterrupt } from "./local-cli-interruption.ts";
+import { localCliInterrupts, type LocalCliInterrupt } from "./local-cli-interruption.ts";
 import { toBackendExit, type BackendLaunchRequest } from "./model.ts";
-import { makeLocalCliEventIngress } from "./local-cli-events.ts";
+import { localCliEventIngress } from "./local-cli-events.ts";
 import { correlatedRequest, protocolError, supervisorError } from "./driver-shared.ts";
-import { deliverTerminalReport, makeLocalCliBackendDriver } from "./local-cli-driver.ts";
+import { deliverTerminalReport, localCliBackendDriver } from "./local-cli-driver.ts";
 
 const RPC_TIMEOUT = "10 seconds";
 
@@ -56,9 +57,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   supervisor: SupervisorChannelHandle,
 ) {
   const scope = yield* Scope.Scope;
-  const { events, offer, release, acknowledge } = yield* makeLocalCliEventIngress(
-    child.acknowledge,
-  );
+  const { events, offer, release, acknowledge } = yield* localCliEventIngress(child.acknowledge);
   const responses = new Map<string, PendingResponse>();
   let nextRequestId = 1;
   let assignmentEpoch = 0;
@@ -66,7 +65,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   let sessionId: string | undefined;
   let activeTurnId: string | undefined;
   let runStartedTurnId: string | undefined;
-  const interrupts = makeLocalCliInterrupts<PendingInterrupt>(
+  const interrupts = localCliInterrupts<PendingInterrupt>(
     "Codex",
     { offer, release },
     () => assignmentEpoch,
@@ -460,7 +459,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
             Effect.tapError((error) =>
               Effect.sync(() => {
                 const uncertain =
-                  error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
+                  Predicate.isTagged(error, "SubagentProcessError") && isOutcomeUncertain(error);
                 if (!uncertain && !activeTurnId && assignmentEpoch === epoch)
                   assignmentEpoch = previousEpoch;
               }),
@@ -507,7 +506,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   };
 });
 
-export const makeLocalCodexBackendDriver = makeLocalCliBackendDriver(
+export const localCodexBackendDriver = localCliBackendDriver(
   "codex",
   (capability) =>
     `Local Codex app-server does not expose ${capability} in the hardened protocol subset.`,

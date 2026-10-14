@@ -9,11 +9,11 @@ import {
   importedMember,
   isImmutable,
   resolveFunction,
-  resolveVariable,
   returnedValue,
   staticPropertyName,
   unwrapExpression,
 } from "../shared/ast.ts";
+import { resolveVariable } from "../shared/scope.ts";
 import {
   definitionOrigin,
   objectAssignTarget,

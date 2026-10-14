@@ -19,7 +19,7 @@ import {
   makeInMemoryDocuments,
   type InMemoryDocuments,
 } from "pi-cosmic-core/testing";
-import { makeSettingsAdmission } from "../../src/config/coordinator";
+import { nextSettingsAdmission } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import {
@@ -33,9 +33,9 @@ import {
 } from "../../src/config/store";
 
 const loadSettings = (service: CodePreviewSettingsServiceContract) =>
-  service.load(makeSettingsAdmission());
+  service.load(nextSettingsAdmission());
 const saveSettings = (service: CodePreviewSettingsServiceContract, settings: CodePreviewSettings) =>
-  service.save(settings, makeSettingsAdmission());
+  service.save(settings, nextSettingsAdmission());
 
 function settingsLayer(documents: JsonDocumentStoreContract) {
   const dependencies = Layer.mergeAll(
@@ -172,8 +172,8 @@ it.effect("a cancelled newer load does not suppress an older successful publicat
         "/agent/settings.json": { codePreview: { readCollapsedLines: 31 } },
       }),
     );
-    const olderAdmission = makeSettingsAdmission();
-    const newerAdmission = makeSettingsAdmission();
+    const olderAdmission = nextSettingsAdmission();
+    const newerAdmission = nextSettingsAdmission();
     const older = yield* usingSettings(gate.documents, (service) =>
       service.load(olderAdmission),
     ).pipe(Effect.forkScoped);
@@ -206,10 +206,10 @@ it.effect("a later save waits for an earlier load and publishes after it", () =>
     });
     yield* usingSettings(documents, (service) =>
       Effect.gen(function* () {
-        const load = yield* service.load(makeSettingsAdmission()).pipe(Effect.forkScoped);
+        const load = yield* service.load(nextSettingsAdmission()).pipe(Effect.forkScoped);
         yield* Deferred.await(gate.started);
         const save = yield* service
-          .save({ ...defaultCodePreviewSettings, readCollapsedLines: 42 }, makeSettingsAdmission())
+          .save({ ...defaultCodePreviewSettings, readCollapsedLines: 42 }, nextSettingsAdmission())
           .pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         assert.deepEqual(events, ["read-1"]);
@@ -229,8 +229,8 @@ it.effect("a stale save returns before document modification", () => {
   const fake = makeInMemoryDocuments();
   return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
-      const stale = makeSettingsAdmission();
-      yield* service.load(makeSettingsAdmission());
+      const stale = nextSettingsAdmission();
+      yield* service.load(nextSettingsAdmission());
       const published = codePreviewSettings;
       yield* service.save({ ...defaultCodePreviewSettings, readCollapsedLines: 99 }, stale);
       assert.equal(fake.updateCount, 0);
@@ -250,7 +250,7 @@ it.effect("flush in another Layer waits for one-shot rehydrate and save", () =>
     const save = yield* usingSettings(fake.service, (service) =>
       service.save(
         { ...defaultCodePreviewSettings, readCollapsedLines: 42 },
-        makeSettingsAdmission(),
+        nextSettingsAdmission(),
         { rehydrate: {} },
       ),
     ).pipe(Effect.forkScoped);
@@ -351,13 +351,13 @@ it.effect.each(["failure", "reset"] as const)(
         const loaded = yield* loadSettings(service);
         const first = { ...loaded, readCollapsedLines: 40 };
         const second = { ...first, readLineNumbers: false };
-        const save = service.save(first, makeSettingsAdmission(), { previous: loaded });
+        const save = service.save(first, nextSettingsAdmission(), { previous: loaded });
         if (operation === "failure") yield* Effect.flip(save);
         else {
           yield* save;
-          yield* service.reset(makeSettingsAdmission());
+          yield* service.reset(nextSettingsAdmission());
         }
-        yield* service.save(second, makeSettingsAdmission(), { previous: first });
+        yield* service.save(second, nextSettingsAdmission(), { previous: first });
 
         const expected = operation === "failure" ? loaded : defaultCodePreviewSettings;
         assert.equal(codePreviewSettings.readCollapsedLines, expected.readCollapsedLines);
@@ -428,7 +428,7 @@ it.effect("flush waits for an earlier save and interruption cannot lose that sav
       Effect.gen(function* () {
         const loaded = yield* loadSettings(service);
         const saveFiber = yield* service
-          .save({ ...loaded, readCollapsedLines: 42 }, makeSettingsAdmission())
+          .save({ ...loaded, readCollapsedLines: 42 }, nextSettingsAdmission())
           .pipe(Effect.forkScoped);
         yield* Deferred.await(started);
         let flushCompleted = false;
@@ -465,7 +465,7 @@ it.effect("post-rename publication completes before save interruption becomes vi
       Effect.gen(function* () {
         const loaded = yield* loadSettings(service);
         const saveFiber = yield* service
-          .save({ ...loaded, readCollapsedLines: 42 }, makeSettingsAdmission())
+          .save({ ...loaded, readCollapsedLines: 42 }, nextSettingsAdmission())
           .pipe(Effect.forkScoped);
         yield* Deferred.await(renamed);
         assert.deepEqual(fake.documents.get("/agent/code-previews.json"), {
@@ -518,7 +518,7 @@ it.effect("choosing the project's value writes a global override instead of dele
   return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       const project = { projectCwd: "/project", projectTrusted: true };
-      const loaded = yield* service.load(makeSettingsAdmission(), project);
+      const loaded = yield* service.load(nextSettingsAdmission(), project);
       assert.equal(loaded.shikiTheme, "github-dark");
       yield* saveSettings(service, { ...loaded, shikiTheme: "nord" });
       assert.equal((yield* loadSettings(service)).shikiTheme, "nord");
@@ -538,7 +538,7 @@ it.effect("restoring defaults removes overrides so settings.json values apply ag
   return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       assert.equal((yield* loadSettings(service)).shikiTheme, "github-dark");
-      yield* service.reset(makeSettingsAdmission());
+      yield* service.reset(nextSettingsAdmission());
       assert.deepEqual(fake.documents.get("/agent/code-previews.json"), { owner: "keep" });
       assert.equal(codePreviewSettings.shikiTheme, "nord");
       assert.equal(
@@ -558,7 +558,7 @@ it.effect("saves and resets that another process already wrote still apply here"
       yield* saveSettings(service, { ...loaded, readCollapsedLines: 42 });
       assert.equal(codePreviewSettings.readCollapsedLines, 42);
       fake.documents.set("/agent/code-previews.json", {});
-      yield* service.reset(makeSettingsAdmission());
+      yield* service.reset(nextSettingsAdmission());
       assert.equal(
         codePreviewSettings.readCollapsedLines,
         defaultCodePreviewSettings.readCollapsedLines,

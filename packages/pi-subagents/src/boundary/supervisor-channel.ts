@@ -13,8 +13,9 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
-import { makeSupervisorRpcSerialization } from "./supervisor-rpc-serialization.ts";
+import { supervisorRpcSerialization } from "./supervisor-rpc-serialization.ts";
 import * as RpcServer from "effect/rpc/RpcServer";
+import * as Predicate from "effect/Predicate";
 import {
   isSupervisorRunId,
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
@@ -38,10 +39,10 @@ import {
   tomlString,
   writeExclusive,
 } from "./harness-shared.ts";
-import { makeSupervisorRpcServerProtocol } from "./supervisor-rpc-protocol.ts";
+import { supervisorRpcServerProtocol } from "./supervisor-rpc-protocol.ts";
 import { channelError, type SupervisorChannelError } from "./supervisor-channel-errors.ts";
 import {
-  makeSupervisorChannelSession,
+  supervisorChannelSession,
   type SupervisorChannelControls,
 } from "./supervisor-channel-session.ts";
 
@@ -328,7 +329,7 @@ const acquireNodeChannelEffect = (
             ),
           ),
         );
-        if (baseServer.address._tag !== "InetAddressV4")
+        if (!Predicate.isTagged(baseServer.address, "InetAddressV4"))
           return yield* channelError(
             "listen",
             "invalid_listener_address",
@@ -339,7 +340,7 @@ const acquireNodeChannelEffect = (
           prepared.stateDirectory,
           prepared.connectionConfigPath,
         );
-        const session = yield* makeSupervisorChannelSession({
+        const session = yield* supervisorChannelSession({
           runId,
           verifyToken,
           events,
@@ -359,8 +360,8 @@ const acquireNodeChannelEffect = (
         });
         acquisition.close = close;
         const handle: SupervisorChannelHandle = { metadata, events, ...session.controls };
-        const serialization = makeSupervisorRpcSerialization(MAX_SUPERVISOR_CHANNEL_LINE_BYTES);
-        const protocol = yield* makeSupervisorRpcServerProtocol({
+        const serialization = supervisorRpcSerialization(MAX_SUPERVISOR_CHANNEL_LINE_BYTES);
+        const protocol = yield* supervisorRpcServerProtocol({
           server: baseServer,
           authTimeoutMillis: options.authTimeoutMillis ?? AUTH_TIMEOUT_MILLIS,
           onDisconnect: session.disconnect,

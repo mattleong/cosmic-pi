@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext as ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, type Component, type SettingsList } from "@earendil-works/pi-tui";
+import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import {
@@ -8,7 +9,6 @@ import {
   dispatchSettingsCommand,
   invokeHostCallback,
   notifyAtHostBoundary,
-  type CapturedHostSignal,
   type ExtensionSubcommand,
   type SettingsOptionDescriptor,
 } from "pi-cosmic-core";
@@ -23,7 +23,7 @@ import {
   hasCustomSurface,
   openOwnedSurfacePromise,
   type OwnedSurfaceHost,
-  type OwnedSurfaceOutcome,
+  OwnedSurfaceOutcome,
 } from "./host-surface.ts";
 import { capturedHostSignal } from "./host-abort-signal.ts";
 
@@ -165,8 +165,14 @@ export function settingsSubcommand<Config>(
   const invoked = (ctx: ExtensionContext) =>
     invokeHostCallback(() => options.onInvoke?.(ctx), undefined);
   const optionalSignal = options.signal === "optional";
-  const captureSignal = (ctx: ExtensionContext): CapturedHostSignal =>
-    optionalSignal ? { _tag: "Captured", signal: capturedHostSignal(ctx) } : captureHostSignal(ctx);
+  // Undefined means the host context was retired before its signal could be read.
+  const captureSignal = (
+    ctx: ExtensionContext,
+  ): { readonly signal: AbortSignal | undefined } | undefined => {
+    if (optionalSignal) return { signal: capturedHostSignal(ctx) };
+    const captured = captureHostSignal(ctx);
+    return Predicate.isTagged(captured, "Captured") ? { signal: captured.signal } : undefined;
+  };
 
   const applySetting = (
     ctx: ExtensionContext,
@@ -229,7 +235,7 @@ export function settingsSubcommand<Config>(
 
   const openInteractive = (ctx: ExtensionContext) => {
     const captured = captureSignal(ctx);
-    if (captured._tag === "Unavailable") return notify(ctx, unavailable, "warning");
+    if (!captured) return notify(ctx, unavailable, "warning");
     const apply: SettingsSession<Config>["apply"] = (id, value, show, scope) =>
       applySetting(
         ctx,
@@ -272,8 +278,11 @@ export function settingsSubcommand<Config>(
       );
     };
     return options.open(ctx, { config: () => readConfig(ctx), apply, picker }).then((outcome) => {
-      if (outcome._tag === "Blocked") notify(ctx, unavailable, "warning");
-      if (outcome._tag === "Failed") notify(ctx, `Couldn't open ${title} settings`, "warning");
+      OwnedSurfaceOutcome.$match(outcome, {
+        Settled: () => undefined,
+        Blocked: () => notify(ctx, unavailable, "warning"),
+        Failed: () => notify(ctx, `Couldn't open ${title} settings`, "warning"),
+      });
       return undefined;
     });
   };
@@ -306,44 +315,40 @@ export function settingsSubcommand<Config>(
     if (!isCurrent()) return;
     invoked(ctx);
     const dispatch = dispatchSettingsCommand(args, descriptors, scopeNames);
-    switch (dispatch._tag) {
-      case "OpenInteractive":
-        return hasCustomSurface(ctx) ? openInteractive(ctx) : showHelp(ctx);
-      case "Help":
-        return showHelp(ctx);
-      case "Status":
-        return Promise.resolve()
-          .then(() => (isCurrent() ? options.status(ctx) : undefined))
-          .then(
-            (text) => {
-              if (text !== undefined) notify(ctx, text, "info");
-              return undefined;
-            },
-            () => notify(ctx, unavailable, "warning"),
-          );
-      case "Invalid":
-        return notify(
-          ctx,
-          dispatch.reason === "invalid-value"
-            ? `${dispatch.id} must be one of: ${dispatch.allowedValues.join(", ")}`
-            : dispatch.reason === "missing-value"
-              ? `Usage: /${command} ${scopeToken}<id> <value>`
-              : `Unknown setting: ${dispatch.id}`,
-          "warning",
-        );
-      case "Apply": {
-        const captured = captureSignal(ctx);
-        if (captured._tag === "Unavailable") return notify(ctx, unavailable, "warning");
-        return applySetting(
-          ctx,
-          dispatch.id,
-          dispatch.value,
-          captured.signal,
-          undefined,
-          dispatch.scope,
-        );
-      }
-    }
+    return Match.value(dispatch).pipe(
+      Match.tagsExhaustive({
+        OpenInteractive: () => (hasCustomSurface(ctx) ? openInteractive(ctx) : showHelp(ctx)),
+        Help: () => showHelp(ctx),
+        Status: () =>
+          Promise.resolve()
+            .then(() => (isCurrent() ? options.status(ctx) : undefined))
+            .then(
+              (text) => {
+                if (text !== undefined) notify(ctx, text, "info");
+                return undefined;
+              },
+              () => notify(ctx, unavailable, "warning"),
+            ),
+        Invalid: (invalid) =>
+          notify(
+            ctx,
+            Match.value(invalid).pipe(
+              Match.discriminatorsExhaustive("reason")({
+                "invalid-value": ({ id, allowedValues }) =>
+                  `${id} must be one of: ${allowedValues.join(", ")}`,
+                "missing-value": () => `Usage: /${command} ${scopeToken}<id> <value>`,
+                "unknown-setting": ({ id }) => `Unknown setting: ${id}`,
+              }),
+            ),
+            "warning",
+          ),
+        Apply: ({ id, value, scope }) => {
+          const captured = captureSignal(ctx);
+          if (!captured) return notify(ctx, unavailable, "warning");
+          return applySetting(ctx, id, value, captured.signal, undefined, scope);
+        },
+      }),
+    );
   };
 
   return {

@@ -1,6 +1,7 @@
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Match from "effect/Match";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
@@ -499,15 +500,16 @@ describe("subagent tool", () => {
     function* () {
       const service = subagentServiceDouble({
         send: (id) =>
-          id === "pending"
-            ? Effect.fail(steering(true))
-            : id === "unflagged"
-              ? Effect.fail(steering(false))
-              : id === "bad"
-                ? Effect.fail(
-                    new InvalidSubagentRequestError({ code: "not_running", message: "Paused." }),
-                  )
-                : Effect.succeed(view({ id })),
+          Match.value(id).pipe(
+            Match.when("pending", () => Effect.fail(steering(true))),
+            Match.when("unflagged", () => Effect.fail(steering(false))),
+            Match.when("bad", () =>
+              Effect.fail(
+                new InvalidSubagentRequestError({ code: "not_running", message: "Paused." }),
+              ),
+            ),
+            Match.orElse(() => Effect.succeed(view({ id }))),
+          ),
       });
       const result = yield* invokeOptionalTool(captureSubagentTools(service).get("subagent_send"), {
         runIds: ["good", "pending", "unflagged", "bad"],
@@ -654,8 +656,11 @@ describe("subagent tool", () => {
         Effect.succeed(
           view({
             id,
-            state:
-              id === "agent-complete" ? "completed" : id === "agent-failed" ? "failed" : "stopped",
+            state: Match.value(id).pipe(
+              Match.when("agent-complete", () => "completed" as const),
+              Match.when("agent-failed", () => "failed" as const),
+              Match.orElse(() => "stopped" as const),
+            ),
           }),
         ),
     });

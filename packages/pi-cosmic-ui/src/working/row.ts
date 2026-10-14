@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { formatElapsed, invokeHostCallback, synchronousMonotonicNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "../boundary/host-status.ts";
-import { makeThroughputMeter, type ThroughputRate } from "./throughput.ts";
+import { createThroughputMeter, type ThroughputRate } from "./throughput.ts";
 
 const WAITING_MESSAGE = "Waiting for you";
 
@@ -18,7 +18,7 @@ export interface WorkingRowOptions {
   readonly every?: (intervalMs: number, tick: () => void) => () => void;
 }
 
-export const makeWorkingRow = ({
+export const createWorkingRow = ({
   now = synchronousMonotonicNow,
   every = startHostUiTicker,
 }: WorkingRowOptions = {}) => {
@@ -29,7 +29,7 @@ export const makeWorkingRow = ({
   let halt: (() => void) | undefined;
   let workStartedAt: number | undefined;
   let workMilliseconds = 0;
-  const throughput = makeThroughputMeter();
+  const throughput = createThroughputMeter();
 
   const workAt = (at: number) =>
     workMilliseconds + (workStartedAt === undefined ? 0 : at - workStartedAt);

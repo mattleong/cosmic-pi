@@ -1,10 +1,11 @@
+import * as Predicate from "effect/Predicate";
 import { captureHostSignal, invokeHostCallback } from "pi-cosmic-core";
 
 export const capturedHostSignal = (
   ctx: Parameters<typeof captureHostSignal>[0],
 ): AbortSignal | undefined => {
   const captured = captureHostSignal(ctx);
-  return captured._tag === "Captured" ? captured.signal : undefined;
+  return Predicate.isTagged(captured, "Captured") ? captured.signal : undefined;
 };
 
 export interface HostAbortSignalSnapshot {

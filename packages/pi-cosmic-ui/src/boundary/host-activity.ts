@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core";
 import {
   ActivityComponent,
-  makeActivityPresentation,
+  freshActivityPresentation,
   type ActivityPresentation,
 } from "../activity/component.ts";
 import type { ActivityRow } from "../activity/model.ts";
@@ -70,7 +70,7 @@ export interface ActivityHost {
   ) => Effect.Effect<boolean, ActivityError>;
 }
 
-export function makeActivityHost(
+export function createActivityHost(
   pi: ExtensionAPI,
   submit: (effect: Effect.Effect<void, ActivityError>, signal?: AbortSignal) => void,
   run?: ActivityHostRun,
@@ -124,7 +124,7 @@ export function makeActivityHost(
             rows: [],
             starting: 0,
             now: 0,
-            presentation: makeActivityPresentation(),
+            presentation: freshActivityPresentation(),
             nonce: {},
             cleanups: [],
             active: false,

@@ -15,7 +15,7 @@ import {
 import { SharpAdapter } from "../src/boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../src/config/schema.ts";
 import { OpenAIImageService } from "../src/image/service.ts";
-import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from "../src/image/types.ts";
+import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, OpenAIImageError } from "../src/image/types.ts";
 import { makeResolvedConfig, testContext, testModel } from "./helpers.ts";
 
 const registryToken = JSON.stringify({ access: "test-token", accountId: "acct_test" });
@@ -149,11 +149,11 @@ describe("OpenAIImageService", () => {
     });
     return Effect.gen(function* () {
       const service = yield* OpenAIImageService;
-      for (const params of [{ prompt: "extra key", detail: "high" }, hostile, throwingPrompt])
-        expect(yield* service.generate(params).pipe(Effect.flip)).toMatchObject({
-          _tag: "OpenAIImageError",
-          operation: "params",
-        });
+      for (const params of [{ prompt: "extra key", detail: "high" }, hostile, throwingPrompt]) {
+        const failure = yield* service.generate(params).pipe(Effect.flip);
+        expect(failure).toBeInstanceOf(OpenAIImageError);
+        expect(failure).toMatchObject({ operation: "params" });
+      }
       expect(requests).toEqual([]);
     }).pipe(provideBuiltLayer(layer));
   });
@@ -190,10 +190,9 @@ describe("OpenAIImageService", () => {
       yield* Deferred.await(started);
       yield* TestClock.adjust("30 seconds");
 
-      expect(yield* Fiber.join(failure)).toMatchObject({
-        _tag: "OpenAIImageError",
-        operation: "timeout",
-      });
+      const timeout = yield* Fiber.join(failure);
+      expect(timeout).toBeInstanceOf(OpenAIImageError);
+      expect(timeout).toMatchObject({ operation: "timeout" });
       expect(finalized).toBe(1);
     }),
   );

@@ -25,7 +25,7 @@ import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
 } from "../run/launch-validation.ts";
-import { makeStartDetails } from "./details.ts";
+import { startDetails } from "./details.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import type {
   SubagentStartFailure,
@@ -194,7 +194,7 @@ export const executeStartBatch = (
         invokeBestEffort(() =>
           input.onUpdate?.({
             content: [{ type: "text", text: summary }],
-            details: makeStartDetails({
+            details: startDetails({
               startEntries: startEntriesFor(specs, partialOutcomes),
               ...(failures.length > 0 && { startFailures: failures }),
             }),

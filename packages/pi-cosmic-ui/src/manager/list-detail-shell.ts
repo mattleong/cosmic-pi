@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import * as Predicate from "effect/Predicate";
 import type * as Types from "effect/Types";
 import { managerLayoutTier, type ManagerLayoutTier, clipToWidth } from "./chrome.ts";
 import { FullScreenKeymap, pageSteps } from "./keymap.ts";
@@ -93,7 +94,7 @@ export class ListDetailShell {
       detailSteps: pageSteps(this.detailPageSize),
       listSteps: pageSteps(this.listPageSize),
     });
-    if (result._tag === "Update") {
+    if (Predicate.isTagged(result, "Update")) {
       this.current.pane = result.state.pane;
       this.current.details = result.state.details;
       this.current.detailScroll = result.state.detailScroll;

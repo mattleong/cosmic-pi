@@ -1,16 +1,17 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
 import { HerdrClient, type HerdrPane } from "../boundary/herdr-client.ts";
-import type { HerdrBtwLinkRecordResult, HerdrBtwLinkStore } from "../boundary/host-link-store.ts";
+import { HerdrBtwLinkStore, type HerdrBtwLinkRecordResult } from "../boundary/host-link-store.ts";
 import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
 import * as SessionFile from "../boundary/session-file.ts";
 import { confirmedFailure, HerdrBtwError, uncertainFailure } from "./errors.ts";
-import type { HerdrBtwLink } from "./link.ts";
+import { HerdrBtwLinkRestoration, type HerdrBtwLink } from "./link.ts";
 import {
-  makeAgentName,
   parentBtwDisplayName,
   selectSplitDirection,
+  sideSessionAgentName,
   sideSessionPrompt,
 } from "./policy.ts";
 import {
@@ -78,13 +79,13 @@ type LaunchTarget =
   | { readonly mode: "resume"; readonly link: HerdrBtwLink };
 
 const makeHerdrBtwService = (
-  input: HerdrBtwSessionInput & { readonly linkStore: HerdrBtwLinkStore },
+  input: HerdrBtwSessionInput,
   options: Partial<typeof sessionFileBoundary> = {},
 ) =>
   Effect.gen(function* () {
     const gate = yield* Semaphore.make(1);
     const herdr = yield* HerdrClient;
-    const linkStore = input.linkStore;
+    const linkStore = yield* HerdrBtwLinkStore;
     const {
       probeSessionHeader,
       compareSessionFileIdentity,
@@ -106,7 +107,7 @@ const makeHerdrBtwService = (
           cwd: input.cwd,
           sessionId: childSessionId,
         });
-        if (created._tag !== "created")
+        if (!SessionFile.BlankChildSessionFileResult.$is("created")(created))
           return yield* confirmedFailure(
             "create blank child session",
             "herdr_btw_child_create_failed",
@@ -132,13 +133,13 @@ const makeHerdrBtwService = (
           ? undefined
           : yield* Effect.result(herdr.promptSideSessionPi(agentName, sideSessionPrompt(prompt)));
       const focusResult = yield* Effect.result(herdr.focusSideSessionPi(agentName));
-      if (promptResult?._tag === "Failure")
+      if (promptResult !== undefined && Result.isFailure(promptResult))
         return yield* retainPaneFailure(
           promptResult.failure,
           paneId,
           "The side session is running; type your prompt there",
         );
-      if (focusResult._tag === "Failure")
+      if (Result.isFailure(focusResult))
         return yield* retainPaneFailure(
           focusResult.failure,
           paneId,
@@ -187,7 +188,7 @@ const makeHerdrBtwService = (
           target.mode === "create"
             ? yield* prepareFreshLaunchTarget(target.childSessionId)
             : target.link;
-        const agentName = makeAgentName(sessionId, btwPane.pane_id);
+        const agentName = sideSessionAgentName(sessionId, btwPane.pane_id);
         if (target.mode === "resume") {
           const newlyLive = (yield* herdr.inspectLiveAgents()).filter((agent) =>
             isLinkedAgentConflictCandidate(agent, target.link, compareSessionFileIdentity),
@@ -290,13 +291,13 @@ const makeHerdrBtwService = (
     const openInner = Effect.fn("HerdrBtwService.open")(function* (prompt?: string) {
       const { sessionFile, sessionId } = yield* validateBtwInput(prompt, input, probeSessionHeader);
       const restoration = linkStore.restore();
-      if (restoration._tag === "malformed")
+      if (HerdrBtwLinkRestoration.$is("malformed")(restoration))
         return yield* failClosedLink(
           "restore BTW link",
           "herdr_btw_link_malformed",
           "This session's side-session link is unreadable",
         );
-      if (restoration._tag === "none")
+      if (HerdrBtwLinkRestoration.$is("none")(restoration))
         return yield* openFreshCreate(prompt, sessionFile, sessionId);
 
       const link = restoration.link;

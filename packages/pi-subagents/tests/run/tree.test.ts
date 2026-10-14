@@ -15,6 +15,7 @@ import {
   waitForCompleted,
   withService,
 } from "./fixtures/service-harness.ts";
+import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
 
 const policy = (maxDirectChildren: number, maxDepth: number) => ({
   maxDirectChildren,
@@ -75,10 +76,8 @@ describe("root-owned subagent run tree", () => {
           request({ name: "too-deep", nestingPolicy: policy(12, 2) }),
         )
         .pipe(Effect.flip);
-      expect(blocked).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "nesting_depth_limit",
-      });
+      expect(blocked).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(blocked).toMatchObject({ code: "nesting_depth_limit" });
 
       const sibling = yield* service.start(
         request({ name: "sibling", nestingPolicy: policy(12, 2) }),
@@ -93,9 +92,11 @@ describe("root-owned subagent run tree", () => {
           expect.objectContaining({ id: child.id }),
         ]),
       );
-      expect(
-        yield* service.authorizeTargets(parent.id, [sibling.id]).pipe(Effect.flip),
-      ).toMatchObject({ _tag: "SubagentNotFoundError", id: sibling.id });
+      const unauthorized = yield* service
+        .authorizeTargets(parent.id, [sibling.id])
+        .pipe(Effect.flip);
+      expect(unauthorized).toBeInstanceOf(SubagentNotFoundError);
+      expect(unauthorized).toMatchObject({ id: sibling.id });
     }),
   );
 

@@ -1,5 +1,6 @@
 import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import { nodeFsConstants, nodeFsPromises as fs } from "../boundary/node-builtins.ts";
@@ -183,7 +184,7 @@ const readinessFailure = (
         Effect.succeed(error.code ? `${error.message} [${error.code}]` : error.message),
       ),
       Effect.timeoutOption(PREFLIGHT_TIMEOUT),
-      Effect.map((result) => (result._tag === "Some" ? result.value : "readiness check timed out")),
+      Effect.map(Option.getOrElse(() => "readiness check timed out")),
     );
 
 const STATUS_GLYPHS = { ok: "✓", warning: "!", failed: "✗" } as const;

@@ -14,7 +14,7 @@ import {
 } from "./resolve.ts";
 import {
   conflict,
-  makeSessionProfileSnapshot,
+  sessionProfileSnapshot,
   patchSessionDelegationSnapshot,
   patchSessionNestingSnapshot,
   patchSessionProfileSnapshot,
@@ -79,7 +79,7 @@ export const makeSubagentProfileService = (
       const publish = options.publishSession;
       return publish ? Effect.try(() => publish(snapshot)).pipe(Effect.ignore) : Effect.void;
     };
-    const initial = makeSessionProfileSnapshot(config, options.initialSessionOverrides);
+    const initial = sessionProfileSnapshot(config, options.initialSessionOverrides);
     const state = yield* Ref.make(initial);
     const lock = yield* Semaphore.make(1);
     yield* publishSnapshot(initial);
@@ -145,3 +145,9 @@ export const subagentProfileServiceLayer = (options: SubagentProfileLayerOptions
       return yield* makeSubagentProfileService(config, options);
     }),
   );
+
+/** Builds the profile service from an already resolved configuration. */
+export const subagentProfileServiceLayerFor = (
+  config: ResolvedSubagentConfig,
+  options: Pick<SubagentProfileLayerOptions, "initialSessionOverrides" | "publishSession"> = {},
+) => Layer.effect(SubagentProfileService, makeSubagentProfileService(config, options));

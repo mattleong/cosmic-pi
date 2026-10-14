@@ -29,7 +29,7 @@ export const reportArchiveRoot = (agentDirectory: string): string =>
  * Writes each delivered report to a private file keyed by the Pi session, so the parent can
  * re-read it after compaction, `/reload`, or a resumed session.
  */
-export const makeReportArchive = (agentDirectory: string, sessionKey: string): ReportArchive => {
+export const sessionReportArchive = (agentDirectory: string, sessionKey: string): ReportArchive => {
   const directory = path.join(
     reportArchiveRoot(agentDirectory),
     safeSubagentDirectorySegment(sessionKey),

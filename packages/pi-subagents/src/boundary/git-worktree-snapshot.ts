@@ -208,9 +208,8 @@ export const captureSnapshot = (
         return yield* workspaceFailure("snapshot", "Workspace exceeds the byte limit.");
       files.push({ path: name, ...file });
     }
-    const regularPaths = new Set(
-      files.filter((file) => file.mode !== "120000").map((file) => file.path),
-    );
+    const regularPaths = new Set<string>();
+    for (const file of files) if (file.mode !== "120000") regularPaths.add(file.path);
     if (
       files.some(
         (file) => file.symlinkTarget !== undefined && !regularPaths.has(file.symlinkTarget),

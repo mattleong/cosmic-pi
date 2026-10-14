@@ -82,7 +82,6 @@ describe("ListDetailShell motions", () => {
 
     const half = shell.applyMotion("half-page-down", { rowCount: 50, hasSelection: true });
     expect(half).toMatchObject({
-      _tag: "Update",
       movedSelection: true,
       state: { selected: 5 },
     });
@@ -91,7 +90,6 @@ describe("ListDetailShell motions", () => {
 
     const full = shell.applyMotion("full-page-down", { rowCount: 50, hasSelection: true });
     expect(full).toMatchObject({
-      _tag: "Update",
       movedSelection: true,
       state: { selected: 15 },
     });
@@ -109,7 +107,7 @@ describe("ListDetailShell motions", () => {
     shell.detailWindow(lines(30), 11);
 
     const result = shell.applyMotion("half-page-up", { rowCount: 1, hasSelection: true });
-    expect(result).toMatchObject({ _tag: "Update", scrolledDetail: true, movedSelection: false });
+    expect(result).toMatchObject({ scrolledDetail: true, movedSelection: false });
     expect(shell.state.detailScroll).toBe(5);
     shell.applyMotion("first", { rowCount: 1, hasSelection: true });
     expect(shell.state.detailScroll).toBe(20);

@@ -1,5 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
+import * as Predicate from "effect/Predicate";
+import { FullScreenResolution } from "../manager/keymap.ts";
 import type {
   FullScreenAction,
   FullScreenKeymapOptions,
@@ -33,7 +35,7 @@ export interface ActivityPresentation {
   readonly expandedHistory: Set<string>;
   focus: string | undefined;
 }
-export const makeActivityPresentation = (): ActivityPresentation => ({
+export const freshActivityPresentation = (): ActivityPresentation => ({
   shell: new ListDetailShell(),
   collapsed: new Set(),
   expandedHistory: new Set(),
@@ -106,7 +108,7 @@ export class ActivityComponent {
   private readonly options: ActivityComponentOptions;
   constructor(options: ActivityComponentOptions) {
     this.options = options;
-    this.presentation = options.presentation ?? makeActivityPresentation();
+    this.presentation = options.presentation ?? freshActivityPresentation();
     this.shell = this.presentation.shell;
     if (options.initialSection) this.presentation.focus = undefined;
   }
@@ -302,9 +304,13 @@ export class ActivityComponent {
       reservedKeys: activityShortcuts,
     });
     if (!result) return;
-    if (result._tag === "Shortcut") this.handleShortcut(result.key, selected, row);
-    else if (result.action === "confirm" && selected) this.enterSelection(row);
-    else this.handleNavigation(result.action, entries, selected, row);
+    FullScreenResolution.$match(result, {
+      Shortcut: ({ key }) => this.handleShortcut(key, selected, row),
+      Action: ({ action }) => {
+        if (action === "confirm" && selected) this.enterSelection(row);
+        else this.handleNavigation(action, entries, selected, row);
+      },
+    });
     this.selected();
     this.flushCancellation();
     this.options.requestRender();
@@ -431,11 +437,11 @@ export class ActivityComponent {
       rowCount: entries.length,
       hasSelection: selected !== undefined,
     });
-    if (changed._tag === "Close") {
+    if (Predicate.isTagged(changed, "Close")) {
       this.close();
       return;
     }
-    if (changed._tag !== "Update") return;
+    if (!Predicate.isTagged(changed, "Update")) return;
     if (changed.movedSelection)
       this.shell.select(
         changed.state.selected,

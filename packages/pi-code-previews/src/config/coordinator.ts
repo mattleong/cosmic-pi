@@ -14,7 +14,7 @@ const settingsPermit = Semaphore.makeUnsafe(1);
 let nextAdmission = 0;
 let latestSuccessfulPublication = 0;
 
-export function makeSettingsAdmission(): SettingsAdmission {
+export function nextSettingsAdmission(): SettingsAdmission {
   return { sequence: ++nextAdmission };
 }
 

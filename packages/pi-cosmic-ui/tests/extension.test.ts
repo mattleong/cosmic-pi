@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as MutableRef from "effect/MutableRef";
 import { CosmicUiConfigStore, CosmicUiConfigError } from "../src/config/store.ts";
-import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
+import { defaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { CosmicUiService, type CosmicUiProjection } from "../src/protocol/service.ts";
 import { vi } from "vitest";
 import {
@@ -317,7 +317,7 @@ describe("Cosmic UI extension", () => {
         const committed = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let failed = false;
-        let durable = makeDefaultResolvedCosmicUiConfig();
+        let durable = defaultResolvedCosmicUiConfig();
         let observed: MutableRef.MutableRef<CosmicUiProjection> | undefined;
         const projection = () => observed;
         const store = CosmicUiConfigStore.of({

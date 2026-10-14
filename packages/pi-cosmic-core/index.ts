@@ -15,7 +15,7 @@ export {
   type PiSessionRuntimeSlot,
 } from "./src/runtime/session-runtime.ts";
 export { notifyListeners } from "./src/coordination/listeners.ts";
-export { makeSubscriptionRefresh } from "./src/coordination/subscription-refresh.ts";
+export { createSubscriptionRefresh } from "./src/coordination/subscription-refresh.ts";
 export { mergeHeaders } from "./src/http/headers.ts";
 export { JsonDocumentError, StreamingHttpError } from "./src/platform/errors.ts";
 export { AgentDirectory } from "./src/platform/agent-directory.ts";
@@ -36,7 +36,7 @@ export {
   isStrictlyInsidePathWith,
 } from "./src/platform/paths.ts";
 export { isInteractiveShellProcessName } from "./src/platform/shell-process-names.ts";
-export { JsonHttpClient } from "./src/platform/json-http.ts";
+export { JsonHttpClient, JsonHttpResponse } from "./src/platform/json-http.ts";
 export {
   CrossProcessLock,
   CrossProcessLockError,
@@ -47,7 +47,7 @@ export {
   decodeTolerantFields,
   type TolerantFieldDiagnostic,
 } from "./src/config/tolerant-fields.ts";
-export { makeConfigDocumentErrorFactory } from "./src/config/document-ops.ts";
+export { configDocumentErrorFactory } from "./src/config/document-ops.ts";
 export {
   commitPreferredScope,
   makeScopedConfigStore,
@@ -55,6 +55,7 @@ export {
 } from "./src/config/scoped-config-store.ts";
 export {
   captureHostSignal,
+  CapturedHostSignal,
   captureSessionHost,
   hasTerminalUI,
   invokeBestEffort,
@@ -62,7 +63,6 @@ export {
   isProjectTrusted,
   isUsingOAuthAtHostBoundary,
   notifyAtHostBoundary,
-  type CapturedHostSignal,
   type HostNotificationLevel,
 } from "./src/host-session.ts";
 export {
@@ -108,9 +108,10 @@ export {
   formatUsageDebugReport,
   makeUsageRefreshController,
   timedDiagnosticResult,
+  UsageFetchOutcome,
   type SubscriptionUsageConfig,
 } from "./src/usage-controller.ts";
-export { freezeSnapshot, makeFrozenProjection, ProjectionError } from "./src/projection.ts";
+export { freezeSnapshot, frozenProjection, ProjectionError } from "./src/projection.ts";
 export { hasObjectRuntimeType, runtimeTypeName } from "./src/runtime-values.ts";
 export {
   makeSynchronousIngress,
@@ -163,7 +164,7 @@ export {
   makeUsageSettingDescriptors,
   type SettingsOptionDescriptor,
 } from "./src/settings-completion.ts";
-export { dispatchSettingsCommand } from "./src/settings-dispatch.ts";
+export { dispatchSettingsCommand, SettingsCommandDispatch } from "./src/settings-dispatch.ts";
 export {
   clampPercent,
   formatPercent,

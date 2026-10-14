@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { runSubagentDoctor } from "../src/application/doctor.ts";
-import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "../src/backend/service.ts";
+import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { profileLayerFor } from "./run/fixtures/service-harness.ts";
 import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
@@ -34,7 +34,7 @@ const config = {
 const registry = (probed: string[]) =>
   Layer.succeed(
     SubagentBackendRegistry,
-    makeSubagentBackendRegistry([
+    backendRegistryFor([
       {
         host: "local",
         runtime: "claude",

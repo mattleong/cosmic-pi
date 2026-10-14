@@ -7,7 +7,7 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
+import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import type { SubagentError } from "../src/run/errors.ts";
@@ -17,7 +17,7 @@ const fakePiChild = Effect.gen(function* () {
   const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
   const receipt = yield* Deferred.make<ProcessExit>();
   const state = { requested: false, readingExit: false };
-  const driver = makeLocalPiBackendDriver({
+  const driver = localPiBackendDriver({
     reclaimRunState: () => Effect.void,
     spawn: () =>
       Effect.succeed({

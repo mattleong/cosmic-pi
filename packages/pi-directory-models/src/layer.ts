@@ -8,7 +8,7 @@ import {
   type DirectoryModelWarn,
 } from "./preference/service.ts";
 
-export const makeDirectoryModelsLayer = (
+export const directoryModelsLayer = (
   input: DirectoryModelSessionInput,
   warn: DirectoryModelWarn,
 ) => {

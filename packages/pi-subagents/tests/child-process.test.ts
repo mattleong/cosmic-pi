@@ -8,6 +8,7 @@ import {
   requestCooperativeAbort,
   safeSubagentDirectorySegment,
 } from "../src/boundary/child-process.ts";
+import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { NESTED_SUBAGENT_TOOL_NAMES, piRootActiveToolSnapshot } from "../src/run/tool-policy.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 
@@ -107,8 +108,8 @@ describe("subagent child process boundary", () => {
       ];
       for (const activeTools of cases) {
         const error = yield* piRootActiveToolSnapshot(activeTools).pipe(Effect.flip);
+        expect(error).toBeInstanceOf(InvalidSubagentRequestError);
         expect(error).toMatchObject({
-          _tag: "InvalidSubagentRequestError",
           code: "pi_active_tools_unrepresentable",
         });
       }

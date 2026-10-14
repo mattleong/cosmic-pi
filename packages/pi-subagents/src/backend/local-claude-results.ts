@@ -13,7 +13,7 @@ type ClaudeResultProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "
 
 const CONTINUATION_GRACE = "20 seconds";
 
-export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
+export const localClaudeResults = (context: LocalClaudeHandleContext) => {
   const {
     state,
     supervisor,

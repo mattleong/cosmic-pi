@@ -25,6 +25,7 @@ import {
 } from "../../src/tools/renderers/registration";
 import { getEnabledCodePreviewTools } from "../../src/tools/selection";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
+import * as Match from "effect/Match";
 
 const builtinSource: SourceInfo = {
   path: "builtin:write",
@@ -242,11 +243,11 @@ test.each(["foreign replacement", "missing anchor", "ambiguous anchor", "metadat
         ],
         getCommands: () => {
           if (scenario === "metadata failure") throw new Error("metadata unavailable");
-          return scenario === "missing anchor"
-            ? []
-            : scenario === "ambiguous anchor"
-              ? [anchor, anchor]
-              : [anchor];
+          return Match.value(scenario).pipe(
+            Match.when("missing anchor", () => []),
+            Match.when("ambiguous anchor", () => [anchor, anchor]),
+            Match.orElse(() => [anchor]),
+          );
         },
         registerTool: () => assert.fail("prior membership is not ownership proof"),
       }),

@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Match from "effect/Match";
 import {
   deferredPromise,
   extensionApiFixture,
@@ -145,9 +146,9 @@ describe("subagent Pi registration", () => {
     "retired runtime callbacks cannot publish or notify into the next session",
     function* () {
       const captured: SubagentLayers.SubagentLayerOptions[] = [];
-      const makeLayer = SubagentLayers.makeSubagentLayer;
+      const makeLayer = SubagentLayers.subagentApplicationLayer;
       const capture = vi
-        .spyOn(SubagentLayers, "makeSubagentLayer")
+        .spyOn(SubagentLayers, "subagentApplicationLayer")
         .mockImplementation((options) => {
           captured.push(options);
           return makeLayer(options);
@@ -251,11 +252,11 @@ describe("subagent Pi registration", () => {
       const queryProtocol = makeSessionCapabilityProtocol({ version: 1, maxSessionIdChars: 256 });
       const pending = deferredPromise<boolean>();
       const open = vi.fn(() =>
-        outcome === "replaced"
-          ? pending.promise
-          : outcome === "rejected"
-            ? Promise.reject(new Error("Manager already open"))
-            : Promise.resolve(outcome === "accepted"),
+        Match.value(outcome).pipe(
+          Match.when("replaced", () => pending.promise),
+          Match.when("rejected", () => Promise.reject(new Error("Manager already open"))),
+          Match.orElse((other) => Promise.resolve(other === "accepted")),
+        ),
       );
       if (outcome !== "absent")
         events.on(ACTIVITY_VIEW_DISCOVER, (data) => {

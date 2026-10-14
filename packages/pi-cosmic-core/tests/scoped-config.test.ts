@@ -254,8 +254,8 @@ testLayer(Path.layer)("scoped config store", (test) => {
       });
       return Effect.gen(function* () {
         const failure = yield* Effect.flip(store.resolveConfig("/project", "/agent"));
+        expect(failure).toBeInstanceOf(TestConfigError);
         expect(failure).toMatchObject({
-          _tag: "TestConfigError",
           operation: operation === "inspect" ? "inspect" : "write",
           path: globalDocument,
         });
@@ -361,7 +361,8 @@ testLayer(Path.layer)("scoped config store", (test) => {
       const failure = yield* Effect.flip(
         commitPreferredScope(testStore, current, changed, () => Effect.void),
       );
-      expect(failure).toMatchObject({ _tag: "TestConfigError", operation: "read" });
+      expect(failure).toBeInstanceOf(TestConfigError);
+      expect(failure).toMatchObject({ operation: "read" });
       expect(memory.documents.get(projectDocument)).toEqual({ fromProject: true });
 
       const next = yield* commitPreferredScope(testStore, current, changed, () => Effect.void, {

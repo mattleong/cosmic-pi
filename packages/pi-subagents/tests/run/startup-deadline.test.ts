@@ -11,6 +11,7 @@ import {
   request,
   withService,
 } from "./fixtures/service-harness.ts";
+import { SubagentProcessError } from "../../src/run/errors.ts";
 
 const expectDiagnostic = (message: string | undefined) => {
   expect(message).toContain("Failed to load extension: missing entrypoint");
@@ -70,10 +71,9 @@ describe("local Pi startup deadline", () => {
         expect(settled).toBe(false);
         expect(child.released()).toBe(0);
         yield* Deferred.succeed(release, undefined);
-        expect(yield* Fiber.join(starting)).toMatchObject({
-          _tag: "SubagentProcessError",
-          code: "get_state_outcome_uncertain",
-        });
+        const startFailure = yield* Fiber.join(starting);
+        expect(startFailure).toBeInstanceOf(SubagentProcessError);
+        expect(startFailure).toMatchObject({ code: "get_state_outcome_uncertain" });
         expect(child.released()).toBe(1);
         expect(child.commandTypes()).toEqual(["get_state"]);
         expect(fake.controls).toHaveLength(1);
@@ -151,10 +151,9 @@ describe("local Pi startup deadline", () => {
         .pipe(Effect.flip, Effect.forkScoped);
       yield* yieldUntil(() => fake.controls[0]?.sent("set_session_name") === true);
       yield* TestClock.adjust("11 seconds");
-      expect(yield* Fiber.join(renaming)).toMatchObject({
-        _tag: "SubagentProcessError",
-        code: "rename_outcome_uncertain",
-      });
+      const renameFailure = yield* Fiber.join(renaming);
+      expect(renameFailure).toBeInstanceOf(SubagentProcessError);
+      expect(renameFailure).toMatchObject({ code: "rename_outcome_uncertain" });
       expect((yield* service.status(run.id)).name).toBe("original");
     });
   });

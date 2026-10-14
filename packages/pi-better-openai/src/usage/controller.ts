@@ -5,7 +5,11 @@ import * as Layer from "effect/Layer";
 import type * as MutableRef from "effect/MutableRef";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { makeUsageRefreshController, timedDiagnosticResult } from "pi-cosmic-core";
+import {
+  makeUsageRefreshController,
+  timedDiagnosticResult,
+  UsageFetchOutcome,
+} from "pi-cosmic-core";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
 import { OpenAIConfigService } from "../config/store.ts";
@@ -73,25 +77,17 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
               "Codex credential lookup timed out.",
             );
             if (Result.isFailure(authAttempt))
-              return { _tag: "Failure", message: authAttempt.failure } as const;
+              return UsageFetchOutcome.Failure({ message: authAttempt.failure });
             const credentials = authAttempt.success;
-            if (credentials === undefined) return { _tag: "Missing" } as const;
+            if (credentials === undefined) return UsageFetchOutcome.Missing();
             const authPatch = { authFound: true, accountId: credentials.accountId } as const;
             const usage = yield* timedDiagnosticResult(
               requestCodexUsageWithCredentials(credentials, ctx.model?.id),
               "Codex usage request timed out.",
             );
             if (Result.isFailure(usage))
-              return {
-                _tag: "Failure",
-                message: usage.failure,
-                patch: authPatch,
-              } as const;
-            return {
-              _tag: "Success",
-              snapshot: usage.success,
-              patch: authPatch,
-            } as const;
+              return UsageFetchOutcome.Failure({ message: usage.failure, patch: authPatch });
+            return UsageFetchOutcome.Success({ snapshot: usage.success, patch: authPatch });
           }),
         formatStatusLine: (snapshot, cfg, fetchedAt) =>
           formatUsageSnapshot(snapshot, cfg.usage, fetchedAt),

@@ -9,6 +9,7 @@ import {
   settingsSubcommand,
   type SettingsCommandOptions,
 } from "../src/boundary/host-settings-command.ts";
+import { OwnedSurfaceOutcome } from "../src/boundary/host-surface.ts";
 
 interface DemoConfig {
   readonly mode: string;
@@ -116,7 +117,7 @@ describe("provider settings command shell", () => {
         yield* yieldUntil(() => started);
         current = false;
         status.resolve("diagnostics");
-        picker.resolve({ _tag: "Failed", cause: undefined });
+        picker.resolve(OwnedSurfaceOutcome.Failed({ cause: undefined }));
         yield* Fiber.join(work);
         expect(h.notify).not.toHaveBeenCalled();
       }),
@@ -145,7 +146,7 @@ describe("provider settings command shell", () => {
       expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("Usage"), "warning");
       yield* h.invoke("mode maybe");
       expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("mode"), "warning");
-      h.open.mockResolvedValueOnce({ _tag: "Blocked" });
+      h.open.mockResolvedValueOnce(OwnedSurfaceOutcome.Blocked());
       yield* h.invoke("");
       expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
       expect(h.apply).not.toHaveBeenCalled();

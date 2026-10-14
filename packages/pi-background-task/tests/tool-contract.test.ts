@@ -341,7 +341,7 @@ describe("registered background_task output", () => {
           undefined,
           ctx,
         ),
-      ).rejects.toMatchObject({ _tag: "BackgroundTaskNotFoundError" }),
+      ).rejects.toSatisfy(Predicate.isTagged("BackgroundTaskNotFoundError")),
     ),
   );
 

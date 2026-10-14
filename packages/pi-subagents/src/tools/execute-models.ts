@@ -9,7 +9,7 @@ import { profileCandidateLabel, PROFILE_IDS, type ProfileId } from "../profiles/
 import { SubagentProfileService } from "../profiles/service.ts";
 import { encodeSubagentContract } from "./contract-schema.ts";
 import { modelsContract } from "./discovery-contract.ts";
-import { makeCompactToolDetails } from "./details.ts";
+import { compactToolDetails } from "./details.ts";
 import { boundToolOutput } from "./format.ts";
 import type { ProfileCandidateDiscovery, SubagentProfileView } from "./model.ts";
 import type { SubagentModelsInput } from "./schema.ts";
@@ -87,7 +87,7 @@ export const executeModelsAction = (
           text: boundToolOutput(formatProfileDiscovery(profiles, fallbackProfile)),
         },
       ],
-      details: makeCompactToolDetails({ action: "models", profiles, fallbackProfile }),
+      details: compactToolDetails({ action: "models", profiles, fallbackProfile }),
       structuredContent: encodeSubagentContract(modelsContract(profiles, fallbackProfile)),
     };
   });

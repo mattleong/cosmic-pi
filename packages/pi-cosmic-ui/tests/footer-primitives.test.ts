@@ -7,7 +7,7 @@ import {
   modelFixture,
   plainTheme,
 } from "pi-cosmic-core/testing";
-import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
+import { defaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterComponent } from "../src/footer/component.ts";
 import { applyTextDecorations, orderedContributions } from "../src/footer/builtin-contributions.ts";
 import { contributionText, ranked } from "../src/footer/contributions.ts";
@@ -54,7 +54,7 @@ const footer = (options: {
 };
 
 it("keeps context visibility and decorator consumption independent of its rendered usage", () => {
-  const defaults = makeDefaultResolvedCosmicUiConfig();
+  const defaults = defaultResolvedCosmicUiConfig();
   const hidden = defaults.footer.order.filter((id) => id !== "context");
   const contributions: CosmicFooterTextContribution[] = [];
   let usage = { contextWindow: 100_000, tokens: 12_500, percent: 12.5 };
@@ -90,7 +90,7 @@ it("keeps context visibility and decorator consumption independent of its render
 it.each(["comfortable", "compact"] as const)(
   "honors configured repository order in %s density",
   (density) => {
-    const defaults = makeDefaultResolvedCosmicUiConfig();
+    const defaults = defaultResolvedCosmicUiConfig();
     const markers = { branch: "branch-marker", location: "project" };
     for (const order of [
       ["branch", "location"],
@@ -119,7 +119,7 @@ it("puts configured contributions first, by their last configured position, with
         : { kind: "text", id, region: "identity", text: id, order: 200 },
   );
   const originals = values.map((value) => ({ ...value }));
-  const defaults = makeDefaultResolvedCosmicUiConfig();
+  const defaults = defaultResolvedCosmicUiConfig();
   const ordered = orderedContributions(values, {
     ...defaults,
     footer: { ...defaults.footer, order: ["branch", "location", "branch"] },
@@ -134,7 +134,7 @@ it("orders an unordered contribution the same way on a line and across detail li
     { kind: "text", id: "ordered", region: "identity", text: "ordered", order: 300 },
   ];
   const lineOrder = ranked(values).map((value) => value.id);
-  const passOrder = orderedContributions(values, makeDefaultResolvedCosmicUiConfig()).map(
+  const passOrder = orderedContributions(values, defaultResolvedCosmicUiConfig()).map(
     (value) => value.id,
   );
   expect(lineOrder).toEqual(passOrder);
@@ -173,7 +173,7 @@ it.each([undefined, "", "short"])(
 );
 
 it("uses compact text for labeled contributions in compact mode", () => {
-  const defaults = makeDefaultResolvedCosmicUiConfig();
+  const defaults = defaultResolvedCosmicUiConfig();
   const rendered = footer({
     contributions: [
       {
@@ -199,7 +199,7 @@ it("renders a labeled detail once even when its id is extension-scoped", () => {
     contributions: [
       { kind: "text", id: "extension.usage", region: "details", text: "plain detail", label: "P" },
     ],
-    config: makeDefaultResolvedCosmicUiConfig,
+    config: defaultResolvedCosmicUiConfig,
     contextUsage: () => undefined,
   })
     .render(120)

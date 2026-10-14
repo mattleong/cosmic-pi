@@ -17,6 +17,7 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { anyString, stringContaining } from "../support/matchers.ts";
+import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 
 describe("SubagentService", () => {
   it.effect("checks current direct-parent capacity before completed respawn", () => {
@@ -341,10 +342,8 @@ describe("SubagentService", () => {
       yield* completeLocalRun(service, fake.controls[0]!, run.id);
 
       const failure = yield* service.resume(run.id).pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "backend_resume_unavailable",
-      });
+      expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(failure).toMatchObject({ code: "backend_resume_unavailable" });
       expect(failure.message).toContain("local/pi did not provide continuation state");
       expect(failure.message).not.toContain("session file");
     });

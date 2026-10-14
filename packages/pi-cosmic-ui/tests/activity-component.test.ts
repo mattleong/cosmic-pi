@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Match from "effect/Match";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
@@ -23,7 +24,11 @@ const hierarchy = Array.from({ length: 16 }, (_, index) =>
     index ? String(index - 1) : undefined,
     {
       title: "长い所有者の名前 ".repeat(8),
-      kind: index === 15 ? "question" : index === 14 ? "command" : "agent",
+      kind: Match.value(index).pipe(
+        Match.when(15, () => "question" as const),
+        Match.when(14, () => "command" as const),
+        Match.orElse(() => "agent" as const),
+      ),
     },
   ),
 );

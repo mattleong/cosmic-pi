@@ -4,7 +4,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-export const makeSupervisorRpcSerialization = (
+export const supervisorRpcSerialization = (
   maxBufferSize: number,
 ): RpcSerialization.RpcSerialization["Service"] => {
   const ndjson = RpcSerialization.makeNdjson({ maxBufferSize });

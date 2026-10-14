@@ -101,15 +101,14 @@ export function formatWindowedUsageLine(
   );
   const labels = visible.map((window) => `${window.label}: ${formatPercent(window.leftPercent)}`);
   const resets = options.showResetTimes
-    ? visible
-        .map((window) =>
-          formatShortReset(
-            window.label,
-            remainingResetSeconds(window.resetInSeconds, capturedAt, now),
-            now,
-          ),
-        )
-        .filter((value): value is string => value !== null)
+    ? visible.flatMap((window) => {
+        const reset = formatShortReset(
+          window.label,
+          remainingResetSeconds(window.resetInSeconds, capturedAt, now),
+          now,
+        );
+        return reset === null ? [] : [reset];
+      })
     : [];
   return `Usage: ${labels.length ? labels.join(" | ") : "--"}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
 }

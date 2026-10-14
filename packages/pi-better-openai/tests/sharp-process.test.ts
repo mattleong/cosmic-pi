@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import { nodeFilePlatformLayer, runBoundedProcessNode } from "pi-cosmic-core";
 import sharp from "sharp";
 import { makeSharpAdapter } from "../src/boundary/sharp.ts";
@@ -69,7 +70,7 @@ it.live("enforces the child stdin limit even without the parent guard", () =>
       timeoutMillis: 5_000,
       cleanupTimeoutMillis: 200,
     }).pipe(Effect.result);
-    if (result._tag === "Success") {
+    if (Result.isSuccess(result)) {
       expect(result.success.code).not.toBe(0);
       expect(result.success.stdout).toBe("");
       expect(result.success.stderr).toBe("");
@@ -155,7 +156,7 @@ it.live("cancellation confirms forced child exit before releasing shared admissi
     const pending = yield* adapter.decode(png).pipe(Effect.forkScoped);
     const pid = yield* ownPid(marker);
     const next = makeSharpAdapter();
-    expect(yield* next.decode(png).pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+    expect(Result.isFailure(yield* next.decode(png).pipe(Effect.result))).toBe(true);
     yield* Fiber.interrupt(pending);
     expect(yield* fs.readFileString(marker)).toContain("SIGTERM");
     expectExited(pid);
@@ -198,7 +199,7 @@ it.live("failed native cancellation cannot admit another decoder while its child
       spawned = true;
       return Effect.die("must not dispatch");
     });
-    expect(yield* next.decode(png).pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+    expect(Result.isFailure(yield* next.decode(png).pipe(Effect.result))).toBe(true);
     expect(spawned).toBe(false);
     expect(otherChildKills).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),

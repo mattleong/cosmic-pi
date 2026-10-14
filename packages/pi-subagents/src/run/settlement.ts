@@ -67,7 +67,7 @@ const reportPairStatus = (record: RunRecord, report: BackendReport) => {
   return report.sequence <= watermark.sequence ? "invalid" : "new";
 };
 
-export function makeRunSettlement(dependencies: RunSettlementDependencies) {
+export function settlementOperations(dependencies: RunSettlementDependencies) {
   const { ownerScope, withLock, publish, delivery, closeRecordScope, sendPeerNotices } =
     dependencies;
 
@@ -527,4 +527,4 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   };
 }
 
-export type RunSettlement = ReturnType<typeof makeRunSettlement>;
+export type RunSettlement = ReturnType<typeof settlementOperations>;

@@ -7,10 +7,11 @@ import type * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { nodePlatformLayer, provideBuiltLayer, SafeFile } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../src/boundary/sharp.ts";
-import { makeImageInputReader } from "../src/image/input.ts";
-import { makeImageOutput } from "../src/image/output.ts";
+import { imageInputReader } from "../src/image/input.ts";
+import { imageOutput } from "../src/image/output.ts";
 import { parseImageSse } from "../src/image/stream.ts";
 import { bytes, pngSharp } from "./helpers.ts";
+import { OpenAIImageError } from "../src/image/types.ts";
 
 const body = (value: string) => Stream.make(bytes(value));
 const dataEvent = (value: Schema.Json) => `data: ${JSON.stringify(value)}\n\n`;
@@ -137,7 +138,7 @@ describe("OpenAI image byte and path validation", () => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const data = "A".repeat(8 * 1024 * 1024);
-      const output = makeImageOutput({ fs, path, sharp: pngSharp });
+      const output = imageOutput({ fs, path, sharp: pngSharp });
       const result = yield* output.validatedGeneratedImage(
         { id: "image", status: "completed", data, mimeType: "image/png" },
         "png",
@@ -160,7 +161,7 @@ describe("OpenAI image byte and path validation", () => {
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
-      const output = makeImageOutput({ fs, path: pathService, sharp });
+      const output = imageOutput({ fs, path: pathService, sharp });
       for (const data of ["Y Q==", "AAA\n", "AAA\r", "AA\r\n", "A===", "AA=A", "===="])
         expect(
           yield* output
@@ -184,8 +185,8 @@ describe("OpenAI image byte and path validation", () => {
       const outside = path.join(root, "outside.png");
       yield* fs.makeDirectory(workspace);
       yield* fs.writeFile(outside, bytes("outside"));
-      const reader = makeImageInputReader({ fs, path, safeFile, sharp: pngSharp });
-      const output = makeImageOutput({ fs, path, sharp: pngSharp });
+      const reader = imageInputReader({ fs, path, safeFile, sharp: pngSharp });
+      const output = imageOutput({ fs, path, sharp: pngSharp });
 
       const inputFailure = yield* reader(["../outside.png"], workspace).pipe(Effect.flip);
       const outputFailure = yield* output
@@ -193,7 +194,8 @@ describe("OpenAI image byte and path validation", () => {
         .pipe(Effect.flip);
 
       expect(inputFailure.operation).toBe("input");
-      expect(outputFailure).toMatchObject({ _tag: "OpenAIImageError", operation: "save" });
+      expect(outputFailure).toBeInstanceOf(OpenAIImageError);
+      expect(outputFailure).toMatchObject({ operation: "save" });
       expect(yield* fs.exists(path.join(root, "escaped"))).toBe(false);
     }).pipe(provideBuiltLayer(fileLayer)),
   );

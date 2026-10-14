@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
-import { makeLocalClaudeDiagnostics } from "../src/backend/local-claude-diagnostics.ts";
+import { localClaudeDiagnostics } from "../src/backend/local-claude-diagnostics.ts";
 import type { PendingUserReplay } from "../src/backend/local-claude-input-delivery.ts";
 import { processError } from "../src/run/errors.ts";
 
@@ -21,7 +21,7 @@ const pending = (): PendingUserReplay => ({
 describe("Claude steering failure metadata", () => {
   it.effect("retains bounded category, timing, and native version without foreign content", () =>
     Effect.gen(function* () {
-      const diagnostics = makeLocalClaudeDiagnostics(() => [
+      const diagnostics = localClaudeDiagnostics(() => [
         "Bash",
         "secret-path-tool",
         "mcp__pi_subagents_supervisor__supervisor_question",
@@ -48,9 +48,7 @@ describe("Claude steering failure metadata", () => {
   );
   it.effect("ignores untrusted version text and caps timing and active count", () =>
     Effect.gen(function* () {
-      const diagnostics = makeLocalClaudeDiagnostics(() =>
-        Array.from({ length: 600 }, () => "Agent"),
-      );
+      const diagnostics = localClaudeDiagnostics(() => Array.from({ length: 600 }, () => "Agent"));
       yield* diagnostics.observe("init", "secret/path/token");
       yield* TestClock.adjust("2 days");
       const snapshot = yield* diagnostics.snapshot(pending(), "write-uncertain");

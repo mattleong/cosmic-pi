@@ -101,7 +101,7 @@ const runtimeClosedError = () =>
     message: "The subagent session runtime is closed.",
   });
 
-export function makeRunLaunch(dependencies: RunLaunchDependencies) {
+export function launchOperations(dependencies: RunLaunchDependencies) {
   const {
     backendRegistry,
     writerLeases,

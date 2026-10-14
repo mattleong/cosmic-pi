@@ -1,3 +1,4 @@
+import * as Match from "effect/Match";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
 import type {
   SubagentContextMode,
@@ -195,12 +196,11 @@ const resolveKnownProfileRoute = (
   startCandidateIndex: number,
 ): ProfileResolution => {
   const { defaultEffort }: ProfileDefinition = PROFILE_DEFINITIONS[profile];
-  const routeLabel =
-    routeSource === "builtin"
-      ? "built-in route"
-      : routeSource === "session"
-        ? "session override"
-        : `${routeSource} route`;
+  const routeLabel = Match.value(routeSource).pipe(
+    Match.when("builtin", () => "built-in route"),
+    Match.when("session", () => "session override"),
+    Match.orElse((source) => `${source} route`),
+  );
   const attempts: ProfileCandidateAttempt[] = [];
   const skippedCandidates: SkippedProfileCandidate[] = [];
   let pendingSkipped: SkippedProfileCandidate[] = [];

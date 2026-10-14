@@ -1,3 +1,4 @@
+import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
@@ -39,11 +40,13 @@ export interface QuestionNotificationReceipt {
 const nextRetryDelay = (delayMillis: number, reset: boolean): number =>
   reset ? COMPLETION_RETRY_INITIAL_MILLIS : Math.min(COMPLETION_RETRY_MAX_MILLIS, delayMillis * 2);
 
-type ActionDeliveryState =
-  | { readonly _tag: "Idle" }
-  | { readonly _tag: "Retry"; readonly immediate: boolean; readonly delayMillis: number };
+type ActionDeliveryState = Data.TaggedEnum<{
+  Idle: Record<never, never>;
+  Retry: { readonly immediate: boolean; readonly delayMillis: number };
+}>;
+const ActionDeliveryState = Data.taggedEnum<ActionDeliveryState>();
 
-export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.make")(function* (
+export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")(function* (
   dependencies: RunNotificationDeliveryDependencies,
 ) {
   const { ownerScope, records, withLock, withCompletionGate, notify } = dependencies;
@@ -126,7 +129,7 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
     ).pipe(
       Effect.flatMap((notifications) =>
         notifications.length === 0
-          ? Effect.succeed<ActionDeliveryState>({ _tag: "Idle" })
+          ? Effect.succeed(ActionDeliveryState.Idle())
           : Effect.forEach(
               notifications,
               (notification) =>
@@ -153,18 +156,17 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
                       actionRetryDelayMillis,
                       pendingActionNotifications.size === 0 || acknowledged > 0,
                     );
-                    if (pendingActionNotifications.size === 0) return { _tag: "Idle" };
+                    if (pendingActionNotifications.size === 0) return ActionDeliveryState.Idle();
                     const immediate = [...pendingActionNotifications.values()].some(
                       (notification) =>
                         !attempted.has(notification) &&
                         actionRelevant(notification) &&
                         !questionClaims.has(notification.id),
                     );
-                    return {
-                      _tag: "Retry",
+                    return ActionDeliveryState.Retry({
                       immediate,
                       delayMillis: actionRetryDelayMillis,
-                    };
+                    });
                   }),
                 ),
               ),
@@ -175,16 +177,19 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
 
   const deliverPendingActions = (): Effect.Effect<void> =>
     flushPendingActions.pipe(
-      Effect.flatMap((state) => {
-        if (state._tag === "Idle") return Effect.void;
-        const retry = state.immediate
-          ? Effect.void
-          : Effect.raceFirst(
-              Effect.sleep(Duration.millis(state.delayMillis)),
-              Latch.await(actionWake),
-            );
-        return retry.pipe(Effect.flatMap(() => deliverPendingActions()));
-      }),
+      Effect.flatMap(
+        ActionDeliveryState.$match({
+          Idle: () => Effect.void,
+          Retry: ({ immediate, delayMillis }) =>
+            (immediate
+              ? Effect.void
+              : Effect.raceFirst(
+                  Effect.sleep(Duration.millis(delayMillis)),
+                  Latch.await(actionWake),
+                )
+            ).pipe(Effect.flatMap(() => deliverPendingActions())),
+        }),
+      ),
     );
 
   const actionWorker = Effect.forever(
@@ -261,6 +266,4 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
   };
 });
 
-export type RunNotificationDelivery = Effect.Success<
-  ReturnType<typeof makeRunNotificationDelivery>
->;
+export type RunNotificationDelivery = Effect.Success<ReturnType<typeof notificationDelivery>>;

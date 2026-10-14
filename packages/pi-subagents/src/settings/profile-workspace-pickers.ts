@@ -2,15 +2,15 @@ import type { SearchableSelectPage } from "pi-cosmic-ui/manager/searchable-selec
 import { PROFILE_IDS, type ProfileCandidate } from "../profiles/model.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
 import { updateCandidateControls, updateCandidateModel } from "./profile-route-editor.ts";
-import { makeProfileModelPickerPage } from "./ui/model-picker.ts";
+import { profileModelPickerPage } from "./ui/model-picker.ts";
 import {
   candidateFastModeAvailable,
   runWithChoice,
   type SelectableCandidateField,
 } from "./ui/profile-workspace-model.ts";
 import {
-  makeCandidateFieldSelector,
-  makeProfileSearchSelector,
+  candidateFieldSelector,
+  profileSearchSelector,
   selectHost,
   shortTargetLabel,
 } from "./ui/profile-workspace-selectors.ts";
@@ -64,7 +64,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
   ): void {
     const candidateIndex = this.candidateIndex;
     this.showSelectPage(
-      makeCandidateFieldSelector({
+      candidateFieldSelector({
         ...selectHost(this.options),
         profile: this.profile(),
         candidateIndex,
@@ -161,7 +161,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
           this.notice("warning", picker.warning ?? "No models are available for this selection.");
           return undefined;
         }
-        this.modelPicker = makeProfileModelPickerPage({
+        this.modelPicker = profileModelPickerPage({
           ...selectHost(this.options),
           choices: picker.choices,
           scopedChoices: picker.scopedChoices,
@@ -215,7 +215,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
 
   protected openProfileSearch(): void {
     this.showSelectPage(
-      makeProfileSearchSelector({
+      profileSearchSelector({
         ...selectHost(this.options),
         inspection: this.inspection,
         current: this.profile(),

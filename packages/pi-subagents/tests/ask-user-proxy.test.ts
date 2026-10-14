@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import {
@@ -183,7 +184,7 @@ describe("structured questionnaire proxy boundary", () => {
         })
         .then((outcome) => {
           expect(outcome._tag).toBe(ending === "answer" ? "Success" : "Failure");
-          if (outcome._tag === "Failure")
+          if (Result.isFailure(outcome))
             expect(outcome.failure).toBeInstanceOf(InvalidSubagentRequestError);
           return undefined;
         });

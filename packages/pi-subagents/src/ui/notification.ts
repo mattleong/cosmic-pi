@@ -3,6 +3,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Match from "effect/Match";
 import { countLabel, stripTerminalControls } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
@@ -87,14 +88,18 @@ const notificationRow = (
   };
 };
 
-const expansionLabel = (details: NotificationDetails | undefined): string =>
-  details?.kind === "question"
-    ? "question"
-    : details?.kind === "completed"
-      ? details.failed === details.total
-        ? countLabel(details.total, "failure detail")
-        : countLabel(details.total, "report")
-      : "message";
+const expansionLabel = (details: NotificationDetails | undefined): string => {
+  if (details === undefined) return "message";
+  return Match.value(details).pipe(
+    Match.when({ kind: "question" }, () => "question"),
+    Match.when({ kind: "completed" }, (completed) =>
+      completed.failed === completed.total
+        ? countLabel(completed.total, "failure detail")
+        : countLabel(completed.total, "report"),
+    ),
+    Match.orElse(() => "message"),
+  );
+};
 
 export function renderSubagentNotification(
   input: Parameters<MessageRenderer>[0],

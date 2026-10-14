@@ -14,6 +14,7 @@ import {
   settingsSubcommand,
   withInvocationAuthority,
 } from "pi-cosmic-ui/boundary/host-settings-command";
+import { OwnedSurfaceOutcome } from "pi-cosmic-ui/boundary/host-surface";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
 import {
   createSettingsGroupSubmenu,
@@ -106,10 +107,10 @@ export function registerSettingsController(
         readRedactedConfig(ctx)
           .catch(() => ({}))
           .then((initialRedactedConfig) => {
-            if (!isCurrent()) return { _tag: "Settled", value: undefined } as const;
+            if (!isCurrent()) return OwnedSurfaceOutcome.Settled({ value: undefined });
             let redactedConfig = initialRedactedConfig;
             const initialConfig = session.config();
-            if (!initialConfig) return { _tag: "Blocked" } as const;
+            if (!initialConfig) return OwnedSurfaceOutcome.Blocked();
             let cfg = initialConfig;
             const imageDescriptors = imageSettingDescriptors(
               invokeHostCallback(

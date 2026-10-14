@@ -11,7 +11,7 @@ import {
 import { captureExplicitPreferenceArgument } from "./boundary/host-cli.ts";
 import { captureSelectedModel, captureThinkingLevel } from "./boundary/host-model.ts";
 import { captureDirectorySession } from "./boundary/host-session.ts";
-import { makeDirectoryModelsLayer } from "./layer.ts";
+import { directoryModelsLayer } from "./layer.ts";
 import {
   DirectoryModelPreferenceService,
   WRITE_WARNING,
@@ -29,7 +29,7 @@ export function registerDirectoryModelsApplication(
     makeRuntime: (input: DirectoryModelSessionInput) =>
       makePiManagedRuntime(
         pi,
-        makeDirectoryModelsLayer(input, (message) => warn(input.ctx, message)),
+        directoryModelsLayer(input, (message) => warn(input.ctx, message)),
         { agentDirectory: getAgentDir, packageName: "pi-directory-models" },
       ),
     startup: () => DirectoryModelPreferenceService.use((service) => service.initialize),

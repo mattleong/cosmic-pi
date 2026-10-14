@@ -1,3 +1,5 @@
+import * as Match from "effect/Match";
+import * as Predicate from "effect/Predicate";
 import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
@@ -121,12 +123,13 @@ export class TaskManagerComponent implements Component {
       reservedKeys: TASK_MANAGER_SHORTCUTS,
     });
     if (!resolution) return;
-    if (resolution._tag === "Action") {
-      this.handleAction(resolution.action, tasks, selected);
-      return;
-    }
-    this.handleShortcut(resolution.key, tasks, selected);
-    this.options.requestRender();
+    Match.valueTags(resolution, {
+      Action: ({ action }) => this.handleAction(action, tasks, selected),
+      Shortcut: ({ key }) => {
+        this.handleShortcut(key, tasks, selected);
+        this.options.requestRender();
+      },
+    });
   }
 
   private handleConfirmation(
@@ -143,7 +146,7 @@ export class TaskManagerComponent implements Component {
     const hasStableTarget = pending.action === "clear" || selected?.id === pending.id;
     const confirmed =
       hasStableTarget &&
-      ((resolution?._tag === "Action" && resolution.action === "confirm") ||
+      ((Predicate.isTagged(resolution, "Action") && resolution.action === "confirm") ||
         confirmedReservedShortcut(resolution, data, key));
     if (confirmed) {
       this.pending = undefined;
@@ -151,7 +154,7 @@ export class TaskManagerComponent implements Component {
       else if (selected) this.options.stop(selected.id);
     } else if (
       !hasStableTarget ||
-      (resolution?._tag === "Action" && resolution.action === "cancel")
+      (Predicate.isTagged(resolution, "Action") && resolution.action === "cancel")
     )
       this.pending = undefined;
   }
@@ -193,11 +196,11 @@ export class TaskManagerComponent implements Component {
         rowCount: tasks.length,
         hasSelection: selected !== undefined,
       });
-      if (result._tag === "Close") {
+      if (Predicate.isTagged(result, "Close")) {
         this.options.close();
         return;
       }
-      if (result._tag === "Update") {
+      if (Predicate.isTagged(result, "Update")) {
         if (result.scrolledDetail && this.shell.state.detailScroll > 0) this.follow = false;
         if (result.movedSelection) this.select(result.state.selected, tasks);
       }
@@ -224,11 +227,12 @@ export class TaskManagerComponent implements Component {
       top: this.options.theme.fg("accent", title),
       bottom: footerText,
       body: (bodyHeight) =>
-        this.shell.state.layout === "wide"
-          ? this.renderWide(safeWidth, bodyHeight, tasks, selected)
-          : this.shell.state.layout === "stacked"
-            ? this.renderStacked(safeWidth, bodyHeight, tasks, selected)
-            : this.renderNarrow(safeWidth, bodyHeight, tasks, selected),
+        Match.value(this.shell.state.layout).pipe(
+          Match.when("wide", () => this.renderWide(safeWidth, bodyHeight, tasks, selected)),
+          Match.when("stacked", () => this.renderStacked(safeWidth, bodyHeight, tasks, selected)),
+          Match.when("narrow", () => this.renderNarrow(safeWidth, bodyHeight, tasks, selected)),
+          Match.exhaustive,
+        ),
     });
   }
 

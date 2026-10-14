@@ -7,7 +7,7 @@ import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
-import { makeHostNotifier } from "../src/boundary/host-notifier.ts";
+import { hostNotifier } from "../src/boundary/host-notifier.ts";
 import { registerParentWake } from "../src/boundary/host-parent-wake.ts";
 import type { SubagentProjection } from "../src/run/model.ts";
 import { beforeAgentStartEvent } from "./fixtures/pi-host.ts";
@@ -44,7 +44,7 @@ const harness = (initial: SubagentProjection = projectionOf([])) => {
   const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
   const host = recordingExtensionHost({}, { sendMessage });
   const wake = registerParentWake(host.pi, { projection: () => projection, drain });
-  const notify = makeHostNotifier(host.pi, { triggerTurn: wake.mayStartTurn });
+  const notify = hostNotifier(host.pi, { triggerTurn: wake.mayStartTurn });
   const notices = vi.fn();
   const ctx = (mode: ExtensionContext["mode"] = "tui"): ExtensionContext =>
     extensionContextFixture({ mode, hasUI: mode === "tui", ui: { notify: notices } });

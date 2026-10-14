@@ -70,11 +70,11 @@ export const createNativeModelOptions = (
   models: ReadonlyArray<NativeRuntimeModel>,
   currentSelector: string | undefined,
 ): ProfileModelOption[] =>
-  models
-    .filter((model) => isSafeNativeModelSelector(model.selector))
-    .map((model) => {
-      const fastModeAvailable = model.supportedServiceTiers.includes(FAST_SERVICE_TIER);
-      return {
+  models.flatMap((model) => {
+    if (!isSafeNativeModelSelector(model.selector)) return [];
+    const fastModeAvailable = model.supportedServiceTiers.includes(FAST_SERVICE_TIER);
+    return [
+      {
         provider: "profile",
         id: model.selector,
         selector: model.selector,
@@ -83,8 +83,9 @@ export const createNativeModelOptions = (
         searchText: `${model.selector} ${model.label} ${model.description ?? ""}`,
         supportedEfforts: model.supportedEfforts,
         fastModeAvailable,
-      };
-    });
+      },
+    ];
+  });
 
 export const retainUnavailableCurrent = (
   current: string,
@@ -123,7 +124,7 @@ export interface ProfileModelPickerPageOptions extends SearchableSelectHostOptio
   readonly cancel: () => void;
 }
 
-export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOptions) => {
+export const profileModelPickerPage = (options: ProfileModelPickerPageOptions) => {
   const { context, initialSelection, scopedChoices, targetLabel } = options;
   const optionLabel = profileRouteOptionLabel(context.candidateIndex);
   return new ModelPickerPage({

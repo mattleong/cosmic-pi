@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { makeThroughputMeter } from "../src/working/throughput.ts";
+import { createThroughputMeter } from "../src/working/throughput.ts";
 
 describe("main-agent call throughput", () => {
   it("requires an observed call start and enough time for a live estimate", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     meter.output(400);
     meter.finish(1_000, 100);
     expect(meter.rate(1_000)).toBeUndefined();
@@ -14,7 +14,7 @@ describe("main-agent call throughput", () => {
   });
 
   it("includes pre-output latency instead of assigning the first chunk zero generation time", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     meter.start(0);
     meter.output(400);
     expect(meter.rate(10_000)).toEqual({ kind: "live", tokensPerSecond: 10 });
@@ -23,7 +23,7 @@ describe("main-agent call throughput", () => {
   });
 
   it("reconciles buffered and hidden-only output with final reported counts", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     meter.start(0);
     meter.output(400);
     meter.finish(1_000, 500);
@@ -34,7 +34,7 @@ describe("main-agent call throughput", () => {
   });
 
   it("weights completed samples by their own durations and excludes inter-call/tool time", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     meter.start(0);
     meter.finish(1_000, 100);
     expect(meter.rate(90_000)).toEqual({ kind: "completed", tokensPerSecond: 100 });
@@ -44,7 +44,7 @@ describe("main-agent call throughput", () => {
   });
 
   it("never mixes a current estimate or an incomplete call into the completed average", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     meter.start(0);
     meter.finish(1_000, 100);
     meter.start(2_000);
@@ -56,7 +56,7 @@ describe("main-agent call throughput", () => {
   });
 
   it("omits unknown, zero and invalid usage along with their durations", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     meter.start(0);
     meter.finish(1_000, 100);
     for (const usage of [undefined, 0, -1, 1.5, NaN, Infinity, Number.MAX_VALUE]) {
@@ -67,7 +67,7 @@ describe("main-agent call throughput", () => {
   });
 
   it("discards zero, negative and invalid durations rather than storing unmatched tokens", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     for (const end of [1_000, 0, NaN, Infinity]) {
       meter.start(1_000);
       meter.finish(end, 1_000);
@@ -78,7 +78,7 @@ describe("main-agent call throughput", () => {
   });
 
   it("settles a call once and discards unfinished predecessors at the next start", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     meter.start(0);
     meter.output(4_000);
     meter.start(2_000);
@@ -90,7 +90,7 @@ describe("main-agent call throughput", () => {
   });
 
   it("includes streaming silence and clears every sample at a run reset", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     meter.start(0);
     meter.output(400);
     expect(meter.rate(1_000)?.tokensPerSecond).toBe(100);
@@ -103,7 +103,7 @@ describe("main-agent call throughput", () => {
   });
 
   it("preserves the last complete aggregate if adding a sample would overflow", () => {
-    const meter = makeThroughputMeter();
+    const meter = createThroughputMeter();
     meter.start(0);
     meter.finish(1_000, Number.MAX_SAFE_INTEGER);
     meter.start(2_000);

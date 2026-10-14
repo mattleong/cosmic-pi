@@ -34,6 +34,7 @@ import {
   setPlainPreviewSettings,
 } from "../support/renderer-host";
 import type { CodePreviewRenderers } from "../../src/tools/renderers/shared/types";
+import * as Match from "effect/Match";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => {
@@ -68,11 +69,11 @@ for (const name of ["bash", "codemode", "tool_search"] as const)
         assert.equal(renderers?.renderShell, "self");
         const row = hostToolRow(
           name,
-          name === "bash"
-            ? { command: "echo EXACT_SOURCE" }
-            : name === "codemode"
-              ? { code: "text('EXACT_SOURCE');" }
-              : { query: "EXACT_SOURCE" },
+          Match.value(name).pipe(
+            Match.when("bash", () => ({ command: "echo EXACT_SOURCE" })),
+            Match.when("codemode", () => ({ code: "text('EXACT_SOURCE');" })),
+            Match.orElse(() => ({ query: "EXACT_SOURCE" })),
+          ),
           renderers,
           { result: output },
         );

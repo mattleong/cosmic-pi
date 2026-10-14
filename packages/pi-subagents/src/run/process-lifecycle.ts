@@ -13,7 +13,7 @@ import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
 import type { WriterPreparation } from "./writer-preparation.ts";
 
-export function makeRunProcessControls(withLock: WithRunLock) {
+export function processControlOperations(withLock: WithRunLock) {
   const runControl = <A>(
     record: RunRecord,
     use: (handle: BackendHandle) => Effect.Effect<A, SubagentError>,
@@ -51,7 +51,7 @@ export function makeRunProcessControls(withLock: WithRunLock) {
   };
 }
 
-export type RunProcessControls = ReturnType<typeof makeRunProcessControls>;
+export type RunProcessControls = ReturnType<typeof processControlOperations>;
 
 export interface RunProcessInitializerDependencies extends Pick<
   RunContext,
@@ -65,7 +65,7 @@ export interface RunProcessInitializerDependencies extends Pick<
   readonly failRun: RunSettlement["failRun"];
 }
 
-export function makeRunProcessInitializer(dependencies: RunProcessInitializerDependencies) {
+export function processInitializer(dependencies: RunProcessInitializerDependencies) {
   const {
     ownerScope,
     withLock,
@@ -199,4 +199,4 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
   return (record: RunRecord) => installProcess(record).pipe(Effect.andThen(initialize(record)));
 }
 
-export type RunProcessInitializer = ReturnType<typeof makeRunProcessInitializer>;
+export type RunProcessInitializer = ReturnType<typeof processInitializer>;

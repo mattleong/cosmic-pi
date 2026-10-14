@@ -43,14 +43,14 @@ import {
   type WaitForBackgroundTask,
 } from "./model.ts";
 import { OutputMatcher } from "./output-match.ts";
-import { makeTaskPublication, monotonicMillis } from "./publication.ts";
+import { startTaskPublication, monotonicMillis } from "./publication.ts";
 import {
   activeRecords,
   clearFinished,
   completedSnapshot,
   enforceRetainedLogBudget,
   logFields,
-  makeTaskRecord,
+  taskRecord,
   registryProjection,
   trimRetention,
   wakeTaskRecord,
@@ -114,7 +114,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   );
 
   const withLock = Semaphore.withPermit(lock);
-  const { publish, publishOutput } = yield* makeTaskPublication(lock, () =>
+  const { publish, publishOutput } = yield* startTaskPublication(lock, () =>
     options.publish?.(registryProjection(tasks)),
   );
   const settle = (record: TaskRecord, snapshot: BackgroundTaskStatus) => {
@@ -318,7 +318,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             const id = `task-${nextId}`;
             nextId += 1;
             const startedAt = yield* Clock.currentTimeMillis;
-            const created = makeTaskRecord({
+            const created = taskRecord({
               id,
               command,
               cwd,
@@ -338,12 +338,12 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         );
         return yield* restore(Deferred.await(record.handleReady)).pipe(
           Effect.andThen(Effect.sync(() => record.snapshot)),
-          Effect.mapError((error) =>
-            error._tag === "BackgroundRuntimeClosedError"
-              ? error
-              : error.reason === "cwd"
+          Effect.catchTag("LocalProcessError", (error) =>
+            Effect.fail(
+              error.reason === "cwd"
                 ? new InvalidBackgroundCwdError({ cwd, message: error.message })
                 : new BackgroundSpawnError({ message: error.message }),
+            ),
           ),
         );
       }),
@@ -354,12 +354,11 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     withLock(
       Effect.sync(() =>
         sortTasksByActivity(
-          [...tasks.values()]
-            .map((record) => record.snapshot)
-            .filter(
-              (snapshot) =>
-                filter === "all" || isActiveTaskState(snapshot.state) === (filter === "active"),
-            ),
+          [...tasks.values()].flatMap(({ snapshot }) =>
+            filter === "all" || isActiveTaskState(snapshot.state) === (filter === "active")
+              ? [snapshot]
+              : [],
+          ),
         ),
       ),
     );

@@ -1,9 +1,11 @@
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { applyGitNumstat, parseGitStatus } from "../footer/git.ts";
-import type { PiExecContract } from "../boundary/host-exec.ts";
+import { PiExec, type PiExecContract } from "../boundary/host-exec.ts";
 
-export const makeRepositoryProbe = (exec: PiExecContract) => ({
+const repositoryProbe = (exec: PiExecContract) => ({
   git: Effect.fn("RepositoryProbe.git")(function* (cwd: string, isCurrent: () => boolean) {
     const status = yield* exec.exec(
       "git",
@@ -34,3 +36,10 @@ export const makeRepositoryProbe = (exec: PiExecContract) => ({
     Effect.withSpan("pi-cosmic-ui.probe.pull-request"),
   ),
 });
+
+export class RepositoryProbe extends Context.Service<RepositoryProbe>()(
+  "pi-cosmic-ui/probe/repository-probe/RepositoryProbe",
+  { make: PiExec.useSync(repositoryProbe) },
+) {
+  static readonly layer = Layer.effect(this, this.make);
+}

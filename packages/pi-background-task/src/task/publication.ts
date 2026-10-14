@@ -10,7 +10,7 @@ export const monotonicMillis = Effect.map(Clock.monotonicTimeNanos, (nanos) =>
   Number(nanos / 1_000_000n),
 );
 
-export const makeTaskPublication = (lock: Semaphore.Semaphore, emit: () => void) =>
+export const startTaskPublication = (lock: Semaphore.Semaphore, emit: () => void) =>
   Effect.gen(function* () {
     const withLock = Semaphore.withPermit(lock);
     let outputPending = false;

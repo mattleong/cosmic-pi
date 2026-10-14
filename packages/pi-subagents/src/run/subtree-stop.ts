@@ -14,7 +14,7 @@ interface RunSubtreeStopDependencies extends Pick<
   readonly stopRun: (id: string) => Effect.Effect<SubagentRunView, SubagentError>;
 }
 
-export const makeRunSubtreeStop =
+export const subtreeStopper =
   (dependencies: RunSubtreeStopDependencies) =>
   (
     id: string,

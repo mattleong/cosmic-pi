@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeProfileOverrideHandoff } from "../src/application/profile-override-handoff.ts";
+import { createProfileOverrideHandoff } from "../src/application/profile-override-handoff.ts";
 import { completeBaseline, profileCandidate as candidate } from "./fixtures/profiles.ts";
 
 const seed = (revision: number, model: string) => ({
@@ -10,7 +10,7 @@ const seed = (revision: number, model: string) => ({
 
 describe("session profile override handoff", () => {
   it("survives an internal tree generation and rejects stale runtime publication", () => {
-    const handoff = makeProfileOverrideHandoff();
+    const handoff = createProfileOverrideHandoff();
     expect(handoff.captureAuthoritative()).toBeUndefined();
     const first = handoff.open();
     handoff.publish(first, seed(1, "openai/tree"));
@@ -32,7 +32,7 @@ describe("session profile override handoff", () => {
   });
 
   it("clears at a real session lifecycle boundary and retires the open runtime", () => {
-    const handoff = makeProfileOverrideHandoff();
+    const handoff = createProfileOverrideHandoff();
     const owner = handoff.open();
     handoff.publish(owner, { revision: 4, overrides: { scout: { candidates: [] } } });
     handoff.clear();

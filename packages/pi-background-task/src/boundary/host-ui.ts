@@ -10,7 +10,7 @@ const STATUS_KEY = "pi-background-task";
 
 export type BackgroundTaskProjectionBridge = ProjectionBridge<BackgroundTaskProjection>;
 
-export function makeProjectionBridge(
+export function taskProjectionBridge(
   events?: ExtensionAPI["events"],
 ): BackgroundTaskProjectionBridge {
   return makeHostProjectionBridge({

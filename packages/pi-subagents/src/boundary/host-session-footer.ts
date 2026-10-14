@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hasTerminalUI } from "pi-cosmic-core";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
-import { createCosmicFooterClient, makeHostStateWatch } from "pi-cosmic-ui/client";
+import { createCosmicFooterClient, createHostStateWatch } from "pi-cosmic-ui/client";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { SESSION_FOOTER_ID, sessionFooterContribution } from "../ui/session-footer.ts";
 
@@ -17,7 +17,7 @@ export interface SubagentSessionFooter {
  * Shows Current Session's profile set and delegation mode in the Cosmic UI footer, or as a
  * plain Pi status entry when Cosmic UI is not active. Hidden footer items stay hidden in both.
  */
-export const makeSubagentSessionFooter = (
+export const subagentSessionFooter = (
   events: ExtensionAPI["events"] | undefined,
 ): SubagentSessionFooter => {
   const client = createCosmicFooterClient(events, OWNER);
@@ -39,7 +39,7 @@ export const makeSubagentSessionFooter = (
     }
     setStatus(ctx, terminal && client.active ? undefined : contribution?.text);
   };
-  const watch = makeHostStateWatch(client, paint);
+  const watch = createHostStateWatch(client, paint);
   return {
     show: (ctx, snapshot) => {
       shown = { ctx, snapshot };

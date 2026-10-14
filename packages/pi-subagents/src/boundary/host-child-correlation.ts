@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { ParentContactError } from "./local-pi-ipc.ts";
 
-export const makeParentCorrelations = <A>() => {
+export const parentCorrelations = <A>() => {
   const waiters = new Map<string, Deferred.Deferred<A, ParentContactError>>();
   const deleteExact = (requestId: string, waiter: Deferred.Deferred<A, ParentContactError>) => {
     if (waiters.get(requestId) !== waiter) return false;

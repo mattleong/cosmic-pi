@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import { vi } from "vitest";
 import { provideBuiltLayer, SafeFile } from "../index.ts";
 import { nodeFsPromises, nodePath } from "../src/platform/node-builtins.ts";
@@ -81,7 +82,7 @@ for (const change of ["growth", "shrink", "growth after EOF", "read failure"])
       const safeFile = yield* SafeFile;
       const result = yield* Effect.result(safeFile.readContainedRegularFile(file, root, 4));
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
+      if (Result.isFailure(result)) {
         expect(result.failure._tag).toBe("SafeFileError");
         expect(String(result.failure)).not.toContain(root);
       }
@@ -162,7 +163,7 @@ it.live("fails safely when the file exceeds the configured limit", () =>
     const safeFile = yield* SafeFile;
     const result = yield* Effect.result(safeFile.readContainedRegularFile(file, root, 2));
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(String(result.failure)).not.toContain(file);
+    if (Result.isFailure(result)) expect(String(result.failure)).not.toContain(file);
   }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
 );
 
@@ -188,7 +189,7 @@ it.live("rejects symlinked roots, leaf symlinks, and files outside the containme
     ]) {
       const result = yield* Effect.result(attempt);
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
+      if (Result.isFailure(result)) {
         expect(String(result.failure)).not.toContain(root);
       }
     }

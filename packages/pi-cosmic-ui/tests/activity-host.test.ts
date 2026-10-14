@@ -26,7 +26,7 @@ import {
 } from "../src/activity/protocol.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
 import type { ActivityError, ActivityServiceContract } from "../src/activity/service.ts";
-import { makeActivityHost } from "../src/boundary/host-activity.ts";
+import { createActivityHost } from "../src/boundary/host-activity.ts";
 import { ActivityComponent } from "../src/activity/component.ts";
 import { screenViewport } from "../src/manager/viewport.ts";
 import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
@@ -45,7 +45,7 @@ const item = (id = "a"): ActivityItem => ({
 function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal") {
   const { events: bus, emitted } = eventBus();
   const work: Array<Effect.Effect<void, ActivityError>> = [];
-  const host = makeActivityHost(extensionApiFixture({ events: bus }), (effect) => {
+  const host = createActivityHost(extensionApiFixture({ events: bus }), (effect) => {
     work.push(effect);
   });
   let redraws = 0;

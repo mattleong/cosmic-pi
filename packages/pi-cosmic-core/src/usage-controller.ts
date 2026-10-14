@@ -1,18 +1,20 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import type * as Result from "effect/Result";
 import type * as Scope from "effect/Scope";
 import * as Tracer from "effect/Tracer";
 import type { RefreshRequest } from "./coordination/refresh-coordinator.ts";
-import { makeSubscriptionRefresh } from "./coordination/subscription-refresh.ts";
+import { createSubscriptionRefresh } from "./coordination/subscription-refresh.ts";
 import { AgentDirectory } from "./platform/agent-directory.ts";
 import { JsonHttpClient } from "./platform/json-http.ts";
 import { invokeHostCallback } from "./host-session.ts";
-import { makeFrozenProjection } from "./projection.ts";
+import { frozenProjection } from "./projection.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./security.ts";
 import { formatTimestampOrNever } from "./subscription-format.ts";
 import { withUsageEligibility, type UsageProjectionBase } from "./usage-projection.ts";
@@ -34,21 +36,36 @@ export interface UsageControllerConfig {
 
 type UsageProviderRequirements = JsonHttpClient;
 
-export type UsageFetchOutcome<Snapshot, Patch> =
-  | { readonly _tag: "Missing" }
-  | { readonly _tag: "Failure"; readonly message: string; readonly patch?: Patch }
-  | { readonly _tag: "Success"; readonly snapshot: Snapshot; readonly patch: Patch };
+export type UsageFetchOutcome<Snapshot, Patch> = Data.TaggedEnum<{
+  Missing: Record<never, never>;
+  Failure: { readonly message: string; readonly patch?: Patch };
+  Success: { readonly snapshot: Snapshot; readonly patch: Patch };
+}>;
+
+interface UsageFetchOutcomeDefinition extends Data.TaggedEnum.WithGenerics<2> {
+  readonly taggedEnum: UsageFetchOutcome<this["A"], this["B"]>;
+}
+
+export const UsageFetchOutcome = Data.taggedEnum<UsageFetchOutcomeDefinition>();
 
 const hostHasUi = (ctx: ExtensionContext): boolean => invokeHostCallback(() => ctx.hasUI, true);
 
-type RefreshValue<Snapshot, Patch> =
-  | { readonly _tag: "Skipped" }
-  | { readonly _tag: "Disabled"; readonly notify: boolean }
-  | { readonly _tag: "Hidden"; readonly notify: boolean }
-  | (UsageFetchOutcome<Snapshot, Patch> & {
-      readonly notify: boolean;
-      readonly fetchedAt: number;
-    });
+type RefreshValue<Snapshot, Patch> = Data.TaggedEnum<{
+  Skipped: Record<never, never>;
+  Disabled: { readonly notify: boolean };
+  Hidden: { readonly notify: boolean };
+  Fetched: {
+    readonly outcome: UsageFetchOutcome<Snapshot, Patch>;
+    readonly notify: boolean;
+    readonly fetchedAt: number;
+  };
+}>;
+
+interface RefreshValueDefinition extends Data.TaggedEnum.WithGenerics<2> {
+  readonly taggedEnum: RefreshValue<this["A"], this["B"]>;
+}
+
+const RefreshValue = Data.taggedEnum<RefreshValueDefinition>();
 
 export interface UsageRefreshControllerOptions<
   P extends UsageProjectionBase<Resolved, Snapshot>,
@@ -134,7 +151,7 @@ export const makeUsageRefreshController = <
     const agentDir = yield* AgentDirectory;
     const authPath = path.join(agentDir, "auth.json");
     const mergeState = mergeProjection<Resolved, Snapshot, P>;
-    const state = yield* makeFrozenProjection<P, P>(
+    const state = yield* frozenProjection<P, P>(
       mergeState(options.initialProjection(), { config: options.initialConfig, authPath }),
       (current) => current,
       (published) => {
@@ -181,6 +198,47 @@ export const makeUsageRefreshController = <
         .pipe(Effect.orDie, Effect.asVoid);
     yield* provideDependencies(synchronize(true));
 
+    const installState = (next: (current: P) => P, notify: boolean) =>
+      Effect.gen(function* () {
+        const latest = yield* updateState(next);
+        yield* notifyChanged;
+        if (notify) yield* notifyUser(latest.statusText, latest.snapshot ? "info" : "warning");
+      });
+    const installHidden = (statusText: string, notify: boolean) =>
+      installState(
+        (current) =>
+          mergeState(current, {
+            eligible: false,
+            snapshot: undefined,
+            statusLine: undefined,
+            error: undefined,
+            statusText,
+          }),
+        notify,
+      );
+    const installUnavailable = (
+      message: string,
+      fetchedAt: number,
+      patch: Partial<P> | undefined,
+      notify: boolean,
+    ) =>
+      installState(
+        (current) =>
+          mergeState(
+            current,
+            {
+              eligible: true,
+              snapshot: undefined,
+              statusLine: undefined,
+              error: message,
+              statusText: `Usage unavailable: ${failureMessage(message, "unknown error")}`,
+              lastFetchAt: fetchedAt,
+            },
+            patch,
+          ),
+        notify,
+      );
+
     const key = Effect.gen(function* () {
       const ctx = MutableRef.get(context);
       const current = yield* state.getState;
@@ -192,7 +250,7 @@ export const makeUsageRefreshController = <
       ];
       return segments.join(":");
     });
-    const refreshEngine = yield* makeSubscriptionRefresh<
+    const refreshEngine = yield* createSubscriptionRefresh<
       string,
       RefreshValue<Snapshot, Partial<P>>,
       never,
@@ -209,77 +267,65 @@ export const makeUsageRefreshController = <
           const current = yield* state.getState;
           const cfg = current.config;
           if (options.canPublish?.() === false || !cfg || !hostHasUi(ctx))
-            return { _tag: "Skipped" } as const;
+            return RefreshValue.Skipped();
           const now = yield* Clock.currentTimeMillis;
           if (!notify && options.backgroundEnabled?.() === false)
-            return { _tag: "Disabled", notify } as const;
-          if (!(yield* options.eligibility(ctx, cfg))) return { _tag: "Hidden", notify } as const;
+            return RefreshValue.Disabled({ notify });
+          if (!(yield* options.eligibility(ctx, cfg))) return RefreshValue.Hidden({ notify });
           if (
             !request.force &&
             !request.notify &&
             current.lastFetchAt !== undefined &&
             now - current.lastFetchAt < cfg.usage.refreshIntervalMs
           )
-            return { _tag: "Skipped" } as const;
+            return RefreshValue.Skipped();
           const outcome = yield* options.fetchOutcome({ ctx });
-          return { ...outcome, notify, fetchedAt: now };
+          return RefreshValue.Fetched({ outcome, notify, fetchedAt: now });
         }),
       commit: (value) =>
-        Effect.gen(function* () {
-          if (value._tag === "Skipped") return;
-          if (value._tag === "Failure")
-            yield* Effect.logWarning(`${logLabel} usage recovery: refresh_failed.`);
-          if (value._tag === "Missing")
-            yield* Effect.logWarning(`${logLabel} usage recovery: credentials_missing.`);
-          const latest = yield* updateState((current) => {
-            const cfg = current.config;
-            if (value._tag === "Disabled" || value._tag === "Hidden")
-              return mergeState(current, {
-                eligible: false,
-                snapshot: undefined,
-                statusLine: undefined,
-                error: undefined,
-                statusText:
-                  value._tag === "Disabled"
-                    ? "Usage is hidden in Cosmic UI"
-                    : options.hiddenStatusText,
-              });
-            if (value._tag === "Failure" || value._tag === "Missing") {
-              const missing = value._tag === "Missing";
-              const message = missing ? options.missingCredentialsMessage : value.message;
-              return mergeState(
-                current,
-                {
-                  eligible: true,
-                  snapshot: undefined,
-                  statusLine: undefined,
-                  error: message,
-                  statusText: `Usage unavailable: ${failureMessage(message, "unknown error")}`,
-                  lastFetchAt: value.fetchedAt,
-                },
-                missing ? options.clearAuthPatch : value.patch,
-              );
-            }
-            return mergeState(
-              current,
-              {
-                eligible: true,
-                snapshot: value.snapshot,
-                statusLine:
-                  cfg === undefined
-                    ? undefined
-                    : options.formatStatusLine(value.snapshot, cfg, value.fetchedAt),
-                statusText: options.formatStatusText(value.snapshot, value.fetchedAt),
-                error: undefined,
-                updatedAt: value.fetchedAt,
-                lastFetchAt: value.fetchedAt,
-              },
-              value.patch,
-            );
-          });
-          yield* notifyChanged;
-          if ("notify" in value && value.notify)
-            yield* notifyUser(latest.statusText, latest.snapshot ? "info" : "warning");
+        Match.valueTags(value, {
+          Skipped: () => Effect.void,
+          Disabled: ({ notify }) => installHidden("Usage is hidden in Cosmic UI", notify),
+          Hidden: ({ notify }) => installHidden(options.hiddenStatusText, notify),
+          Fetched: ({ outcome, notify, fetchedAt }) =>
+            Match.valueTags(outcome, {
+              Missing: () =>
+                Effect.logWarning(`${logLabel} usage recovery: credentials_missing.`).pipe(
+                  Effect.andThen(
+                    installUnavailable(
+                      options.missingCredentialsMessage,
+                      fetchedAt,
+                      options.clearAuthPatch,
+                      notify,
+                    ),
+                  ),
+                ),
+              Failure: ({ message, patch }) =>
+                Effect.logWarning(`${logLabel} usage recovery: refresh_failed.`).pipe(
+                  Effect.andThen(installUnavailable(message, fetchedAt, patch, notify)),
+                ),
+              Success: ({ snapshot, patch }) =>
+                installState(
+                  (current) =>
+                    mergeState(
+                      current,
+                      {
+                        eligible: true,
+                        snapshot,
+                        statusLine:
+                          current.config === undefined
+                            ? undefined
+                            : options.formatStatusLine(snapshot, current.config, fetchedAt),
+                        statusText: options.formatStatusText(snapshot, fetchedAt),
+                        error: undefined,
+                        updatedAt: fetchedAt,
+                        lastFetchAt: fetchedAt,
+                      },
+                      patch,
+                    ),
+                  notify,
+                ),
+            }),
         }),
       spanName: `${options.spanPrefix}.refresh`,
     });

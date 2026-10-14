@@ -30,7 +30,7 @@ import {
 } from "../src/ui/activity-panel.ts";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import {
-  makeHostNotifier,
+  hostNotifier,
   type SubagentCompletionNotification,
   type SubagentNotification,
 } from "../src/boundary/host-notifier.ts";
@@ -48,7 +48,7 @@ import {
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import { scriptedWriterAdmissionError } from "../src/run/launch-policy.ts";
 import { SubagentService } from "../src/run/service.ts";
-import { makeAwaitDetails, makeStartDetails } from "../src/tools/details.ts";
+import { awaitDetails, startDetails } from "../src/tools/details.ts";
 import {
   CONTACT_PARENT_LABEL,
   contactParentCompactSummary,
@@ -56,7 +56,7 @@ import {
   contactParentRenderers,
 } from "../src/tools/render-parent.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../src/tools/execute.ts";
-import { makeAwaitExecution } from "../src/tools/execute-await.ts";
+import { awaitExecutionFor } from "../src/tools/execute-await.ts";
 import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../src/tools/outcome.ts";
 import { subagentToolAction, type SubagentToolInput } from "../src/tools/schema.ts";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
@@ -357,7 +357,7 @@ const awaitScenarios = Effect.gen(function* () {
       updates.push(update);
     },
   });
-  const cancellation = makeAwaitExecution(awaitInput.args.runIds, "all_finished");
+  const cancellation = awaitExecutionFor(awaitInput.args.runIds, "all_finished");
   cancellation.update([authReview, docsSweep]);
   const live: ToolScenario = {
     tool: awaitInput.tool,
@@ -825,15 +825,15 @@ const workspaceScenarios = Effect.all([
 
 const awaited = (
   title: string,
-  runs: Parameters<typeof makeAwaitDetails>[0]["runs"],
-  extra: Partial<Parameters<typeof makeAwaitDetails>[0]> = {},
+  runs: Parameters<typeof awaitDetails>[0]["runs"],
+  extra: Partial<Parameters<typeof awaitDetails>[0]> = {},
 ): ToolScenario => ({
   tool: "subagent_await",
   title,
   args: { runIds: runs.map((run) => run.id), until: "all_finished" },
   result: {
     content: [{ type: "text", text: "Agent-facing await report" }],
-    details: makeAwaitDetails({ runs, awaitUntil: "all_finished", ...extra }),
+    details: awaitDetails({ runs, awaitUntil: "all_finished", ...extra }),
   },
 });
 
@@ -922,7 +922,7 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     isError: true,
     result: {
       content: [{ type: "text" as const, text: "Agent-facing launch report" }],
-      details: makeStartDetails({
+      details: startDetails({
         startEntries: [
           { ...route, index: 0, name: "auth-review", status: "failed", candidateIndex: 0 },
           {
@@ -998,7 +998,7 @@ type SentMessage = Pick<GalleryMessage, "customType" | "content" | "display" | "
 
 const notified = (title: string, notification: SubagentNotification) => {
   const messages: GalleryMessage[] = [];
-  makeHostNotifier(
+  hostNotifier(
     extensionApiFixture({
       sendMessage: (message: SentMessage) => {
         messages.push({ role: "custom", timestamp: 0, ...message });

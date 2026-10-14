@@ -5,15 +5,16 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Result from "effect/Result";
 import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
 import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
 import type { BackendEvent, BackendHandle } from "../../src/backend/model.ts";
 import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
 import type { RunContext, RunRecord } from "../../src/run/internal.ts";
-import { makeRunProcessInitializer } from "../../src/run/process-lifecycle.ts";
-import { makeRunRecordCleanup } from "../../src/run/record-cleanup.ts";
-import { makeWriterPreparation } from "../../src/run/writer-preparation.ts";
+import { processInitializer } from "../../src/run/process-lifecycle.ts";
+import { recordCleanup } from "../../src/run/record-cleanup.ts";
+import { writerSpawnPreparation } from "../../src/run/writer-preparation.ts";
 import { view } from "../fixtures/run-view.ts";
 import { testBackendDriver } from "../tools/fixtures/tool-harness.ts";
 import { makeRunContext } from "./fixtures/run-context.ts";
@@ -108,9 +109,12 @@ const processFixture = () =>
     return { context, owner, counts, newRecord };
   });
 
-const initializer = (context: RunContext, prepareBackendSpawn = makeWriterPreparation(context)) => {
-  const cleanup = makeRunRecordCleanup(context);
-  return makeRunProcessInitializer({
+const initializer = (
+  context: RunContext,
+  prepareBackendSpawn = writerSpawnPreparation(context),
+) => {
+  const cleanup = recordCleanup(context);
+  return processInitializer({
     ...context,
     ...cleanup,
     prepareBackendSpawn,
@@ -150,8 +154,8 @@ it.effect(
       const pool = record.writerPool!;
       const claim = yield* pauseOnceAfterLock(fixture.context, () => pool.state === "preparing");
       const context = claim.context;
-      const cleanup = makeRunRecordCleanup(context);
-      const preparing = yield* makeWriterPreparation(context)(record).pipe(Effect.forkScoped);
+      const cleanup = recordCleanup(context);
+      const preparing = yield* writerSpawnPreparation(context)(record).pipe(Effect.forkScoped);
       yield* Deferred.await(claim.entered);
       preparing.interruptUnsafe();
       yield* Deferred.succeed(claim.release, undefined);
@@ -163,7 +167,7 @@ it.effect(
       expect(fixture.context.writerPools.size).toBe(0);
 
       const replacement = yield* fixture.newRecord("replacement");
-      yield* makeWriterPreparation(context)(replacement);
+      yield* writerSpawnPreparation(context)(replacement);
       expect(replacement.writerPool?.state).toBe("held");
       yield* cleanup.closeRecordScope(replacement);
       expect(fixture.context.writerPools.size).toBe(0);
@@ -181,7 +185,7 @@ it.effect("settles an interrupted spawn claim before stop, compensation and sess
         () => record.backendSpawnAttempt !== undefined,
       );
       const context = claim.context;
-      const cleanup = makeRunRecordCleanup(context);
+      const cleanup = recordCleanup(context);
       const starting = yield* initializer(context)(record).pipe(Effect.forkScoped);
       yield* Deferred.await(claim.entered);
       const spawnSettlement = record.backendSpawnAttempt!.settled;
@@ -202,9 +206,7 @@ it.effect("settles an interrupted spawn claim before stop, compensation and sess
       expect(record.writerPool).toBeUndefined();
       expect(fixture.context.writerPools.size).toBe(0);
       expect(leases.release).toBe(1);
-      expect(yield* initializer(context)(record).pipe(Effect.result)).toMatchObject({
-        _tag: "Failure",
-      });
+      expect(Result.isFailure(yield* initializer(context)(record).pipe(Effect.result))).toBe(true);
       expect(fixture.counts.spawned).toBe(0);
 
       const replacement = yield* fixture.newRecord("replacement");
@@ -224,7 +226,7 @@ it.effect("cancels spawn admission while the registry permit remains held", () =
   Effect.gen(function* () {
     const fixture = yield* processFixture();
     const record = yield* fixture.newRecord("waiting-writer");
-    yield* makeWriterPreparation(fixture.context)(record);
+    yield* writerSpawnPreparation(fixture.context)(record);
     const held = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     yield* Effect.gen(function* () {
@@ -255,7 +257,7 @@ it.effect("cancels spawn admission while the registry permit remains held", () =
       expect(record.process).toBeUndefined();
     }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
     record.stoppedByParent = true;
-    yield* makeRunRecordCleanup(fixture.context).closeRecordScope(record);
+    yield* recordCleanup(fixture.context).closeRecordScope(record);
     yield* Scope.close(fixture.owner, Exit.void);
     expect(record.cleanupDisposition).toBe("confirmed");
     expect(fixture.context.writerPools.size).toBe(0);
@@ -268,7 +270,7 @@ it.effect("spawn ownership remains reusable across scheduler interruption checkp
     for (let interruptAt = 1; interruptAt <= 160; interruptAt++) {
       const fixture = yield* processFixture();
       const record = yield* fixture.newRecord(`writer-${interruptAt}`);
-      yield* makeWriterPreparation(fixture.context)(record);
+      yield* writerSpawnPreparation(fixture.context)(record);
       let checkpoints = 0;
       const scheduler = interruptingScheduler(
         () => fixture.counts.spawned === 0 && ++checkpoints === interruptAt,
@@ -280,7 +282,7 @@ it.effect("spawn ownership remains reusable across scheduler interruption checkp
       yield* Fiber.await(starting);
       expect(record.backendSpawnAttempt, `interruption checkpoint ${interruptAt}`).toBeUndefined();
       record.stoppedByParent = true;
-      const cleanup = makeRunRecordCleanup(fixture.context);
+      const cleanup = recordCleanup(fixture.context);
       let compensated = false;
       const compensation = yield* cleanup.closeRecordScope(record).pipe(
         Effect.tap(() => Effect.sync(() => void (compensated = true))),

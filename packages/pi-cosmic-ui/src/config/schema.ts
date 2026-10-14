@@ -46,7 +46,7 @@ export const DEFAULT_CONFIG = {
   },
 } satisfies { readonly footer: FooterConfig };
 
-export const makeDefaultResolvedCosmicUiConfig = (): ResolvedCosmicUiConfig => ({
+export const defaultResolvedCosmicUiConfig = (): ResolvedCosmicUiConfig => ({
   configPath: "",
   projectConfigPath: "",
   globalConfigPath: "",

@@ -202,8 +202,13 @@ export const duplicateRouteCandidate = (
 export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
   cloneCandidate(builtinProfileCandidate(profile));
 
-export const runtimeLabel = (runtime: SubagentRuntime): string =>
-  runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude" : "Codex";
+const RUNTIME_LABELS = {
+  pi: "Pi",
+  claude: "Claude",
+  codex: "Codex",
+} as const satisfies Record<SubagentRuntime, string>;
+
+export const runtimeLabel = (runtime: SubagentRuntime): string => RUNTIME_LABELS[runtime];
 
 export const profileRouteOptionLabel = (index: number): string =>
   index <= 0 ? "Primary" : `Fallback ${index}`;

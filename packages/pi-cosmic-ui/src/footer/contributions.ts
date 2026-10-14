@@ -119,8 +119,10 @@ export function rawContributionLine(
   compact: boolean,
 ): string {
   return entries
-    .map((entry) => contributionText(entry, compact))
-    .filter(Boolean)
+    .flatMap((entry) => {
+      const text = contributionText(entry, compact);
+      return text ? [text] : [];
+    })
     .join(" • ");
 }
 
@@ -133,8 +135,10 @@ export function styledContributionLine(
 ): string {
   if (clipped !== raw) return theme.fg("text", clipped);
   return entries
-    .filter((entry) => Boolean(contributionText(entry, compact)))
-    .map((entry) => tone(theme, entry, contributionText(entry, compact)))
+    .flatMap((entry) => {
+      const text = contributionText(entry, compact);
+      return text ? [tone(theme, entry, text)] : [];
+    })
     .join(theme.fg("dim", " • "));
 }
 

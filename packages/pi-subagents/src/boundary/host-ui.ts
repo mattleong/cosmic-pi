@@ -9,8 +9,8 @@ import type { SubagentProjection } from "../run/model.ts";
 import { emptyProjection, fleetStatus } from "../run/projection.ts";
 import type { SubagentActivityPresentationSnapshot } from "../ui/activity-panel.ts";
 import {
-  makeSubagentActivityPresentation,
-  makeSubagentActivityWidgetHost,
+  subagentActivityPresentation,
+  subagentActivityWidgetHost,
   shouldSuppressSubagentFooter,
   type SubagentToolPresentation,
 } from "./host-activity-widget.ts";
@@ -29,7 +29,7 @@ export interface SubagentProjectionBridgeOptions {
   readonly getNow?: (() => number) | undefined;
 }
 
-export function makeSubagentProjectionBridge(
+export function subagentProjectionBridge(
   events?: ExtensionAPI["events"],
   options: SubagentProjectionBridgeOptions = {},
 ): SubagentProjectionBridge {
@@ -46,11 +46,11 @@ export function makeSubagentProjectionBridge(
   });
   let context: ExtensionContext | undefined;
   let activityAvailable = false;
-  const presentation = makeSubagentActivityPresentation();
+  const presentation = subagentActivityPresentation();
   const syncFooter = () =>
     base.setFooterEnabled(!shouldSuppressSubagentFooter(base.get(), presentation));
   presentation.subscribe(syncFooter);
-  const widget = makeSubagentActivityWidgetHost({
+  const widget = subagentActivityWidgetHost({
     getProjection: base.get,
     subscribeProjection: base.subscribe,
     presentation,

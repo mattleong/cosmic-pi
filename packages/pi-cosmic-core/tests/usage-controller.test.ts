@@ -20,6 +20,7 @@ import { yieldUntil } from "../src/testing/polling.ts";
 import {
   makeUsageRefreshController,
   timedDiagnosticResult,
+  UsageFetchOutcome,
   type UsageControllerConfig,
   type UsageRefreshControllerOptions,
 } from "../src/usage-controller.ts";
@@ -82,7 +83,7 @@ const nextConfig: UsageControllerConfig = {
 
 const fetching = (fetch: Effect.Effect<number>) => ({
   fetchOutcome: () =>
-    fetch.pipe(Effect.map((snapshot) => ({ _tag: "Success" as const, snapshot, patch: {} }))),
+    fetch.pipe(Effect.map((snapshot) => UsageFetchOutcome.Success({ snapshot, patch: {} }))),
   dependencies: Context.empty(),
 });
 
@@ -97,7 +98,7 @@ it.effect("captures dependencies for an escaped refresh", () => {
       fetchOutcome: () =>
         Effect.gen(function* () {
           observedHttp = yield* JsonHttpClient;
-          return { _tag: "Missing" } as const;
+          return UsageFetchOutcome.Missing();
         }),
       dependencies: Context.make(JsonHttpClient, conflictingHttp),
     }).pipe(provideBuiltLayer(testLayer));
@@ -253,7 +254,7 @@ for (const invalidation of ["context", "configuration"] as const) {
       const paused = pausedScheduler();
       let validated = false;
       let stopped = false;
-      const makeRefresh = subscriptionRefresh.makeSubscriptionRefresh;
+      const makeRefresh = subscriptionRefresh.createSubscriptionRefresh;
       const observedRefresh: typeof makeRefresh = (options) =>
         makeRefresh({
           ...options,
@@ -263,7 +264,7 @@ for (const invalidation of ["context", "configuration"] as const) {
           },
         });
       const boundary = vi
-        .spyOn(subscriptionRefresh, "makeSubscriptionRefresh")
+        .spyOn(subscriptionRefresh, "createSubscriptionRefresh")
         .mockImplementation(observedRefresh);
       const scheduler: Scheduler.Scheduler = {
         executionMode: paused.scheduler.executionMode,

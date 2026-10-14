@@ -1,3 +1,4 @@
+import * as Match from "effect/Match";
 import { describe, expect, it } from "@effect/vitest";
 import { effectTest, step } from "./support/effect-test.ts";
 import { assert, vi } from "vitest";
@@ -7,14 +8,14 @@ import { deferredPromise } from "pi-cosmic-core/testing";
 import { captureSubagentControlExpectation, type SubagentRunView } from "../src/run/model.ts";
 import { registerSubagentActivity } from "../src/boundary/host-activity.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
-import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
+import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { view } from "./fixtures/run-view.ts";
 
 const question = { requestId: "q", message: "Question" };
 
 const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () => true) => {
   const transport = fakeActivityHost();
-  const bridge = makeSubagentProjectionBridge();
+  const bridge = subagentProjectionBridge();
   bridge.publish({ revision: 1, runs });
   const pending = deferredPromise<string | undefined>();
   const admitted = deferredPromise();
@@ -87,8 +88,11 @@ describe("subagent activity provider", () => {
       function* () {
         const selected = view({
           id: "selected",
-          state:
-            action === "reply" ? "waiting_for_parent" : action === "resume" ? "paused" : "running",
+          state: Match.value(action).pipe(
+            Match.when("reply", () => "waiting_for_parent" as const),
+            Match.when("resume", () => "paused" as const),
+            Match.orElse(() => "running" as const),
+          ),
           ...(action === "reply" && { question }),
         });
         const { bridge, pending, admitted, act, dispose, invoke } = promptedProvider([
@@ -314,7 +318,7 @@ describe("subagent activity provider", () => {
 
   it("publishes launch leases as metadata before rows exist and releases overlapping requests independently", () => {
     const transport = fakeActivityHost();
-    const bridge = makeSubagentProjectionBridge();
+    const bridge = subagentProjectionBridge();
     const dispose = registerSubagentActivity({
       events: transport.events,
       sessionId: "session",
@@ -348,7 +352,7 @@ describe("subagent activity provider", () => {
   });
 
   it("marks exact await targets without adding rows or implicitly marking descendants", () => {
-    const bridge = makeSubagentProjectionBridge();
+    const bridge = subagentProjectionBridge();
     bridge.publish({
       revision: 1,
       runs: [
@@ -390,7 +394,7 @@ describe("subagent activity provider", () => {
     "revokes stale actions on projection changes, token replacement, and disposal",
     function* () {
       const transport = fakeActivityHost();
-      const bridge = makeSubagentProjectionBridge();
+      const bridge = subagentProjectionBridge();
       bridge.publish({ revision: 1, runs: [view({ id: "run" })] });
       let current = true;
       const act = vi.fn(() => Promise.resolve());

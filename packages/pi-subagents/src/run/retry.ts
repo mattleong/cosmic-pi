@@ -153,7 +153,7 @@ const retryResourceFailure = (
   return undefined;
 };
 
-export function makeRunRetry(
+export function retryOperations(
   dependencies: Pick<RunContext, "records" | "withLock" | "publish" | "requireRecord"> & {
     readonly allocateClaimToken: () => string;
   },

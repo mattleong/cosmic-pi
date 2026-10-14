@@ -6,10 +6,10 @@ import type {
   HerdrPaneProcessInfo,
 } from "../boundary/herdr-client.ts";
 import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
-import type {
-  SessionFileIdentityComparator,
-  SessionFileIdentityComparison,
+import {
   SessionHeaderProbe,
+  type SessionFileIdentityComparator,
+  type SessionFileIdentityComparison,
 } from "../boundary/session-file.ts";
 import { confirmedFailure } from "./errors.ts";
 import type { HerdrBtwLink } from "./link.ts";
@@ -25,7 +25,7 @@ export const isValidBlankChildProbe = (
   probe: SessionHeaderProbe,
   childSessionId: string,
 ): boolean =>
-  probe._tag === "valid" &&
+  SessionHeaderProbe.$is("valid")(probe) &&
   probe.header.id === childSessionId &&
   probe.header.parentSession === undefined;
 
@@ -82,7 +82,7 @@ export const validateBtwInput = Effect.fn("HerdrBtw.validateBtwInput")(function*
       "Couldn't read this Pi session's ID",
     );
   const parentProbe = probeSessionHeader(input.sessionFile);
-  if (parentProbe._tag !== "valid") return yield* parentSessionUnavailable();
+  if (!SessionHeaderProbe.$is("valid")(parentProbe)) return yield* parentSessionUnavailable();
   if (parentProbe.header.id !== sessionId)
     return yield* confirmedFailure(
       "validate parent session",

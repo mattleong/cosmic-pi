@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -16,18 +17,16 @@ export interface JsonHttpRequest<S extends Schema.ConstraintDecoder<unknown, unk
   readonly maxResponseBytes?: number;
 }
 
-interface JsonHttpAcceptedResponse<A> {
-  readonly _tag: "Accepted";
-  readonly status: number;
-  readonly body: A;
+type JsonHttpResponse<A> = Data.TaggedEnum<{
+  Accepted: { readonly status: number; readonly body: A };
+  Rejected: { readonly status: number };
+}>;
+
+interface JsonHttpResponseDefinition extends Data.TaggedEnum.WithGenerics<1> {
+  readonly taggedEnum: JsonHttpResponse<this["A"]>;
 }
 
-interface JsonHttpRejectedResponse {
-  readonly _tag: "Rejected";
-  readonly status: number;
-}
-
-type JsonHttpResponse<A> = JsonHttpAcceptedResponse<A> | JsonHttpRejectedResponse;
+export const JsonHttpResponse = Data.taggedEnum<JsonHttpResponseDefinition>();
 
 export type IsAny<A> = 0 extends 1 & A ? true : false;
 
@@ -65,7 +64,7 @@ type JsonHttpExecute = <A, R>(
   jsonBody?: Schema.Json,
 ) => Effect.Effect<JsonHttpResponse<A>, JsonHttpError, R>;
 
-export const makeJsonHttpClient = (execute: JsonHttpExecute): JsonHttpClientContract => ({
+export const jsonHttpClientFromExecute = (execute: JsonHttpExecute): JsonHttpClientContract => ({
   request: (input) => execute(input),
   requestJson: (input, bodySchema, body) =>
     Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
@@ -110,7 +109,7 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
               )
             : Effect.fail(responseTooLarge());
         if (response.status < 200 || response.status >= 300)
-          return { _tag: "Rejected", status: response.status } satisfies JsonHttpRejectedResponse;
+          return JsonHttpResponse.Rejected({ status: response.status });
         const body = yield* Schema.decodeEffect(Schema.fromJsonString(input.responseSchema))(
           text,
         ).pipe(
@@ -119,13 +118,9 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
             attributes: { "http.response.status_code": response.status },
           }),
         );
-        return {
-          _tag: "Accepted",
-          status: response.status,
-          body,
-        } satisfies JsonHttpAcceptedResponse<A>;
+        return JsonHttpResponse.Accepted({ status: response.status, body });
       });
-      return JsonHttpClient.of(makeJsonHttpClient(execute));
+      return JsonHttpClient.of(jsonHttpClientFromExecute(execute));
     }),
   );
 }

@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createCosmicFooterClient, makeHostStateWatch } from "../footer/client.ts";
+import { createCosmicFooterClient, createHostStateWatch } from "../footer/client.ts";
 import {
   invokeBestEffort,
   invokeHostCallback,
@@ -7,10 +7,10 @@ import {
   sanitizeTerminalLine,
 } from "pi-cosmic-core";
 import type { CosmicFooterStatusContribution } from "../protocol/protocol.ts";
-import { makeHostUiTickerPool, type HostUiTickerPool } from "./host-ui-ticker-pool.ts";
+import { createHostUiTickerPool, type HostUiTickerPool } from "./host-ui-ticker-pool.ts";
 
 export const makeHostUiTickerOwner = (
-  createPool: () => HostUiTickerPool = makeHostUiTickerPool,
+  createPool: () => HostUiTickerPool = createHostUiTickerPool,
 ) => {
   let pool = createPool();
   return {
@@ -62,7 +62,7 @@ export function makeFooterStatusDeclaration(options: {
     ...options.placement,
   });
   let declared = false;
-  const watch = makeHostStateWatch(client, (state) => {
+  const watch = createHostStateWatch(client, (state) => {
     if (declared && state.active) client.upsert(contribution);
   });
   const shutdown = () => {

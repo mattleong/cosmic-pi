@@ -248,7 +248,7 @@ export const decodeSessionProfileOverrideSeed = flow(
   (value) => value && seedFromFields(value),
 );
 
-export const makeSessionProfileSnapshot = (
+export const sessionProfileSnapshot = (
   baseConfig: ResolvedSubagentConfig,
   seed: SessionProfileOverrideSeed = emptySessionProfileOverrideSeed(),
 ): SessionProfileSnapshot => {
@@ -318,7 +318,7 @@ const editSnapshot = (
       `Session profile revision reached the exact-integer limit ${MAX_SESSION_PROFILE_REVISION}; restart the Pi session before making another change.`,
     );
   return Effect.succeed(
-    makeSessionProfileSnapshot(snapshot.baseConfig, {
+    sessionProfileSnapshot(snapshot.baseConfig, {
       ...snapshot,
       ...changes,
       revision: snapshot.revision + 1,

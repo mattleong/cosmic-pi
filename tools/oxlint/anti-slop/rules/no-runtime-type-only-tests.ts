@@ -9,11 +9,11 @@ import {
   isRuntimeFunction,
   isStringLiteral,
   resolveFunction,
-  resolveVariable,
   staticPropertyName,
   unwrapExpression,
   type RuntimeFunction,
 } from "../shared/ast.ts";
+import { resolveVariable } from "../shared/scope.ts";
 
 const vitestSources = new Set(["vitest", "@effect/vitest"]);
 const matchers = new Set(["toContain", "toMatch", "toBe", "toEqual"]);

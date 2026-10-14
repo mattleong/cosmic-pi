@@ -14,7 +14,7 @@ export interface BackgroundTaskSessionInput {
   readonly projectTrusted: boolean;
 }
 
-export const makeBackgroundTaskLayer = (
+export const backgroundTaskLayer = (
   input: BackgroundTaskSessionInput,
   publish: (projection: BackgroundTaskProjection) => void,
 ) => {
@@ -33,6 +33,6 @@ export const makeBackgroundTaskLayer = (
   );
 };
 
-type BackgroundTaskApplicationLayer = ReturnType<typeof makeBackgroundTaskLayer>;
+type BackgroundTaskApplicationLayer = ReturnType<typeof backgroundTaskLayer>;
 export type BackgroundTaskApplication = Layer.Success<BackgroundTaskApplicationLayer>;
 export type BackgroundTaskRuntimeError = Layer.Error<BackgroundTaskApplicationLayer>;

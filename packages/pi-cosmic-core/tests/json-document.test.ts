@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import type * as Schema from "effect/Schema";
@@ -160,7 +161,7 @@ it.effect("rejects non-JSON values instead of coercing persisted data", () => {
     });
     const result = yield* Effect.result(store.writeObject("/config.json", invalidDocument));
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(result.failure.operation).toBe("encode");
+    if (Result.isFailure(result)) expect(result.failure.operation).toBe("encode");
     expect(harness.files.has("/config.json")).toBe(false);
   }).pipe(provideBuiltLayer(harness.layer));
 });
@@ -174,7 +175,7 @@ it.effect("does not clean up a temporary path when exclusive acquisition fails",
     const store = yield* JsonDocumentStore;
     const result = yield* Effect.result(store.writeObject("/config.json", { enabled: true }));
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(result.failure.operation).toBe("write");
+    if (Result.isFailure(result)) expect(result.failure.operation).toBe("write");
     expect(removals).toBe(0);
   }).pipe(provideBuiltLayer(harness.layer));
 });
@@ -224,7 +225,7 @@ it.effect("does not run an after-commit hook when temporary writing fails", () =
       }),
     );
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(result.failure.operation).toBe("write");
+    if (Result.isFailure(result)) expect(result.failure.operation).toBe("write");
     expect(harness.files.get("/config.json")).toBe('{"enabled":false}');
     expect(renames).toBe(0);
     expect(afterCommits).toBe(0);
@@ -293,7 +294,7 @@ it.effect("preserves a rename failure when best-effort cleanup also defects", ()
       JsonDocumentStore.use((store) => store.writeObject("/config.json", { enabled: true })),
     );
     expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(result.failure.operation).toBe("rename");
+    if (Result.isFailure(result)) expect(result.failure.operation).toBe("rename");
     expect(harness.files.get("/config.json")).toBe("old");
     expect(cleanupAttempts).toBe(1);
   }).pipe(provideBuiltLayer(harness.layer));

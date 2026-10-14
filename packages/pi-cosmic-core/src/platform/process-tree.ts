@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -11,7 +12,11 @@ const send = (target: number, signal: NodeJS.Signals | 0): ProcessSignalResult =
     return "present";
   } catch (cause) {
     const code = Predicate.hasProperty(cause, "code") ? cause.code : undefined;
-    return code === "ESRCH" ? "absent" : code === "EPERM" ? "permission" : "failed";
+    return Match.value(code).pipe(
+      Match.when("ESRCH", (): ProcessSignalResult => "absent"),
+      Match.when("EPERM", (): ProcessSignalResult => "permission"),
+      Match.orElse((): ProcessSignalResult => "failed"),
+    );
   }
 };
 const signalable = (pid: number | undefined): pid is number =>

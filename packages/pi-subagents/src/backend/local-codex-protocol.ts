@@ -139,6 +139,12 @@ const CollabAgentItem = Schema.Struct({
   reasoningEffort: Schema.NullOr(Text),
   agentsStates: Schema.Record(Schema.String, CollabAgentState),
 });
+const SUB_AGENT_ACTIVITY_STATE = {
+  started: "running",
+  interrupted: "stopped",
+  interacted: "activity",
+} as const;
+
 const SubAgentActivityItem = Schema.Struct({
   id: Id,
   type: Schema.Literal("subAgentActivity"),
@@ -234,12 +240,7 @@ const decodeCodexItemNotification = Effect.fn("LocalCodexProtocol.decodeItemNoti
         turnId: envelope.turnId,
         activityId: item.agentThreadId,
         kind: `${item.kind}:${item.agentPath}`,
-        state:
-          item.kind === "started"
-            ? ("running" as const)
-            : item.kind === "interrupted"
-              ? ("stopped" as const)
-              : ("activity" as const),
+        state: SUB_AGENT_ACTIVITY_STATE[item.kind],
       };
     }
     return {

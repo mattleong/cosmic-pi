@@ -1,12 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Fiber from "effect/Fiber";
-import { makeRunControls } from "../../src/run/control.ts";
+import { controlOperations } from "../../src/run/control.ts";
 import { captureSubagentControlExpectation } from "../../src/run/model.ts";
-import { makeRunProcessControls } from "../../src/run/process-lifecycle.ts";
-import { makeRunSubtreeStop } from "../../src/run/subtree-stop.ts";
-import { makeRunTurnInputs } from "../../src/run/turn-input.ts";
+import { processControlOperations } from "../../src/run/process-lifecycle.ts";
+import { subtreeStopper } from "../../src/run/subtree-stop.ts";
+import { turnInputGates } from "../../src/run/turn-input.ts";
 import { view } from "../fixtures/run-view.ts";
 import {
   backendHandleFixture,
@@ -37,11 +38,11 @@ const fixture = Effect.gen(function* () {
   const waiting = yield* Deferred.make<void>();
   const withLock: typeof context.withLock = (effect) =>
     Deferred.succeed(waiting, undefined).pipe(Effect.andThen(context.withLock(effect)));
-  const controls = makeRunControls({
+  const controls = controlOperations({
     ...context,
     withLock,
-    ...makeRunTurnInputs(withLock),
-    processControls: makeRunProcessControls(withLock),
+    ...turnInputGates(withLock),
+    processControls: processControlOperations(withLock),
     closeRecordScope: () => Effect.sync(() => void deliveries.push("stop")),
     settle: () => Effect.die("Unexpected settlement"),
   });
@@ -86,15 +87,13 @@ describe("captured fleet control authority", () => {
       Effect.gen(function* () {
         const { context, controls, deliveries, record, waiting, withLock } = yield* fixture;
         const expected = captureSubagentControlExpectation(record.view);
-        const stopSubtree = makeRunSubtreeStop({ ...context, withLock, stopRun: controls.stop });
-        const control =
-          action === "send"
-            ? controls.send(record.view.id, "Old guidance", expected)
-            : action === "rename"
-              ? controls.rename(record.view.id, "Old name", expected)
-              : action === "stop subtree"
-                ? stopSubtree(record.view.id, expected)
-                : controls[action](record.view.id, expected);
+        const stopSubtree = subtreeStopper({ ...context, withLock, stopRun: controls.stop });
+        const control = Match.value(action).pipe(
+          Match.when("send", () => controls.send(record.view.id, "Old guidance", expected)),
+          Match.when("rename", () => controls.rename(record.view.id, "Old name", expected)),
+          Match.when("stop subtree", () => stopSubtree(record.view.id, expected)),
+          Match.orElse((other) => controls[other](record.view.id, expected)),
+        );
         const pending = yield* context.withLock(
           Effect.gen(function* () {
             const queued = yield* control.pipe(Effect.flip, Effect.forkScoped);

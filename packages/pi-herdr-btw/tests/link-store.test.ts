@@ -5,8 +5,12 @@ import {
   makeHostHerdrBtwLinkStore,
   type HerdrBtwLinkRecord,
 } from "../src/boundary/host-link-store.ts";
-import type { SessionHeaderProbe } from "../src/boundary/session-file.ts";
-import { HERDR_BTW_LINK_ENTRY_TYPE, type HerdrBtwLink } from "../src/btw/link.ts";
+import { SessionHeaderProbe } from "../src/boundary/session-file.ts";
+import {
+  HERDR_BTW_LINK_ENTRY_TYPE,
+  HerdrBtwLinkRestoration,
+  type HerdrBtwLink,
+} from "../src/btw/link.ts";
 
 const OWNER = {
   sessionId: "parent-session",
@@ -61,7 +65,9 @@ const sessionEntry = (entry: CustomEntryFixture, index: number): CustomEntry => 
 const harness = (initialThrow?: ThrowingOperation) => {
   const entries: CustomEntryFixture[] = [];
   let currentOwner: OwnerState = { ...OWNER };
-  let currentProbe: SessionHeaderProbe = { _tag: "valid", header: { id: OWNER.sessionId } };
+  let currentProbe: SessionHeaderProbe = SessionHeaderProbe.valid({
+    header: { id: OWNER.sessionId },
+  });
   let throwing = initialThrow;
   const getSessionId = vi.fn(() => {
     if (throwing === "sessionId") throw new Error("session-id-secret");
@@ -120,10 +126,10 @@ describe("host reusable-link store", () => {
     expect(h.getSessionId).not.toHaveBeenCalled();
     expect(h.getSessionFile).not.toHaveBeenCalled();
     h.setThrowing(undefined);
-    expect(h.store.restore()).toEqual({ _tag: "none" });
+    expect(h.store.restore()).toEqual(HerdrBtwLinkRestoration.none());
     expect(h.store.record(RECORD)).toBe("recorded");
     expect(h.appendEntry).toHaveBeenCalledWith(HERDR_BTW_LINK_ENTRY_TYPE, LINK);
-    expect(h.store.restore()).toEqual({ _tag: "restored", link: LINK });
+    expect(h.store.restore()).toEqual(HerdrBtwLinkRestoration.restored({ link: LINK }));
   });
 
   it.each<[string, (h: Harness) => void]>([
@@ -131,25 +137,25 @@ describe("host reusable-link store", () => {
     ["a replaced owner path", (h) => h.setOwner({ sessionPath: "/sessions/replacement.jsonl" })],
     ["an empty owner ID", (h) => h.setOwner({ sessionId: "" })],
     ["a missing owner path", (h) => h.setOwner({ sessionPath: undefined })],
-    ["a missing parent header", (h) => h.setProbe({ _tag: "invalid" })],
+    ["a missing parent header", (h) => h.setProbe(SessionHeaderProbe.invalid())],
     [
       "another session's parent header",
-      (h) => h.setProbe({ _tag: "valid", header: { id: "replacement-session" } }),
+      (h) => h.setProbe(SessionHeaderProbe.valid({ header: { id: "replacement-session" } })),
     ],
     ["a throwing session ID read", (h) => h.setThrowing("sessionId")],
     ["a throwing session file read", (h) => h.setThrowing("sessionFile")],
     ["a throwing header probe", (h) => h.setThrowing("probe")],
   ])("revalidates every call and fails closed after %s", (_name, change) => {
     const h = harness();
-    expect(h.store.restore()).toEqual({ _tag: "none" });
+    expect(h.store.restore()).toEqual(HerdrBtwLinkRestoration.none());
     expect(h.store.record(RECORD)).toBe("recorded");
-    expect(h.store.restore()).toEqual({ _tag: "restored", link: LINK });
+    expect(h.store.restore()).toEqual(HerdrBtwLinkRestoration.restored({ link: LINK }));
     h.getEntries.mockClear();
     h.appendEntry.mockClear();
 
     change(h);
 
-    expect(h.store.restore()).toEqual({ _tag: "malformed" });
+    expect(h.store.restore()).toEqual(HerdrBtwLinkRestoration.malformed());
     expect(h.getEntries).not.toHaveBeenCalled();
     expect(h.store.record(RECORD)).toBe("refused");
     expect(h.appendEntry).not.toHaveBeenCalled();
@@ -159,7 +165,7 @@ describe("host reusable-link store", () => {
   });
 
   it("contains entry-read failures and treats any append throw as uncertain", () => {
-    expect(harness("entries").store.restore()).toEqual({ _tag: "malformed" });
+    expect(harness("entries").store.restore()).toEqual(HerdrBtwLinkRestoration.malformed());
 
     const appendFailure = harness("append");
     expect(appendFailure.store.record(RECORD)).toBe("uncertain");

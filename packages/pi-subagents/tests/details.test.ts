@@ -2,11 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as Predicate from "effect/Predicate";
 import type { SubagentRunView } from "../src/run/model.ts";
 import { formatStartResult } from "../src/tools/format.ts";
-import {
-  makeAwaitDetails,
-  makeCompactToolDetails,
-  makeStartDetails,
-} from "../src/tools/details.ts";
+import { awaitDetails, compactToolDetails, startDetails } from "../src/tools/details.ts";
 import { projectSubagentRunCard } from "../src/tools/details-projection.ts";
 import type { ProfileCandidateDiscovery as ProfileCandidateDetailsInput } from "../src/tools/model.ts";
 import {
@@ -116,11 +112,11 @@ const isDeeplyFrozen = (value: FrozenJson | undefined): boolean =>
     ? value.every((child: FrozenJson) => isDeeplyFrozen(child))
     : !Predicate.isObject(value) || Object.values(value).every((child) => isDeeplyFrozen(child)));
 
-const awaitWire = () => clone(makeAwaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
+const awaitWire = () => clone(awaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
 
 const modelsDetails = () => {
   const details = clone(
-    makeCompactToolDetails({
+    compactToolDetails({
       action: "models",
       fallbackProfile: "generalist",
       profiles: [
@@ -186,10 +182,10 @@ describe("persisted subagent details version 2", () => {
       ...run(index + 1),
       reportStatus: "available" as const,
     }));
-    const fitted = makeAwaitDetails({ runs, awaitUntil: "all_finished" });
+    const fitted = awaitDetails({ runs, awaitUntil: "all_finished" });
     expect(JSON.stringify(fitted).length).toBeLessThanOrEqual(48_000);
     expect(fitted.cards.every((card) => card.reportStatus === "available")).toBe(true);
-    const historical = makeAwaitDetails({
+    const historical = awaitDetails({
       runs: [{ ...run(), finalText: undefined }],
       awaitUntil: "all_finished",
     });
@@ -200,7 +196,7 @@ describe("persisted subagent details version 2", () => {
         : restored.action === "await" && restored.cards[0]?.reportStatus,
     ).toBeUndefined();
     for (const reportStatus of ["claimed", "delivered", "missing"] as const) {
-      const details = makeAwaitDetails({
+      const details = awaitDetails({
         runs: [{ ...run(), finalText: undefined, reportStatus }],
         awaitUntil: "all_finished",
       });
@@ -229,7 +225,7 @@ describe("persisted subagent details version 2", () => {
       expect(card.systemWarning).not.toContain("\u001b");
       expect(card.systemWarning).toContain("system");
     }
-    const projected = makeCompactToolDetails({
+    const projected = compactToolDetails({
       action: "status",
       runs: [{ ...run(), warningSource: "child", systemWarning: "System only" }],
     });
@@ -240,7 +236,7 @@ describe("persisted subagent details version 2", () => {
     });
   });
   it("makes and decodes aggregate-bounded, deeply frozen private await cards", () => {
-    const details = makeAwaitDetails({
+    const details = awaitDetails({
       runs: Array.from({ length: 12 }, (_, index) => run(index + 1)),
       awaitUntil: "all_finished",
     });
@@ -296,7 +292,7 @@ describe("persisted subagent details version 2", () => {
       parentRunId: target.id,
       finalText: `Unclaimed context ${index}.`,
     }));
-    const details = makeAwaitDetails({
+    const details = awaitDetails({
       runs: [target],
       contextRuns: [child, ...extraContext],
       awaitedRunIds: [target.id],
@@ -339,7 +335,7 @@ describe("persisted subagent details version 2", () => {
         })),
       },
     }));
-    const details = makeAwaitDetails({
+    const details = awaitDetails({
       runs,
       awaitedRunIds: runs.map((candidate) => candidate.id),
       awaitUntil: "all_finished",
@@ -352,14 +348,14 @@ describe("persisted subagent details version 2", () => {
   it("orders list cards parent before child before applying the card bound", () => {
     const parent = { ...run(1), parentRunId: "root" };
     const child = { ...run(2), parentRunId: parent.id };
-    const details = makeCompactToolDetails({ action: "list", runs: [child, parent] });
+    const details = compactToolDetails({ action: "list", runs: [child, parent] });
     expect(details.action).toBe("list");
     if (details.action !== "list") return;
     expect(details.cards.map((card) => card.id)).toEqual([parent.id, child.id]);
   });
 
   it("strips unknown keys without invoking their getters", () => {
-    const source = clone(makeAwaitDetails({ runs: [run()], awaitUntil: "any_finished" }));
+    const source = clone(awaitDetails({ runs: [run()], awaitUntil: "any_finished" }));
     const rootGetter = vi.fn(() => "private root value");
     const cardGetter = vi.fn(() => "private card value");
     Object.defineProperty(source, "privateRoot", { enumerable: true, get: rootGetter });
@@ -425,13 +421,13 @@ describe("persisted subagent details version 2", () => {
   });
 
   it("rejects old versions, unsupported versions, wrong discriminants, and wrong shapes", () => {
-    const awaitDetails = awaitWire();
-    expect(decodeStartAwaitCardDetails({ ...awaitDetails, version: 1 })).toBeUndefined();
-    expect(decodeStartAwaitCardDetails({ ...awaitDetails, version: 3 })).toBeUndefined();
+    const awaitWireDetails = awaitWire();
+    expect(decodeStartAwaitCardDetails({ ...awaitWireDetails, version: 1 })).toBeUndefined();
+    expect(decodeStartAwaitCardDetails({ ...awaitWireDetails, version: 3 })).toBeUndefined();
     expect(
-      decodeStartAwaitCardDetails({ ...awaitDetails, awaitedRunIds: ["missing-run"] }),
+      decodeStartAwaitCardDetails({ ...awaitWireDetails, awaitedRunIds: ["missing-run"] }),
     ).toBeUndefined();
-    expect(decodeStartAwaitCardDetails({ ...awaitDetails, action: "start" })).toBeUndefined();
+    expect(decodeStartAwaitCardDetails({ ...awaitWireDetails, action: "start" })).toBeUndefined();
     expect(
       decodeStartAwaitCardDetails({
         version: 2,
@@ -471,7 +467,7 @@ describe("persisted subagent details version 2", () => {
     };
     expect(decodeStartAwaitCardDetails(malformedCapability)).toBeUndefined();
 
-    const failures = makeCompactToolDetails({
+    const failures = compactToolDetails({
       action: "send",
       runs: [run()],
       actionFailures: [{ id: "missing", message: "Missing." }],
@@ -530,7 +526,7 @@ describe("persisted subagent details version 2", () => {
   });
 
   it("requires exact request-ordered start entries and matching failures", () => {
-    const details = makeStartDetails({
+    const details = startDetails({
       startEntries: [
         {
           ...startedEntry(0, "same-name"),
@@ -605,7 +601,7 @@ describe("persisted subagent details version 2", () => {
       message: "failure ".concat("m".repeat(5_000)),
     })).toReversed();
 
-    const details = makeStartDetails({ startEntries: entries, startFailures });
+    const details = startDetails({ startEntries: entries, startFailures });
     const serialized = JSON.stringify(details);
 
     expect(details.startEntries).toHaveLength(32);
@@ -627,7 +623,7 @@ describe("persisted subagent details version 2", () => {
   });
 
   it("persists admitted-run recovery in request order and rejects forged dispositions", () => {
-    const details = makeStartDetails({
+    const details = startDetails({
       startEntries: [failedSelected(0, "first"), failedSelected(1, "second")],
       startFailures: [
         {
@@ -716,7 +712,7 @@ describe("persisted subagent details version 2", () => {
       status: "failed",
       routeStatus: "unavailable",
     };
-    const details = makeStartDetails({
+    const details = startDetails({
       startEntries: entries,
       startFailures: [{ index: 5, name: hostile, code: hostile, message: hostile }],
     });
@@ -728,9 +724,9 @@ describe("persisted subagent details version 2", () => {
 
   it("only labels await omissions as report-only without source errors", () => {
     const runs = [run(1), run(2)];
-    expect(makeAwaitDetails({ runs, awaitUntil: "all_finished" }).reportsOnlyOmitted).toBe(true);
+    expect(awaitDetails({ runs, awaitUntil: "all_finished" }).reportsOnlyOmitted).toBe(true);
     expect(
-      makeAwaitDetails({
+      awaitDetails({
         runs: [{ ...runs[0]!, error: "failure" }, runs[1]!],
         awaitUntil: "all_finished",
       }).reportsOnlyOmitted,
@@ -738,7 +734,7 @@ describe("persisted subagent details version 2", () => {
   });
 
   it("preserves omission evidence, capabilities, routes, questions, and cost semantics", () => {
-    const details = makeAwaitDetails({
+    const details = awaitDetails({
       runs: [run(1, undefined), run(2, 0)],
       awaitUntil: "all_finished",
     });
@@ -762,7 +758,7 @@ describe("persisted subagent details version 2", () => {
   });
 
   it("makes discriminated non-start details without removed root wire fields", () => {
-    const status = makeCompactToolDetails({ action: "status", runs: [run()] });
+    const status = compactToolDetails({ action: "status", runs: [run()] });
     expect(status).toMatchObject({ version: 2, action: "status", runCount: 1 });
     expect(status).not.toHaveProperty("runIds");
     expect(status).not.toHaveProperty("profileIds");
@@ -788,7 +784,7 @@ describe("persisted subagent details version 2", () => {
         bashWriteHints: 2,
       },
     };
-    const details = makeCompactToolDetails({ action: "claims", runs: [claimed] });
+    const details = compactToolDetails({ action: "claims", runs: [claimed] });
     expect(details).toMatchObject({
       version: 2,
       action: "claims",
@@ -820,7 +816,7 @@ describe("persisted subagent details version 2", () => {
       writeClaims,
       writeAudit: { observedFileWrites: [], violations: [], bashWriteHints: 0 },
     });
-    const details = makeCompactToolDetails({
+    const details = compactToolDetails({
       action: "status",
       runs: [claimed(1), claimed(2)],
     });
@@ -837,7 +833,7 @@ describe("persisted subagent details version 2", () => {
 
   it("bounds profile route details through the shared semantic selector", () => {
     const hostile = `${"\\".repeat(2_000)}${"\ud800".repeat(500)}`;
-    const details = makeCompactToolDetails({
+    const details = compactToolDetails({
       action: "models",
       fallbackProfile: "generalist",
       profiles: (
@@ -941,7 +937,7 @@ describe("persisted subagent detail fitting", () => {
       warning: "w".repeat(1_000),
       finalText: "private report".repeat(2_000),
     }));
-    const details = makeCompactToolDetails({
+    const details = compactToolDetails({
       action: "send",
       runs,
       actionFailures: [{ id: "missing-agent", code: "not_found", message: "m".repeat(5_000) }],

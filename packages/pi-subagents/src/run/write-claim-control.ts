@@ -49,7 +49,7 @@ const normalizePaths = (paths: ReadonlyArray<string>) => {
     : Effect.fail(invalid(normalized.code, normalized.message));
 };
 
-export function makeRunWriteClaimControl(
+export function writeClaimControl(
   dependencies: Pick<
     RunContext,
     "records" | "withLock" | "publish" | "requireRecord" | "sendPeerNotices"

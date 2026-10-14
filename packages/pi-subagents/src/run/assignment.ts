@@ -50,7 +50,7 @@ export const beginNextAssignmentLocked = (
   };
 };
 
-export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
+export function assignmentOperations(dependencies: RunAssignmentDependencies) {
   const { withLock, publish, startPrompt, activateAssignmentLocked, replayAssignmentActivation } =
     dependencies;
 
@@ -84,9 +84,8 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
     attemptToken: string,
   ) =>
     startPrompt(record, message, record.assignment.epoch).pipe(
-      Effect.catch((error) => {
-        if (error._tag !== "SubagentProcessError" || !isOutcomeUncertain(error))
-          return Effect.fail(error);
+      Effect.catchTag("SubagentProcessError", (error) => {
+        if (!isOutcomeUncertain(error)) return Effect.fail(error);
         const reported =
           operation === "resume"
             ? new SubagentProcessError({
@@ -142,4 +141,4 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
   return { submitPrompt, retainUncertainAssignment };
 }
 
-export type RunAssignment = ReturnType<typeof makeRunAssignment>;
+export type RunAssignment = ReturnType<typeof assignmentOperations>;

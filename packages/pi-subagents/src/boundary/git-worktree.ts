@@ -55,7 +55,7 @@ const revision = (record: WorkspaceRecord, id: string) => {
     : Effect.fail(workspaceFailure("revision", "Reviewed revision is stale or unknown."));
 };
 
-export const makeGitWorkspaceEngine = (agentDirectory: string) =>
+export const gitWorkspaceEngine = (agentDirectory: string) =>
   Effect.sync(() => {
     const registry = path.resolve(agentDirectory, "git-workspaces");
     const owned = new Set<string>();

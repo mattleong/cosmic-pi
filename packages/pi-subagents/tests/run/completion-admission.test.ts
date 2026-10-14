@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
-import { makeRunCompletionObservations } from "../../src/run/completion-observations.ts";
+import { completionObservationOperations } from "../../src/run/completion-observations.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
 import { makeRunContext, runRecordFixture } from "./fixtures/run-context.ts";
 import { useProbe } from "./fixtures/service-harness.ts";
@@ -24,7 +24,7 @@ describe("completion admission", () => {
           completionClaims: new Map<number, string>(),
         });
         let token = 0;
-        const observations = makeRunCompletionObservations({
+        const observations = completionObservationOperations({
           ...(yield* makeRunContext({
             records: new Map([[record.view.id, record]]),
             withLock: runLock.withPermits(1),

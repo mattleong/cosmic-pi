@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
 import { notifyAtHostBoundary } from "./host-session.ts";
 
@@ -32,11 +33,13 @@ export interface ExtensionCommand {
   readonly add: (subcommand: ExtensionSubcommand) => void;
 }
 
-type ExtensionCommandRoute =
-  | { readonly _tag: "Bare"; readonly args: string }
-  | { readonly _tag: "Subcommand"; readonly subcommand: ExtensionSubcommand; readonly args: string }
-  | { readonly _tag: "Overview" }
-  | { readonly _tag: "Unknown"; readonly name: string };
+type ExtensionCommandRoute = Data.TaggedEnum<{
+  Bare: { readonly args: string };
+  Subcommand: { readonly subcommand: ExtensionSubcommand; readonly args: string };
+  Overview: Record<never, never>;
+  Unknown: { readonly name: string };
+}>;
+export const ExtensionCommandRoute = Data.taggedEnum<ExtensionCommandRoute>();
 
 export const routeExtensionCommand = (
   args: string,
@@ -44,11 +47,14 @@ export const routeExtensionCommand = (
   bare?: ExtensionCommandBare,
 ): ExtensionCommandRoute => {
   const trimmed = args.trim();
-  if (!trimmed) return bare ? { _tag: "Bare", args: "" } : { _tag: "Overview" };
+  if (!trimmed)
+    return bare ? ExtensionCommandRoute.Bare({ args: "" }) : ExtensionCommandRoute.Overview();
   const [head = "", rest = ""] = /^(\S+)\s*([\s\S]*)$/u.exec(trimmed)?.slice(1) ?? [];
   const subcommand = subcommands.find((entry) => entry.name === head);
-  if (subcommand) return { _tag: "Subcommand", subcommand, args: rest };
-  return bare?.text ? { _tag: "Bare", args: trimmed } : { _tag: "Unknown", name: head };
+  if (subcommand) return ExtensionCommandRoute.Subcommand({ subcommand, args: rest });
+  return bare?.text
+    ? ExtensionCommandRoute.Bare({ args: trimmed })
+    : ExtensionCommandRoute.Unknown({ name: head });
 };
 
 export const completeExtensionCommand = (
@@ -59,9 +65,11 @@ export const completeExtensionCommand = (
   const split = /^(\S+)\s([\s\S]*)$/u.exec(normalized);
   if (!split) {
     const query = normalized.toLowerCase();
-    const matches = subcommands
-      .filter((entry) => entry.name.toLowerCase().startsWith(query))
-      .map((entry) => ({ value: entry.name, label: entry.name, description: entry.description }));
+    const matches = subcommands.flatMap((entry) =>
+      entry.name.toLowerCase().startsWith(query)
+        ? [{ value: entry.name, label: entry.name, description: entry.description }]
+        : [],
+    );
     return matches.length > 0 ? matches : null;
   }
   const [, head = "", rest = ""] = split;
@@ -115,14 +123,16 @@ export function registerExtensionCommand(
     description,
     getArgumentCompletions: (prefix) => completeExtensionCommand(prefix, list()),
     handler: (args, ctx) => {
-      const route = routeExtensionCommand(args, list(), bare);
-      if (route._tag === "Bare") return settle(() => bare?.handler(route.args, ctx));
-      if (route._tag === "Subcommand")
-        return settle(() => route.subcommand.handler(route.args, ctx));
-      if (route._tag === "Overview")
-        notifyAtHostBoundary(ctx, extensionCommandOverview(name, description, list()), "info");
-      else notifyAtHostBoundary(ctx, extensionCommandUsage(name, list(), bare), "warning");
-      return Promise.resolve();
+      const notify = (message: string, level: "info" | "warning") => {
+        notifyAtHostBoundary(ctx, message, level);
+        return Promise.resolve();
+      };
+      return ExtensionCommandRoute.$match(routeExtensionCommand(args, list(), bare), {
+        Bare: (route) => settle(() => bare?.handler(route.args, ctx)),
+        Subcommand: (route) => settle(() => route.subcommand.handler(route.args, ctx)),
+        Overview: () => notify(extensionCommandOverview(name, description, list()), "info"),
+        Unknown: () => notify(extensionCommandUsage(name, list(), bare), "warning"),
+      });
     },
   });
   return { add: (subcommand) => void subcommands.set(subcommand.name, subcommand) };

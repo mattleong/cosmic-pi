@@ -2,10 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
-import { makeHostNotifier } from "../src/boundary/host-notifier.ts";
+import { hostNotifier } from "../src/boundary/host-notifier.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../src/boundary/node-builtins.ts";
 import {
-  makeReportArchive,
+  sessionReportArchive,
   pruneReportArchive,
   reportArchiveRoot,
 } from "../src/boundary/report-archive.ts";
@@ -33,9 +33,9 @@ describe("subagent report archive", () => {
   it.effect("keeps a long report out of context behind a preview and its private file", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
-      const archive = makeReportArchive(agent, "session-1");
+      const archive = sessionReportArchive(agent, "session-1");
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-      const notify = makeHostNotifier(extensionApiFixture({ sendMessage }), {
+      const notify = hostNotifier(extensionApiFixture({ sendMessage }), {
         archive: () => archive,
       });
       const report = Array.from({ length: 2_000 }, (_, line) => `finding ${line}`).join("\n");
@@ -61,7 +61,7 @@ describe("subagent report archive", () => {
   it.live("removes reports older than a week", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
-      const archive = makeReportArchive(agent, "session-1");
+      const archive = sessionReportArchive(agent, "session-1");
       const old = archive({ id: "agent-1", generation: 1, text: "old" });
       const fresh = archive({ id: "agent-2", generation: 1, text: "fresh" });
       if (!old || !fresh) return yield* Effect.die("archive write failed");

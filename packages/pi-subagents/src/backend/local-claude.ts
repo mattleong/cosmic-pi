@@ -10,24 +10,24 @@ import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type { SupervisorChannelHandle } from "../boundary/supervisor-channel.ts";
 import { processError, type SubagentError } from "../run/errors.ts";
 import type { SupervisorEvent } from "../supervisor/protocol.ts";
-import { makeLocalCliInterrupts } from "./local-cli-interruption.ts";
+import { localCliInterrupts } from "./local-cli-interruption.ts";
 import { toBackendExit, type BackendLaunchRequest, type BackendReport } from "./model.ts";
 import type {
   LocalClaudeHandleContext,
   LocalClaudeHandleState,
   PendingInterrupt,
 } from "./local-claude-context.ts";
-import { makeLocalClaudeControl, type ClaudeInitProtocolEvent } from "./local-claude-control.ts";
-import { isSameClaudeSession, makeClaudeResultCorrelation } from "./local-claude-correlation.ts";
-import { makeLocalClaudeInputDelivery } from "./local-claude-input-delivery.ts";
-import { makeLocalClaudeReportDelivery } from "./local-claude-report-delivery.ts";
-import { makeLocalClaudeResults } from "./local-claude-results.ts";
-import { makeLocalClaudeDiagnostics } from "./local-claude-diagnostics.ts";
-import { makeLocalClaudeUsage, usageComponentsTotal } from "./local-claude-usage.ts";
-import { makeLocalClaudeUserEvents } from "./local-claude-user-events.ts";
-import { makeLocalCliEventIngress } from "./local-cli-events.ts";
+import { localClaudeControl, type ClaudeInitProtocolEvent } from "./local-claude-control.ts";
+import { isSameClaudeSession, claudeResultCorrelation } from "./local-claude-correlation.ts";
+import { localClaudeInputDelivery } from "./local-claude-input-delivery.ts";
+import { localClaudeReportDelivery } from "./local-claude-report-delivery.ts";
+import { localClaudeResults } from "./local-claude-results.ts";
+import { localClaudeDiagnostics } from "./local-claude-diagnostics.ts";
+import { localClaudeUsage, usageComponentsTotal } from "./local-claude-usage.ts";
+import { localClaudeUserEvents } from "./local-claude-user-events.ts";
+import { localCliEventIngress } from "./local-cli-events.ts";
 import { supervisorError } from "./driver-shared.ts";
-import { deliverTerminalReport, makeLocalCliBackendDriver } from "./local-cli-driver.ts";
+import { deliverTerminalReport, localCliBackendDriver } from "./local-cli-driver.ts";
 import { CLAUDE_NATIVE_AGENT_TOOLS } from "./claude-policy.ts";
 import {
   claudeInterruptFrame,
@@ -46,15 +46,13 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   supervisor: SupervisorChannelHandle,
 ) {
   const scope = yield* Scope.Scope;
-  const { events, offer, release, acknowledge } = yield* makeLocalCliEventIngress(
-    child.acknowledge,
-  );
+  const { events, offer, release, acknowledge } = yield* localCliEventIngress(child.acknowledge);
   const nativeInitialization = Deferred.makeUnsafe<ClaudeInitProtocolEvent, SubagentError>();
   const toolNames = new Map<string, string>();
   const nativeToolNames = new Map<string, string>();
-  const correlation = makeClaudeResultCorrelation();
-  const usage = makeLocalClaudeUsage();
-  const reports = makeLocalClaudeReportDelivery(offer);
+  const correlation = claudeResultCorrelation();
+  const usage = localClaudeUsage();
+  const reports = localClaudeReportDelivery(offer);
   const handleState: LocalClaudeHandleState = {
     assignmentEpoch: 0,
     nativeSessionId: undefined,
@@ -66,7 +64,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     continuationToken: 0,
     awaitingContinuationEpoch: undefined,
   };
-  const interrupts = makeLocalCliInterrupts<PendingInterrupt>(
+  const interrupts = localCliInterrupts<PendingInterrupt>(
     "Claude",
     { offer, release },
     () => handleState.assignmentEpoch,
@@ -79,11 +77,11 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     return wireSequence;
   };
 
-  const diagnostics = makeLocalClaudeDiagnostics(() => [
+  const diagnostics = localClaudeDiagnostics(() => [
     ...toolNames.values(),
     ...nativeToolNames.values(),
   ]);
-  const inputs = makeLocalClaudeInputDelivery(
+  const inputs = localClaudeInputDelivery(
     child,
     scope,
     (operation, epoch, shouldQuery) =>
@@ -143,9 +141,9 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     forkOwned: (effect) =>
       Effect.forkIn(effect, scope, { startImmediately: true }).pipe(Effect.asVoid),
   };
-  const control = makeLocalClaudeControl(request, context, nativeInitialization);
-  const { onUser } = makeLocalClaudeUserEvents(context);
-  const { onResult, onBackgroundTasksSettled } = makeLocalClaudeResults(context);
+  const control = localClaudeControl(request, context, nativeInitialization);
+  const { onUser } = localClaudeUserEvents(context);
+  const { onResult, onBackgroundTasksSettled } = localClaudeResults(context);
 
   const cancelPending = (error: SubagentError) => {
     inputs.cancel(error);
@@ -416,7 +414,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
 // Bounds the set of task IDs one Claude process can accumulate.
 const MAX_TRACKED_BACKGROUND_TASKS = 1_024;
 
-export const makeLocalClaudeBackendDriver = makeLocalCliBackendDriver(
+export const localClaudeBackendDriver = localCliBackendDriver(
   "claude",
   (capability) => `Local Claude Code does not provide a confirmable ${capability} operation.`,
   makeLocalClaudeHandle,

@@ -5,7 +5,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vitest";
 import {
-  makeHostNotifier,
+  hostNotifier,
   type SubagentCompletionNotification,
 } from "../src/boundary/host-notifier.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
@@ -23,7 +23,7 @@ const detailsName = flow(
 
 const notifier = (sendMessage = vi.fn<SendMessage>()) => ({
   sendMessage,
-  notify: makeHostNotifier(extensionApiFixture({ sendMessage })),
+  notify: hostNotifier(extensionApiFixture({ sendMessage })),
   content: (call = 0) => messageContent(sendMessage.mock.calls[call]?.[0].content),
 });
 

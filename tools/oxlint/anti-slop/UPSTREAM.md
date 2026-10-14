@@ -1,26 +1,37 @@
 # anti-slop provenance
 
 Vendored from [`dmmulroy/anti-slop`](https://github.com/dmmulroy/anti-slop) at commit
-`446268e5d15baa968eaec669ff65358d36ae6259` (2026-08-14).
+`13909c9e07590f5a85d93c62712259fe14a883f7` (2026-10-13). Upstream `src/rules` and `src/shared` live in
+`rules/` and `shared/`; upstream `src/effect` lives in `effect/` and is registered as the separate
+`anti-slop-effect` plugin, enabled for `packages/**` and `scripts/**` (the lint plugin itself does
+not use Effect). Files are formatted with the workspace oxfmt settings.
 
 The vendored production files retain upstream behavior except the documented local hardening.
 `no-module-mocking` additionally resolves namespace imports, `@effect/vitest`, and immutable aliases
-through lexical import identity; unrelated and shadowed APIs remain valid. Local type-only adjustments let the plugin
-pass its own rules. Identical scope lookup, parameter annotation unwrapping, function node types,
-and alias-name lookup mechanics are extracted into `shared/ast.ts`; rule policy stays local. The
-unused upstream helper `isPopulatedObjectExpression` was dropped from `shared/dictionary-types.ts`.
+through lexical import identity; unrelated and shadowed APIs remain valid. Local type-only
+adjustments let the plugin pass its own rules (`no-runtime-typeof`, `no-param-reassign`,
+`prefer-optional-chain`, `no-underscore-dangle`).
+`no-manual-tagged-construction` also allows the object passed as the first argument to Effect's
+`PlatformError.systemError(...)` and `new PlatformError.SystemError(...)`, whose public API takes the
+system error tag as an argument field.
 
-Earlier workspace adaptations removed comments and split functions without changing behavior.
-Those comment, identifier-spelling, file-length, and complexity bans have been removed: they
-constrained presentation rather than protecting correctness.
-`shared/lexical-type-parameters.ts` finds `infer` declarations through tokens instead of an untyped
-visitor-key walk, so it needs no type assertion.
+Upstream walks visitor-key properties through an untyped record to collect type bindings and
+`infer` declarations. Locally, `shared/type-alias-resolution.ts` and
+`shared/lexical-type-parameters.ts` find those declarations through tokens and
+`getNodeByRangeIndex` instead, so they need no type assertion; both take the `SourceCode` rather
+than its visitor keys. `shared/scope.ts` owns the lexical `resolveVariable` walk for upstream and
+local rules alike; `shared/ast.ts` holds the remaining helpers used by local rules.
 
 Upstream rules with a native Oxlint equivalent were removed in favor of the native rule:
 `no-reflect-get` and `no-reflect-apply` became `eslint/no-restricted-properties` entries, and
 Oxlint's `typescript/consistent-type-assertions` with `assertionStyle: "never"` bans every type
 assertion except `as const`. That ban made `no-chained-type-assertions`, `no-widen-then-assert`,
 and `require-safety-comment-for-type-assertion` unreachable, so they were removed too.
+
+Upstream presentation rules are not vendored because they constrain presentation rather than
+protecting correctness: `no-shape-in-symbol-names` (identifier spelling) and
+`require-readable-spacing` (blank-line layout, with its vendored eslint-stylistic dependency).
+oxfmt owns formatting.
 
 Tests for the retained upstream rules remain, with local baseline coverage added where upstream
 had none, so Oxlint and `@oxlint/plugins` upgrades can be verified against the vendored behavior.

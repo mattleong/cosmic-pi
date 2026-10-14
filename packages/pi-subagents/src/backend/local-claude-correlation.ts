@@ -204,7 +204,7 @@ export interface ResultExpectation {
   readonly usageBaseline: UsageComponents;
 }
 
-export const makeClaudeResultCorrelation = () => {
+export const claudeResultCorrelation = () => {
   const sentUserUuids = new Map<string, ClaudeSentUserIdentity | undefined>();
   const internalReplayUuids = new Map<string, true>();
   const resultExpectations = new Map<string, ResultExpectation>();

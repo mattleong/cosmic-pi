@@ -5,7 +5,7 @@ import { deferredPromise } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import { makeHostUiTickerOwner } from "../src/boundary/host-status.ts";
 import {
-  makeHostUiTickerPool,
+  createHostUiTickerPool,
   type HostUiTickerPool,
   type HostUiTickerScheduler,
 } from "../src/boundary/host-ui-ticker-pool.ts";
@@ -33,7 +33,7 @@ const ignore = () => undefined;
 describe("host UI ticker pool", () => {
   it("shares one underlying ticker between same-cadence consumers", () => {
     const harness = schedulerHarness();
-    const pool = makeHostUiTickerPool(harness.schedule);
+    const pool = createHostUiTickerPool(harness.schedule);
     const first = vi.fn();
     const second = vi.fn();
 
@@ -60,7 +60,7 @@ describe("host UI ticker pool", () => {
 
   it("keeps different cadences independent and creates a fresh group after teardown", () => {
     const harness = schedulerHarness();
-    const pool = makeHostUiTickerPool(harness.schedule);
+    const pool = createHostUiTickerPool(harness.schedule);
     const first = vi.fn();
     const second = vi.fn();
 
@@ -84,7 +84,7 @@ describe("host UI ticker pool", () => {
 
   it("isolates throwing and reentrantly removed consumers", () => {
     const harness = schedulerHarness();
-    const pool = makeHostUiTickerPool(harness.schedule);
+    const pool = createHostUiTickerPool(harness.schedule);
     const throwing = vi.fn(() => {
       throw new Error("host teardown");
     });
@@ -106,7 +106,7 @@ describe("host UI ticker pool", () => {
   it.effect("disposes every active cadence group exactly once", () =>
     Effect.gen(function* () {
       const harness = schedulerHarness();
-      const pool = makeHostUiTickerPool(harness.schedule);
+      const pool = createHostUiTickerPool(harness.schedule);
       pool.start(160, vi.fn());
       pool.start(1_000, vi.fn());
 
@@ -123,7 +123,7 @@ describe("host UI ticker pool", () => {
     const stopped = Deferred.makeUnsafe<void>();
     const schedule: HostUiTickerScheduler = () =>
       Effect.runFork(Effect.never.pipe(Effect.ensuring(Deferred.await(stopped))));
-    const pool = makeHostUiTickerPool(schedule);
+    const pool = createHostUiTickerPool(schedule);
     return Effect.gen(function* () {
       const stopSubscription = pool.start(160, vi.fn());
       stopSubscription();
@@ -178,7 +178,7 @@ describe("host UI ticker pool", () => {
     const schedule = vi.fn<HostUiTickerScheduler>(() => {
       throw new Error("scheduler unavailable");
     });
-    const pool = makeHostUiTickerPool(schedule);
+    const pool = createHostUiTickerPool(schedule);
     const tick = vi.fn();
 
     expect(() => pool.start(Number.NaN, tick)()).not.toThrow();

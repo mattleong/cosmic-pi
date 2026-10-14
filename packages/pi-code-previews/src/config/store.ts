@@ -8,7 +8,7 @@ import {
 } from "../application/capability";
 import { nodeJoin } from "../boundary/node";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
-import { makeSettingsAdmission, type SettingsAdmission } from "./coordinator";
+import { nextSettingsAdmission, type SettingsAdmission } from "./coordinator";
 import type { CodePreviewSettings } from "./schema";
 import {
   CodePreviewSettingsService,
@@ -48,12 +48,12 @@ export function loadCodePreviewSettings(
     });
   };
 
-  if (signal) return execute(makeSettingsAdmission());
+  if (signal) return execute(nextSettingsAdmission());
 
   const key = JSON.stringify([projectCwd ?? null, projectTrusted]);
   const inFlight = inFlightLoads.get(key);
   if (inFlight) return inFlight.then(cloneCodePreviewSettings);
-  const load = execute(makeSettingsAdmission());
+  const load = execute(nextSettingsAdmission());
   inFlightLoads.set(key, load);
   const settle = () => {
     if (inFlightLoads.get(key) === load) inFlightLoads.delete(key);
@@ -72,7 +72,7 @@ export function queueSettingsSave(
   previous?: CodePreviewSettings,
   editedKeys?: readonly (keyof CodePreviewSettings)[],
 ): Promise<void> {
-  const admission = makeSettingsAdmission();
+  const admission = nextSettingsAdmission();
   const next = cloneCodePreviewSettings(settings);
   const options = {
     ...(!hasCodePreviewSessionCapability() && { rehydrate: loadOptions }),
@@ -85,7 +85,7 @@ export function queueSettingsSave(
 }
 
 export function queueSettingsReset(loadOptions: LoadSettingsOptions = {}): Promise<void> {
-  const admission = makeSettingsAdmission();
+  const admission = nextSettingsAdmission();
   const options = hasCodePreviewSessionCapability() ? {} : { rehydrate: loadOptions };
   return runSettingsEffect(
     CodePreviewSettingsService.use((service) => service.reset(admission, options)),

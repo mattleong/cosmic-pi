@@ -3,7 +3,7 @@ import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
 import {
   FOOTER_PRE_SESSION_KEY_LIMIT,
   FOOTER_REENTRANT_OPERATION_LIMIT,
-  makeFooterRegistry,
+  createFooterRegistry,
   type FooterRegistry,
 } from "../src/footer/registry.ts";
 
@@ -16,7 +16,7 @@ const text = (id: string, value = id): CosmicFooterTextContribution => ({
 
 function registry(onRender: (registry: FooterRegistry) => void = () => undefined) {
   const renders = vi.fn(() => onRender(store));
-  const store = makeFooterRegistry({ requestRender: renders, sessionActive: () => true });
+  const store = createFooterRegistry({ requestRender: renders, sessionActive: () => true });
   const ids = () => store.snapshot().contributions.map((entry) => entry.id);
   return { store, renders, ids };
 }
@@ -154,7 +154,7 @@ describe("footer registry", () => {
 
   it("caps distinct keys only while no session is active", () => {
     let active = false;
-    const store = makeFooterRegistry({
+    const store = createFooterRegistry({
       requestRender: () => undefined,
       sessionActive: () => active,
     });

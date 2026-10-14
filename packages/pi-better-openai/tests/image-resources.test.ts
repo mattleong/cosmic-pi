@@ -8,8 +8,9 @@ import * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import { nodePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
-import { makeImageOutput } from "../src/image/output.ts";
+import { imageOutput } from "../src/image/output.ts";
 import { bytes, pngSharp } from "./helpers.ts";
+import { OpenAIImageError } from "../src/image/types.ts";
 
 const tempImages = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -22,7 +23,7 @@ describe("OpenAI image resources", () => {
   it.effect("publishes atomically and preserves an existing destination on collision", () =>
     Effect.gen(function* () {
       const { fs, path, root, directory } = yield* tempImages;
-      const output = makeImageOutput({ fs, path, sharp: pngSharp });
+      const output = imageOutput({ fs, path, sharp: pngSharp });
       const content = bytes("owned-image-bytes");
       const persist = output
         .persistImage(directory, root, content, "png", "provider/id")
@@ -38,7 +39,8 @@ describe("OpenAI image resources", () => {
       const collision = yield* output
         .persistImage(directory, root, bytes("replacement"), "png", "provider/id")
         .pipe(Random.withSeed("collision-seed"), Effect.flip);
-      expect(collision).toMatchObject({ _tag: "OpenAIImageError", operation: "save" });
+      expect(collision).toBeInstanceOf(OpenAIImageError);
+      expect(collision).toMatchObject({ operation: "save" });
       expect(Array.from(yield* fs.readFile(destination))).toEqual(Array.from(content));
       const visible = yield* fs.readDirectory(directory);
       expect(visible).toHaveLength(1);
@@ -51,10 +53,11 @@ describe("OpenAI image resources", () => {
       const { fs: realFs, path, root, directory } = yield* tempImages;
       const probeFailure = realFs.readFile(path.join(root, "missing")).pipe(Effect.as(false));
       const hostileFs: typeof realFs = Object.assign({}, realFs, { exists: () => probeFailure });
-      const failure = yield* makeImageOutput({ fs: hostileFs, path, sharp: pngSharp })
+      const failure = yield* imageOutput({ fs: hostileFs, path, sharp: pngSharp })
         .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
         .pipe(Effect.flip);
-      expect(failure).toMatchObject({ _tag: "OpenAIImageError", operation: "save" });
+      expect(failure).toBeInstanceOf(OpenAIImageError);
+      expect(failure).toMatchObject({ operation: "save" });
     }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 
@@ -102,14 +105,14 @@ describe("OpenAI image resources", () => {
               linkCalls++;
             }).pipe(Effect.andThen(realFs.link(...args))),
         });
-        const output = makeImageOutput({ fs: hostileFs, path, sharp: pngSharp });
+        const output = imageOutput({ fs: hostileFs, path, sharp: pngSharp });
 
         const failure = yield* output
           .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
           .pipe(Effect.flip);
 
+        expect(failure).toBeInstanceOf(OpenAIImageError);
         expect(failure).toMatchObject({
-          _tag: "OpenAIImageError",
           operation: "save",
           message: failureCase.message,
         });
@@ -136,13 +139,14 @@ describe("OpenAI image resources", () => {
             destination = target;
           }),
       });
-      const output = makeImageOutput({ fs: hostileFs, path, sharp: pngSharp });
+      const output = imageOutput({ fs: hostileFs, path, sharp: pngSharp });
 
       const failure = yield* output
         .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
         .pipe(Effect.flip);
 
-      expect(failure).toMatchObject({ _tag: "OpenAIImageError", operation: "save" });
+      expect(failure).toBeInstanceOf(OpenAIImageError);
+      expect(failure).toMatchObject({ operation: "save" });
       const publishedDestination = destination;
       if (!publishedDestination) return yield* Effect.die("destination was not published");
       expect(Array.from(yield* realFs.readFile(publishedDestination))).toEqual(
@@ -179,7 +183,7 @@ describe("OpenAI image resources", () => {
             ),
           ),
       });
-      const output = makeImageOutput({ fs: hostileFs, path, sharp: pngSharp });
+      const output = imageOutput({ fs: hostileFs, path, sharp: pngSharp });
       const fiber = yield* output
         .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
         .pipe(Effect.forkScoped);
@@ -199,7 +203,7 @@ describe("OpenAI image resources", () => {
         stat: (pathArg: Parameters<typeof realFs.stat>[0]) =>
           pathArg.endsWith(".png") ? Effect.die("verification-io-loss") : realFs.stat(pathArg),
       });
-      const output = makeImageOutput({ fs: hostileFs, path, sharp: pngSharp });
+      const output = imageOutput({ fs: hostileFs, path, sharp: pngSharp });
       const content = bytes("committed-image-bytes");
       const destination = yield* output.persistImage(
         directory,

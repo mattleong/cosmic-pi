@@ -1,9 +1,10 @@
 import * as Effect from "effect/Effect";
-import { makeLocalCliEventIngress } from "./local-cli-events.ts";
+import { localCliEventIngress } from "./local-cli-events.ts";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as Predicate from "effect/Predicate";
 import {
   type ChildProcessHandle,
   type ChildProcessContract,
@@ -16,7 +17,7 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import { PI_SUBAGENT_CAPABILITIES } from "../run/model.ts";
-import { makeLocalPiUsage } from "./local-pi-usage.ts";
+import { localPiUsage } from "./local-pi-usage.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import { decodeRpcEnvelope, decodeRpcStateData, rpcStateModelId } from "./local-pi-protocol.ts";
 import {
@@ -24,7 +25,7 @@ import {
   normalizeRpcEvent,
   parentContactAckOutcome,
 } from "./local-pi-events.ts";
-import { makeLocalPiRpc } from "./local-pi-rpc.ts";
+import { localPiRpc } from "./local-pi-rpc.ts";
 import { MAX_ERROR_CHARS, sanitizeStreamDiagnostic } from "../run/state.ts";
 import { protocolError } from "./driver-shared.ts";
 import {
@@ -58,18 +59,12 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
 ) {
   const turnControl = yield* Semaphore.make(1);
   const withTurnControl = turnControl.withPermits(1);
-  const {
-    rpc,
-    ipcAck,
-    resolveIpcAck,
-    resolveResponse,
-    cancel: cancelPending,
-  } = makeLocalPiRpc(child);
+  const { rpc, ipcAck, resolveIpcAck, resolveResponse, cancel: cancelPending } = localPiRpc(child);
   let assignmentEpoch = 0;
   let latestTerminal: BackendAssistantTerminal | undefined;
   let transportFailure: SubagentError | undefined;
 
-  const { events, offer, release, acknowledge } = yield* makeLocalCliEventIngress(
+  const { events, offer, release, acknowledge } = yield* localCliEventIngress(
     child.acknowledge,
     "local-Pi",
   );
@@ -94,7 +89,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   );
 
   const usageRequests = yield* Queue.dropping<void>(1);
-  const accountUsage = makeLocalPiUsage();
+  const accountUsage = localPiUsage();
   const usageControl = yield* Semaphore.make(1);
   const withUsageControl = usageControl.withPermits(1);
   let usageDirty = false;
@@ -279,7 +274,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
               Effect.tapError((error) =>
                 Effect.sync(() => {
                   const outcomeUncertain =
-                    error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
+                    Predicate.isTagged(error, "SubagentProcessError") && isOutcomeUncertain(error);
                   if (!outcomeUncertain && assignmentEpoch === nextAssignmentEpoch) {
                     assignmentEpoch = previousAssignmentEpoch;
                     latestTerminal = previousTerminal;
@@ -369,7 +364,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   };
 });
 
-export const makeLocalPiBackendDriver = (childProcesses: ChildProcessContract): BackendDriver => ({
+export const localPiBackendDriver = (childProcesses: ChildProcessContract): BackendDriver => ({
   host: "local",
   runtime: "pi",
   capabilities: PI_SUBAGENT_CAPABILITIES,

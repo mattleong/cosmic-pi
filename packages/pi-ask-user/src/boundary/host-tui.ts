@@ -12,7 +12,7 @@ import { captureExternalEditorCommand, editWithExternalEditor } from "./host-ext
 import type { AskUserPromptGate } from "./host-prompt.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
-export const makeAskUserTuiHost =
+export const askUserTuiHost =
   (ctx: ExtensionContext, bridge: AskUserDialogBridge, gate?: AskUserPromptGate): AskUserHost =>
   (request, presence, queued) =>
     Effect.tryPromise(() => import("../ui/dialog.ts")).pipe(

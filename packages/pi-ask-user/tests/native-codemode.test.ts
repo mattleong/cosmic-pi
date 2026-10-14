@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Match from "effect/Match";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { AskUserHostError } from "../src/questionnaire/errors.ts";
@@ -47,16 +48,15 @@ describe("native scripted questionnaire workflows", () => {
           Effect.sync(() => {
             const key = input.questions[0]!.key;
             seen.push(key);
-            return key === "choice"
-              ? submitted
-              : key === "wording"
-                ? {
-                    outcome: "submitted",
-                    answers: [
-                      { key, kind: "text", text: "Use the user's words", note: "Verbatim" },
-                    ],
-                  }
-                : { outcome: "cancelled", answers: [] };
+            return Match.value(key).pipe(
+              Match.withReturnType<AskUserOutcome>(),
+              Match.when("choice", () => submitted),
+              Match.when("wording", () => ({
+                outcome: "submitted",
+                answers: [{ key, kind: "text", text: "Use the user's words", note: "Verbatim" }],
+              })),
+              Match.orElse(() => ({ outcome: "cancelled", answers: [] })),
+            );
           }),
         );
         const h = yield* nativeCodemodeSession(service);

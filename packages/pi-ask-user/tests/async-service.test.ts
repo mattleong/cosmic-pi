@@ -21,7 +21,7 @@ import {
   type QuestionnairePresence,
 } from "../src/questionnaire/service.ts";
 import { formatAsyncSnapshot } from "../src/questionnaire/format.ts";
-import { AskUserHostError } from "../src/questionnaire/errors.ts";
+import { AskUserHostError, AskUserValidationError } from "../src/questionnaire/errors.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import {
   MAX_RETAINED_REQUESTS,
@@ -374,13 +374,9 @@ it.effect("propagates opening failure and releases admission", () =>
     const failure = new AskUserHostError({ operation: "open", message: "Unavailable." });
     yield* Effect.gen(function* () {
       const service = yield* AskUserService;
-      expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({
-        _tag: "AskUserHostError",
-      });
+      expect(yield* Effect.flip(service.startAsync(request))).toBeInstanceOf(AskUserHostError);
       expect((yield* control(service, "status"))?.status).toBe("failed");
-      expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({
-        _tag: "AskUserHostError",
-      });
+      expect(yield* Effect.flip(service.startAsync(request))).toBeInstanceOf(AskUserHostError);
     }).pipe(
       Effect.provide(
         AskUserService.layer(
@@ -443,7 +439,7 @@ it.effect("rejects blank work descriptions before opening", () =>
     for (const work of [" ", "x".repeat(501)])
       expect(
         yield* Effect.flip(service.startAsync({ ...request, blockedWork: work })),
-      ).toMatchObject({ _tag: "AskUserValidationError" });
+      ).toBeInstanceOf(AskUserValidationError);
     expect(yield* Effect.flip(control(service, "await"))).toMatchObject({
       reason: "invalid-control",
     });
@@ -463,9 +459,7 @@ it.effect("acknowledging failed openings recovers a full registry after host rec
       });
     const service = yield* acquireService(host, () => Effect.void);
     for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) {
-      expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({
-        _tag: "AskUserHostError",
-      });
+      expect(yield* Effect.flip(service.startAsync(request))).toBeInstanceOf(AskUserHostError);
     }
     const listed = yield* service.controlAsync({ action: "status" });
     expect(listed.requests).toHaveLength(MAX_RETAINED_REQUESTS);

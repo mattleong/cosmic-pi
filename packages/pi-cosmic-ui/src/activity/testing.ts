@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
-import { ActivityComponent, makeActivityPresentation } from "./component.ts";
+import { ActivityComponent, freshActivityPresentation } from "./component.ts";
 import type { ActivityRow } from "./model.ts";
 import {
   ACTIVITY_DISCOVER,
@@ -81,7 +81,7 @@ export function activityGalleryFrames(options: ActivityGalleryOptions): string[]
       );
   const width = 140;
   for (const itemId of options.open ?? []) {
-    const presentation = makeActivityPresentation();
+    const presentation = freshActivityPresentation();
     for (const row of rows) presentation.expandedHistory.add(row.key);
     const component = new ActivityComponent({
       snapshot: () => rows,

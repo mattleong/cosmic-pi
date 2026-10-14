@@ -3,9 +3,11 @@ import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { afterAll, describe, expect } from "vitest";
 import {
+  BlankChildSessionFileResult,
   compareSessionFileIdentity,
   createBlankChildSessionFile,
   probeSessionHeader,
+  SessionHeaderProbe,
 } from "../src/boundary/session-file.ts";
 
 const nodeFs = process.getBuiltinModule("node:fs");
@@ -55,18 +57,16 @@ describe("session-file validation", () => {
       }),
       `${JSON.stringify({ type: "message", id: "m1", parentId: null })}\n`,
     );
-    expect(probeSessionHeader(path)).toEqual({
-      _tag: "valid",
-      header: { id: "child-id-1", parentSession: PARENT_FILE },
-    });
+    expect(probeSessionHeader(path)).toEqual(
+      SessionHeaderProbe.valid({ header: { id: "child-id-1", parentSession: PARENT_FILE } }),
+    );
   });
 
   it("reads a root header without parentSession", () => {
     const path = writeHeader("root.jsonl", "root-id");
-    expect(probeSessionHeader(path)).toEqual({
-      _tag: "valid",
-      header: { id: "root-id", parentSession: undefined },
-    });
+    expect(probeSessionHeader(path)).toEqual(
+      SessionHeaderProbe.valid({ header: { id: "root-id", parentSession: undefined } }),
+    );
   });
 
   it("rejects missing files, directories, and symlinks", () => {
@@ -78,33 +78,33 @@ describe("session-file validation", () => {
     symlinkSync(target, link);
 
     for (const path of [missing, nested, link]) {
-      expect(probeSessionHeader(path)).toEqual({ _tag: "invalid" });
+      expect(probeSessionHeader(path)).toEqual(SessionHeaderProbe.invalid());
     }
   });
 
   it("rejects malformed and non-session first lines", () => {
-    expect(probeSessionHeader(writeSession("broken.jsonl", "{not json"))).toEqual({
-      _tag: "invalid",
-    });
+    expect(probeSessionHeader(writeSession("broken.jsonl", "{not json"))).toEqual(
+      SessionHeaderProbe.invalid(),
+    );
     expect(
       probeSessionHeader(
         writeSession("wrong-type.jsonl", JSON.stringify({ type: "message", id: "x" })),
       ),
-    ).toEqual({ _tag: "invalid" });
+    ).toEqual(SessionHeaderProbe.invalid());
     expect(
       probeSessionHeader(writeSession("no-id.jsonl", JSON.stringify({ type: "session" }))),
-    ).toEqual({ _tag: "invalid" });
+    ).toEqual(SessionHeaderProbe.invalid());
   });
 
   it("rejects an unbounded first line instead of reading it fully", () => {
     const path = pathApi.join(dir, "huge.jsonl");
     writeFileSync(path, `{"type":"session","id":"huge","pad":"${"x".repeat(300 * 1024)}"}\n`);
-    expect(probeSessionHeader(path)).toEqual({ _tag: "invalid" });
+    expect(probeSessionHeader(path)).toEqual(SessionHeaderProbe.invalid());
   });
 
   it("rejects relative and control-character paths without touching the filesystem", () => {
     for (const path of ["relative/session.jsonl", `${dir}/bad\npath.jsonl`, ""]) {
-      expect(probeSessionHeader(path)).toEqual({ _tag: "invalid" });
+      expect(probeSessionHeader(path)).toEqual(SessionHeaderProbe.invalid());
     }
   });
 });
@@ -139,10 +139,9 @@ describe("session-file identity", () => {
     symlinkSync(nestedDirectory, directoryAlias);
     const traversed = `${directoryAlias}${sep}..${sep}session.jsonl`;
 
-    expect(probeSessionHeader(traversed)).toMatchObject({
-      _tag: "valid",
-      header: { id: "target-session" },
-    });
+    expect(probeSessionHeader(traversed)).toMatchObject(
+      SessionHeaderProbe.valid({ header: { id: "target-session" } }),
+    );
     expect(compareSessionFileIdentity(traversed, target)).toBe("same");
     expect(compareSessionFileIdentity(target, traversed)).toBe("same");
   });
@@ -170,17 +169,16 @@ describe("createBlankChildSessionFile", () => {
         sessionId: "blank-child-id",
       });
 
-      expect(result._tag).toBe("created");
-      if (result._tag === "created") {
+      expect(BlankChildSessionFileResult.$is("created")(result)).toBe(true);
+      if (BlankChildSessionFileResult.$is("created")(result)) {
         expect(result.path).toContain("2026-08-26T01-02-03-004Z_blank-child-id.jsonl");
         expect(statSync(result.path).mode & 0o777).toBe(0o600);
         const header = readFileSync(result.path, "utf8").split("\n")[0] ?? "";
         expect(header).toContain(`"timestamp":"${FIRST_TIMESTAMP}"`);
         expect(header).toContain('"cwd":"/project"');
-        expect(probeSessionHeader(result.path)).toEqual({
-          _tag: "valid",
-          header: { id: "blank-child-id", parentSession: undefined },
-        });
+        expect(probeSessionHeader(result.path)).toEqual(
+          SessionHeaderProbe.valid({ header: { id: "blank-child-id", parentSession: undefined } }),
+        );
       }
     }),
   );
@@ -193,18 +191,22 @@ describe("createBlankChildSessionFile", () => {
         cwd: "/project",
         sessionId: "collision-child-id",
       } as const;
-      expect((yield* createBlankChildSessionFile(input))._tag).toBe("created");
-      expect(yield* createBlankChildSessionFile(input)).toEqual({ _tag: "invalid" });
+      expect(
+        BlankChildSessionFileResult.$is("created")(yield* createBlankChildSessionFile(input)),
+      ).toBe(true);
+      expect(yield* createBlankChildSessionFile(input)).toEqual(
+        BlankChildSessionFileResult.invalid(),
+      );
       expect(
         yield* createBlankChildSessionFile({
           ...input,
           sessionDir: pathApi.join(dir, "missing-directory"),
         }),
-      ).toEqual({ _tag: "invalid" });
+      ).toEqual(BlankChildSessionFileResult.invalid());
       for (const sessionId of ["x/../escape", "a".repeat(129)])
-        expect(yield* createBlankChildSessionFile({ ...input, sessionId })).toEqual({
-          _tag: "invalid",
-        });
+        expect(yield* createBlankChildSessionFile({ ...input, sessionId })).toEqual(
+          BlankChildSessionFileResult.invalid(),
+        );
     }),
   );
 });

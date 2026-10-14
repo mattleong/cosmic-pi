@@ -3,6 +3,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { JsonHttpClient, mergeHeaders } from "pi-cosmic-core";
 import {
@@ -142,7 +143,7 @@ export class OpenAICompactionClient extends Context.Service<
                 attributes: { "http.request.method": "POST" },
               }),
             );
-          if (response._tag === "Rejected")
+          if (Predicate.isTagged(response, "Rejected"))
             return yield* new OpenAICompactionBoundaryError({
               operation: "response",
               message: `OpenAI compaction failed (${response.status}).`,

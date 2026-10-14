@@ -12,7 +12,7 @@ export interface AdaptiveHostRefreshTickerOptions {
   readonly requestRender: () => void;
 }
 
-export const makeAdaptiveHostRefreshTicker = (
+export const adaptiveHostRefreshTicker = (
   options: AdaptiveHostRefreshTickerOptions,
 ): AdaptiveHostRefreshTicker => {
   let cadence: SubagentUiRefreshCadence | undefined;

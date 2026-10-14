@@ -1,7 +1,12 @@
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { expect } from "vitest";
-import { makeAgentName, parentBtwDisplayName, selectSplitDirection } from "../src/btw/policy.ts";
+import {
+  sideSessionAgentName,
+  parentBtwDisplayName,
+  selectSplitDirection,
+} from "../src/btw/policy.ts";
+import { SessionHeaderProbe } from "../src/boundary/session-file.ts";
 import {
   CHILD_ALIAS,
   CHILD_FILE,
@@ -25,7 +30,7 @@ describe("herdr-btw policy", () => {
   });
 
   it("generates bounded Herdr-safe agent names", () => {
-    const name = makeAgentName("SESSION !!! WITH SPACES", "workspace:pane/999999999");
+    const name = sideSessionAgentName("SESSION !!! WITH SPACES", "workspace:pane/999999999");
     expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
   });
 
@@ -181,18 +186,15 @@ describe("herdr-btw workflow", () => {
 
   it.effect("requires an exact bounded parent session header before a client call", () =>
     Effect.gen(function* () {
-      for (const parentProbe of [
-        { _tag: "invalid" as const },
-        { _tag: "valid" as const, header: { id: "another-parent" } },
-      ]) {
+      for (const [parentProbe, code] of [
+        [SessionHeaderProbe.invalid(), "parent_session_unavailable"],
+        [
+          SessionHeaderProbe.valid({ header: { id: "another-parent" } }),
+          "parent_session_owner_mismatch",
+        ],
+      ] as const) {
         const test = fixture({ probes: { [SESSION_FILE]: parentProbe } });
-        expect(yield* Effect.flip(test.open())).toMatchObject({
-          code:
-            parentProbe._tag === "invalid"
-              ? "parent_session_unavailable"
-              : "parent_session_owner_mismatch",
-          outcome: "confirmed",
-        });
+        expect(yield* Effect.flip(test.open())).toMatchObject({ code, outcome: "confirmed" });
         expect(test.calls).toEqual([]);
       }
     }),

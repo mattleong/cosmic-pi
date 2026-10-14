@@ -34,7 +34,7 @@ import {
 } from "../src/boundary/openai-compaction.ts";
 import { reconstructOpenAIContext } from "../src/compaction/context.ts";
 import { projectOpenAIResponseInput } from "../src/compaction/projection.ts";
-import { OpenAICompactionService } from "../src/compaction/service.ts";
+import { OpenAICompactionError, OpenAICompactionService } from "../src/compaction/service.ts";
 import {
   decodeOpenAICompactionDetails,
   OPENAI_COMPACTION_SUMMARY,
@@ -756,7 +756,8 @@ describe("OpenAICompactionService", () => {
     return Effect.gen(function* () {
       const service = yield* OpenAICompactionService;
       const failure = yield* service.compact(compactEvent()).pipe(Effect.flip);
-      expect(failure).toMatchObject({ _tag: "OpenAICompactionError", operation: "context" });
+      expect(failure).toBeInstanceOf(OpenAICompactionError);
+      expect(failure).toMatchObject({ operation: "context" });
       expect(serializedSnapshot(failure)).not.toContain("host-context-secret");
     }).pipe(provideBuiltLayer(serviceLayer(target, client)));
   });

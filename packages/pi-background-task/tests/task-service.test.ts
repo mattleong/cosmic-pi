@@ -31,6 +31,14 @@ import type {
   StartBackgroundTask,
   WaitForBackgroundTask,
 } from "../src/task/model.ts";
+import {
+  BackgroundSpawnError,
+  BackgroundTaskCapacityError,
+  BackgroundTaskNotFoundError,
+  BackgroundTerminationError,
+  InvalidBackgroundCommandError,
+  InvalidBackgroundCwdError,
+} from "../src/task/errors.ts";
 import { BackgroundTaskService, type BackgroundTaskServiceContract } from "../src/task/service.ts";
 
 interface FakeProcessControl {
@@ -303,9 +311,10 @@ describe("BackgroundTaskService", () => {
       if (text === "abc") Deferred.doneUnsafe(trailing, Effect.void);
     });
     const outputTexts = () =>
-      projections
-        .map((projection) => projection.tasks[0]?.logs.map((entry) => entry.text).join(""))
-        .filter((text): text is string => Boolean(text));
+      projections.flatMap((projection) => {
+        const text = projection.tasks[0]?.logs.map((entry) => entry.text).join("");
+        return text ? [text] : [];
+      });
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput({ command: "watch" }));
 
@@ -450,7 +459,7 @@ describe("BackgroundTaskService", () => {
               cwd: ".",
             })
             .pipe(Effect.flip),
-        ).toMatchObject({ _tag: "InvalidBackgroundCommandError" });
+        ).toBeInstanceOf(InvalidBackgroundCommandError);
         expect(
           yield* service
             .start({
@@ -459,10 +468,10 @@ describe("BackgroundTaskService", () => {
               name: ` ${"n".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars + 1)} `,
             })
             .pipe(Effect.flip),
-        ).toMatchObject({ _tag: "InvalidBackgroundCommandError" });
+        ).toBeInstanceOf(InvalidBackgroundCommandError);
         expect(
           yield* service.start({ command: "valid", cwd: `${cwdAtLimit}d` }).pipe(Effect.flip),
-        ).toMatchObject({ _tag: "InvalidBackgroundCwdError" });
+        ).toBeInstanceOf(InvalidBackgroundCwdError);
         expect(harness.controls).toHaveLength(1);
         expect((yield* service.list()).map((task) => task.id)).toEqual(["task-1"]);
 
@@ -638,12 +647,12 @@ describe("BackgroundTaskService", () => {
         yield* service
           .wait({ id: started.id, until: "output", contains: "", waitSeconds: 1 })
           .pipe(Effect.flip),
-      ).toMatchObject({ _tag: "InvalidBackgroundCommandError" });
+      ).toBeInstanceOf(InvalidBackgroundCommandError);
       expect(
         yield* service
           .wait({ id: started.id, until: "exit", contains: "irrelevant", waitSeconds: 1 })
           .pipe(Effect.flip),
-      ).toMatchObject({ _tag: "InvalidBackgroundCommandError" });
+      ).toBeInstanceOf(InvalidBackgroundCommandError);
       yield* service.stop(started.id);
     });
   });
@@ -717,17 +726,13 @@ describe("BackgroundTaskService", () => {
       yield* Effect.yieldNow;
       yield* TestClock.adjust("5 seconds");
       const failure = yield* Fiber.join(stopping).pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "BackgroundTerminationError",
-        id: started.id,
-      });
+      expect(failure).toBeInstanceOf(BackgroundTerminationError);
+      expect(failure).toMatchObject({ id: started.id });
       expect(yield* service.status(started.id)).toMatchObject({ state: "stopping" });
       expect((yield* service.list("active")).map((task) => task.id)).toEqual([started.id]);
       expect(
         yield* service.start(taskInput({ command: "second" })).pipe(Effect.flip),
-      ).toMatchObject({
-        _tag: "BackgroundTaskCapacityError",
-      });
+      ).toBeInstanceOf(BackgroundTaskCapacityError);
 
       harness.controls[0]?.complete({ exitCode: null, signal: "SIGKILL" });
       yield* Effect.yieldNow;
@@ -740,11 +745,8 @@ describe("BackgroundTaskService", () => {
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput());
       const failure = yield* service.stop(started.id).pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "BackgroundTerminationError",
-        id: started.id,
-        message: "Fixture termination failed.",
-      });
+      expect(failure).toBeInstanceOf(BackgroundTerminationError);
+      expect(failure).toMatchObject({ id: started.id, message: "Fixture termination failed." });
       expect(yield* service.status(started.id)).toMatchObject({ state: "stopping" });
       harness.controls[0]?.complete({ exitCode: null, signal: "SIGTERM" });
       yield* Effect.yieldNow;
@@ -798,10 +800,9 @@ describe("BackgroundTaskService", () => {
       const stopping = yield* service.stop("task-1").pipe(forkNow);
       yield* Effect.yieldNow;
       yield* TestClock.adjust("10 seconds");
-      expect(yield* Fiber.join(stopping).pipe(Effect.flip)).toMatchObject({
-        _tag: "BackgroundTerminationError",
-        id: "task-1",
-      });
+      const failure = yield* Fiber.join(stopping).pipe(Effect.flip);
+      expect(failure).toBeInstanceOf(BackgroundTerminationError);
+      expect(failure).toMatchObject({ id: "task-1" });
       expect((yield* service.status("task-1")).state).toBe("stopping");
       yield* Deferred.succeed(spawnGate, undefined);
       yield* Deferred.await(harness.spawned);
@@ -863,7 +864,7 @@ describe("BackgroundTaskService", () => {
         snapshot: { state: "exited" },
       });
       const missing = yield* service.status(first.id).pipe(Effect.flip);
-      expect(missing).toMatchObject({ _tag: "BackgroundTaskNotFoundError" });
+      expect(missing).toBeInstanceOf(BackgroundTaskNotFoundError);
       const [headline = ""] = missing.message.split("\n");
       expect(issueMessageStyleProblems(headline, { forbidden: [first.id] })).toEqual([]);
       expect(missing.message).toContain(first.id);
@@ -897,12 +898,12 @@ describe("BackgroundTaskService", () => {
         .pipe(Effect.timeout("2 seconds"), Effect.flip);
     return Effect.gen(function* () {
       const service = yield* BackgroundTaskService;
-      expect(yield* refusedStart(service)).toMatchObject({ _tag: "BackgroundSpawnError" });
+      expect(yield* refusedStart(service)).toBeInstanceOf(BackgroundSpawnError);
       const [failed] = yield* service.list();
       expect(failed?.state).toBe("failed");
       expect(failed?.error).toBeTypeOf("string");
       expect(failed?.endedAt).toBeDefined();
-      expect(yield* refusedStart(service)).toMatchObject({ _tag: "BackgroundSpawnError" });
+      expect(yield* refusedStart(service)).toBeInstanceOf(BackgroundSpawnError);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 

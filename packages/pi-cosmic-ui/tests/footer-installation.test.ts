@@ -8,9 +8,9 @@ import {
   plainTheme,
   tuiFixture,
 } from "pi-cosmic-core/testing";
-import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
+import { defaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterInstallation } from "../src/footer/installation.ts";
-import { makeProjection } from "../src/protocol/service.ts";
+import { createProjection } from "../src/protocol/service.ts";
 
 type FooterFactory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 
@@ -22,10 +22,10 @@ const mountFooter = (factory: FooterFactory | undefined, requestRender: () => vo
 };
 
 function installation() {
-  const projection = makeProjection();
+  const projection = createProjection();
   MutableRef.update(projection, (current) => ({
     ...current,
-    config: makeDefaultResolvedCosmicUiConfig(),
+    config: defaultResolvedCosmicUiConfig(),
   }));
   const factories: FooterFactory[] = [];
   const context = () =>
@@ -41,7 +41,7 @@ function installation() {
     pi: extensionApiFixture({}),
     registry: { snapshot: () => ({ contributions: [] }) },
     projection,
-    config: makeDefaultResolvedCosmicUiConfig,
+    config: defaultResolvedCosmicUiConfig,
     currentContext: () => undefined,
     refreshAfterBranchChange: () => undefined,
     onActiveChange: () => undefined,

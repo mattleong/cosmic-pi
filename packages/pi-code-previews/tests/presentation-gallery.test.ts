@@ -24,6 +24,7 @@ import {
 } from "../src/application/tool-renderers";
 import { nativeCall as callRecord, nativeReceipt, scriptResult } from "./support/native-codemode";
 import { builtinToolInfo, inertScheduler } from "./support/renderer-host";
+import * as Match from "effect/Match";
 
 function registered(style: "compact" | "preview") {
   setCodePreviewSettings({
@@ -420,7 +421,11 @@ const scenarios: ReadonlyArray<
       Array.from({ length: 257 }, (_, index) => ({
         ...nativeCall(
           index === 0 || index === 256 ? "error" : "ok",
-          index === 0 ? "Older failure" : index === 256 ? "Recent failure" : undefined,
+          Match.value(index).pipe(
+            Match.when(0, () => "Older failure"),
+            Match.when(256, () => "Recent failure"),
+            Match.orElse(() => undefined),
+          ),
         ),
         id: `private/${index}`,
         args: JSON.stringify({ path: `/project/check-${index}.ts` }),

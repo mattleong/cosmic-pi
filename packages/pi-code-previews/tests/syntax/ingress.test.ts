@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { makeSyntaxIngress } from "../../src/syntax/ingress";
+import { acquireSyntaxIngress } from "../../src/syntax/ingress";
 import { clearSyntaxProjection, requestSyntaxLanguage } from "../../src/syntax/projection";
 import { acquireProjectionOwnership } from "../../src/shared/projection-ownership";
 
@@ -15,7 +15,7 @@ it.effect("shares the callback retention bound across duplicate and distinct req
     let retained = 0;
     let overflow = 0;
     const loaded: string[] = [];
-    const ingress = yield* makeSyntaxIngress(owner, {
+    const ingress = yield* acquireSyntaxIngress(owner, {
       initialize: () => Effect.void,
       language: (language) =>
         Effect.gen(function* () {
@@ -50,7 +50,7 @@ it.effect("shares the callback retention bound across duplicate and distinct req
 it.effect("a saturated row's synchronous redraw does not invalidate it again", () =>
   Effect.gen(function* () {
     const owner = acquireProjectionOwnership("code-preview-syntax-projection");
-    const ingress = yield* makeSyntaxIngress(owner, {
+    const ingress = yield* acquireSyntaxIngress(owner, {
       initialize: () => Effect.void,
       language: () => Effect.never,
     });

@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import {
   buildSessionContext,
   type ExtensionContext,
@@ -7,7 +8,7 @@ import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core";
 
 export function captureDirectorySession(event: SessionStartEvent, ctx: ExtensionContext) {
   const host = captureSessionHost(ctx);
-  if (host._tag === "Unavailable") return undefined;
+  if (!Predicate.isTagged(host, "Captured")) return undefined;
   const fresh =
     event.reason === "startup"
       ? invokeHostCallback(

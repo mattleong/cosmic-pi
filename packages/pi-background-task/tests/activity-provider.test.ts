@@ -9,7 +9,7 @@ import {
   backgroundTaskActivityItems,
   registerBackgroundTaskActivity,
 } from "../src/boundary/host-activity.ts";
-import { makeProjectionBridge } from "../src/boundary/host-ui.ts";
+import { taskProjectionBridge } from "../src/boundary/host-ui.ts";
 import type { BackgroundTaskView } from "../src/task/model.ts";
 
 const task: BackgroundTaskView = {
@@ -27,7 +27,7 @@ describe("background task activity provider", () => {
   it.effect("clears only finished producer records and cannot reuse a cleared action", () =>
     Effect.gen(function* () {
       const transport = fakeActivityHost();
-      const bridge = makeProjectionBridge();
+      const bridge = taskProjectionBridge();
       bridge.publish({
         tasks: [task, { ...task, id: "finished", state: "exited", exitCode: 0, endedAt: 2 }],
       });
@@ -96,7 +96,7 @@ describe("background task activity provider", () => {
       startedAt: index,
     }));
     const transport = fakeActivityHost();
-    const bridge = makeProjectionBridge();
+    const bridge = taskProjectionBridge();
     bridge.publish({ tasks: [...finished, ...running] });
     const dispose = registerBackgroundTaskActivity({
       events: transport.events,
@@ -169,7 +169,7 @@ describe("background task activity provider", () => {
     () =>
       Effect.gen(function* () {
         const transport = fakeActivityHost();
-        const bridge = makeProjectionBridge();
+        const bridge = taskProjectionBridge();
         bridge.publish({ tasks: [task] });
         let current = true;
         const stop = vi.fn(() => Promise.resolve());

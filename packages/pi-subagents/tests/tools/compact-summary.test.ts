@@ -3,7 +3,7 @@ import { issueMessageStyleProblems, renderContextFixture } from "pi-code-preview
 import type * as Schema from "effect/Schema";
 import { assert, describe, expect, it } from "vitest";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
-import { makeCompactToolDetails } from "../../src/tools/details.ts";
+import { compactToolDetails } from "../../src/tools/details.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import type {
   CompactSubagentToolDetails,
@@ -76,7 +76,7 @@ const selected = {
 };
 
 const statusOf = (...runs: ReadonlyArray<Partial<SubagentRunView>>) =>
-  makeCompactToolDetails({ action: "status", runs: runs.map((run) => view(run)) });
+  compactToolDetails({ action: "status", runs: runs.map((run) => view(run)) });
 
 const awaitReceipt = (
   runs: ReadonlyArray<SubagentRunView>,
@@ -122,7 +122,7 @@ describe("subagent compact semantic policy", () => {
   it("attributes issues to each run and keeps raw warning prose on expansion", () => {
     const summary = summarize(
       "list",
-      makeCompactToolDetails({
+      compactToolDetails({
         action: "list",
         runs: [view({ id: "one", state: "stopping" }), view({ id: "two", state: "stopping" })],
       }),
@@ -154,7 +154,7 @@ describe("subagent compact semantic policy", () => {
     }
     const summary = summarize(
       "list",
-      makeCompactToolDetails({
+      compactToolDetails({
         action: "list",
         runs: [view({ id: "one", state: "running" }), view({ id: "two", state: "completed" })],
       }),
@@ -175,7 +175,7 @@ describe("subagent compact semantic policy", () => {
             ? undefined
             : {
                 content: [],
-                details: makeCompactToolDetails({
+                details: compactToolDetails({
                   action: "interrupt",
                   runs: [view({ id: "target-1", name: "Worker", state: "running" })],
                 }),
@@ -192,7 +192,7 @@ describe("subagent compact semantic policy", () => {
     for (const name of ["Retry worker", "source-1", "successor-2"]) {
       const summary = summarize(
         "lifecycle",
-        makeCompactToolDetails({
+        compactToolDetails({
           action: "retry",
           runs: [view({ id: "successor-2", name, state: "running" })],
         }),
@@ -246,7 +246,7 @@ describe("subagent compact semantic policy", () => {
       undefined,
       {},
       { version: 1, action: "status" },
-      makeCompactToolDetails({ action: "list", runs: [] }),
+      compactToolDetails({ action: "list", runs: [] }),
     ]) {
       expect(summarize("status", details)).toBeUndefined();
     }
@@ -325,7 +325,7 @@ describe("subagent compact semantic policy", () => {
 
   it("promotes the sole listed identity but not a partial multi-target status", () => {
     for (const action of ["list", "status"] as const) {
-      const details = makeCompactToolDetails({
+      const details = compactToolDetails({
         action,
         runs: [view({ id: "only-1", name: "Worker" })],
       });
@@ -360,7 +360,7 @@ describe("subagent compact semantic policy", () => {
     const runs = Array.from({ length: accepted }, (_, index) =>
       view({ id: `accepted-${index}`, state: "running" }),
     );
-    const details = makeCompactToolDetails({
+    const details = compactToolDetails({
       action,
       runs,
       actionFailures: [{ id: "missing", code: "run_not_found", message: "Run not found" }],
@@ -385,10 +385,10 @@ describe("subagent compact semantic policy", () => {
     "counts only accepted %s operations and retains failures",
     (action) => {
       for (const accepted of [0, 1, 2]) expectAcceptedCount(action, accepted);
-      const success = summarize(action, makeCompactToolDetails({ action, runs: [view()] }));
+      const success = summarize(action, compactToolDetails({ action, runs: [view()] }));
       expect(success?.outcome).toBe("success");
       const bounded = summarize(action, {
-        ...makeCompactToolDetails({ action, runs: [view()] }),
+        ...compactToolDetails({ action, runs: [view()] }),
         runCount: 3,
       });
       expect(bounded?.counters?.join(" ")).toContain("3");
@@ -406,7 +406,7 @@ describe("subagent compact semantic policy", () => {
     tool: "send" | "reply" | "lifecycle",
     code: string,
   ) => {
-    const mixed = makeCompactToolDetails({
+    const mixed = compactToolDetails({
       action,
       runs: [],
       actionFailures: [
@@ -424,7 +424,7 @@ describe("subagent compact semantic policy", () => {
     code: string,
     confirmed: number,
   ) => {
-    const projected = makeCompactToolDetails({
+    const projected = compactToolDetails({
       action,
       runs: confirmed ? [view({ id: "confirmed" })] : [],
       actionFailures: [{ id: "uncertain", code, message: "Native evidence. Do not resend." }],
@@ -468,7 +468,7 @@ describe("subagent compact semantic policy", () => {
       [0, [pendingFailure, definite], "error", ["1 awaiting confirmation", "1 failed"]],
       [1, [pendingFailure, unflagged], "uncertain", ["1 awaiting confirmation", "1 unconfirmed"]],
     ] as const) {
-      const projected = makeCompactToolDetails({
+      const projected = compactToolDetails({
         action: "send",
         runs: confirmed ? [view({ id: "confirmed-run" })] : [],
         actionFailures: failures,
@@ -486,7 +486,7 @@ describe("subagent compact semantic policy", () => {
       expect(issueDetails(pendingIssues)).toContain("stop remains available");
       if (outcome !== "error") expect(compactIssueSeverity(summary?.issues)).toBe("warning");
     }
-    const reply = makeCompactToolDetails({
+    const reply = compactToolDetails({
       action: "reply",
       runs: [],
       actionFailures: [{ ...unflagged, code: "steer_outcome_uncertain" }],
@@ -509,7 +509,7 @@ describe("subagent compact semantic policy", () => {
       for (const pendingDelivery of [false, true]) {
         const summary = summarize(
           "send",
-          makeCompactToolDetails({
+          compactToolDetails({
             action: "send",
             runs: [],
             actionFailures: [
@@ -533,7 +533,7 @@ describe("subagent compact semantic policy", () => {
   it("accepts only matching typed failure details when Pi reports an error", () => {
     const failedWorker = statusOf({ state: "failed" });
     expect(summarize("status", failedWorker, "settled", {}, true)).toBeUndefined();
-    const missing = makeCompactToolDetails({
+    const missing = compactToolDetails({
       action: "status",
       runs: [],
       actionFailures: [{ id: "missing", message: "Worker not found" }],
@@ -589,7 +589,7 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("classifies action failures and keeps their target IDs on expansion", () => {
-    const projected = makeCompactToolDetails({
+    const projected = compactToolDetails({
       action: "send",
       runs: [],
       actionFailures: [{ id: "agent-1", code: "run_not_found", message: "Run not found" }],
@@ -687,7 +687,7 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("matches claims operations to the claims detail family", () => {
-    const details = makeCompactToolDetails({
+    const details = compactToolDetails({
       action: "claims",
       runs: [view({ writeIntent: "writer", writeClaims: ["src/a.ts"] })],
     });
@@ -696,7 +696,7 @@ describe("subagent compact semantic policy", () => {
     expect(summary?.counters).toContain("1 file claim");
     expect(summary?.metadata?.join(" ")).not.toContain("src/a.ts");
     expect(
-      summarize("claims", makeCompactToolDetails({ action: "list", runs: [] }), "settled", {
+      summarize("claims", compactToolDetails({ action: "list", runs: [] }), "settled", {
         action: "list",
       }),
     ).toBeUndefined();
@@ -704,7 +704,7 @@ describe("subagent compact semantic policy", () => {
 
   it("branches paused recovery on capabilities", () => {
     for (const resumable of [true, false]) {
-      const projected = makeCompactToolDetails({
+      const projected = compactToolDetails({
         action: "interrupt",
         runs: [view({ state: "paused", capabilities: resumable ? ["resume"] : [] })],
       });
@@ -789,7 +789,7 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("marks omitted details as bounded rather than complete fleet counts", () => {
-    const projected = makeCompactToolDetails({ action: "list", runs: [view()] });
+    const projected = compactToolDetails({ action: "list", runs: [view()] });
     const summary = summarize("list", { ...projected, runCount: 20, contentOmitted: true });
     expect(summary?.counters?.join(" ")).toContain("1/20 shown");
     expect(summary?.outcome).toBe("uncertain");
@@ -875,14 +875,14 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("distinguishes proven report omissions from errors and unknown omissions", () => {
-    const reports = makeCompactToolDetails({
+    const reports = compactToolDetails({
       action: "list",
       runs: [view({ finalText: "report" })],
     });
     expect(summarize("list", reports)?.metadata).toEqual([]);
     expect(summarize("list", reports)?.issues).toEqual([]);
     for (const overrides of [{ error: "failure" }, { error: "failure", finalText: "report" }]) {
-      const projected = makeCompactToolDetails({ action: "list", runs: [view(overrides)] });
+      const projected = compactToolDetails({ action: "list", runs: [view(overrides)] });
       expect(
         summarize("list", projected)?.issues?.some((issue) => issue.code === "evidence-omitted"),
       ).toBe(true);
@@ -900,7 +900,7 @@ describe("subagent compact semantic policy", () => {
 
   it("keeps distinct run and selection warning identities even when their text matches", () => {
     const warning = "Inspect the changed route";
-    const projected = makeCompactToolDetails({
+    const projected = compactToolDetails({
       action: "status",
       runs: ["agent-a", "agent-b"].map((id) =>
         view({ id, name: id, warning, selection: { ...view().selection, warning } }),
@@ -1151,9 +1151,9 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("keeps claim operations and failed launch recovery compact", () => {
-    expect(
-      summarize("claims", makeCompactToolDetails({ action: "claims", runs: [] }))?.outcome,
-    ).toBe("success");
+    expect(summarize("claims", compactToolDetails({ action: "claims", runs: [] }))?.outcome).toBe(
+      "success",
+    );
     const failed = summarize("start", {
       version: 2,
       action: "start",
@@ -1279,7 +1279,7 @@ describe("subagent compact semantic policy", () => {
         const detailsAction = tool === "lifecycle" ? action : tool;
         const summary = summarize(
           tool,
-          makeCompactToolDetails({
+          compactToolDetails({
             action: detailsAction,
             runs: [],
             actionFailures: [{ id, code, message: serviceText(code) }],
@@ -1304,7 +1304,7 @@ describe("subagent compact semantic policy", () => {
     const serviceText = failedActionText;
     const named = summarize(
       "send",
-      makeCompactToolDetails({
+      compactToolDetails({
         action: "send",
         runs: [view({ id: "other", name: "docs-sweep" }), view({ id, name: "auth-review" })],
         actionFailures: [{ id, code: "run_waiting_for_parent", message: serviceText("x") }],
@@ -1342,7 +1342,7 @@ describe("subagent compact semantic policy", () => {
   it("treats requested results and routine history as routine, not warnings", () => {
     const interrupted = summarize(
       "lifecycle",
-      makeCompactToolDetails({ action: "interrupt", runs: [view({ state: "paused" })] }),
+      compactToolDetails({ action: "interrupt", runs: [view({ state: "paused" })] }),
       "settled",
       { action: "interrupt", runIds: ["agent-1"] },
     );
@@ -1352,7 +1352,7 @@ describe("subagent compact semantic policy", () => {
       "local/pi/anthropic/claude-opus-4-7:high:fresh:read-only:openaiFastMode=false:closeOnReport=true";
     const retried = summarize(
       "lifecycle",
-      makeCompactToolDetails({
+      compactToolDetails({
         action: "retry",
         runs: [
           view({
@@ -1381,7 +1381,7 @@ describe("subagent compact semantic policy", () => {
     expect(skipped?.detail).not.toContain("source");
     const listed = summarize(
       "list",
-      makeCompactToolDetails({
+      compactToolDetails({
         action: "list",
         runs: [
           view({ id: "a", state: "completed", finalText: "report" }),

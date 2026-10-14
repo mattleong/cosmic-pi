@@ -35,7 +35,7 @@ export interface ParentDrainDependencies {
  * direct child waits for the parent's reply. A headless parent uses it before ending its turn so
  * reports reach the conversation instead of dying with the process.
  */
-export const makeParentDrain = ({
+export const parentDrainAwaiter = ({
   records,
   withLock,
   revision,

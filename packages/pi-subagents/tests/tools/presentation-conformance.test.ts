@@ -17,7 +17,7 @@ import {
 } from "pi-code-previews/testing";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
-import { makeAwaitDetails, makeCompactToolDetails } from "../../src/tools/details.ts";
+import { awaitDetails, compactToolDetails } from "../../src/tools/details.ts";
 import { view } from "./fixtures/tool-harness.ts";
 import { containedWriter } from "../fixtures/run-view.ts";
 
@@ -76,7 +76,7 @@ it.each(["compact", "preview"] as const)(
       view({ id: "long-report", state: "completed", finalText }),
       view({ id: "short-report", state: "completed", finalText: "SHORT_REPORT_BODY" }),
     ];
-    const details = makeAwaitDetails({ runs, awaitUntil: "all_finished" });
+    const details = awaitDetails({ runs, awaitUntil: "all_finished" });
     expect(details.contentOmitted).not.toBe(true);
     expect(details.cards[0]?.finalText).toBe(finalText);
     const result = { content: [], details };
@@ -115,7 +115,7 @@ it("retains malformed and historical evidence through expansion for every root r
 
 it("keeps parent recovery visible when a live panel hides partial hierarchy", () => {
   const tool = registered(true).find((candidate) => candidate.name === "subagent_await")!;
-  const details = makeAwaitDetails({
+  const details = awaitDetails({
     runs: [
       view({
         id: "target",
@@ -242,7 +242,7 @@ effectTest("preserves preparation paths omitted from bounded metadata", function
 
 it("preserves host-flagged uncertainty, exact input and full output through compact expansion", () => {
   const tool = registered().find((entry) => entry.name === "subagent_send")!;
-  const details = makeCompactToolDetails({
+  const details = compactToolDetails({
     action: "send",
     runs: [],
     actionFailures: [
@@ -290,7 +290,7 @@ const pendingSend = (extra: ReadonlyArray<typeof definiteFailure> = []) => ({
     { type: "text" as const, text: "raw pending output sentinel; middleware evidence" },
     pendingImage,
   ],
-  details: makeCompactToolDetails({
+  details: compactToolDetails({
     action: "send",
     runs: [view({ id: "confirmed" })],
     actionFailures: [
@@ -385,17 +385,17 @@ it("draws each issue once and keeps IDs and agent procedures out of collapsed pr
     [
       "subagent_await",
       { runIds: [paused.id], until: "all_finished" },
-      makeAwaitDetails({ runs: [paused], awaitUntil: "all_finished", attentionRequired: true }),
+      awaitDetails({ runs: [paused], awaitUntil: "all_finished", attentionRequired: true }),
     ],
     [
       "subagent_lifecycle",
       { action: "stop", runIds: [paused.id, failed.id] },
-      makeCompactToolDetails({ action: "stop", runs: [paused], actionFailures: [failed] }),
+      compactToolDetails({ action: "stop", runs: [paused], actionFailures: [failed] }),
     ],
     [
       "subagent_send",
       { runIds: [failed.id], message: "guidance" },
-      makeCompactToolDetails({ action: "send", runs: [], actionFailures: [failed] }),
+      compactToolDetails({ action: "send", runs: [], actionFailures: [failed] }),
     ],
   ] as const) {
     const harness = createToolPresentationHarness(tool(name));
@@ -447,7 +447,7 @@ it("keeps agent recovery steps out of the collapsed preview style", () => {
     ],
     [containedWriter({ state: "running" }), "src/b.ts"],
   ] as const) {
-    const details = makeAwaitDetails({
+    const details = awaitDetails({
       runs: [run],
       awaitUntil: "all_finished",
       attentionRequired: true,
@@ -476,7 +476,7 @@ it("retains failures, cancelled waits and uncertain cleanup across expansion tog
     { state: "running" as const, cancelled: true, evidence: "NOT stopped" },
     { state: "stopping" as const, cancelled: false, evidence: "cleanup is not yet confirmed" },
   ]) {
-    const details = makeAwaitDetails({
+    const details = awaitDetails({
       runs: [view({ id: "target", ...scenario })],
       awaitUntil: "all_finished",
       cancelled: scenario.cancelled,
@@ -506,7 +506,7 @@ it("stops an expanded await ticker when a declined summary collapses", () => {
       return () => ticks.delete(tick);
     },
   }).find((entry) => entry.name === "subagent_await")!;
-  const details = makeAwaitDetails({
+  const details = awaitDetails({
     runs: [view({ id: "target", state: "running" })],
     awaitUntil: "all_finished",
   });
@@ -554,7 +554,7 @@ it("animates with the registering owner and releases the ticker on settlement", 
     args: () => ({ runIds: ["agent-1"] }),
     result: () => ({
       content: [],
-      details: makeCompactToolDetails({ action: "status", runs: [] }),
+      details: compactToolDetails({ action: "status", runs: [] }),
     }),
   });
   expect(report?.scheduled).toBeGreaterThan(0);

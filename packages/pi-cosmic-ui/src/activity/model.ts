@@ -89,7 +89,7 @@ const keptWithinHistoryLimit = (
     evictionOrder.slice(0, Math.max(0, history.length - HISTORY_ROOT_LIMIT)).map((row) => row.key),
   );
   return new Set(
-    rows.filter((row) => !evictedRoots.has(roots.get(row.key) ?? row.key)).map((row) => row.key),
+    rows.flatMap((row) => (evictedRoots.has(roots.get(row.key) ?? row.key) ? [] : [row.key])),
   );
 };
 
@@ -168,15 +168,14 @@ export function retainActivity(
   const protectedKeys = protectedActivityKeys(rows, ownership.parents);
   const keep = keptWithinHistoryLimit(rows, ownership, protectedKeys);
   const omitted = trimCompleted(rows, next, keep, ownership, protectedKeys);
-  return rows
-    .filter((row) => keep.has(row.key))
-    .map((row) => {
-      const omittedChildren = Math.max(
-        omitted.get(row.key) ?? 0,
-        old.get(row.key)?.omittedChildren ?? 0,
-      );
-      return Object.assign({}, row, omittedChildren > 0 ? { omittedChildren } : {});
-    });
+  return rows.flatMap((row) => {
+    if (!keep.has(row.key)) return [];
+    const omittedChildren = Math.max(
+      omitted.get(row.key) ?? 0,
+      old.get(row.key)?.omittedChildren ?? 0,
+    );
+    return [Object.assign({}, row, omittedChildren > 0 ? { omittedChildren } : {})];
+  });
 }
 
 export function activityPath(rows: readonly ActivityRow[], key: string): readonly ActivityRow[] {

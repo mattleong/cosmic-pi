@@ -15,7 +15,7 @@ import {
   registerSubagentProxyManagerCommand,
   type SubagentProxyCall,
 } from "../src/settings/proxy-controller.ts";
-import { makeCompactToolDetails } from "../src/tools/details.ts";
+import { compactToolDetails } from "../src/tools/details.ts";
 import {
   decodeFleetActionRequest,
   encodeFleetActionRequest,
@@ -337,14 +337,14 @@ describe("nested /subagents proxied actions", () => {
       "another action's details",
       () => ({
         content: [],
-        details: makeCompactToolDetails({ action: "reply", runs: [child()] }),
+        details: compactToolDetails({ action: "reply", runs: [child()] }),
       }),
     ],
     [
       "another target's run card",
       () => ({
         content: [],
-        details: makeCompactToolDetails({ action: "send", runs: [child({ id: "other" })] }),
+        details: compactToolDetails({ action: "send", runs: [child({ id: "other" })] }),
       }),
     ],
     [
@@ -352,7 +352,7 @@ describe("nested /subagents proxied actions", () => {
       () => ({
         content: [],
         details: {
-          ...makeCompactToolDetails({ action: "send", runs: [] }),
+          ...compactToolDetails({ action: "send", runs: [] }),
           actionFailures: [{ ...pendingFailure, id: "other", pendingDelivery: true }],
         },
       }),
@@ -362,7 +362,7 @@ describe("nested /subagents proxied actions", () => {
       () => ({
         content: [],
         details: {
-          ...makeCompactToolDetails({ action: "send", runs: [child()] }),
+          ...compactToolDetails({ action: "send", runs: [child()] }),
           actionFailures: [{ ...pendingFailure, pendingDelivery: true }],
         },
       }),
@@ -391,7 +391,7 @@ describe("nested /subagents proxied actions", () => {
             ? Promise.resolve({
                 content: [],
                 details: {
-                  ...makeCompactToolDetails({ action: "reply", runs: [] }),
+                  ...compactToolDetails({ action: "reply", runs: [] }),
                   actionFailures: [{ ...pendingFailure, pendingDelivery: true }],
                 },
               })
@@ -437,7 +437,7 @@ describe("nested /subagents proxied actions", () => {
         input.tool === SUBAGENT_TOOL_NAME.lifecycle
           ? Promise.resolve({
               content: [],
-              details: makeCompactToolDetails({ action: "interrupt", runs: [child()] }),
+              details: compactToolDetails({ action: "interrupt", runs: [child()] }),
             })
           : undefined,
     });

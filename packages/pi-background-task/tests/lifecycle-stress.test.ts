@@ -17,6 +17,7 @@ import {
 } from "../src/boundary/local-process.ts";
 import { normalizeConfig } from "../src/config/options.ts";
 import { BackgroundTaskConfigStore } from "../src/config/store.ts";
+import { BackgroundRuntimeClosedError, BackgroundTerminationError } from "../src/task/errors.ts";
 import { BackgroundTaskService } from "../src/task/service.ts";
 
 const LIFETIMES = 6;
@@ -197,8 +198,8 @@ describe("background task lifecycle stress", () => {
           expect(yield* Deferred.isDone(batchSettled)).toBe(false);
           yield* fixtures[15]!.complete();
           const failure = yield* Fiber.join(stopping);
-          expect(failure).toMatchObject({ _tag: "BackgroundTerminationError" });
-          if (failure._tag === "BackgroundTerminationError") {
+          expect(failure).toBeInstanceOf(BackgroundTerminationError);
+          if (failure instanceof BackgroundTerminationError) {
             expect(new Set(failure.id.split(", "))).toEqual(new Set([tasks[0]!.id, tasks[16]!.id]));
           }
           expect((yield* service.list("active")).map((task) => task.id).toSorted()).toEqual(
@@ -235,7 +236,7 @@ describe("background task lifecycle stress", () => {
           expectReleased(fixtures);
           expect(
             yield* service.start({ command: "closed", cwd: "." }).pipe(Effect.flip),
-          ).toMatchObject({ _tag: "BackgroundRuntimeClosedError" });
+          ).toBeInstanceOf(BackgroundRuntimeClosedError);
         }
       }),
   );
@@ -285,7 +286,7 @@ describe("background task lifecycle stress", () => {
       );
       yield* TestClock.adjust("11 seconds");
       yield* Fiber.join(closing);
-      expect(yield* Fiber.join(starting)).toMatchObject({ _tag: "BackgroundRuntimeClosedError" });
+      expect(yield* Fiber.join(starting)).toBeInstanceOf(BackgroundRuntimeClosedError);
       expect(fixture.counts().acquisitions).toBe(0);
     }),
   );

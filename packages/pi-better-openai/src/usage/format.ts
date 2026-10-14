@@ -173,7 +173,7 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
           });
         }),
       );
-    if (response._tag === "Rejected")
+    if (Predicate.isTagged(response, "Rejected"))
       return yield* new CodexUsageError({
         operation: "request",
         message: `Usage request failed with status ${response.status}`,

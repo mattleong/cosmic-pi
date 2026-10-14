@@ -5,6 +5,7 @@ import {
   matchesKey,
   type KeyId,
 } from "@earendil-works/pi-tui";
+import * as Data from "effect/Data";
 
 export type FullScreenMode = "navigation" | "search" | "text-input" | "confirmation" | "busy";
 
@@ -36,9 +37,11 @@ export type FullScreenAction =
   | "help"
   | "pending-first";
 
-export type FullScreenResolution =
-  | { readonly _tag: "Action"; readonly action: FullScreenAction }
-  | { readonly _tag: "Shortcut"; readonly key: string };
+export type FullScreenResolution = Data.TaggedEnum<{
+  Action: { readonly action: FullScreenAction };
+  Shortcut: { readonly key: string };
+}>;
+export const FullScreenResolution = Data.taggedEnum<FullScreenResolution>();
 
 export interface FullScreenKeymapOptions {
   readonly mode: FullScreenMode;
@@ -54,10 +57,8 @@ export const decodeFullScreenPrintable = (data: string): string | undefined => {
   return printable?.charCodeAt(0) === 127 ? undefined : printable;
 };
 
-const action = (value: FullScreenAction): FullScreenResolution => ({
-  _tag: "Action",
-  action: value,
-});
+const action = (value: FullScreenAction): FullScreenResolution =>
+  FullScreenResolution.Action({ action: value });
 
 const SELECTION_MOTIONS: ReadonlyArray<
   readonly [KeyId, FullScreenAction, FullScreenSelectionKeybindingId?]
@@ -126,7 +127,9 @@ const isReserved = (
 ): boolean => printable !== undefined && reservedKeys?.has(printable) === true;
 
 const shortcut = ({ data, printable }: KeyInput): FullScreenResolution | undefined =>
-  printable === undefined || isKeyRepeat(data) ? undefined : { _tag: "Shortcut", key: printable };
+  printable === undefined || isKeyRepeat(data)
+    ? undefined
+    : FullScreenResolution.Shortcut({ key: printable });
 
 const cancels = ({ data, configured }: KeyInput): boolean =>
   matchesKey(data, Key.escape) || configured("tui.select.cancel");

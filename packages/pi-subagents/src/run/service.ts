@@ -1,5 +1,5 @@
 import type { AskUserRequest, QuestionnaireOwner } from "pi-ask-user/protocol";
-import { makeQuestionnaireLifetimes } from "./questionnaire-lifetime.ts";
+import { questionnaireLifetimes } from "./questionnaire-lifetime.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -24,22 +24,19 @@ import {
   type SubagentNotFoundError,
   SubagentRuntimeClosedError,
 } from "./errors.ts";
-import { makeRunAssignment } from "./assignment.ts";
-import { makeRunCompletionObservations } from "./completion-observations.ts";
-import { makeRunPeerNotifier } from "./coordination.ts";
-import { makeRunControls } from "./control.ts";
-import { makeRunEventHandler } from "./events.ts";
-import { makeRunLaunch } from "./launch.ts";
+import { assignmentOperations } from "./assignment.ts";
+import { completionObservationOperations } from "./completion-observations.ts";
+import { peerNotifier } from "./coordination.ts";
+import { controlOperations } from "./control.ts";
+import { backendEventHandler } from "./events.ts";
+import { launchOperations } from "./launch.ts";
 import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
-import {
-  makeRunNotificationDelivery,
-  type QuestionNotificationReceipt,
-} from "./notification-delivery.ts";
-import { makeRunProcessControls, makeRunProcessInitializer } from "./process-lifecycle.ts";
-import { makeRunRecordCleanup, type RunRecordCleanup } from "./record-cleanup.ts";
-import { makeRunResume } from "./resume.ts";
-import { makeRunRetry, type SubagentRetryClaim } from "./retry.ts";
-import { makeRunSettlement } from "./settlement.ts";
+import { notificationDelivery, type QuestionNotificationReceipt } from "./notification-delivery.ts";
+import { processControlOperations, processInitializer } from "./process-lifecycle.ts";
+import { recordCleanup, type RunRecordCleanup } from "./record-cleanup.ts";
+import { resumeOperations } from "./resume.ts";
+import { retryOperations, type SubagentRetryClaim } from "./retry.ts";
+import { settlementOperations } from "./settlement.ts";
 import {
   type FailedStartRecovery,
   type StartSubagentRequest,
@@ -51,20 +48,20 @@ import {
 import { sortRuns } from "./projection.ts";
 import { closeRunsLeafFirst } from "./shutdown.ts";
 import { projectRunTree } from "./tree.ts";
-import { allocateRuntimeNamespace, makeRunIdentities } from "./identity.ts";
-import { makeRunNotificationRouting } from "./notification-routing.ts";
-import { makeParentDrain } from "./parent-drain.ts";
-import { makeSessionUsageLedger, sessionUsageLocked } from "./session-usage.ts";
-import { makeRunSessionStarts } from "./session-starts.ts";
-import { makeRunSubtreeStop } from "./subtree-stop.ts";
-import { makeRunTurnInputs } from "./turn-input.ts";
-import { makeRunVisibility } from "./visibility.ts";
-import { makeRunWriteClaimContainment } from "./write-claim-containment.ts";
-import { makeRunProxyExecution } from "./proxy-execution.ts";
-import { makeWriterPreparation } from "./writer-preparation.ts";
+import { allocateRuntimeNamespace, identityAllocators } from "./identity.ts";
+import { notificationRouter } from "./notification-routing.ts";
+import { parentDrainAwaiter } from "./parent-drain.ts";
+import { emptySessionUsageLedger, sessionUsageLocked } from "./session-usage.ts";
+import { sessionStartOperations } from "./session-starts.ts";
+import { subtreeStopper } from "./subtree-stop.ts";
+import { turnInputGates } from "./turn-input.ts";
+import { visibilityOperations } from "./visibility.ts";
+import { writeClaimContainment } from "./write-claim-containment.ts";
+import { proxyExecutionHandler } from "./proxy-execution.ts";
+import { writerSpawnPreparation } from "./writer-preparation.ts";
 import { WriterPools } from "./writer-pool.ts";
-import { makeRunWriteClaimControl } from "./write-claim-control.ts";
-import { makeWorkspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
+import { writeClaimControl } from "./write-claim-control.ts";
+import { workspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
 import { WorkspaceService } from "../workspace/service.ts";
 import type { WorkspaceSetup, WriterWorkspaceMode } from "../config/schema.ts";
 
@@ -208,7 +205,7 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly projection: Effect.Effect<SubagentProjection>;
   /** Hands every eligible completion to its notifier now, as a session ends. */
   readonly deliverPendingCompletions: Effect.Effect<void>;
-  /** Resolves when headless parent work has drained; see `makeParentDrain`. */
+  /** Resolves when headless parent work has drained; see `parentDrainAwaiter`. */
   readonly awaitParentDrain: Effect.Effect<void, SubagentRuntimeClosedError>;
 }
 
@@ -223,7 +220,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
-  const sessionUsage = makeSessionUsageLedger();
+  const sessionUsage = emptySessionUsageLedger();
   const writerPools = new WriterPools();
   const frozenProjection = (revision: number): SubagentProjection =>
     Object.freeze({
@@ -234,16 +231,16 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const projectionRef = yield* SubscriptionRef.make(frozenProjection(0));
   const runtimeNamespace = allocateRuntimeNamespace();
   let closed = false;
-  const questionnaires = makeQuestionnaireLifetimes(() => closed);
+  const questionnaires = questionnaireLifetimes(() => closed);
   const withLock: WithRunLock = lock.withPermits(1);
   const withCompletionGate = completionGate.withPermits(1);
-  const { admitTurnInput, releaseTurnInput, claimTurnInputDrain } = makeRunTurnInputs(withLock);
+  const { admitTurnInput, releaseTurnInput, claimTurnInputDrain } = turnInputGates(withLock);
   const {
     allocateClaimToken,
     allocateRetryClaimToken,
     allocateAssignmentAttemptToken,
     allocateRunIdentity,
-  } = makeRunIdentities(runtimeNamespace);
+  } = identityAllocators(runtimeNamespace);
   const publish = Effect.uninterruptible(
     questionnaires.invalidate.pipe(
       Effect.andThen(
@@ -286,11 +283,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     writerPools,
     writerLeases,
     requireRecord,
-    sendPeerNotices: makeRunPeerNotifier(records),
+    sendPeerNotices: peerNotifier(records),
     allocateAssignmentAttemptToken,
     sessionUsage,
   };
-  const workspaces = makeWorkspaceControl({
+  const workspaces = workspaceControl({
     ...runContext,
     engine: Option.getOrUndefined(workspaceEngine),
     initialMode: options.writerWorkspaceMode ?? initialProfiles.effectiveConfig.writerWorkspaceMode,
@@ -300,17 +297,17 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     isClosed: () => closed,
   });
 
-  const delivery = yield* makeRunNotificationDelivery({
+  const delivery = yield* notificationDelivery({
     ...runContext,
     withCompletionGate,
-    notify: makeRunNotificationRouting({
+    notify: notificationRouter({
       ...runContext,
       admitTurnInput,
       releaseTurnInput,
       notifyHost: (notification) => options.notify?.(notification),
     }),
   });
-  const observations = makeRunCompletionObservations({
+  const observations = completionObservationOperations({
     ...runContext,
     withCompletionGate,
     currentProjection: () => SubscriptionRef.getUnsafe(projectionRef),
@@ -319,10 +316,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     delivery,
   });
 
-  const retry = makeRunRetry({ ...runContext, allocateClaimToken: allocateRetryClaimToken });
+  const retry = retryOperations({ ...runContext, allocateClaimToken: allocateRetryClaimToken });
 
-  const prepareWriterLeaseForSpawn = makeWriterPreparation(runContext);
-  const ownedCleanup = makeRunRecordCleanup(runContext);
+  const prepareWriterLeaseForSpawn = writerSpawnPreparation(runContext);
+  const ownedCleanup = recordCleanup(runContext);
   const cleanup: RunRecordCleanup = {
     ...ownedCleanup,
     closeRecordScope: (record, scope) =>
@@ -332,18 +329,18 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   };
   const { closeRecordScope } = cleanup;
 
-  const settlement = makeRunSettlement({ ...runContext, delivery, closeRecordScope });
+  const settlement = settlementOperations({ ...runContext, delivery, closeRecordScope });
 
-  const processControls = makeRunProcessControls(withLock);
+  const processControls = processControlOperations(withLock);
 
-  const assignment = makeRunAssignment({
+  const assignment = assignmentOperations({
     ...runContext,
     startPrompt: processControls.startPrompt,
     activateAssignmentLocked: settlement.activateAssignmentLocked,
     replayAssignmentActivation: settlement.replayAssignmentActivation,
   });
 
-  const controls = makeRunControls({
+  const controls = controlOperations({
     ...runContext,
     processControls,
     admitTurnInput,
@@ -353,15 +350,15 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     settle: settlement.settle,
   });
 
-  const stop = makeRunSubtreeStop({ ...runContext, stopRun: controls.stop });
-  const containWriteClaimViolation = makeRunWriteClaimContainment({
+  const stop = subtreeStopper({ ...runContext, stopRun: controls.stop });
+  const containWriteClaimViolation = writeClaimContainment({
     ...runContext,
     stop,
     interrupt: controls.interrupt,
   });
 
   const { proxyHandler, questionnaireHandler } = options;
-  const handleProxyEvent = makeRunProxyExecution({
+  const handleProxyEvent = proxyExecutionHandler({
     ownerScope,
     executions: proxyRuns,
     ...(proxyHandler && {
@@ -377,14 +374,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     }),
   });
 
-  const handleWireEvent = makeRunEventHandler({
+  const handleWireEvent = backendEventHandler({
     settlement,
     queueQuestionLocked: delivery.queueActionNotificationLocked,
     onWriteClaimViolation: containWriteClaimViolation,
     onProxyEvent: handleProxyEvent,
   });
 
-  const initializeProcess = makeRunProcessInitializer({
+  const initializeProcess = processInitializer({
     ...runContext,
     initialize: processControls.initialize,
     handleBackendEvent: handleWireEvent,
@@ -394,7 +391,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     failRun: settlement.failRun,
   });
 
-  const launch = makeRunLaunch({
+  const launch = launchOperations({
     ...runContext,
     backendRegistry,
     records,
@@ -414,7 +411,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const rootNesting = profileService.capture.pipe(
     Effect.map((snapshot) => snapshot.effectiveConfig.nesting),
   );
-  const resume = makeRunResume({
+  const resume = resumeOperations({
     ...runContext,
     delivery,
     initializeProcess,
@@ -425,9 +422,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     currentNesting: rootNesting,
   });
 
-  const writeClaims = makeRunWriteClaimControl(runContext);
+  const writeClaims = writeClaimControl(runContext);
 
-  const starts = makeRunSessionStarts({
+  const starts = sessionStartOperations({
     ...runContext,
     launch,
     workspaces,
@@ -465,7 +462,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
     setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,
     startSessionOwnedFrom: starts.startSessionOwnedFrom,
-    ...makeRunVisibility(runContext),
+    ...visibilityOperations(runContext),
     startRetrySessionOwned: starts.startRetrySessionOwned,
     list,
     status,
@@ -480,7 +477,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     resumeWriterAdmission: writeClaims.resumeAdmission,
     projection,
     deliverPendingCompletions: delivery.deliverPendingCompletions,
-    awaitParentDrain: makeParentDrain({
+    awaitParentDrain: parentDrainAwaiter({
       records,
       withLock,
       revision: projection.pipe(Effect.map(({ revision }) => revision)),

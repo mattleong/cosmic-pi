@@ -15,7 +15,7 @@ import {
   installCodePreviewSessionCapability,
   type CodePreviewSessionCapability,
 } from "../../src/application/capability";
-import { makeSettingsAdmission, withSettingsCoordinator } from "../../src/config/coordinator";
+import { nextSettingsAdmission, withSettingsCoordinator } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { loadCodePreviewSettings } from "../../index";
@@ -43,7 +43,7 @@ const processEnv: NodeJS.ProcessEnv = process.env;
 const loadSettingsFromDisk = (options: LoadSettingsOptions = {}) =>
   step(() =>
     runOneShotSettingsEffect(
-      CodePreviewSettingsService.use((service) => service.load(makeSettingsAdmission(), options)),
+      CodePreviewSettingsService.use((service) => service.load(nextSettingsAdmission(), options)),
     ),
   );
 
@@ -176,7 +176,7 @@ effectTest("rapid panel edits preserve fields merged from an external settings e
   const started = yield* Deferred.make<void>();
   const release = yield* Deferred.make<void>();
   const blocked = runtime.runPromise(
-    withSettingsCoordinator(makeSettingsAdmission(), () =>
+    withSettingsCoordinator(nextSettingsAdmission(), () =>
       Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
     ),
   );
@@ -375,7 +375,7 @@ effectTest(
     const started = Deferred.makeUnsafe<void>();
     const release = Deferred.makeUnsafe<void>();
     const first = runOneShotSettingsEffect(
-      withSettingsCoordinator(makeSettingsAdmission(), () =>
+      withSettingsCoordinator(nextSettingsAdmission(), () =>
         Effect.suspend(() => {
           Deferred.doneUnsafe(started, Effect.void);
           return Deferred.await(release);
@@ -387,7 +387,7 @@ effectTest(
     let secondRan = false;
     const controller = new AbortController();
     const second = runOneShotSettingsEffect(
-      withSettingsCoordinator(makeSettingsAdmission(), () =>
+      withSettingsCoordinator(nextSettingsAdmission(), () =>
         Effect.sync(() => {
           secondRan = true;
         }),

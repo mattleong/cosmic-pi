@@ -1,3 +1,4 @@
+import * as Data from "effect/Data";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
@@ -34,22 +35,24 @@ const CustomEntrySchema = Schema.Struct({
   data: Schema.optional(Schema.Unknown),
 });
 
-export type HerdrBtwLinkRestoration =
-  | { readonly _tag: "none" }
-  | { readonly _tag: "restored"; readonly link: HerdrBtwLink }
-  | { readonly _tag: "malformed" };
+export type HerdrBtwLinkRestoration = Data.TaggedEnum<{
+  none: Record<never, never>;
+  restored: { readonly link: HerdrBtwLink };
+  malformed: Record<never, never>;
+}>;
+export const HerdrBtwLinkRestoration = Data.taggedEnum<HerdrBtwLinkRestoration>();
 
 export const restoreHerdrBtwLink = (
   entries: Iterable<unknown>,
   owner: HerdrBtwLinkOwner,
 ): HerdrBtwLinkRestoration => {
-  let restoration: HerdrBtwLinkRestoration = { _tag: "none" };
+  let restoration: HerdrBtwLinkRestoration = HerdrBtwLinkRestoration.none();
   for (const entry of entries) {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(CustomEntrySchema)(entry));
     if (decoded?.customType !== HERDR_BTW_LINK_ENTRY_TYPE) continue;
     const linkOwner = decodeLinkOwner(decoded.data);
     if (!linkOwner) {
-      restoration = { _tag: "malformed" };
+      restoration = HerdrBtwLinkRestoration.malformed();
       continue;
     }
     if (
@@ -58,7 +61,9 @@ export const restoreHerdrBtwLink = (
     )
       continue;
     const link = decodeLink(decoded.data);
-    restoration = link ? { _tag: "restored", link } : { _tag: "malformed" };
+    restoration = link
+      ? HerdrBtwLinkRestoration.restored({ link })
+      : HerdrBtwLinkRestoration.malformed();
   }
   return restoration;
 };

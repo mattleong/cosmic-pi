@@ -16,7 +16,7 @@ export const DirectoryModelPreferenceSchema = Schema.Struct({
 
 export type DirectoryModelPreference = typeof DirectoryModelPreferenceSchema.Type;
 
-export function makeDirectoryModelPreference(
+export function directoryModelPreference(
   cwd: string,
   provider: string,
   model: string,

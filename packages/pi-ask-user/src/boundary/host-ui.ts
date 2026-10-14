@@ -11,7 +11,7 @@ interface DialogActivity {
 
 const setStatus = makeSetStatusSafely(STATUS_KEY);
 
-export function makeAskUserDialogBridge() {
+export function createAskUserDialogBridge() {
   let context: ExtensionContext | undefined;
   let nextToken = 1;
   let requestId: string | undefined;
@@ -84,4 +84,4 @@ export function makeAskUserDialogBridge() {
   };
 }
 
-export type AskUserDialogBridge = ReturnType<typeof makeAskUserDialogBridge>;
+export type AskUserDialogBridge = ReturnType<typeof createAskUserDialogBridge>;

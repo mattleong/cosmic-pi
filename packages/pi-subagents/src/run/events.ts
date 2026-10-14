@@ -71,7 +71,7 @@ type ViewBackendEvent = Exclude<HandledBackendEvent, DelegatedBackendEvent>;
 const isDelegatedEvent = (event: HandledBackendEvent): event is DelegatedBackendEvent =>
   DELEGATED_EVENT_TYPES.some((type) => type === event.type);
 
-export function makeRunEventHandler(dependencies: RunEventDependencies) {
+export function backendEventHandler(dependencies: RunEventDependencies) {
   const { settlement, queueQuestionLocked, onWriteClaimViolation, onProxyEvent } = dependencies;
 
   const mutateAt = (
@@ -398,4 +398,4 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
   };
 }
 
-export type RunEventHandler = ReturnType<typeof makeRunEventHandler>;
+export type RunEventHandler = ReturnType<typeof backendEventHandler>;

@@ -12,7 +12,7 @@ import {
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { hasCustomSurface, openOwnedSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
-import { makeAdaptiveHostRefreshTicker } from "../boundary/host-refresh-ticker.ts";
+import { adaptiveHostRefreshTicker } from "../boundary/host-refresh-ticker.ts";
 import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { SubagentControlExpectation } from "../run/model.ts";
 import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
@@ -164,7 +164,7 @@ function openFleetManager(
             rename: actions.rename,
           },
         });
-        const refreshTicker = makeAdaptiveHostRefreshTicker({
+        const refreshTicker = adaptiveHostRefreshTicker({
           getCadence: () =>
             subagentUiRefreshCadence(bridge.get().runs, { includeTerminalAges: true }),
           startTicker: startHostUiTicker,

@@ -52,13 +52,12 @@ export function retryOmissions(
     );
     if (last && isRetryOmittable(last)) requested.add(last.id);
   }
-  return branch
-    .filter(
-      (entry, index) =>
-        isRetryOmittable(entry) &&
-        (requested.has(entry.id) || (index <= checkpointIndex && persisted.has(entry.id))),
-    )
-    .map((entry) => entry.id);
+  return branch.flatMap((entry, index) =>
+    isRetryOmittable(entry) &&
+    (requested.has(entry.id) || (index <= checkpointIndex && persisted.has(entry.id)))
+      ? [entry.id]
+      : [],
+  );
 }
 
 export function projectContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {

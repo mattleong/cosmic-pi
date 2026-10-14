@@ -26,7 +26,7 @@ const containmentActionLocked = (record: RunRecord) => {
     : undefined;
 };
 
-export function makeRunWriteClaimContainment(dependencies: RunWriteClaimContainmentDependencies) {
+export function writeClaimContainment(dependencies: RunWriteClaimContainmentDependencies) {
   const { ownerScope, withLock, records, publish, stop, interrupt } = dependencies;
   return (record: RunRecord, message: string): Effect.Effect<void> =>
     Effect.uninterruptible(

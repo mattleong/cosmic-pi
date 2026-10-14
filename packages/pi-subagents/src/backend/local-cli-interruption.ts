@@ -31,7 +31,7 @@ export interface LocalCliInterrupt {
   abandoned: boolean;
 }
 
-export const makeLocalCliInterrupts = <Interrupt extends LocalCliInterrupt>(
+export const localCliInterrupts = <Interrupt extends LocalCliInterrupt>(
   runtime: "Claude" | "Codex",
   events: Pick<LocalCliRawEventOwnership, "offer" | "release">,
   currentEpoch: () => number,

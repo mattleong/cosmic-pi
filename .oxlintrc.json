@@ -25,9 +25,14 @@
     {
       "name": "anti-slop",
       "specifier": "./tools/oxlint/anti-slop/index.ts"
+    },
+    {
+      "name": "anti-slop-effect",
+      "specifier": "./tools/oxlint/anti-slop/effect/index.ts"
     }
   ],
   "rules": {
+    "anti-slop/no-array-filter-map": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-eager-effect-finalizer-condition": "error",
     "anti-slop/no-escaping-render-context": "error",
@@ -37,6 +42,7 @@
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-raw-host-notify": "error",
+    "anti-slop/no-reduce-accumulator-copy": "error",
     "anti-slop/no-runtime-type-only-tests": "error",
     "anti-slop/no-runtime-typeof": "error",
     "anti-slop/no-unknown-parameters": "error",
@@ -168,6 +174,16 @@
     "unicorn/prefer-structured-clone": "error"
   },
   "overrides": [
+    {
+      "files": ["packages/**", "scripts/**"],
+      "rules": {
+        "anti-slop-effect/no-manual-effect-error-tag": "error",
+        "anti-slop-effect/no-manual-tag-comparison": "error",
+        "anti-slop-effect/no-manual-tagged-construction": "error",
+        "anti-slop-effect/no-service-constructor-imports": "error",
+        "anti-slop-effect/prefer-effect-match": "error"
+      }
+    },
     {
       "files": ["packages/*/src/**/*.ts"],
       "rules": {

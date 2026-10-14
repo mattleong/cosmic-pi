@@ -23,10 +23,12 @@ const nearMatchesFor = (
   const lowered = selector.toLowerCase();
   const bare = lowered.includes("/") ? lowered.slice(lowered.lastIndexOf("/") + 1) : lowered;
   return available
-    .map(canonicalPiModelId)
-    .filter((canonical) => {
+    .flatMap((model) => {
+      const canonical = canonicalPiModelId(model);
       const candidate = canonical.toLowerCase();
-      return candidate.includes(lowered) || candidate.includes(bare) || bare.includes(candidate);
+      return candidate.includes(lowered) || candidate.includes(bare) || bare.includes(candidate)
+        ? [canonical]
+        : [];
     })
     .toSorted()
     .slice(0, MAX_NEAR_MATCHES);

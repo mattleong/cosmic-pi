@@ -270,18 +270,19 @@ export function applyTextDecorations(
     prefixes.set(target, (prefixes.get(target) ?? "") + entry.text);
   }
   if (prefixes.size === 0) return [...entries];
-  return entries
-    .filter((entry) => !consumed.has(entry))
-    .map((entry) => {
-      const prefix = prefixes.get(entry.id);
-      if (prefix === undefined) return entry;
-      return Object.assign(
+  return entries.flatMap((entry) => {
+    if (consumed.has(entry)) return [];
+    const prefix = prefixes.get(entry.id);
+    if (prefix === undefined) return [entry];
+    return [
+      Object.assign(
         {},
         entry,
         { text: `${prefix}${entry.text}` },
         entry.compactText === undefined ? {} : { compactText: `${prefix}${entry.compactText}` },
-      );
-    });
+      ),
+    ];
+  });
 }
 
 export function orderedContributions(
@@ -289,19 +290,23 @@ export function orderedContributions(
   config: ResolvedCosmicUiConfig,
 ): CosmicFooterTextContribution[] {
   const order = new Map(config.footer.order.map((id, index) => [id, index]));
+  const hidden = config.footer.hidden;
   return values
-    .filter(
-      (value) =>
-        !config.footer.hidden.includes(value.id) &&
-        !(value.id.startsWith("metrics.") && config.footer.hidden.includes("metrics")) &&
-        !(value.id.startsWith("git.") && config.footer.hidden.includes("git")) &&
-        !(value.id.startsWith("extension.") && config.footer.hidden.includes("extensions")),
-    )
-    .map((value) => {
+    .flatMap((value) => {
+      if (
+        hidden.includes(value.id) ||
+        (value.id.startsWith("metrics.") && hidden.includes("metrics")) ||
+        (value.id.startsWith("git.") && hidden.includes("git")) ||
+        (value.id.startsWith("extension.") && hidden.includes("extensions"))
+      ) {
+        return [];
+      }
       const configuredOrder = order.get(value.id);
-      return configuredOrder === undefined
-        ? value
-        : Object.assign({}, value, { order: configuredOrder });
+      return [
+        configuredOrder === undefined
+          ? value
+          : Object.assign({}, value, { order: configuredOrder }),
+      ];
     })
     .toSorted(
       (a, b) => (a.order ?? DEFAULT_CONTRIBUTION_ORDER) - (b.order ?? DEFAULT_CONTRIBUTION_ORDER),

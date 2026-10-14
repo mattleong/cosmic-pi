@@ -1,3 +1,4 @@
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -46,13 +47,15 @@ const EventDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.Str
 
 type ImageGenerationItem = typeof ImageGenerationItemSchema.Type;
 
-export type ImageStreamEvent =
-  | { readonly _tag: "Image"; readonly image: ExtractedImageResult }
-  | { readonly _tag: "ResponseFailed"; readonly message: string }
-  | { readonly _tag: "ProviderError"; readonly message: string }
-  | { readonly _tag: "Ignored" };
+export type ImageStreamEvent = Data.TaggedEnum<{
+  Image: { readonly image: ExtractedImageResult };
+  ResponseFailed: { readonly message: string };
+  ProviderError: { readonly message: string };
+  Ignored: Record<never, never>;
+}>;
+export const ImageStreamEvent = Data.taggedEnum<ImageStreamEvent>();
 
-const ignoredEvent: ImageStreamEvent = { _tag: "Ignored" };
+const ignoredEvent = ImageStreamEvent.Ignored();
 
 const imageData = (value: string, expectedMimeType: string) => {
   const match = /^data:[^;,]+;base64,(.*)$/s.exec(value);
@@ -74,11 +77,10 @@ const normalizeImageItem = (
     status: item.status ?? "completed",
     ...imageData(raw, fallbackMimeType),
   };
-  return {
-    _tag: "Image",
+  return ImageStreamEvent.Image({
     image:
       item.revised_prompt === undefined ? base : { ...base, revisedPrompt: item.revised_prompt },
-  };
+  });
 };
 
 export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent")(function* (
@@ -99,17 +101,15 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
   }
   if (discriminant.type === "response.failed") {
     const event = yield* Schema.decodeUnknownEffect(FailedEventSchema)(value);
-    return {
-      _tag: "ResponseFailed",
+    return ImageStreamEvent.ResponseFailed({
       message: event.response.error?.message ?? "Codex image request failed.",
-    } as const;
+    });
   }
   if (discriminant.type === "error") {
     const event = yield* Schema.decodeUnknownEffect(ProviderErrorEventSchema)(value);
-    return {
-      _tag: "ProviderError",
+    return ImageStreamEvent.ProviderError({
       message: event.message ?? "Codex image request failed.",
-    } as const;
+    });
   }
   if (
     discriminant.type === undefined &&

@@ -7,10 +7,11 @@ import {
   ASYNC_RECEIPT_TYPE,
   acceptsAsyncMessage,
   captureHistoricalDeliveries,
-  makeAsyncDelivery,
+  hostAsyncDelivery,
 } from "../src/boundary/host-delivery.ts";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { AskUserHostError } from "../src/questionnaire/errors.ts";
 
 const throwSecret = () => {
   throw new Error("secret-raw-error");
@@ -108,7 +109,7 @@ effectIt.effect(
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
       const pi = extensionApiFixture({ sendMessage, appendEntry: vi.fn() });
       let active = true;
-      const send = makeAsyncDelivery(pi, "generation", () => active);
+      const send = hostAsyncDelivery(pi, "generation", () => active);
       yield* send(snapshot);
       expect(sendMessage.mock.calls[0]?.[0]).toMatchObject({
         customType: ASYNC_MESSAGE_TYPE,
@@ -121,10 +122,9 @@ effectIt.effect(
       expect(sendMessage.mock.calls[0]?.[0].content).not.toContain("\u001b");
       expect(sendMessage.mock.calls[0]?.[1]).toEqual({ deliverAs: "steer", triggerTurn: true });
       active = false;
-      expect(yield* Effect.flip(send(snapshot))).toMatchObject({
-        _tag: "AskUserHostError",
-        operation: "deliver",
-      });
+      const revoked = yield* Effect.flip(send(snapshot));
+      expect(revoked).toBeInstanceOf(AskUserHostError);
+      expect(revoked).toMatchObject({ operation: "deliver" });
       expect(sendMessage).toHaveBeenCalledOnce();
     }),
 );
@@ -138,8 +138,9 @@ effectIt.effect.each(["appendEntry", "sendMessage"] as const)(
         appendEntry: failing === "appendEntry" ? throwSecret : vi.fn(),
         sendMessage: failing === "sendMessage" ? throwSecret : sendMessage,
       });
-      const error = yield* Effect.flip(makeAsyncDelivery(pi, "generation", () => true)(snapshot));
-      expect(error).toMatchObject({ _tag: "AskUserHostError", operation: "deliver" });
+      const error = yield* Effect.flip(hostAsyncDelivery(pi, "generation", () => true)(snapshot));
+      expect(error).toBeInstanceOf(AskUserHostError);
+      expect(error).toMatchObject({ operation: "deliver" });
       expect(`${error.message} ${error.operation}`).not.toContain("secret-raw-error");
       if (failing === "appendEntry") expect(sendMessage).not.toHaveBeenCalled();
     }),

@@ -6,9 +6,7 @@ type ClaudeReport = Extract<BackendEvent, { readonly type: "report" }>;
 
 const RESULT_REPORT_GRACE = "10 seconds";
 
-export const makeLocalClaudeReportDelivery = (
-  offer: (event: BackendEvent) => Effect.Effect<void>,
-) => {
+export const localClaudeReportDelivery = (offer: (event: BackendEvent) => Effect.Effect<void>) => {
   const bufferedReports = new Map<number, ClaudeReport>();
   const nativeResultEpochs = new Set<number>();
   const forwardingReports = new Map<number, Deferred.Deferred<boolean>>();

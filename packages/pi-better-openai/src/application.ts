@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
+import * as Predicate from "effect/Predicate";
 import {
   loadCodePreviewSettings,
   registerCodePreviewReplay,
@@ -25,7 +26,7 @@ import {
   failureMessage,
   registerExtensionCommand,
 } from "pi-cosmic-core";
-import { createCosmicFooterClient, makeHostStateWatch } from "pi-cosmic-ui/client";
+import { createCosmicFooterClient, createHostStateWatch } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 import { resetOpenAICodexTransport } from "./boundary/host-codex-transport.ts";
 import { containCommandFailure, safeHostSignal } from "./boundary/host-ui.ts";
@@ -47,7 +48,7 @@ import {
 import { applyFastRoutingHeaders } from "./fast/routing.ts";
 import { FastModeService, type FastInjectionIngress } from "./fast/service.ts";
 import {
-  makeOpenAIApplicationLayer,
+  openAIApplicationLayer,
   type OpenAIApplication,
   type OpenAIRuntimeError,
   type OpenAISessionInput,
@@ -63,7 +64,7 @@ import { fastModeFooterPrimitive, openAIUsageFooterPrimitive } from "./ui/primit
 import { OpenAIUsageService, sessionNotStarted } from "./usage/controller.ts";
 import { formatDebug } from "./usage/debug.ts";
 import {
-  makeProjection,
+  usageProjectionRef,
   resetProjection,
   synchronizeProjectionContext,
 } from "./usage/projection.ts";
@@ -106,7 +107,7 @@ export function betterOpenAIWithDependencies(
   pi: ExtensionAPI,
   dependencies: BetterOpenAIExtensionDependencies = {},
 ): void {
-  const projection = makeProjection();
+  const projection = usageProjectionRef();
   const configProjection = MutableRef.make<ResolvedConfig | undefined>(undefined);
   const fastProjection = MutableRef.make(initialFastSnapshot());
   const resetProviderTransport =
@@ -170,7 +171,7 @@ export function betterOpenAIWithDependencies(
     updateContext(ctx);
     updateFooter(ctx);
   };
-  const cosmicUiWatch = makeHostStateWatch(cosmicUi, () => {
+  const cosmicUiWatch = createHostStateWatch(cosmicUi, () => {
     if (currentContext) updateFooter(MutableRef.get(currentContext));
   });
 
@@ -187,7 +188,7 @@ export function betterOpenAIWithDependencies(
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
-        makeOpenAIApplicationLayer(input, {
+        openAIApplicationLayer(input, {
           projection,
           configProjection,
           fastProjection,
@@ -350,7 +351,7 @@ export function betterOpenAIWithDependencies(
 
   const startSession = (ctx: ExtensionContext): Promise<void> => {
     const captured = captureSessionHost(ctx);
-    if (captured._tag !== "Captured" || captured.aborted) {
+    if (!Predicate.isTagged(captured, "Captured") || captured.aborted) {
       notifyAtHostBoundary(ctx, "Better OpenAI couldn't start", "warning");
       return slot.shutdown();
     }

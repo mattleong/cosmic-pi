@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import {
   JsonDocumentError,
   JsonDocumentStore,
@@ -812,9 +813,9 @@ describe("profile declaration visit restore", () => {
           ...original,
           profileSets: { saved: { profiles }, other: { profiles: {} } },
         };
-        expect(result).toMatchObject({ _tag: "Success", success: expected });
+        expect(Result.isSuccess(result) && result.success).toMatchObject(expected);
         expect(memory.documents.get(GLOBAL)).toEqual(expected);
-        if (result._tag === "Success") result.success.version = 99;
+        if (Result.isSuccess(result)) result.success.version = 99;
         expect(memory.documents.get(GLOBAL)?.version).toBe(6);
       }),
     );

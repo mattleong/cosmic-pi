@@ -3,6 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import { synchronousNow as previewNow } from "pi-cosmic-core";
 import { createSimpleDiff } from "../src/diff/structured";
@@ -32,13 +33,13 @@ const inheritedValue = (value: number) => {
   return fixture;
 };
 const propertyFixtures: unknown[] = Array.from({ length: 256 }, (_, index) =>
-  index % 4 === 0
-    ? { value: index }
-    : index % 4 === 1
-      ? inheritedValue(index)
-      : index % 4 === 2
-        ? [index]
-        : null,
+  Match.value(index % 4).pipe(
+    Match.withReturnType<unknown>(),
+    Match.when(0, () => ({ value: index })),
+    Match.when(1, () => inheritedValue(index)),
+    Match.when(2, () => [index]),
+    Match.orElse(() => null),
+  ),
 );
 let propertySink = 0;
 const cases = [

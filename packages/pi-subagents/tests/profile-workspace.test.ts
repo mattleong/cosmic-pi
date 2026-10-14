@@ -3,7 +3,7 @@ import { deferredPromise, plainTheme } from "pi-cosmic-core/testing";
 import { effectTest, step } from "./support/effect-test.ts";
 import {
   inheritedInvalidInspection,
-  makeProfileSettingsInspection,
+  profileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
 import {
   chooseFromPage,
@@ -396,7 +396,7 @@ describe("editing visit integration", () => {
         version: 6,
         profileSets: { work: { profiles: { generalist: [raw] } } },
       };
-      const initial = makeProfileSettingsInspection({
+      const initial = profileSettingsInspection({
         globalDocument: openingDocument,
         projectTrusted: true,
       });
@@ -404,7 +404,7 @@ describe("editing visit integration", () => {
         version: 6,
         profileSets: { work: { profiles: { generalist: "disabled" } } },
       };
-      const disabled = makeProfileSettingsInspection({
+      const disabled = profileSettingsInspection({
         globalDocument: disabledDocument,
         projectTrusted: true,
       });

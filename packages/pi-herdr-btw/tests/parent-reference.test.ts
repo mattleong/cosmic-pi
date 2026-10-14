@@ -6,9 +6,9 @@ import {
 } from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { registerHerdrBtwParentReference } from "../src/boundary/host-parent-reference.ts";
-import type {
-  SessionFileIdentityComparison,
+import {
   SessionHeaderProbe,
+  type SessionFileIdentityComparison,
 } from "../src/boundary/session-file.ts";
 
 const PARENT_FILE = "/sessions/parent.jsonl";
@@ -34,7 +34,7 @@ const harness = (options: HarnessOptions = {}) => {
   const registerFlag = vi.fn();
   const probe = vi.fn((_path: string): SessionHeaderProbe => {
     if (options.hostileProbe) throw new Error("host-probe-secret");
-    return options.probeResult ?? { _tag: "valid", header: { id: PARENT_ID } };
+    return options.probeResult ?? SessionHeaderProbe.valid({ header: { id: PARENT_ID } });
   });
   const compareIdentity = vi.fn(
     (leftPath: string, rightPath: string): SessionFileIdentityComparison => {
@@ -143,8 +143,8 @@ describe("herdr-btw parent reference", () => {
 
   it("drops the instruction when per-run parent identity revalidation fails", () => {
     const failures: Array<SessionHeaderProbe | Error> = [
-      { _tag: "invalid" },
-      { _tag: "valid", header: { id: "another-parent" } },
+      SessionHeaderProbe.invalid(),
+      SessionHeaderProbe.valid({ header: { id: "another-parent" } }),
       new Error("probe-secret"),
     ];
     for (const failure of failures) {
@@ -216,8 +216,8 @@ describe("herdr-btw parent reference", () => {
 
   it("rejects unusable parent headers and contains throwing host boundaries", () => {
     for (const hostile of [
-      { probeResult: { _tag: "invalid" as const } },
-      { probeResult: { _tag: "valid" as const, header: { id: "some-other-session" } } },
+      { probeResult: SessionHeaderProbe.invalid() },
+      { probeResult: SessionHeaderProbe.valid({ header: { id: "some-other-session" } }) },
       { hostileFlag: true },
       { hostileSessionId: true },
       { hostileSessionFile: true },

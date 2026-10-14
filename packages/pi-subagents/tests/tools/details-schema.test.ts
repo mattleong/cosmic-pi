@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeCompactToolDetails, makeAwaitDetails } from "../../src/tools/details.ts";
+import { compactToolDetails, awaitDetails } from "../../src/tools/details.ts";
 import { projectSubagentRunCard } from "../../src/tools/details-projection.ts";
 import { STEERING_DELIVERY_STATES } from "../../src/run/model.ts";
 import {
@@ -31,7 +31,7 @@ const actionFailuresOf = (value: CompactSubagentToolDetails | undefined) => {
 
 describe("subagent detail evidence", () => {
   it("keeps typed pending delivery additive, send-scoped, and distinct from uncertainty", () => {
-    const pending = makeCompactToolDetails({
+    const pending = compactToolDetails({
       action: "send",
       runs: [view()],
       actionFailures: [pendingFailure],
@@ -39,7 +39,7 @@ describe("subagent detail evidence", () => {
     expect(decodeCompactToolDetails(pending)).toEqual(pending);
     expect(actionFailuresOf(pending)).toEqual([expect.objectContaining({ pendingDelivery: true })]);
     expect(marksSubagentToolError(pending)).toBe(false);
-    const unflagged = makeCompactToolDetails({
+    const unflagged = compactToolDetails({
       action: "send",
       runs: [],
       actionFailures: [unflaggedFailure],
@@ -51,7 +51,7 @@ describe("subagent detail evidence", () => {
       ["send", [pendingFailure, { id: "definite", code: "not_running", message: "Not running" }]],
       ["send", [pendingFailure, { ...unflaggedFailure, id: "unflagged" }]],
     ] as const) {
-      const mixed = makeCompactToolDetails({ action, runs: [], actionFailures: failures });
+      const mixed = compactToolDetails({ action, runs: [], actionFailures: failures });
       expect(marksSubagentToolError(mixed)).toBe(true);
     }
   });
@@ -65,11 +65,11 @@ describe("subagent detail evidence", () => {
       ["reply", pendingFailure],
       ["resume", pendingFailure],
     ] as const) {
-      const projected = makeCompactToolDetails({ action, runs: [], actionFailures: [failure] });
+      const projected = compactToolDetails({ action, runs: [], actionFailures: [failure] });
       expect(actionFailuresOf(projected)?.[0]).not.toHaveProperty("pendingDelivery");
       expect(marksSubagentToolError(projected)).toBe(true);
     }
-    const base = makeCompactToolDetails({
+    const base = compactToolDetails({
       action: "send",
       runs: [],
       actionFailures: [unflaggedFailure],
@@ -98,7 +98,7 @@ describe("subagent detail evidence", () => {
   });
 
   it("preserves native delivery evidence at every density without changing historical v2 cards", () => {
-    const historical = makeCompactToolDetails({ action: "status", runs: [view()] });
+    const historical = compactToolDetails({ action: "status", runs: [view()] });
     expect(decodeCompactToolDetails(historical)).toEqual(historical);
     expect(historical).not.toHaveProperty("cards.0.steeringDelivery");
     for (const steeringDelivery of STEERING_DELIVERY_STATES) {
@@ -108,8 +108,8 @@ describe("subagent detail evidence", () => {
         expect(card.steeringDelivery).toBe(steeringDelivery);
         expect(card.state).toBe("running");
       }
-      const status = makeCompactToolDetails({ action: "status", runs: [run] });
-      const awaited = makeAwaitDetails({
+      const status = compactToolDetails({ action: "status", runs: [run] });
+      const awaited = awaitDetails({
         runs: [run],
         awaitedRunIds: [run.id],
         awaitUntil: "all_finished",
@@ -129,7 +129,7 @@ describe("subagent detail evidence", () => {
   });
 
   it("does not let report-only provenance hide failures or missing evidence", () => {
-    const details = makeCompactToolDetails({
+    const details = compactToolDetails({
       action: "list",
       runs: [view({ finalText: "report" })],
     });
@@ -165,7 +165,7 @@ describe("subagent detail evidence", () => {
   });
   it("round-trips only the current offender bit", () => {
     const offender = containedWriter({ state: "paused" });
-    const details = makeCompactToolDetails({ action: "claims", runs: [offender] });
+    const details = compactToolDetails({ action: "claims", runs: [offender] });
 
     expect(details).toMatchObject({
       action: "claims",
@@ -182,7 +182,7 @@ describe("subagent detail evidence", () => {
     };
     expect(decodeCompactToolDetails(forged)).toBeUndefined();
 
-    const peer = makeCompactToolDetails({
+    const peer = compactToolDetails({
       action: "claims",
       runs: [
         view({

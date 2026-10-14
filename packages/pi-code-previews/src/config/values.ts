@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
@@ -69,7 +70,11 @@ function uiSettingCandidate(
   }
   if (key === "editCollapsedLines") return value === "all" ? value : Number(value);
   if (Predicate.isBoolean(currentValue))
-    return value === "on" ? true : value === "off" ? false : undefined;
+    return Match.value(value).pipe(
+      Match.when("on", () => true),
+      Match.when("off", () => false),
+      Match.orElse(() => undefined),
+    );
   if (Predicate.isNumber(currentValue)) return Number(value);
   return value;
 }

@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { MAX_COMPLETION_DELIVERY_BATCH } from "../../src/run/limits.ts";
-import { processError } from "../../src/run/errors.ts";
+import { processError, InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { MAX_ERROR_CHARS } from "../../src/run/state.ts";
 import { makeTestSettlement, runningAssignment, runRecordFixture } from "./fixtures/run-context.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
@@ -747,10 +747,8 @@ describe("SubagentService", () => {
         const failure = yield* service
           .start(request({ runtime, closeOnReport: false }))
           .pipe(Effect.flip);
-        expect(failure).toMatchObject({
-          _tag: "InvalidSubagentRequestError",
-          code: "retained_report_capability_invalid",
-        });
+        expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
+        expect(failure).toMatchObject({ code: "retained_report_capability_invalid" });
       }
       expect(fake.controls).toHaveLength(0);
       expect(yield* service.list).toEqual([]);
@@ -776,10 +774,8 @@ describe("SubagentService", () => {
       }
 
       const failure = yield* service.resume(run.id, "Exceed the backlog.").pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "report_delivery_backlog",
-      });
+      expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(failure).toMatchObject({ code: "report_delivery_backlog" });
       expect(fake.controls).toHaveLength(64);
     });
   });

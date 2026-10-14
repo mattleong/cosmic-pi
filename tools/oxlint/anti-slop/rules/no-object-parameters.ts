@@ -1,19 +1,26 @@
 import { defineRule } from "@oxlint/plugins";
 
-import type { ESTree, SourceCode } from "@oxlint/plugins";
+import type { ESTree } from "@oxlint/plugins";
 
-import { parameterAnnotation, type FunctionNode } from "../shared/ast.ts";
+import {
+  functionParameterBindingName,
+  functionParameterTypeAnnotation,
+} from "../shared/function-parameters.ts";
+import {
+  createTypeAliasEnvironment,
+  resolvedTypeMatches,
+  type TypeAliasEnvironment,
+} from "../shared/type-alias-resolution.ts";
+type ParameterOwner =
+  | ESTree.ArrowFunctionExpression
+  | ESTree.Function
+  | ESTree.TSCallSignatureDeclaration
+  | ESTree.TSConstructSignatureDeclaration
+  | ESTree.TSConstructorType
+  | ESTree.TSFunctionType
+  | ESTree.TSMethodSignature;
 
-import { lexicalTypeParameterNames } from "../shared/lexical-type-parameters.ts";
-
-type Parameter = ESTree.ParamPattern;
-
-function parameterName(parameter: Parameter, sourceCode: SourceCode): string {
-  return parameter.type === "Identifier"
-    ? parameter.name
-    : sourceCode.getText(parameter).replace(/\s*:\s*object\s*$/u, "");
-}
-
+/** Ban the broad object type on function inputs, including local aliases to object. */
 export const noObjectParametersRule = defineRule({
   meta: {
     type: "problem",
@@ -27,64 +34,34 @@ export const noObjectParametersRule = defineRule({
     },
   },
   createOnce(context) {
-    const aliases = new Map<string, ESTree.TSType>();
+    let environment: TypeAliasEnvironment | null = null;
 
-    const resolvesToObject = (
-      type: ESTree.TSType,
-      shadowedAliases: ReadonlySet<string>,
-      visited = new Set<string>(),
-    ): boolean => {
-      if (type.type === "TSObjectKeyword") return true;
-      if (type.type === "TSParenthesizedType")
-        return resolvesToObject(type.typeAnnotation, shadowedAliases, visited);
-      if (type.type === "TSUnionType") {
-        return type.types.some((member) => resolvesToObject(member, shadowedAliases, visited));
-      }
-      if (
-        type.type !== "TSTypeReference" ||
-        type.typeName.type !== "Identifier" ||
-        (type.typeArguments !== null &&
-          type.typeArguments !== undefined &&
-          type.typeArguments.params.length > 0) ||
-        visited.has(type.typeName.name) ||
-        shadowedAliases.has(type.typeName.name)
-      ) {
-        return false;
-      }
-      const alias = aliases.get(type.typeName.name);
-      if (alias === undefined) return false;
-      const nextVisited = new Set(visited);
-      nextVisited.add(type.typeName.name);
-      return resolvesToObject(alias, shadowedAliases, nextVisited);
-    };
+    const resolvesToObject = (type: ESTree.TSType): boolean =>
+      environment !== null &&
+      resolvedTypeMatches(type, environment, (resolved, matches) => {
+        if (resolved.type === "TSObjectKeyword") return true;
+        if (resolved.type === "TSParenthesizedType") {
+          return matches(resolved.typeAnnotation);
+        }
+        return resolved.type === "TSUnionType" && resolved.types.some(matches);
+      });
 
-    const checkParameters = (node: FunctionNode) => {
-      const shadowedAliases = lexicalTypeParameterNames(node, context.sourceCode);
+    const checkParameters = (node: ParameterOwner) => {
       for (const parameter of node.params) {
-        const annotation = parameterAnnotation(parameter);
+        const annotation = functionParameterTypeAnnotation(parameter);
         if (annotation === null || annotation === undefined) continue;
-        if (!resolvesToObject(annotation.typeAnnotation, shadowedAliases)) continue;
+        if (!resolvesToObject(annotation.typeAnnotation)) continue;
         context.report({
           node: annotation.typeAnnotation,
           messageId: "objectParameter",
-          data: { parameter: parameterName(parameter, context.sourceCode) },
+          data: { parameter: functionParameterBindingName(parameter, context.sourceCode) },
         });
       }
     };
 
     return {
       Program(node) {
-        aliases.clear();
-        for (const statement of node.body) {
-          const declaration =
-            statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
-          if (
-            declaration?.type === "TSTypeAliasDeclaration" &&
-            (declaration.typeParameters === null || declaration.typeParameters === undefined)
-          ) {
-            aliases.set(declaration.id.name, declaration.typeAnnotation);
-          }
-        }
+        environment = createTypeAliasEnvironment(node, context.sourceCode);
       },
       ArrowFunctionExpression: checkParameters,
       FunctionDeclaration: checkParameters,

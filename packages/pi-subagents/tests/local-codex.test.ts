@@ -5,7 +5,8 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { makeLocalCodexBackendDriver } from "../src/backend/local-codex.ts";
+import * as Match from "effect/Match";
+import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import type { SupervisorChannelHandle } from "../src/boundary/supervisor-channel.ts";
 import { SupervisorChannelError } from "../src/boundary/supervisor-channel-errors.ts";
@@ -38,22 +39,21 @@ const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedRep
       send: (frame) =>
         Effect.sync(() => {
           if (!("id" in frame) || !("method" in frame)) return;
-          const result =
-            frame.method === "initialize"
-              ? {
-                  codexHome: "/tmp",
-                  platformFamily: "unix",
-                  platformOs: "linux",
-                  userAgent: "fixture",
-                }
-              : frame.method === "thread/start"
-                ? {
-                    model: "fixture",
-                    cwd: process.cwd(),
-                    serviceTier: null,
-                    thread: { id: "thread" },
-                  }
-                : { turn: { id: "turn", status: "inProgress" } };
+          const result = Match.value(frame.method).pipe(
+            Match.when("initialize", () => ({
+              codexHome: "/tmp",
+              platformFamily: "unix",
+              platformOs: "linux",
+              userAgent: "fixture",
+            })),
+            Match.when("thread/start", () => ({
+              model: "fixture",
+              cwd: process.cwd(),
+              serviceTier: null,
+              thread: { id: "thread" },
+            })),
+            Match.orElse(() => ({ turn: { id: "turn", status: "inProgress" } })),
+          );
           Queue.offerUnsafe(childEvents, { type: "message", value: { id: frame.id, result } });
         }),
     };
@@ -65,7 +65,7 @@ const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedRep
         hasAcceptedReport,
       },
     );
-    const backend = yield* makeLocalCodexBackendDriver(
+    const backend = yield* localCodexBackendDriver(
       { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
       { open: () => Effect.succeed(supervisor) },
     ).spawn(backendLaunch({ runId: report.runId }));

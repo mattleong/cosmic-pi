@@ -75,7 +75,9 @@ const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
   });
 };
 
-export function makeRunCompletionObservations(dependencies: RunCompletionObservationDependencies) {
+export function completionObservationOperations(
+  dependencies: RunCompletionObservationDependencies,
+) {
   const {
     records,
     withLock,

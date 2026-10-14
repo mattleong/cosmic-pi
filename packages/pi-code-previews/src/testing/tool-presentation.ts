@@ -271,6 +271,13 @@ type ProbedTool<TArgs, TDetails, TState> = PresentableRenderers<
   TState
 > & { readonly name: string };
 
+interface AnimationOwnershipRow {
+  name: string;
+  scheduled: number;
+  invalidated: boolean;
+  stops: number;
+}
+
 export function probeAnimationOwnership<TArgs, TDetails, TState>(
   tools: ReadonlyArray<ProbedTool<TArgs, TDetails, TState>>,
   scheduler: AnimationSchedulerProbe,
@@ -282,26 +289,27 @@ export function probeAnimationOwnership<TArgs, TDetails, TState>(
     readonly filter?: (tool: ProbedTool<TArgs, TDetails, TState>) => boolean;
   },
 ) {
-  return tools
-    .filter((tool) => options.filter?.(tool) ?? true)
-    .map((tool) => {
-      const before = { scheduled: scheduler.scheduled, stops: scheduler.stops };
-      let invalidations = 0;
-      const harness = createToolPresentationHarness(tool);
-      harness.call(options.args(tool), {
-        executionStarted: true,
-        invalidate: () => {
-          invalidations += 1;
-        },
-      });
-      harness.render();
-      const scheduled = scheduler.scheduled - before.scheduled;
-      if (scheduled > 0) scheduler.tick();
-      const invalidated = invalidations > 0;
-      harness.result(
-        options.result?.(tool) ?? { content: [{ type: "text", text: "done" }], details: undefined },
-      );
-      harness.render();
-      return { name: tool.name, scheduled, invalidated, stops: scheduler.stops - before.stops };
+  const rows: AnimationOwnershipRow[] = [];
+  for (const tool of tools) {
+    if (!(options.filter?.(tool) ?? true)) continue;
+    const before = { scheduled: scheduler.scheduled, stops: scheduler.stops };
+    let invalidations = 0;
+    const harness = createToolPresentationHarness(tool);
+    harness.call(options.args(tool), {
+      executionStarted: true,
+      invalidate: () => {
+        invalidations += 1;
+      },
     });
+    harness.render();
+    const scheduled = scheduler.scheduled - before.scheduled;
+    if (scheduled > 0) scheduler.tick();
+    const invalidated = invalidations > 0;
+    harness.result(
+      options.result?.(tool) ?? { content: [{ type: "text", text: "done" }], details: undefined },
+    );
+    harness.render();
+    rows.push({ name: tool.name, scheduled, invalidated, stops: scheduler.stops - before.stops });
+  }
+  return rows;
 }

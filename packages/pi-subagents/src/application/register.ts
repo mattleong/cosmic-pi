@@ -5,6 +5,7 @@ import {
   type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import {
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
@@ -30,19 +31,19 @@ import {
 import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
 import { registerActiveRunsPrompt } from "../boundary/host-active-runs-prompt.ts";
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
-import { makeHostNotifier } from "../boundary/host-notifier.ts";
+import { hostNotifier } from "../boundary/host-notifier.ts";
 import { registerParentWake } from "../boundary/host-parent-wake.ts";
 import {
-  makeReportArchive,
+  sessionReportArchive,
   pruneReportArchive,
   type ReportArchive,
 } from "../boundary/report-archive.ts";
-import { makeSubagentSessionFooter } from "../boundary/host-session-footer.ts";
+import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
-import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
+import { subagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { SessionProfileOverrideSeed } from "../profiles/session-overrides.ts";
 import {
-  makeSubagentLayer,
+  subagentApplicationLayer,
   type SubagentApplication,
   type SubagentRuntimeError,
 } from "../layer.ts";
@@ -62,7 +63,7 @@ import {
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerApplicationCommands } from "./commands.ts";
 import { registerSubagentMessageRenderers } from "./messages.ts";
-import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
+import { createProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import {
   IncompatibleProfileReloadHandoffError,
   profileReloadHandoff,
@@ -146,9 +147,9 @@ export function registerSubagentApplication(
     tools: [...SUBAGENT_TOOL_NAME_SET],
   });
   const receipts = registerSubagentErrorReceipts(pi);
-  const bridge = makeSubagentProjectionBridge(pi.events);
-  const profileOverrideHandoff = makeProfileOverrideHandoff();
-  const sessionFooter = makeSubagentSessionFooter(pi.events);
+  const bridge = subagentProjectionBridge(pi.events);
+  const profileOverrideHandoff = createProfileOverrideHandoff();
+  const sessionFooter = subagentSessionFooter(pi.events);
   let releaseActivity: (() => void) | undefined;
   let currentActivation: CapturedActivation | undefined;
   const wake = registerParentWake(pi, {
@@ -161,7 +162,7 @@ export function registerSubagentApplication(
         : undefined,
   });
   let reportArchive: ReportArchive | undefined;
-  const notify = makeHostNotifier(pi, {
+  const notify = hostNotifier(pi, {
     triggerTurn: wake.mayStartTurn,
     archive: () => reportArchive,
   });
@@ -227,7 +228,7 @@ export function registerSubagentApplication(
         }
         if (restoredReload) profileOverrideHandoff.publish(owner, restoredReload);
         const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
-        const layer = makeSubagentLayer({
+        const layer = subagentApplicationLayer({
           sessionKey: activation.sessionKey,
           cwd: activation.cwd,
           agentDirectory: activation.agentDirectory,
@@ -366,7 +367,7 @@ export function registerSubagentApplication(
         bridge.publish(prepared.projection);
         currentActivation = activation;
         if (activation.sessionKey) {
-          reportArchive = makeReportArchive(activation.agentDirectory, activation.sessionKey);
+          reportArchive = sessionReportArchive(activation.agentDirectory, activation.sessionKey);
           pruneReportArchive(activation.agentDirectory, synchronousNow()).catch(() => undefined);
         }
         showSessionFooter();
@@ -436,7 +437,7 @@ export function registerSubagentApplication(
     const tree = trigger === "tree";
     detachActivation(tree);
     const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable") return slot.shutdown();
+    if (!Predicate.isTagged(captured, "Captured")) return slot.shutdown();
     const projectTrusted = isProjectTrusted(ctx);
     const agentDirectory = invokeHostCallback<string | undefined>(
       () => boundaries.getAgentDirectory(),

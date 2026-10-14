@@ -33,7 +33,7 @@ const scheduleHostUiTicker: HostUiTickerScheduler = (intervalMs, tick) =>
 const stopGroup = (group: HostUiTickerGroup): void =>
   invokeHostCallback(() => group.fiber?.interruptUnsafe(), undefined);
 
-export const makeHostUiTickerPool = (
+export const createHostUiTickerPool = (
   schedule: HostUiTickerScheduler = scheduleHostUiTicker,
 ): HostUiTickerPool => {
   const scope = Scope.makeUnsafe("parallel");

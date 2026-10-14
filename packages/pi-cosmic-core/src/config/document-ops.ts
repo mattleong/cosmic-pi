@@ -6,7 +6,7 @@ export type ConfigDocumentErrorClass<E> = new (props: {
   readonly message: string;
 }) => E;
 
-export const makeConfigDocumentErrorFactory =
+export const configDocumentErrorFactory =
   <E>(Ctor: ConfigDocumentErrorClass<E>, label: string): ConfigDocumentErrorFactory<E> =>
   (operation, path) =>
   () =>

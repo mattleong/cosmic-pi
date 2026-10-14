@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as PlatformError from "effect/PlatformError";
+import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -250,11 +251,11 @@ for (const mode of ["timeout", "stream", "partial-spawn", "spawn"] as const) {
       const result = yield* Fiber.join(pending);
       expect(fake.reports).toEqual([false]);
       if (mode === "timeout")
-        expect(result).toMatchObject({
-          _tag: "Success",
-          success: { timedOut: true, cleanupUnconfirmed: true },
+        expect(Result.getOrUndefined(result)).toMatchObject({
+          timedOut: true,
+          cleanupUnconfirmed: true,
         });
-      else expect(result._tag).toBe("Failure");
+      else expect(Result.isFailure(result)).toBe(true);
       expect(owned).toBe(mode === "partial-spawn");
     }),
   );

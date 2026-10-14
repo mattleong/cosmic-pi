@@ -5,7 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scheduler from "effect/Scheduler";
 import {
-  makeRefreshCoordinator,
+  createRefreshCoordinator,
   type RefreshRequest,
 } from "../src/coordination/refresh-coordinator.ts";
 import { interruptingScheduler, yieldUntil } from "../testing.ts";
@@ -30,7 +30,7 @@ describe("RefreshCoordinator", () => {
   it.effect("remains reusable across every scheduler interruption point in admission", () =>
     Effect.gen(function* () {
       for (let interruptAt = 1; interruptAt <= 100; interruptAt++) {
-        const coordinator = yield* makeRefreshCoordinator();
+        const coordinator = yield* createRefreshCoordinator();
         let checkpoints = 0;
         const admissionScheduler = interruptingScheduler(() => ++checkpoints === interruptAt);
         const owner = yield* coordinator
@@ -56,7 +56,7 @@ describe("RefreshCoordinator", () => {
     "interrupts joiner waiting without cancelling its owner or losing the merged request",
     () =>
       Effect.gen(function* () {
-        const coordinator = yield* makeRefreshCoordinator();
+        const coordinator = yield* createRefreshCoordinator();
         const { started, release, requests, operation } = yield* gated();
         const owner = yield* coordinator.run({}, operation).pipe(Effect.forkScoped);
         yield* Deferred.await(started);
@@ -74,7 +74,7 @@ describe("RefreshCoordinator", () => {
 
   it.effect("coalesces force and notify into one follow-up", () =>
     Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinator();
+      const coordinator = yield* createRefreshCoordinator();
       const { started, release, requests, operation } = yield* gated();
       const owner = yield* coordinator.run({}, operation).pipe(Effect.forkScoped);
       yield* Deferred.await(started);
@@ -91,7 +91,7 @@ describe("RefreshCoordinator", () => {
 
   it.effect("executes a request merged while the follow-up is running", () =>
     Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinator();
+      const coordinator = yield* createRefreshCoordinator();
       const started = yield* Deferred.make<void>();
       const releaseFirst = yield* Deferred.make<void>();
       const followUpStarted = yield* Deferred.make<void>();
@@ -131,7 +131,7 @@ describe("RefreshCoordinator", () => {
 
   it.effect("replays follow-up failure to late waiters and permits immediate reuse", () =>
     Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinator<string>();
+      const coordinator = yield* createRefreshCoordinator<string>();
       const firstStarted = yield* Deferred.make<void>();
       const releaseFirst = yield* Deferred.make<void>();
       const followUpStarted = yield* Deferred.make<void>();
@@ -178,7 +178,7 @@ describe("RefreshCoordinator", () => {
 
   it.effect("replays typed owner failure to every waiter and permits retry", () =>
     Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinator<string>();
+      const coordinator = yield* createRefreshCoordinator<string>();
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       let calls = 0;
@@ -208,7 +208,7 @@ describe("RefreshCoordinator", () => {
 
   it.effect("replays interruption and does not run queued follow-up", () =>
     Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinator();
+      const coordinator = yield* createRefreshCoordinator();
       const started = yield* Deferred.make<void>();
       let calls = 0;
       const operation = () =>

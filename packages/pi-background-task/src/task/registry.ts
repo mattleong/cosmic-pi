@@ -31,7 +31,7 @@ export interface TaskRecord {
 
 export type TaskRegistry = Map<string, TaskRecord>;
 
-export const makeTaskRecord = (snapshot: BackgroundTaskStatus): TaskRecord => ({
+export const taskRecord = (snapshot: BackgroundTaskStatus): TaskRecord => ({
   snapshot,
   logs: new LogBuffer(),
   wake: Deferred.makeUnsafe<void>(),

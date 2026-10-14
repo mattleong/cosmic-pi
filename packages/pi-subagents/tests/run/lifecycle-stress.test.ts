@@ -21,6 +21,7 @@ import {
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
+import { SubagentRuntimeClosedError } from "../../src/run/errors.ts";
 
 const cycles = 4;
 
@@ -280,7 +281,7 @@ describe("SubagentService lifecycle stress", () => {
               [sibling.id],
               "all_finished",
               () => updates++,
-            ).pipe(Effect.result, Effect.forkScoped);
+            ).pipe(Effect.flip, Effect.forkScoped);
             yield* yieldUntil(() => updates > 0);
 
             const shutdown = yield* Scope.close(owner, Exit.void).pipe(
@@ -295,10 +296,7 @@ describe("SubagentService lifecycle stress", () => {
             fake.controls[2]!.offer({ type: "agent_settled" });
             yield* Deferred.succeed(release, undefined);
             yield* Fiber.join(shutdown);
-            expect(yield* Fiber.join(waiting)).toMatchObject({
-              _tag: "Failure",
-              failure: { _tag: "SubagentRuntimeClosedError" },
-            });
+            expect(yield* Fiber.join(waiting)).toBeInstanceOf(SubagentRuntimeClosedError);
             yield* Scope.close(owner, Exit.void);
             expect(fake.controls.map((control) => control.released())).toEqual([1, 1, 1, 1]);
             expect(new Set(fake.reclaimedRunIds)).toEqual(

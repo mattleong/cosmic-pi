@@ -42,7 +42,7 @@ const canAcceptNotification = (record: RunRecord): boolean =>
   !record.pauseRequested &&
   record.process?.controls.deliverNotification !== undefined;
 
-export function makeRunNotificationRouting(dependencies: RunNotificationRoutingDependencies) {
+export function notificationRouter(dependencies: RunNotificationRoutingDependencies) {
   const { records, withLock, admitTurnInput, releaseTurnInput, notifyHost } = dependencies;
 
   const notifyRoot = (
@@ -90,11 +90,11 @@ export function makeRunNotificationRouting(dependencies: RunNotificationRoutingD
           (admission) => (admission ? releaseTurnInput(admission.record) : Effect.void),
         ).pipe(
           Effect.flatMap((delivered) => (delivered ? Effect.succeed(true) : attempt(index + 1))),
-          Effect.catch((error) =>
-            error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
-              ? Effect.succeed("uncertain" as const)
-              : attempt(index + 1),
+          Effect.catchTag("SubagentProcessError", (error) =>
+            isOutcomeUncertain(error) ? Effect.succeed("uncertain" as const) : attempt(index + 1),
           ),
+          // `attempt` cannot fail, so this only sees the remaining delivery errors.
+          Effect.catch(() => attempt(index + 1)),
         );
       };
       return attempt(0);

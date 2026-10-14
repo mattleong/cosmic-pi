@@ -1,4 +1,5 @@
 import { absurd } from "effect/Function";
+import * as Match from "effect/Match";
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
@@ -240,12 +241,11 @@ export const profileWorkspaceRows = (
     scope: "profile",
     field: draft.candidates.length === 0 ? "model" : "add",
     label: draft.candidates.length === 0 ? "Add model…" : "Add fallback…",
-    value:
-      draft.kind === "invalid"
-        ? "repair this profile"
-        : draft.kind === "disabled"
-          ? "enable this profile"
-          : "",
+    value: Match.value(draft.kind).pipe(
+      Match.when("invalid", () => "repair this profile"),
+      Match.when("disabled", () => "enable this profile"),
+      Match.orElse(() => ""),
+    ),
     fixed: draft.candidates.length >= MAX_PROFILE_CANDIDATES,
     fixedReason: CANDIDATE_LIMIT_REACHED,
   },

@@ -24,6 +24,7 @@ import {
   type QuestionnaireRelay,
   type AskUserOutcome,
 } from "../src/protocol.ts";
+import { AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 
 const answer: AskUserOutcome = {
   outcome: "submitted",
@@ -190,15 +191,15 @@ it.effect(
       );
       expect(yield* askFails(capability, { ...owner, runId: "" })).toBe(true);
       yield* Effect.promise(() =>
-        expect(capability.ask(request, owner, AbortSignal.abort())).rejects.toMatchObject({
-          _tag: "AskUserRuntimeClosedError",
-        }),
+        expect(capability.ask(request, owner, AbortSignal.abort())).rejects.toBeInstanceOf(
+          AskUserRuntimeClosedError,
+        ),
       );
       stale = true;
       yield* Effect.promise(() =>
-        expect(capability.ask(request, owner, new AbortController().signal)).rejects.toMatchObject({
-          _tag: "AskUserRuntimeClosedError",
-        }),
+        expect(capability.ask(request, owner, new AbortController().signal)).rejects.toBeInstanceOf(
+          AskUserRuntimeClosedError,
+        ),
       );
       expect(queryQuestionnaireCapability(bus, "root")).toBeUndefined();
       stale = false;
@@ -349,7 +350,6 @@ const registerPendingRuns = () => {
   });
   return { runs, dispose, capability: queryQuestionnaireCapability(bus, "root")! };
 };
-const closed = { _tag: "AskUserRuntimeClosedError" };
 
 it.effect("root capabilities bound live owners and refuse a duplicate live owner unrun", () =>
   Effect.gen(function* () {
@@ -360,7 +360,7 @@ it.effect("root capabilities bound live owners and refuse a duplicate live owner
       const before = runs.length;
       const asking = capability.ask(request, ownerAt(index), signal);
       expect(runs).toHaveLength(before);
-      return Effect.promise(() => expect(asking).rejects.toMatchObject(closed));
+      return Effect.promise(() => expect(asking).rejects.toBeInstanceOf(AskUserRuntimeClosedError));
     };
     const pending = [capability.ask(request, ownerAt(0), signal)];
     yield* refused(0);

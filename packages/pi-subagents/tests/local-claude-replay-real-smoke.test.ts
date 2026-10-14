@@ -2,7 +2,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { synchronousRandomHex, provideBuiltLayer } from "pi-cosmic-core";
 import { describe, expect, it } from "vitest";
-import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
+import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
 import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
@@ -35,7 +35,7 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
     return Effect.runPromise(
       Effect.gen(function* () {
         const supervisors = yield* SupervisorChannel;
-        const driver = makeLocalClaudeBackendDriver(processes, supervisors);
+        const driver = localClaudeBackendDriver(processes, supervisors);
         yield* driver.preflight({ ...launch, closeOnReport: true });
         const backend = yield* driver.spawn(launch);
         yield* backend.controls.initialize;

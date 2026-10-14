@@ -22,10 +22,10 @@ import {
   type FooterTotals,
 } from "./boundary/host-usage.ts";
 import { shutdownHostUiTickers, startHostUiTicker } from "./boundary/host-status.ts";
-import { makeDefaultResolvedCosmicUiConfig, type ResolvedCosmicUiConfig } from "./config/schema.ts";
-import { makeFooterRegistry } from "./footer/registry.ts";
+import { defaultResolvedCosmicUiConfig, type ResolvedCosmicUiConfig } from "./config/schema.ts";
+import { createFooterRegistry } from "./footer/registry.ts";
 import {
-  makeCosmicUiApplicationLayer,
+  cosmicUiApplicationLayer,
   type CosmicUiApplication,
   type CosmicUiRuntimeError,
   type CosmicUiSessionInput,
@@ -33,7 +33,7 @@ import {
 import {
   CosmicUiService,
   emptyTotals,
-  makeProjection,
+  createProjection,
   resetProjection,
 } from "./protocol/service.ts";
 import {
@@ -48,9 +48,9 @@ import {
 } from "./protocol/protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
 import { createFooterInstallation } from "./footer/installation.ts";
-import { makeWorkingRow, type WorkingRowOptions } from "./working/row.ts";
+import { createWorkingRow, type WorkingRowOptions } from "./working/row.ts";
 import { ActivityService, type ActivityServiceContract } from "./activity/service.ts";
-import { makeActivityHost } from "./boundary/host-activity.ts";
+import { createActivityHost } from "./boundary/host-activity.ts";
 
 const TOTAL_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cost"] as const;
 
@@ -75,8 +75,8 @@ export function registerCosmicUiApplication(
   dependencies: CosmicUiApplicationDependencies = {},
 ): void {
   const shutdownTickers = dependencies.shutdownHostUiTickers ?? shutdownHostUiTickers;
-  const projection = makeProjection();
-  const workingRow = makeWorkingRow(dependencies.workingRow);
+  const projection = createProjection();
+  const workingRow = createWorkingRow(dependencies.workingRow);
   let activatedToken: number | undefined;
   let lifecycleGeneration = 0;
   let stopUsageTicker: (() => void) | undefined;
@@ -88,7 +88,7 @@ export function registerCosmicUiApplication(
   let publishedHostState: string | undefined;
 
   const config = (): ResolvedCosmicUiConfig =>
-    MutableRef.get(projection).config ?? makeDefaultResolvedCosmicUiConfig();
+    MutableRef.get(projection).config ?? defaultResolvedCosmicUiConfig();
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
@@ -104,7 +104,7 @@ export function registerCosmicUiApplication(
     publishedHostState = key;
     invokeHostCallback(() => pi.events.emit(COSMIC_UI_HOST_STATE, state), undefined);
   };
-  const registry = makeFooterRegistry({
+  const registry = createFooterRegistry({
     requestRender: () => footerInstallation.requestRender(),
     sessionActive: () => activatedToken !== undefined,
   });
@@ -183,7 +183,7 @@ export function registerCosmicUiApplication(
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
-        makeCosmicUiApplicationLayer(input, {
+        cosmicUiApplicationLayer(input, {
           projection,
           requestRender: () => {
             footerInstallation.requestRender();
@@ -226,7 +226,7 @@ export function registerCosmicUiApplication(
     onStartFailure: ({ ctx }) => notifyAtHostBoundary(ctx, "Cosmic UI couldn't start", "warning"),
   });
 
-  const activityHost = makeActivityHost(
+  const activityHost = createActivityHost(
     pi,
     (effect, signal) => {
       slot.fork(effect.pipe(Effect.ignore), signal);

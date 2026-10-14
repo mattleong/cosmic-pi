@@ -7,14 +7,14 @@ import {
   ProfileWorkspaceComponent,
   type ProfileWorkspaceOptions,
 } from "../../src/settings/profile-workspace.ts";
-import { makeProfileSettingsInspection } from "./profile-settings-inspection.ts";
+import { profileSettingsInspection } from "./profile-settings-inspection.ts";
 import { profileCandidate } from "./profiles.ts";
 
 export const settleTurn = (): Promise<void> =>
   Effect.runPromise(Effect.yieldNow.pipe(Effect.andThen(Effect.yieldNow)));
 
 export const workspaceInspection = (seed?: SessionProfileOverrideSeed) =>
-  makeProfileSettingsInspection(
+  profileSettingsInspection(
     {
       globalDocument: {
         version: 6,

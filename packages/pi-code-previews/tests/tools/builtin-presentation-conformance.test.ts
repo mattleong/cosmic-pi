@@ -4,6 +4,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
 import { builtinRenderers, previewBodiesDisabled, stripAnsi } from "../support/render";
+import * as Match from "effect/Match";
 
 const cases = [
   {
@@ -70,13 +71,12 @@ function plain(lines: string[]) {
 beforeEach(() => applyPresentationSettings({ toolCallTiming: false, ...previewBodiesDisabled }));
 
 const sourceMarkers = (name: string): string[] =>
-  name === "bash"
-    ? ["FIRST_COMMAND", "LAST_COMMAND"]
-    : name === "write"
-      ? ["const first", "const last"]
-      : name === "edit"
-        ? ["OLD_4", "NEW_4"]
-        : [];
+  Match.value(name).pipe(
+    Match.when("bash", () => ["FIRST_COMMAND", "LAST_COMMAND"]),
+    Match.when("write", () => ["const first", "const last"]),
+    Match.when("edit", () => ["OLD_4", "NEW_4"]),
+    Match.orElse(() => []),
+  );
 const count = (text: string, phrase: string) => text.split(phrase).length - 1;
 
 describe("registered builtin presentation", () => {

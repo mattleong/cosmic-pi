@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { makeFrozenProjection, type ProjectionError } from "pi-cosmic-core";
+import { frozenProjection, type ProjectionError } from "pi-cosmic-core";
 import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import {
   clearWriteProjection,
@@ -28,7 +28,7 @@ export class CodePreviewWriteService extends Context.Service<
         Effect.sync(() => acquireProjectionOwnership("code-preview-write-projection")),
         (acquired) => Effect.sync(() => clearWriteProjection(acquired)),
       );
-      const projection = yield* makeFrozenProjection<
+      const projection = yield* frozenProjection<
         CodePreviewWriteSnapshot,
         CodePreviewWriteSnapshot
       >(

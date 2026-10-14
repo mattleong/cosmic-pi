@@ -7,7 +7,7 @@ interface TurnInputAdmission {
   drained: Deferred.Deferred<void> | undefined;
 }
 
-export function makeRunTurnInputs(withLock: WithRunLock) {
+export function turnInputGates(withLock: WithRunLock) {
   const turnInputs = new WeakMap<RunRecord, TurnInputAdmission>();
   const admitTurnInput = (record: RunRecord): void => {
     const admission = turnInputs.get(record);

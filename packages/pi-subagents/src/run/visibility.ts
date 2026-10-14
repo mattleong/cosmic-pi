@@ -5,7 +5,7 @@ import type { SubagentRunView } from "./model.ts";
 import { sortRuns } from "./projection.ts";
 import { isRunInSubtree, projectRunTree } from "./tree.ts";
 
-export function makeRunVisibility(dependencies: Pick<RunContext, "records" | "withLock">) {
+export function visibilityOperations(dependencies: Pick<RunContext, "records" | "withLock">) {
   const { records, withLock } = dependencies;
   const visibleList = (callerRunId: string): Effect.Effect<ReadonlyArray<SubagentRunView>> =>
     withLock(

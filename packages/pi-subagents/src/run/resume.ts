@@ -2,6 +2,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import {
   canonicalizeWriterCwd,
@@ -97,7 +98,7 @@ export interface RunResumeDependencies extends Pick<
   readonly workspaces: Pick<RunWorkspaceControl, "invalidateForResume" | "heldLaunchSlots">;
 }
 
-export function makeRunResume(dependencies: RunResumeDependencies) {
+export function resumeOperations(dependencies: RunResumeDependencies) {
   const {
     ownerScope,
     records,
@@ -254,7 +255,10 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
       Effect.tapError((error) =>
         withLock(Effect.sync(() => completeRunInitialization(claimed.record))).pipe(
           Effect.flatMap((pending) => {
-            if (error._tag !== "SubagentProcessError" || error.code !== "resume_outcome_uncertain")
+            if (
+              !Predicate.isTagged(error, "SubagentProcessError") ||
+              error.code !== "resume_outcome_uncertain"
+            )
               return settlement
                 .failRun(claimed.record, error.message)
                 .pipe(Effect.andThen(closeRecordScope(claimed.record)));

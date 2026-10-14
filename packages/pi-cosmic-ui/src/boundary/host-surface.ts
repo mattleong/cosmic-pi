@@ -5,7 +5,9 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
@@ -35,10 +37,17 @@ export interface OwnedSurfaceOptions<A> {
   readonly onControl?: (close: () => void) => void;
 }
 
-export type OwnedSurfaceOutcome<A> =
-  | { readonly _tag: "Settled"; readonly value: A }
-  | { readonly _tag: "Blocked" }
-  | { readonly _tag: "Failed"; readonly cause: unknown };
+export type OwnedSurfaceOutcome<A> = Data.TaggedEnum<{
+  Settled: { readonly value: A };
+  Blocked: Record<never, never>;
+  Failed: { readonly cause: unknown };
+}>;
+
+interface OwnedSurfaceOutcomeDefinition extends Data.TaggedEnum.WithGenerics<1> {
+  readonly taggedEnum: OwnedSurfaceOutcome<this["A"]>;
+}
+
+export const OwnedSurfaceOutcome = Data.taggedEnum<OwnedSurfaceOutcomeDefinition>();
 
 export class OwnedSurfaceError extends Schema.TaggedError<OwnedSurfaceError>()(
   "OwnedSurfaceError",
@@ -104,7 +113,7 @@ function mountOwnedSurface<A>(
         guard.hide();
       }
     } catch (cause) {
-      complete({ _tag: "Failed", cause });
+      complete(OwnedSurfaceOutcome.Failed({ cause }));
     }
   };
   const close = () => {
@@ -157,32 +166,32 @@ function mountOwnedSurface<A>(
     options.onControl?.(close);
     const admitted = options.admit?.();
     if (admitted === false) {
-      complete({ _tag: "Blocked" });
+      complete(OwnedSurfaceOutcome.Blocked());
       return close;
     }
     release = admitted;
     const opened = ctx.ui.custom<A>(
       factory,
-      placement === "inline"
-        ? undefined
-        : placement === "overlay"
-          ? { overlay: true, onHandle }
-          : {
-              overlay: true,
-              overlayOptions: viewport?.overlayOptions ?? {
-                anchor: "top-left",
-                width: 1,
-                maxHeight: 0,
-              },
-              onHandle,
-            },
+      Match.value(placement).pipe(
+        Match.when("inline", () => undefined),
+        Match.when("overlay", () => ({ overlay: true, onHandle })),
+        Match.orElse(() => ({
+          overlay: true,
+          overlayOptions: viewport?.overlayOptions ?? {
+            anchor: "top-left",
+            width: 1,
+            maxHeight: 0,
+          },
+          onHandle,
+        })),
+      ),
     );
     void Promise.resolve(opened).then(
-      (value) => complete({ _tag: "Settled", value }),
-      (cause: unknown) => complete({ _tag: "Failed", cause }),
+      (value) => complete(OwnedSurfaceOutcome.Settled({ value })),
+      (cause: unknown) => complete(OwnedSurfaceOutcome.Failed({ cause })),
     );
   } catch (cause) {
-    complete({ _tag: "Failed", cause });
+    complete(OwnedSurfaceOutcome.Failed({ cause }));
   }
   return close;
 }
@@ -194,11 +203,11 @@ export const openOwnedSurface = <A>(
   Effect.callback<A, OwnedSurfaceError>((resume) => {
     const close = mountOwnedSurface(ctx, options, (outcome) =>
       resume(
-        outcome._tag === "Settled"
-          ? Effect.succeed(outcome.value)
-          : Effect.fail(
-              new OwnedSurfaceError({ reason: outcome._tag === "Blocked" ? "blocked" : "failed" }),
-            ),
+        OwnedSurfaceOutcome.$match(outcome, {
+          Settled: ({ value }): Effect.Effect<A, OwnedSurfaceError> => Effect.succeed(value),
+          Blocked: () => Effect.fail(new OwnedSurfaceError({ reason: "blocked" })),
+          Failed: () => Effect.fail(new OwnedSurfaceError({ reason: "failed" })),
+        }),
       ),
     );
     return Effect.sync(close);
@@ -220,7 +229,7 @@ export const openCommandSurface = (
 ): Promise<void> =>
   openOwnedSurfacePromise<undefined>(ctx, { ...options, closedValue: undefined }).then(
     (outcome) => {
-      if (outcome._tag === "Failed") throw outcome.cause;
+      if (OwnedSurfaceOutcome.$is("Failed")(outcome)) throw outcome.cause;
       return undefined;
     },
   );

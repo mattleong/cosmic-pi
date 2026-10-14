@@ -15,10 +15,10 @@ import { SubagentNotFoundError } from "../../../src/run/errors.ts";
 import type { RunContext, RunRecord } from "../../../src/run/internal.ts";
 import type { RunNotificationDelivery } from "../../../src/run/notification-delivery.ts";
 import { WriterPools } from "../../../src/run/writer-pool.ts";
-import { makeRunSettlement } from "../../../src/run/settlement.ts";
+import { settlementOperations } from "../../../src/run/settlement.ts";
 import { view } from "../../fixtures/run-view.ts";
 import { fakeWriterLeaseLayer } from "./service-harness.ts";
-import { makeSessionUsageLedger } from "../../../src/run/session-usage.ts";
+import { emptySessionUsageLedger } from "../../../src/run/session-usage.ts";
 
 export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
   Effect.gen(function* () {
@@ -42,7 +42,7 @@ export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
       },
       sendPeerNotices: () => Effect.void,
       allocateAssignmentAttemptToken: () => `assignment-test-${++attempts}`,
-      sessionUsage: makeSessionUsageLedger(),
+      sessionUsage: emptySessionUsageLedger(),
       ...overrides,
     };
     return context;
@@ -67,7 +67,7 @@ const inertDelivery: RunNotificationDelivery = {
 export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
   makeRunContext(overrides).pipe(
     Effect.map((context) =>
-      makeRunSettlement({
+      settlementOperations({
         ...context,
         delivery: inertDelivery,
         closeRecordScope: () => Effect.void,

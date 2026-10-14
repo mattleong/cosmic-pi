@@ -14,7 +14,7 @@ import {
   installCodePreviewSessionCapability,
   type CodePreviewSessionCapability,
 } from "../../src/application/capability";
-import { makeSettingsAdmission, withSettingsCoordinator } from "../../src/config/coordinator";
+import { nextSettingsAdmission, withSettingsCoordinator } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { CodePreviewSettingsService } from "../../src/config/service";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
@@ -48,7 +48,7 @@ const overlappingSettingsCommands = (commands: readonly string[]) =>
     );
     yield* step(() =>
       runtime.runPromise(
-        CodePreviewSettingsService.use((service) => service.load(makeSettingsAdmission())),
+        CodePreviewSettingsService.use((service) => service.load(nextSettingsAdmission())),
       ),
     );
 
@@ -56,7 +56,7 @@ const overlappingSettingsCommands = (commands: readonly string[]) =>
     const release = yield* Deferred.make<void>();
     yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
     const blocked = runtime.runPromise(
-      withSettingsCoordinator(makeSettingsAdmission(), () =>
+      withSettingsCoordinator(nextSettingsAdmission(), () =>
         Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
       ),
     );

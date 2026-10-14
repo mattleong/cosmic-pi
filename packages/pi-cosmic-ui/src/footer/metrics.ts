@@ -1,4 +1,5 @@
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import * as Match from "effect/Match";
 import type { CosmicFooterTextContribution, CosmicFooterTheme } from "../protocol/protocol.ts";
 import {
   alignSides,
@@ -42,8 +43,11 @@ function metricParts(
     }
     parts.push({
       text: tone(theme, entry, contributionText(entry, compact)),
-      kind:
-        entry.id === "metrics.input" ? "input" : entry.id === "metrics.output" ? "output" : "other",
+      kind: Match.value(entry.id).pipe(
+        Match.when("metrics.input", (): MetricPartKind => "input"),
+        Match.when("metrics.output", (): MetricPartKind => "output"),
+        Match.orElse((): MetricPartKind => "other"),
+      ),
     });
   }
   return parts;

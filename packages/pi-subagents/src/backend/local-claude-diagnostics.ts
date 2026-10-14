@@ -36,7 +36,7 @@ const toolCategory = (name: string): ClaudeInputFailureSnapshot["activeToolCateg
   return "other";
 };
 
-export const makeLocalClaudeDiagnostics = (activeTools: () => Iterable<string>) => {
+export const localClaudeDiagnostics = (activeTools: () => Iterable<string>) => {
   let lastInbound: ClaudeInputFailureSnapshot["lastInbound"] = "none";
   let lastInboundAt: number | undefined;
   let cliVersion: string | null = null;

@@ -176,21 +176,23 @@ const reportStatusLines = (
   width: number,
   theme: Theme,
 ): string[] =>
-  runs
-    .filter((run) => run.state === "completed" && !run.finalText && !run.error)
-    .map((run) =>
-      clipToWidth(
-        theme.fg(
-          "dim",
-          `${sanitizeTerminalLine(run.name)}: ${
-            run.reportStatus === undefined
-              ? "final report availability unknown in this observation"
-              : REPORT_STATUS_TEXT[run.reportStatus]
-          }`,
-        ),
-        width,
-      ),
-    );
+  runs.flatMap((run) =>
+    run.state !== "completed" || run.finalText || run.error
+      ? []
+      : [
+          clipToWidth(
+            theme.fg(
+              "dim",
+              `${sanitizeTerminalLine(run.name)}: ${
+                run.reportStatus === undefined
+                  ? "final report availability unknown in this observation"
+                  : REPORT_STATUS_TEXT[run.reportStatus]
+              }`,
+            ),
+            width,
+          ),
+        ],
+  );
 
 interface RunOverviewOptions {
   readonly expanded: boolean;

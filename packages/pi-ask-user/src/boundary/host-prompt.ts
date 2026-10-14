@@ -1,6 +1,6 @@
 import * as Latch from "effect/Latch";
 
-export const makeAskUserPromptGate = () => {
+export const createAskUserPromptGate = () => {
   let promptActive = false;
   let own = false;
   const open = Latch.makeUnsafe(true);
@@ -32,4 +32,4 @@ export const makeAskUserPromptGate = () => {
   };
 };
 
-export type AskUserPromptGate = ReturnType<typeof makeAskUserPromptGate>;
+export type AskUserPromptGate = ReturnType<typeof createAskUserPromptGate>;

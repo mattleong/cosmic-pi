@@ -79,7 +79,7 @@ export interface SupervisorChannelState {
   closed: boolean;
 }
 
-export const makeSupervisorChannelState = (
+export const supervisorChannelState = (
   runId: SupervisorRunId,
   verifyToken: TokenVerifier,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,

@@ -6,8 +6,9 @@ import {
   captureContextModel,
   captureSelectedModel,
   captureThinkingLevel,
+  DirectoryModelHostError,
 } from "../src/boundary/host-model.ts";
-import { makeDirectoryModelPreference } from "../src/config/schema.ts";
+import { directoryModelPreference } from "../src/config/schema.ts";
 
 describe("directory model host capture", () => {
   it("captures model fields and contains malformed or hostile host values", () => {
@@ -37,12 +38,7 @@ describe("directory model host capture", () => {
     const ctx = extensionContextFixture(hostileContext);
     expect(captureContextModel(ctx)).toBeUndefined();
 
-    const preference = makeDirectoryModelPreference(
-      "/project",
-      "openai-codex",
-      "gpt-5.6-sol",
-      "high",
-    );
+    const preference = directoryModelPreference("/project", "openai-codex", "gpt-5.6-sol", "high");
     const pi = extensionApiFixture({});
     const hostileModel = Object.defineProperty(modelFixture({ provider: "openai-codex" }), "id", {
       enumerable: true,
@@ -53,7 +49,8 @@ describe("directory model host capture", () => {
     const nestedHostile = extensionContextFixture({ model: hostileModel });
     for (const context of [ctx, nestedHostile]) {
       const error = Effect.runSync(Effect.flip(applyHostPreference(pi, context, preference)));
-      expect(error).toMatchObject({ _tag: "DirectoryModelHostError", operation: "read" });
+      expect(error).toBeInstanceOf(DirectoryModelHostError);
+      expect(error).toMatchObject({ operation: "read" });
     }
   });
 });

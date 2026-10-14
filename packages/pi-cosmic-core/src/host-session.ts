@@ -1,3 +1,4 @@
+import * as Data from "effect/Data";
 import { constVoid } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { notificationText } from "./message-text.ts";
@@ -28,18 +29,21 @@ type HostModelRegistry<Model> = {
   readonly isUsingOAuth: (model: Model) => boolean;
 };
 
-export type CapturedHostSignal =
-  | { readonly _tag: "Captured"; readonly signal: AbortSignal | undefined }
-  | { readonly _tag: "Unavailable" };
+export type CapturedHostSignal = Data.TaggedEnum<{
+  Captured: { readonly signal: AbortSignal | undefined };
+  Unavailable: Record<never, never>;
+}>;
+export const CapturedHostSignal = Data.taggedEnum<CapturedHostSignal>();
 
-type CapturedSessionHost =
-  | {
-      readonly _tag: "Captured";
-      readonly cwd: string;
-      readonly signal: AbortSignal | undefined;
-      readonly aborted: boolean;
-    }
-  | { readonly _tag: "Unavailable" };
+type CapturedSessionHost = Data.TaggedEnum<{
+  Captured: {
+    readonly cwd: string;
+    readonly signal: AbortSignal | undefined;
+    readonly aborted: boolean;
+  };
+  Unavailable: Record<never, never>;
+}>;
+const CapturedSessionHost = Data.taggedEnum<CapturedSessionHost>();
 
 export function hasTerminalUI(ctx: HostUiContext): boolean {
   return invokeHostCallback(() => {
@@ -92,9 +96,9 @@ export function isUsingOAuthAtHostBoundary<Model>(
 
 export function captureHostSignal(ctx: HostSessionContext): CapturedHostSignal {
   try {
-    return { _tag: "Captured", signal: ctx.signal };
+    return CapturedHostSignal.Captured({ signal: ctx.signal });
   } catch {
-    return { _tag: "Unavailable" };
+    return CapturedHostSignal.Unavailable();
   }
 }
 
@@ -102,14 +106,9 @@ export function captureSessionHost(ctx: HostSessionContext): CapturedSessionHost
   try {
     const cwd = ctx.cwd;
     const signal = ctx.signal;
-    if (!Predicate.isString(cwd) || cwd.length === 0) return { _tag: "Unavailable" };
-    return {
-      _tag: "Captured",
-      cwd,
-      signal,
-      aborted: signal?.aborted === true,
-    };
+    if (!Predicate.isString(cwd) || cwd.length === 0) return CapturedSessionHost.Unavailable();
+    return CapturedSessionHost.Captured({ cwd, signal, aborted: signal?.aborted === true });
   } catch {
-    return { _tag: "Unavailable" };
+    return CapturedSessionHost.Unavailable();
   }
 }

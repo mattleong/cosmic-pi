@@ -9,16 +9,16 @@ import {
   plainTheme,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
-import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
+import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import {
   fleetManagerActionsFixture,
-  makeProfileSettingsInspection,
+  profileSettingsInspection,
   openRegisteredFleet,
 } from "./fixtures/profile-settings-inspection.ts";
 import { PROFILE_IDS } from "../src/profiles/model.ts";
 import { SubagentConfigStoreError } from "../src/config/store.ts";
 import {
-  makeSessionProfileSnapshot,
+  sessionProfileSnapshot,
   SessionProfileConflictError,
 } from "../src/profiles/session-overrides.ts";
 import type { SubagentRunView } from "../src/run/model.ts";
@@ -42,7 +42,7 @@ const inspectionDocument = (defaultProfileSet: string, own: string) => ({
 });
 
 const inspection = (globalDefault = "global"): ProfileSettingsInspection => {
-  return makeProfileSettingsInspection({
+  return profileSettingsInspection({
     globalDocument: inspectionDocument(globalDefault, "global"),
     projectDocument: inspectionDocument("project", "project"),
     projectTrusted: true,
@@ -50,7 +50,7 @@ const inspection = (globalDefault = "global"): ProfileSettingsInspection => {
 };
 
 const untrustedInspection = (defaultProfileSet: string | [], profileSet: string) =>
-  makeProfileSettingsInspection({
+  profileSettingsInspection({
     globalDocument: {
       version: 6,
       defaultProfileSet,
@@ -66,7 +66,7 @@ const atSessionRevision = (
   revision: number,
 ): ProfileSettingsInspection => ({
   ...value,
-  session: makeSessionProfileSnapshot(value.config, { revision, overrides: {} }),
+  session: sessionProfileSnapshot(value.config, { revision, overrides: {} }),
 });
 
 const actions = (value: ProfileSettingsInspection) =>
@@ -104,7 +104,7 @@ const setup = (
     rows: 30,
   });
   const managerActions = actions(options.value ?? inspection());
-  registerSubagentManagerCommand(pi, makeSubagentProjectionBridge(), managerActions);
+  registerSubagentManagerCommand(pi, subagentProjectionBridge(), managerActions);
   let customImplementation: ExtensionUIContext["custom"] = custom;
   let customCalls = 0;
   const countedCustom: ExtensionUIContext["custom"] = (factory, customOptions) => {
@@ -525,7 +525,7 @@ describe("profile settings controller", () => {
       const fixture = setup();
       const running = yield* openLibrary(fixture);
       press(fixture, "\r");
-      const updated = makeProfileSettingsInspection({
+      const updated = profileSettingsInspection({
         globalDocument: inspection().globalDocument,
         projectDocument: {
           version: 6,
@@ -690,7 +690,7 @@ describe("profile settings controller", () => {
     "fills a saved scope's other limit from what it inherits, never the session's",
     function* () {
       const fixture = setup({
-        value: makeProfileSettingsInspection(
+        value: profileSettingsInspection(
           {
             globalDocument: { version: 6, nesting: { maxDirectChildren: 6, maxDepth: 1 } },
             projectDocument: { version: 6 },
@@ -707,7 +707,7 @@ describe("profile settings controller", () => {
         { maxDirectChildren: 6, maxDepth: 4 },
         { maxDirectChildren: 6, maxDepth: 5 },
       ]);
-      const unset = setup({ value: makeProfileSettingsInspection({ projectTrusted: false }) });
+      const unset = setup({ value: profileSettingsInspection({ projectTrusted: false }) });
       yield* step(() => unset.settings("global maxDepth 5"));
       expect(vi.mocked(unset.managerActions.patchNesting).mock.calls[0]?.[0].nesting).toEqual({
         maxDirectChildren: 12,
@@ -750,7 +750,7 @@ describe("profile settings controller", () => {
 });
 
 const openFleet = (run: SubagentRunView, overrides: Partial<FleetManagerActions>) => {
-  const bridge = makeSubagentProjectionBridge();
+  const bridge = subagentProjectionBridge();
   bridge.publish(projectionOf([run]));
   return openRegisteredFleet((pi) =>
     registerSubagentManagerCommand(pi, bridge, fleetManagerActionsFixture(overrides)),

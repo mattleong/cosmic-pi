@@ -1,7 +1,7 @@
 let nextRuntimeNamespace = 1;
 export const allocateRuntimeNamespace = (): string => `r${(nextRuntimeNamespace++).toString(36)}`;
 
-export function makeRunIdentities(runtimeNamespace: string) {
+export function identityAllocators(runtimeNamespace: string) {
   let nextRunOrdinal = 1;
   const ordinalTokens = (kind: string) => {
     let next = 1;

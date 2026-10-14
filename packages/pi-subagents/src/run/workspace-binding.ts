@@ -80,11 +80,12 @@ export const runsWithin = (
   except?: RunRecord,
 ): ReadonlyMap<RunRecord, SubagentRunView> =>
   new Map(
-    [...records.values()]
-      .filter(
-        (record) => record !== except && trees.some((tree) => isWithin(record.view.cwd, tree)),
-      )
-      .map((record) => [record, record.view]),
+    [...records.values()].flatMap(
+      (record): ReadonlyArray<readonly [RunRecord, SubagentRunView]> =>
+        record !== except && trees.some((tree) => isWithin(record.view.cwd, tree))
+          ? [[record, record.view]]
+          : [],
+    ),
   );
 
 export const workspaceFinishedError = () =>
@@ -99,7 +100,7 @@ export const workspaceBusyError = () =>
     "Another operation on this workspace is still running. Retry once it finishes.",
   );
 
-export function makeWorkspaceControlContext(
+export function workspaceControlContext(
   dependencies: WorkspaceControlDependencies,
 ): WorkspaceControlContext {
   const { engine, ownerId } = dependencies;

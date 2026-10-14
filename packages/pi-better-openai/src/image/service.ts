@@ -17,8 +17,8 @@ import {
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ImageSaveMode, type ResolvedConfig } from "../config/schema.ts";
-import { makeImageInputReader } from "./input.ts";
-import { imageOutputMetadata, makeImageOutput } from "./output.ts";
+import { imageInputReader } from "./input.ts";
+import { imageOutputMetadata, imageOutput } from "./output.ts";
 import { buildImageRequest, ImageRequestSchema } from "./protocol.ts";
 import { parseImageSse } from "./stream.ts";
 import {
@@ -124,8 +124,8 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
         const customSaveDir = yield* Config.option(Config.String("PI_IMAGE_SAVE_DIR"));
         const homeDirectory = yield* Config.option(Config.String("HOME"));
 
-        const readInputs = makeImageInputReader({ fs, path, safeFile, sharp });
-        const { validatedGeneratedImage, persistImage } = makeImageOutput({ fs, path, sharp });
+        const readInputs = imageInputReader({ fs, path, safeFile, sharp });
+        const { validatedGeneratedImage, persistImage } = imageOutput({ fs, path, sharp });
         const generate = Effect.fn("OpenAIImage.generate")(function* (
           rawParams: ToolParams,
           ctx: ExtensionContext,

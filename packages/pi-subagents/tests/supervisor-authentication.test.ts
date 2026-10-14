@@ -7,7 +7,7 @@ import * as Queue from "effect/Queue";
 import * as Headers from "effect/http/Headers";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcMessage from "effect/rpc/RpcMessage";
-import { makeSupervisorChannelSession } from "../src/boundary/supervisor-channel-session.ts";
+import { supervisorChannelSession } from "../src/boundary/supervisor-channel-session.ts";
 import { SupervisorRpcConnection } from "../src/boundary/supervisor-rpc-protocol.ts";
 import {
   SUPERVISOR_CHANNEL_VERSION,
@@ -26,7 +26,7 @@ describe("supervisor authentication publication", () => {
         const token = SupervisorAuthTokenSchema.make("4a".repeat(32));
         const runId = SupervisorRunIdSchema.make("agent-authentication-test");
         const events = yield* Queue.bounded<SupervisorEvent, Cause.Done>(16);
-        const session = yield* makeSupervisorChannelSession({
+        const session = yield* supervisorChannelSession({
           verifyToken: () =>
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(completed))),
           runId,

@@ -210,7 +210,7 @@ export interface HostNotifierOptions {
   readonly archive?: () => ReportArchive | undefined;
 }
 
-export function makeHostNotifier(
+export function hostNotifier(
   pi: ExtensionAPI,
   options: HostNotifierOptions = {},
 ): SubagentNotifier {

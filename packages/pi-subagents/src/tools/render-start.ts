@@ -1,4 +1,5 @@
 import { absurd } from "effect/Function";
+import * as Match from "effect/Match";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
@@ -104,12 +105,11 @@ interface ReceiptRowOptions {
 }
 
 const receiptRunId = (entry: SubagentStartEntry, options: ReceiptRowOptions): string => {
-  const runId =
-    entry.status === "started"
-      ? entry.runId
-      : entry.status === "failed"
-        ? options.failure?.admittedRun?.runId
-        : undefined;
+  const runId = Match.value(entry).pipe(
+    Match.when({ status: "started" }, (started) => started.runId),
+    Match.when({ status: "failed" }, () => options.failure?.admittedRun?.runId),
+    Match.orElse(() => undefined),
+  );
   if (runId === undefined) return "";
   if (options.expanded) return sanitizeTerminalLine(runId);
   return options.sharedNames.has(entry.name) ? sanitizeTerminalLine(shortRunId(runId)) : "";

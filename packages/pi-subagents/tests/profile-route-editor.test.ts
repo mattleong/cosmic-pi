@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SubagentConfigScope } from "../src/config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
 import type { DeclaredProfileRoute, ProfileId } from "../src/profiles/model.ts";
-import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
+import { sessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import {
   addRouteCandidate,
   candidateValidationError,
@@ -24,7 +24,7 @@ import {
 import {
   inheritedInvalidInspection,
   jsonObject,
-  makeProfileSettingsInspection,
+  profileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
 import { profileCandidate as candidate } from "./fixtures/profiles.ts";
 
@@ -41,7 +41,7 @@ const inspection = (
   global: ProfileSetSeed = {},
   project?: ProfileSetSeed,
 ): ProfileSettingsInspection => {
-  return makeProfileSettingsInspection({
+  return profileSettingsInspection({
     globalDocument: currentDocument(global),
     projectDocument: project ? currentDocument(project) : undefined,
     projectTrusted: true,
@@ -96,7 +96,7 @@ describe("ordered profile-route editor state", () => {
     );
     const value = {
       ...base,
-      session: makeSessionProfileSnapshot(base.config, {
+      session: sessionProfileSnapshot(base.config, {
         revision: 1,
         overrides: { reviewer: { candidates: [candidate("openai/session")] } },
       }),
@@ -105,7 +105,7 @@ describe("ordered profile-route editor state", () => {
       kind: "explicit",
       candidates: [candidate("openai/session")],
     });
-    const inherited = { ...value, session: makeSessionProfileSnapshot(base.config) };
+    const inherited = { ...value, session: sessionProfileSnapshot(base.config) };
     expect(loadProfileRouteDraft(inherited, { kind: "session" }, "reviewer")).toEqual({
       kind: "inherit",
       candidates: [candidate("openai/project")],
@@ -113,7 +113,7 @@ describe("ordered profile-route editor state", () => {
 
     const detached = {
       ...base,
-      session: makeSessionProfileSnapshot(base.config, {
+      session: sessionProfileSnapshot(base.config, {
         revision: 2,
         overrides: {},
         baseline: {

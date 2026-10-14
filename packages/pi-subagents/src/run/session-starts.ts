@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import type { RunContext } from "./internal.ts";
-import type { makeRunLaunch } from "./launch.ts";
+import type { launchOperations } from "./launch.ts";
 import type { StartSubagentRequest, SubagentRetrySupersession, SubagentRunView } from "./model.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
@@ -9,13 +9,13 @@ interface RunSessionStartDependencies extends Pick<
   RunContext,
   "ownerScope" | "withLock" | "requireRecord"
 > {
-  readonly launch: Pick<ReturnType<typeof makeRunLaunch>, "validate" | "start">;
+  readonly launch: Pick<ReturnType<typeof launchOperations>, "validate" | "start">;
   readonly workspaces: Pick<RunWorkspaceControl, "withLaunch">;
   readonly redactCompletionReport: (view: SubagentRunView) => SubagentRunView;
   readonly releaseRetryClaim: (id: string, claimToken: string) => Effect.Effect<void>;
 }
 
-export function makeRunSessionStarts(dependencies: RunSessionStartDependencies) {
+export function sessionStartOperations(dependencies: RunSessionStartDependencies) {
   const {
     ownerScope,
     withLock,

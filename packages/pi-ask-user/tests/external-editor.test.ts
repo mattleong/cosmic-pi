@@ -7,6 +7,7 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { expect, vi } from "vitest";
 import { editWithExternalEditor } from "../src/boundary/host-external-editor.ts";
 import { tuiFixture } from "pi-cosmic-core/testing";
+import * as Predicate from "effect/Predicate";
 
 const decodeHangingEditorState = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ pid: Schema.Number, target: Schema.String })),
@@ -80,7 +81,7 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
           (cause: unknown) => cause,
         ),
       );
-      expect(failure).toMatchObject({ _tag: "ExternalEditorError" });
+      expect(Predicate.isTagged(failure, "ExternalEditorError")).toBe(true);
       expect(failure instanceof Error ? failure.message : "").not.toContain(script);
 
       expect(stop).toHaveBeenCalledOnce();

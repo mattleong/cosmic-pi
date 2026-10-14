@@ -15,8 +15,8 @@ import {
 import { resolveSubagentConfig } from "../../../src/config/options.ts";
 import { decodeSubagentConfig, type SubagentNestingPolicy } from "../../../src/config/schema.ts";
 import {
-  makeSubagentProfileService,
   SubagentProfileService,
+  subagentProfileServiceLayerFor,
   type SubagentProfileServiceContract,
 } from "../../../src/profiles/service.ts";
 import type { DeclaredProfileCandidate, ProfileId } from "../../../src/profiles/model.ts";
@@ -81,15 +81,18 @@ export const profileServiceFor = (
   initialSessionOverrides?: SessionProfileOverrideSeed,
 ) =>
   Effect.runSync(
-    makeSubagentProfileService(
-      resolveSubagentConfig({
-        globalConfigPath: "/agent/pi-subagents.json",
-        projectConfigPath: "/project/.pi/pi-subagents.json",
-        projectTrusted: true,
-        global: decodeSubagentConfig(profileDocument(global)),
-        ...(project !== undefined && { project: decodeSubagentConfig(profileDocument(project)) }),
-      }),
-      { initialSessionOverrides },
+    Effect.provide(
+      SubagentProfileService.use(Effect.succeed),
+      subagentProfileServiceLayerFor(
+        resolveSubagentConfig({
+          globalConfigPath: "/agent/pi-subagents.json",
+          projectConfigPath: "/project/.pi/pi-subagents.json",
+          projectTrusted: true,
+          global: decodeSubagentConfig(profileDocument(global)),
+          ...(project !== undefined && { project: decodeSubagentConfig(profileDocument(project)) }),
+        }),
+        { initialSessionOverrides },
+      ),
     ),
   );
 

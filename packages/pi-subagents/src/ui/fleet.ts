@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { toolStatusLine } from "pi-cosmic-ui/tool";
 import { Input, type Component, type Focusable } from "@earendil-works/pi-tui";
@@ -302,7 +303,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (this.handleFixedTreeInput(data, projection, selectedRow)) return;
     const resolution = this.resolveInput(data, "navigation", FLEET_SHORTCUTS);
     if (!resolution) return;
-    if (resolution._tag === "Shortcut") this.handleShortcut(resolution.key, selected);
+    if (Predicate.isTagged(resolution, "Shortcut")) this.handleShortcut(resolution.key, selected);
     else this.handleNavigation(resolution.action, rows, selected);
   }
 
@@ -420,11 +421,11 @@ export class SubagentFleetComponent implements Component, Focusable {
         rowCount: rows.length,
         hasSelection: selected !== undefined,
       });
-      if (result._tag === "Close") {
+      if (Predicate.isTagged(result, "Close")) {
         this.options.close();
         return;
       }
-      if (result._tag === "Update" && result.movedSelection)
+      if (Predicate.isTagged(result, "Update") && result.movedSelection)
         this.applySelection(
           this.shell.select(
             result.state.selected,

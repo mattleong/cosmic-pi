@@ -53,7 +53,7 @@ const releaseRevisionLocked = ({ binding, revision }: Succession) => {
   binding.preparing = false;
 };
 
-export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
+export function workspaceLaunchOperations(context: WorkspaceControlContext) {
   const { records, withLock, isClosed, state, ownerFor, requireEngine, requireBinding } = context;
   const { workspaceSetup } = context;
   const { operations, ownerScope } = context;

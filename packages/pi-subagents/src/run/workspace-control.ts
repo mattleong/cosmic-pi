@@ -9,17 +9,17 @@ import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
 import {
   isWithin,
-  makeWorkspaceControlContext,
+  workspaceControlContext,
   mapWorkspaceError,
   type WorkspaceControlDependencies,
 } from "./workspace-binding.ts";
 import {
-  makeWorkspaceIntegrate,
+  workspaceIntegrationOperations,
   type WorkspaceIntegrationOutcome,
 } from "./workspace-integration.ts";
-import { makeWorkspaceLaunch } from "./workspace-launch.ts";
+import { workspaceLaunchOperations } from "./workspace-launch.ts";
 import {
-  makeWorkspaceReview,
+  workspaceReviewOperations,
   type WorkspaceReview,
   type WorkspaceReviewOptions,
 } from "./workspace-review.ts";
@@ -74,8 +74,8 @@ export interface WorkspaceCoordinatorContract {
   ) => Effect.Effect<void, SubagentError | E, R>;
 }
 
-export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies) {
-  const context = makeWorkspaceControlContext(dependencies);
+export function workspaceControl(dependencies: WorkspaceControlDependencies) {
+  const context = workspaceControlContext(dependencies);
   const { engine, ownerId, records, writerPools, withLock, isClosed, state, ownerFor } = context;
   const { requireEngine, sourceCwd, writerLeases } = context;
   const sourceRecords = (listing: WorkspaceListing) =>
@@ -206,13 +206,13 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
       );
     });
   return {
-    ...makeWorkspaceLaunch(context),
-    ...makeWorkspaceReview(context),
-    workspaceIntegrate: makeWorkspaceIntegrate(context),
+    ...workspaceLaunchOperations(context),
+    ...workspaceReviewOperations(context),
+    workspaceIntegrate: workspaceIntegrationOperations(context),
     workspaceList,
     inspectWriterWorkspace,
     setWriterWorkspaceMode,
   };
 }
 
-export type RunWorkspaceControl = ReturnType<typeof makeWorkspaceControl>;
+export type RunWorkspaceControl = ReturnType<typeof workspaceControl>;

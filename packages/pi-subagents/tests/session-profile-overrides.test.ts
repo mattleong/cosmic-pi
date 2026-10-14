@@ -11,8 +11,9 @@ import {
 } from "../src/profiles/model.ts";
 import { makeSubagentProfileService } from "../src/profiles/service.ts";
 import {
+  SessionProfileConflictError,
   decodeSessionProfileOverrideSeed,
-  makeSessionProfileSnapshot,
+  sessionProfileSnapshot,
   MAX_SESSION_PROFILE_REVISION,
   patchSessionProfileSnapshot,
   replaceSessionProfileSnapshot,
@@ -160,8 +161,8 @@ describe("session profile overrides", () => {
   );
 
   it("restores an unedited frozen baseline without adopting changed saved defaults", () => {
-    const initial = makeSessionProfileSnapshot(baseConfig("openai/original"));
-    const restored = makeSessionProfileSnapshot(
+    const initial = sessionProfileSnapshot(baseConfig("openai/original"));
+    const restored = sessionProfileSnapshot(
       baseConfig("openai/changed-on-disk"),
       sessionProfileSeed(initial),
     );
@@ -224,7 +225,7 @@ describe("session profile overrides", () => {
   });
 
   it("rejects baselines whose routes do not match their provenance", () => {
-    const baseline = makeSessionProfileSnapshot(baseConfig()).baseline;
+    const baseline = sessionProfileSnapshot(baseConfig()).baseline;
 
     expect(
       decodeBaseline(
@@ -292,7 +293,7 @@ describe("session profile overrides", () => {
 
   it.effect("fails an invalid whole-baseline replacement without throwing", () =>
     Effect.gen(function* () {
-      const initial = makeSessionProfileSnapshot(baseConfig());
+      const initial = sessionProfileSnapshot(baseConfig());
       const failure = yield* replaceSessionProfileSnapshot(initial, {
         expectedRevision: initial.revision,
         origin: { scope: "builtin" },
@@ -300,8 +301,8 @@ describe("session profile overrides", () => {
         profileSources: completeSources("project"),
       }).pipe(Effect.flip);
 
+      expect(failure).toBeInstanceOf(SessionProfileConflictError);
       expect(failure).toMatchObject({
-        _tag: "SessionProfileConflictError",
         expectedRevision: initial.revision,
         actualRevision: initial.revision,
       });
@@ -310,7 +311,7 @@ describe("session profile overrides", () => {
 
   it.effect("keeps identical whole-set replacements as no-ops through the maximum revision", () =>
     Effect.gen(function* () {
-      const initial = makeSessionProfileSnapshot(baseConfig());
+      const initial = sessionProfileSnapshot(baseConfig());
       const unchanged = yield* replaceSessionProfileSnapshot(initial, {
         expectedRevision: initial.revision,
         ...initial.baseline,
@@ -318,7 +319,7 @@ describe("session profile overrides", () => {
       expect(unchanged).toBe(initial);
       expect(unchanged.revision).toBe(0);
 
-      const maximum = makeSessionProfileSnapshot(baseConfig(), {
+      const maximum = sessionProfileSnapshot(baseConfig(), {
         ...sessionProfileSeed(initial),
         revision: MAX_SESSION_PROFILE_REVISION,
       });
@@ -345,7 +346,7 @@ describe("session profile overrides", () => {
           overrides: {},
         }),
       ).toBeUndefined();
-      const initial = makeSessionProfileSnapshot(baseConfig(), decoded);
+      const initial = sessionProfileSnapshot(baseConfig(), decoded);
       const final = yield* patchSessionProfileSnapshot(initial, {
         profile: "reviewer",
         route: route("openai/final-safe-revision"),
@@ -358,8 +359,8 @@ describe("session profile overrides", () => {
         route: route("openai/stale"),
         expectedRevision: MAX_SESSION_PROFILE_REVISION - 1,
       }).pipe(Effect.flip);
+      expect(stale).toBeInstanceOf(SessionProfileConflictError);
       expect(stale).toMatchObject({
-        _tag: "SessionProfileConflictError",
         actualRevision: MAX_SESSION_PROFILE_REVISION,
       });
 
@@ -368,8 +369,8 @@ describe("session profile overrides", () => {
         route: route("openai/would-saturate"),
         expectedRevision: MAX_SESSION_PROFILE_REVISION,
       }).pipe(Effect.flip);
+      expect(exhausted).toBeInstanceOf(SessionProfileConflictError);
       expect(exhausted).toMatchObject({
-        _tag: "SessionProfileConflictError",
         expectedRevision: MAX_SESSION_PROFILE_REVISION,
         actualRevision: MAX_SESSION_PROFILE_REVISION,
         message: stringContaining("exact-integer limit"),
@@ -498,8 +499,8 @@ describe("session profile overrides", () => {
             expectedRevision: initial.revision,
           })
           .pipe(Effect.flip);
+        expect(conflict).toBeInstanceOf(SessionProfileConflictError);
         expect(conflict).toMatchObject({
-          _tag: "SessionProfileConflictError",
           expectedRevision: 0,
           actualRevision: 1,
         });
@@ -581,8 +582,8 @@ describe("session profile overrides", () => {
             profileSources: initial.baseline.profileSources,
           })
           .pipe(Effect.flip);
+        expect(stale).toBeInstanceOf(SessionProfileConflictError);
         expect(stale).toMatchObject({
-          _tag: "SessionProfileConflictError",
           expectedRevision: 0,
           actualRevision: cleared.revision,
         });
@@ -602,7 +603,7 @@ describe("session profile overrides", () => {
       ];
 
       for (const changed of variants) {
-        const initial = makeSessionProfileSnapshot(baseConfig());
+        const initial = sessionProfileSnapshot(baseConfig());
         const committed = yield* patchSessionProfileSnapshot(initial, {
           profile: "reviewer",
           route: { candidates: [changed] },
@@ -652,7 +653,7 @@ describe("session profile overrides", () => {
 
   it.effect("allows a session route to repair an invalid loaded project route temporarily", () =>
     Effect.gen(function* () {
-      const initial = makeSessionProfileSnapshot(
+      const initial = sessionProfileSnapshot(
         resolveTestConfig(
           { version: 6 },
           {

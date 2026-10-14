@@ -8,12 +8,12 @@ import {
   isImmutable,
   isRuntimeFunction,
   isStringLiteral,
-  resolveVariable,
   returnedValue,
   staticPropertyName,
   unwrapExpression,
   type RuntimeFunction,
 } from "../shared/ast.ts";
+import { resolveVariable } from "../shared/scope.ts";
 
 const CORE = "pi-cosmic-core";
 const DESTRUCTIVE = new Set(["stripTerminalControls", "stripAnsi"]);

@@ -14,7 +14,8 @@ import {
 } from "../platform/json-document.ts";
 import {
   JsonHttpClient,
-  makeJsonHttpClient,
+  jsonHttpClientFromExecute,
+  JsonHttpResponse,
   responseDecodeError,
   type JsonHttpRequest,
 } from "../platform/json-http.ts";
@@ -56,7 +57,7 @@ export interface InMemoryDocuments {
 }
 
 interface JsonDocumentUpdateGate {
-  readonly _tag: "BeforeCommit" | "Committed";
+  readonly phase: "BeforeCommit" | "Committed";
   readonly started: Deferred.Deferred<void>;
   readonly release: Deferred.Deferred<void>;
 }
@@ -123,13 +124,13 @@ export function makeInMemoryDocuments(
         const stored = yield* cloneDocument("update", path, document);
         const gate = nextUpdateGate;
         nextUpdateGate = undefined;
-        if (gate?._tag === "BeforeCommit") {
+        if (gate?.phase === "BeforeCommit") {
           yield* Deferred.succeed(gate.started, undefined);
           yield* Deferred.await(gate.release);
         }
         yield* Effect.gen(function* () {
           yield* Effect.sync(() => void storedDocuments.set(path, stored));
-          if (gate?._tag === "Committed") {
+          if (gate?.phase === "Committed") {
             yield* Deferred.succeed(gate.started, undefined);
             yield* Deferred.await(gate.release);
           }
@@ -170,10 +171,10 @@ export function makeInMemoryDocuments(
       beforeNextUpdate = update;
     },
     blockNextUpdateBeforeCommit(started, release) {
-      nextUpdateGate = { _tag: "BeforeCommit", started, release };
+      nextUpdateGate = { phase: "BeforeCommit", started, release };
     },
     blockNextUpdateAtCommit(started, release) {
-      nextUpdateGate = { _tag: "Committed", started, release };
+      nextUpdateGate = { phase: "Committed", started, release };
     },
     get updateCount() {
       return updateCount;
@@ -206,13 +207,13 @@ export const jsonHttpTestLayer = (
   Layer.succeed(
     JsonHttpClient,
     JsonHttpClient.of(
-      makeJsonHttpClient((input, encodedJsonBody) =>
+      jsonHttpClientFromExecute((input, encodedJsonBody) =>
         Effect.gen(function* () {
           const requestInput: JsonHttpTestRequest =
             encodedJsonBody === undefined ? input : { ...input, encodedJsonBody };
           const response = yield* handle(requestInput);
           if (response.status < 200 || response.status >= 300)
-            return { _tag: "Rejected", status: response.status } as const;
+            return JsonHttpResponse.Rejected({ status: response.status });
           const rawBody =
             "body" in response
               ? response.body
@@ -222,7 +223,7 @@ export const jsonHttpTestLayer = (
           const body = yield* Schema.decodeEffect(input.responseSchema)(rawBody).pipe(
             Effect.mapError(responseDecodeError),
           );
-          return { _tag: "Accepted", status: response.status, body } as const;
+          return JsonHttpResponse.Accepted({ status: response.status, body });
         }),
       ),
     ),

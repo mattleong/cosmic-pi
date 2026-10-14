@@ -7,7 +7,14 @@ import {
   type CrossProcessLockContract,
 } from "pi-cosmic-core";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
-import { makeWriterLease, WriterLeaseService } from "../src/boundary/writer-lease.ts";
+import {
+  makeWriterLease,
+  WriterCwdCanonicalizationError,
+  WriterLeaseAcquireError,
+  WriterLeaseMarkError,
+  WriterLeaseReleaseError,
+  WriterLeaseService,
+} from "../src/boundary/writer-lease.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
 type LockOutcome = "live" | "recovery-required" | "unavailable";
@@ -74,14 +81,14 @@ describe("writer lease adapter", () => {
       const recovery = yield* Effect.flip(acquire);
       expect(recovery).toMatchObject({ reason: "recovery-required" });
       expect(recovery.message).toContain(RECOVERY_SLOT);
-      expect(yield* Effect.flip(acquire)).toMatchObject({ _tag: "WriterLeaseAcquireError" });
+      expect(yield* Effect.flip(acquire)).toBeInstanceOf(WriterLeaseAcquireError);
       yield* acquire;
       expect(calls).toEqual(["tryAcquire", "tryAcquire", "tryAcquire", "tryAcquire"]);
       expect(
         yield* Effect.flip(
           service.acquire({ cwd: { ...cwd, digest: "0".repeat(64) }, runId: "x" }),
         ),
-      ).toMatchObject({ _tag: "WriterLeaseAcquireError" });
+      ).toBeInstanceOf(WriterLeaseAcquireError);
       expect(calls).toHaveLength(4);
     }).pipe(Effect.scoped),
   );
@@ -94,12 +101,10 @@ describe("writer lease adapter", () => {
       yield* service.release(lease);
       expect(calls).toEqual(["tryAcquire", "mutationStarted", "mutationSettled", "release"]);
       expect(held()).toBe(false);
-      expect(yield* Effect.flip(service.release(lease))).toMatchObject({
-        _tag: "WriterLeaseReleaseError",
-      });
-      expect(yield* Effect.flip(service.markSpawnStarted(lease))).toMatchObject({
-        _tag: "WriterLeaseMarkError",
-      });
+      expect(yield* Effect.flip(service.release(lease))).toBeInstanceOf(WriterLeaseReleaseError);
+      expect(yield* Effect.flip(service.markSpawnStarted(lease))).toBeInstanceOf(
+        WriterLeaseMarkError,
+      );
     }).pipe(Effect.scoped),
   );
 
@@ -111,13 +116,9 @@ describe("writer lease adapter", () => {
         failing.add(failure);
         const marked = yield* Effect.exit(service.markSpawnStarted(lease));
         expect(Exit.isFailure(marked)).toBe(failure === "mutationStarted");
-        expect(yield* Effect.flip(service.release(lease))).toMatchObject({
-          _tag: "WriterLeaseReleaseError",
-        });
+        expect(yield* Effect.flip(service.release(lease))).toBeInstanceOf(WriterLeaseReleaseError);
         failing.clear();
-        expect(yield* Effect.flip(service.release(lease))).toMatchObject({
-          _tag: "WriterLeaseReleaseError",
-        });
+        expect(yield* Effect.flip(service.release(lease))).toBeInstanceOf(WriterLeaseReleaseError);
         expect(held()).toBe(true);
       }
     }).pipe(Effect.scoped),
@@ -151,9 +152,7 @@ describe("writer lease adapter", () => {
       expect(yield* Effect.flip(second.acquire({ cwd: renamed, runId: "renamed" }))).toMatchObject({
         reason: "live",
       });
-      expect(yield* Effect.flip(second.release(lease))).toMatchObject({
-        _tag: "WriterLeaseReleaseError",
-      });
+      expect(yield* Effect.flip(second.release(lease))).toBeInstanceOf(WriterLeaseReleaseError);
       expect(yield* Effect.promise(() => fs.readdir(nodePath.join(root, "renamed")))).toEqual([]);
       yield* first.release(lease);
       yield* second.release(yield* second.acquire({ cwd: renamed, runId: "renamed" }));
@@ -165,7 +164,7 @@ describe("writer lease adapter", () => {
       const { agentDirectory, service } = yield* adapter();
       expect(
         yield* Effect.flip(service.canonicalize(nodePath.join(agentDirectory, "missing"))),
-      ).toMatchObject({ _tag: "WriterCwdCanonicalizationError" });
+      ).toBeInstanceOf(WriterCwdCanonicalizationError);
       expect(yield* Effect.promise(() => fs.readdir(agentDirectory))).toEqual([]);
     }).pipe(Effect.scoped),
   );

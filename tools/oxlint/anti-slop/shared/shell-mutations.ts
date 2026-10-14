@@ -1,6 +1,7 @@
 import type { ESTree, SourceCode, Variable } from "@oxlint/plugins";
 
-import { constValue, resolveVariable, staticPropertyName, unwrapExpression } from "./ast.ts";
+import { constValue, staticPropertyName, unwrapExpression } from "./ast.ts";
+import { resolveVariable } from "./scope.ts";
 
 export const rendererFields = new Set(["renderShell", "renderCall", "renderResult"]);
 

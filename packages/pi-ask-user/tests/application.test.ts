@@ -22,6 +22,7 @@ import {
 import { afterEach, expect, vi } from "vitest";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
+import { AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 
 withoutRelayMarker();
 afterEach(() => {
@@ -133,9 +134,9 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       const replacing = h.emit("session_start");
       yield* eventually(() => expect(loads).toBe(2));
       yield* Effect.promise(() =>
-        expect(tool.execute("call", request, undefined, undefined, h.ctx)).rejects.toMatchObject({
-          _tag: "AskUserRuntimeClosedError",
-        }),
+        expect(tool.execute("call", request, undefined, undefined, h.ctx)).rejects.toBeInstanceOf(
+          AskUserRuntimeClosedError,
+        ),
       );
 
       replacement.resolve();
@@ -205,7 +206,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         yield* Effect.promise(() =>
           expect(
             control.execute("stale", { action: "status" }, undefined, undefined, h.ctx),
-          ).rejects.toMatchObject({ _tag: "AskUserRuntimeClosedError" }),
+          ).rejects.toBeInstanceOf(AskUserRuntimeClosedError),
         );
         const fresh = h.tools.get("ask_user_async_control")!;
         const result = yield* Effect.promise(() =>

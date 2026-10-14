@@ -6,7 +6,7 @@ import {
   JsonDocumentStore,
 } from "../platform/json-document.ts";
 import {
-  makeConfigDocumentErrorFactory,
+  configDocumentErrorFactory,
   type ConfigDocumentErrorClass,
   type ConfigDocumentErrorFactory,
 } from "./document-ops.ts";
@@ -71,7 +71,7 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
   options: ScopedConfigStoreOptions<File, Resolved, E>,
 ): ScopedConfigStore<File, Resolved, E> => {
   const { decode, defaultDocument, resolve, spanPrefix } = options;
-  const errorFactory = makeConfigDocumentErrorFactory(options.error, options.label);
+  const errorFactory = configDocumentErrorFactory(options.error, options.label);
 
   const configPaths = Effect.fn(`${spanPrefix}.configPaths`)((cwd: string, agentDir: string) =>
     Path.Path.useSync(

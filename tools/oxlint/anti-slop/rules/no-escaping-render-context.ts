@@ -5,13 +5,13 @@ import {
   constInitializer,
   importedMember,
   isRuntimeFunction,
-  parameterAnnotation,
   resolveFunction,
-  resolveVariable,
   staticPropertyName,
   unwrapExpression,
   type RuntimeFunction,
 } from "../shared/ast.ts";
+import { resolveVariable } from "../shared/scope.ts";
+import { functionParameterTypeAnnotation } from "../shared/function-parameters.ts";
 
 type Invocation = ESTree.CallExpression | ESTree.NewExpression;
 
@@ -426,7 +426,7 @@ export const noEscapingRenderContextRule = defineRule({
           (left, right) => left - right,
         );
         const actual = parameters.flatMap((parameter, index) => {
-          const annotation = parameterAnnotation(parameter);
+          const annotation = functionParameterTypeAnnotation(parameter);
           return annotation && functionTyped(annotation.typeAnnotation) ? [index] : [];
         });
         const values = helper.values ?? [];

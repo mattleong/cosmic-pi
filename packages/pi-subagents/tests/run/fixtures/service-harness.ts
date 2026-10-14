@@ -2,19 +2,17 @@ import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-import { makeLocalPiBackendDriver } from "../../../src/backend/local-pi.ts";
+import { localPiBackendDriver } from "../../../src/backend/local-pi.ts";
 import type {
   BackendDriver,
   BackendEvent,
   BackendLaunchRequest,
   BackendReport,
 } from "../../../src/backend/model.ts";
-import {
-  makeSubagentBackendRegistry,
-  SubagentBackendRegistry,
-} from "../../../src/backend/service.ts";
+import { backendRegistryFor, SubagentBackendRegistry } from "../../../src/backend/service.ts";
 import {
   WriterCwdCanonicalizationError,
   WriterLeaseConflictError,
@@ -25,10 +23,7 @@ import {
 } from "../../../src/boundary/writer-lease.ts";
 import { resolveSubagentConfig } from "../../../src/config/options.ts";
 import { decodeSubagentConfig } from "../../../src/config/schema.ts";
-import {
-  makeSubagentProfileService,
-  SubagentProfileService,
-} from "../../../src/profiles/service.ts";
+import { subagentProfileServiceLayerFor } from "../../../src/profiles/service.ts";
 import type { LocalPiParentControl, RpcCommand } from "../../../src/backend/local-pi-protocol.ts";
 import {
   ChildProcess,
@@ -333,7 +328,7 @@ export function fakeChildLayer(
           });
           const offer = (value: RpcWireValue) => {
             const message = Schema.decodeUnknownOption(persistedMessage)(value);
-            const usage = message._tag === "Some" ? message.value.message.usage : undefined;
+            const usage = Option.isSome(message) ? message.value.message.usage : undefined;
             if (usage) {
               tokens.input += usage.input ?? 0;
               tokens.output += usage.output ?? 0;
@@ -462,9 +457,9 @@ export function fakeChildLayer(
             sent: (type) => commands.some((command) => command.type === type),
             sentIpc: (type, matches = () => true) => ipc.filter(isIpcControl(type)).some(matches),
             commandTypes: (...only) =>
-              commands
-                .map((command) => command.type)
-                .filter((type) => only.length === 0 || only.includes(type)),
+              commands.flatMap(({ type }) =>
+                only.length === 0 || only.includes(type) ? [type] : [],
+              ),
             settle: (text = "Assignment complete.") => {
               offer(assistantMessageEndFrame(text));
               offer({ type: "agent_settled" });
@@ -505,16 +500,13 @@ export function fakeChildLayer(
 }
 
 export const profileLayerFor = (global: JsonObject) =>
-  Layer.effect(
-    SubagentProfileService,
-    makeSubagentProfileService(
-      resolveSubagentConfig({
-        globalConfigPath: "/agent/pi-subagents.json",
-        projectConfigPath: "/project/.pi/pi-subagents.json",
-        projectTrusted: true,
-        global: decodeSubagentConfig(global),
-      }),
-    ),
+  subagentProfileServiceLayerFor(
+    resolveSubagentConfig({
+      globalConfigPath: "/agent/pi-subagents.json",
+      projectConfigPath: "/project/.pi/pi-subagents.json",
+      projectTrusted: true,
+      global: decodeSubagentConfig(global),
+    }),
   );
 
 export const leaseCounts = () => ({ canonicalize: 0, acquire: 0, mark: 0, release: 0 });
@@ -614,7 +606,7 @@ export function fakeWriterLeaseLayer(
 const localPiBackendRegistryLayer = Layer.effect(
   SubagentBackendRegistry,
   ChildProcess.use((childProcesses) =>
-    Effect.succeed(makeSubagentBackendRegistry([makeLocalPiBackendDriver(childProcesses)])),
+    Effect.succeed(backendRegistryFor([localPiBackendDriver(childProcesses)])),
   ),
 );
 
@@ -768,7 +760,7 @@ export function fakeNativeReportBackendLayer(
   return {
     controls,
     launches,
-    layer: Layer.succeed(SubagentBackendRegistry, makeSubagentBackendRegistry([driver])),
+    layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor([driver])),
   };
 }
 

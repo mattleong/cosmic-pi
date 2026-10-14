@@ -1,4 +1,5 @@
 import * as Clock from "effect/Clock";
+import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -9,7 +10,14 @@ import type { WriterPools } from "./writer-pool.ts";
 import { isTerminalRunState } from "./model.ts";
 import { recordRunWarning } from "./warnings.ts";
 
-export function makeRunRecordCleanup(
+type ExitedScopeOwnership = Data.TaggedEnum<{
+  Stale: Record<never, never>;
+  Close: Record<never, never>;
+  Wait: { readonly settled: Deferred.Deferred<void> | undefined };
+}>;
+const ExitedScopeOwnership = Data.taggedEnum<ExitedScopeOwnership>();
+
+export function recordCleanup(
   dependencies: Pick<RunContext, "withLock" | "publish"> & {
     readonly writerPools: Pick<WriterPools, "completeReleaseLocked">;
   },
@@ -243,20 +251,21 @@ export function makeRunRecordCleanup(
     withLock(
       Effect.sync(() => {
         if (record.scope !== scope || record.closingScope === scope)
-          return { _tag: "Stale" } as const;
-        if (!record.initializationPending) return { _tag: "Close" } as const;
-        return { _tag: "Wait", settled: record.initializationSettled } as const;
+          return ExitedScopeOwnership.Stale();
+        if (!record.initializationPending) return ExitedScopeOwnership.Close();
+        return ExitedScopeOwnership.Wait({ settled: record.initializationSettled });
       }),
     ).pipe(
-      Effect.flatMap((ownership) => {
-        if (ownership._tag === "Stale") return Effect.void;
-        if (ownership._tag === "Close") return closeRecordScope(record, scope);
-        return ownership.settled
-          ? Deferred.await(ownership.settled).pipe(
-              Effect.flatMap(() => closeExitedScope(record, scope)),
-            )
-          : Effect.never;
-      }),
+      Effect.flatMap(
+        ExitedScopeOwnership.$match({
+          Stale: () => Effect.void,
+          Close: () => closeRecordScope(record, scope),
+          Wait: ({ settled }) =>
+            settled
+              ? Deferred.await(settled).pipe(Effect.flatMap(() => closeExitedScope(record, scope)))
+              : Effect.never,
+        }),
+      ),
       Effect.asVoid,
     );
 
@@ -269,4 +278,4 @@ export function makeRunRecordCleanup(
   };
 }
 
-export type RunRecordCleanup = ReturnType<typeof makeRunRecordCleanup>;
+export type RunRecordCleanup = ReturnType<typeof recordCleanup>;

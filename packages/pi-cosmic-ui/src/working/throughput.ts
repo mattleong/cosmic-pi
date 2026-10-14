@@ -9,7 +9,7 @@ const rate = (tokens: number, milliseconds: number): number | undefined => {
   return Number.isFinite(value) ? value : undefined;
 };
 
-export const makeThroughputMeter = () => {
+export const createThroughputMeter = () => {
   let current: { startedAt: number; characters: number } | undefined;
   let completedTokens = 0;
   let completedMilliseconds = 0;

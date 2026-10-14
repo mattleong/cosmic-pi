@@ -28,11 +28,7 @@ import { InvalidSubagentRequestError, SubagentProcessError } from "../../src/run
 import { SubagentService } from "../../src/run/service.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { SubagentBackendRegistry } from "../../src/backend/service.ts";
-import {
-  makeAwaitDetails,
-  makeCompactToolDetails,
-  makeStartDetails,
-} from "../../src/tools/details.ts";
+import { awaitDetails, compactToolDetails, startDetails } from "../../src/tools/details.ts";
 import { decodeCompactToolDetails } from "../../src/tools/details-decode.ts";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
@@ -183,7 +179,7 @@ const steeringError = (pendingDelivery: boolean, code = "steer_outcome_uncertain
   });
 const failed = () => ({
   content: [{ type: "text" as const, text: "exact failure and no-resend evidence" }],
-  details: makeCompactToolDetails({ action: "send", runs: [], actionFailures: [failure()] }),
+  details: compactToolDetails({ action: "send", runs: [], actionFailures: [failure()] }),
 });
 
 function ownedTools(service = subagentServiceDouble({}), earlierResult?: ToolResultHandler) {
@@ -405,7 +401,7 @@ effectTest(
   "classifies structurally decoded pending flags by action and code before marking receipts",
   function* () {
     const { receipts, owner, result } = receiptHost();
-    const base = makeCompactToolDetails({ action: "send", runs: [], actionFailures: [failure()] });
+    const base = compactToolDetails({ action: "send", runs: [], actionFailures: [failure()] });
     for (const [tool, action, entry, isError] of [
       ["subagent_send", "send", pendingFailure(), false],
       ["subagent_send", "send", { ...pendingFailure(), code: "not_running" }, true],
@@ -433,8 +429,8 @@ effectTest(
           content: [],
           details:
             action === "await"
-              ? makeAwaitDetails({ runs: [run], awaitUntil: "all_finished", cancelled })
-              : makeCompactToolDetails({ action, runs: [run] }),
+              ? awaitDetails({ runs: [run], awaitUntil: "all_finished", cancelled })
+              : compactToolDetails({ action, runs: [run] }),
         };
         proxiedTools(h, () => Promise.resolve(response));
         const tool = `subagent_${action}` as const;
@@ -588,7 +584,7 @@ describe("local Pi serialized proxy", () => {
         ] as const) {
           response = {
             content: [{ type: "text", text: "exact proxy evidence" }],
-            details: makeCompactToolDetails({
+            details: compactToolDetails({
               action: "send",
               runs: confirmed ? [view({ id: "confirmed" })] : [],
               actionFailures: failures,
@@ -623,7 +619,7 @@ effectTest("marks failed start receipts without changing the proxy wire format",
   const h = receiptHost();
   const response = {
     content: [{ type: "text" as const, text: "startup outcome is uncertain; do not retry" }],
-    details: makeStartDetails({
+    details: startDetails({
       startEntries: [
         {
           index: 0,

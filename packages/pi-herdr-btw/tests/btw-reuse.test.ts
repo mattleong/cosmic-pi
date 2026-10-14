@@ -5,9 +5,10 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vitest";
 import { type HerdrPane } from "../src/boundary/herdr-client.ts";
-import type { SessionHeaderProbe } from "../src/boundary/session-file.ts";
+import { SessionHeaderProbe } from "../src/boundary/session-file.ts";
 import {
   HERDR_BTW_LINK_ENTRY_TYPE,
+  HerdrBtwLinkRestoration,
   restoreHerdrBtwLink,
   type HerdrBtwLink,
 } from "../src/btw/link.ts";
@@ -78,15 +79,14 @@ describe("herdr-btw link restoration", () => {
         ],
         OWNER,
       ),
-    ).toEqual({ _tag: "none" });
+    ).toEqual(HerdrBtwLinkRestoration.none());
   });
 
   it("restores the newest owner link", () => {
     const superseded = { ...LINK, childSessionId: NEW_CHILD_ID, childSessionPath: NEW_CHILD_FILE };
-    expect(restoreHerdrBtwLink([linkEntry(LINK), linkEntry(superseded)], OWNER)).toEqual({
-      _tag: "restored",
-      link: superseded,
-    });
+    expect(restoreHerdrBtwLink([linkEntry(LINK), linkEntry(superseded)], OWNER)).toEqual(
+      HerdrBtwLinkRestoration.restored({ link: superseded }),
+    );
   });
 
   it("filters copied ancestor links at the store contract boundary", () => {
@@ -95,19 +95,24 @@ describe("herdr-btw link restoration", () => {
       parentSessionId: "ancestor-session",
       parentSessionPath: "/sessions/ancestor.jsonl",
     };
-    expect(restoreHerdrBtwLink([linkEntry(inherited)], OWNER)).toEqual({ _tag: "none" });
-    expect(restoreHerdrBtwLink([linkEntry(LINK), linkEntry(inherited)], OWNER)).toEqual({
-      _tag: "restored",
-      link: LINK,
-    });
+    expect(restoreHerdrBtwLink([linkEntry(inherited)], OWNER)).toEqual(
+      HerdrBtwLinkRestoration.none(),
+    );
+    expect(restoreHerdrBtwLink([linkEntry(LINK), linkEntry(inherited)], OWNER)).toEqual(
+      HerdrBtwLinkRestoration.restored({ link: LINK }),
+    );
   });
 
   it("fails closed on a malformed or wrong-version newest entry", () => {
-    expect(restoreHerdrBtwLink([linkEntry(LINK), linkEntry({ version: 2 })], OWNER)).toEqual({
-      _tag: "malformed",
-    });
-    expect(restoreHerdrBtwLink([linkEntry(undefined)], OWNER)).toEqual({ _tag: "malformed" });
-    expect(restoreHerdrBtwLink([linkEntry("not-a-link")], OWNER)).toEqual({ _tag: "malformed" });
+    expect(restoreHerdrBtwLink([linkEntry(LINK), linkEntry({ version: 2 })], OWNER)).toEqual(
+      HerdrBtwLinkRestoration.malformed(),
+    );
+    expect(restoreHerdrBtwLink([linkEntry(undefined)], OWNER)).toEqual(
+      HerdrBtwLinkRestoration.malformed(),
+    );
+    expect(restoreHerdrBtwLink([linkEntry("not-a-link")], OWNER)).toEqual(
+      HerdrBtwLinkRestoration.malformed(),
+    );
   });
 });
 
@@ -282,8 +287,8 @@ describe("herdr-btw reuse workflow", () => {
             if (replacement !== "parent-alias")
               probes[CHILD_FILE] =
                 replacement === "missing"
-                  ? { _tag: "invalid" }
-                  : { _tag: "valid", header: { id: "replacement-session" } };
+                  ? SessionHeaderProbe.invalid()
+                  : SessionHeaderProbe.valid({ header: { id: "replacement-session" } });
           },
           compareSessionFileIdentity: (left, right) =>
             replaced &&
@@ -334,14 +339,13 @@ describe("herdr-btw reuse workflow", () => {
   it.effect("fails closed before any Herdr call on an invalid, reparented or aliased child", () =>
     Effect.gen(function* () {
       for (const options of [
-        { probes: { [CHILD_FILE]: { _tag: "invalid" } } },
-        { probes: { [CHILD_FILE]: { _tag: "valid", header: { id: "different-id" } } } },
+        { probes: { [CHILD_FILE]: SessionHeaderProbe.invalid() } },
+        { probes: { [CHILD_FILE]: SessionHeaderProbe.valid({ header: { id: "different-id" } }) } },
         {
           probes: {
-            [CHILD_FILE]: {
-              _tag: "valid",
+            [CHILD_FILE]: SessionHeaderProbe.valid({
               header: { id: CHILD_ID, parentSession: "/sessions/other-parent.jsonl" },
-            },
+            }),
           },
         },
         { compareSessionFileIdentity: aliasIdentity([CHILD_FILE, SESSION_FILE]) },
@@ -366,7 +370,7 @@ describe("herdr-btw reuse workflow", () => {
 
   it.effect("fails closed before client calls when the recorded link is malformed", () =>
     Effect.gen(function* () {
-      const test = fixture({ restoreOverride: { _tag: "malformed" } });
+      const test = fixture({ restoreOverride: HerdrBtwLinkRestoration.malformed() });
       expect(yield* Effect.flip(test.open())).toMatchObject({
         code: "herdr_btw_link_malformed",
         outcome: "confirmed",

@@ -1,5 +1,6 @@
 import { eslintCompatPlugin } from "@oxlint/plugins";
 
+import { noArrayFilterMapRule } from "./rules/no-array-filter-map.ts";
 import { noConditionalEmptyObjectSpreadRule } from "./rules/no-conditional-empty-object-spread.ts";
 import { noEagerEffectFinalizerConditionRule } from "./rules/no-eager-effect-finalizer-condition.ts";
 import { noEscapingRenderContextRule } from "./rules/no-escaping-render-context.ts";
@@ -9,6 +10,7 @@ import { noManualAbortListenerRule } from "./rules/no-manual-abort-listener.ts";
 import { noModuleMockingRule } from "./rules/no-module-mocking.ts";
 import { noObjectParametersRule } from "./rules/no-object-parameters.ts";
 import { noRawHostNotifyRule } from "./rules/no-raw-host-notify.ts";
+import { noReduceAccumulatorCopyRule } from "./rules/no-reduce-accumulator-copy.ts";
 import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.ts";
 import { noRuntimeTypeOnlyTestsRule } from "./rules/no-runtime-type-only-tests.ts";
 import { noUnknownParametersRule } from "./rules/no-unknown-parameters.ts";
@@ -20,6 +22,7 @@ import { requireCodePreviewShellRule } from "./rules/require-code-preview-shell.
 const antiSlopPlugin = eslintCompatPlugin({
   meta: { name: "anti-slop" },
   rules: {
+    "no-array-filter-map": noArrayFilterMapRule,
     "no-conditional-empty-object-spread": noConditionalEmptyObjectSpreadRule,
     "no-eager-effect-finalizer-condition": noEagerEffectFinalizerConditionRule,
     "no-escaping-render-context": noEscapingRenderContextRule,
@@ -29,6 +32,7 @@ const antiSlopPlugin = eslintCompatPlugin({
     "no-module-mocking": noModuleMockingRule,
     "no-object-parameters": noObjectParametersRule,
     "no-raw-host-notify": noRawHostNotifyRule,
+    "no-reduce-accumulator-copy": noReduceAccumulatorCopyRule,
     "no-runtime-typeof": noRuntimeTypeofRule,
     "no-runtime-type-only-tests": noRuntimeTypeOnlyTestsRule,
     "no-unsafe-dictionary-type": noUnsafeDictionaryTypeRule,

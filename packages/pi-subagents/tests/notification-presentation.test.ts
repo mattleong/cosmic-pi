@@ -6,7 +6,7 @@ import {
   registerSubagentMessageRenderers,
   renderSubagentMessage,
 } from "../src/application/messages.ts";
-import { makeHostNotifier } from "../src/boundary/host-notifier.ts";
+import { hostNotifier } from "../src/boundary/host-notifier.ts";
 
 let restore = () => {};
 afterEach(() => restore());
@@ -17,7 +17,7 @@ test.each(["compact", "preview"] as const)(
     restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
     const renderers = captureRegistrations(registerSubagentMessageRenderers).messageRenderers;
     const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
+    const notify = hostNotifier(extensionApiFixture({ sendMessage }));
     notify({
       type: "completed",
       runs: [

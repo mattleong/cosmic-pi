@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import * as Match from "effect/Match";
 import {
   extensionContextFixture,
   piKeybindingsFixture,
@@ -62,11 +63,11 @@ export const mountingCustomUi = (
     theme,
     keybindings: piKeybindingsFixture({
       matches: (data, id) =>
-        id === "tui.select.confirm"
-          ? matchesKey(data, Key.enter)
-          : id === "tui.select.cancel"
-            ? matchesKey(data, Key.escape)
-            : false,
+        Match.value(id).pipe(
+          Match.when("tui.select.confirm", () => matchesKey(data, Key.enter)),
+          Match.when("tui.select.cancel", () => matchesKey(data, Key.escape)),
+          Match.orElse(() => false),
+        ),
     }),
   });
   const custom: ExtensionUIContext["custom"] = (factory, options) => {

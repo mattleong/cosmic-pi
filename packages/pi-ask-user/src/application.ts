@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -25,10 +26,10 @@ import {
   acceptsAsyncMessage,
   captureHistoricalDeliveries,
   createQuestionnaireGeneration,
-  makeAsyncDelivery,
+  hostAsyncDelivery,
 } from "./boundary/host-delivery.ts";
 import {
-  makeQuestionnaireActivity,
+  createQuestionnaireActivity,
   type QuestionnaireActivityBridge,
 } from "./boundary/host-activity.ts";
 import { registerQuestionnaireCapability } from "./boundary/host-owned-calls.ts";
@@ -37,10 +38,10 @@ import {
   registerAsyncAskUserMessageRenderer,
   registerAsyncAskUserTools,
 } from "./tools/ask-user-async.ts";
-import { makeAskUserPromptGate } from "./boundary/host-prompt.ts";
+import { createAskUserPromptGate } from "./boundary/host-prompt.ts";
 import { asyncBusy } from "./questionnaire/async-service.ts";
-import { makeAskUserDialogBridge } from "./boundary/host-ui.ts";
-import { makeAskUserLayer, type AskUserApplication, type AskUserRuntimeError } from "./layer.ts";
+import { createAskUserDialogBridge } from "./boundary/host-ui.ts";
+import { askUserLayer, type AskUserApplication, type AskUserRuntimeError } from "./layer.ts";
 import { AskUserRuntimeClosedError } from "./questionnaire/errors.ts";
 import { AskUserService } from "./questionnaire/service.ts";
 import { registerAskUserTool } from "./tools/ask-user.ts";
@@ -66,8 +67,8 @@ export function askUserWithDependencies(
   pi: ExtensionAPI,
   loadPreviewSettings: PreviewSettingsLoader = loadCodePreviewSettings,
 ): void {
-  const bridge = makeAskUserDialogBridge();
-  const promptGate = makeAskUserPromptGate();
+  const bridge = createAskUserDialogBridge();
+  const promptGate = createAskUserPromptGate();
   registerAsyncAskUserMessageRenderer(pi);
   const replay = registerCodePreviewReplay(pi, {
     command: "ask-user",
@@ -86,7 +87,7 @@ export function askUserWithDependencies(
     CodePreviewSchedulerServiceContract
   >({
     makeRuntime: (input) => {
-      input.activity = makeQuestionnaireActivity({
+      input.activity = createQuestionnaireActivity({
         bridge,
         isCurrent: () => input.active,
         run: (effect, signal) =>
@@ -96,10 +97,10 @@ export function askUserWithDependencies(
       });
       return makePiManagedRuntime(
         pi,
-        makeAskUserLayer(
+        askUserLayer(
           input.ctx,
           bridge,
-          makeAsyncDelivery(pi, input.generation, () => input.active),
+          hostAsyncDelivery(pi, input.generation, () => input.active),
           input.generation,
           promptGate,
           input.activity.observer,
@@ -198,7 +199,7 @@ export function askUserWithDependencies(
   const startSession = (ctx: ExtensionContext, publishesReplay: boolean) => {
     historicalDeliveries = captureHistoricalDeliveries(ctx);
     const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable" || (!ctx.hasUI && !requiresQuestionnaireRelay()))
+    if (!Predicate.isTagged(captured, "Captured") || (!ctx.hasUI && !requiresQuestionnaireRelay()))
       return slot.shutdown();
     return slot
       .start({

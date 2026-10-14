@@ -23,7 +23,7 @@ export interface FooterRegistry {
   readonly clear: () => void;
 }
 
-export const makeFooterRegistry = (options: {
+export const createFooterRegistry = (options: {
   readonly requestRender: () => void;
   readonly sessionActive: () => boolean;
 }): FooterRegistry => {

@@ -4,8 +4,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
-import { SubagentBackendRegistry, makeSubagentBackendRegistry } from "../../src/backend/service.ts";
-import { processError } from "../../src/run/errors.ts";
+import { SubagentBackendRegistry, backendRegistryFor } from "../../src/backend/service.ts";
+import { processError, SubagentWriterConflictError } from "../../src/run/errors.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { getFailedStartRecovery } from "../../src/run/launch.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
@@ -59,7 +59,7 @@ describe("explicit profile-route retry", () => {
               SubagentBackendRegistry.use((backends) =>
                 backends.resolve({ host: "local", runtime: "claude", context: "fresh" }).pipe(
                   Effect.map((driver) =>
-                    makeSubagentBackendRegistry([
+                    backendRegistryFor([
                       {
                         ...driver,
                         spawn: (launch) =>
@@ -550,8 +550,8 @@ describe("explicit profile-route retry", () => {
           }),
         )
         .pipe(Effect.flip);
+      expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
       expect(conflict).toMatchObject({
-        _tag: "SubagentWriterConflictError",
         activeId: failedRun.id,
         message: stringContaining("route retry"),
       });

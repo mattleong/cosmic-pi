@@ -43,7 +43,7 @@ const notFound = () =>
       "That questionnaire is no longer available. Use status without a requestId to list retained requests; it may have expired or belonged to an earlier session or branch.",
   });
 
-export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(function* (
+export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync")(function* (
   host: AskUserHost,
   queue: QuestionnaireQueue,
   delivery: AsyncDelivery | undefined,

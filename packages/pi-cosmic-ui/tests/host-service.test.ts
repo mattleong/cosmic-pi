@@ -29,8 +29,9 @@ import {
 } from "pi-cosmic-core/testing";
 import { abortablePendingExec, execOk, execResult, type ExecResult } from "./support/host.ts";
 import { CosmicUiConfigStore } from "../src/config/store.ts";
-import { CosmicUiService, makeProjection, resetProjection } from "../src/protocol/service.ts";
-import { makePiExec } from "../src/boundary/host-exec.ts";
+import { CosmicUiService, createProjection, resetProjection } from "../src/protocol/service.ts";
+import { PiExec } from "../src/boundary/host-exec.ts";
+import { RepositoryProbe } from "../src/probe/repository-probe.ts";
 
 const SavedFooter = Schema.Struct({
   hidden: Schema.optional(Schema.Array(Schema.String)),
@@ -52,21 +53,23 @@ function serviceLayer(
     onChange?: () => void;
   } = {},
 ) {
-  const projection = makeProjection();
+  const projection = createProjection();
   const contextRef = options.context ?? MutableRef.make(context());
   const store = options.store ?? makeInMemoryDocuments(options.documents);
   const platform = Layer.mergeAll(store.layer, Path.layer, AgentDirectory.layer("/agent"));
   const repository = CosmicUiConfigStore.layer.pipe(Layer.provide(platform));
+  const probe = RepositoryProbe.layer.pipe(
+    Layer.provide(PiExec.layerFrom(options.exec ?? (() => execOk()))),
+  );
   const layer = CosmicUiService.layer({
     context: contextRef,
     cwd: "/project",
-    exec: makePiExec(options.exec ?? (() => execOk())),
     projection,
     onChange: options.onChange ?? (() => undefined),
     canPublish: options.canPublish,
     startPolling: options.startPolling ?? false,
     projectTrusted: options.projectTrusted ?? true,
-  }).pipe(Layer.provide(repository));
+  }).pipe(Layer.provide(Layer.merge(repository, probe)));
   return { layer, projection, contextRef, documents: store.documents };
 }
 
@@ -273,7 +276,7 @@ describe("Cosmic UI host service", () => {
       let armed = false;
       let validated = false;
       let stopped = false;
-      const makeRefresh = core.makeSubscriptionRefresh;
+      const makeRefresh = core.createSubscriptionRefresh;
       const observedRefresh: typeof makeRefresh = (options) =>
         makeRefresh({
           ...options,
@@ -283,7 +286,7 @@ describe("Cosmic UI host service", () => {
           },
         });
       const boundary = vi
-        .spyOn(core, "makeSubscriptionRefresh")
+        .spyOn(core, "createSubscriptionRefresh")
         .mockImplementation(observedRefresh);
       const contextRef = MutableRef.make(context());
       const { layer, projection } = serviceLayer({

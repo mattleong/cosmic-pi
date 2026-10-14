@@ -2,14 +2,14 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { ActivitySnapshotSchema } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
-import { makeQuestionnaireActivity } from "../../src/boundary/host-activity.ts";
-import { makeAskUserDialogBridge } from "../../src/boundary/host-ui.ts";
+import { createQuestionnaireActivity } from "../../src/boundary/host-activity.ts";
+import { createAskUserDialogBridge } from "../../src/boundary/host-ui.ts";
 
 export const makeActivityFixture = () => {
-  const bridge = makeAskUserDialogBridge();
+  const bridge = createAskUserDialogBridge();
   const host = fakeActivityHost("session");
   let current = true;
-  const activity = makeQuestionnaireActivity({
+  const activity = createQuestionnaireActivity({
     bridge,
     isCurrent: () => current,
     run: (effect, signal) => Effect.runPromise(effect, { signal }),

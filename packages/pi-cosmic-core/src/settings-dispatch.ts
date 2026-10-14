@@ -1,10 +1,12 @@
+import * as Data from "effect/Data";
+
 interface SettingsDispatchDescriptor {
   readonly id: string;
   readonly values?: ReadonlyArray<string> | undefined;
   readonly openValues?: boolean | undefined;
 }
 
-type SettingsCommandDispatch =
+export type SettingsCommandDispatch =
   | { readonly _tag: "OpenInteractive" }
   | { readonly _tag: "Help" }
   | { readonly _tag: "Status" }
@@ -23,6 +25,7 @@ type SettingsCommandDispatch =
       readonly value: string;
       readonly allowedValues: ReadonlyArray<string>;
     };
+export const SettingsCommandDispatch = Data.taggedEnum<SettingsCommandDispatch>();
 
 export const dispatchSettingsCommand = (
   args: string,
@@ -30,24 +33,23 @@ export const dispatchSettingsCommand = (
   scopes: ReadonlyArray<string> = [],
 ): SettingsCommandDispatch => {
   const trimmed = args.trim();
-  if (!trimmed) return { _tag: "OpenInteractive" };
-  if (trimmed === "help") return { _tag: "Help" };
-  if (trimmed === "status") return { _tag: "Status" };
+  if (!trimmed) return SettingsCommandDispatch.OpenInteractive();
+  if (trimmed === "help") return SettingsCommandDispatch.Help();
+  if (trimmed === "status") return SettingsCommandDispatch.Status();
   const tokens = trimmed.split(/\s+/);
   const scope = scopes.includes(tokens[0] ?? "") ? tokens.shift() : undefined;
   const [id = "", ...parts] = tokens;
   const value = parts.join(" ").trim();
-  if (!value) return { _tag: "Invalid", reason: "missing-value", id };
+  if (!value) return SettingsCommandDispatch.Invalid({ reason: "missing-value", id });
   const descriptor = descriptors.find((candidate) => candidate.id === id);
-  if (!descriptor) return { _tag: "Invalid", reason: "unknown-setting", id };
+  if (!descriptor) return SettingsCommandDispatch.Invalid({ reason: "unknown-setting", id });
   if (descriptor.values && !descriptor.openValues && !descriptor.values.includes(value)) {
-    return {
-      _tag: "Invalid",
+    return SettingsCommandDispatch.Invalid({
       reason: "invalid-value",
       id,
       value,
       allowedValues: descriptor.values,
-    };
+    });
   }
-  return { _tag: "Apply", id, value, ...(scope !== undefined && { scope }) };
+  return SettingsCommandDispatch.Apply({ id, value, ...(scope !== undefined && { scope }) });
 };

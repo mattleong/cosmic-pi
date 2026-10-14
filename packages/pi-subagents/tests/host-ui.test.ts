@@ -5,7 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
+import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { extensionContextFixture, plainTheme, tuiFixture } from "pi-cosmic-core/testing";
 import { projectionOf, view } from "./fixtures/run-view.ts";
 
@@ -29,7 +29,7 @@ const context = (
   });
 
 const quietBridge = () =>
-  makeSubagentProjectionBridge(undefined, {
+  subagentProjectionBridge(undefined, {
     startTicker: () => () => undefined,
     getNow: () => 2_000,
   });
@@ -48,7 +48,7 @@ describe("subagent activity widget host", () => {
     const setStatus = vi.fn();
     const stopTicker = vi.fn();
     const startTicker = vi.fn(() => stopTicker);
-    const bridge = makeSubagentProjectionBridge(undefined, { startTicker, getNow: () => 2_000 });
+    const bridge = subagentProjectionBridge(undefined, { startTicker, getNow: () => 2_000 });
     bridge.publish(projectionOf([view({ id: "parent" })]));
     bridge.setContext(context(setWidget, setStatus));
 
@@ -82,7 +82,7 @@ describe("subagent activity widget host", () => {
       stops.push(stop);
       return stop;
     });
-    const bridge = makeSubagentProjectionBridge(undefined, { startTicker });
+    const bridge = subagentProjectionBridge(undefined, { startTicker });
     bridge.publish(projectionOf([view({ id: "run", state: "waiting_for_parent" })]));
     bridge.setContext(context(setWidget));
     getFactory()?.(tui(), plainTheme);
@@ -103,7 +103,7 @@ describe("subagent activity widget host", () => {
     const { getFactory, setWidget } = captureFactory();
     const setStatus = vi.fn();
     const stopTicker = vi.fn();
-    const bridge = makeSubagentProjectionBridge(undefined, { startTicker: () => stopTicker });
+    const bridge = subagentProjectionBridge(undefined, { startTicker: () => stopTicker });
     bridge.publish(projectionOf([view({ id: "running" })]));
     const ctx = context(setWidget, setStatus);
     bridge.setContext(ctx);
@@ -171,7 +171,7 @@ describe("subagent activity widget host", () => {
 
   it("falls back when widget installation throws", () => {
     const setStatus = vi.fn();
-    const bridge = makeSubagentProjectionBridge();
+    const bridge = subagentProjectionBridge();
     bridge.publish(projectionOf([view({ id: "running" })]));
     bridge.setContext(
       context(() => {
@@ -209,7 +209,7 @@ describe("subagent activity widget host", () => {
   it("uses status fallback in RPC mode without installing a component widget", () => {
     const setWidget = vi.fn();
     const setStatus = vi.fn();
-    const bridge = makeSubagentProjectionBridge();
+    const bridge = subagentProjectionBridge();
     const rpc = extensionContextFixture({
       cwd: "/project",
       mode: "rpc" as const,

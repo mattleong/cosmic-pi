@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
-import { makeGitWorkspaceEngine } from "../boundary/git-worktree.ts";
+import { gitWorkspaceEngine } from "../boundary/git-worktree.ts";
 import type {
   WorkspaceAcquired,
   WorkspaceError,
@@ -62,7 +62,7 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
     Layer.effect(
       WorkspaceService,
       Effect.gen(function* () {
-        const engine = yield* makeGitWorkspaceEngine(options.agentDirectory);
+        const engine = yield* gitWorkspaceEngine(options.agentDirectory);
         const lock = yield* Semaphore.make(1);
         const safe = yield* SafeFile;
         const run = <A, E>(effect: Effect.Effect<A, E, SafeFile>) =>

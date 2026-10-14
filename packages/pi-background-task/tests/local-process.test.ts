@@ -5,11 +5,13 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { provideBuiltLayer, signalProcess } from "pi-cosmic-core";
 import {
   LocalProcess,
+  LocalProcessError,
   makeBackgroundProcessEnvironment,
   type LocalProcessHandle,
   type LocalProcessRequest,
@@ -126,8 +128,8 @@ describe("local process boundary", () => {
         const result = yield* Effect.result(
           spawnProcess('node -e ""', { cwd: "/definitely/missing/pi-bg-dir" }),
         );
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") expect(result.failure.reason).toBe("cwd");
+        expect(Result.isFailure(result)).toBe(true);
+        if (Result.isFailure(result)) expect(result.failure.reason).toBe("cwd");
       }),
     ),
   );
@@ -140,8 +142,8 @@ describe("local process boundary", () => {
             shellPath: "/definitely/missing/pi-background-shell",
           }),
         );
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") {
+        expect(Result.isFailure(result)).toBe(true);
+        if (Result.isFailure(result)) {
           expect(result.failure.reason).toBe("spawn");
           expect(result.failure.message).not.toContain("FAKE_SECRET_123");
           expect(String(result.failure)).not.toContain("FAKE_SECRET_123");
@@ -158,7 +160,8 @@ describe("local process boundary", () => {
           ["echo api_key=FAKE_SECRET_123", { shellPath: "/bin/sh\u0000" }],
         ] as const) {
           const failure = yield* spawnProcess(command, overrides).pipe(Effect.flip);
-          expect(failure).toMatchObject({ _tag: "LocalProcessError", reason: "spawn" });
+          expect(failure).toBeInstanceOf(LocalProcessError);
+          expect(failure).toMatchObject({ reason: "spawn" });
           expect(String(failure)).not.toContain("FAKE_SECRET_123");
         }
       }),
@@ -187,8 +190,7 @@ describe("local process boundary", () => {
         });
         const result = yield* collectUntilExit(handle);
         const stdout = [...result.events]
-          .filter((event) => event.stream === "stdout")
-          .map((event) => event.text)
+          .flatMap((event) => (event.stream === "stdout" ? [event.text] : []))
           .join("");
         expect(stdout).toBe(content);
         expect(handle.droppedOutputBytes()).toBe(0);

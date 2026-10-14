@@ -238,7 +238,7 @@ export function openProfileDashboard(
         },
       })
         .then((outcome) => {
-          if (outcome._tag === "Failed")
+          if (Predicate.isTagged(outcome, "Failed"))
             notifyAtHostBoundary(
               ctx,
               "Could not open Subagents profile settings. Close and try again.",

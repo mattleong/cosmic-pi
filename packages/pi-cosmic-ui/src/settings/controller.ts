@@ -1,4 +1,5 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Data from "effect/Data";
 import type * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -32,12 +33,11 @@ const footerLabels = {
   extensions: "Extension status",
 } satisfies Record<(typeof DEFAULT_FOOTER_ORDER)[number], string>;
 
-type CosmicUiSettingChange =
-  | {
-      readonly _tag: "UpdateFooter";
-      readonly patch: FooterPatch;
-    }
-  | { readonly _tag: "SetVisibility"; readonly id: string; readonly visible: boolean };
+type CosmicUiSettingChange = Data.TaggedEnum<{
+  UpdateFooter: { readonly patch: FooterPatch };
+  SetVisibility: { readonly id: string; readonly visible: boolean };
+}>;
+const CosmicUiSettingChange = Data.taggedEnum<CosmicUiSettingChange>();
 
 const settingDescriptors = [
   {
@@ -49,7 +49,9 @@ const settingDescriptors = [
     currentValue: (config: ResolvedCosmicUiConfig) => String(config.footer.enabled),
     change: (value: string): CosmicUiSettingChange | undefined => {
       const enabled = decodeUnknownOrUndefined(BooleanSettingSchema)(value);
-      return enabled && { _tag: "UpdateFooter", patch: { enabled: enabled === "true" } };
+      return (
+        enabled && CosmicUiSettingChange.UpdateFooter({ patch: { enabled: enabled === "true" } })
+      );
     },
   },
   {
@@ -60,7 +62,7 @@ const settingDescriptors = [
     currentValue: (config: ResolvedCosmicUiConfig) => config.footer.density,
     change: (value: string): CosmicUiSettingChange | undefined => {
       const density = decodeUnknownOrUndefined(FooterDensitySchema)(value);
-      return density && { _tag: "UpdateFooter", patch: { density } };
+      return density && CosmicUiSettingChange.UpdateFooter({ patch: { density } });
     },
   },
   ...DEFAULT_FOOTER_ORDER.map((item) => {
@@ -78,7 +80,9 @@ const settingDescriptors = [
         config.footer.hidden.includes(item) ? hidden : shown,
       change: (value: string): CosmicUiSettingChange | undefined => {
         const decoded = decodeUnknownOrUndefined(schema)(value);
-        return decoded && { _tag: "SetVisibility", id: item, visible: decoded === shown };
+        return (
+          decoded && CosmicUiSettingChange.SetVisibility({ id: item, visible: decoded === shown })
+        );
       },
     };
   }),
@@ -117,9 +121,10 @@ export function registerSettingsCommand(
         const change = settingDescriptors.find((descriptor) => descriptor.id === id)?.change(value);
         if (!change) return Promise.resolve(Result.fail({ message: `Unknown setting: ${id}` }));
         const update = CosmicUiService.use((service) =>
-          change._tag === "SetVisibility"
-            ? service.setFooterVisibility(change.id, change.visible)
-            : service.updateFooterConfig(change.patch),
+          CosmicUiSettingChange.$match(change, {
+            SetVisibility: ({ id: item, visible }) => service.setFooterVisibility(item, visible),
+            UpdateFooter: ({ patch }) => service.updateFooterConfig(patch),
+          }),
         );
         return options.run(update, signal).then(
           () => Result.succeed(undefined),

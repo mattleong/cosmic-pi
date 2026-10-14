@@ -1,3 +1,4 @@
+import * as Match from "effect/Match";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { clipText, sanitizeTerminalLine } from "pi-cosmic-core";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
@@ -8,11 +9,11 @@ export const ACTIVE_RUNS_PROMPT_SECTION = "active_subagents";
 const MAX_LISTED_RUNS = 20;
 
 const stateLabel = (run: SubagentRunView): string =>
-  run.state === "waiting_for_parent"
-    ? "waiting for your reply"
-    : run.state === "paused"
-      ? "paused"
-      : "running";
+  Match.value(run.state).pipe(
+    Match.when("waiting_for_parent", () => "waiting for your reply"),
+    Match.when("paused", () => "paused"),
+    Match.orElse(() => "running"),
+  );
 
 const runLine = (run: SubagentRunView): string =>
   `- ${run.id} · ${run.profile ?? "subagent"} · ${clipText(sanitizeTerminalLine(run.name), 60)} · ${stateLabel(run)}`;

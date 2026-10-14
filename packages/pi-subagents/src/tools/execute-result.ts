@@ -4,7 +4,7 @@ import type { SubagentRunView } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import { encodeSubagentContract, type SubagentContract } from "./contract-schema.ts";
-import { makeAwaitDetails, makeCompactToolDetails, makeStartDetails } from "./details.ts";
+import { awaitDetails, compactToolDetails, startDetails } from "./details.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import {
   boundToolOutput,
@@ -39,19 +39,19 @@ export const presentSubagentResult = (
   const actionFailures = executionResult.actionFailures ?? [];
   const details: unknown =
     input.tool === SUBAGENT_TOOL_NAME.start
-      ? makeStartDetails({
+      ? startDetails({
           startEntries: executionResult.startEntries ?? [],
           ...(startFailures.length > 0 && { startFailures }),
         })
       : input.tool === SUBAGENT_TOOL_NAME.await
-        ? makeAwaitDetails({
+        ? awaitDetails({
             runs,
             contextRuns: awaitContextRuns,
             awaitedRunIds: requestedAwaitIds,
             awaitUntil: input.args.until,
             ...(attentionRequired === true && { attentionRequired: true as const }),
           })
-        : makeCompactToolDetails({
+        : compactToolDetails({
             action: subagentToolAction(input),
             runs,
             ...(actionFailures.length > 0 && { actionFailures }),

@@ -1,5 +1,6 @@
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -26,9 +27,11 @@ const decodeSessionHeader = decodeUnknownOrUndefined(SessionHeaderFromJson);
 
 export type SessionHeaderFacts = Pick<typeof SessionHeaderSchema.Type, "id" | "parentSession">;
 
-export type SessionHeaderProbe =
-  | { readonly _tag: "valid"; readonly header: SessionHeaderFacts }
-  | { readonly _tag: "invalid" };
+export type SessionHeaderProbe = Data.TaggedEnum<{
+  valid: { readonly header: SessionHeaderFacts };
+  invalid: Record<never, never>;
+}>;
+export const SessionHeaderProbe = Data.taggedEnum<SessionHeaderProbe>();
 
 export type SessionFileIdentityComparison = "same" | "distinct" | "unavailable";
 export type SessionFileIdentityComparator = (
@@ -97,8 +100,10 @@ export const probeSessionHeader = (path: string): SessionHeaderProbe => {
   const line = readFirstLine(path);
   const header = line === undefined ? undefined : decodeSessionHeader(line);
   return header
-    ? { _tag: "valid", header: { id: header.id, parentSession: header.parentSession } }
-    : { _tag: "invalid" };
+    ? SessionHeaderProbe.valid({
+        header: { id: header.id, parentSession: header.parentSession },
+      })
+    : SessionHeaderProbe.invalid();
 };
 
 export interface BlankChildSessionFileInput {
@@ -107,9 +112,11 @@ export interface BlankChildSessionFileInput {
   readonly sessionId: string;
 }
 
-export type BlankChildSessionFileResult =
-  | { readonly _tag: "created"; readonly path: string }
-  | { readonly _tag: "invalid" };
+export type BlankChildSessionFileResult = Data.TaggedEnum<{
+  created: { readonly path: string };
+  invalid: Record<never, never>;
+}>;
+export const BlankChildSessionFileResult = Data.taggedEnum<BlankChildSessionFileResult>();
 
 export const createChildSessionId = (): string => synchronousRandomUuid();
 
@@ -123,13 +130,13 @@ const createBlankChildSessionFileAt = (
     !pathApi.isAbsolute(input.cwd) ||
     LINE_CONTROL.test(input.cwd)
   )
-    return { _tag: "invalid" };
+    return BlankChildSessionFileResult.invalid();
   try {
-    if (!statSync(input.sessionDir).isDirectory()) return { _tag: "invalid" };
+    if (!statSync(input.sessionDir).isDirectory()) return BlankChildSessionFileResult.invalid();
     const timestamp = DateTime.formatIso(DateTime.makeUnsafe(now));
     const fileTimestamp = timestamp.replace(/[:.]/gu, "-");
     const path = pathApi.join(input.sessionDir, `${fileTimestamp}_${input.sessionId}.jsonl`);
-    if (!isBoundedSessionPath(path)) return { _tag: "invalid" };
+    if (!isBoundedSessionPath(path)) return BlankChildSessionFileResult.invalid();
     const header = {
       type: "session",
       version: CURRENT_SESSION_VERSION,
@@ -142,9 +149,9 @@ const createBlankChildSessionFileAt = (
       flag: "wx",
       mode: 0o600,
     });
-    return { _tag: "created", path };
+    return BlankChildSessionFileResult.created({ path });
   } catch {
-    return { _tag: "invalid" };
+    return BlankChildSessionFileResult.invalid();
   }
 };
 

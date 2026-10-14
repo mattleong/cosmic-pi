@@ -1,10 +1,11 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { AgentDirectory, nodeFilePlatformLayer, PiApi } from "pi-cosmic-core";
-import { makePiExec } from "./boundary/host-exec.ts";
+import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { PiExec } from "./boundary/host-exec.ts";
 import type { FooterTotals } from "./boundary/host-usage.ts";
 import { CosmicUiConfigStore } from "./config/store.ts";
+import { RepositoryProbe } from "./probe/repository-probe.ts";
 import { CosmicUiService, type CosmicUiProjection } from "./protocol/service.ts";
 import { ActivityService } from "./activity/service.ts";
 import type { ActivityHost } from "./boundary/host-activity.ts";
@@ -26,29 +27,30 @@ export interface CosmicUiApplicationLayerOptions {
   readonly activityHost: ActivityHost;
 }
 
-export const makeCosmicUiApplicationLayer = (
+export const cosmicUiApplicationLayer = (
   { context, cwd, initialTotals, projectTrusted, publicationOwner }: CosmicUiSessionInput,
   options: CosmicUiApplicationLayerOptions,
 ) => {
   const platform = Layer.merge(nodeFilePlatformLayer, AgentDirectory.layerFromHost(getAgentDir));
-  const service = Layer.effect(
-    CosmicUiService,
-    PiApi.use((pi) =>
-      CosmicUiService.make({
-        context,
-        cwd,
-        exec: makePiExec((command, args, execOptions) => pi.exec(command, args, execOptions)),
-        initialTotals,
-        projection: options.projection,
-        projectTrusted,
-        onChange: options.requestRender,
-        canPublish: () => MutableRef.get(publicationOwner),
-      }),
+  const service = CosmicUiService.layer({
+    context,
+    cwd,
+    initialTotals,
+    projection: options.projection,
+    projectTrusted,
+    onChange: options.requestRender,
+    canPublish: () => MutableRef.get(publicationOwner),
+  }).pipe(
+    Layer.provide(
+      Layer.merge(
+        CosmicUiConfigStore.layer.pipe(Layer.provide(platform)),
+        RepositoryProbe.layer.pipe(Layer.provide(PiExec.layer)),
+      ),
     ),
-  ).pipe(Layer.provide(CosmicUiConfigStore.layer.pipe(Layer.provide(platform))));
+  );
   return Layer.mergeAll(service, ActivityService.layer(options.activityHost.serviceOptions()));
 };
 
-type CosmicUiApplicationLayer = ReturnType<typeof makeCosmicUiApplicationLayer>;
+type CosmicUiApplicationLayer = ReturnType<typeof cosmicUiApplicationLayer>;
 export type CosmicUiApplication = Layer.Success<CosmicUiApplicationLayer>;
 export type CosmicUiRuntimeError = Layer.Error<CosmicUiApplicationLayer>;

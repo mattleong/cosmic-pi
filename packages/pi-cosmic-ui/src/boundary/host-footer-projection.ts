@@ -73,8 +73,10 @@ export const materializeFooterHostProjection = (options: {
     () =>
       [...footerData.getExtensionStatuses().entries()]
         .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([id, text]) => ({ id, text: sanitizeTerminalLine(text) }))
-        .filter(({ text }) => Boolean(text)),
+        .flatMap(([id, raw]) => {
+          const text = sanitizeTerminalLine(raw);
+          return text ? [{ id, text }] : [];
+        }),
     [],
   );
   return Object.freeze({

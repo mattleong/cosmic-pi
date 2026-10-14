@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
 import {
@@ -323,7 +324,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       reservedKeys: PROFILE_SET_SHORTCUTS,
     });
     if (!resolution) return;
-    if (resolution._tag === "Shortcut") {
+    if (Predicate.isTagged(resolution, "Shortcut")) {
       if (resolution.key === "u") this.activate("use-current");
       else if (resolution.key === "a") this.openActions();
       else {

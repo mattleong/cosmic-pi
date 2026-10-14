@@ -16,6 +16,13 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
+import {
+  InvalidSubagentRequestError,
+  SubagentNotFoundError,
+  SubagentCapacityError,
+  SubagentWriterConflictError,
+  SubagentProcessError,
+} from "../../src/run/errors.ts";
 
 const completeHistory = (
   service: SubagentServiceContract,
@@ -54,7 +61,8 @@ describe("SubagentService", () => {
       expect(isSupervisorRunId(first.id)).toBe(true);
       expect(isSupervisorRunId(result.second.id)).toBe(true);
       expect(result.second.id).not.toBe(first.id);
-      expect(result.stale).toMatchObject({ _tag: "SubagentNotFoundError", id: first.id });
+      expect(result.stale).toBeInstanceOf(SubagentNotFoundError);
+      expect(result.stale).toMatchObject({ id: first.id });
     }),
   );
 
@@ -80,10 +88,8 @@ describe("SubagentService", () => {
       const failure = yield* Effect.flip(
         service.start(request({ host: "local", runtime: "claude" })),
       );
-      expect(failure).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "backend_not_implemented",
-      });
+      expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(failure).toMatchObject({ code: "backend_not_implemented" });
       expect(fake.controls).toHaveLength(0);
       expect(yield* service.list).toEqual([]);
     });
@@ -137,10 +143,8 @@ describe("SubagentService", () => {
         const failure = yield* Effect.flip(
           service.start(request({ effort: "high", effortWasExplicit: true })),
         );
-        expect(failure).toMatchObject({
-          _tag: "InvalidSubagentRequestError",
-          code: "pi_effort_unsupported",
-        });
+        expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
+        expect(failure).toMatchObject({ code: "pi_effort_unsupported" });
         expect(failure.message).toContain(
           "does not support requested effort high; effective level was off",
         );
@@ -161,10 +165,8 @@ describe("SubagentService", () => {
       const failure = yield* service
         .start(request({ name: "uncertain-writer", writeIntent: "writer" }))
         .pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "SubagentProcessError",
-        code: "start_outcome_uncertain",
-      });
+      expect(failure).toBeInstanceOf(SubagentProcessError);
+      expect(failure).toMatchObject({ code: "start_outcome_uncertain" });
       expect(failure.message).toContain("The writer task may have been accepted");
       expect((yield* service.list)[0]?.state).toBe("failed");
     });
@@ -183,7 +185,8 @@ describe("SubagentService", () => {
         const activeSaturation = yield* service
           .start(request({ name: "thirteenth-active" }))
           .pipe(Effect.flip);
-        expect(activeSaturation).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
+        expect(activeSaturation).toBeInstanceOf(SubagentCapacityError);
+        expect(activeSaturation).toMatchObject({ limit: 12 });
         expect(activeSaturation.message).toContain("Stop an active run");
         expect(fake.controls).toHaveLength(12);
 
@@ -202,10 +205,8 @@ describe("SubagentService", () => {
         const blockedDuringCleanup = yield* service
           .start(request({ name: "blocked-during-cleanup" }))
           .pipe(Effect.flip);
-        expect(blockedDuringCleanup).toMatchObject({
-          _tag: "SubagentCapacityError",
-          limit: 12,
-        });
+        expect(blockedDuringCleanup).toBeInstanceOf(SubagentCapacityError);
+        expect(blockedDuringCleanup).toMatchObject({ limit: 12 });
         expect(fake.controls).toHaveLength(12);
 
         yield* Deferred.succeed(cleanupGate, undefined);
@@ -239,18 +240,16 @@ describe("SubagentService", () => {
           ),
         );
       }
-      expect(
-        yield* service.start(request({ name: "capacity-probe" })).pipe(Effect.flip),
-      ).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
+      const probe = yield* service.start(request({ name: "capacity-probe" })).pipe(Effect.flip);
+      expect(probe).toBeInstanceOf(SubagentCapacityError);
+      expect(probe).toMatchObject({ limit: 12 });
 
       const resuming = yield* service.resume(runs[0]!.id).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* TestClock.adjust("10 seconds");
       const timeout = yield* Fiber.join(resuming).pipe(Effect.flip);
-      expect(timeout).toMatchObject({
-        _tag: "SubagentProcessError",
-        code: "cleanup_timeout",
-      });
+      expect(timeout).toBeInstanceOf(SubagentProcessError);
+      expect(timeout).toMatchObject({ code: "cleanup_timeout" });
       yield* Effect.forEach(gates, (gate) => Deferred.succeed(gate, undefined), {
         discard: true,
       });
@@ -317,10 +316,8 @@ describe("SubagentService", () => {
       const firstId = (yield* completeHistory(service, fake, 50, "evictable"))[0]!;
       yield* TestClock.adjust("100 millis");
       const blocked = yield* service.start(request({ name: "blocked" })).pipe(Effect.flip);
-      expect(blocked).toMatchObject({
-        _tag: "SubagentProcessError",
-        code: "fixture_reclaim_failed",
-      });
+      expect(blocked).toBeInstanceOf(SubagentProcessError);
+      expect(blocked).toMatchObject({ code: "fixture_reclaim_failed" });
       const afterFailure = yield* service.list;
       const secondId = afterFailure[1]?.id ?? "";
       const thirdId = afterFailure[2]?.id ?? "";
@@ -388,7 +385,7 @@ describe("SubagentService", () => {
         );
         yield* Deferred.succeed(reclaimGate, undefined);
         const rejected = yield* Fiber.join(prospective).pipe(Effect.flip);
-        expect(rejected).toMatchObject({ _tag: "SubagentWriterConflictError" });
+        expect(rejected).toBeInstanceOf(SubagentWriterConflictError);
 
         const oldest = (yield* service.list).find((run) => run.id === oldestId);
         expect(oldest).toMatchObject({
@@ -423,7 +420,8 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => fake.reclaimedRunIds.length === 2);
       expect(new Set(fake.reclaimedRunIds).size).toBe(2);
       const blocked = yield* service.start(request({ name: "evict-c" })).pipe(Effect.flip);
-      expect(blocked).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
+      expect(blocked).toBeInstanceOf(SubagentCapacityError);
+      expect(blocked).toMatchObject({ limit: 12 });
       expect(fake.reclaimedRunIds).toHaveLength(2);
       yield* Deferred.succeed(gate, undefined);
       expect((yield* Fiber.join(startA)).state).toBe("running");
@@ -440,7 +438,8 @@ describe("SubagentService", () => {
       for (let index = 0; index < 12; index += 1)
         yield* service.start(request({ name: `active-${index + 1}` }));
       const failure = yield* service.start(request({ name: "capacity-blocked" })).pipe(Effect.flip);
-      expect(failure).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
+      expect(failure).toBeInstanceOf(SubagentCapacityError);
+      expect(failure).toMatchObject({ limit: 12 });
       const retained = yield* service.list;
       expect(retained).toHaveLength(50);
       expect(retained.some((run) => run.id === oldestId)).toBe(true);

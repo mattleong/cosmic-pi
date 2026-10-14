@@ -10,7 +10,7 @@ import {
 } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { projectRunCardTree } from "../ui/run-tree-rows.ts";
-import { makeAwaitDetails } from "./details.ts";
+import { awaitDetails } from "./details.ts";
 import { attentionRecoveryText, joinBoundedToolText } from "./format.ts";
 import { formatAwaitProgress } from "./render-await.ts";
 import { cancelledAwaitContract } from "./contract.ts";
@@ -32,15 +32,19 @@ export const observeAwaitInterruption = <A, E, R>(
       )
     : effect;
 
-export function makeAwaitExecution(
+export function awaitExecutionFor(
   ids: ReadonlyArray<string>,
   until: SubagentAwaitUntil,
   onUpdate?: AgentToolUpdateCallback<unknown>,
 ) {
-  const requestedIds = [...new Set(ids.map((id) => id.trim()).filter(Boolean))].slice(
-    0,
-    MAX_TARGET_RUNS,
-  );
+  const requestedIds = [
+    ...new Set(
+      ids.flatMap((id) => {
+        const trimmed = id.trim();
+        return trimmed ? [trimmed] : [];
+      }),
+    ),
+  ].slice(0, MAX_TARGET_RUNS);
   let latestRuns: ReadonlyArray<SubagentRunView> = [];
   let contextRuns: ReadonlyArray<SubagentRunView> = [];
   let lastUpdate = "";
@@ -73,7 +77,7 @@ export function makeAwaitExecution(
       }
       return false;
     });
-    const details = makeAwaitDetails({
+    const details = awaitDetails({
       runs,
       contextRuns,
       awaitedRunIds: requestedIds,
@@ -122,7 +126,7 @@ export function makeAwaitExecution(
           timedOut: timedOutSeconds !== undefined,
         }),
       ),
-      details: makeAwaitDetails({
+      details: awaitDetails({
         runs: latestRuns,
         contextRuns,
         awaitedRunIds: requestedIds,
@@ -150,4 +154,4 @@ export function makeAwaitExecution(
   };
 }
 
-export type AwaitExecution = ReturnType<typeof makeAwaitExecution>;
+export type AwaitExecution = ReturnType<typeof awaitExecutionFor>;

@@ -29,6 +29,7 @@ import {
   renderComponent,
   textResult as result,
 } from "../../support/render";
+import * as Match from "effect/Match";
 
 const originalPerformance = codePreviewPerformanceConfig;
 const secret = "-----BEGIN PRIVATE KEY-----";
@@ -158,12 +159,11 @@ describe("builtin compact lifecycle", () => {
   );
 
   test.each(tools)("%s accepts recorded success without live execution flags", (tool) => {
-    const details =
-      tool === "write"
-        ? { codePreviewBeforeWrite: { kind: "content", content: "old" } }
-        : tool === "edit"
-          ? { diff: "-1 old\n+1 new" }
-          : undefined;
+    const details = Match.value(tool).pipe(
+      Match.when("write", () => ({ codePreviewBeforeWrite: { kind: "content", content: "old" } })),
+      Match.when("edit", () => ({ diff: "-1 old\n+1 new" })),
+      Match.orElse(() => undefined),
+    );
     const value = summary(
       tool,
       { path: "file.ts", command: "true", content: "new" },

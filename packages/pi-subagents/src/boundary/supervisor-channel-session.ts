@@ -18,11 +18,11 @@ import {
   epochError,
   type SupervisorChannelError,
 } from "./supervisor-channel-errors.ts";
-import { makeSupervisorChannelHandlers } from "./supervisor-channel-handlers.ts";
+import { supervisorChannelHandlers } from "./supervisor-channel-handlers.ts";
 import {
   failPendingQuestion,
   hasReadyPeer,
-  makeSupervisorChannelState,
+  supervisorChannelState,
   removePeer,
 } from "./supervisor-channel-state.ts";
 
@@ -43,7 +43,7 @@ export interface SupervisorChannelControls {
   readonly cancelPending: (reason?: string) => void;
 }
 
-export const makeSupervisorChannelSession = ({
+export const supervisorChannelSession = ({
   runId,
   verifyToken,
   events,
@@ -53,9 +53,9 @@ export const makeSupervisorChannelSession = ({
   readonly events: Queue.Queue<SupervisorEvent, Cause.Done>;
 }) =>
   Effect.gen(function* () {
-    const state = yield* makeSupervisorChannelState(runId, verifyToken, events);
+    const state = yield* supervisorChannelState(runId, verifyToken, events);
     const { peers, assignmentEpochs, reports, epochAcknowledgements, readiness } = state;
-    const handlers = makeSupervisorChannelHandlers(state);
+    const handlers = supervisorChannelHandlers(state);
 
     const shutdown = Effect.gen(function* () {
       state.closed = true;
