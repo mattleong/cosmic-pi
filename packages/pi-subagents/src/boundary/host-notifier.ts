@@ -173,35 +173,52 @@ const steer = (
     return true;
   }, false);
 
-export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
+export interface HostNotifierOptions {
+  /** False while the user's interrupt holds wakes: messages are appended without starting a turn. */
+  readonly triggerTurn?: () => boolean;
+}
+
+export function makeHostNotifier(
+  pi: ExtensionAPI,
+  options: HostNotifierOptions = {},
+): SubagentNotifier {
+  const triggerTurn = options.triggerTurn ?? (() => true);
   return (notification) => {
     if (notification.type === "completed") {
       const deliveredCompletionKeys: string[] = [];
       for (const chunk of completionChunks(notification.runs)) {
-        const accepted = steer(pi, {
-          customType: "pi-subagents-completed",
-          content: chunk.content,
-          details: {
-            version: 1,
-            kind: "completed",
-            total: chunk.runs.length,
-            failed: chunk.runs.filter((run) => run.outcome === "failed").length,
-            warnings: chunk.runs.filter((run) => Boolean(run.warning?.trim())).length,
-            ...(chunk.runs.length === 1 &&
-              chunk.runs[0] !== undefined && { name: displayName(chunk.runs[0].name) }),
+        const accepted = steer(
+          pi,
+          {
+            customType: "pi-subagents-completed",
+            content: chunk.content,
+            details: {
+              version: 1,
+              kind: "completed",
+              total: chunk.runs.length,
+              failed: chunk.runs.filter((run) => run.outcome === "failed").length,
+              warnings: chunk.runs.filter((run) => Boolean(run.warning?.trim())).length,
+              ...(chunk.runs.length === 1 &&
+                chunk.runs[0] !== undefined && { name: displayName(chunk.runs[0].name) }),
+            },
           },
-        });
+          triggerTurn(),
+        );
         if (!accepted) break;
         for (const run of chunk.runs) deliveredCompletionKeys.push(`${run.id}:${run.generation}`);
       }
       return { deliveredCompletionKeys };
     }
     return {
-      actionAccepted: steer(pi, {
-        customType: "pi-subagents-question",
-        details: { version: 1, kind: "question", name: displayName(notification.name) },
-        content: clip(questionContent(notification)),
-      }),
+      actionAccepted: steer(
+        pi,
+        {
+          customType: "pi-subagents-question",
+          details: { version: 1, kind: "question", name: displayName(notification.name) },
+          content: clip(questionContent(notification)),
+        },
+        triggerTurn(),
+      ),
     };
   };
 }

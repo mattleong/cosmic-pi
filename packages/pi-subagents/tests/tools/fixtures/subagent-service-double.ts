@@ -48,6 +48,7 @@ const unexpectedService: SubagentServiceContract = {
   inspectWriterWorkspace: unexpected("inspectWriterWorkspace"),
   setWriterWorkspaceMode: () => unexpected("setWriterWorkspaceMode"),
   projection: unexpected("projection"),
+  awaitParentDrain: unexpected("awaitParentDrain"),
 };
 
 const statusObservations =

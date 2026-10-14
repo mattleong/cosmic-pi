@@ -28,6 +28,7 @@ import {
 import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
+import { registerParentWake } from "../boundary/host-parent-wake.ts";
 import { makeSubagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
@@ -138,11 +139,20 @@ export function registerSubagentApplication(
   });
   const receipts = registerSubagentErrorReceipts(pi);
   const bridge = makeSubagentProjectionBridge(pi.events);
-  const notify = makeHostNotifier(pi);
   const profileOverrideHandoff = makeProfileOverrideHandoff();
   const sessionFooter = makeSubagentSessionFooter(pi.events);
   let releaseActivity: (() => void) | undefined;
   let currentActivation: CapturedActivation | undefined;
+  const wake = registerParentWake(pi, {
+    projection: bridge.get,
+    drain: () =>
+      currentActivation
+        ? slot
+            .run(SubagentService.use((service) => service.awaitParentDrain))
+            .catch(() => undefined)
+        : undefined,
+  });
+  const notify = makeHostNotifier(pi, { triggerTurn: wake.mayStartTurn });
   let startupFailureTools: ReadonlyArray<string> = [];
   let hasRegisteredTools = false;
   let incompatibleReload = false;

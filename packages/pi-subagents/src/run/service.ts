@@ -53,6 +53,7 @@ import { closeRunsLeafFirst } from "./shutdown.ts";
 import { projectRunTree } from "./tree.ts";
 import { allocateRuntimeNamespace, makeRunIdentities } from "./identity.ts";
 import { makeRunNotificationRouting } from "./notification-routing.ts";
+import { makeParentDrain } from "./parent-drain.ts";
 import { makeRunSessionStarts } from "./session-starts.ts";
 import { makeRunSubtreeStop } from "./subtree-stop.ts";
 import { makeRunTurnInputs } from "./turn-input.ts";
@@ -203,6 +204,8 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly resumeWriterAdmission: (id: string) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly projection: Effect.Effect<SubagentProjection>;
+  /** Resolves when headless parent work has drained; see `makeParentDrain`. */
+  readonly awaitParentDrain: Effect.Effect<void, SubagentRuntimeClosedError>;
 }
 
 const makeService = Effect.fn("SubagentService.make")(function* (options: SubagentServiceOptions) {
@@ -462,6 +465,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     revokeWriteClaims: writeClaims.revoke,
     resumeWriterAdmission: writeClaims.resumeAdmission,
     projection,
+    awaitParentDrain: makeParentDrain({
+      records,
+      withLock,
+      revision: projection.pipe(Effect.map(({ revision }) => revision)),
+      waitForRevision,
+    }),
   };
 
   yield* Effect.addFinalizer(() =>
