@@ -81,6 +81,9 @@ describe("local Pi terminal evidence", () => {
           expect(result.error).toContain("writes may already exist");
           expect(result.error).not.toContain("\u001b");
           if (stopReason === "error") expect(result.error).toContain("Provider unavailable.");
+          if (stopReason !== undefined && stopReason !== "stop")
+            expect(result.error).toContain("Partial output before the failure: Partial work.");
+          expect(result.error).not.toContain("Earlier success must not leak.");
           fake.controls[0]!.exit(0);
           yield* yieldUntil(() => fake.controls[0]!.released() === 1);
         });

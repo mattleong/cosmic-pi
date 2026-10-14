@@ -270,6 +270,7 @@ export interface CancelledAwaitContractInput {
   readonly until: SubagentAwaitUntil;
   readonly cleanup: "confirmed" | "unconfirmed";
   readonly deliveryAttemptedIds?: ReadonlySet<string>;
+  readonly timedOut?: boolean | undefined;
 }
 
 export const cancelledAwaitContract = (
@@ -278,7 +279,7 @@ export const cancelledAwaitContract = (
   const observed = new Set(input.runs.map((run) => run.id));
   return {
     ...envelope(SUBAGENT_TOOL_NAME.await),
-    outcome: "cancelled",
+    outcome: input.timedOut ? "timed_out" : "cancelled",
     until: input.until,
     requestedRunIds: [...input.requestedRunIds],
     targets: input.runs.map((run) => ({

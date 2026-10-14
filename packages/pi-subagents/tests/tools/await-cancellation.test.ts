@@ -245,3 +245,25 @@ it.live(
       expect(fixture.backend.controls[0]!.released()).toBe(1);
     }),
 );
+
+it.live("ends a wait at its timeout without stopping the child", () =>
+  Effect.gen(function* () {
+    const { tools, pi, runtime, service } = yield* managedTools;
+    registerSubagentTools(pi, {
+      environment: { cwd: "/project", projectTrusted: true },
+      run: (effect, signal) => runtime.run(effect, signal),
+    });
+    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
+    const result = yield* step(() =>
+      executeTool(
+        tools.get("subagent_await")!,
+        { runIds: [child.id], until: "all_finished", timeoutSeconds: 1 },
+        { callID: "timed-await" },
+      ),
+    );
+    expect(result.structuredContent).toMatchObject({ outcome: "timed_out" });
+    expect(result.content[0]).toMatchObject({ text: stringContaining("timed out after 1s") });
+    const status = yield* step(() => runtime.run(service.status(child.id)));
+    expect(status.state).toBe("running");
+  }),
+);

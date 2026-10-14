@@ -442,8 +442,15 @@ export const executeSubagentAction = (
     input.tool === SUBAGENT_TOOL_NAME.await
       ? makeAwaitExecution(input.args.runIds, input.args.until, onUpdate)
       : undefined;
+  const timeoutSeconds =
+    input.tool === SUBAGENT_TOOL_NAME.await ? input.args.timeoutSeconds : undefined;
+  // The timeout ends only this wait, exactly like a cancellation; children keep running.
+  const timeout =
+    timeoutSeconds === undefined ? undefined : AbortSignal.timeout(timeoutSeconds * 1000);
+  const waitSignal =
+    timeout === undefined ? signal : signal ? AbortSignal.any([signal, timeout]) : timeout;
   const executing = runtime.proxyCall
-    ? runtime.proxyCall(input, signal, awaitState?.markInterrupted)
+    ? runtime.proxyCall(input, waitSignal, awaitState?.markInterrupted)
     : runtime.run(
         observeAwaitInterruption(
           executeSubagentActionEffect(
@@ -458,11 +465,15 @@ export const executeSubagentAction = (
           ),
           awaitState?.markInterrupted,
         ),
-        signal,
+        waitSignal,
       );
   return executing.catch((cause: unknown) => {
     if (!awaitState?.wasInterrupted()) throw cause;
-    const result = awaitState.cancelled(runtime.proxyCall !== undefined);
+    const timedOut = timeout?.aborted === true && signal?.aborted !== true;
+    const result = awaitState.cancelled(
+      runtime.proxyCall !== undefined,
+      timedOut ? timeoutSeconds : undefined,
+    );
     invokeHostCallback(() => onUpdate?.(result), undefined);
     return result;
   });

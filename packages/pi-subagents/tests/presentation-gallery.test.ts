@@ -24,6 +24,10 @@ import type { ActivityItem } from "pi-cosmic-ui/activity";
 import { activityGalleryFrames } from "pi-cosmic-ui/activity/testing";
 import { renderSubagentMessage } from "../src/application/messages.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
+import {
+  projectSubagentActivityPanel,
+  renderProjectedSubagentActivityPanel,
+} from "../src/ui/activity-panel.ts";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import {
   makeHostNotifier,
@@ -57,7 +61,7 @@ import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../src/too
 import { subagentToolAction, type SubagentToolInput } from "../src/tools/schema.ts";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
-import { extensionApiFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import { containedWriter, view } from "./fixtures/run-view.ts";
 import {
   subagentServiceDouble,
@@ -1151,6 +1155,61 @@ const activityLines = (): ReadonlyArray<string> =>
     );
   });
 
+const minutesAgo = (minutes: number) => now - minutes * 60_000;
+const stalledRuns: ReadonlyArray<SubagentRunView> = [
+  view({
+    id: "agent-20",
+    name: "flaky-suite",
+    state: "running",
+    startedAt: minutesAgo(9),
+    lastActivityAt: minutesAgo(7),
+    sessionEvents: [
+      {
+        type: "tool",
+        toolCallId: "t1",
+        toolName: "bash",
+        state: "running",
+        startedAt: minutesAgo(7),
+      },
+    ],
+  }),
+  view({
+    id: "agent-21",
+    name: "quiet-review",
+    state: "running",
+    startedAt: minutesAgo(6),
+    lastActivityAt: minutesAgo(3),
+    sessionEvents: [],
+  }),
+  view({
+    id: "agent-22",
+    name: "edit-retry",
+    state: "running",
+    startedAt: minutesAgo(2),
+    lastActivityAt: minutesAgo(0),
+    sessionEvents: ["t1", "t2", "t3"].map((toolCallId, index) => ({
+      type: "tool" as const,
+      toolCallId,
+      toolName: "edit",
+      state: "failed" as const,
+      startedAt: minutesAgo(1) + index,
+      endedAt: minutesAgo(1) + index + 1,
+    })),
+  }),
+];
+
+const widgetLines = (): ReadonlyArray<string> => {
+  const panel = projectSubagentActivityPanel({ revision: 1, runs: stalledRuns });
+  return ["── widget · stalled children (tool open, silent, failing tools)"].concat(
+    [60, 100].flatMap((width) =>
+      [`width ${width}`].concat(
+        renderProjectedSubagentActivityPanel(panel, width, plainTheme, now),
+        [""],
+      ),
+    ),
+  );
+};
+
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
@@ -1198,7 +1257,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
           restore();
         }
       }
-      lines.push(...activityLines());
+      lines.push(...activityLines(), ...widgetLines());
       yield* writeGallerySection(directory, "pi-subagents", lines);
     }),
   );

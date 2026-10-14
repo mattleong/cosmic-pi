@@ -106,6 +106,8 @@ const StatusParameters = Type.Object(
   strictObjectOptions,
 );
 
+export const MAX_AWAIT_TIMEOUT_SECONDS = 3_600;
+
 const AwaitParameters = Type.Object(
   {
     runIds: RunIdsParameters,
@@ -113,6 +115,14 @@ const AwaitParameters = Type.Object(
       description:
         "Return when all selected runs are finished, or when any selected run is finished. Finished includes completed, failed, and stopped.",
     }),
+    timeoutSeconds: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: MAX_AWAIT_TIMEOUT_SECONDS,
+        description:
+          "Stop waiting after this many seconds and return the latest observation. Subagents keep running.",
+      }),
+    ),
   },
   strictObjectOptions,
 );

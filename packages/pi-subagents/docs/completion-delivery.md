@@ -48,6 +48,12 @@ Resolved generation records are removed, while the immutable public projection r
 
 The root notifier writes each delivered report generation to a private file, `<agent dir>/subagents/reports/<session>/<run>-<generation>.md` (directory 0700, file 0600), keyed by the Pi session so a resumed session can re-read it after compaction, `/reload`, or record eviction. Reports up to 4,000 characters arrive whole with the file path; longer reports arrive as a whole-line preview with a marker giving the shown and total characters, the line count, and the path. If the file cannot be written, the report is inlined within the 32 KiB notification bound as before. Activation prunes reports older than seven days and then the oldest beyond 64 MiB. Session shutdown holds wakes and hands every eligible completion to the notifier immediately (bounded to two seconds), so pending reports are appended to the transcript without starting a turn before the tree closes.
 
+## Stalls, wait timeouts, and partial output
+
+`run/stall.ts` derives presentation-only stall signals from a running child's projection: a tool open for five minutes, three consecutive failed tool calls, or two minutes without activity while no tool is open. The widget shows the signal in warning color in place of the activity text, keeping it ahead of the route on narrow rows. Nothing stops or retries a run because of elapsed time.
+
+`subagent_await` accepts `timeoutSeconds` (1–3600). A timeout ends only that wait, exactly like a cancellation: children keep running, completion claims are released, and the result carries outcome `timed_out` with the latest observation. A failed assignment's error includes up to 2,000 characters of the failing attempt's own text, so the parent can judge it before an explicit retry; earlier attempts never leak into it.
+
 ## Script results and report read-back
 
 Root models, start, list, await, status, rename, and lifecycle registrations declare version-1 orchestration results from Effect Schema. Their JSON output schemas are generated locally, separate from privacy-bounded persisted details. The result constructor encodes the contract inside the claim scope before consumption; only completely returned owned reports are consumed. Structured results preserve ordered launch/action outcomes and admitted cleanup/retry facts. The strict nested-Pi result decoder preserves this additional channel, although proxy definitions remain model-only for now.

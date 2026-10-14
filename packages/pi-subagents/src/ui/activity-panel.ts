@@ -1,6 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { formatElapsed, sanitizeTerminalLine } from "pi-cosmic-core";
+import { absurd } from "effect/Function";
+import { runStall, type RunStall } from "../run/stall.ts";
 import {
   managerLayoutTier,
   type ManagerLayoutTier,
@@ -246,6 +248,18 @@ const activityIdentity = (
   return `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}`;
 };
 
+const stallLabel = (stall: RunStall): string => {
+  switch (stall.kind) {
+    case "idle":
+      return `no activity for ${formatElapsed(stall.sinceMillis)}`;
+    case "tool-open":
+      return `${stall.toolName} running for ${formatElapsed(stall.sinceMillis)}`;
+    case "failing-tools":
+      return `${stall.count} failed tools in a row`;
+  }
+  return absurd(stall);
+};
+
 const activityMetadataVariants = (
   run: FleetTreeRow["run"],
   route: string,
@@ -254,14 +268,18 @@ const activityMetadataVariants = (
   ancestorOnly: boolean,
   separator: string,
 ): string[] => {
-  const activity = ancestorOnly ? "" : runActivity(run);
-  const attention = run.state === "waiting_for_parent" || run.state === "paused";
+  const stall = ancestorOnly ? undefined : runStall(run, now);
+  const activity = stall ? stallLabel(stall) : ancestorOnly ? "" : runActivity(run);
+  const attention =
+    stall !== undefined || run.state === "waiting_for_parent" || run.state === "paused";
   const themedActivity = activity ? theme.fg(attention ? "warning" : "accent", activity) : "";
   const elapsed = ancestorOnly ? "" : runElapsed(run, now);
   const themedElapsed = elapsed ? theme.fg("dim", elapsed) : "";
   return [
     [route, themedActivity, themedElapsed],
     [route, themedActivity],
+    // A stall warning outranks the route when the row is too narrow for both.
+    ...(stall ? [[themedActivity, themedElapsed], [themedActivity]] : []),
     [route, themedElapsed],
     [route],
   ]

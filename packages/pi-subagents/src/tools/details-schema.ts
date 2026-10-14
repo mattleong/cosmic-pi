@@ -332,6 +332,7 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   attentionRequired: Schema.optionalKey(Schema.Literal(true)),
   cancelled: Schema.optionalKey(Schema.Literal(true)),
   cancellationCleanup: Schema.optionalKey(Schema.Literal("unconfirmed")),
+  timedOutSeconds: Schema.optionalKey(Schema.Finite.check(Schema.isInt(), Schema.isGreaterThan(0))),
   contextOmitted: Schema.optionalKey(Schema.Literal(true)),
   reportsOnlyOmitted: Schema.optionalKey(Schema.Literal(true)),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),

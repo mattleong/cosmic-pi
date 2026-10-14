@@ -84,16 +84,23 @@ export function makeAwaitExecution(
     lastUpdate = key;
     onUpdate?.({ content: [{ type: "text", text: progressText(runs) }], details });
   };
-  const cancelled = (proxyCleanupUnconfirmed = false): AgentToolResult<unknown> => {
+  const cancelled = (
+    proxyCleanupUnconfirmed = false,
+    timedOutSeconds?: number,
+  ): AgentToolResult<unknown> => {
     const unfinished = latestRuns.filter((run) => !isAssignmentFinishedRunState(run.state)).length;
+    const ended =
+      timedOutSeconds === undefined
+        ? "Await cancelled"
+        : `Await timed out after ${timedOutSeconds}s`;
     const summary =
       latestRuns.length === 0
-        ? "Await cancelled before progress was observed; selected run states are unobserved."
-        : `Await cancelled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished in the latest observation.`;
+        ? `${ended} before progress was observed; selected run states are unobserved.`
+        : `${ended}; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished in the latest observation.`;
     const text = joinBoundedToolText([
       summary,
       `Requested runs: ${requestedIds.join(", ")}.`,
-      "Only this local wait was cancelled. Children continue; this cancellation did not stop or retry any run.",
+      "Only this local wait ended. Children continue; it did not stop or retry any run.",
       proxyCleanupUnconfirmed
         ? "Root completion-claim cleanup is unconfirmed. Claims may still be held; an immediate replacement await may fail with completion_claim_conflict. This receipt does not acknowledge root cleanup."
         : "Wait cleanup is complete. Await these IDs again when their results are needed.",
@@ -112,6 +119,7 @@ export function makeAwaitExecution(
           until,
           cleanup: proxyCleanupUnconfirmed ? "unconfirmed" : "confirmed",
           deliveryAttemptedIds,
+          timedOut: timedOutSeconds !== undefined,
         }),
       ),
       details: makeAwaitDetails({
@@ -120,6 +128,7 @@ export function makeAwaitExecution(
         awaitedRunIds: requestedIds,
         awaitUntil: until,
         cancelled: true,
+        timedOutSeconds,
         ...(proxyCleanupUnconfirmed && { cancellationCleanup: "unconfirmed" as const }),
         ...(latestRuns.some(isParentActionRequiredRun) && { attentionRequired: true }),
       }),

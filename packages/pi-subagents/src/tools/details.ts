@@ -38,6 +38,7 @@ export interface AwaitDetailsInput {
   readonly awaitUntil: "all_finished" | "any_finished";
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
+  readonly timedOutSeconds?: number | undefined;
   readonly cancellationCleanup?: "unconfirmed" | undefined;
 }
 
@@ -136,6 +137,8 @@ const awaitCandidate = (
     awaitUntil: input.awaitUntil,
     ...(input.attentionRequired && { attentionRequired: true as const }),
     ...(input.cancelled && { cancelled: true as const }),
+    ...(input.cancelled &&
+      input.timedOutSeconds !== undefined && { timedOutSeconds: input.timedOutSeconds }),
     ...(input.cancelled &&
       input.cancellationCleanup === "unconfirmed" && {
         cancellationCleanup: "unconfirmed" as const,

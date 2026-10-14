@@ -124,7 +124,16 @@ function awaitIssues(
       detail:
         "Descendants are context only; this await summarizes requested targets. Inspect subagent_list or subagent_status for descendant state.",
     });
-  if (details.cancelled) {
+  if (details.cancelled && details.timedOutSeconds !== undefined) {
+    summary.outcome = "warning";
+    issues.push({
+      severity: "warning",
+      code: "await-timed-out",
+      message: `Stopped waiting after ${details.timedOutSeconds}s; subagents keep running`,
+      detail:
+        "Await timed out; child runs were NOT stopped. Await the requested targets again or inspect subagent_status.",
+    });
+  } else if (details.cancelled) {
     summary.outcome = "cancelled";
     const unconfirmed = details.cancellationCleanup === "unconfirmed";
     issues.push({

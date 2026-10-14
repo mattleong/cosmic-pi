@@ -167,7 +167,7 @@ const AwaitContractSchema = Schema.Union([
   }),
   Schema.Struct({
     ...awaitFields,
-    outcome: Schema.Literal("cancelled"),
+    outcome: Schema.Literals(["cancelled", "timed_out"]),
     targets: Schema.Array(WithheldRunTargetSchema).check(Schema.isMaxLength(MAX_TARGET_RUNS)),
     unobservedRunIds: RunIdsSchema,
     cleanup: Schema.Literals(["confirmed", "unconfirmed"]),
