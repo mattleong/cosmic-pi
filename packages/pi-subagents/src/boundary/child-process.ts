@@ -46,7 +46,25 @@ const BLOCKED_ENV_KEYS = new Set([
   "PI_SESSION_ID",
   RUNTIME_API_KEY_ENV,
   RUNTIME_API_PROVIDER_ENV,
+  // Git's repository-local variables (`git rev-parse --local-env-vars`) would aim a child's Git
+  // at the parent's repository, index, or config instead of the child's own cwd.
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_CONFIG",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_DIR",
+  "GIT_GRAFT_FILE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_PREFIX",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_SHALLOW_FILE",
+  "GIT_WORK_TREE",
 ]);
+const GIT_CONFIG_ENTRY_KEY = /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u;
 
 export type ChildLaunchRequest = Omit<BackendLaunchRequest, "resumeToken"> & {
   readonly resumeSessionFile?: string | undefined;
@@ -119,11 +137,15 @@ export const requestCooperativeAbort = (
 ): Effect.Effect<void> =>
   send({ type: "abort" }).pipe(Effect.interruptible, Effect.timeout("250 millis"), Effect.ignore);
 
-function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
+export function childProcessEnvironment(
+  source: NodeJS.ProcessEnv,
+  request: ChildLaunchRequest,
+): NodeJS.ProcessEnv {
   return {
     ...Object.fromEntries(
-      Object.entries(process.env).filter(
-        ([key, value]) => value !== undefined && !BLOCKED_ENV_KEYS.has(key),
+      Object.entries(source).filter(
+        ([key, value]) =>
+          value !== undefined && !BLOCKED_ENV_KEYS.has(key) && !GIT_CONFIG_ENTRY_KEY.test(key),
       ),
     ),
     PI_SUBAGENT_CHILD: "1",
@@ -287,7 +309,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         spawn(process.execPath, args, {
           cwd: request.cwd,
           detached: true,
-          env: sanitizedEnvironment(request),
+          env: childProcessEnvironment(process.env, request),
           stdio: ["pipe", "pipe", "pipe", "ipc"],
         }),
       label: "Subagent RPC",

@@ -45,10 +45,15 @@ const SAFE_ENV_KEYS = new Set([
   "LC_CTYPE",
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
   "HTTPS_PROXY",
   "HTTP_PROXY",
   "NO_PROXY",
   "ALL_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "no_proxy",
+  "all_proxy",
 ]);
 
 export interface LocalCliHarnessOptions {

@@ -3,13 +3,45 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import {
+  childProcessEnvironment,
   childToolPolicy,
   requestCooperativeAbort,
   safeSubagentDirectorySegment,
 } from "../src/boundary/child-process.ts";
 import { NESTED_SUBAGENT_TOOL_NAMES, piRootActiveToolSnapshot } from "../src/run/tool-policy.ts";
+import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 
 describe("subagent child process boundary", () => {
+  it("keeps a child's Git on its own repository when the parent runs under Git variables", () => {
+    const environment = childProcessEnvironment(
+      {
+        PATH: "/usr/bin",
+        GIT_DIR: "/parent/.git",
+        GIT_WORK_TREE: "/parent",
+        GIT_INDEX_FILE: "/parent/.git/index",
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "core.hooksPath",
+        GIT_CONFIG_VALUE_0: "/parent/hooks",
+        GIT_AUTHOR_NAME: "Parent Author",
+      },
+      backendLaunch({ runId: "agent-1" }),
+    );
+    expect(environment).toMatchObject({
+      PATH: "/usr/bin",
+      GIT_AUTHOR_NAME: "Parent Author",
+      PI_SUBAGENT_RUN_ID: "agent-1",
+    });
+    for (const key of [
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_INDEX_FILE",
+      "GIT_CONFIG_COUNT",
+      "GIT_CONFIG_KEY_0",
+      "GIT_CONFIG_VALUE_0",
+    ])
+      expect(environment[key]).toBeUndefined();
+  });
+
   it("keeps untrusted session identifiers inside one directory segment", () => {
     expect(safeSubagentDirectorySegment("session-123")).toBe("session-123");
     const escaped = safeSubagentDirectorySegment("../../../../tmp/owned");

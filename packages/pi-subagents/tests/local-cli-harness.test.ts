@@ -47,6 +47,23 @@ const harnessEntries = (agentDirectory: string) =>
   });
 
 describe("local CLI harness ownership", () => {
+  it("passes proxy and certificate settings in either case", () => {
+    const sanitized = sanitizeLocalCliEnvironment(
+      {
+        https_proxy: "http://proxy.local:8080",
+        no_proxy: "localhost",
+        NODE_EXTRA_CA_CERTS: "/etc/corp-ca.pem",
+      },
+      "codex",
+      backendLaunch(),
+    );
+    expect(sanitized).toMatchObject({
+      https_proxy: "http://proxy.local:8080",
+      no_proxy: "localhost",
+      NODE_EXTRA_CA_CERTS: "/etc/corp-ca.pem",
+    });
+  });
+
   it("keeps adapter debug controls out of the child environment", () => {
     const sanitized = sanitizeLocalCliEnvironment(
       {
