@@ -130,6 +130,6 @@ export const claudeArgv = (
   claudeAllowedTools(launch.writeIntent, writerPolicy).join(","),
   "--disallowedTools",
   CLAUDE_DENIED_TOOLS.join(","),
-  "--system-prompt-file",
+  "--append-system-prompt-file",
   harness.promptPath,
 ];

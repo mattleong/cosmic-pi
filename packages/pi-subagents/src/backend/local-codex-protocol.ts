@@ -353,10 +353,9 @@ export const threadStartRequest = (
     params: {
       allowProviderModelFallback: false,
       approvalPolicy: "never",
-      baseInstructions: request.systemPrompt,
+      developerInstructions: request.systemPrompt,
       cwd: request.cwd,
       dynamicTools: [],
-      environments: [],
       ephemeral: true,
       experimentalRawEvents: false,
       model: request.model,
@@ -365,8 +364,6 @@ export const threadStartRequest = (
       ...(request.openaiFastMode && ({ serviceTier: FAST_SERVICE_TIER } as const)),
     },
   }) as const;
-
-const NO_ENVIRONMENTS: readonly [] = [];
 
 const input = (text: string) => [{ type: "text", text, text_elements: [] }] as const;
 
@@ -387,7 +384,6 @@ export const turnStartRequest = (
     approvalPolicy: "never" as const,
     cwd: undefined,
     effort,
-    environments: NO_ENVIRONMENTS,
     model,
     multiAgentMode: "explicitRequestOnly" as const,
     sandboxPolicy:
