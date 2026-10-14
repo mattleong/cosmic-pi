@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { sha256Text } from "../security/sha256.ts";
 import { synchronousRandomHex } from "./native-crypto.ts";
 import { nodeFsConstants as flags, nodeLockFs as fs, nodePath as path } from "./node-builtins.ts";
+import { processStartIdentity } from "./process-start.ts";
 import { signalProcess } from "./process-tree.ts";
 
 export class CrossProcessLockError extends Schema.TaggedError<CrossProcessLockError>()(
@@ -33,6 +34,8 @@ const Owner = Schema.Struct({
   version: Schema.Literal(1),
   token: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
   pid: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+  /** The owner's start identity, when known, so a reused PID doesn't keep the lease alive. */
+  started: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
   phase: Schema.Literals(["quiescent", "native-pending"]),
 });
 type Owner = typeof Owner.Type;
@@ -94,7 +97,17 @@ const writeOwner = (directory: string, owner: Owner) => {
   fs.renameSync(temporary, path.join(directory, "owner.json"));
   syncDirectory(directory);
 };
-const dead = (pid: number) => signalProcess(pid, 0) === "absent";
+let ownStart: string | undefined | null = null;
+const currentProcessStart = (): string | undefined => {
+  if (ownStart === null) ownStart = processStartIdentity(process.pid);
+  return ownStart;
+};
+const dead = (owner: Owner): boolean => {
+  if (signalProcess(owner.pid, 0) === "absent") return true;
+  if (owner.started === undefined) return false;
+  const started = processStartIdentity(owner.pid);
+  return started !== undefined && started !== owner.started;
+};
 const retire = (directory: string, owner: Owner, root: string) => {
   const current = readOwner(directory);
   if (current.token !== owner.token || current.phase !== "quiescent") throw recovery();
@@ -226,11 +239,18 @@ export const acquireNativeLock = (
   const directory = path.join(root, sha256Text(namespace));
   const previous = readPreviousOwner(directory);
   if (previous) {
-    if (!dead(previous.pid)) return undefined;
+    if (!dead(previous)) return undefined;
     retireDeadOwner(directory, previous, root);
     return retryAfterRetire ? acquireNativeLock(namespace, options) : undefined;
   }
-  const owner: Owner = { version: 1, token: randomToken(), pid: process.pid, phase: "quiescent" };
+  const started = currentProcessStart();
+  const owner: Owner = {
+    version: 1,
+    token: randomToken(),
+    pid: process.pid,
+    ...(started !== undefined && { started }),
+    phase: "quiescent",
+  };
   return publishOwner(root, directory, owner) ? ownedLease(root, directory, owner) : undefined;
 };
 

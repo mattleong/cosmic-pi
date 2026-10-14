@@ -27,3 +27,4 @@ export const nodeTemporaryRoot = () => nodeOsModule.tmpdir();
 const nodeChildProcessModule = process.getBuiltinModule("node:child_process");
 if (!nodeChildProcessModule) throw new Error("Node child-process builtin is unavailable.");
 export const nodeSpawn = nodeChildProcessModule.spawn;
+export const nodeSpawnSync = nodeChildProcessModule.spawnSync;

@@ -160,7 +160,39 @@ const environment = {
   forkAvailable: true,
 };
 
+const forkedPi = (id: string) => ({
+  host: "local",
+  runtime: "pi",
+  model: `openai/${id}`,
+  effort: "default",
+  context: "fork",
+  writeIntent: "read-only",
+});
+
 describe("subagent v6 profile configuration and resolution", () => {
+  it("skips a forked Pi candidate whose window can't hold the inherited conversation", () => {
+    const config = resolveTestConfig(
+      document({
+        profileSets: {
+          main: { profiles: { oracle: [forkedPi("gpt-small"), forkedPi("gpt-large")] } },
+        },
+        defaultProfileSet: "main",
+      }),
+    );
+    const forkEnvironment = {
+      ...environment,
+      availablePiModels: [
+        { provider: "openai", id: "gpt-small", contextWindow: 128_000 },
+        { provider: "openai", id: "gpt-large", contextWindow: 1_000_000 },
+      ],
+      parentContextTokens: 150_000,
+    };
+    expect(resolveProfilePlan("oracle", config, forkEnvironment)).toMatchObject({
+      kind: "resolved",
+      attempts: [{ model: "openai/gpt-large" }],
+      skippedCandidates: [{ code: "fork_context_too_large" }],
+    });
+  });
   it("requires local host and close-after-report in candidate decoding", () => {
     for (const runtime of ["pi", "claude", "codex"] as const) {
       const input = {

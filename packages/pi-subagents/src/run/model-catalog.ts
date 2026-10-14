@@ -6,6 +6,7 @@ export interface PiCatalogModel {
   readonly provider: string;
   readonly id: string;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
+  readonly contextWindow?: number | undefined;
 }
 
 const canonicalPiModelId = (model: PiCatalogModel): string => `${model.provider}/${model.id}`;

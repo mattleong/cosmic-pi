@@ -263,3 +263,21 @@ it.live("does not delete unexpected contents even under an owned normal-release 
     expect(nodeLockFs.readdirSync(directory)).toEqual(retained);
   }).pipe(Effect.scoped),
 );
+
+it.live("reclaims a lease whose live PID now belongs to a different process", () =>
+  Effect.gen(function* () {
+    const directory = yield* root;
+    const lease = acquireNativeLock("fixture", { directory });
+    expect(lease).toBeDefined();
+    expect(acquireNativeLock("fixture", { directory })).toBeUndefined();
+    const [slot] = nodeLockFs.readdirSync(directory);
+    const ownerPath = path.join(directory, slot ?? "", "owner.json");
+    const owner = yield* Effect.promise(() => fs.readFile(ownerPath, "utf8"));
+    expect(owner).toContain('"started"');
+    nodeLockFs.writeFileSync(
+      ownerPath,
+      owner.replace(/"started":"[^"]*"/u, '"started":"an earlier process"'),
+    );
+    expect(acquireNativeLock("fixture", { directory }, true)).toBeDefined();
+  }).pipe(Effect.scoped),
+);

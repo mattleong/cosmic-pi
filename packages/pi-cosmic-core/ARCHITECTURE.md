@@ -69,7 +69,8 @@ and unchanged size/modification metadata across the read.
 [Cross-process locks](src/platform/cross-process-lock.ts) are an opt-in, same-host capability.
 Exclusion requires the same private root and actual shared-resource namespace. `tryAcquire` does
 not wait; callers own retries and the returned lease. Recovery requires positive process-death
-evidence and a quiescent journal. An uncancellable native mutation retains the lease until its real
+evidence and a quiescent journal. Owners record their process start time when the OS reports it,
+so a live PID whose start time differs counts as dead: a reused PID does not hold a lease forever. An uncancellable native mutation retains the lease until its real
 completion callback settles it; a dead owner with pending native work fails closed.
 
 Recovery barriers prevent a stale reclaimer from moving a successor. Successful normal release

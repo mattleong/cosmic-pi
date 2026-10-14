@@ -2,7 +2,7 @@ import * as Predicate from "effect/Predicate";
 
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot, invokeHostCallback } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
@@ -144,6 +144,9 @@ const resolvePiModel = (
 const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
   decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
 
+const parentContextTokens = (ctx: ExtensionContext): number | undefined =>
+  invokeHostCallback(() => ctx.getContextUsage()?.tokens ?? undefined, undefined);
+
 export const hostProfileEnvironment = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -152,7 +155,9 @@ export const hostProfileEnvironment = (
     provider: model.provider,
     id: model.id,
     supportedEfforts: getSupportedThinkingLevels(model),
+    contextWindow: model.contextWindow,
   })),
+  ...(parentContextTokens(ctx) !== undefined && { parentContextTokens: parentContextTokens(ctx) }),
   ...(ctx.model && {
     parentModel: {
       model: `${ctx.model.provider}/${ctx.model.id}`,

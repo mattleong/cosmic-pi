@@ -464,3 +464,17 @@ describe("SubagentService", () => {
     });
   });
 });
+
+describe("Pi model confirmation", () => {
+  it.effect("fails a start when Pi selects a different model than the route requires", () => {
+    const { layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      expect(
+        yield* service.start(request({ model: "openai-codex/gpt-6-luna" })).pipe(Effect.flip),
+      ).toMatchObject({ code: "pi_model_mismatch" });
+      expect((yield* service.start(request({ model: "openai-codex/gpt-5.6-sol@1m" }))).state).toBe(
+        "running",
+      );
+    });
+  });
+});

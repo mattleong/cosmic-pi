@@ -48,6 +48,8 @@ import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import { makeParentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
+import { nodeWriteSync } from "./node-builtins.ts";
+import { protocolMismatch } from "./protocol-fingerprint.ts";
 import {
   openLocalPiChildIpc,
   ParentContactError,
@@ -467,5 +469,12 @@ export function registerSubagentChildBridge(
 
 export default function subagentChildBridge(pi: ExtensionAPI): void {
   if (!isSubagentChildProcess()) return;
+  const mismatch = protocolMismatch(process.env);
+  if (mismatch) {
+    // A dedicated child that can't speak its parent's protocol stops before taking any work; the
+    // parent reports this stderr line as the failed start.
+    nodeWriteSync(2, `${mismatch}\n`);
+    process.exit(78);
+  }
   registerSubagentChildBridge(pi);
 }

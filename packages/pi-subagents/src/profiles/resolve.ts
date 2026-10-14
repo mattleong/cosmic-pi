@@ -32,7 +32,12 @@ export interface ProfileResolutionEnvironment {
   readonly availablePiModels: ReadonlyArray<PiCatalogModel>;
   readonly parentModel?: ParentProfileModel | undefined;
   readonly forkAvailable: boolean;
+  /** Tokens in the parent's context, which a forked child inherits, when Pi knows them. */
+  readonly parentContextTokens?: number | undefined;
 }
+
+// A forked child needs room beyond the inherited conversation to do its own work.
+const FORK_CONTEXT_HEADROOM = 0.8;
 
 export interface ProfileCandidateAttempt {
   readonly source: SubagentSelectionSource;
@@ -137,9 +142,21 @@ const resolveCandidate = (
             }.`,
       );
     const resolvedModel = `${resolved.provider}/${resolved.id}`;
-    const supportedEfforts = environment.availablePiModels.find(
+    const catalogModel = environment.availablePiModels.find(
       (model) => model.provider === resolved.provider && model.id === resolved.id,
-    )?.supportedEfforts;
+    );
+    const supportedEfforts = catalogModel?.supportedEfforts;
+    const inherited = environment.parentContextTokens;
+    if (
+      candidate.context === "fork" &&
+      inherited !== undefined &&
+      catalogModel?.contextWindow !== undefined &&
+      inherited > catalogModel.contextWindow * FORK_CONTEXT_HEADROOM
+    )
+      return skipCandidate(
+        "fork_context_too_large",
+        `Pi model ${resolvedModel} has a ${catalogModel.contextWindow}-token window, too small for the ${inherited}-token conversation a fork inherits.`,
+      );
     if (hardEffort !== undefined && supportedEfforts && !supportedEfforts.includes(hardEffort))
       return skipCandidate(
         "pi_effort_unsupported",

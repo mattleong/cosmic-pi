@@ -1,6 +1,7 @@
 import { sha256Text, synchronousRandomUuid } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
+import { PROTOCOL_FINGERPRINT_ENV, protocolFingerprint } from "./protocol-fingerprint.ts";
 import { nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
   getAgentDir,
@@ -132,6 +133,7 @@ export function childProcessEnvironment(
       ),
     ),
     PI_SUBAGENT_CHILD: "1",
+    [PROTOCOL_FINGERPRINT_ENV]: protocolFingerprint(),
     PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
     PI_SUBAGENT_RUN_ID: request.runId,
     ...(request.runtimeApiKey && {

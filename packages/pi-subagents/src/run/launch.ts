@@ -91,6 +91,11 @@ export interface RunLaunchDependencies extends Pick<
   readonly currentSpendLimit: Effect.Effect<number | undefined>;
 }
 
+// Registry context variants ("model@1m") name the same model with a different window.
+const baseModel = (model: string): string => model.split("@", 1)[0]?.toLowerCase() ?? model;
+const samePiModel = (selected: string, required: string): boolean =>
+  baseModel(selected) === baseModel(required);
+
 const runtimeClosedError = () =>
   new SubagentRuntimeClosedError({
     message: "The subagent session runtime is closed.",
@@ -415,6 +420,15 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         const initialize = Effect.gen(function* () {
           const state = yield* initializeProcess(reserved);
           yield* Effect.yieldNow;
+          if (
+            request.runtime === "pi" &&
+            state.model !== undefined &&
+            !samePiModel(state.model, request.model)
+          )
+            return yield* invalidRequest(
+              "pi_model_mismatch",
+              `Pi selected model ${state.model} instead of required model ${request.model}.`,
+            );
           if (request.effortWasExplicit && state.effort !== request.effort)
             return yield* invalidRequest(
               "pi_effort_unsupported",
