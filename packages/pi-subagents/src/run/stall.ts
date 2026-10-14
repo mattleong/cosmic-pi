@@ -18,7 +18,8 @@ type StallRun = Pick<SubagentRunView, "state" | "lastActivityAt" | "sessionEvent
 export const runStall = (run: StallRun, now: number): RunStall | undefined => {
   if (run.state !== "running") return undefined;
   const tools = run.sessionEvents.filter((event) => event.type === "tool");
-  const open = tools.findLast((event) => event.state === "running");
+  // The oldest open tool, so a newer parallel call can't hide one that is stuck.
+  const open = tools.find((event) => event.state === "running");
   if (open && now - open.startedAt >= STALL_TOOL_OPEN_MILLIS)
     return { kind: "tool-open", toolName: open.toolName, sinceMillis: now - open.startedAt };
   let failed = 0;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runStall, STALL_IDLE_MILLIS, STALL_TOOL_OPEN_MILLIS } from "../../src/run/stall.ts";
 import type { SubagentSessionEvent } from "../../src/run/model.ts";
+import { closeOpenToolSessionEvents } from "../../src/run/session-events.ts";
 
 const tool = (
   state: "running" | "completed" | "failed",
@@ -27,6 +28,10 @@ describe("run stall signals", () => {
       toolName: "bash",
     });
     expect(runStall(running([tool("running", 0)]), STALL_TOOL_OPEN_MILLIS - 1)).toBeUndefined();
+    const parallel = [tool("running", 0, "bash"), tool("running", STALL_TOOL_OPEN_MILLIS, "read")];
+    expect(runStall(running(parallel), STALL_TOOL_OPEN_MILLIS + 1)).toMatchObject({
+      toolName: "bash",
+    });
   });
 
   it("flags consecutive failed tools until one succeeds", () => {
@@ -40,6 +45,14 @@ describe("run stall signals", () => {
     expect(runStall(running([tool("running", 0)], 0), STALL_IDLE_MILLIS)).toBeUndefined();
     expect(
       runStall({ ...running([], 0), state: "waiting_for_parent" }, STALL_IDLE_MILLIS * 10),
+    ).toBeUndefined();
+  });
+
+  it("does not report a tool interrupted in an earlier assignment as still open", () => {
+    const interrupted = closeOpenToolSessionEvents([tool("running", 0, "bash")]);
+    const resumed = [...interrupted, tool("running", STALL_TOOL_OPEN_MILLIS, "read")];
+    expect(
+      runStall(running(resumed, STALL_TOOL_OPEN_MILLIS), STALL_TOOL_OPEN_MILLIS + 1),
     ).toBeUndefined();
   });
 });

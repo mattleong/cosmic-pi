@@ -162,3 +162,16 @@ export function finishToolSessionEvent(
     ),
   );
 }
+
+// Tool calls still open when an assignment stops never finish; closing them keeps an interrupted
+// call from looking like a live one after the run resumes.
+export const closeOpenToolSessionEvents = (
+  current: ReadonlyArray<SubagentSessionEvent>,
+): ReadonlyArray<SubagentSessionEvent> =>
+  current.some((event) => event.type === "tool" && event.state === "running")
+    ? current.map((event) =>
+        event.type === "tool" && event.state === "running"
+          ? { ...event, state: "failed" as const, endedAt: event.startedAt }
+          : event,
+      )
+    : current;

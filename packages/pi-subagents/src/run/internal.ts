@@ -1,3 +1,4 @@
+import { closeOpenToolSessionEvents } from "./session-events.ts";
 import { absurd } from "effect/Function";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -131,10 +132,14 @@ export interface RunRecord {
 export const clearRunActivity = (record: RunRecord): void => {
   record.activeTools.clear();
   record.nativeAgents.clear();
-  if (record.view.nativeActivity?.active)
+  const sessionEvents = closeOpenToolSessionEvents(record.view.sessionEvents);
+  if (record.view.nativeActivity?.active || sessionEvents !== record.view.sessionEvents)
     record.view = {
       ...record.view,
-      nativeActivity: { ...record.view.nativeActivity, active: 0 },
+      sessionEvents,
+      ...(record.view.nativeActivity?.active && {
+        nativeActivity: { ...record.view.nativeActivity, active: 0 },
+      }),
     };
 };
 

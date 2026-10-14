@@ -104,11 +104,12 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
       ? [`Your assigned profile is ${request.profile}.\n\n${request.profileGuidance}`]
       : []),
     "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",
-    "Use contact_parent sparingly: kind=progress only for discoveries that change the plan; kind=question when blocked on a decision, then wait for the reply instead of guessing; kind=warning for a material non-blocking risk, which you also repeat in your final report. Ask a question instead of warning when the parent must act before you continue or the risk could invalidate work the parent is doing now.",
-    "End with a concise, self-contained final report of what you found or changed. Never finish with only an acknowledgement.",
+    "Search scoped first: start from the paths and symbols the task names, and use repository-wide searches only to confirm an exact string after a scoped pass.",
+    "Use contact_parent sparingly: kind=progress only for discoveries that change the plan; kind=question when blocked on a decision, then wait for the reply instead of guessing; kind=warning for a material non-blocking risk, which you also repeat in your final report. Ask a question instead of warning when the parent must act before you continue or the risk could invalidate work the parent is doing now. Your parent can't authorize more than its user has.",
+    "End with a concise, self-contained final report of what you found or changed. Never finish with only an acknowledgement, and never end on a question offering choices; ask with contact_parent(kind=question) and wait instead.",
     ...(request.workspace
       ? [
-          `Your isolated workspace is ${request.workspace.cwd}, created from ${request.workspace.sourceCwd}. Work only in the isolated workspace; don't write into the source checkout or another worker's directory.`,
+          "You work in an isolated workspace, named with your task. Work only there; don't write into the source checkout or another worker's directory.",
           "Your changes are a proposal: don't stage, commit, merge, or integrate them. Your parent reviews and tests them before integrating. The isolation is not a security sandbox.",
         ]
       : []),
@@ -118,7 +119,7 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
             request.workspace
               ? "Your exact write claims still limit what you change in the isolated workspace."
               : "You share the working directory with other writers. Your tools can reach any file; the claims below are coordination rules, not isolation.",
-            `Your exact write claims:\n${request.writes.map((path) => `- ${path}`).join("\n")}`,
+            "Your exact write claims are listed with your task.",
             request.workspace
               ? "Read repository files as needed, but modify only the claimed paths inside your isolated cwd."
               : "Read any repository file, but modify only the claimed paths. Re-read a file immediately before editing because peers may change the checkout concurrently.",
@@ -132,5 +133,23 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
       : "You are read-only. Your tools can still modify files, so use them only to inspect and validate; don't edit, write, generate, or otherwise change project files. If the task needs changes, say what should change in your report or ask the parent.",
   ].join("\n\n");
 
+// Shown to a forked child before its task so it doesn't continue the inherited conversation.
+const FORK_PREAMBLE =
+  "You start from a copy of your parent's conversation. Treat it as reference only: don't continue it or answer earlier messages. Do only the assigned task below.";
+
+// Per-run details live in the task message rather than the system prompt, so siblings with the
+// same profile share a cached system prompt.
 export const taskPrompt = (request: StartSubagentRequest, peerNotice: string): string =>
-  [`Assigned task:\n${request.task}`, `Workspace coordination:\n${peerNotice}`].join("\n\n");
+  [
+    ...(request.context === "fork" ? [FORK_PREAMBLE] : []),
+    `Assigned task:\n${request.task}`,
+    ...(request.workspace
+      ? [
+          `Isolated workspace: ${request.workspace.cwd} (created from ${request.workspace.sourceCwd}).`,
+        ]
+      : []),
+    ...(request.writeIntent === "writer" && request.writes
+      ? [`Your exact write claims:\n${request.writes.map((path) => `- ${path}`).join("\n")}`]
+      : []),
+    `Workspace coordination:\n${peerNotice}`,
+  ].join("\n\n");
