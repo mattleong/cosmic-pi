@@ -19,7 +19,7 @@ A pnpm workspace for Pi extensions.
 - macOS or Linux
 - Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`
 - pnpm 10.33.0 (declared in `packageManager`)
-- Pi 1.0.1 or later for Code Previews; tested with Pi 1.0.2
+- Pi 1.0.1 or later for Code Previews and 1.2.0 or later for Subagents; tested with Pi 1.2.0
 
 ## Install
 

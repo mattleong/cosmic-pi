@@ -16,7 +16,7 @@ The workspace supports macOS and Linux. Use POSIX paths and process-group lifecy
 - `packages/pi-herdr-btw/`: reusable Herdr BTW side sessions.
 - `packages/pi-subagents/`: session-scoped background subagents.
 
-Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. Native `codemode` and MCP execution belong to Pi; the retired `pi-code-mode`, `pi-mcp`, and standalone `pi-mcp-previews` packages have no compatibility layer. Code Previews requires Pi 1.0.1 or later and is tested with 1.0.2. Previously installed standalone MCP Previews must be removed manually; never edit user configuration automatically.
+Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. Native `codemode` and MCP execution belong to Pi; the retired `pi-code-mode`, `pi-mcp`, and standalone `pi-mcp-previews` packages have no compatibility layer. Code Previews requires Pi 1.0.1 or later and is tested with 1.2.0. Subagents requires Pi 1.2.0 or later. Previously installed standalone MCP Previews must be removed manually; never edit user configuration automatically.
 
 ## Architecture and organization
 

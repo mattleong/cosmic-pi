@@ -1,12 +1,12 @@
 # Migrate to native Pi MCP and codemode
 
-Cosmic Pi `0.2.0` retires `pi-mcp`, `pi-code-mode`, and the standalone `pi-mcp-previews` package. Code Previews includes builtin/native codemode/MCP presentation through the public renderer-only API; it requires Pi **1.0.1 or later**, tested with **1.0.2**. Pi now owns MCP configuration, authentication, connections, execution, tool exposure, and native `codemode`. There is intentionally no compatibility layer.
+Cosmic Pi `0.2.0` retires `pi-mcp`, `pi-code-mode`, and the standalone `pi-mcp-previews` package. Code Previews includes builtin/native codemode/MCP presentation through the public renderer-only API; it requires Pi **1.0.1 or later**, tested with **1.2.0**. Pi now owns MCP configuration, authentication, connections, execution, tool exposure, and native `codemode`. There is intentionally no compatibility layer.
 
 ## Replace the extensions
 
 1. Uninstall the old extensions from every scope where they were installed. Use `pi remove /absolute/path/to/packages/pi-code-mode` and `pi remove /absolute/path/to/packages/pi-mcp`, or the exact sources `pi list` shows. Add `-l` for project-local installations. Remove any remaining explicit old extension paths from Pi settings.
 2. If standalone `pi-mcp-previews` was installed, **remove it manually from every scope**: `pi remove /absolute/path/to/packages/pi-mcp-previews`. Add `-l` for project-local installations. Use `pi list` to find the exact source and remove any remaining explicit extension paths yourself. The old adapter replaces `/mcp`; leaving it installed prevents the independent builtin manager from owning native MCP.
-3. Upgrade Pi to at least 1.0.1 (the workspace tests 1.0.2). Keep or install `pi-code-previews` with `pi install "$PWD/packages/pi-code-previews"` from a checkout with dependencies installed; it isn't published to npm. Add `-l` only for project-local installation. It now includes the generic shell, builtin previews, native codemode, and standalone native MCP presentation.
+3. Upgrade Pi to at least 1.0.1 (the workspace tests 1.2.0). Keep or install `pi-code-previews` with `pi install "$PWD/packages/pi-code-previews"` from a checkout with dependencies installed; it isn't published to npm. Add `-l` only for project-local installation. It now includes the generic shell, builtin previews, native codemode, and standalone native MCP presentation.
 4. Remove obsolete `-builtin:mcp` exclusions that previously disabled native MCP for the custom gateway. Remove custom `-builtin:codemode` exclusions if they were only there for the retired extension. Preserve deliberate user restrictions; do not enable every tool or replace your allowlist indiscriminately.
 5. Run `/reload` or restart Pi after changing installation or configuration.
 

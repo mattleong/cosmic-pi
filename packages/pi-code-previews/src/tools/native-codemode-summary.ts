@@ -150,15 +150,25 @@ function callCounters(
   return [countLabel(calls.length, toolCalls ? "tool call" : "call")];
 }
 
+// Pi appends its error trailer after all script output and may join it with the preceding text,
+// so only the last trailer at a line start is Pi's; earlier ones are guest-printed text.
+function scriptErrorText(content: AgentToolResult<unknown>["content"]): string {
+  for (let index = content.length - 1; index >= 0; index -= 1) {
+    const part = content[index];
+    if (part?.type !== "text") continue;
+    const lineStart = part.text.lastIndexOf(`\n${SCRIPT_ERROR}`);
+    if (lineStart >= 0) return part.text.slice(lineStart + 1 + SCRIPT_ERROR.length);
+    if (part.text.startsWith(SCRIPT_ERROR)) return part.text.slice(SCRIPT_ERROR.length);
+  }
+  return "";
+}
+
 function scriptFailure(
   summary: NativeSummary,
   result: Pick<AgentToolResult<unknown>, "content">,
   diagnosticHidden: boolean,
 ): CompactSummary {
-  const diagnostic = diagnosticHidden
-    ? undefined
-    : result.content.findLast((part) => part.type === "text" && part.text.startsWith(SCRIPT_ERROR));
-  const text = diagnostic?.type === "text" ? diagnostic.text.slice(SCRIPT_ERROR.length) : "";
+  const text = diagnosticHidden ? "" : scriptErrorText(result.content);
   const failure = issue("native-script-error", text || "The script failed");
   const explained = selectCompactChildren(summary.children).entries.some(
     (entry) =>

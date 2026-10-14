@@ -21,7 +21,7 @@ pi install "$PWD/packages/pi-subagents"
 pi install "$PWD/packages/pi-cosmic-ui"   # recommended: shared Activity view
 ```
 
-Claude Code and Codex routes need those CLIs installed and signed in. Pi routes need nothing extra.
+Requires Pi 1.2.0 or later. Claude Code and Codex routes need those CLIs installed and signed in. Pi routes need nothing extra.
 
 ## Usage
 

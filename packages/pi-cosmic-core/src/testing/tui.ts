@@ -29,6 +29,7 @@ export const terminalFixture = (overrides: Partial<HostTerminal> = {}): HostTerm
       clearScreen: ignore,
       setTitle: ignore,
       setProgress: ignore,
+      setProgramStatus: ignore,
     },
     overrides,
   );

@@ -21,7 +21,7 @@ Not published to npm; install from a [local clone](../../README.md#install). Aft
 pi install "$PWD/packages/pi-code-previews"
 ```
 
-Requires Pi 1.0.1 or later; tested with Pi 1.0.2. If you previously installed the standalone `pi-mcp-previews`, remove it manually with `pi remove` and the source `pi list` shows for it (add `-l` for project installs), then reload. See the [migration guide](../../docs/migrations/native-mcp-codemode.md).
+Requires Pi 1.0.1 or later; tested with Pi 1.2.0. If you previously installed the standalone `pi-mcp-previews`, remove it manually with `pi remove` and the source `pi list` shows for it (add `-l` for project installs), then reload. See the [migration guide](../../docs/migrations/native-mcp-codemode.md).
 
 ## Usage
 

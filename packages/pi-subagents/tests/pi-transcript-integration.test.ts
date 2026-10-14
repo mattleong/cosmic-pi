@@ -69,6 +69,7 @@ describe("installed Pi transcript reconstruction", () => {
                   },
                 });
               pi.on("before_agent_start", (event) => {
+                if (event.messageType !== "user") return;
                 if (event.prompt === "use alpha")
                   event.systemPromptOptions.selectedTools = ["child_alpha"];
                 if (event.prompt === "switch to beta")

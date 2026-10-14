@@ -50,6 +50,8 @@ export function renderContextFixture(
     isError: false,
     lastComponent: undefined,
     invalidate: () => undefined,
+    durationMs: undefined,
+    outputPad: 1,
     ...overrides,
   };
 }

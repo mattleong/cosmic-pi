@@ -86,11 +86,13 @@ const harness = (options: HarnessOptions = {}) => {
     const result = invokeBeforeAgentStart(
       {
         type: "before_agent_start",
+        messageType: "user",
         prompt: "p",
         systemPrompt: BASE_PROMPT,
         systemPromptOptions: {
           cwd: "/project",
           selectedTools: [],
+          hiddenTools: [],
           toolSnippets: {},
           toolGuidelines: {},
           promptGuidelines: [],

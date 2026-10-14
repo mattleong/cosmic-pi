@@ -388,6 +388,7 @@ it.live(
         registered: [probe],
         getExposure: () => "direct",
         getNamespace: () => undefined,
+        getPromptGuidelines: () => [],
       });
       assert.deepEqual(freshLoadout?.hiddenDeclarations, ["native_probe"]);
       assert.deepEqual(session.getActiveToolNames(), initialActive);

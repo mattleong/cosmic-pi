@@ -113,7 +113,7 @@ const makeDefaultEvents = () =>
     context_with_system: { type: "context_with_system", messages: [] },
     agent_start: { type: "agent_start" },
     agent_end: { type: "agent_end", messages: [] },
-    agent_settled: { type: "agent_settled" },
+    agent_settled: { type: "agent_settled", aborted: false },
   }) satisfies EventDefaults;
 
 export type DefaultedEventName = keyof ReturnType<typeof makeDefaultEvents>;

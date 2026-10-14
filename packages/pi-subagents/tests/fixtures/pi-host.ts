@@ -34,11 +34,13 @@ export const beforeAgentStartEvent = (
   options: Partial<NormalizedBuildSystemPromptOptions> = {},
 ): BeforeAgentStartEvent => ({
   type: "before_agent_start",
+  messageType: "user",
   prompt,
   systemPrompt: "",
   systemPromptOptions: {
     cwd: process.cwd(),
     selectedTools: [],
+    hiddenTools: [],
     toolSnippets: {},
     toolGuidelines: {},
     promptGuidelines: [],
