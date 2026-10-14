@@ -89,6 +89,22 @@ const SystemEvent = Schema.Struct({
   type: Schema.Literal("system"),
   subtype: Schema.optional(Schema.String),
 });
+// Claude Code 2.1 ends a turn while background agents or shells run, then starts a new turn when
+// their completion notification arrives; this event carries the live task list.
+const BackgroundTasksChanged = Schema.Struct({
+  type: Schema.Literal("system"),
+  subtype: Schema.Literal("background_tasks_changed"),
+  tasks: Schema.Array(Schema.Unknown).check(Schema.isMaxLength(1_024)),
+  session_id: Schema.optional(Id),
+});
+const BackgroundTaskId = Schema.Struct({ task_id: Id });
+const isBackgroundTaskId = Schema.is(BackgroundTaskId);
+const TaskNotification = Schema.Struct({
+  type: Schema.Literal("system"),
+  subtype: Schema.Literal("task_notification"),
+  task_id: Id,
+  session_id: Schema.optional(Id),
+});
 const StreamEvent = Schema.Struct({
   type: Schema.Literal("stream_event"),
   event: Schema.optional(Schema.Unknown),
@@ -142,6 +158,8 @@ export type ClaudeInboundFrame =
   | typeof User.Type
   | typeof SystemInit.Type
   | typeof SystemEvent.Type
+  | typeof BackgroundTasksChanged.Type
+  | typeof TaskNotification.Type
   | typeof StreamEvent.Type
   | typeof Result.Type
   | typeof ControlResponse.Type;
@@ -177,6 +195,8 @@ export type ClaudeProtocolEvent =
     }
   | {
       readonly type: "assistant";
+      /** Set when a native sub-agent, not the main session, produced the message. */
+      readonly parentToolUseId?: string | undefined;
       readonly text?: string | undefined;
       readonly messageId?: string | undefined;
       readonly tools: ReadonlyArray<{
@@ -187,6 +207,16 @@ export type ClaudeProtocolEvent =
       readonly usage: SubagentUsage;
     }
   | { readonly type: "activity" }
+  | {
+      readonly type: "background_tasks";
+      readonly taskIds: ReadonlyArray<string>;
+      readonly sessionId?: string | undefined;
+    }
+  | {
+      readonly type: "task_notification";
+      readonly taskId: string;
+      readonly sessionId?: string | undefined;
+    }
   | {
       readonly type: "result";
       readonly isError: boolean;
@@ -274,6 +304,7 @@ const assistantProtocolEvent = (event: typeof Assistant.Type): ClaudeProtocolEve
   const text = textFromContent(event.message.content).trim();
   return {
     type: "assistant",
+    ...(event.parent_tool_use_id && { parentToolUseId: event.parent_tool_use_id }),
     ...(text && { text }),
     ...(event.message.id && { messageId: event.message.id }),
     tools,
@@ -309,6 +340,22 @@ const decodeSystemEvent = (
   Effect.gen(function* () {
     const system = yield* Schema.decodeUnknownEffect(SystemEvent)(value);
     if (system.subtype === "status") return { type: "activity" };
+    if (system.subtype === "background_tasks_changed") {
+      const changed = yield* Schema.decodeUnknownEffect(BackgroundTasksChanged)(value);
+      return {
+        type: "background_tasks",
+        taskIds: changed.tasks.flatMap((task) => (isBackgroundTaskId(task) ? [task.task_id] : [])),
+        ...(changed.session_id && { sessionId: changed.session_id }),
+      };
+    }
+    if (system.subtype === "task_notification") {
+      const notification = yield* Schema.decodeUnknownEffect(TaskNotification)(value);
+      return {
+        type: "task_notification",
+        taskId: notification.task_id,
+        ...(notification.session_id && { sessionId: notification.session_id }),
+      };
+    }
     if (system.subtype !== "init") return { type: "ignored" };
     const event = yield* Schema.decodeUnknownEffect(SystemInit)(value);
     return {

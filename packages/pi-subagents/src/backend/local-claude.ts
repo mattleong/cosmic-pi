@@ -18,7 +18,7 @@ import type {
   PendingInterrupt,
 } from "./local-claude-context.ts";
 import { makeLocalClaudeControl, type ClaudeInitProtocolEvent } from "./local-claude-control.ts";
-import { makeClaudeResultCorrelation } from "./local-claude-correlation.ts";
+import { isSameClaudeSession, makeClaudeResultCorrelation } from "./local-claude-correlation.ts";
 import { makeLocalClaudeInputDelivery } from "./local-claude-input-delivery.ts";
 import { makeLocalClaudeReportDelivery } from "./local-claude-report-delivery.ts";
 import { makeLocalClaudeResults } from "./local-claude-results.ts";
@@ -59,6 +59,12 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     assignmentEpoch: 0,
     nativeSessionId: undefined,
     lastOutboundAtMillis: undefined,
+    backgroundTasks: 0,
+    topLevelTaskIds: new Set<string>(),
+    notificationSinceResult: false,
+    continuationActivity: false,
+    continuationToken: 0,
+    awaitingContinuationEpoch: undefined,
   };
   const interrupts = makeLocalCliInterrupts<PendingInterrupt>(
     "Claude",
@@ -134,10 +140,12 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     forwardAcceptedReport,
     toolNames,
     nativeToolNames,
+    forkOwned: (effect) =>
+      Effect.forkIn(effect, scope, { startImmediately: true }).pipe(Effect.asVoid),
   };
   const control = makeLocalClaudeControl(request, context, nativeInitialization);
   const { onUser } = makeLocalClaudeUserEvents(context);
-  const { onResult } = makeLocalClaudeResults(context);
+  const { onResult, onBackgroundTasksSettled } = makeLocalClaudeResults(context);
 
   const cancelPending = (error: SubagentError) => {
     inputs.cancel(error);
@@ -177,6 +185,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
 
   const onAssistant = (event: ClaudeAssistantProtocolEvent, raw: LocalCliWireEvent) =>
     Effect.gen(function* () {
+      if (event.parentToolUseId === undefined) handleState.continuationActivity = true;
       for (const tool of event.tools) {
         if (CLAUDE_NATIVE_AGENT_TOOL_NAMES.has(tool.name)) {
           nativeToolNames.set(tool.id, tool.name);
@@ -246,6 +255,37 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                     case "init":
                       return onInit(event, raw);
                     case "activity":
+                      return offer(
+                        { type: "activity", assignmentEpoch: handleState.assignmentEpoch },
+                        raw,
+                      );
+                    case "background_tasks": {
+                      if (!isSameClaudeSession(event.sessionId, handleState.nativeSessionId))
+                        return release(raw);
+                      const wasRunning = handleState.backgroundTasks > 0;
+                      handleState.backgroundTasks = event.taskIds.length;
+                      for (const taskId of event.taskIds)
+                        if (handleState.topLevelTaskIds.size < MAX_TRACKED_BACKGROUND_TASKS)
+                          handleState.topLevelTaskIds.add(taskId);
+                      return (
+                        wasRunning && event.taskIds.length === 0
+                          ? onBackgroundTasksSettled()
+                          : Effect.void
+                      ).pipe(
+                        Effect.andThen(
+                          offer(
+                            { type: "activity", assignmentEpoch: handleState.assignmentEpoch },
+                            raw,
+                          ),
+                        ),
+                      );
+                    }
+                    case "task_notification":
+                      if (
+                        isSameClaudeSession(event.sessionId, handleState.nativeSessionId) &&
+                        handleState.topLevelTaskIds.has(event.taskId)
+                      )
+                        handleState.notificationSinceResult = true;
                       return offer(
                         { type: "activity", assignmentEpoch: handleState.assignmentEpoch },
                         raw,
@@ -372,6 +412,9 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     cancelPending,
   };
 });
+
+// Bounds the set of task IDs one Claude process can accumulate.
+const MAX_TRACKED_BACKGROUND_TASKS = 1_024;
 
 export const makeLocalClaudeBackendDriver = makeLocalCliBackendDriver(
   "claude",

@@ -102,7 +102,8 @@ export const makeLocalClaudeUserEvents = (context: LocalClaudeHandleContext) => 
       (replay === "labelled" || inputs.pending === undefined) &&
       isExactSession(event) &&
       state.assignmentEpoch > 0 &&
-      correlation.hasOutstandingAssignment(state.assignmentEpoch)
+      (correlation.hasOutstandingAssignment(state.assignmentEpoch) ||
+        state.awaitingContinuationEpoch === state.assignmentEpoch)
     );
   };
 

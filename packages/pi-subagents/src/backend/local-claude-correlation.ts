@@ -25,9 +25,12 @@ interface ClaudeSentUserIdentity {
   readonly kind: ClaudeSentUserKind;
 }
 
+// Turns Claude starts on its own: background-task notifications, continuations, and messages its
+// native agents send the main session with SendMessage. Cross-session input stays refused.
 const INTERNAL_REPLAY_ORIGINS: ReadonlySet<string> = new Set([
   "task-notification",
   "auto-continuation",
+  "peer",
 ]);
 
 export const isInternalReplayOrigin = (

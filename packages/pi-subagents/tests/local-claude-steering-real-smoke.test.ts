@@ -23,7 +23,8 @@ import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 const sourceEnvironment = { ...process.env };
 const enabled = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_STEERING_SMOKE === "1";
 type Scenario = "tool" | "generation" | "native-agent";
-const delayCommand = "sleep 25";
+// Claude Code refuses long foreground `sleep` commands, even chained, so the delay uses Perl.
+const delayCommand = "perl -e 'select(undef, undef, undef, 25)' && echo waited";
 const guidanceMarker = "STEERING_OBSERVED";
 const tasks = {
   tool: `Invoke Bash exactly once with command ${JSON.stringify(delayCommand)}, timeout 35000, and run_in_background false. Wait for it to finish, then submit your supervisor report.`,
@@ -32,7 +33,7 @@ const tasks = {
   "native-agent": [
     "Use the native Agent tool exactly once with run_in_background true to launch one read-only agent.",
     `Its entire task is one foreground Bash invocation with command ${JSON.stringify(delayCommand)}, timeout 35000, then a short final response.`,
-    "Do not invoke Bash yourself. Collect its result with one blocking TaskOutput wait of at most 45000 ms, or its completion notification.",
+    "Do not invoke Bash yourself. Wait for its completion notification.",
     "Then submit your supervisor report. If Agent/background execution or result collection is unavailable, report that limitation promptly; do not substitute tools, poll, or retry.",
   ].join(" "),
 } satisfies Record<Scenario, string>;
@@ -50,9 +51,7 @@ const failureCode = (cause: Cause.Cause<unknown>): string => {
 
 const delayCommands = new Set([
   delayCommand,
-  "/bin/sleep 25",
-  "command sleep 25",
-  "exec sleep 25",
+  "perl -e 'select(undef, undef, undef, 25)'",
   ...["sh", "/bin/sh", "bash", "/bin/bash"].flatMap((shell) => [
     `${shell} -c '${delayCommand}'`,
     `${shell} -c "${delayCommand}"`,

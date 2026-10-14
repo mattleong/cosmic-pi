@@ -27,6 +27,17 @@ export interface LocalClaudeHandleState {
   assignmentEpoch: number;
   nativeSessionId: string | undefined;
   lastOutboundAtMillis: number | undefined;
+  /** Background agents and shells Claude reports as still running in this session. */
+  backgroundTasks: number;
+  /** Every top-level background task this session has started. */
+  readonly topLevelTaskIds: Set<string>;
+  /** A top-level background task reported back since the last result. */
+  notificationSinceResult: boolean;
+  /** The main session spoke after its turn ended while a continuation was awaited. */
+  continuationActivity: boolean;
+  continuationToken: number;
+  /** An assignment whose turn ended without a report while background work was still running. */
+  awaitingContinuationEpoch: number | undefined;
 }
 
 export interface LocalClaudeHandleContext {
@@ -44,6 +55,8 @@ export interface LocalClaudeHandleContext {
   readonly forwardAcceptedReport: (report: BackendReport) => Effect.Effect<void>;
   readonly toolNames: Map<string, string>;
   readonly nativeToolNames: Map<string, string>;
+  /** Runs a background effect owned by this handle's scope. */
+  readonly forkOwned: (effect: Effect.Effect<void>) => Effect.Effect<void>;
 }
 
 export const observeInterruptEvidence = (

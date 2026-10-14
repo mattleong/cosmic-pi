@@ -1,11 +1,17 @@
 import * as Effect from "effect/Effect";
 import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import { observeInterruptEvidence, type LocalClaudeHandleContext } from "./local-claude-context.ts";
-import { isSameClaudeSession, type ResultExpectation } from "./local-claude-correlation.ts";
+import {
+  isInternalReplayOrigin,
+  isSameClaudeSession,
+  type ResultExpectation,
+} from "./local-claude-correlation.ts";
 import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
 import { usageComponentsTotal } from "./local-claude-usage.ts";
 
 type ClaudeResultProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "result" }>;
+
+const CONTINUATION_GRACE = "20 seconds";
 
 export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
   const {
@@ -18,7 +24,36 @@ export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
     reports,
     interrupts,
     forwardAcceptedReport,
+    forkOwned,
   } = context;
+
+  const missingReport = (raw?: LocalCliWireEvent) =>
+    offer(
+      {
+        type: "protocol_error",
+        message: "Claude Code result completed without an accepted supervisor report.",
+      },
+      raw,
+    );
+
+  // Claude starts the continuation right after the turn that received the notification ends;
+  // without any main-session output by then, the notification was absorbed and no report comes.
+  const continuationWatchdog = (epoch: number, token: number) =>
+    Effect.sleep(CONTINUATION_GRACE).pipe(
+      Effect.andThen(
+        Effect.suspend(() => {
+          if (
+            state.awaitingContinuationEpoch !== epoch ||
+            state.continuationToken !== token ||
+            state.continuationActivity ||
+            state.backgroundTasks > 0
+          )
+            return Effect.void;
+          state.awaitingContinuationEpoch = undefined;
+          return missingReport();
+        }),
+      ),
+    );
 
   const reconcileResultUsage = (
     event: ClaudeResultProtocolEvent,
@@ -58,6 +93,7 @@ export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
     event: ClaudeResultProtocolEvent,
     expectation: ResultExpectation,
     raw: LocalCliWireEvent,
+    notified: boolean,
   ) => {
     const completedEpoch = expectation.epoch;
     return reconcileResultUsage(event, expectation).pipe(
@@ -72,17 +108,30 @@ export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
                 },
                 raw,
               ),
-            onSuccess: (accepted) =>
-              accepted
-                ? release(raw).pipe(Effect.andThen(reports.observeNativeResult(completedEpoch)))
-                : offer(
-                    {
-                      type: "protocol_error",
-                      message:
-                        "Claude Code result completed without an accepted supervisor report.",
-                    },
-                    raw,
+            onSuccess: (accepted) => {
+              if (accepted) {
+                state.awaitingContinuationEpoch = undefined;
+                return release(raw).pipe(
+                  Effect.andThen(reports.observeNativeResult(completedEpoch)),
+                );
+              }
+              // Claude resumes in a new turn when its background work reports back; the report
+              // is due from that continuation, not from the turn that started the work.
+              if (state.backgroundTasks > 0 || notified) {
+                state.awaitingContinuationEpoch = completedEpoch;
+                state.continuationActivity = false;
+                const token = ++state.continuationToken;
+                return release(raw).pipe(
+                  Effect.andThen(
+                    state.backgroundTasks > 0
+                      ? Effect.void
+                      : forkOwned(continuationWatchdog(completedEpoch, token)),
                   ),
+                );
+              }
+              state.awaitingContinuationEpoch = undefined;
+              return missingReport(raw);
+            },
           }),
         ),
       ),
@@ -153,6 +202,8 @@ export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
       event.originKind,
       event.originSubkind,
     );
+    const notified = state.notificationSinceResult;
+    state.notificationSinceResult = false;
     const interrupt = interrupts.current;
     if (interrupt !== undefined && isInterruptedResult(event, expectation, interrupt.epoch))
       return reconcileResultUsage(event, expectation).pipe(
@@ -162,7 +213,40 @@ export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
     if (event.isError) return handleResultError(event, expectation, raw);
     if (expectation?.kind === "initialization") return release(raw);
     if (expectation?.kind === "synthetic")
-      return reconcileResultUsage(event, expectation).pipe(Effect.andThen(release(raw)));
+      return expectation.epoch === state.awaitingContinuationEpoch &&
+        expectation.epoch === state.assignmentEpoch
+        ? confirmAssignmentResult(event, expectation, raw, notified)
+        : reconcileResultUsage(event, expectation).pipe(Effect.andThen(release(raw)));
+    // Claude starts the continuation turn from its own task notification without replaying it as
+    // user input, so nothing correlates the result; while one is awaited, it is that continuation.
+    if (expectation === undefined && state.awaitingContinuationEpoch === state.assignmentEpoch)
+      return confirmAssignmentResult(
+        event,
+        {
+          uuid: `continuation:${state.assignmentEpoch}`,
+          kind: "synthetic",
+          epoch: state.assignmentEpoch,
+          usageBaseline: usage.baseline(),
+        },
+        raw,
+        notified,
+      );
+    // After the assignment settles, Claude may still take a turn to absorb its own background
+    // work's notification; that turn reports nothing and only its usage counts.
+    if (
+      expectation === undefined &&
+      (notified ||
+        (event.userMessageUuid === undefined &&
+          isInternalReplayOrigin(event.originKind, event.originSubkind))) &&
+      state.assignmentEpoch > 0 &&
+      !correlation.hasOutstandingAssignment(state.assignmentEpoch)
+    )
+      return reconcileResultUsage(event, {
+        uuid: `settled:${state.assignmentEpoch}`,
+        kind: "synthetic",
+        epoch: state.assignmentEpoch,
+        usageBaseline: usage.baseline(),
+      }).pipe(Effect.andThen(release(raw)));
     if (expectation === undefined)
       return offer(
         {
@@ -171,8 +255,16 @@ export const makeLocalClaudeResults = (context: LocalClaudeHandleContext) => {
         },
         raw,
       );
-    return confirmAssignmentResult(event, expectation, raw);
+    return confirmAssignmentResult(event, expectation, raw, notified);
   };
 
-  return { onResult };
+  // Once the last background task finishes, its notification should start the continuation soon.
+  const onBackgroundTasksSettled = (): Effect.Effect<void> => {
+    const epoch = state.awaitingContinuationEpoch;
+    if (epoch === undefined || epoch !== state.assignmentEpoch) return Effect.void;
+    state.continuationActivity = false;
+    return forkOwned(continuationWatchdog(epoch, ++state.continuationToken));
+  };
+
+  return { onResult, onBackgroundTasksSettled };
 };
