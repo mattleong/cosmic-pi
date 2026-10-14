@@ -24,6 +24,8 @@ export interface ParentWakeHost {
 export interface ParentWake {
   /** Whether a finished child may start a parent turn now. */
   readonly mayStartTurn: () => boolean;
+  /** Holds wakes for the rest of this session, as it shuts down. */
+  readonly hold: () => void;
 }
 
 type PendingQuestion = SubagentRunView & {
@@ -82,6 +84,10 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
     if (event.messageType === "user") held = false;
   });
 
+  pi.on("session_start", () => {
+    held = false;
+  });
+
   pi.on(
     "agent_before_settle",
     (event, ctx): AgentBeforeSettleEventResult | Promise<undefined> | undefined => {
@@ -122,5 +128,10 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
     },
   );
 
-  return { mayStartTurn: () => !held };
+  return {
+    mayStartTurn: () => !held,
+    hold: () => {
+      held = true;
+    },
+  };
 }

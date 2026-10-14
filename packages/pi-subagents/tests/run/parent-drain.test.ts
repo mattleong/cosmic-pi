@@ -12,6 +12,25 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 
+describe("session-end completion flush", () => {
+  it.effect("hands a pending report to the notifier without waiting for the retry clock", () => {
+    const delivered: SubagentNotification[] = [];
+    const { fake, layer } = localServiceFixture({
+      notify: (notification) => {
+        delivered.push(notification);
+        return acknowledgeCompletions(notification);
+      },
+    });
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request());
+      yield* completeLocalRun(service, fake.controls[0]!, run.id, "Done.");
+      expect(delivered).toEqual([]);
+      yield* service.deliverPendingCompletions;
+      expect(delivered.map((notification) => notification.type)).toEqual(["completed"]);
+    });
+  });
+});
+
 describe("headless parent drain", () => {
   it.effect("returns at once when nothing is running", () => {
     const { layer } = localServiceFixture();

@@ -54,39 +54,46 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
   let completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
   let actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
 
-  const flushPendingCompletions = Effect.gen(function* () {
-    yield* Effect.sleep(Duration.millis(completionRetryDelayMillis));
-    yield* withCompletionGate(
-      Effect.gen(function* () {
-        const selected = yield* withLock(
-          Effect.sync(() => {
-            Latch.closeUnsafe(completionWake);
-            return collectCompletionDeliveryBatch(records);
-          }),
-        );
-        if (selected.length === 0) {
-          completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
-          return;
-        }
-        const runs = selected.map((item) => item.notification);
-        const delivery = yield* notify({ type: "completed", runs });
-        yield* withLock(
-          Effect.sync(() => {
-            const acknowledged = acknowledgeCompletionSelections(
-              selected,
-              deliveredCompletionKeys(delivery, runs),
-            );
-            const eligibleRemain = hasEligibleCompletion(records);
-            completionRetryDelayMillis = nextRetryDelay(
-              completionRetryDelayMillis,
-              !eligibleRemain || acknowledged > 0,
-            );
-            if (eligibleRemain) Latch.openUnsafe(completionWake);
-          }),
-        );
-      }),
-    );
-  });
+  const deliverCompletionBatch: Effect.Effect<boolean> = withCompletionGate(
+    Effect.gen(function* () {
+      const selected = yield* withLock(
+        Effect.sync(() => {
+          Latch.closeUnsafe(completionWake);
+          return collectCompletionDeliveryBatch(records);
+        }),
+      );
+      if (selected.length === 0) {
+        completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
+        return false;
+      }
+      const runs = selected.map((item) => item.notification);
+      const delivery = yield* notify({ type: "completed", runs });
+      return yield* withLock(
+        Effect.sync(() => {
+          const acknowledged = acknowledgeCompletionSelections(
+            selected,
+            deliveredCompletionKeys(delivery, runs),
+          );
+          const eligibleRemain = hasEligibleCompletion(records);
+          completionRetryDelayMillis = nextRetryDelay(
+            completionRetryDelayMillis,
+            !eligibleRemain || acknowledged > 0,
+          );
+          if (eligibleRemain) Latch.openUnsafe(completionWake);
+          return eligibleRemain && acknowledged > 0;
+        }),
+      );
+    }),
+  );
+
+  const flushPendingCompletions = Effect.suspend(() =>
+    Effect.sleep(Duration.millis(completionRetryDelayMillis)),
+  ).pipe(Effect.andThen(deliverCompletionBatch));
+
+  // Delivers every eligible completion now, batch by batch, while the notifier keeps accepting.
+  const deliverPendingCompletions: Effect.Effect<void> = deliverCompletionBatch.pipe(
+    Effect.flatMap((more) => (more ? deliverPendingCompletions : Effect.void)),
+  );
 
   const completionWorker = Effect.forever(
     Latch.await(completionWake).pipe(Effect.andThen(flushPendingCompletions)),
@@ -237,6 +244,7 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
   };
 
   return {
+    deliverPendingCompletions,
     queueActionNotificationLocked,
     claimQuestionsLocked,
     questionReceiptLocked,

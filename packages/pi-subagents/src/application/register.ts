@@ -2,6 +2,7 @@ import {
   getAgentDir,
   type ExtensionAPI,
   type ExtensionContext,
+  type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import {
@@ -20,6 +21,7 @@ import {
   makePiSessionRuntimeSlot,
   type PiSessionRuntimeSlot,
   notifyAtHostBoundary,
+  synchronousNow,
 } from "pi-cosmic-core";
 import {
   promptSubagentActivityInput,
@@ -29,6 +31,11 @@ import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
 import { registerParentWake } from "../boundary/host-parent-wake.ts";
+import {
+  makeReportArchive,
+  pruneReportArchive,
+  type ReportArchive,
+} from "../boundary/report-archive.ts";
 import { makeSubagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
@@ -152,7 +159,11 @@ export function registerSubagentApplication(
             .catch(() => undefined)
         : undefined,
   });
-  const notify = makeHostNotifier(pi, { triggerTurn: wake.mayStartTurn });
+  let reportArchive: ReportArchive | undefined;
+  const notify = makeHostNotifier(pi, {
+    triggerTurn: wake.mayStartTurn,
+    archive: () => reportArchive,
+  });
   let startupFailureTools: ReadonlyArray<string> = [];
   let hasRegisteredTools = false;
   let incompatibleReload = false;
@@ -352,6 +363,10 @@ export function registerSubagentApplication(
         if (activation.trigger !== "tree") replay.publish();
         bridge.publish(prepared.projection);
         currentActivation = activation;
+        if (activation.sessionKey) {
+          reportArchive = makeReportArchive(activation.agentDirectory, activation.sessionKey);
+          pruneReportArchive(activation.agentDirectory, synchronousNow()).catch(() => undefined);
+        }
         showSessionFooter();
         if (activation.trigger === "reload" && activation.sessionKey)
           profileReloadHandoff.clear(activation.sessionKey);
@@ -460,7 +475,7 @@ export function registerSubagentApplication(
 
   pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, "tree"));
 
-  pi.on("session_shutdown", (event, ctx) => {
+  const shutdownSession = (event: SessionShutdownEvent, ctx: ExtensionContext) => {
     const reload = event.reason === "reload";
     replay.retire();
     const sessionKey = profileReloadSessionKey(ctx) ?? currentActivation?.sessionKey;
@@ -471,5 +486,20 @@ export function registerSubagentApplication(
     } else profileReloadHandoff.clear();
     profileOverrideHandoff.clear();
     return reload ? retainingToolsDuring(() => slot.shutdown()) : slot.shutdown();
+  };
+
+  pi.on("session_shutdown", (event, ctx) => {
+    // Pending reports are appended to the transcript, without a turn, before the tree closes.
+    wake.hold();
+    const flushed = currentActivation
+      ? slot
+          .run(
+            SubagentService.use((service) =>
+              service.deliverPendingCompletions.pipe(Effect.timeoutOption("2 seconds")),
+            ),
+          )
+          .catch(() => undefined)
+      : Promise.resolve();
+    return flushed.then(() => shutdownSession(event, ctx));
   });
 }

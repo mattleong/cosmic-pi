@@ -205,6 +205,8 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly resumeWriterAdmission: (id: string) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly projection: Effect.Effect<SubagentProjection>;
+  /** Hands every eligible completion to its notifier now, as a session ends. */
+  readonly deliverPendingCompletions: Effect.Effect<void>;
   /** Resolves when headless parent work has drained; see `makeParentDrain`. */
   readonly awaitParentDrain: Effect.Effect<void, SubagentRuntimeClosedError>;
 }
@@ -467,6 +469,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     revokeWriteClaims: writeClaims.revoke,
     resumeWriterAdmission: writeClaims.resumeAdmission,
     projection,
+    deliverPendingCompletions: delivery.deliverPendingCompletions,
     awaitParentDrain: makeParentDrain({
       records,
       withLock,
