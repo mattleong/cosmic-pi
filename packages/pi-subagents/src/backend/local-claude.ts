@@ -11,7 +11,7 @@ import type { SupervisorChannelHandle } from "../boundary/supervisor-channel.ts"
 import { processError, type SubagentError } from "../run/errors.ts";
 import type { SupervisorEvent } from "../supervisor/protocol.ts";
 import { localCliInterrupts } from "./local-cli-interruption.ts";
-import { toBackendExit, type BackendLaunchRequest, type BackendReport } from "./model.ts";
+import type { BackendLaunchRequest, BackendReport } from "./model.ts";
 import type {
   LocalClaudeHandleContext,
   LocalClaudeHandleState,
@@ -27,7 +27,12 @@ import { localClaudeUsage, usageComponentsTotal } from "./local-claude-usage.ts"
 import { localClaudeUserEvents } from "./local-claude-user-events.ts";
 import { localCliEventIngress } from "./local-cli-events.ts";
 import { oversizedLineError, supervisorError } from "./driver-shared.ts";
-import { deliverTerminalReport, localCliBackendDriver } from "./local-cli-driver.ts";
+import {
+  consumeUntilExit,
+  deliverTerminalReport,
+  localCliBackendDriver,
+  localCliBackendExit,
+} from "./local-cli-driver.ts";
 import { CLAUDE_NATIVE_AGENT_TOOLS } from "./claude-policy.ts";
 import {
   claudeInterruptFrame,
@@ -338,30 +343,13 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
         ),
   );
 
-  yield* Stream.fromQueue(child.events).pipe(
-    Stream.runForEach(consumeRaw),
-    Effect.ignoreCause,
-    Effect.ensuring(
-      deliverTerminalReport(
-        events,
-        preserveAcceptedReport.pipe(
-          Effect.ensuring(
-            Effect.sync(() =>
-              cancelPending(
-                processError(
-                  "run",
-                  "local_claude_transport_closed",
-                  "Local Claude Code transport closed.",
-                ),
-              ),
-            ),
-          ),
-        ),
-        scope,
-      ),
+  yield* consumeUntilExit("claude", child, consumeRaw, (failure) =>
+    deliverTerminalReport(
+      events,
+      preserveAcceptedReport.pipe(Effect.ensuring(Effect.sync(() => cancelPending(failure)))),
+      scope,
     ),
-    Effect.forkScoped,
-  );
+  ).pipe(Effect.forkScoped);
   yield* Stream.fromQueue(supervisor.events).pipe(
     Stream.runForEach(handleSupervisorEvent),
     Effect.ignoreCause,
@@ -397,7 +385,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     events,
     awaitExit: child.awaitExit.pipe(
       Effect.map((exit) => ({
-        ...toBackendExit(exit),
+        ...localCliBackendExit("claude", exit),
         ...(inputs.failure && { failure: inputs.failure }),
       })),
       Effect.mapError((error) => inputs.failure ?? error),

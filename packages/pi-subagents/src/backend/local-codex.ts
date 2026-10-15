@@ -31,7 +31,7 @@ import {
   type CodexRequest,
 } from "./local-codex-protocol.ts";
 import { localCliInterrupts, type LocalCliInterrupt } from "./local-cli-interruption.ts";
-import { toBackendExit, type BackendLaunchRequest } from "./model.ts";
+import type { BackendLaunchRequest } from "./model.ts";
 import { localCliEventIngress } from "./local-cli-events.ts";
 import {
   correlatedRequest,
@@ -39,7 +39,12 @@ import {
   protocolError,
   supervisorError,
 } from "./driver-shared.ts";
-import { deliverTerminalReport, localCliBackendDriver } from "./local-cli-driver.ts";
+import {
+  consumeUntilExit,
+  deliverTerminalReport,
+  localCliBackendDriver,
+  localCliBackendExit,
+} from "./local-cli-driver.ts";
 
 const RPC_TIMEOUT = "10 seconds";
 
@@ -316,18 +321,11 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         ),
   );
 
-  yield* Stream.fromQueue(child.events).pipe(
-    Stream.runForEach(consumeRaw),
-    Effect.ignoreCause,
-    Effect.ensuring(
-      Effect.sync(() =>
-        cancelPending(
-          processError("run", "local_codex_transport_closed", "Local Codex transport closed."),
-        ),
-      ).pipe(Effect.andThen(deliverTerminalReport(events, preserveAcceptedReport, scope))),
+  yield* consumeUntilExit("codex", child, consumeRaw, (failure) =>
+    Effect.sync(() => cancelPending(failure)).pipe(
+      Effect.andThen(deliverTerminalReport(events, preserveAcceptedReport, scope)),
     ),
-    Effect.forkScoped,
-  );
+  ).pipe(Effect.forkScoped);
   yield* Stream.fromQueue(supervisor.events).pipe(
     Stream.runForEach((event) => offer(event)),
     Effect.ignoreCause,
@@ -431,7 +429,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   return {
     pid: child.pid,
     events,
-    awaitExit: child.awaitExit.pipe(Effect.map(toBackendExit)),
+    awaitExit: child.awaitExit.pipe(Effect.map((exit) => localCliBackendExit("codex", exit))),
     controls: {
       initialize,
       start: (message: string, epoch: number) =>

@@ -2,26 +2,36 @@ import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type {
   LocalCliProcessContract,
   LocalCliProcessHandle,
   LocalCliRuntime,
 } from "../boundary/local-cli-process.ts";
+import type { LocalCliHandle, LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
+import type { ProcessExit } from "../boundary/process-transport.ts";
 import type {
   SupervisorChannelContract,
   SupervisorChannelHandle,
 } from "../boundary/supervisor-channel.ts";
-import { UnsupportedSubagentCapabilityError, type SubagentError } from "../run/errors.ts";
+import {
+  processError,
+  UnsupportedSubagentCapabilityError,
+  type SubagentError,
+  type SubagentProcessError,
+} from "../run/errors.ts";
+import { MAX_ERROR_CHARS, sanitizeStreamDiagnostic } from "../run/state.ts";
 import {
   SUPERVISOR_MCP_REGISTRATION,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "../supervisor/mcp-contract.ts";
-import type {
-  BackendControls,
-  BackendDriver,
-  BackendEvent,
-  BackendHandle,
-  BackendLaunchRequest,
+import {
+  toBackendExit,
+  type BackendControls,
+  type BackendDriver,
+  type BackendEvent,
+  type BackendHandle,
+  type BackendLaunchRequest,
 } from "./model.ts";
 import { supervisorError } from "./driver-shared.ts";
 
@@ -42,6 +52,65 @@ export const withLocalSupervisorInstructions = (
       : "Writer intent permits project edits within the assigned cwd only; keep changes narrowly within the assignment.",
   ].join("\n\n"),
 });
+
+const RUNTIME_LABELS = {
+  claude: "Claude Code",
+  codex: "Codex",
+} as const satisfies Record<LocalCliRuntime, string>;
+
+/** The exit status on the first line, then the end of the CLI's bounded, redacted stderr. */
+export const localCliExitDiagnostic = (runtime: LocalCliRuntime, exit: ProcessExit): string => {
+  const summary = `${RUNTIME_LABELS[runtime]} exited${exit.exitCode === null ? "" : ` with code ${exit.exitCode}`}${exit.signal ? ` (${exit.signal})` : ""}.`;
+  const stderr = exit.stderr.trim();
+  return stderr
+    ? `${summary}\n${sanitizeStreamDiagnostic(stderr, MAX_ERROR_CHARS - summary.length - 1)}`
+    : summary;
+};
+
+export const localCliBackendExit = (runtime: LocalCliRuntime, exit: ProcessExit) => ({
+  ...toBackendExit(exit),
+  diagnostic: localCliExitDiagnostic(runtime, exit),
+});
+
+/**
+ * Consumes native frames until the process closes, then hands pending work the exit diagnostic.
+ * The transport ends its frames only after the process closes, so the exit receipt is already
+ * settled; scope interruption skips the wait and reports a generic closure instead.
+ */
+export const consumeUntilExit = (
+  runtime: LocalCliRuntime,
+  child: Pick<LocalCliHandle, "events" | "awaitExit">,
+  consume: (raw: LocalCliWireEvent) => Effect.Effect<void>,
+  onClosed: (failure: SubagentProcessError) => Effect.Effect<void>,
+): Effect.Effect<void> => {
+  let failure: SubagentProcessError | undefined;
+  return Stream.fromQueue(child.events).pipe(
+    Stream.runForEach(consume),
+    Effect.andThen(child.awaitExit),
+    Effect.tap((exit) =>
+      Effect.sync(() => {
+        failure = processError(
+          "run",
+          `local_${runtime}_exited`,
+          localCliExitDiagnostic(runtime, exit),
+        );
+      }),
+    ),
+    Effect.ignoreCause,
+    Effect.ensuring(
+      Effect.suspend(() =>
+        onClosed(
+          failure ??
+            processError(
+              "run",
+              `local_${runtime}_transport_closed`,
+              `Local ${RUNTIME_LABELS[runtime]} transport closed.`,
+            ),
+        ),
+      ),
+    ),
+  );
+};
 
 export const deliverTerminalReport = (
   events: Queue.Queue<BackendEvent, Cause.Done>,

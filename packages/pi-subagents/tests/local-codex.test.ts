@@ -33,7 +33,8 @@ const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedRep
     const child: LocalCliHandle = {
       pid: 1,
       events: childEvents,
-      awaitExit: Effect.never,
+      // The transport settles its exit receipt before it ends the frame queue.
+      awaitExit: Effect.succeed({ exitCode: 0, stderr: "" }),
       acknowledge: () => {},
       terminate: () => Effect.void,
       send: (frame) =>
