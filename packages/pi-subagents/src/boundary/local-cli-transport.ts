@@ -6,6 +6,7 @@ import type {
 } from "../backend/local-codex-protocol.ts";
 import type {
   ClaudeControlRequestFrame,
+  ClaudeHookResponseFrame,
   ClaudeUserFrame,
 } from "../backend/local-claude-protocol.ts";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
@@ -24,6 +25,7 @@ export type LocalCliWireEvent = ProcessWireEvent<LocalCliMessage>;
 export type LocalCliOutboundFrame =
   | ClaudeUserFrame
   | ClaudeControlRequestFrame
+  | ClaudeHookResponseFrame
   | CodexRequest
   | CodexInitializedNotification;
 

@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
 import * as Queue from "effect/Queue";
 import type { BackendReport } from "../backend/model.ts";
+import { NATIVE_SUB_AGENT_REFUSAL } from "../supervisor/mcp-contract.ts";
 import type {
   SupervisorChannelId,
   SupervisorDeliveryId,
@@ -76,6 +77,8 @@ export interface SupervisorChannelState {
   currentAssignmentEpoch: number;
   nextReportSequence: number;
   pendingQuestion: PendingQuestion | undefined;
+  /** The child's main native thread; calls the runtime attributes to another thread are refused. */
+  mainAgentThreadId: string | undefined;
   closed: boolean;
 }
 
@@ -98,6 +101,7 @@ export const supervisorChannelState = (
     currentAssignmentEpoch: 0,
     nextReportSequence: 1,
     pendingQuestion: undefined,
+    mainAgentThreadId: undefined,
     closed: false,
   }));
 
@@ -245,3 +249,14 @@ export const authorizeAssignment = (
           ),
         ),
   );
+
+// A caller without thread identity is admitted: Claude gates its sub-agents before the call.
+export const refuseNativeSubAgent = (
+  state: SupervisorChannelState,
+  payload: { readonly nativeThreadId?: string | undefined },
+): Effect.Effect<void, SupervisorRpcFailure> =>
+  state.mainAgentThreadId !== undefined &&
+  payload.nativeThreadId !== undefined &&
+  payload.nativeThreadId !== state.mainAgentThreadId
+    ? Effect.fail(rpcFailure("native_sub_agent_refused", NATIVE_SUB_AGENT_REFUSAL))
+    : Effect.void;

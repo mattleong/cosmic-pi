@@ -9,6 +9,7 @@ import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
 import { omittedOutputPreview } from "./driver-shared.ts";
 import type { SubagentUsage } from "../run/model.ts";
 import type { UsageComponents } from "./local-claude-usage.ts";
+import { CLAUDE_HOOK_REGISTRATIONS, claudeMainAgentToolDecision } from "./claude-policy.ts";
 
 const MAX_ID_CHARS = 256;
 const MAX_NAME_CHARS = 256;
@@ -168,6 +169,21 @@ const McpStatusControlResponse = Schema.Struct({
   ),
 });
 const Discriminant = Schema.Struct({ type: Schema.optional(Schema.String) });
+const HookCallbackDiscriminant = Schema.Struct({
+  request: Schema.Struct({ subtype: Schema.Literal("hook_callback") }),
+});
+const isHookCallbackRequest = Schema.is(HookCallbackDiscriminant);
+const HookCallbackRequest = Schema.Struct({
+  type: Schema.Literal("control_request"),
+  request_id: Id,
+  request: Schema.Struct({
+    subtype: Schema.Literal("hook_callback"),
+    input: Schema.optional(Schema.Unknown),
+  }),
+});
+// Claude Code adds `agent_id` to hook input only when a native sub-agent makes the call.
+const MainAgentHookInput = Schema.Struct({ agent_id: Schema.optional(Schema.Undefined) });
+const isMainAgentHookInput = Schema.is(MainAgentHookInput);
 
 export type ClaudeInboundFrame =
   | typeof Assistant.Type
@@ -178,7 +194,8 @@ export type ClaudeInboundFrame =
   | typeof TaskNotification.Type
   | typeof StreamEvent.Type
   | typeof Result.Type
-  | typeof ControlResponse.Type;
+  | typeof ControlResponse.Type
+  | typeof HookCallbackRequest.Type;
 
 export type ClaudeProtocolEvent =
   | {
@@ -256,6 +273,12 @@ export type ClaudeProtocolEvent =
       readonly success: boolean;
       readonly diagnostic?: string | undefined;
       readonly response?: unknown;
+    }
+  | {
+      /** Claude Code waits for the answer before it runs the hooked tool call. */
+      readonly type: "hook_callback";
+      readonly requestId: string;
+      readonly caller: "main" | "native-sub-agent";
     }
   | { readonly type: "ignored" };
 
@@ -422,6 +445,22 @@ const decodeControlResponseEvent = (
     };
   });
 
+// The driver registers only hook callbacks, so it expects no other control request from Claude.
+const decodeControlRequestEvent = (
+  value: Schema.Json,
+): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
+  isHookCallbackRequest(value)
+    ? Schema.decodeUnknownEffect(HookCallbackRequest)(value).pipe(
+        Effect.map((event) => ({
+          type: "hook_callback" as const,
+          requestId: event.request_id,
+          caller: isMainAgentHookInput(event.request.input)
+            ? ("main" as const)
+            : ("native-sub-agent" as const),
+        })),
+      )
+    : Effect.succeed({ type: "ignored" as const });
+
 export const decodeClaudeProtocolEvent = (
   value: Schema.Json,
 ): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
@@ -447,6 +486,8 @@ export const decodeClaudeProtocolEvent = (
       }
       case "control_response":
         return yield* decodeControlResponseEvent(value);
+      case "control_request":
+        return yield* decodeControlRequestEvent(value);
       case undefined:
       default:
         return { type: "ignored" };
@@ -499,6 +540,17 @@ export type ClaudeUserFrame = ReturnType<typeof claudeUserFrame>;
 export type ClaudeControlRequestFrame = ReturnType<
   typeof claudeInitializeFrame | typeof claudeMcpStatusFrame | typeof claudeInterruptFrame
 >;
+export type ClaudeHookResponseFrame = ReturnType<typeof claudeHookResponseFrame>;
+
+export const claudeHookResponseFrame = (requestId: string, caller: "main" | "native-sub-agent") =>
+  ({
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: requestId,
+      response: claudeMainAgentToolDecision(caller),
+    },
+  }) as const;
 
 export const claudeUserFrame = (
   message: string,
@@ -516,6 +568,9 @@ const controlFrame =
   (requestId: string) =>
     ({ type: "control_request", request_id: requestId, request }) as const;
 
-export const claudeInitializeFrame = controlFrame({ subtype: "initialize" });
+export const claudeInitializeFrame = controlFrame({
+  subtype: "initialize",
+  hooks: CLAUDE_HOOK_REGISTRATIONS,
+});
 export const claudeMcpStatusFrame = controlFrame({ subtype: "mcp_status" });
 export const claudeInterruptFrame = controlFrame({ subtype: "interrupt", cancel_queued: true });

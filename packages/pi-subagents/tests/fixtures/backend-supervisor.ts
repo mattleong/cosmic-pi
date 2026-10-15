@@ -44,7 +44,7 @@ export const backendSupervisor = (
   metadata: SupervisorConnectionMetadata,
   events: SupervisorChannelHandle["events"],
   behavior: Pick<SupervisorChannelHandle, "hasAcceptedReport" | "acceptedReportForEpoch"> &
-    Partial<Pick<SupervisorChannelHandle, "setAssignmentEpoch">>,
+    Partial<Pick<SupervisorChannelHandle, "setAssignmentEpoch" | "setMainAgentThread">>,
 ): SupervisorChannelHandle => ({
   metadata,
   events,
@@ -52,6 +52,7 @@ export const backendSupervisor = (
   setAssignmentEpoch: () => Effect.void,
   reply: () => Effect.void,
   cancelPending: () => {},
+  setMainAgentThread: () => {},
   ...behavior,
 });
 

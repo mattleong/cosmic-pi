@@ -25,6 +25,7 @@ Natural completion leaves descendants running. Explicit stop and runtime replace
 - Authenticated ancestry determines subtree visibility and target authority; caller-supplied identifiers never grant parent authority.
 - Writer admission, assignment changes, completion consumption, and cleanup evidence remain coordinated under their owning locks. Uncertain process or lease cleanup blocks reuse and can quarantine a writer pool.
 - Shared-checkout claims coordinate writers; they do not sandbox filesystem access. Worktree reports are proposals. Only the direct parent may review, test, and integrate an exact revision against current parent work. Another session's root may only discard a workspace, and only once its creating session's owner lease is free and no writer lease holds its worker tree.
+- Only a child's main agent may submit its report or ask the parent a blocking question. Claude and Codex identify a native sub-agent caller at the call, and that identity, never output ordering, decides refusal.
 - Tools and UI read frozen projections. A terminal state or returned start receipt does not prove cleanup or completion. Native result contracts remain separate from bounded presentation details.
 - Delegation modes change only the root session's prompt guidance. They never restrict tools or reach nested children.
 - Current Session edits affect later launches. Saved-set edits do not change the active working set, and Project writes recheck trust.

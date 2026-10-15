@@ -162,9 +162,19 @@ const uncertain = () =>
 
 const ok = (text: string, isError = false): SupervisorToolResult => ({ text, isError });
 
+export interface SupervisorToolCaller {
+  readonly nativeThreadId?: string | undefined;
+}
+
+// The model can act on these refusals, so they return as tool errors rather than RPC failures.
+const isToolErrorRefusal = (error: unknown): error is SupervisorRpcFailure =>
+  error instanceof SupervisorRpcFailure &&
+  (error.code === "report_schema_invalid" || error.code === "native_sub_agent_refused");
+
 export const runSupervisorTool = (
   client: SupervisorToolClient,
   call: SupervisorToolCall,
+  caller: SupervisorToolCaller = {},
 ): Effect.Effect<SupervisorToolResult, SupervisorRpcFailure | SupervisorToolFailure> =>
   Effect.gen(function* () {
     const assignmentEpoch = client.assignmentEpoch();
@@ -175,11 +185,13 @@ export const runSupervisorTool = (
       });
     const { rpc, auth } = client;
     const requestId = SupervisorChannelIdSchema.make(synchronousRandomUuid());
+    const identity =
+      caller.nativeThreadId === undefined ? {} : { nativeThreadId: caller.nativeThreadId };
     switch (call.kind) {
       case "report": {
         const { deliveryId, report: text } = call;
         return yield* rpc
-          .SupervisorReport({ ...auth, assignmentEpoch, requestId, deliveryId, text })
+          .SupervisorReport({ ...auth, assignmentEpoch, requestId, deliveryId, text, ...identity })
           .pipe(
             Effect.timeout(CALL_TIMEOUT_MILLIS),
             Effect.map((result) =>
@@ -187,17 +199,19 @@ export const runSupervisorTool = (
                 `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
               ),
             ),
-            Effect.catchIf(
-              (error) =>
-                error instanceof SupervisorRpcFailure && error.code === "report_schema_invalid",
-              (error) => Effect.succeed(ok(error.message, true)),
-            ),
+            Effect.catchIf(isToolErrorRefusal, (error) => Effect.succeed(ok(error.message, true))),
           );
       }
       case "question":
         return yield* Effect.uninterruptibleMask((restore) =>
           restore(
-            rpc.SupervisorQuestion({ ...auth, assignmentEpoch, requestId, message: call.message }),
+            rpc.SupervisorQuestion({
+              ...auth,
+              assignmentEpoch,
+              requestId,
+              message: call.message,
+              ...identity,
+            }),
           ).pipe(
             Effect.flatMap((reply) =>
               rpc
@@ -212,6 +226,8 @@ export const runSupervisorTool = (
                 ),
             ),
           ),
+        ).pipe(
+          Effect.catchIf(isToolErrorRefusal, (error) => Effect.succeed(ok(error.message, true))),
         );
       case "progress":
       case "warning": {

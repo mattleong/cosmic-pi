@@ -1,5 +1,7 @@
 import type { SubagentEffort, SubagentWriteIntent } from "../domain/routing.ts";
 import {
+  NATIVE_SUB_AGENT_REFUSAL,
+  SUPERVISOR_MCP_MAIN_AGENT_TOOL_NAMES,
   SUPERVISOR_MCP_REGISTRATION,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "../supervisor/mcp-contract.ts";
@@ -34,6 +36,34 @@ export const CLAUDE_NATIVE_AGENT_TOOLS: ReadonlyArray<string> = [
   "TaskStop",
   "SendMessage",
 ];
+const CLAUDE_MAIN_AGENT_HOOK_ID = "pi-subagents-main-agent-tools";
+
+/**
+ * SDK hook callbacks sent with the initialize control request. Claude Code asks the driver before
+ * each main-agent-only supervisor call and names a native sub-agent caller with `agent_id`.
+ */
+export const CLAUDE_HOOK_REGISTRATIONS = {
+  PreToolUse: [
+    {
+      matcher: SUPERVISOR_MCP_MAIN_AGENT_TOOL_NAMES.map(
+        (name) => `mcp__${SUPERVISOR_MCP_REGISTRATION}__${name}`,
+      ).join("|"),
+      hookCallbackIds: [CLAUDE_MAIN_AGENT_HOOK_ID],
+    },
+  ],
+} as const;
+
+export const claudeMainAgentToolDecision = (caller: "main" | "native-sub-agent") =>
+  caller === "main"
+    ? {}
+    : {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: NATIVE_SUB_AGENT_REFUSAL,
+        },
+      };
+
 const CLAUDE_DENIED_TOOLS: ReadonlyArray<string> = [
   "Skill",
   "EnterWorktree",

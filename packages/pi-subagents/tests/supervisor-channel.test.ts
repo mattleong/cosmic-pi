@@ -605,6 +605,53 @@ describe("private supervisor channel", () => {
   });
 
   liveTest(
+    "refuses the report and question from a native sub-agent thread but keeps its progress",
+    function* () {
+      const { handle } = yield* step(() => openChannel("agent-native-thread"));
+      const { rpc } = yield* readyHelper(handle);
+      handle.setMainAgentThread("main-thread");
+      const fromThread = (id: string, name: string, args: JsonRpcObject, threadId: string) =>
+        rpc.request({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name, arguments: args, _meta: { threadId, progressToken: 1 } },
+        });
+      const report = { delivery_id: "delivery-native", report: "Sub-agent findings." };
+
+      for (const [id, name, args] of [
+        ["sub-report", "supervisor_submit_report", report],
+        ["sub-question", "supervisor_question", { message: "Which file?" }],
+      ] as const) {
+        const refused = yield* step(() => fromThread(id, name, args, "sub-agent-thread"));
+        expect(refused).toMatchObject({
+          result: { isError: true, content: [{ text: stringContaining("parent") }] },
+        });
+      }
+      expect(Queue.sizeUnsafe(handle.events)).toBe(0);
+
+      yield* step(() =>
+        fromThread("sub-progress", "supervisor_progress", { message: "Halfway." }, "sub-thread"),
+      );
+      expect(yield* step(() => takeEvent(handle))).toMatchObject({
+        kind: "progress",
+        message: "Halfway.",
+      });
+
+      const accepted = yield* step(() =>
+        fromThread("main-report", "supervisor_submit_report", report, "main-thread"),
+      );
+      expect(accepted).toMatchObject({
+        result: { content: [{ text: stringContaining("accepted") }] },
+      });
+      expect(yield* step(() => takeEvent(handle))).toMatchObject({
+        type: "report",
+        text: "Sub-agent findings.",
+      });
+    },
+  );
+
+  liveTest(
     "spawns the helper and keeps blocked questions concurrent, correlated, cancellable, and epoch-safe",
     function* () {
       const opened = yield* step(() => openChannel());

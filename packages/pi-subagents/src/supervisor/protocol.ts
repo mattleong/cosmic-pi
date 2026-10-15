@@ -7,6 +7,7 @@ import {
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
   MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
+  MAX_SUPERVISOR_MCP_THREAD_ID_CHARS,
   SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
 } from "./mcp-contract.ts";
@@ -99,6 +100,15 @@ const MessagePayload = {
   requestId: SupervisorChannelIdSchema,
   message: SupervisorMessageSchema,
 };
+/** The native thread that made a main-agent-only call, when the runtime identifies it. */
+const MainAgentCallPayload = {
+  nativeThreadId: Schema.optional(
+    Schema.String.check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(MAX_SUPERVISOR_MCP_THREAD_ID_CHARS),
+    ),
+  ),
+};
 
 export class SupervisorRpcFailure extends Schema.TaggedError<SupervisorRpcFailure>()(
   "SupervisorRpcFailure",
@@ -141,7 +151,7 @@ export const SupervisorProgressRpc = contactRpc("SupervisorProgress");
 export const SupervisorWarningRpc = contactRpc("SupervisorWarning");
 
 export const SupervisorQuestionRpc = Rpc.make("SupervisorQuestion", {
-  payload: MessagePayload,
+  payload: { ...MessagePayload, ...MainAgentCallPayload },
   success: Schema.Struct({
     questionId: SupervisorChannelIdSchema,
     message: SupervisorReplySchema,
@@ -166,6 +176,7 @@ export const SupervisorReportRpc = Rpc.make("SupervisorReport", {
     requestId: SupervisorChannelIdSchema,
     deliveryId: SupervisorDeliveryIdSchema,
     text: SupervisorReportTextSchema,
+    ...MainAgentCallPayload,
   },
   success: Schema.Struct({
     duplicate: Schema.Boolean,

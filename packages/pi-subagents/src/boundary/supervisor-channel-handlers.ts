@@ -20,6 +20,7 @@ import {
   hasEventCapacity,
   offerContact,
   type PendingQuestion,
+  refuseNativeSubAgent,
   type SupervisorChannelState,
   type SupervisorContactPayload,
   synchronizeReadiness,
@@ -123,6 +124,7 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
       SupervisorQuestion: (payload, options) =>
         Effect.gen(function* () {
           yield* authorizeAssignment(state, options.client.id, payload);
+          yield* refuseNativeSubAgent(state, payload);
           if (state.pendingQuestion)
             return yield* rpcFailure(
               "question_pending",
@@ -188,6 +190,7 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
       SupervisorReport: (payload, options) =>
         Effect.gen(function* () {
           yield* authorizeAssignment(state, options.client.id, payload);
+          yield* refuseNativeSubAgent(state, payload);
           const previous = state.reports.get(payload.deliveryId);
           if (previous) {
             if (

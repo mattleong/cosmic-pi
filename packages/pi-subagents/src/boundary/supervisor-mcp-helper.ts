@@ -98,9 +98,9 @@ const main = Effect.gen(function* () {
   const executeTool = (request: ToolCall) => {
     const call = decodeSupervisorToolCall(request.name, request.arguments);
     return Result.isSuccess(call)
-      ? runSupervisorTool(supervisor, call.success).pipe(
-          Effect.map((result) => toolResult(result.text, result.isError)),
-        )
+      ? runSupervisorTool(supervisor, call.success, {
+          nativeThreadId: request.nativeThreadId,
+        }).pipe(Effect.map((result) => toolResult(result.text, result.isError)))
       : Effect.succeed(toolResult(`Not delivered: ${call.failure}`, true));
   };
 

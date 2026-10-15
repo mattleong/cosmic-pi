@@ -10,6 +10,7 @@ import {
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
   MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
+  MAX_SUPERVISOR_MCP_THREAD_ID_CHARS,
   SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
   SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
@@ -30,6 +31,8 @@ export type DecodedMcpMessage =
       readonly id: RpcId;
       readonly name: string;
       readonly arguments: JsonValue | undefined;
+      /** The native thread making the call, when the runtime names it in the request metadata. */
+      readonly nativeThreadId?: string | undefined;
     }
   | {
       readonly method: "unknown";
@@ -124,12 +127,12 @@ export const toolDefinitions = [
   ),
   messageTool(
     SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2],
-    "Ask the parent this assignment's one correlated blocking question and wait for its exact reply.",
+    "Main agent only: ask the parent this assignment's one correlated blocking question and wait for its exact reply.",
   ),
   {
     name: SUPERVISOR_MCP_TOOL_NAMES[3],
     description:
-      "Submit the complete bounded final report with a stable delivery identity for explicit idempotent retry.",
+      "Main agent only: submit the complete bounded final report with a stable delivery identity for explicit idempotent retry.",
     inputSchema: {
       type: "object",
       properties: {
@@ -205,7 +208,21 @@ const decodeToolCallMessage = (
     !boundedString(params.name, 128)
   )
     return undefined;
-  return { method: "tools/call", id, name: params.name, arguments: params.arguments };
+  const nativeThreadId = callerThreadId(params._meta);
+  return {
+    method: "tools/call",
+    id,
+    name: params.name,
+    arguments: params.arguments,
+    ...(nativeThreadId !== undefined && { nativeThreadId }),
+  };
+};
+
+// Codex names the calling thread, including a native sub-agent's own thread, in `_meta.threadId`.
+const callerThreadId = (meta: Schema.Json | undefined): string | undefined => {
+  if (!isJsonObject(meta)) return undefined;
+  const threadId = meta.threadId;
+  return boundedString(threadId, MAX_SUPERVISOR_MCP_THREAD_ID_CHARS) ? threadId : undefined;
 };
 
 const decodeMethodMessage = (

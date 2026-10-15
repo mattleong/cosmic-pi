@@ -35,6 +35,7 @@ import {
 } from "./local-cli-driver.ts";
 import { CLAUDE_NATIVE_AGENT_TOOLS } from "./claude-policy.ts";
 import {
+  claudeHookResponseFrame,
   claudeInterruptFrame,
   decodeClaudeProtocolEvent,
   oversizedClaudeProtocolEvent,
@@ -293,6 +294,11 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                 return onUser(event, raw, sequence);
               case "control_response":
                 return control.onControlResponse(event, raw);
+              case "hook_callback":
+                return child.send(claudeHookResponseFrame(event.requestId, event.caller)).pipe(
+                  Effect.catch((error) => offer({ type: "backend_failure", error })),
+                  Effect.andThen(release(raw)),
+                );
               case "assistant":
                 return onAssistant(event, raw);
               case "result":

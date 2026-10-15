@@ -461,6 +461,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       );
     threadId = started.thread.id;
     sessionId = started.thread.sessionId ?? started.thread.id;
+    supervisor.setMainAgentThread(started.thread.id);
     yield* supervisor.awaitReady.pipe(Effect.mapError(supervisorError("initialize")));
     return {
       model: started.model,
