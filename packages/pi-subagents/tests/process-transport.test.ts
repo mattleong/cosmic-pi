@@ -26,14 +26,17 @@ const boundary = {
   spawn: vi.fn<ProcessTransportRuntime["spawn"]>(),
   terminate: vi.fn<ProcessTransportRuntime["terminate"]>(),
   confirmGroupExit: vi.fn<ProcessTransportRuntime["confirmGroupExit"]>(),
+  detachedGroups: vi.fn<ProcessTransportRuntime["detachedGroups"]>(),
 };
 const nativeRequest = {
   executable: "fixture",
   args: [],
   env: {},
   cwd: "/fixture",
+  writer: false,
 };
-const acquireNative = () => acquireLocalCliTransport(nativeRequest, boundary);
+const acquireNative = (writer = false) =>
+  acquireLocalCliTransport({ ...nativeRequest, writer }, boundary);
 const notification = { method: "initialized" as const };
 
 const { ChildProcess: NodeChildProcessClass } = process.getBuiltinModule("node:child_process");
@@ -110,10 +113,10 @@ const finishTimed = <A, E>(effect: Effect.Effect<A, E>) =>
     return yield* Fiber.join(fiber);
   });
 const closeScope = (scope: Scope.Closeable) => finishTimed(Scope.close(scope, Exit.void));
-const openNative = (f: ReturnType<typeof fixture>) =>
+const openNative = (f: ReturnType<typeof fixture>, writer = false) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
-    const handle = yield* start(f.child, acquireNative().pipe(Scope.provide(scope)));
+    const handle = yield* start(f.child, acquireNative(writer).pipe(Scope.provide(scope)));
     return { handle, scope, release: closeScope(scope) };
   });
 
@@ -121,6 +124,7 @@ beforeEach(() => {
   boundary.spawn.mockReset();
   boundary.terminate.mockReset();
   boundary.confirmGroupExit.mockReset().mockReturnValue(Effect.succeed(true));
+  boundary.detachedGroups.mockReset().mockReturnValue(Effect.succeed([]));
 });
 
 describe("shared process transport", () => {
@@ -272,6 +276,72 @@ describe("shared process transport", () => {
       yield* release;
     }),
   );
+
+  it.effect("gives an overflowed child a SIGTERM grace period before SIGKILL", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      boundary.terminate.mockImplementation((_child, mode) =>
+        mode === "force" ? Effect.sync(f.finish) : Effect.void,
+      );
+      const { release } = yield* openNative(f);
+      for (let i = 0; i < 513; i++) f.stdout.emit("data", Buffer.from("{}\n"));
+      yield* yieldUntil(() => boundary.terminate.mock.calls.length > 0);
+      yield* TestClock.adjust("1 second");
+      expect(boundary.terminate.mock.calls.map((call) => call[1])).toEqual(["graceful"]);
+      yield* TestClock.adjust("1 second");
+      yield* yieldUntil(() => boundary.terminate.mock.calls.length === 2);
+      expect(boundary.terminate.mock.calls.map((call) => call[1])).toEqual(["graceful", "force"]);
+      yield* release;
+    }),
+  );
+
+  describe("detached descendants", () => {
+    const DETACHED_GROUP = 5151;
+    // Descendants reparent once the child is signalled, so only an earlier snapshot finds them.
+    const detachedUntilSignalled = (survives: boolean) => {
+      boundary.detachedGroups.mockImplementation(() =>
+        Effect.sync(() => (boundary.terminate.mock.calls.length === 0 ? [DETACHED_GROUP] : [])),
+      );
+      boundary.confirmGroupExit.mockImplementation((pid) =>
+        Effect.succeed(!survives || pid !== DETACHED_GROUP),
+      );
+    };
+    const releaseFailure = (scope: Scope.Closeable) =>
+      finishTimed(Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip)).pipe(
+        Effect.map(Cause.squash),
+      );
+
+    it.effect("keeps a writer's cleanup unconfirmed while a detached command survives", () =>
+      Effect.gen(function* () {
+        detachedUntilSignalled(true);
+        const { scope } = yield* openNative(fixture(), true);
+        expect(yield* releaseFailure(scope)).toMatchObject({ code: "cleanup_unconfirmed" });
+      }),
+    );
+
+    it.effect("records detached commands before an overflow signals the writer", () =>
+      Effect.gen(function* () {
+        detachedUntilSignalled(true);
+        const f = fixture();
+        const { scope } = yield* openNative(f, true);
+        for (let i = 0; i < 513; i++) f.stdout.emit("data", Buffer.from("{}\n"));
+        yield* yieldUntil(() => boundary.terminate.mock.calls.length > 0);
+        expect(yield* releaseFailure(scope)).toMatchObject({ code: "cleanup_unconfirmed" });
+      }),
+    );
+
+    for (const [description, writer, survives] of [
+      ["confirms a writer whose detached commands exited", true, false],
+      ["does not hold a reader's cleanup on detached commands", false, true],
+    ] as const)
+      it.effect(description, () =>
+        Effect.gen(function* () {
+          detachedUntilSignalled(survives);
+          const { release } = yield* openNative(fixture(), writer);
+          yield* release;
+        }),
+      );
+  });
 
   it.effect("lets an in-flight forced termination finish after the scope closes", () =>
     Effect.gen(function* () {

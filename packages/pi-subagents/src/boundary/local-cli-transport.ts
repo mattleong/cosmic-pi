@@ -34,6 +34,7 @@ export interface LocalCliTransportRequest {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
   readonly cwd: string;
+  readonly writer: boolean;
 }
 
 export const processError = (
@@ -66,6 +67,7 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
       message: (value): LocalCliWireEvent => ({ type: "message", value }),
       maxOutboundBytes: MAX_PROCESS_LINE_BYTES,
       terminateOnParserOverflow: true,
+      confirmDetachedDescendants: request.writer,
       synchronousWriteFailure: "defect",
       attach: () => ({ detach: () => {} }),
     },

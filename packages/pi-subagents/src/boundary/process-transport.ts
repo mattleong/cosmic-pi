@@ -9,7 +9,7 @@ import { confirmProcessGroupExit } from "pi-cosmic-core";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, type OversizedLine } from "./bounded-line-parser.ts";
 import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
-import { terminateProcessTree } from "./process-tree.ts";
+import { detachedDescendantGroups, terminateProcessTree } from "./process-tree.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
 export const MAX_PROCESS_LINE_BYTES = 4 * 1024 * 1024;
@@ -39,22 +39,22 @@ export interface ProcessTransportHandle<Message, Frame> {
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
 }
 
-const cleanupUnconfirmed = () =>
-  processCauseError(
-    "confirm subagent process cleanup",
-    new Error("Process tree exit was not confirmed after forced termination."),
-    "cleanup_unconfirmed",
-  );
+const cleanupUnconfirmed = (
+  message = "Process tree exit was not confirmed after forced termination.",
+) =>
+  processCauseError("confirm subagent process cleanup", new Error(message), "cleanup_unconfirmed");
 
 export interface ProcessTransportRuntime {
   readonly spawn: (...args: Parameters<typeof nodeSpawn>) => NodeChildProcess;
   readonly terminate: typeof terminateProcessTree;
   readonly confirmGroupExit: typeof confirmProcessGroupExit;
+  readonly detachedGroups: typeof detachedDescendantGroups;
 }
 const nodeRuntime: ProcessTransportRuntime = {
   spawn: nodeSpawn,
   terminate: terminateProcessTree,
   confirmGroupExit: confirmProcessGroupExit,
+  detachedGroups: detachedDescendantGroups,
 };
 
 interface ProcessTransportOptions<Message, Frame, Attachment> {
@@ -64,6 +64,8 @@ interface ProcessTransportOptions<Message, Frame, Attachment> {
   readonly message: (value: Schema.Json) => Message;
   readonly maxOutboundBytes?: number;
   readonly terminateOnParserOverflow: boolean;
+  /** Writers must not release ownership while a command the child detached may still write. */
+  readonly confirmDetachedDescendants: boolean;
   readonly synchronousWriteFailure: "not_sent" | "defect";
   readonly requestAbort?: (
     send: (frame: Frame) => Effect.Effect<void, SubagentProcessError>,
@@ -104,8 +106,35 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         try: () => options.spawn(runtime.spawn),
         catch: (error) => processError("spawn", error),
       });
+      const waitForExit = Deferred.await(exited).pipe(
+        Effect.interruptible,
+        Effect.as(true),
+        Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
+      );
+      const detachedGroups = new Set<number>();
+      // Descendants reparent once the child dies, so they are recorded before any signal.
+      const recordDetachedGroups = Effect.suspend(() =>
+        options.confirmDetachedDescendants && child.pid && !settled
+          ? runtime.detachedGroups(child.pid).pipe(
+              Effect.map((groups) => {
+                for (const group of groups) detachedGroups.add(group);
+              }),
+            )
+          : Effect.void,
+      );
+      // Pi's bash commands run in their own process groups and die only through its SIGTERM
+      // handler, so even an overflow gives the child a grace period before SIGKILL.
       const force = () => {
-        runFork(Effect.uninterruptible(runtime.terminate(child, "force")).pipe(Effect.ignore));
+        runFork(
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* recordDetachedGroups;
+              yield* Effect.exit(runtime.terminate(child, "graceful"));
+              yield* waitForExit;
+              yield* Effect.exit(runtime.terminate(child, "force"));
+            }),
+          ),
+        );
       };
       const appendStderr = (chunk: Buffer) => {
         stderr.push(chunk);
@@ -288,25 +317,34 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         runtime
           .terminate(child, mode)
           .pipe(Effect.mapError((error) => processError("terminate", error)));
-      const waitForExit = Deferred.await(exited).pipe(
-        Effect.interruptible,
-        Effect.as(true),
-        Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
-      );
+      const confirmDetachedGroupsExit = Effect.suspend(() =>
+        Effect.forEach(
+          [...detachedGroups],
+          (group) =>
+            runtime
+              .confirmGroupExit(group, 2_000)
+              .pipe(Effect.map((gone) => (gone ? [] : [group]))),
+          { concurrency: "unbounded" },
+        ),
+      ).pipe(Effect.map((remaining) => remaining.flat()));
       const release = Effect.gen(function* () {
+        yield* recordDetachedGroups;
         yield* options.requestAbort?.(send) ?? Effect.void;
         yield* Effect.sleep("100 millis");
         yield* Effect.exit(terminate("graceful"));
         if (yield* waitForExit) {
           yield* Effect.sleep("100 millis");
           yield* terminate("force").pipe(Effect.ignore);
-          if (!(yield* runtime.confirmGroupExit(pid, 2_000))) return yield* cleanupUnconfirmed();
-          return undefined;
+        } else {
+          yield* Effect.exit(terminate("force"));
+          if (!(yield* waitForExit)) return yield* cleanupUnconfirmed();
         }
-        yield* Effect.exit(terminate("force"));
-        const forcedExit = yield* waitForExit;
-        if (!forcedExit) return yield* cleanupUnconfirmed();
         if (!(yield* runtime.confirmGroupExit(pid, 2_000))) return yield* cleanupUnconfirmed();
+        const remaining = yield* confirmDetachedGroupsExit;
+        if (remaining.length > 0)
+          return yield* cleanupUnconfirmed(
+            `Detached descendant process groups ${remaining.join(", ")} were still running after the subagent exited.`,
+          );
         return undefined;
       });
       yield* Effect.addFinalizer(() =>

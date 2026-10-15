@@ -333,6 +333,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       error: processError,
       message: (value): ChildWireEvent => ({ type: "rpc_message", value }),
       terminateOnParserOverflow: false,
+      confirmDetachedDescendants: request.writeIntent === "writer",
       synchronousWriteFailure: "not_sent",
       requestAbort: requestCooperativeAbort,
       attach: (child, offer) =>

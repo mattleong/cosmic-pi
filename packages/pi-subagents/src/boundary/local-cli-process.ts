@@ -230,6 +230,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
     args: harness.args,
     env: harness.env,
     cwd: request.launch.cwd,
+    writer: request.launch.writeIntent === "writer",
   });
   return claudeDebug ? { ...transport, claudeDebug } : transport;
 });
