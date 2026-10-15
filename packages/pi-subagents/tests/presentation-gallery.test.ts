@@ -34,6 +34,10 @@ import {
   type SubagentCompletionNotification,
   type SubagentNotification,
 } from "../src/boundary/host-notifier.ts";
+import {
+  STOPPED_RUNS_MESSAGE_TYPE,
+  stoppedRunsContent,
+} from "../src/boundary/host-stopped-runs.ts";
 import type { DeclaredProfileCandidate, ProfileRouteContinuation } from "../src/profiles/model.ts";
 import {
   SubagentProfileService,
@@ -1052,6 +1056,17 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
     message: dbMigration.question?.message ?? "",
     generation: 1,
   }),
+  {
+    title: "moving in the session tree stops workers",
+    message: {
+      role: "custom",
+      customType: STOPPED_RUNS_MESSAGE_TYPE,
+      display: true,
+      timestamp: 0,
+      content: stoppedRunsContent([authReview, dbMigration], "tree"),
+      details: { version: 1, kind: "stopped", total: 2 },
+    },
+  },
   ...completedReports.map(({ message }) => ({
     title: "forwarded to a nested worker",
     message: { ...message, customType: "pi-subagents-proxy-notification", details: undefined },

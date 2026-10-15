@@ -31,6 +31,11 @@ import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
 import { registerActiveRunsPrompt } from "../boundary/host-active-runs-prompt.ts";
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
 import { hostNotifier } from "../boundary/host-notifier.ts";
+import {
+  reportStoppedRuns,
+  type RuntimeRetirement,
+  runsStoppedByReplacement,
+} from "../boundary/host-stopped-runs.ts";
 import { registerParentWake } from "../boundary/host-parent-wake.ts";
 import { sessionReportArchive, type ReportArchive } from "../boundary/report-archive.ts";
 import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
@@ -480,7 +485,30 @@ export function registerSubagentApplication(
     bridge.setContext(currentActivation.ctx);
   });
 
-  pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, "tree"));
+  // Replacing the runtime stops every run, so first append pending reports without a turn, then
+  // tell the model and the user which runs stop.
+  const retireActivation = (ctx: ExtensionContext, cause: RuntimeRetirement): Promise<void> => {
+    if (!currentActivation) return Promise.resolve();
+    return slot
+      .run(
+        SubagentService.use((service) =>
+          service.deliverPendingCompletions.pipe(Effect.timeoutOption("2 seconds")),
+        ),
+      )
+      .catch(() => undefined)
+      .then(() =>
+        currentActivation
+          ? reportStoppedRuns(pi, ctx, runsStoppedByReplacement(bridge.get().runs), cause)
+          : undefined,
+      );
+  };
+
+  pi.on("session_tree", (_event, ctx) => {
+    const release = wake.hold();
+    return retireActivation(ctx, "tree")
+      .then(() => prepareActivation(ctx, "tree"))
+      .finally(release);
+  });
 
   const shutdownSession = (event: SessionShutdownEvent, ctx: ExtensionContext) => {
     const reload = event.reason === "reload";
@@ -496,17 +524,9 @@ export function registerSubagentApplication(
   };
 
   pi.on("session_shutdown", (event, ctx) => {
-    // Pending reports are appended to the transcript, without a turn, before the tree closes.
     wake.hold();
-    const flushed = currentActivation
-      ? slot
-          .run(
-            SubagentService.use((service) =>
-              service.deliverPendingCompletions.pipe(Effect.timeoutOption("2 seconds")),
-            ),
-          )
-          .catch(() => undefined)
-      : Promise.resolve();
-    return flushed.then(() => shutdownSession(event, ctx));
+    return retireActivation(ctx, event.reason === "reload" ? "reload" : "session").then(() =>
+      shutdownSession(event, ctx),
+    );
   });
 }

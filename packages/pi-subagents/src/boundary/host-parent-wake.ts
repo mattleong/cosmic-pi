@@ -46,8 +46,11 @@ export interface ParentWakeHost {
 }
 
 export interface ParentWake extends NoticeDelivery {
-  /** Holds wakes for the rest of this session, as it shuts down. */
-  readonly hold: () => void;
+  /**
+   * Holds wakes while the runtime is retired, so its last reports are appended without a turn.
+   * The returned release restores the earlier hold state; a shutdown never calls it.
+   */
+  readonly hold: () => () => void;
 }
 
 type PendingQuestion = SubagentRunView & {
@@ -212,7 +215,11 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
       return accepted;
     },
     hold: () => {
+      const wasHeld = held;
       held = true;
+      return () => {
+        held = wasHeld;
+      };
     },
   };
 }

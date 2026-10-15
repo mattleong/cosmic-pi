@@ -25,6 +25,12 @@ const Details = Schema.Union([
     warnings: Count,
     name: Schema.optional(Name),
   }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("stopped"),
+    total: Count,
+    name: Schema.optional(Name),
+  }),
 ]);
 type NotificationDetails = typeof Details.Type;
 const Envelope = Schema.Struct({
@@ -75,6 +81,16 @@ const notificationRow = (
     return {
       summary: { subject: `${details.name ?? "A subagent"} needs a reply`, outcome: "warning" },
     };
+  if (details?.kind === "stopped" && details.total > 0)
+    return {
+      summary: {
+        subject:
+          details.total === 1 && details.name
+            ? `${details.name} stopped`
+            : `${countLabel(details.total, "subagent")} stopped`,
+        outcome: "warning",
+      },
+    };
   if (
     details?.kind === "completed" &&
     details.total > 0 &&
@@ -92,6 +108,7 @@ const expansionLabel = (details: NotificationDetails | undefined): string => {
   if (details === undefined) return "message";
   return Match.value(details).pipe(
     Match.when({ kind: "question" }, () => "question"),
+    Match.when({ kind: "stopped" }, () => "list"),
     Match.when({ kind: "completed" }, (completed) =>
       completed.failed === completed.total
         ? countLabel(completed.total, "failure detail")

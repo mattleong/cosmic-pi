@@ -16,6 +16,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Match from "effect/Match";
 import {
@@ -30,6 +31,8 @@ import { registerSubagentApplication } from "../src/application/register.ts";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import * as SubagentLayers from "../src/layer.ts";
 import { captureSubagentControlExpectation } from "../src/run/model.ts";
+import { SubagentService } from "../src/run/service.ts";
+import { stringContaining } from "./support/matchers.ts";
 import { encodeFleetActionRequest } from "../src/tools/proxy-fleet.ts";
 import { view } from "./fixtures/run-view.ts";
 import { completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
@@ -246,6 +249,80 @@ describe("subagent Pi registration", () => {
     yield* settle(() => emit("session_shutdown", ctx));
     expect(sweeps).toEqual([true, false, false, true]);
   });
+
+  effectTest(
+    "appends pending reports, then lists the runs a tree move or reload stops, without a turn",
+    function* () {
+      const makeLayer = SubagentLayers.subagentApplicationLayer;
+      const order: string[] = [];
+      const capture = vi
+        .spyOn(SubagentLayers, "subagentApplicationLayer")
+        .mockImplementation((options) =>
+          makeLayer(options).pipe(
+            Layer.merge(
+              Layer.succeed(
+                SubagentService,
+                subagentServiceDouble({
+                  projection: Effect.succeed({ revision: 0, runs: [] }),
+                  deliverPendingCompletions: Effect.sync(() => {
+                    order.push("flush");
+                    options.notify({
+                      type: "completed",
+                      runs: [
+                        {
+                          id: "agent-0",
+                          name: "finished-reader",
+                          generation: 1,
+                          outcome: "completed",
+                          finalText: "Pending report.",
+                        },
+                      ],
+                    });
+                    options.publish({
+                      revision: 1,
+                      runs: [
+                        view({ id: "agent-1", name: "parser-review", state: "running" }),
+                        view({ id: "agent-2", name: "lexer-review", state: "paused" }),
+                        view({ id: "agent-3", name: "done", state: "completed" }),
+                      ],
+                    });
+                  }),
+                }),
+              ),
+            ),
+          ),
+        );
+      yield* Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore()));
+      const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>((message) => {
+        order.push(message.customType);
+      });
+      const notify = vi.fn();
+      const ctx = sessionContext({ hasUI: true, mode: "tui", ui: { notify } }, "retiring-session");
+      const { emit } = applicationFixture({ sendMessage });
+      yield* settle(() => emit("session_start", ctx));
+
+      yield* settle(() => emit("session_tree", ctx));
+      expect(order).toEqual(["flush", "pi-subagents-completed", "pi-subagents-stopped"]);
+      expect(sendMessage.mock.calls.map(([, options]) => options?.triggerTurn)).toEqual([
+        false,
+        false,
+      ]);
+      const stopped = sendMessage.mock.calls[1]?.[0];
+      expect(stopped?.content).toEqual(stringContaining("parser-review (agent-1): running"));
+      expect(stopped?.content).toEqual(stringContaining("lexer-review (agent-2): paused"));
+      expect(stopped?.content).not.toEqual(stringContaining("agent-3"));
+      expect(notify).toHaveBeenCalledWith(stringContaining("2 subagents stopped"), "warning");
+
+      yield* settle(() =>
+        emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
+      );
+      expect(order.slice(3)).toEqual(["flush", "pi-subagents-completed", "pi-subagents-stopped"]);
+      expect(sendMessage.mock.calls.at(-1)?.[0].content).toEqual(stringContaining("Reloading Pi"));
+      expect(sendMessage.mock.calls.every(([, options]) => options?.triggerTurn === false)).toBe(
+        true,
+      );
+    },
+  );
 
   effectTest("retired tools cannot run against a replacement session", function* () {
     const ctx = sessionContext({ isProjectTrusted: () => false });
