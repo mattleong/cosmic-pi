@@ -6,6 +6,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import type { SupervisorChannelHandle } from "../src/boundary/supervisor-channel.ts";
@@ -30,6 +31,7 @@ const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedRep
   Effect.gen(function* () {
     const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
     const supervisorEvents = yield* Queue.unbounded<SupervisorEvent, Cause.Done>();
+    const turnInputs: string[] = [];
     const child: LocalCliHandle = {
       pid: 1,
       events: childEvents,
@@ -40,6 +42,7 @@ const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedRep
       send: (frame) =>
         Effect.sync(() => {
           if (!("id" in frame) || !("method" in frame)) return;
+          if (frame.method === "turn/start") turnInputs.push(frame.params.input[0].text);
           const result = Match.value(frame.method).pipe(
             Match.when("initialize", () => ({
               codexHome: "/tmp",
@@ -73,8 +76,69 @@ const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedRep
     yield* backend.controls.initialize;
     yield* backend.controls.start("Start", 1);
     expect(yield* Queue.take(backend.events)).toMatchObject({ type: "run_started" });
-    return { backend, childEvents, supervisorEvents };
+    return { backend, childEvents, supervisorEvents, turnInputs };
   });
+
+const finishTurn = (childEvents: Queue.Queue<LocalCliWireEvent, Cause.Done>, text: string) => {
+  Queue.offerUnsafe(childEvents, {
+    type: "message",
+    value: {
+      method: "item/completed",
+      params: {
+        threadId: "thread",
+        turnId: "turn",
+        item: { id: `message-${text.length}`, type: "agentMessage", text },
+      },
+    },
+  });
+  Queue.offerUnsafe(childEvents, {
+    type: "message",
+    value: {
+      method: "turn/completed",
+      params: { threadId: "thread", turn: { id: "turn", status: "completed" } },
+    },
+  });
+};
+
+it.effect("Codex reminds once, then fails with the reminded turn's final text", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { backend, childEvents, turnInputs } = yield* startedCodex(() => Effect.succeed(false));
+      finishTurn(childEvents, "Here is my answer, without a report.");
+      expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
+      expect(yield* Queue.take(backend.events)).toEqual({ type: "activity", assignmentEpoch: 1 });
+      yield* yieldUntil(() => turnInputs.length === 2);
+      expect(turnInputs[1]).toContain("supervisor_submit_report");
+      finishTurn(childEvents, "Still no report.");
+      expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
+      const failure = yield* Queue.take(backend.events);
+      if (failure.type !== "protocol_error") return yield* Effect.die("Expected a failure.");
+      expect(failure.message).toContain("even after a reminder");
+      expect(failure.message).toContain("Still no report.");
+      expect(failure.message).not.toContain("Here is my answer");
+      return undefined;
+    }),
+  ),
+);
+
+it.effect("Codex completes when the reminded turn submits its report", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let accepted = false;
+      const { backend, childEvents, turnInputs } = yield* startedCodex(() =>
+        Effect.succeed(accepted),
+      );
+      finishTurn(childEvents, "Done, but no report yet.");
+      expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
+      expect(yield* Queue.take(backend.events)).toEqual({ type: "activity", assignmentEpoch: 1 });
+      yield* yieldUntil(() => turnInputs.length === 2);
+      accepted = true;
+      finishTurn(childEvents, "Report submitted.");
+      expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
+      expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+    }),
+  ),
+);
 
 it.effect("Codex never recounts usage after a cumulative snapshot regresses", () =>
   Effect.scoped(

@@ -50,8 +50,8 @@ export const settledAssignmentLocked = (
 const PARTIAL_OUTPUT_CHARS = 2_000;
 
 // The failed attempt's own text, so the parent can judge the failure before retrying.
-const partialOutput = (terminal: BackendAssistantTerminal | undefined): string => {
-  const text = terminal?.text?.trim();
+export const partialOutput = (finalText: string | undefined): string => {
+  const text = finalText?.trim();
   if (!text) return "";
   const shown =
     text.length > PARTIAL_OUTPUT_CHARS ? `${text.slice(0, PARTIAL_OUTPUT_CHARS)}…` : text;
@@ -59,7 +59,7 @@ const partialOutput = (terminal: BackendAssistantTerminal | undefined): string =
 };
 
 export const settledFailureMessage = (terminal: BackendAssistantTerminal | undefined): string =>
-  `${terminalFailureMessage(terminal)} Work and writes may already exist; inspect them before an explicit retry.${partialOutput(terminal)}`;
+  `${terminalFailureMessage(terminal)} Work and writes may already exist; inspect them before an explicit retry.${partialOutput(terminal?.text)}`;
 
 export const settlementBlocked = (record: RunRecord, state: SettlementState): boolean =>
   isTerminalRunState(record.view.state) ||

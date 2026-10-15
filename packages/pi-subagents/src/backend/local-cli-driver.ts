@@ -20,6 +20,7 @@ import {
   type SubagentError,
   type SubagentProcessError,
 } from "../run/errors.ts";
+import { partialOutput } from "../run/settlement-outcome.ts";
 import { MAX_ERROR_CHARS, sanitizeStreamDiagnostic } from "../run/state.ts";
 import {
   SUPERVISOR_MCP_REGISTRATION,
@@ -37,6 +38,16 @@ import { supervisorError } from "./driver-shared.ts";
 import { LOCAL_CLI_LABELS } from "./local-cli-version.ts";
 
 const REPORT_TOOL = SUPERVISOR_MCP_TOOL_NAMES[3];
+
+/** The one follow-up input a child gets when a turn ends without its report. */
+export const REPORT_REMINDER = `Your turn ended without a ${REPORT_TOOL} call, so the parent has received nothing. If the assignment is complete, call ${REPORT_TOOL} now with your final report and a fresh delivery_id. Otherwise finish the work first, then submit the report. Final text alone never reaches the parent.`;
+
+export const missingReportMessage = (
+  runtime: LocalCliRuntime,
+  finalText: string | undefined,
+  reminded: boolean,
+): string =>
+  `${LOCAL_CLI_LABELS[runtime]} ended its turn without an accepted supervisor report${reminded ? ", even after a reminder" : ""}. Work and writes may already exist; inspect them before an explicit retry.${partialOutput(finalText)}`;
 
 export const withLocalSupervisorInstructions = (
   request: BackendLaunchRequest,

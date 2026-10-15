@@ -44,6 +44,8 @@ import {
   deliverTerminalReport,
   localCliBackendDriver,
   localCliBackendExit,
+  missingReportMessage,
+  REPORT_REMINDER,
 } from "./local-cli-driver.ts";
 
 const RPC_TIMEOUT = "10 seconds";
@@ -75,6 +77,11 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   let sessionId: string | undefined;
   let activeTurnId: string | undefined;
   let runStartedTurnId: string | undefined;
+  let runStartedEpoch: number | undefined;
+  /** The active turn's latest agent message, for a missing-report failure. */
+  let turnFinalText: string | undefined;
+  /** The assignment already reminded once to submit its missing report. */
+  let reportReminderEpoch: number | undefined;
   const interrupts = localCliInterrupts<PendingInterrupt>(
     "Codex",
     { offer, release },
@@ -135,7 +142,8 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   };
 
   const onItemCompleted = (event: CodexItemEvent, raw: LocalCliWireEvent) => {
-    if (event.item.type === "agentMessage")
+    if (event.item.type === "agentMessage") {
+      turnFinalText = event.item.text;
       return offer(
         {
           type: "assistant_message" as const,
@@ -146,6 +154,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         },
         raw,
       );
+    }
     const tool = executableToolName(event.item);
     if (tool === undefined) return release(raw);
     return offer(
@@ -161,15 +170,66 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     );
   };
 
+  // A report reminder starts a second turn in the same assignment, which is not a new start.
   const markTurnStarted = (turnId: string, epoch: number, raw?: LocalCliWireEvent) => {
     activeTurnId = turnId;
-    if (runStartedTurnId === turnId) return raw ? release(raw) : Effect.void;
+    const announce = runStartedTurnId !== turnId && runStartedEpoch !== epoch;
     runStartedTurnId = turnId;
+    if (!announce) return raw ? release(raw) : Effect.void;
+    runStartedEpoch = epoch;
     return offer({ type: "run_started", assignmentEpoch: epoch }, raw);
+  };
+
+  const failMissingReport = (
+    finalText: string | undefined,
+    reminded: boolean,
+    raw?: LocalCliWireEvent,
+  ) =>
+    offer(
+      { type: "protocol_error", message: missingReportMessage("codex", finalText, reminded) },
+      raw,
+    );
+
+  // The thread is idle once its turn completes, so the one reminder starts a turn whose own
+  // completion is checked for the report again; only a second miss fails the assignment.
+  const missingReport = (
+    epoch: number,
+    finalText: string | undefined,
+    raw: LocalCliWireEvent,
+  ): Effect.Effect<void> => {
+    if (reportReminderEpoch === epoch) return failMissingReport(finalText, true, raw);
+    const thread = threadId;
+    if (epoch !== assignmentEpoch || thread === undefined)
+      return failMissingReport(finalText, false, raw);
+    reportReminderEpoch = epoch;
+    const remind = rpcResult(
+      (id) =>
+        turnStartRequest(
+          id,
+          thread,
+          REPORT_REMINDER,
+          request.model,
+          request.effort,
+          request.writeIntent,
+          request.openaiFastMode,
+        ),
+      TurnStartResult,
+      "turn/start",
+    ).pipe(
+      Effect.flatMap((started) => markTurnStarted(started.turn.id, epoch)),
+      Effect.catch(() => failMissingReport(finalText, false)),
+    );
+    // The turn/start response arrives through the consumer that is handling this completion.
+    return offer({ type: "activity", assignmentEpoch: epoch }, raw).pipe(
+      Effect.andThen(Effect.forkIn(remind, scope, { startImmediately: true })),
+      Effect.asVoid,
+    );
   };
 
   const onTurnCompleted = (event: CodexTurnCompleted, raw: LocalCliWireEvent) => {
     const completedEpoch = assignmentEpoch;
+    const finalText = turnFinalText;
+    turnFinalText = undefined;
     activeTurnId = undefined;
     if (runStartedTurnId === event.turnId) runStartedTurnId = undefined;
     const interrupt = interrupts.current;
@@ -205,15 +265,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
             raw,
           ),
         onSuccess: (accepted) =>
-          accepted
-            ? release(raw)
-            : offer(
-                {
-                  type: "protocol_error",
-                  message: "Codex turn completed without an accepted supervisor report.",
-                },
-                raw,
-              ),
+          accepted ? release(raw) : missingReport(completedEpoch, finalText, raw),
       }),
     );
   };

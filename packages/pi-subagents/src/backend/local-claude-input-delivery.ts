@@ -20,7 +20,7 @@ export const userContentDigest = (text: string): string => sha256Text(text);
 export interface PendingUserReplay {
   readonly uuid: string;
   readonly sequence: number;
-  readonly operation: "initialize" | "start" | "steer";
+  readonly operation: "initialize" | "start" | "steer" | "remind";
   readonly contentDigest: string;
   readonly epoch: number;
   readonly emitRunStarted: boolean;
@@ -141,6 +141,7 @@ export const localClaudeInputDelivery = (
           resultKind: Match.value(operation).pipe(
             Match.when("initialize", () => "initialization" as const),
             Match.when("start", () => "assignment" as const),
+            Match.when("remind", () => "assignment" as const),
             Match.when("steer", () => undefined),
             Match.exhaustive,
           ),

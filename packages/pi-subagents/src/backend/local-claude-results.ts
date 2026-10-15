@@ -8,6 +8,7 @@ import {
 } from "./local-claude-correlation.ts";
 import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
 import { usageComponentsTotal } from "./local-claude-usage.ts";
+import { missingReportMessage, REPORT_REMINDER } from "./local-cli-driver.ts";
 
 type ClaudeResultProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "result" }>;
 
@@ -23,18 +24,36 @@ export const localClaudeResults = (context: LocalClaudeHandleContext) => {
     usage,
     reports,
     interrupts,
+    inputs,
     forwardAcceptedReport,
     forkOwned,
   } = context;
 
-  const missingReport = (raw?: LocalCliWireEvent) =>
+  const failMissingReport = (reminded: boolean, raw?: LocalCliWireEvent) =>
     offer(
       {
         type: "protocol_error",
-        message: "Claude Code result completed without an accepted supervisor report.",
+        message: missingReportMessage("claude", state.lastResultText, reminded),
       },
       raw,
     );
+
+  // Claude is idle once its turn ends, so the one reminder starts a turn whose own result is
+  // checked for the report again; only a second miss fails the assignment.
+  const missingReport = (epoch: number, raw?: LocalCliWireEvent): Effect.Effect<void> => {
+    if (state.reportReminderEpoch === epoch) return failMissingReport(true, raw);
+    if (epoch !== state.assignmentEpoch) return failMissingReport(false, raw);
+    state.reportReminderEpoch = epoch;
+    return offer({ type: "activity", assignmentEpoch: epoch }, raw).pipe(
+      Effect.andThen(
+        forkOwned(
+          inputs
+            .send(REPORT_REMINDER, epoch, "remind")
+            .pipe(Effect.catch(() => failMissingReport(false))),
+        ),
+      ),
+    );
+  };
 
   // Claude starts the continuation right after the turn that received the notification ends;
   // without any main-session output by then, the notification was absorbed and no report comes.
@@ -50,7 +69,7 @@ export const localClaudeResults = (context: LocalClaudeHandleContext) => {
           )
             return Effect.void;
           state.awaitingContinuationEpoch = undefined;
-          return missingReport();
+          return missingReport(epoch);
         }),
       ),
     );
@@ -99,6 +118,7 @@ export const localClaudeResults = (context: LocalClaudeHandleContext) => {
     notified: boolean,
   ) => {
     const completedEpoch = expectation.epoch;
+    state.lastResultText = event.finalText;
     return reconcileResultUsage(event, expectation).pipe(
       Effect.andThen(
         supervisor.hasAcceptedReport(completedEpoch).pipe(
@@ -133,7 +153,7 @@ export const localClaudeResults = (context: LocalClaudeHandleContext) => {
                 );
               }
               state.awaitingContinuationEpoch = undefined;
-              return missingReport(raw);
+              return missingReport(completedEpoch, raw);
             },
           }),
         ),

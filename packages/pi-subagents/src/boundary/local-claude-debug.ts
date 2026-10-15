@@ -19,7 +19,7 @@ export type LocalClaudeDebugEntry =
   | {
       readonly kind: "outbound-user";
       readonly sequence: number;
-      readonly operation: "initialize" | "start" | "steer";
+      readonly operation: "initialize" | "start" | "steer" | "remind";
       readonly epoch: number;
       readonly shouldQuery: boolean;
     }
@@ -58,7 +58,7 @@ export type LocalClaudeDebugEntry =
       readonly toolResults: boolean;
       readonly origin: boolean;
       readonly subkind: boolean;
-      readonly pending: "initialize" | "start" | "steer" | "interrupt" | "none";
+      readonly pending: "initialize" | "start" | "steer" | "remind" | "interrupt" | "none";
       readonly report: "accepted" | "none" | "unknown";
     };
 

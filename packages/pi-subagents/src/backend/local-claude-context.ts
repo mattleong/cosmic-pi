@@ -38,6 +38,10 @@ export interface LocalClaudeHandleState {
   continuationToken: number;
   /** An assignment whose turn ended without a report while background work was still running. */
   awaitingContinuationEpoch: number | undefined;
+  /** The assignment already reminded once to submit its missing report. */
+  reportReminderEpoch: number | undefined;
+  /** The latest assignment result's final text, for a missing-report failure. */
+  lastResultText: string | undefined;
 }
 
 export interface LocalClaudeHandleContext {

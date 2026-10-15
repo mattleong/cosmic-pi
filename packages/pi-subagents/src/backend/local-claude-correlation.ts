@@ -162,7 +162,7 @@ export const claudeOutboundAgeDiagnostic = (
 export interface ClaudeUserDiagnosticContext {
   readonly sequence: number;
   readonly contentMatch: ClaudeSentContentMatch;
-  readonly pending: "initialize" | "start" | "steer" | "interrupt" | "none";
+  readonly pending: "initialize" | "start" | "steer" | "remind" | "interrupt" | "none";
   readonly report: "accepted" | "none" | "unknown";
   readonly sinceOutbound: ClaudeOutboundAgeDiagnostic;
   readonly traceEnabled: boolean;

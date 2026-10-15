@@ -246,6 +246,8 @@ export type ClaudeProtocolEvent =
       readonly cumulativeUsage?: UsageComponents | undefined;
       /** The process's running cost estimate so far. */
       readonly totalCostUsd?: number | undefined;
+      /** A successful turn's final assistant text. */
+      readonly finalText?: string | undefined;
       readonly diagnostic?: string | undefined;
     }
   | {
@@ -350,6 +352,7 @@ const resultProtocolEvent = (event: typeof Result.Type): ClaudeProtocolEvent => 
       ?.map((error) => error.trim())
       .filter(Boolean)
       .join("\n");
+  const finalText = event.is_error === true ? "" : (event.result?.trim() ?? "");
   return {
     type: "result",
     isError: event.is_error === true,
@@ -361,6 +364,7 @@ const resultProtocolEvent = (event: typeof Result.Type): ClaudeProtocolEvent => 
     ...(event.origin?.subkind && { originSubkind: event.origin.subkind }),
     ...(event.modelUsage && { cumulativeUsage: cumulativeUsageFromNative(event.modelUsage) }),
     ...(event.total_cost_usd !== undefined && { totalCostUsd: event.total_cost_usd }),
+    ...(finalText && { finalText }),
     ...(diagnostic && { diagnostic }),
   };
 };

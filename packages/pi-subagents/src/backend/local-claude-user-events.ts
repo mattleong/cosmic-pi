@@ -30,6 +30,7 @@ type UserDecision = Extract<LocalClaudeDebugEntry, { readonly kind: "user-decisi
 const SENT_KIND_BY_OPERATION = {
   initialize: "probe",
   start: "assignment",
+  remind: "assignment",
   steer: "steer",
 } as const satisfies Record<PendingUserReplay["operation"], ClaudeSentUserKind>;
 

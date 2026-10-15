@@ -69,6 +69,8 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     continuationActivity: false,
     continuationToken: 0,
     awaitingContinuationEpoch: undefined,
+    reportReminderEpoch: undefined,
+    lastResultText: undefined,
   };
   const interrupts = localCliInterrupts<PendingInterrupt>(
     "Claude",

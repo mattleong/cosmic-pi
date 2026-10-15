@@ -95,7 +95,8 @@ interface ReplayHarness {
   readonly guidanceSent: Effect.Effect<void>;
   readonly replayGuidance: Effect.Effect<void>;
   readonly taskNotification: (form: TaskNotificationReplay, uuid?: string) => Effect.Effect<string>;
-  readonly assignmentResult: Effect.Effect<void>;
+  readonly assignmentResult: (finalText?: string) => Effect.Effect<void>;
+  readonly sentTexts: () => ReadonlyArray<string>;
   readonly backgroundTasks: (count: number) => Effect.Effect<void>;
   readonly requireReports: Effect.Effect<void>;
   readonly taskCompleted: Effect.Effect<void>;
@@ -133,6 +134,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
     const guidanceSent = Deferred.makeUnsafe<void>();
     const exited = Deferred.makeUnsafe<{ exitCode: number; stderr: string }>();
     let terminations = 0;
+    const sentTexts: string[] = [];
     let acceptedReport = scenario.startsWith("accepted-report-")
       ? {
           runId: `agent-${scenario}`,
@@ -329,6 +331,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
         if (!("type" in outbound)) return;
         if (outbound.type === "control_request") return answerControlRequest(outbound);
         if (outbound.type !== "user") return;
+        sentTexts.push(outbound.message.content);
         if (outbound.message.content === "Delayed guidance") {
           pendingGuidance = outbound;
           Deferred.doneUnsafe(guidanceSent, Effect.void);
@@ -547,17 +550,20 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
             }),
           }),
         ),
-      assignmentResult: Effect.sync(() =>
-        offerChild({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          session_id: "claude-replay-session",
-          user_message_uuid: assignmentUuid,
-          modelUsage: modelUsage(5, 4, 1),
-          total_cost_usd: 0.001,
-        }),
-      ),
+      assignmentResult: (finalText) =>
+        Effect.sync(() =>
+          offerChild({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            session_id: "claude-replay-session",
+            user_message_uuid: assignmentUuid,
+            ...(finalText !== undefined && { result: finalText }),
+            modelUsage: modelUsage(5, 4, 1),
+            total_cost_usd: 0.001,
+          }),
+        ),
+      sentTexts: () => sentTexts,
       foreignResult: Effect.sync(() =>
         offerChild({
           type: "result",
@@ -663,6 +669,20 @@ const expectInternalUserFrame = (scenario: ReplayScenario) =>
     }),
   );
 
+// A turn that ends without a report earns one reminder turn; only that turn's miss fails.
+const missReportAfterReminder = (
+  backend: BackendHandle,
+  harness: ReplayHarness,
+  finalText?: string,
+) =>
+  Effect.gen(function* () {
+    expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
+    expect(yield* take(backend)).toMatchObject({ type: "assistant_message", text: "Working" });
+    yield* harness.assignmentResult(finalText);
+    expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
+    return yield* take(backend);
+  });
+
 const takeRejectedUserFrame = (scenario: ReplayScenario) =>
   withRunningBackend(scenario, 9, (backend) => take(backend));
 
@@ -674,7 +694,7 @@ describe("local Claude steering acknowledgement lifecycle", () => {
         Effect.gen(function* () {
           yield* harness.foreignResult;
           expect(yield* take(backend)).toMatchObject({ type: "protocol_error" });
-          yield* harness.assignmentResult;
+          yield* harness.assignmentResult();
           expect(yield* take(backend)).toMatchObject({
             type: "assistant_message",
             assignmentEpoch: 12,
@@ -1073,7 +1093,7 @@ describe("local Claude task-notification replays", () => {
           yield* harness.taskNotification("labelled");
           expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         }
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult();
         expect(yield* take(backend)).toMatchObject({
           type: "assistant_message",
           assignmentEpoch: 12,
@@ -1096,7 +1116,7 @@ describe("local Claude task-notification replays", () => {
         const uuid = yield* harness.taskNotification("labelled");
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         yield* harness.taskNotification("labelled", uuid);
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult();
         expect(yield* take(backend)).toMatchObject({
           type: "assistant_message",
           usage: objectContaining({ cost: 0.001 }),
@@ -1140,7 +1160,7 @@ describe("local Claude task-notification replays", () => {
     (form) =>
       withRunningBackend("steering", 12, (backend, harness) =>
         Effect.gen(function* () {
-          yield* harness.assignmentResult;
+          yield* harness.assignmentResult();
           expect(yield* take(backend)).toMatchObject({
             type: "assistant_message",
             usage: objectContaining({ cost: 0.001 }),
@@ -1159,7 +1179,7 @@ describe("local Claude task-notification replays", () => {
           yield* harness.requireReports;
           yield* harness.backgroundTasks(1);
           expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
-          yield* harness.assignmentResult;
+          yield* harness.assignmentResult();
           expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
           yield* harness.backgroundTasks(0);
           expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
@@ -1182,7 +1202,7 @@ describe("local Claude task-notification replays", () => {
         yield* harness.requireReports;
         yield* harness.backgroundTasks(1);
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult();
         const first = yield* take(backend);
         yield* harness.acceptReport(12);
         yield* harness.continuationResult(undefined, {
@@ -1208,7 +1228,7 @@ describe("local Claude task-notification replays", () => {
         yield* harness.requireReports;
         yield* harness.backgroundTasks(1);
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult();
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
         yield* harness.acceptReport(12);
         yield* harness.continuationResult();
@@ -1226,7 +1246,7 @@ describe("local Claude task-notification replays", () => {
         yield* harness.taskCompleted;
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult();
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
         yield* harness.acceptReport(12);
         yield* harness.continuationResult();
@@ -1247,10 +1267,10 @@ describe("local Claude task-notification replays", () => {
         yield* harness.activity;
         expect(yield* take(backend)).toMatchObject({ type: "tool_started" });
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult();
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
         yield* TestClock.adjust("21 seconds");
-        expect(yield* take(backend)).toMatchObject({
+        expect(yield* missReportAfterReminder(backend, harness)).toMatchObject({
           type: "protocol_error",
           message: stringContaining("without an accepted supervisor report"),
         });
@@ -1262,7 +1282,7 @@ describe("local Claude task-notification replays", () => {
     withRunningBackend("steering", 12, (backend, harness) =>
       Effect.gen(function* () {
         yield* harness.acceptReport(12);
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult();
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
         expect(yield* take(backend)).toMatchObject({ type: "report", assignmentEpoch: 12 });
         yield* harness.continuationResult();
@@ -1320,7 +1340,7 @@ describe("local Claude task-notification replays", () => {
       Effect.gen(function* () {
         yield* harness.peerMessage;
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult();
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
         yield* harness.acceptReport(12);
         expect(yield* take(backend)).toMatchObject({ type: "report", assignmentEpoch: 12 });
@@ -1334,12 +1354,12 @@ describe("local Claude task-notification replays", () => {
         yield* harness.requireReports;
         yield* harness.backgroundTasks(1);
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult();
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
         yield* harness.backgroundTasks(0);
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         yield* TestClock.adjust("21 seconds");
-        expect(yield* take(backend)).toMatchObject({
+        expect(yield* missReportAfterReminder(backend, harness)).toMatchObject({
           type: "protocol_error",
           message: stringContaining("without an accepted supervisor report"),
         });
@@ -1347,16 +1367,52 @@ describe("local Claude task-notification replays", () => {
     ),
   );
 
-  it.effect("still fails an assignment turn that ends without a report or background work", () =>
+  it.effect("reminds once, then fails with the reminded turn's final text", () =>
     withRunningBackend("steering", 12, (backend, harness) =>
       Effect.gen(function* () {
         yield* harness.requireReports;
-        yield* harness.assignmentResult;
+        yield* harness.assignmentResult("Here is my answer, without a report.");
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
-        expect(yield* take(backend)).toMatchObject({
+        const failure = yield* missReportAfterReminder(backend, harness, "Still no report.");
+        expect(failure).toMatchObject({
           type: "protocol_error",
-          message: stringContaining("without an accepted supervisor report"),
+          message: stringContaining("even after a reminder"),
         });
+        if (failure.type !== "protocol_error") return yield* Effect.die("Expected a failure.");
+        expect(failure.message).toContain("Still no report.");
+        expect(failure.message).not.toContain("Here is my answer");
+        expect(harness.sentTexts().at(-1)).toContain("supervisor_submit_report");
+        return undefined;
+      }),
+    ),
+  );
+
+  it.effect("completes when the reminded turn submits its report", () =>
+    withRunningBackend("steering", 12, (backend, harness) =>
+      Effect.gen(function* () {
+        yield* harness.requireReports;
+        yield* harness.assignmentResult();
+        expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
+        expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
+        expect(yield* take(backend)).toMatchObject({ type: "assistant_message", text: "Working" });
+        yield* harness.acceptReport(12);
+        yield* harness.assignmentResult();
+        expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
+        expect(yield* take(backend)).toMatchObject({ type: "report", assignmentEpoch: 12 });
+      }),
+    ),
+  );
+
+  it.effect("bounds the final text in a missing-report failure", () =>
+    withRunningBackend("steering", 12, (backend, harness) =>
+      Effect.gen(function* () {
+        yield* harness.requireReports;
+        yield* harness.assignmentResult();
+        expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
+        const failure = yield* missReportAfterReminder(backend, harness, "x".repeat(10_000));
+        if (failure.type !== "protocol_error") return yield* Effect.die("Expected a failure.");
+        expect(failure.message.length).toBeLessThan(3_000);
+        return undefined;
       }),
     ),
   );
