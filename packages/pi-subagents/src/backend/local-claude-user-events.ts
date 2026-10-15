@@ -51,7 +51,6 @@ export const localClaudeUserEvents = (context: LocalClaudeHandleContext) => {
     offer,
     release,
     correlation,
-    usage,
     interrupts,
     inputs,
     recordDebug,
@@ -279,10 +278,11 @@ export const localClaudeUserEvents = (context: LocalClaudeHandleContext) => {
             kind: sentKindForOperation(pending.operation),
           });
           if (pending.resultKind)
-            correlation.register(
-              { uuid: pending.uuid, kind: pending.resultKind, epoch: pending.epoch },
-              usage.baseline(),
-            );
+            correlation.register({
+              uuid: pending.uuid,
+              kind: pending.resultKind,
+              epoch: pending.epoch,
+            });
           return inputs
             .confirm(pending)
             .pipe(
@@ -306,10 +306,11 @@ export const localClaudeUserEvents = (context: LocalClaudeHandleContext) => {
         Effect.suspend(() => {
           const syntheticUuid = event.uuid ?? `synthetic:${synchronousRandomUuid()}`;
           if (event.uuid !== undefined) correlation.rememberInternalReplayUuid(event.uuid);
-          correlation.register(
-            { uuid: syntheticUuid, kind: "synthetic", epoch: state.assignmentEpoch },
-            usage.baseline(),
-          );
+          correlation.register({
+            uuid: syntheticUuid,
+            kind: "synthetic",
+            epoch: state.assignmentEpoch,
+          });
           return offer({ type: "activity", assignmentEpoch: state.assignmentEpoch }, raw);
         }),
       );

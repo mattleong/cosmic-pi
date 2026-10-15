@@ -1,5 +1,4 @@
 import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
-import type { UsageComponents } from "./local-claude-usage.ts";
 
 export const SENT_UUID_LIMIT = 64;
 
@@ -201,7 +200,6 @@ export interface ResultExpectation {
   readonly uuid: string;
   readonly kind: "initialization" | "assignment" | "synthetic";
   readonly epoch: number;
-  readonly usageBaseline: UsageComponents;
 }
 
 export const claudeResultCorrelation = () => {
@@ -219,11 +217,8 @@ export const claudeResultCorrelation = () => {
     return kinds.values().next().value ?? "other";
   };
 
-  const register = (
-    expectation: Omit<ResultExpectation, "usageBaseline">,
-    usageBaseline: UsageComponents,
-  ): void => {
-    const owned = { ...expectation, usageBaseline: { ...usageBaseline } };
+  const register = (expectation: ResultExpectation): void => {
+    const owned = { ...expectation };
     resultExpectations.set(owned.uuid, owned);
     resultOrder.push(owned);
     while (resultOrder.length > SENT_UUID_LIMIT) {

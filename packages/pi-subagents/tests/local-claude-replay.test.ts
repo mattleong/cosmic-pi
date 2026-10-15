@@ -70,6 +70,22 @@ type TaskNotificationReplay =
   | "cross-session"
   | "auto-continuation";
 
+interface RunningTotals {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cost: number;
+}
+
+const modelUsage = (inputTokens: number, outputTokens: number, cacheReadInputTokens: number) => ({
+  "fixture-model": {
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens: 0,
+  },
+});
+
 const TASK_NOTIFICATION =
   "<task-notification><task-id>background-shell</task-id><status>completed</status><summary>Background command completed.</summary></task-notification>";
 
@@ -84,7 +100,10 @@ interface ReplayHarness {
   readonly requireReports: Effect.Effect<void>;
   readonly taskCompleted: Effect.Effect<void>;
   readonly peerMessage: Effect.Effect<void>;
-  readonly continuationResult: (userMessageUuid?: string) => Effect.Effect<void>;
+  readonly continuationResult: (
+    userMessageUuid?: string,
+    totals?: RunningTotals,
+  ) => Effect.Effect<void>;
   readonly foreignResult: Effect.Effect<void>;
   readonly rejectReplay: (
     kind: "wrong-uuid" | "wrong-session" | "absent-session",
@@ -287,9 +306,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
         is_error: false,
         session_id: "claude-replay-session",
         user_message_uuid: outbound.uuid,
-        ...(scenario !== "accepted-report-cost-only" && {
-          usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
-        }),
+        ...(scenario !== "accepted-report-cost-only" && { modelUsage: modelUsage(5, 4, 1) }),
         total_cost_usd: 0.001,
       };
       if (
@@ -514,7 +531,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
             session_id: "claude-replay-session",
           }),
         ),
-      continuationResult: (userMessageUuid) =>
+      continuationResult: (userMessageUuid, totals) =>
         Effect.sync(() =>
           offerChild({
             type: "result",
@@ -524,6 +541,10 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
             ...(userMessageUuid === undefined
               ? { origin: { kind: "task-notification" } }
               : { user_message_uuid: userMessageUuid }),
+            ...(totals && {
+              modelUsage: modelUsage(totals.input, totals.output, totals.cacheRead),
+              total_cost_usd: totals.cost,
+            }),
           }),
         ),
       assignmentResult: Effect.sync(() =>
@@ -533,7 +554,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           is_error: false,
           session_id: "claude-replay-session",
           user_message_uuid: assignmentUuid,
-          usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
+          modelUsage: modelUsage(5, 4, 1),
           total_cost_usd: 0.001,
         }),
       ),
@@ -544,7 +565,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           is_error: false,
           session_id: "different-claude-session",
           user_message_uuid: assignmentUuid,
-          usage: { input_tokens: 1000, output_tokens: 1000 },
+          modelUsage: modelUsage(1000, 1000, 0),
           total_cost_usd: 100,
         }),
       ),
@@ -1153,6 +1174,32 @@ describe("local Claude task-notification replays", () => {
           });
         }),
       ),
+  );
+
+  it.effect("charges each later result only the increase of Claude's running totals", () =>
+    withRunningBackend("steering", 12, (backend, harness) =>
+      Effect.gen(function* () {
+        yield* harness.requireReports;
+        yield* harness.backgroundTasks(1);
+        expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
+        yield* harness.assignmentResult;
+        const first = yield* take(backend);
+        yield* harness.acceptReport(12);
+        yield* harness.continuationResult(undefined, {
+          input: 9,
+          output: 6,
+          cacheRead: 1,
+          cost: 0.003,
+        });
+        const second = yield* take(backend);
+        expect(yield* take(backend)).toMatchObject({ type: "report", assignmentEpoch: 12 });
+        if (first.type !== "assistant_message" || second.type !== "assistant_message")
+          return yield* Effect.die("Expected result usage events.");
+        expect(second.usage).toMatchObject({ input: 4, output: 2, cacheRead: 0 });
+        expect((first.usage.cost ?? 0) + (second.usage.cost ?? 0)).toBeCloseTo(0.003);
+        return undefined;
+      }),
+    ),
   );
 
   it.effect("accepts a continuation that Claude starts from its own notification", () =>

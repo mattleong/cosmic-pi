@@ -62,11 +62,14 @@ export const localClaudeResults = (context: LocalClaudeHandleContext) => {
     if (
       expectation === undefined ||
       expectation.kind === "initialization" ||
-      (event.usage === undefined && event.totalCostUsd === undefined)
+      (event.cumulativeUsage === undefined && event.totalCostUsd === undefined)
     )
       return Effect.void;
-    const { delta, inconsistent } = usage.resultDelta(expectation.usageBaseline, event.usage);
-    const costDelta = event.totalCostUsd;
+    const {
+      delta,
+      inconsistent,
+      cost: costDelta,
+    } = usage.resultDelta(event.cumulativeUsage, event.totalCostUsd);
     const warn = inconsistent
       ? offer({
           type: "warning",
@@ -226,7 +229,6 @@ export const localClaudeResults = (context: LocalClaudeHandleContext) => {
           uuid: `continuation:${state.assignmentEpoch}`,
           kind: "synthetic",
           epoch: state.assignmentEpoch,
-          usageBaseline: usage.baseline(),
         },
         raw,
         notified,
@@ -245,7 +247,6 @@ export const localClaudeResults = (context: LocalClaudeHandleContext) => {
         uuid: `settled:${state.assignmentEpoch}`,
         kind: "synthetic",
         epoch: state.assignmentEpoch,
-        usageBaseline: usage.baseline(),
       }).pipe(Effect.andThen(release(raw)));
     if (expectation === undefined)
       return offer(

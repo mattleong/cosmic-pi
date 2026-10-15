@@ -7,7 +7,6 @@ import {
   uncorrelatedClaudeUserMessage,
 } from "../src/backend/local-claude-correlation.ts";
 import type { ClaudeProtocolEvent } from "../src/backend/local-claude-protocol.ts";
-import { zeroUsageComponents } from "../src/backend/local-claude-usage.ts";
 
 type UserEvent = Extract<ClaudeProtocolEvent, { readonly type: "user" }>;
 
@@ -34,8 +33,8 @@ describe("local Claude result correlation", () => {
 
   it("does not let a UUID-less ordinary result consume synthetic ownership", () => {
     const correlation = claudeResultCorrelation();
-    correlation.register({ uuid: "synthetic", kind: "synthetic", epoch: 2 }, zeroUsageComponents);
-    correlation.register({ uuid: "assignment", kind: "assignment", epoch: 2 }, zeroUsageComponents);
+    correlation.register({ uuid: "synthetic", kind: "synthetic", epoch: 2 });
+    correlation.register({ uuid: "assignment", kind: "assignment", epoch: 2 });
 
     expect(correlation.take(undefined, undefined, undefined)).toMatchObject({
       uuid: "assignment",
@@ -80,12 +79,9 @@ describe("local Claude result correlation", () => {
 
   it("never lets Claude-owned subturns evict an adapter-owned result expectation", () => {
     const correlation = claudeResultCorrelation();
-    correlation.register({ uuid: "assignment", kind: "assignment", epoch: 4 }, zeroUsageComponents);
+    correlation.register({ uuid: "assignment", kind: "assignment", epoch: 4 });
     for (let index = 0; index <= SENT_UUID_LIMIT; index += 1)
-      correlation.register(
-        { uuid: `internal-${index}`, kind: "synthetic", epoch: 4 },
-        zeroUsageComponents,
-      );
+      correlation.register({ uuid: `internal-${index}`, kind: "synthetic", epoch: 4 });
 
     expect(correlation.hasOutstandingAssignment(4)).toBe(true);
     expect(correlation.take("internal-0", undefined, undefined)).toBeUndefined();
@@ -102,7 +98,7 @@ describe("local Claude result correlation", () => {
     expect(correlation.hasSentUuid("internal-notification")).toBe(false);
     expect(correlation.matchSentContent("notification-digest")).toBe("other");
 
-    correlation.register({ uuid: "assignment", kind: "assignment", epoch: 3 }, zeroUsageComponents);
+    correlation.register({ uuid: "assignment", kind: "assignment", epoch: 3 });
     expect(correlation.hasOutstandingAssignment(3)).toBe(true);
     expect(correlation.take("assignment", undefined, undefined)?.kind).toBe("assignment");
     expect(correlation.hasOutstandingAssignment(3)).toBe(false);

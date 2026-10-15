@@ -8,6 +8,7 @@ import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
 import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
 import { omittedOutputPreview } from "./driver-shared.ts";
 import type { SubagentUsage } from "../run/model.ts";
+import type { UsageComponents } from "./local-claude-usage.ts";
 
 const MAX_ID_CHARS = 256;
 const MAX_NAME_CHARS = 256;
@@ -42,6 +43,17 @@ const Usage = Schema.Struct({
   cache_creation_input_tokens: Schema.optional(Token),
 });
 const Cost = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0));
+const MAX_RESULT_MODELS = 64;
+// Per-model running totals for every query-pipeline call, including native agents and compaction.
+const ModelUsage = Schema.Record(
+  Name,
+  Schema.Struct({
+    inputTokens: Schema.optional(Token),
+    outputTokens: Schema.optional(Token),
+    cacheReadInputTokens: Schema.optional(Token),
+    cacheCreationInputTokens: Schema.optional(Token),
+  }),
+).check(Schema.isMaxProperties(MAX_RESULT_MODELS));
 const MessageOrigin = Schema.Struct({
   kind: Name,
   subkind: Schema.optional(Name),
@@ -123,7 +135,7 @@ const Result = Schema.Struct({
   session_id: Schema.optional(Id),
   user_message_uuid: Schema.optional(Id),
   origin: Schema.optional(MessageOrigin),
-  usage: Schema.optional(Usage),
+  modelUsage: Schema.optional(ModelUsage),
   total_cost_usd: Schema.optional(Cost),
 });
 const ControlResponse = Schema.Struct({
@@ -230,7 +242,9 @@ export type ClaudeProtocolEvent =
       readonly userMessageUuid?: string | undefined;
       readonly originKind?: string | undefined;
       readonly originSubkind?: string | undefined;
-      readonly usage?: SubagentUsage | undefined;
+      /** The process's running totals so far, summed across models. */
+      readonly cumulativeUsage?: UsageComponents | undefined;
+      /** The process's running cost estimate so far. */
       readonly totalCostUsd?: number | undefined;
       readonly diagnostic?: string | undefined;
     }
@@ -265,6 +279,19 @@ const usageFromNative = (usage: Schema.Schema.Type<typeof Usage> | undefined): S
     totalTokens: input + output + cacheRead + cacheWrite,
   };
 };
+
+const cumulativeUsageFromNative = (
+  modelUsage: Schema.Schema.Type<typeof ModelUsage>,
+): UsageComponents =>
+  Object.values(modelUsage).reduce<UsageComponents>(
+    (total, model) => ({
+      input: total.input + (model.inputTokens ?? 0),
+      output: total.output + (model.outputTokens ?? 0),
+      cacheRead: total.cacheRead + (model.cacheReadInputTokens ?? 0),
+      cacheWrite: total.cacheWrite + (model.cacheCreationInputTokens ?? 0),
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  );
 
 const userProtocolEvent = (event: typeof User.Type): ClaudeProtocolEvent => {
   const toolResults = Predicate.isString(event.message.content)
@@ -332,7 +359,7 @@ const resultProtocolEvent = (event: typeof Result.Type): ClaudeProtocolEvent => 
     ...(event.user_message_uuid && { userMessageUuid: event.user_message_uuid }),
     ...(event.origin && { originKind: event.origin.kind }),
     ...(event.origin?.subkind && { originSubkind: event.origin.subkind }),
-    ...(event.usage && { usage: usageFromNative(event.usage) }),
+    ...(event.modelUsage && { cumulativeUsage: cumulativeUsageFromNative(event.modelUsage) }),
     ...(event.total_cost_usd !== undefined && { totalCostUsd: event.total_cost_usd }),
     ...(diagnostic && { diagnostic }),
   };
