@@ -1,6 +1,7 @@
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type { BackendEvent } from "./model.ts";
 
 const MAX_ID_CHARS = 256;
 const MAX_METHOD_CHARS = 128;
@@ -123,36 +124,36 @@ const NativeItemEnvelope = Schema.Struct({
   item: Schema.Unknown,
 });
 const NativeItemDiscriminant = Schema.Struct({ type: Schema.optional(Schema.String) });
-const CollabAgentState = Schema.Struct({
-  status: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
-  message: Schema.NullOr(Text),
-});
+// Tool, status, and kind values follow the app-server schema generated from Codex 0.162.1.
 const CollabAgentItem = Schema.Struct({
   id: Id,
-  type: Schema.Literal("collabAgentToolCall"),
-  tool: Schema.Literals(["spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent"] as const),
-  status: Schema.Literals(["inProgress", "completed", "failed"] as const),
-  senderThreadId: Id,
+  tool: Schema.Literals([
+    "spawnAgent",
+    "sendInput",
+    "resumeAgent",
+    "wait",
+    "closeAgent",
+    "sendMessage",
+    "followupTask",
+    "interruptAgent",
+    "listAgents",
+  ] as const),
+  status: Schema.Literals(["inProgress", "completed", "failed", "interrupted"] as const),
   receiverThreadIds: Schema.Array(Id).check(Schema.isMaxLength(64)),
-  prompt: Schema.NullOr(Text),
-  model: Schema.NullOr(Text),
-  reasoningEffort: Schema.NullOr(Text),
-  agentsStates: Schema.Record(Schema.String, CollabAgentState),
 });
 const SUB_AGENT_ACTIVITY_STATE = {
   started: "running",
   interrupted: "stopped",
   interacted: "activity",
+  completed: "completed",
 } as const;
 
 const SubAgentActivityItem = Schema.Struct({
-  id: Id,
-  type: Schema.Literal("subAgentActivity"),
-  kind: Schema.Literals(["started", "interacted", "interrupted"] as const),
+  kind: Schema.Literals(["started", "interacted", "interrupted", "completed"] as const),
   agentThreadId: Id,
   agentPath: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
 });
-const exactDecodeOptions = { onExcessProperty: "error" as const };
+const NativeItemIdentity = Schema.Struct({ id: Id });
 const AgentDelta = Schema.Struct({ threadId: Id, turnId: Id, itemId: Id, delta: Text });
 const UsageBreakdown = Schema.Struct({
   inputTokens: Count,
@@ -199,50 +200,84 @@ const normalizedWarning = (summary: string, details?: string | null): string => 
   return (parts.join("\n") || "Codex warning.").slice(0, MAX_WARNING_TEXT_CHARS);
 };
 
+type NativeItemEnvelopeValue = typeof NativeItemEnvelope.Type;
+type NativeActivityState = Extract<
+  BackendEvent,
+  { readonly type: "native_agent_activity" }
+>["state"];
+
+const nativeActivity = (
+  envelope: NativeItemEnvelopeValue,
+  activityId: string,
+  kind: string,
+  state: NativeActivityState,
+) =>
+  ({
+    type: "native_activity",
+    threadId: envelope.threadId,
+    turnId: envelope.turnId,
+    activityId,
+    kind,
+    state,
+  }) as const;
+
+const collabAgentState = (
+  method: "item/started" | "item/completed",
+  item: typeof CollabAgentItem.Type,
+): NativeActivityState => {
+  const receiver = item.receiverThreadIds[0];
+  if (method === "item/started" || item.status === "inProgress") return "activity";
+  if (item.status === "failed") return "failed";
+  if (item.status !== "completed" || receiver === undefined) return "activity";
+  if (item.tool === "spawnAgent") return "running";
+  return item.tool === "closeAgent" ? "stopped" : "activity";
+};
+
+// Native agent items only feed the activity projection, so added fields are ignored and a shape
+// outside the generated subset counts as plain activity instead of failing the run.
+const decodeNativeAgentItem = (
+  method: "item/started" | "item/completed",
+  envelope: NativeItemEnvelopeValue,
+  type: "collabAgentToolCall" | "subAgentActivity",
+) =>
+  (type === "collabAgentToolCall"
+    ? Schema.decodeUnknownEffect(CollabAgentItem)(envelope.item).pipe(
+        Effect.map((item) =>
+          nativeActivity(
+            envelope,
+            item.receiverThreadIds[0] ?? item.id,
+            item.tool,
+            collabAgentState(method, item),
+          ),
+        ),
+      )
+    : Schema.decodeUnknownEffect(SubAgentActivityItem)(envelope.item).pipe(
+        Effect.map((item) =>
+          nativeActivity(
+            envelope,
+            item.agentThreadId,
+            `${item.kind}:${item.agentPath}`,
+            SUB_AGENT_ACTIVITY_STATE[item.kind],
+          ),
+        ),
+      )
+  ).pipe(
+    Effect.catch(() =>
+      Schema.decodeUnknownEffect(NativeItemIdentity)(envelope.item).pipe(
+        Effect.map((item) => nativeActivity(envelope, item.id, type, "activity")),
+      ),
+    ),
+  );
+
 const decodeCodexItemNotification = Effect.fn("LocalCodexProtocol.decodeItemNotification")(
   function* (method: "item/started" | "item/completed", params: Schema.Json | undefined) {
     const envelope = yield* Schema.decodeUnknownEffect(NativeItemEnvelope)(params);
     const discriminant = yield* Schema.decodeUnknownEffect(NativeItemDiscriminant)(envelope.item);
-    if (discriminant.type === "collabAgentToolCall") {
-      const item = yield* Schema.decodeUnknownEffect(
-        CollabAgentItem,
-        exactDecodeOptions,
-      )(envelope.item);
-      const receiver = item.receiverThreadIds[0];
-      const state =
-        method === "item/started" || item.status === "inProgress"
-          ? ("activity" as const)
-          : item.status === "failed"
-            ? ("failed" as const)
-            : item.tool === "spawnAgent" && receiver
-              ? ("running" as const)
-              : item.tool === "closeAgent" && receiver
-                ? ("stopped" as const)
-                : ("activity" as const);
-      return {
-        type: "native_activity" as const,
-        threadId: envelope.threadId,
-        turnId: envelope.turnId,
-        activityId: receiver ?? item.id,
-        kind: item.tool,
-        state,
-      };
-    }
-    if (discriminant.type === "subAgentActivity") {
-      const item = yield* Schema.decodeUnknownEffect(
-        SubAgentActivityItem,
-        exactDecodeOptions,
-      )(envelope.item);
-      if (method === "item/started") return { type: "ignored" as const };
-      return {
-        type: "native_activity" as const,
-        threadId: envelope.threadId,
-        turnId: envelope.turnId,
-        activityId: item.agentThreadId,
-        kind: `${item.kind}:${item.agentPath}`,
-        state: SUB_AGENT_ACTIVITY_STATE[item.kind],
-      };
-    }
+    // Codex repeats each sub-agent activity item on completion, which carries the same state.
+    if (discriminant.type === "subAgentActivity" && method === "item/started")
+      return { type: "ignored" as const };
+    if (discriminant.type === "collabAgentToolCall" || discriminant.type === "subAgentActivity")
+      return yield* decodeNativeAgentItem(method, envelope, discriminant.type);
     return {
       type: method === "item/started" ? ("item_started" as const) : ("item_completed" as const),
       threadId: envelope.threadId,

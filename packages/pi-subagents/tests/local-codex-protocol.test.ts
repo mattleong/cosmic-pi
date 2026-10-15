@@ -58,6 +58,11 @@ describe("local Codex protocol", () => {
         ["item/completed", "spawnAgent", "failed", "failed"],
         ["item/completed", "closeAgent", "completed", "stopped"],
         ["item/completed", "wait", "completed", "activity"],
+        ["item/completed", "sendMessage", "completed", "activity"],
+        ["item/completed", "followupTask", "completed", "activity"],
+        ["item/completed", "interruptAgent", "completed", "activity"],
+        ["item/completed", "listAgents", "completed", "activity"],
+        ["item/completed", "spawnAgent", "interrupted", "activity"],
       ];
       for (const [method, tool, status, state] of collabCases)
         expect(yield* decode(method, { ...collabBase, tool, status })).toMatchObject({
@@ -70,9 +75,7 @@ describe("local Codex protocol", () => {
         tool: "spawnAgent",
         status: "completed",
         receiverThreadIds: [],
-        model: null,
-        reasoningEffort: null,
-        agentsStates: {},
+        agentsStates: { "native-1": { status: "pendingInit" } },
       };
       expect(yield* decode("item/completed", { ...collabBase, ...receiverless })).toMatchObject({
         type: "native_activity",
@@ -93,6 +96,7 @@ describe("local Codex protocol", () => {
         ["started", "running"],
         ["interacted", "activity"],
         ["interrupted", "stopped"],
+        ["completed", "completed"],
       ];
       for (const [kind, state] of activityCases)
         expect(
@@ -101,18 +105,27 @@ describe("local Codex protocol", () => {
             type: "subAgentActivity",
             kind,
             ...activityBase,
+            model: kind === "started" ? "gpt-native" : null,
+            reasoningEffort: kind === "started" ? "low" : null,
           }),
         ).toMatchObject({ type: "native_activity", activityId: "native-1", state });
     }),
   );
 
-  it.effect("fails closed on malformed native-agent shapes", () =>
+  it.effect("counts newer native-agent shapes as activity but rejects an item without an id", () =>
     Effect.gen(function* () {
+      for (const item of [
+        { id: "call-1", type: "collabAgentToolCall", tool: "unknownFutureTool", status: "done" },
+        { id: "a-1", type: "subAgentActivity", kind: "paused", agentThreadId: "native-1" },
+      ])
+        expect(yield* decode("item/completed", item)).toMatchObject({
+          type: "native_activity",
+          activityId: item.id,
+          state: "activity",
+        });
       const error = yield* decode("item/completed", {
-        id: "call-1",
         type: "collabAgentToolCall",
-        tool: "unknownFutureTool",
-        status: "completed",
+        tool: "spawnAgent",
       }).pipe(Effect.flip);
       expect(error._tag).toBe("SchemaError");
     }),
