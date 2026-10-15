@@ -11,7 +11,6 @@ import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.t
 
 const MAX_PROTOCOL_NAME_CHARS = 256;
 const MAX_PROTOCOL_ERROR_CHARS = 64 * 1024;
-const MAX_MESSAGE_DELTA_CHARS = 1024 * 1024;
 const MAX_PROXY_PAYLOAD_CHARS = 2 * 1024 * 1024;
 
 const ProtocolIdSchema = Schema.String.check(
@@ -51,10 +50,7 @@ const AgentEndSchema = Schema.Struct({
 const AgentSettledSchema = Schema.Struct({ type: Schema.Literal("agent_settled") });
 const MessageUpdateSchema = Schema.Struct({
   type: Schema.Literal("message_update"),
-  assistantMessageEvent: Schema.Struct({
-    type: ProtocolNameSchema,
-    delta: Schema.optional(Schema.String.check(Schema.isMaxLength(MAX_MESSAGE_DELTA_CHARS))),
-  }),
+  assistantMessageEvent: Schema.Struct({ type: ProtocolNameSchema }),
 });
 const MessageStartSchema = Schema.Struct({
   type: Schema.Literal("message_start"),

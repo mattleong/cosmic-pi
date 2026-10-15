@@ -310,6 +310,27 @@ describe("SubagentService", () => {
     });
   });
 
+  it.effect("counts streamed thinking and tool-call arguments as activity", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "deep-thinker" }));
+      const updates = [
+        { type: "thinking_start" },
+        { type: "thinking_delta", delta: "Weighing the options" },
+        { type: "toolcall_delta", delta: '{"path":' },
+      ];
+      for (const [index, assistantMessageEvent] of updates.entries()) {
+        yield* TestClock.adjust("1 second");
+        const before = projections.length;
+        fake.controls[0]?.offer({ type: "message_update", assistantMessageEvent });
+        yield* yieldUntil(() => projections.length === before + 1);
+        expect((yield* service.status(run.id)).lastActivityAt).toBe(
+          run.lastActivityAt + (index + 1) * 1_000,
+        );
+      }
+    });
+  });
+
   it.effect("terminates a completed Pi process and restores its saved session", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {

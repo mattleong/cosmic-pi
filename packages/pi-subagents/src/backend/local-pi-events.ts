@@ -34,11 +34,7 @@ export const normalizeRpcEvent = (
     case "agent_settled":
       return Effect.succeed<BackendEvent>({ type: "run_settled", assignmentEpoch });
     case "message_update":
-      return Effect.succeed(
-        envelope.assistantMessageEvent.type === "text_delta" && envelope.assistantMessageEvent.delta
-          ? ({ type: "activity", assignmentEpoch } as const)
-          : undefined,
-      );
+      return Effect.succeed<BackendEvent>({ type: "activity", assignmentEpoch });
     case "message_end":
       return decodeAssistantMessage(envelope.message).pipe(
         Effect.map((message): BackendEvent | undefined => {

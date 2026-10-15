@@ -57,7 +57,7 @@ Each runtime's tool completion carries a bounded output preview (the first seven
 
 ## Stalls, wait timeouts, and partial output
 
-`run/stall.ts` derives presentation-only stall signals from a running child's projection: a tool open for five minutes, three consecutive failed tool calls, or two minutes without activity while no tool is open. The widget shows the signal in warning color in place of the activity text, keeping it ahead of the route on narrow rows. Nothing stops or retries a run because of elapsed time.
+`run/stall.ts` derives presentation-only stall signals from a running child's projection: a tool open for five minutes, three consecutive failed tool calls, or two minutes without activity while no tool is open. Every streamed model event counts as activity, including Pi thinking and tool-call argument deltas and every Claude stream event. The widget shows the signal in warning color in place of the activity text, keeping it ahead of the route on narrow rows. Nothing stops or retries a run because of elapsed time.
 
 `subagent_await` accepts `timeoutSeconds` (1–3600). A timeout ends only that wait, exactly like a cancellation: children keep running, completion claims are released, and the result carries outcome `timed_out` with the latest observation. A failed assignment's error includes up to 2,000 characters of the failing attempt's own text, so the parent can judge it before an explicit retry; earlier attempts never leak into it.
 
