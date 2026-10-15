@@ -19,8 +19,10 @@ import { backendLaunch, takeBackendEvent } from "./fixtures/backend-supervisor.t
 import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
 
 const sourceEnvironment = { ...process.env };
-// Captured before any child environment is built, since a Codex child gets a private TMPDIR.
+// Captured before any child environment is built, since every child gets a private TMPDIR.
 const parentTemporaryDirectory = sourceEnvironment.TMPDIR ?? tmpdir();
+/** Claude Code's per-user temp directory, which every Claude Code session of this user shares. */
+const sharedClaudeTemporaryDirectory = path.join("/tmp", `claude-${process.getuid?.() ?? ""}`);
 const ORIGINAL = "ORIGINAL";
 const CANARY = "CANARY";
 
@@ -29,11 +31,18 @@ const RUNTIMES = {
     enabled: sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_SANDBOX_SMOKE === "1",
     modelVariable: "PI_SUBAGENTS_REAL_CLAUDE_MODEL",
     driver: localClaudeBackendDriver,
+    /** Claude Code gives sandboxed Bash `<CLAUDE_CODE_TMPDIR>/claude-<uid>` as its `$TMPDIR`. */
+    shellTemporaryDirectory: (root: string) =>
+      path.join(root, path.basename(sharedClaudeTemporaryDirectory)),
+    /** Claude Code's shell writes its cwd record and here-documents there, read-only or not. */
+    readOnlyWritesPrivateTemporary: true,
   },
   codex: {
     enabled: sourceEnvironment.PI_SUBAGENTS_REAL_CODEX_SANDBOX_SMOKE === "1",
     modelVariable: "PI_SUBAGENTS_REAL_CODEX_MODEL",
     driver: localCodexBackendDriver,
+    shellTemporaryDirectory: (root: string) => root,
+    readOnlyWritesPrivateTemporary: false,
   },
 } as const;
 type Runtime = keyof typeof RUNTIMES;
@@ -43,6 +52,7 @@ type Target =
   | "outsideShell"
   | "slashTmpShell"
   | "parentTmpShell"
+  | "sharedClaudeTmpShell"
   | "privateTmpShell"
   | "insideEdit"
   | "outsideEdit";
@@ -84,13 +94,16 @@ const temporaryName = (tag: string, place: string) => `pi-subagents-canary-${tag
 const sharedTemporaryFiles = (tag: string) => [
   path.join("/tmp", temporaryName(tag, "slash-tmp")),
   path.join(parentTemporaryDirectory, temporaryName(tag, "tmpdir")),
+  path.join(sharedClaudeTemporaryDirectory, temporaryName(tag, "claude-tmp")),
 ];
 
 /**
- * Every child tries the shared /tmp and the parent's $TMPDIR; a child with a private temp
- * directory also tries it through its own $TMPDIR.
+ * Every child tries the shared /tmp and the parent's $TMPDIR, and a Claude child also tries
+ * Claude Code's shared per-user directory. A child with a private temp directory also tries it
+ * through its own $TMPDIR.
  */
 const canaryTargets = (
+  runtime: Runtime,
   root: string,
   tag: string,
   privateTemporaryDirectory: string | undefined,
@@ -104,10 +117,24 @@ const canaryTargets = (
             key: "privateTmpShell",
             tool: "shell",
             requested: `"$TMPDIR/${privateName}"`,
-            file: path.join(privateTemporaryDirectory, privateName),
+            file: path.join(
+              RUNTIMES[runtime].shellTemporaryDirectory(privateTemporaryDirectory),
+              privateName,
+            ),
             evidence: privateName,
           },
         ];
+  const sharedClaudeTarget: ReadonlyArray<CanaryTarget> =
+    runtime === "claude"
+      ? [
+          fileTarget(
+            "sharedClaudeTmpShell",
+            "shell",
+            sharedClaudeTemporaryDirectory,
+            temporaryName(tag, "claude-tmp"),
+          ),
+        ]
+      : [];
   const cwd = path.join(root, "workspace");
   const sibling = path.join(root, "outside");
   return [
@@ -115,6 +142,7 @@ const canaryTargets = (
     fileTarget("outsideShell", "shell", sibling, "sibling-shell-canary.txt"),
     fileTarget("slashTmpShell", "shell", "/tmp", temporaryName(tag, "slash-tmp")),
     fileTarget("parentTmpShell", "shell", parentTemporaryDirectory, temporaryName(tag, "tmpdir")),
+    ...sharedClaudeTarget,
     ...privateTarget,
     fileTarget("insideEdit", "edit", cwd, EDIT_TARGETS.cwd),
     fileTarget("outsideEdit", "edit", sibling, EDIT_TARGETS.sibling),
@@ -183,6 +211,12 @@ const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
     const model = sourceEnvironment[modelVariable];
     if (!model) return yield* Effect.die(`Set ${modelVariable} for the live sandbox canary.`);
     const { root, tag } = yield* canarySetup;
+    // Claude Code creates it the same way; a missing directory would block the write for the
+    // wrong reason.
+    if (runtime === "claude")
+      yield* Effect.promise(() =>
+        fs.mkdir(sharedClaudeTemporaryDirectory, { recursive: true, mode: 0o700 }),
+      );
     const agentDirectory = yield* temporaryDirectory("pi-subagents-sandbox-agent-").pipe(
       Effect.flatMap((directory) => Effect.promise(() => fs.realpath(directory))),
     );
@@ -215,7 +249,7 @@ const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
       yield* backend.preflight({ ...launch, closeOnReport: true });
       const handle = yield* backend.spawn(launch);
       yield* handle.controls.initialize;
-      const planned = canaryTargets(root, tag, yield* Ref.get(privateTemporaryDirectory));
+      const planned = canaryTargets(runtime, root, tag, yield* Ref.get(privateTemporaryDirectory));
       yield* handle.controls.start(canaryTask(planned), 1);
       while (report === undefined) {
         const event: BackendEvent = yield* takeBackendEvent(handle, {
@@ -277,22 +311,31 @@ const expectAttempts = (unattempted: ReadonlyArray<Target>, report: string, meta
 for (const runtime of ["claude", "codex"] as const)
   describe.skipIf(!RUNTIMES[runtime].enabled)(`installed local ${runtime} sandbox canary`, () => {
     it(
-      "keeps a read-only child from writing anywhere, temp directories included",
+      "keeps a read-only child out of its cwd and every shared temp directory",
       () =>
         Effect.runPromise(
           runCanary(runtime, "read-only").pipe(
             Effect.map(({ targets, outcome, metadata, unattempted, report }) => {
+              const { privateTmpShell, ...shared } = outcome;
               expect(
-                outcome,
+                shared,
                 `SECURITY: a read-only canary was written; metadata: ${metadata}`,
               ).toEqual(
                 Object.fromEntries(
-                  targets.map((target) => [
-                    target.key,
-                    target.tool === "edit" ? ORIGINAL : undefined,
-                  ]),
+                  targets
+                    .filter((target) => target.key !== "privateTmpShell")
+                    .map((target) => [target.key, target.tool === "edit" ? ORIGINAL : undefined]),
                 ),
               );
+              if (targets.some((target) => target.key === "privateTmpShell")) {
+                const writable = RUNTIMES[runtime].readOnlyWritesPrivateTemporary;
+                expect(
+                  privateTmpShell,
+                  writable
+                    ? `The read-only child could not write its private temp directory; metadata: ${metadata}`
+                    : `SECURITY: a read-only canary was written; metadata: ${metadata}`,
+                ).toBe(writable ? CANARY : undefined);
+              }
               expectAttempts(unattempted, report, metadata);
             }),
           ),
@@ -306,12 +349,18 @@ for (const runtime of ["claude", "codex"] as const)
         Effect.runPromise(
           runCanary(runtime, "writer").pipe(
             Effect.map(({ targets, outcome, metadata, unattempted, report }) => {
+              const sharedClaudeTemporary = targets.some(
+                (target) => target.key === "sharedClaudeTmpShell",
+              );
               expect(
                 {
                   outsideShell: outcome.outsideShell,
                   outsideEdit: outcome.outsideEdit,
                   slashTmpShell: outcome.slashTmpShell,
                   parentTmpShell: outcome.parentTmpShell,
+                  ...(sharedClaudeTemporary && {
+                    sharedClaudeTmpShell: outcome.sharedClaudeTmpShell,
+                  }),
                 },
                 `SECURITY: a writer canary escaped its cwd; metadata: ${metadata}`,
               ).toEqual({
@@ -319,6 +368,7 @@ for (const runtime of ["claude", "codex"] as const)
                 outsideEdit: ORIGINAL,
                 slashTmpShell: undefined,
                 parentTmpShell: undefined,
+                ...(sharedClaudeTemporary && { sharedClaudeTmpShell: undefined }),
               });
               const privateTemporary = targets.some((target) => target.key === "privateTmpShell");
               expect(
