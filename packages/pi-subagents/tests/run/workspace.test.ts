@@ -111,6 +111,7 @@ type GatedOperation = "freeze" | "prepare" | "discard";
 
 interface EngineHooks {
   afterCreate: Effect.Effect<void>;
+  createFailure?: WorkspaceError;
   before: { [Operation in GatedOperation]?: Effect.Effect<void> | undefined };
   failDiscard: boolean;
 }
@@ -160,19 +161,31 @@ function fixture({
   let ordinal = 0;
   let revisions = 0;
   const create: WorkspaceServiceContract["create"] = (input) =>
-    Effect.sync(() => {
-      const workspaceId = `workspace-${++ordinal}`;
-      const handle = {
-        workspaceId,
-        ownerId: input.ownerId,
-        sourceCwd: input.sourceCwd,
-        sourceRoot: input.sourceCwd,
-        cwd: `/private/${workspaceId}`,
-      };
-      entries.set(workspaceId, { version: 1, handle, status: "active", baseline: "original-base" });
-      input.onAcquired?.(handle);
-      return handle;
-    }).pipe(Effect.tap(() => hooks.afterCreate));
+    Effect.suspend(() =>
+      hooks.createFailure ? Effect.fail(hooks.createFailure) : Effect.void,
+    ).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          const workspaceId = `workspace-${++ordinal}`;
+          const handle = {
+            workspaceId,
+            ownerId: input.ownerId,
+            sourceCwd: input.sourceCwd,
+            sourceRoot: input.sourceCwd,
+            cwd: `/private/${workspaceId}`,
+          };
+          entries.set(workspaceId, {
+            version: 1,
+            handle,
+            status: "active",
+            baseline: "original-base",
+          });
+          input.onAcquired?.(handle);
+          return handle;
+        }),
+      ),
+      Effect.tap(() => hooks.afterCreate),
+    );
   const engine: WorkspaceServiceContract = {
     create,
     setupChanges: () => Effect.succeed([]),
@@ -411,6 +424,25 @@ describe("writer workspace orchestration", () => {
     return withService(f.layer, function* (service) {
       yield* reviewAndPrepare(service, (yield* stoppedWriter(service)).workspaceId!);
       expect((yield* service.workspaceList()).unavailable).toHaveLength(1);
+    });
+  });
+
+  it.effect("passes a snapshot refusal's path, rule, and remedy to the failed launch", () => {
+    const f = fixture();
+    f.hooks.createFailure = new WorkspaceError({
+      operation: "snapshot",
+      message: "A file is too large for the isolated workspace.",
+      detail:
+        'Path: "assets/video.mp4"\nRule: each file must be at most 4 MiB\nRemedy: Add it to .gitignore.',
+    });
+    return withService(f.layer, function* (service) {
+      const failure = yield* service.start(repoWriter()).pipe(Effect.flip);
+      expect(failure).toMatchObject({ code: "workspace_operation_failed" });
+      expect(failure.message.split("\n")[0]).toBe(
+        "A file is too large for the isolated workspace.",
+      );
+      expect(failure.message).toContain('Path: "assets/video.mp4"');
+      expect(f.entries.size).toBe(0);
     });
   });
 

@@ -65,8 +65,14 @@ export interface WorkspaceControlContext extends WorkspaceControlDependencies {
   readonly operations: Semaphore.Semaphore;
 }
 
-export const mapWorkspaceError = (error: { readonly message: string }) =>
-  invalid("workspace_operation_failed", error.message);
+export const mapWorkspaceError = (error: {
+  readonly message: string;
+  readonly detail?: string | undefined;
+}) =>
+  invalid(
+    "workspace_operation_failed",
+    error.detail === undefined ? error.message : `${error.message}\n${error.detail}`,
+  );
 
 export const isWithin = (cwd: string, root: string) =>
   cwd === root || cwd.startsWith(`${root.replace(/\/$/, "")}/`);

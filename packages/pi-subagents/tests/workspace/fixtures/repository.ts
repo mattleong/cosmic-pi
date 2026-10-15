@@ -52,8 +52,9 @@ export const workspaceTarget = (handle: WorkspaceHandle) => ({
   processCleanupConfirmed: true as const,
 });
 
+/** Commits `files`, then untracks `untrack` so those paths stay in history and on disk only. */
 export const workspaceTests =
-  (files: RepositoryFiles) =>
+  (files: RepositoryFiles, untrack: ReadonlyArray<string> = []) =>
   (
     name: string,
     body: (
@@ -71,6 +72,10 @@ export const workspaceTests =
           const agent = path.join(temporary, "agent");
           yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
           yield* commitRepository(root, files);
+          if (untrack.length > 0) {
+            yield* git(root, ["rm", "--cached", "-q", "--", ...untrack]);
+            yield* git(root, ["commit", "-m", "untrack"]);
+          }
           yield* Effect.gen(function* () {
             yield* body(yield* WorkspaceService, root, agent);
           }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: agent })));

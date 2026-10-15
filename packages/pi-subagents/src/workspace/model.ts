@@ -3,6 +3,8 @@ import * as Schema from "effect/Schema";
 export class WorkspaceError extends Schema.TaggedError<WorkspaceError>()("WorkspaceError", {
   operation: Schema.String,
   message: Schema.String,
+  /** The path, rule, and remedy behind a refusal, shown beneath the message. */
+  detail: Schema.optional(Schema.String),
   cleanupUnconfirmed: Schema.optional(Schema.Boolean),
 }) {}
 
@@ -12,6 +14,8 @@ export const WorkspaceHandleSchema = Schema.Struct({
   sourceCwd: Schema.String,
   sourceRoot: Schema.String,
   cwd: Schema.String,
+  /** Tracked files the snapshot left out because they sit in dependency or build directories. */
+  omittedTrackedPaths: Schema.optional(Schema.Array(Schema.String)),
 });
 export type WorkspaceHandle = typeof WorkspaceHandleSchema.Type;
 export const WorkspaceRevisionSchema = Schema.Struct({

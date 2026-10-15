@@ -94,6 +94,8 @@ A completed writer report does not approve its changes. Its direct parent follow
 
 For rejected changes, `revise` takes a workspace ID and concrete feedback in `message` and starts a successor writer; await that run and review again. `list` pages workspace metadata with optional `offset`.
 
+A snapshot refusal names the file, the rule that fired, and a remedy in its detail. Tracked files are copied whatever their names, including committed test fixtures that contain credential-like strings; dependency and build directories stay out even when tracked, and untracked files with credential-shaped names are never copied. Only content the source index doesn't already hold is scanned for credential patterns, so staging a deliberate fixture lets the snapshot proceed.
+
 ## Tool access and sandboxing
 
 The root tool snapshot, Pi read-only semantics, and Claude and Codex sandbox policies are documented in [Local Pi ownership and safety](local-backends.md#local-pi-ownership-and-safety), [Local Claude](local-backends.md#local-claude), and [Local Codex](local-backends.md#local-codex). Additional notes:

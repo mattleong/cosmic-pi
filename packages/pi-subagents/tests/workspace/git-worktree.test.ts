@@ -19,13 +19,16 @@ import {
   writeFile,
 } from "./fixtures/repository.ts";
 
-const test = workspaceTests([
-  ["src/main.ts", "baseline\n"],
-  ["other.txt", "other\n"],
-  ["binary.dat", new Uint8Array([0, 255, 13, 10])],
-  [".env", "SECRET=never-copy-this-head-value\n"],
-  [".gitignore", "ignored.ts\n"],
-]);
+const test = workspaceTests(
+  [
+    ["src/main.ts", "baseline\n"],
+    ["other.txt", "other\n"],
+    ["binary.dat", new Uint8Array([0, 255, 13, 10])],
+    [".env", "SECRET=never-copy-this-head-value\n"],
+    [".gitignore", "ignored.ts\n"],
+  ],
+  [".env"],
+);
 const prepareIntegration = (handle: WorkspaceHandle) =>
   Effect.gen(function* () {
     const service = yield* WorkspaceService;

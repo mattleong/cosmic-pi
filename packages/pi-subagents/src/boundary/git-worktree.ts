@@ -17,6 +17,7 @@ import {
   oid,
   workspaceFailure,
   workspaceIO,
+  writeWorkspaceFile,
 } from "./git-worktree-process.ts";
 import { captureSnapshot, inspectSource, sourceIdentity } from "./git-worktree-snapshot.ts";
 import {
@@ -55,15 +56,41 @@ const revision = (record: WorkspaceRecord, id: string) => {
     : Effect.fail(workspaceFailure("revision", "Reviewed revision is stale or unknown."));
 };
 
+// Symlinks are refused below the agent directory, not in the path that leads to it: ~/.pi is often
+// a symlink, and macOS reaches /tmp and /var through one.
+const resolveAgentDirectory = (agentDirectory: string) =>
+  Effect.promise(() => fs.realpath(agentDirectory).catch(() => path.resolve(agentDirectory)));
+
+const ATTRIBUTE_OVERRIDES =
+  "* !text !eol !crlf !filter !ident !working-tree-encoding !diff !merge\n";
+
+// $GIT_DIR/info/attributes outranks every .gitattributes file, so checkout, apply and diff in the
+// private repository and its worktrees stay byte-exact and never run a filter or driver.
+const neutralizeAttributes = (repository: string) =>
+  Effect.gen(function* () {
+    const info = path.join(repository, "info");
+    yield* workspaceIO("create", () => fs.mkdir(info, { mode: 0o700 }));
+    yield* writeWorkspaceFile(
+      path.join(info, "attributes"),
+      new TextEncoder().encode(ATTRIBUTE_OVERRIDES),
+      0o600,
+    );
+  });
+
 export const gitWorkspaceEngine = (agentDirectory: string) =>
-  Effect.sync(() => {
-    const registry = path.resolve(agentDirectory, "git-workspaces");
+  Effect.gen(function* () {
+    const registry = path.join(yield* resolveAgentDirectory(agentDirectory), "git-workspaces");
     const owned = new Set<string>();
     const directory = (record: WorkspaceRecord) =>
       workspaceDirectory(registry, record.handle.workspaceId);
     const repository = (record: WorkspaceRecord) => path.join(directory(record), "repo.git");
     const worker = (record: WorkspaceRecord) => path.join(directory(record), "worker");
-    const capture = (record: WorkspaceRecord, root: string, reference: string) =>
+    const capture = (
+      record: WorkspaceRecord,
+      root: string,
+      reference: string,
+      scanNewContent = false,
+    ) =>
       Effect.gen(function* () {
         const requiredPaths = record.baseline
           ? yield* gitFields(repository(record), [
@@ -75,13 +102,10 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
             ])
           : [];
         if (record.revision) requiredPaths.push(...record.revision.changedPaths);
-        return yield* captureSnapshot(
-          root,
-          repository(record),
-          path.join(directory(record), "snapshot.index"),
-          reference,
+        return yield* captureSnapshot(root, repository(record), reference, {
           requiredPaths,
-        );
+          scanNewContent,
+        });
       });
     const checked = (target: WorkspaceTarget, requireLiveOwner = true) =>
       Effect.gen(function* () {
@@ -149,6 +173,7 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
         }).pipe(Effect.uninterruptible);
         return yield* Effect.gen(function* () {
           yield* git(dir, ["init", "--bare", "--template=", "--object-format=sha1", "repo.git"]);
+          yield* neutralizeAttributes(repository(record));
           let snapshotRoot = source.sourceRoot;
           if (predecessor) {
             snapshotRoot = path.join(dir, "seed");
@@ -161,8 +186,8 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
             ]);
           }
           const identity = predecessor ? undefined : yield* sourceIdentity(source.sourceRoot);
-          const baseline = yield* capture(record, snapshotRoot, "baseline");
-          const verified = yield* capture(record, snapshotRoot, "verify-baseline");
+          const baseline = yield* capture(record, snapshotRoot, "baseline", true);
+          const verified = yield* capture(record, snapshotRoot, "verify-baseline", true);
           if (verified.tree !== baseline.tree)
             return yield* workspaceFailure("create", "Source changed during snapshot acquisition.");
           if (identity) {
@@ -182,8 +207,17 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
               );
             yield* git(repository(predecessor), ["worktree", "remove", snapshotRoot]);
           }
+          const omittedTrackedPaths = predecessor
+            ? predecessor.handle.omittedTrackedPaths
+            : baseline.omittedTrackedPaths;
+          const acquired: WorkspaceHandle = {
+            ...handle,
+            ...(omittedTrackedPaths !== undefined &&
+              omittedTrackedPaths.length > 0 && { omittedTrackedPaths }),
+          };
           record = {
             ...record,
+            handle: acquired,
             baseline: baseline.commit,
             excludedPaths: predecessor ? predecessor.excludedPaths : baseline.excludedPaths,
           };
@@ -195,12 +229,12 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
             worker(record),
             baseline.commit,
           ]);
-          yield* checkDirectory(handle.cwd);
+          yield* checkDirectory(acquired.cwd);
           yield* saveWorkspaceRecord(registry, { ...record, status: "active" }, () => {
             owned.add(workspaceId);
-            input.onAcquired?.(handle);
+            input.onAcquired?.(acquired);
           });
-          return handle;
+          return acquired;
         }).pipe(
           Effect.catchIf(
             (error) => !error.cleanupUnconfirmed && !predecessor,
@@ -284,7 +318,7 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
           "Worker changed after review; freeze a new revision.",
         );
       const identity = yield* sourceIdentity(record.handle.sourceRoot);
-      const parent = yield* capture(record, record.handle.sourceRoot, "parent");
+      const parent = yield* capture(record, record.handle.sourceRoot, "parent", true);
       if (
         parent.entries.some(
           (entry) => entry.mode === "120000" && reviewed.changedPaths.includes(entry.path),
@@ -343,7 +377,7 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
       const workerTree = yield* capture(record, worker(record), "verify-worker");
       const preparedRoot = path.join(directory(record), `prepare-${target.preparationId}`);
       const prepared = yield* capture(record, preparedRoot, "verify-prepared");
-      const before = yield* capture(record, record.handle.sourceRoot, "verify-parent");
+      const before = yield* capture(record, record.handle.sourceRoot, "verify-parent", true);
       const identity = yield* sourceIdentity(record.handle.sourceRoot);
       if (
         workerTree.tree !== reviewedTree ||

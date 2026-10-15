@@ -137,6 +137,18 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
 const FORK_PREAMBLE =
   "You start from a copy of your parent's conversation. Treat it as reference only: don't continue it or answer earlier messages. Do only the assigned task below.";
 
+const MAX_LISTED_OMISSIONS = 8;
+
+const omittedTrackedNotice = (paths: ReadonlyArray<string>): ReadonlyArray<string> => {
+  if (paths.length === 0) return [];
+  const listed = paths.slice(0, MAX_LISTED_OMISSIONS).join(", ");
+  const more =
+    paths.length > MAX_LISTED_OMISSIONS ? `, and ${paths.length - MAX_LISTED_OMISSIONS} more` : "";
+  return [
+    `Tracked files in dependency or build directories are not in this workspace, and changes to them can't be integrated: ${listed}${more}.`,
+  ];
+};
+
 // Per-run details live in the task message rather than the system prompt, so siblings with the
 // same profile share a cached system prompt.
 export const taskPrompt = (request: StartSubagentRequest, peerNotice: string): string =>
@@ -146,6 +158,7 @@ export const taskPrompt = (request: StartSubagentRequest, peerNotice: string): s
     ...(request.workspace
       ? [
           `Isolated workspace: ${request.workspace.cwd} (created from ${request.workspace.sourceCwd}).`,
+          ...omittedTrackedNotice(request.workspace.omittedTrackedPaths ?? []),
         ]
       : []),
     ...(request.writeIntent === "writer" && request.writes

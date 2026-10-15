@@ -10,27 +10,48 @@ export const safeWorkspacePath = (path: string): boolean =>
     .every((part) => part !== "" && part !== "." && part !== ".." && !/^\.git$/iu.test(part)) &&
   !path.startsWith("-");
 
-export const excludedWorkspacePath = (path: string): boolean =>
-  path
-    .split("/")
-    .some(
-      (part) =>
-        /^(?:\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.ssh|\.aws|\.azure|\.gnupg|\.kube|\.pi|node_modules|vendor|dist|build|coverage|credentials?(?:\..*)?|secrets?(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?)$/iu.test(
-          part,
-        ) || /\.(?:pem|key|p12|pfx|jks|keystore)$/iu.test(part),
-    );
+const DEPENDENCY_DIRECTORY = /^(?:node_modules|vendor|dist|build|coverage|\.pi)$/iu;
+const CREDENTIAL_NAME =
+  /^(?:\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.ssh|\.aws|\.azure|\.gnupg|\.kube|credentials?(?:\..*)?|secrets?(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?)$/iu;
+const CREDENTIAL_EXTENSION = /\.(?:pem|key|p12|pfx|jks|keystore)$/iu;
+
+/** Dependency, build, and Pi state directories never enter a snapshot, tracked or not. */
+export const dependencyWorkspacePath = (path: string): boolean =>
+  path.split("/").some((part) => DEPENDENCY_DIRECTORY.test(part));
+
+/** Credential-shaped names; they exclude only files Git does not track. */
+export const credentialWorkspacePath = (path: string): boolean =>
+  path.split("/").some((part) => CREDENTIAL_NAME.test(part) || CREDENTIAL_EXTENSION.test(part));
 
 export const eligibleUntrackedSource = (path: string): boolean =>
   safeWorkspacePath(path) &&
-  !excludedWorkspacePath(path) &&
+  !dependencyWorkspacePath(path) &&
+  !credentialWorkspacePath(path) &&
   (/\.(?:[cm]?[jt]sx?|json|md|txt|ya?ml|toml|py|rs|go|c|h|cpp|hpp|java|kt|swift|rb|php|sh|bash|zsh|css|scss|html|vue|svelte|sql|graphql|proto|xml)$/iu.test(
     path,
   ) ||
     /(?:^|\/)(?:Dockerfile|Makefile|LICENSE|\.gitignore|\.editorconfig)$/u.test(path));
 
-export const sensitiveWorkspaceContent = (bytes: Uint8Array): boolean => {
+const SENSITIVE_CONTENT: ReadonlyArray<readonly [pattern: RegExp, rule: string]> = [
+  [/-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----/iu, "a private key block"],
+  [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/iu, "an AWS access key ID"],
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b/iu, "a GitHub token"],
+  [/\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}\b/iu, "an sk- API key"],
+];
+
+export interface SensitiveContentMatch {
+  readonly rule: string;
+  readonly line: number;
+}
+
+/** Finds the first literal that looks like a credential, without returning the literal itself. */
+export const sensitiveWorkspaceContent = (bytes: Uint8Array): SensitiveContentMatch | undefined => {
   const text = new TextDecoder().decode(bytes);
-  return /-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}\b/iu.test(
-    text,
-  );
+  let first: { readonly index: number; readonly rule: string } | undefined;
+  for (const [pattern, rule] of SENSITIVE_CONTENT) {
+    const index = pattern.exec(text)?.index;
+    if (index !== undefined && (first === undefined || index < first.index))
+      first = { index, rule };
+  }
+  return first && { rule: first.rule, line: text.slice(0, first.index).split("\n").length };
 };
