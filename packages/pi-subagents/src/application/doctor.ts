@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import { nodeFsConstants, nodeFsPromises as fs } from "../boundary/node-builtins.ts";
+import { nodeExecutableProblem } from "../boundary/node-executable.ts";
 import { describeWorkspaceSetup } from "../boundary/workspace-setup.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import type { ProfileCandidateAttempt } from "../profiles/resolve.ts";
@@ -73,10 +74,12 @@ export const runSubagentDoctor = (
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
     const backends = yield* SubagentBackendRegistry;
+    const nodeProblem = yield* nodeExecutableProblem();
     const checks: DoctorCheck[] = [
       versionAtLeast(VERSION, MINIMUM_PI_VERSION)
         ? check("Pi", "ok", `version ${VERSION}`)
         : check("Pi", "failed", `version ${VERSION}; subagents need 1.2.0 or later`),
+      nodeProblem ? check("Node", "failed", nodeProblem) : check("Node", "ok", process.execPath),
     ];
 
     const snapshot = yield* profiles.capture;

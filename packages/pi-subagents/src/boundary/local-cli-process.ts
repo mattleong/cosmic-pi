@@ -16,6 +16,7 @@ import {
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import { acquireLocalClaudeDebug, type LocalClaudeDebugRecorder } from "./local-claude-debug.ts";
 import { readValidatedCodexAuth, safeAgentDirectory } from "./harness-shared.ts";
+import { requireNodeExecutable } from "./node-executable.ts";
 import {
   approvedCodexApiKey,
   claudeAuthLoggedIn,
@@ -101,6 +102,8 @@ const validateLocalPreflightRequest = (
         "claude_writer_confinement_unsupported",
         "Local Claude writer confinement requires a canonical absolute cwd representable by current noninteractive sandbox and scoped Edit policies.",
       );
+    // The supervisor MCP helper that Claude and Codex start runs on this Node binary.
+    yield* requireNodeExecutable();
     yield* Effect.tryPromise({
       try: () => safeAgentDirectory(options.agentDirectory),
       catch: () =>

@@ -23,6 +23,7 @@ const SCRIPTED_WRITER_RECOVERY: FailureRecoveryRule = [
 ];
 const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   SCRIPTED_WRITER_RECOVERY,
+  [["node_executable"], "Restart Pi so it runs on the installed Node, then retry the launch."],
   [NO_ELIGIBLE_ROUTE_CODES, noEligibleRouteRecovery],
   [
     ["profile", "candidate", "auth", "harness", "model", "unsupported", "confinement", "readiness"],

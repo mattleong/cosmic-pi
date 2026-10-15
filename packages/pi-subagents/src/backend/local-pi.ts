@@ -18,6 +18,7 @@ import {
 } from "../run/errors.ts";
 import { PI_SUBAGENT_CAPABILITIES } from "../run/model.ts";
 import { localPiUsage } from "./local-pi-usage.ts";
+import { requireNodeExecutable } from "../boundary/node-executable.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import {
   decodeRpcEnvelope,
@@ -390,7 +391,7 @@ export const localPiBackendDriver = (childProcesses: ChildProcessContract): Back
   supportsContext: (context) => context === "fresh" || context === "fork",
   preflight: (request) =>
     isSafeNativeModelSelector(request.model)
-      ? Effect.void
+      ? requireNodeExecutable()
       : Effect.fail(
           new InvalidSubagentRequestError({
             code: "pi_model_unsupported",
