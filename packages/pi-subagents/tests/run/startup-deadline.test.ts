@@ -105,6 +105,28 @@ describe("local Pi startup deadline", () => {
     }),
   );
 
+  it.effect("adds the install remedy below the cause when a child can't find its model", () =>
+    Effect.gen(function* () {
+      const fake = fakeChildLayer(Effect.void, { dropInitialState: true });
+      const { layer } = localServiceFixture({}, fake);
+      yield* withService(layer, function* (service) {
+        const starting = yield* service.start(request()).pipe(Effect.flip, Effect.forkScoped);
+        yield* yieldUntil(() => fake.controls[0]?.sent("get_state") === true);
+        fake.controls[0]!.exit(1, {
+          stderr:
+            'Warning: No models match pattern "acme/*"\nError: Model "acme/turbo" not found. Use --list-models to see available models.\n',
+        });
+        const failure = yield* Fiber.join(starting);
+        expect(failure).toMatchObject({ code: "pi_model_not_found" });
+        const [cause, ...detail] = failure.message.split("\n");
+        expect(cause).toContain('Model "acme/turbo" not found');
+        expect(cause).not.toContain("pi install");
+        expect(detail.join("\n")).toContain("pi install");
+        expect(detail.join("\n")).toContain("No models match pattern");
+      });
+    }),
+  );
+
   it.effect("preserves an exit cause while establishing startup usage", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();

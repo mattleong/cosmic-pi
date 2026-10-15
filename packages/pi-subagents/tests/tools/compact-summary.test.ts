@@ -564,6 +564,28 @@ describe("subagent compact semantic policy", () => {
     }
   });
 
+  it("keeps a launch failure's remedy in the expanded detail", () => {
+    const remedy = "If an extension provides this model, install it with `pi install`.";
+    const summary = summarize("start", {
+      version: 2,
+      action: "start",
+      startEntries: [{ ...pending, status: "failed", routeStatus: "unavailable" }],
+      startFailures: [
+        {
+          index: 0,
+          code: "pi_model_not_found",
+          message: `Subagent process exited with code 1. Model "acme/turbo" not found.\n${remedy}\nError: Model "acme/turbo" not found.`,
+        },
+      ],
+    });
+    expect(messages(summary?.issues)).toContain('Model "acme/turbo" not found');
+    expect(messages(summary?.issues)).not.toContain("pi install");
+    expect(issueDetails(summary?.issues)).toContain(remedy);
+    expect(
+      (summary?.issues ?? []).flatMap((issue) => issueMessageStyleProblems(issue.message)),
+    ).toEqual([]);
+  });
+
   it("keeps historical launch failures conservative when admission receipts are missing", () => {
     for (const code of ["unknown_failure", "automatic_routing_low_confidence"]) {
       const message = "Historical launch failure";

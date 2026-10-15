@@ -45,6 +45,10 @@ import {
 } from "./model.ts";
 
 const STARTUP_RPC_TIMEOUT = "30 seconds";
+// Pi exits 1 at startup when `--model` names a model no loaded provider offers.
+const MODEL_NOT_FOUND = /\bModel "[^"\n]{1,512}" not found\b/u;
+const CHILD_EXTENSIONS_REMEDY =
+  "Subagents load extensions from Pi settings and installed packages, not from -e. If an extension provides this model, install it with `pi install`.";
 
 const LocalPiResumeToken = Schema.Struct({
   type: Schema.Literal("local-pi-session-file"),
@@ -78,13 +82,27 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
 
   const awaitExit = child.awaitExit.pipe(
     Effect.map((exit) => {
-      const summary = `Subagent process exited${exit.exitCode === null ? "" : ` with code ${exit.exitCode}`}${exit.signal ? ` (${exit.signal})` : ""}.`;
       const stderr = exit.stderr.trim();
+      const exited = `Subagent process exited${exit.exitCode === null ? "" : ` with code ${exit.exitCode}`}${exit.signal ? ` (${exit.signal})` : ""}.`;
+      const missingModel = MODEL_NOT_FOUND.exec(stderr)?.[0];
+      if (!missingModel)
+        return {
+          ...toBackendExit(exit),
+          diagnostic: stderr
+            ? `${exited} ${sanitizeStreamDiagnostic(stderr, MAX_ERROR_CHARS - exited.length - 1)}`
+            : exited,
+        };
+      // The remedy follows the first line, which alone becomes the short failure summary.
+      const summary = `${exited} ${sanitizeStreamDiagnostic(missingModel, 512)}.\n${CHILD_EXTENSIONS_REMEDY}`;
+      const diagnostic = `${summary}\n${sanitizeStreamDiagnostic(stderr, MAX_ERROR_CHARS - summary.length - 1)}`;
       return {
         ...toBackendExit(exit),
-        diagnostic: stderr
-          ? `${summary} ${sanitizeStreamDiagnostic(stderr, MAX_ERROR_CHARS - summary.length - 1)}`
-          : summary,
+        diagnostic,
+        failure: new SubagentProcessError({
+          operation: "run",
+          code: "pi_model_not_found",
+          message: diagnostic,
+        }),
       };
     }),
     Effect.tapError((error) =>
@@ -229,7 +247,8 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     Effect.andThen(awaitExit),
     Effect.tap((exit) =>
       Effect.sync(() => {
-        transportFailure = new SubagentProcessError({ operation: "run", message: exit.diagnostic });
+        transportFailure =
+          exit.failure ?? new SubagentProcessError({ operation: "run", message: exit.diagnostic });
         cancelPending(transportFailure);
       }),
     ),

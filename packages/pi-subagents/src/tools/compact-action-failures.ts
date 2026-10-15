@@ -26,6 +26,10 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   [["node_executable"], "Restart Pi so it runs on the installed Node, then retry the launch."],
   [NO_ELIGIBLE_ROUTE_CODES, noEligibleRouteRecovery],
   [
+    ["pi_model_not_found"],
+    "Install the extension that provides the model with pi install, or choose another route in /subagents profiles.",
+  ],
+  [
     ["profile", "candidate", "auth", "harness", "model", "unsupported", "confinement", "readiness"],
     "Inspect the effective route with subagent_models or choose a compatible route in /subagents profiles.",
   ],
