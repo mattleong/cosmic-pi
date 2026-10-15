@@ -407,6 +407,73 @@ describe("session profile overrides", () => {
     }),
   );
 
+  it.effect("commits active-run-only edits and keeps unchanged nesting policies as no-ops", () =>
+    Effect.gen(function* () {
+      const service = yield* makeSubagentProfileService(baseConfig());
+      let current = yield* service.capture;
+
+      for (const maxActiveRuns of [32, 64, 32]) {
+        const nesting = { ...current.effectiveConfig.nesting, maxActiveRuns };
+        const previousRevision = current.revision;
+        current = yield* service.patchSessionNesting({
+          nesting,
+          expectedRevision: previousRevision,
+        });
+        expect(current.revision).toBe(previousRevision + 1);
+        expect(current.nesting).toEqual(nesting);
+        expect(current.effectiveConfig.nesting).toEqual(nesting);
+        expect(yield* service.capture).toBe(current);
+
+        const unchanged = yield* service.patchSessionNesting({
+          nesting: { ...nesting },
+          expectedRevision: current.revision,
+        });
+        expect(unchanged).toBe(current);
+        expect(unchanged.revision).toBe(previousRevision + 1);
+        expect(unchanged.effectiveConfig.nesting.maxActiveRuns).toBe(maxActiveRuns);
+      }
+    }),
+  );
+
+  it.effect("distinguishes removing an active-run limit from inheriting session nesting", () =>
+    Effect.gen(function* () {
+      const config = baseConfig();
+      const inheritedNesting = { ...config.nesting, maxActiveRuns: 16 };
+      const service = yield* makeSubagentProfileService({
+        ...config,
+        nesting: inheritedNesting,
+      });
+      const initial = yield* service.capture;
+      const explicit = yield* service.patchSessionNesting({
+        nesting: inheritedNesting,
+        expectedRevision: initial.revision,
+      });
+      expect(explicit.revision).toBe(1);
+      expect(explicit.nesting).toEqual(inheritedNesting);
+
+      const withoutActiveRunLimit = yield* service.patchSessionNesting({
+        nesting: config.nesting,
+        expectedRevision: explicit.revision,
+      });
+      expect(withoutActiveRunLimit.revision).toBe(2);
+      expect(withoutActiveRunLimit.nesting).toEqual(config.nesting);
+      expect(withoutActiveRunLimit.effectiveConfig.nesting).toEqual(config.nesting);
+
+      const cleared = yield* service.patchSessionNesting({
+        expectedRevision: withoutActiveRunLimit.revision,
+      });
+      expect(cleared.revision).toBe(3);
+      expect(cleared.nesting).toBeUndefined();
+      expect(cleared.effectiveConfig.nesting).toEqual(inheritedNesting);
+
+      const unchanged = yield* service.patchSessionNesting({
+        expectedRevision: cleared.revision,
+      });
+      expect(unchanged).toBe(cleared);
+      expect(unchanged.revision).toBe(3);
+    }),
+  );
+
   it.effect("overrides delegation for the session, survives the reload seed, and clears", () =>
     Effect.gen(function* () {
       const service = yield* makeSubagentProfileService(baseConfig());

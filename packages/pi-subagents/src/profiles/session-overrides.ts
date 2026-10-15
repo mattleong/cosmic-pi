@@ -391,7 +391,8 @@ export const patchSessionNestingSnapshot = (
     if (patch.nesting !== undefined && !nesting)
       return "The nesting policy is invalid and was not applied.";
     return snapshot.nesting?.maxDirectChildren === nesting?.maxDirectChildren &&
-      snapshot.nesting?.maxDepth === nesting?.maxDepth
+      snapshot.nesting?.maxDepth === nesting?.maxDepth &&
+      snapshot.nesting?.maxActiveRuns === nesting?.maxActiveRuns
       ? undefined
       : { nesting };
   });

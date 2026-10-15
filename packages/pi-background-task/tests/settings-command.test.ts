@@ -198,8 +198,13 @@ describe("/tasks settings", () => {
       });
       yield* macrotask;
       expect(h.isOpen()).toBe(true);
-      h.write.mockImplementationOnce(() => pending.promise);
+      const writeStarted = deferredPromise();
+      h.write.mockImplementationOnce(() => {
+        writeStarted.resolve();
+        return pending.promise;
+      });
       h.input("\r");
+      yield* Effect.promise(() => writeStarted.promise);
       expect(h.write).toHaveBeenCalledTimes(1);
       generation++;
       pending.resolve();

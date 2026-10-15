@@ -7,6 +7,7 @@ import { failureMessage, isProjectTrusted, type ExtensionSubcommand } from "pi-c
 import {
   settingsSubcommand,
   withInvocationAuthority,
+  type SettingsCommandOwner,
   type SettingsSession,
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import {
@@ -190,14 +191,15 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
     const owner = actions.captureModelRefresh();
     return () => owner.isCurrent() && actions.isAvailable();
   };
-  return withInvocationAuthority(captureAuthority, (isCurrent) =>
-    subagentSettingsCommand(actions, isCurrent),
+  return withInvocationAuthority(captureAuthority, (isCurrent, owner) =>
+    subagentSettingsCommand(actions, isCurrent, owner),
   );
 }
 
 function subagentSettingsCommand(
   actions: FleetManagerActions,
   isCurrent: () => boolean,
+  saveOwner: SettingsCommandOwner,
 ): ExtensionSubcommand {
   const current = (
     run: (stillCurrent: () => boolean) => Promise<SettingsResult>,
@@ -380,6 +382,7 @@ function subagentSettingsCommand(
   };
 
   return settingsSubcommand<undefined>({
+    owner: saveOwner,
     root: "subagents",
     isCurrent,
     description: "Configure delegation, the writer workspace, and nesting limits",

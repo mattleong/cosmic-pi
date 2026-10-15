@@ -13,6 +13,7 @@ import {
 import {
   settingsSubcommand,
   withInvocationAuthority,
+  type SettingsCommandOwner,
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
@@ -184,14 +185,15 @@ const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): Setting
 const settingDescriptor = (id: string) => BACKGROUND_TASK_SETTINGS.find((entry) => entry.id === id);
 
 export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionSubcommand {
-  return withInvocationAuthority(actions.captureAuthority, (isCurrent) =>
-    createTaskSettingsSubcommand(actions, isCurrent),
+  return withInvocationAuthority(actions.captureAuthority, (isCurrent, owner) =>
+    createTaskSettingsSubcommand(actions, isCurrent, owner),
   );
 }
 
 function createTaskSettingsSubcommand(
   actions: TaskSettingsActions,
   isCurrent: () => boolean,
+  owner: SettingsCommandOwner,
 ): ExtensionSubcommand {
   const known = new Map<string, string>();
 
@@ -219,6 +221,7 @@ function createTaskSettingsSubcommand(
   };
 
   return settingsSubcommand<BackgroundTaskConfig>({
+    owner,
     root: "tasks",
     description: "Configure background tasks",
     title: "Background Tasks",

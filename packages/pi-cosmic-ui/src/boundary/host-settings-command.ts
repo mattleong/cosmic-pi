@@ -32,7 +32,42 @@ interface SettingsCommandScope {
   readonly description: string;
 }
 
+export interface SettingsCommandOwner {
+  readonly run: (isCurrent: () => boolean, operation: () => Promise<void>) => Promise<void>;
+}
+
+// The registered command owns ordering, not a picker or an individual invocation.
+const settingsCommandOwner = (): SettingsCommandOwner => {
+  let pending: { readonly isCurrent: () => boolean; readonly settled: Promise<void> } | undefined;
+  return {
+    run: (isCurrent, operation) => {
+      if (!invokeHostCallback(isCurrent, false)) return Promise.resolve();
+      // A replacement activation must not wait for a retired, noncooperative host Promise.
+      const previous =
+        pending && invokeHostCallback(pending.isCurrent, false) ? pending.settled : undefined;
+      const work = Promise.resolve(previous).then(() =>
+        invokeHostCallback(isCurrent, false) ? operation() : undefined,
+      );
+      const entry = {
+        isCurrent,
+        settled: work.then(
+          () => undefined,
+          () => undefined,
+        ),
+      };
+      pending = entry;
+      const release = () => {
+        if (pending === entry) pending = undefined;
+        return undefined;
+      };
+      void entry.settled.then(release, release);
+      return work;
+    },
+  };
+};
+
 export interface SettingsCommandOptions<Config> {
+  readonly owner?: SettingsCommandOwner;
   readonly root: string;
   readonly description: string;
   readonly title: string;
@@ -142,16 +177,20 @@ export const openSettingsList = (
 
 export const withInvocationAuthority = (
   capture: () => () => boolean,
-  create: (isCurrent: () => boolean) => ExtensionSubcommand,
-): ExtensionSubcommand => ({
-  ...create(() => false),
-  handler: (args, ctx) => create(capture()).handler(args, ctx),
-});
+  create: (isCurrent: () => boolean, owner: SettingsCommandOwner) => ExtensionSubcommand,
+): ExtensionSubcommand => {
+  const owner = settingsCommandOwner();
+  return {
+    ...create(() => false, owner),
+    handler: (args, ctx) => create(capture(), owner).handler(args, ctx),
+  };
+};
 
 export function settingsSubcommand<Config>(
   options: SettingsCommandOptions<Config>,
 ): ExtensionSubcommand {
   const { title, descriptors } = options;
+  const owner = options.owner ?? settingsCommandOwner();
   const command = `${options.root} settings`;
   const scopes = options.scopes ?? [];
   const scopeNames = scopes.map((scope) => scope.name);
@@ -181,52 +220,64 @@ export function settingsSubcommand<Config>(
     signal: AbortSignal | undefined,
     show?: (value: string) => boolean | void,
     scope = scopeNames[0],
-  ): Promise<void> => {
-    if (!isCurrent()) return Promise.resolve();
-    invoked(ctx);
-    const descriptor = descriptors.find((entry) => entry.id === id);
-    const persisted = (): string | undefined => {
-      if (options.displayValue)
-        return invokeHostCallback(() => options.displayValue?.(ctx, id, scope), undefined);
-      const cfg = readConfig(ctx);
-      return descriptor && cfg
-        ? invokeHostCallback(() => descriptor.currentValue(cfg), undefined)
-        : undefined;
-    };
-    const before = show ? persisted() : undefined;
-    const display = (current: string | undefined): boolean =>
-      isCurrent() &&
-      (!show ||
-        current === undefined ||
-        invokeHostCallback(() => show(current), undefined) !== false);
-    const blocked =
-      scope === undefined
-        ? undefined
-        : invokeHostCallback(() => options.scopeBlocked?.(ctx, scope), undefined);
-    if (blocked) {
-      if (display(before)) notify(ctx, blocked, "warning");
-      return Promise.resolve();
-    }
-    return options.apply(ctx, id, value, signal, scope).then(
-      (settlement) => {
-        if (Result.isFailure(settlement)) {
-          if (display(persisted() ?? before) && settlement.failure.stale !== true)
-            notify(ctx, settlement.failure.message, "error");
-          return undefined;
-        }
-        const current = persisted() ?? value;
-        if (show) display(current);
-        else
-          notify(ctx, `${scopes.length > 0 && scope ? `${scope} ` : ""}${id} = ${current}`, "info");
-        if (isCurrent()) invokeHostCallback(() => options.afterApply?.(ctx, id, scope), undefined);
-        return undefined;
-      },
-      () => {
-        const current = display(persisted() ?? before);
-        if (current && (!optionalSignal || !signal?.aborted)) notify(ctx, unavailable, "warning");
-      },
-    );
-  };
+  ): Promise<void> =>
+    owner.run(isCurrent, () => {
+      invoked(ctx);
+      const descriptor = descriptors.find((entry) => entry.id === id);
+      const persisted = (): string | undefined => {
+        if (options.displayValue)
+          return invokeHostCallback(() => options.displayValue?.(ctx, id, scope), undefined);
+        const cfg = readConfig(ctx);
+        return descriptor && cfg
+          ? invokeHostCallback(() => descriptor.currentValue(cfg), undefined)
+          : undefined;
+      };
+      const before = show ? persisted() : undefined;
+      const display = (current: string | undefined): boolean =>
+        isCurrent() &&
+        (!show ||
+          current === undefined ||
+          invokeHostCallback(() => show(current), undefined) !== false);
+      const blocked =
+        scope === undefined
+          ? undefined
+          : invokeHostCallback(() => options.scopeBlocked?.(ctx, scope), undefined);
+      if (blocked) {
+        if (display(before)) notify(ctx, blocked, "warning");
+        return Promise.resolve();
+      }
+      return Promise.resolve()
+        .then(() =>
+          isCurrent()
+            ? options.apply(ctx, id, value, signal, scope)
+            : Result.fail({ message: "", stale: true }),
+        )
+        .then(
+          (settlement) => {
+            if (Result.isFailure(settlement)) {
+              if (display(persisted() ?? before) && settlement.failure.stale !== true)
+                notify(ctx, settlement.failure.message, "error");
+              return undefined;
+            }
+            const current = persisted() ?? value;
+            if (show) display(current);
+            else
+              notify(
+                ctx,
+                `${scopes.length > 0 && scope ? `${scope} ` : ""}${id} = ${current}`,
+                "info",
+              );
+            if (isCurrent())
+              invokeHostCallback(() => options.afterApply?.(ctx, id, scope), undefined);
+            return undefined;
+          },
+          () => {
+            const current = display(persisted() ?? before);
+            if (current && (!optionalSignal || !signal?.aborted))
+              notify(ctx, unavailable, "warning");
+          },
+        );
+    });
 
   const rowSetting = (row: string): readonly [scope: string | undefined, id: string] => {
     const scope = scopeNames.find((name) => row.startsWith(`${name}:`));
@@ -236,23 +287,30 @@ export function settingsSubcommand<Config>(
   const openInteractive = (ctx: ExtensionContext) => {
     const captured = captureSignal(ctx);
     if (!captured) return notify(ctx, unavailable, "warning");
+    let active = true;
     const apply: SettingsSession<Config>["apply"] = (id, value, show, scope) =>
-      applySetting(
-        ctx,
-        id,
-        value,
-        optionalSignal ? capturedHostSignal(ctx) : captured.signal,
-        show,
-        scope,
-      );
+      active
+        ? applySetting(
+            ctx,
+            id,
+            value,
+            optionalSignal ? capturedHostSignal(ctx) : captured.signal,
+            show ? (shown) => active && show(shown) : undefined,
+            scope,
+          )
+        : Promise.resolve();
     const picker: SettingsSession<Config>["picker"] = (items, maxHeight = 12) => {
       const latest = new Map<string, object>();
       return openSettingsList(
         ctx,
-        ({ tui }) => ({
+        ({ tui, finish }) => ({
           header: `${title} settings`,
           items,
           height: Math.min(maxHeight, items.length + 2),
+          onCancel: () => {
+            active = false;
+            finish(undefined);
+          },
           onChange: (row, value, list) => {
             const [scope, id] = rowSetting(row);
             const change = {};
@@ -270,21 +328,33 @@ export function settingsSubcommand<Config>(
               },
               scope,
             ).catch(() => {
-              if (latest.get(row) === change) notify(ctx, unavailable, "warning");
+              if (active && latest.get(row) === change) notify(ctx, unavailable, "warning");
             });
           },
         }),
         isCurrent,
       );
     };
-    return options.open(ctx, { config: () => readConfig(ctx), apply, picker }).then((outcome) => {
-      OwnedSurfaceOutcome.$match(outcome, {
-        Settled: () => undefined,
-        Blocked: () => notify(ctx, unavailable, "warning"),
-        Failed: () => notify(ctx, `Couldn't open ${title} settings`, "warning"),
+    // Settle already admitted saves before the new invocation captures its rows. Never
+    // hold ordering across options.open: that Promise owns the entire picker lifetime.
+    return owner
+      .run(isCurrent, () => Promise.resolve())
+      .then(() => {
+        if (!isCurrent()) return undefined;
+        return options
+          .open(ctx, { config: () => readConfig(ctx), apply, picker })
+          .then((outcome) => {
+            OwnedSurfaceOutcome.$match(outcome, {
+              Settled: () => undefined,
+              Blocked: () => notify(ctx, unavailable, "warning"),
+              Failed: () => notify(ctx, `Couldn't open ${title} settings`, "warning"),
+            });
+            return undefined;
+          });
+      })
+      .finally(() => {
+        active = false;
       });
-      return undefined;
-    });
   };
 
   const scopeToken = scopes.length > 0 ? `[${scopeNames.join("|")}] ` : "";

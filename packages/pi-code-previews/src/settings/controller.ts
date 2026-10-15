@@ -10,6 +10,7 @@ import {
   openSettingsList,
   settingsSubcommand,
   withInvocationAuthority,
+  type SettingsCommandOwner,
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import {
   captureCodePreviewSessionCapability,
@@ -47,13 +48,17 @@ const captureAuthority = (): (() => boolean) => {
 };
 
 export function codePreviewSettingsSubcommand(): ExtensionSubcommand {
-  return withInvocationAuthority(captureAuthority, (isCurrent) =>
-    codePreviewSettingsCommand(isCurrent),
+  return withInvocationAuthority(captureAuthority, (isCurrent, owner) =>
+    codePreviewSettingsCommand(isCurrent, owner),
   );
 }
 
-function codePreviewSettingsCommand(isCurrent: () => boolean): ExtensionSubcommand {
+function codePreviewSettingsCommand(
+  isCurrent: () => boolean,
+  owner: SettingsCommandOwner,
+): ExtensionSubcommand {
   return settingsSubcommand<CodePreviewSettings>({
+    owner,
     root: "code-previews",
     isCurrent,
     description: "Configure code previews and how tool calls look",

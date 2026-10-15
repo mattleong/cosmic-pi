@@ -7,7 +7,13 @@ import {
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { extensionApiFixture, extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  extensionApiFixture,
+  extensionContextFixture,
+  macrotask,
+  yieldUntil,
+} from "pi-cosmic-core/testing";
 import {
   defaultResolvedCosmicUiConfig,
   type ResolvedCosmicUiConfig,
@@ -26,10 +32,19 @@ function settingsHarness() {
   const afterApply = vi.fn();
   let current = true;
   const host = fakeCustomSurfaceHost();
+  const mounted = deferredPromise();
   const ctx = extensionContextFixture({
     mode: "tui" as const,
     signal: new AbortController().signal,
-    ui: { custom: host.custom, notify },
+    ui: {
+      custom: (factory, options) => {
+        const opened = host.custom(factory, options);
+        host.mount();
+        mounted.resolve();
+        return opened;
+      },
+      notify,
+    },
   });
   const pi = extensionApiFixture({
     registerCommand(_name: string, definition: Omit<RegisteredCommand, "name" | "sourceInfo">) {
@@ -57,11 +72,11 @@ function settingsHarness() {
     notify,
     afterApply,
     updates,
+    mounted: () => mounted.promise,
+    started: (count: number) => yieldUntil(() => updates.length >= count).pipe(Effect.orDie),
     open: () => {
       if (!command) throw new Error("Settings command was not registered.");
-      const opened = command("settings", ctx);
-      host.mount();
-      return opened;
+      return command("settings", ctx);
     },
     close: () => input("\u001b"),
     line: (label: string) =>
@@ -82,6 +97,7 @@ const withSettings = <A, E>(body: (h: ReturnType<typeof settingsHarness>) => Eff
   Effect.gen(function* () {
     const h = settingsHarness();
     const opened = h.open();
+    yield* Effect.promise(h.mounted);
     yield* body(h);
     h.close();
     yield* Effect.promise(() => opened);
@@ -93,7 +109,7 @@ describe("Cosmic UI settings controller", () => {
       withSettings((h) =>
         Effect.gen(function* () {
           h.input();
-          expect(h.updates).toHaveLength(1);
+          yield* h.started(1);
           h.notify.mockClear();
           const renders = h.host.renders;
           h.afterApply.mockClear();
@@ -117,13 +133,13 @@ describe("Cosmic UI settings controller", () => {
           h.input("/");
           for (const character of "OpenAI usage") h.input(character);
           h.input();
-          expect(h.updates).toHaveLength(1);
+          yield* h.started(1);
           h.setFooter({ hidden: ["openai.usage"] });
           yield* Deferred.succeed(h.updates[0]!, undefined);
           yield* macrotask;
           expect(h.line("OpenAI usage")).toContain("hidden");
           h.input();
-          expect(h.updates).toHaveLength(2);
+          yield* h.started(2);
           yield* Deferred.fail(h.updates[1]!, new Error("write failed"));
           yield* macrotask;
           expect(h.line("OpenAI usage")).toContain("hidden");
@@ -138,19 +154,20 @@ describe("Cosmic UI settings controller", () => {
         expect(h.line("Custom footer")).toContain("false");
         h.input();
         expect(h.line("Custom footer")).toContain("true");
-        expect(h.updates).toHaveLength(2);
+        yield* h.started(1);
+        expect(h.updates).toHaveLength(1);
 
         h.setFooter({ enabled: false });
         yield* Deferred.succeed(h.updates[0]!, undefined);
-        yield* macrotask;
+        yield* h.started(2);
         expect(h.line("Custom footer")).toContain("true");
 
         h.input();
         expect(h.line("Custom footer")).toContain("false");
-        expect(h.updates).toHaveLength(3);
+        expect(h.updates).toHaveLength(2);
         h.setFooter({ enabled: true });
         yield* Deferred.fail(h.updates[1]!, new Error("stale failure"));
-        yield* macrotask;
+        yield* h.started(3);
         expect(h.line("Custom footer")).toContain("false");
         expect(h.notify).not.toHaveBeenCalled();
 
@@ -170,12 +187,13 @@ describe("Cosmic UI settings controller", () => {
         h.input("j");
         h.input();
         expect(h.line("Footer density")).toContain("comfortable");
-        expect(h.updates).toHaveLength(2);
+        yield* h.started(1);
+        expect(h.updates).toHaveLength(1);
 
         h.setFooter({ enabled: true });
         const renders = h.host.renders;
         yield* Deferred.fail(h.updates[0]!, new Error("enabled failure"));
-        yield* macrotask;
+        yield* h.started(2);
         expect(h.line("Custom footer")).toContain("true");
         expect(h.notify).toHaveBeenCalledExactlyOnceWith(expect.any(String), "error");
         expect(h.host.renders).toBeGreaterThan(renders);
@@ -192,6 +210,7 @@ describe("Cosmic UI settings controller", () => {
       Effect.gen(function* () {
         h.input();
         expect(h.line("Custom footer")).toContain("false");
+        yield* h.started(1);
         h.setFooter({ enabled: true });
         yield* Deferred.succeed(h.updates[0]!, undefined);
         yield* macrotask;

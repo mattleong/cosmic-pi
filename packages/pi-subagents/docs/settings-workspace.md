@@ -71,6 +71,8 @@ Retired `host: "herdr"` and `closeOnReport: false` declarations are rejected, ne
 
 `/subagents settings` edits the delegation mode in Session, Global, or trusted Project scope with the same precedence and timing as nesting: Session changes apply to the next agent run, persistent changes after `/reload`, and Project wins over Global. `normal` leaves the system prompt unchanged. `encouraged` and `orchestration` replace the `subagent_start` guideline that decides when to delegate, so the prompt never pairs orchestration with the default batch-size advice, and add a `subagent_delegation` prompt section. Pi rebuilds prompt options before every run, so switching modes needs no cleanup. Only the root session applies the mode; nested Pi children keep the default guidance. Neither mode restricts tools.
 
+The registered settings command shares one save owner across rows and picker invocations. Rapid choices save in order, including delegation and nesting rows that share a document. Closing does not cancel an admitted save; reopening waits for it before inspecting saved values. Failed writes release the queue, while external document conflicts, session revisions, project trust, and activation retirement remain checked. This does not watch files or change when saved Global/Project settings take effect. [Delegation integration tests](../tests/delegation.test.ts) exercise the registered command and keyboard picker through these races.
+
 The `subagents` footer item shows Current Session's profile set, `*` when the session has its own route edits, and the delegation mode when it is not `normal`. It publishes to the Cosmic UI footer when that is active and to a plain Pi status entry otherwise; hiding the item in Cosmic UI hides both.
 
 ## Nesting settings

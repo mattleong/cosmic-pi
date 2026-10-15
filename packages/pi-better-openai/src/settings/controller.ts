@@ -13,6 +13,7 @@ import {
   openSettingsList,
   settingsSubcommand,
   withInvocationAuthority,
+  type SettingsCommandOwner,
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import { OwnedSurfaceOutcome } from "pi-cosmic-ui/boundary/host-surface";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
@@ -77,8 +78,9 @@ export function registerSettingsController(
       safeHostSignal(ctx),
     );
 
-  const createCommand = (isCurrent: () => boolean) =>
+  const createCommand = (isCurrent: () => boolean, owner: SettingsCommandOwner) =>
     settingsSubcommand({
+      owner,
       root: "openai",
       description: "Configure Better OpenAI",
       title: "Better OpenAI",

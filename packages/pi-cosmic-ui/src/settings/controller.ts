@@ -98,8 +98,9 @@ export function registerSettingsCommand(
     captureAuthority: () => () => boolean;
   },
 ): void {
-  const settings = withInvocationAuthority(options.captureAuthority, (isCurrent) =>
+  const settings = withInvocationAuthority(options.captureAuthority, (isCurrent, owner) =>
     settingsSubcommand<ResolvedCosmicUiConfig>({
+      owner,
       root: "cosmic-ui",
       description: "Configure the Cosmic UI footer",
       title: "Cosmic UI",
