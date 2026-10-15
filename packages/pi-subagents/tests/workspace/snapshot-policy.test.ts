@@ -155,6 +155,22 @@ linked(
   },
 );
 
+linked(
+  "snapshots a checkout whose .git is a file, as submodule checkouts have",
+  function* (service, root) {
+    const checkout = path.join(path.dirname(root), "separate");
+    const gitDirectory = path.join(path.dirname(root), "separate.git");
+    yield* io(() => fs.mkdir(path.join(checkout, "src"), { recursive: true }));
+    yield* git(checkout, ["init", "--template=", `--separate-git-dir=${gitDirectory}`]);
+    yield* writeFile(path.join(checkout, "src/main.ts"), "separate\n");
+    yield* git(checkout, ["add", "--", "src/main.ts"]);
+    yield* git(checkout, ["commit", "-m", "fixture"]);
+    expect((yield* io(() => fs.lstat(path.join(checkout, ".git")))).isFile()).toBe(true);
+    const handle = yield* service.create({ sourceCwd: checkout, ownerId: "parent" });
+    expect(yield* readText(handle.cwd, "src/main.ts")).toBe("separate\n");
+  },
+);
+
 const sha256 = workspaceTests([["src/main.ts", "baseline\n"]]);
 
 sha256("compares staged content in SHA-256 repositories", function* (service, root) {
