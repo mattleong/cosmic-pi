@@ -69,9 +69,44 @@ describe("subagent report archive", () => {
       const eightDaysAgo = (now - 8 * 24 * 60 * 60 * 1000) / 1000;
       yield* Effect.promise(() => fs.utimes(old.path, eightDaysAgo, eightDaysAgo));
 
-      yield* Effect.promise(() => pruneReportArchive(agent, now));
+      yield* pruneReportArchive(agent);
 
       expect(yield* exists(old.path)).toBe(false);
+      expect(yield* exists(fresh.path)).toBe(true);
+      return undefined;
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("keeps pruning past unreadable entries and removes emptied session directories", () =>
+    Effect.gen(function* () {
+      const agent = yield* temporaryAgent;
+      const expired = sessionReportArchive(
+        agent,
+        "session-1",
+      )({
+        id: "agent-1",
+        generation: 1,
+        text: "old",
+      });
+      const fresh = sessionReportArchive(
+        agent,
+        "session-2",
+      )({
+        id: "agent-2",
+        generation: 1,
+        text: "fresh",
+      });
+      if (!expired || !fresh) return yield* Effect.die("archive write failed");
+      const dangling = path.join(reportArchiveRoot(agent), "session-2", "dangling.md");
+      yield* Effect.promise(() => fs.symlink(path.join(agent, "missing"), dangling));
+      const now = yield* Clock.currentTimeMillis;
+      const eightDaysAgo = (now - 8 * 24 * 60 * 60 * 1000) / 1000;
+      yield* Effect.promise(() => fs.utimes(expired.path, eightDaysAgo, eightDaysAgo));
+
+      yield* pruneReportArchive(agent);
+
+      expect(yield* exists(expired.path)).toBe(false);
+      expect(yield* exists(path.dirname(expired.path))).toBe(false);
       expect(yield* exists(fresh.path)).toBe(true);
       return undefined;
     }).pipe(Effect.scoped),

@@ -39,6 +39,12 @@ import {
   tomlString,
   writeExclusive,
 } from "./harness-shared.ts";
+import {
+  recordPrivateStateOwner,
+  removePrivateStateOwner,
+  SUBAGENT_STATE_ROOT,
+  SUPERVISOR_CHANNEL_ROOT,
+} from "./private-state.ts";
 import { supervisorRpcServerProtocol } from "./supervisor-rpc-protocol.ts";
 import { channelError, type SupervisorChannelError } from "./supervisor-channel-errors.ts";
 import {
@@ -47,7 +53,6 @@ import {
 } from "./supervisor-channel-session.ts";
 
 const LOOPBACK_HOST = "127.0.0.1" as const;
-const CHANNEL_ROOT = "supervisor-channels-v3";
 const CONNECTION_CONFIG_FILE = "connection.json";
 const EVENT_CAPACITY = 64;
 const MAX_ACTIVE_RPC_REQUESTS = 32;
@@ -191,8 +196,8 @@ const prepareStateDirectory = (
     const canonicalAgentDirectory = yield* privateStateOperation("resolve-agent-directory", () =>
       safeAgentDirectory(agentDirectory),
     );
-    const packageRoot = nodePath.join(canonicalAgentDirectory, "subagents");
-    const channelRoot = nodePath.join(packageRoot, CHANNEL_ROOT);
+    const packageRoot = nodePath.join(canonicalAgentDirectory, SUBAGENT_STATE_ROOT);
+    const channelRoot = nodePath.join(packageRoot, SUPERVISOR_CHANNEL_ROOT);
     yield* privateStateOperation("prepare-package-root", () => ensurePrivateDirectory(packageRoot));
     yield* privateStateOperation("prepare-channel-root", () => ensurePrivateDirectory(channelRoot));
     const stateDirectory = nodePath.join(channelRoot, `${runId}-${synchronousRandomHex(12)}`);
@@ -202,7 +207,11 @@ const prepareStateDirectory = (
     } satisfies PreparedStateDirectory;
     let directoryCreated = false;
     const removeLateDirectory = () =>
-      directoryCreated ? fs.rmdir(stateDirectory).catch(() => undefined) : Promise.resolve();
+      directoryCreated
+        ? removePrivateStateOwner(stateDirectory)
+            .then(() => fs.rmdir(stateDirectory))
+            .catch(() => undefined)
+        : Promise.resolve();
     return yield* Effect.tryPromise({
       try: (signal) =>
         fs.mkdir(stateDirectory, { mode: 0o700 }).then(() => {
@@ -215,7 +224,7 @@ const prepareStateDirectory = (
           return fs.lstat(stateDirectory).then((stateStat) => {
             if (signal.aborted || !stateStat.isDirectory() || stateStat.isSymbolicLink())
               throw new Error("unsafe-run-dir");
-            return prepared;
+            return recordPrivateStateOwner(stateDirectory).then(() => prepared);
           });
         }),
       catch: (error) => privateStateError("prepare-state-directory", error),
@@ -251,6 +260,9 @@ const removePrivateState = ({
         });
       yield* privateStateOperation("remove-channel-config", () => fs.unlink(connectionConfigPath));
     }
+    yield* privateStateOperation("remove-channel-owner", () =>
+      removePrivateStateOwner(stateDirectory),
+    );
     const entries = yield* privateStateOperation("read-channel-state", () =>
       fs.readdir(stateDirectory),
     );

@@ -6,8 +6,8 @@ import type { ClaudeLeadingTagDiagnostic } from "../backend/local-claude-correla
 import type { ClaudeProtocolEvent } from "../backend/local-claude-protocol.ts";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import { ensurePrivateDirectory, safeAgentDirectory, writeExclusive } from "./harness-shared.ts";
+import { LOCAL_CLAUDE_DEBUG_ROOT, SUBAGENT_STATE_ROOT } from "./private-state.ts";
 
-const DEBUG_ROOT = "local-claude-debug-v1";
 const LEDGER_FILE = "replay-ledger.ndjson";
 const MAX_LEDGER_BYTES = 64 * 1024;
 const MAX_LEDGER_ENTRIES = 512;
@@ -153,8 +153,8 @@ const persistLedger = Effect.fn("LocalClaudeDebug.persist")(function* (
   ledger: string,
 ) {
   const canonicalAgentDirectory = yield* diagnosticIo(() => safeAgentDirectory(agentDirectory));
-  const packageRoot = nodePath.join(canonicalAgentDirectory, "subagents");
-  const root = nodePath.join(packageRoot, DEBUG_ROOT);
+  const packageRoot = nodePath.join(canonicalAgentDirectory, SUBAGENT_STATE_ROOT);
+  const root = nodePath.join(packageRoot, LOCAL_CLAUDE_DEBUG_ROOT);
   yield* diagnosticIo(() => ensurePrivateDirectory(packageRoot));
   yield* diagnosticIo(() => ensurePrivateDirectory(root));
   const owned = yield* ownedLedgerDirectories(root);

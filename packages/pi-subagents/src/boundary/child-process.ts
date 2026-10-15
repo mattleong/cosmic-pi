@@ -1,5 +1,5 @@
 import { contentText, type SystemMessage } from "@earendil-works/pi-ai";
-import { sha256Text, synchronousRandomUuid } from "pi-cosmic-core";
+import { sha256Text, synchronousRandomHex, synchronousRandomUuid } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 import { PROTOCOL_FINGERPRINT_ENV, protocolFingerprint } from "./protocol-fingerprint.ts";
@@ -32,6 +32,7 @@ import {
   type ProcessWireEvent,
 } from "./process-transport.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
+import { recordPrivateStateOwner, SUBAGENT_STATE_ROOT } from "./private-state.ts";
 import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
 import {
   type LocalPiContact,
@@ -84,35 +85,38 @@ export function safeSubagentDirectorySegment(value: string): string {
   return `id-${sha256Text(value).slice(0, 32)}`;
 }
 
-const subagentRunDirectory = (agentDirectory: string, parentSessionId: string, runId: string) =>
-  nodePath.join(
-    agentDirectory,
-    "subagents",
-    safeSubagentDirectorySegment(parentSessionId),
-    safeSubagentDirectorySegment(runId),
-  );
+type RunDirectory = (request: {
+  readonly parentSessionId: string;
+  readonly runId: string;
+}) => string;
+
+/**
+ * Run ids restart with every Pi process, so each runtime adds its own suffix: a resumed session
+ * never reuses, or races the sweep of, a directory that an earlier process left behind.
+ */
+const subagentRunDirectories =
+  (agentDirectory: string, runtimeSuffix: string): RunDirectory =>
+  ({ parentSessionId, runId }) =>
+    nodePath.join(
+      agentDirectory,
+      SUBAGENT_STATE_ROOT,
+      safeSubagentDirectorySegment(parentSessionId),
+      `${safeSubagentDirectorySegment(runId)}-${runtimeSuffix}`,
+    );
 
 const fileStep = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
   Effect.tryPromise({ try: evaluate, catch: (error) => processError(operation, error) });
 
-const reclaimChildRunState = (
-  agentDirectory: string,
-  request: { readonly parentSessionId: string; readonly runId: string },
-) =>
-  fileStep("reclaim subagent run state", () => {
-    const runDirectory = subagentRunDirectory(
-      agentDirectory,
-      request.parentSessionId,
-      request.runId,
-    );
-    return rm(runDirectory, { recursive: true, force: true }).then(() =>
+const reclaimChildRunState = (runDirectory: string) =>
+  fileStep("reclaim subagent run state", () =>
+    rm(runDirectory, { recursive: true, force: true }).then(() =>
       rmdir(nodePath.join(runDirectory, "..")).catch((cause: unknown) => {
         const code = nodeErrorCode(cause);
         if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
           throw cause;
       }),
-    );
-  });
+    ),
+  );
 
 export const childToolPolicy = (rootActiveTools: ReadonlyArray<string>) => ({
   enabled: [...new Set([...rootActiveTools, "contact_parent", ...NESTED_SUBAGENT_TOOL_NAMES])],
@@ -275,13 +279,12 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
 const extensionPath = fileURLToPath(new URL("./host-child.ts", import.meta.url));
 
 const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
-  agentDirectory: string,
+  runDir: string,
   request: ChildLaunchRequest,
   runtime?: ProcessTransportRuntime,
 ) {
-  const runDir = subagentRunDirectory(agentDirectory, request.parentSessionId, request.runId);
   yield* fileStep("create subagent run directory", () =>
-    mkdir(runDir, { recursive: true, mode: 0o700 }),
+    mkdir(runDir, { recursive: true, mode: 0o700 }).then(() => recordPrivateStateOwner(runDir)),
   );
   const promptPath = nodePath.join(runDir, "system-prompt.md");
   yield* fileStep("write subagent system prompt", () =>
@@ -361,10 +364,15 @@ export class ChildProcess extends Context.Service<ChildProcess, ChildProcessCont
     } = {},
   ) => {
     const agentDirectory = options.agentDirectory ?? getAgentDir();
-    return Layer.succeed(this, {
-      spawn: (request) =>
-        Effect.uninterruptible(acquireChild(agentDirectory, request, options.transportRuntime)),
-      reclaimRunState: (request) => reclaimChildRunState(agentDirectory, request),
+    return Layer.sync(this, () => {
+      const runDirectory = subagentRunDirectories(agentDirectory, synchronousRandomHex(6));
+      return {
+        spawn: (request) =>
+          Effect.uninterruptible(
+            acquireChild(runDirectory(request), request, options.transportRuntime),
+          ),
+        reclaimRunState: (request) => reclaimChildRunState(runDirectory(request)),
+      };
     });
   };
 }

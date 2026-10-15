@@ -9,6 +9,8 @@ import { backendRegistryFor, SubagentBackendRegistry } from "./backend/service.t
 import { ChildProcess } from "./boundary/child-process.ts";
 import { LocalCliProcess } from "./boundary/local-cli-process.ts";
 import { NativeModelCatalog } from "./boundary/native-model-catalog.ts";
+import { sweepAbandonedPrivateState } from "./boundary/private-state.ts";
+import { pruneReportArchive } from "./boundary/report-archive.ts";
 import { SupervisorChannel } from "./boundary/supervisor-channel.ts";
 import { WriterLeaseService } from "./boundary/writer-lease.ts";
 import { WorkspaceService } from "./workspace/service.ts";
@@ -35,8 +37,20 @@ const subagentBackendRegistryLayer = Layer.effect(
   }),
 );
 
+/** Startup housekeeping runs in the background for the runtime's lifetime and never blocks it. */
+const privateStateHousekeepingLayer = (agentDirectory: string) =>
+  Layer.effectDiscard(
+    Effect.forkScoped(
+      sweepAbandonedPrivateState(agentDirectory).pipe(
+        Effect.andThen(pruneReportArchive(agentDirectory)),
+      ),
+    ),
+  );
+
 export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly sessionKey?: string | undefined;
+  /** Root session starts sweep private state that crashed or killed sessions left behind. */
+  readonly sweepPrivateState?: boolean | undefined;
   readonly publish: (projection: SubagentProjection) => void;
   readonly notify: SubagentNotifier;
   readonly proxyHandler: NonNullable<SubagentServiceOptions["proxyHandler"]>;
@@ -82,6 +96,7 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
     backend,
     NativeModelCatalog.layer(directory),
     CodePreviewSchedulerService.layer,
+    options.sweepPrivateState ? privateStateHousekeepingLayer(options.agentDirectory) : Layer.empty,
   );
 };
 

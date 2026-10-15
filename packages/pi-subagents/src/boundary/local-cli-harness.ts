@@ -24,10 +24,14 @@ import {
   safeAgentDirectory,
   writeExclusive,
 } from "./harness-shared.ts";
+import {
+  CODEX_CATALOG_HARNESS_ROOT,
+  LOCAL_CLI_HARNESS_ROOT,
+  recordPrivateStateOwner,
+  SUBAGENT_STATE_ROOT,
+} from "./private-state.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
 
-const HARNESS_ROOT = "local-cli-v1";
-const CATALOG_HARNESS_ROOT = "native-model-catalog-v1";
 const MAX_PROBE_OUTPUT_BYTES = 32 * 1024;
 const PROBE_TIMEOUT_MILLIS = 5_000;
 
@@ -185,13 +189,14 @@ const prepareOwnedHarness = <Harness>(
       const safeDirectory = yield* Effect.interruptible(
         prepareStep(() => safeAgentDirectory(agentDirectory)),
       );
-      const packageRoot = nodePath.join(safeDirectory, "subagents");
+      const packageRoot = nodePath.join(safeDirectory, SUBAGENT_STATE_ROOT);
       const root = nodePath.join(packageRoot, rootName);
       const directory = nodePath.join(root, `${namePrefix}-${synchronousRandomHex(12)}`);
       yield* Effect.interruptible(prepareStep(() => ensurePrivateDirectory(packageRoot)));
       yield* Effect.interruptible(prepareStep(() => ensurePrivateDirectory(root)));
       yield* prepareStep(() => fs.mkdir(directory, { mode: 0o700 }));
-      return yield* build(directory).pipe(
+      return yield* prepareStep(() => recordPrivateStateOwner(directory)).pipe(
+        Effect.andThen(build(directory)),
         Effect.catchCause((cause) =>
           cleanup(directory).pipe(
             Effect.catchCause(() => Effect.fail(harnessCleanupFailed())),
@@ -273,7 +278,7 @@ export const prepareLocalCliHarness = (
 ): Effect.Effect<LocalCliHarness, LocalCliHarnessError> =>
   prepareOwnedHarness(
     options.agentDirectory,
-    HARNESS_ROOT,
+    LOCAL_CLI_HARNESS_ROOT,
     `${request.runtime}-${request.launch.runId}`,
     (directory) =>
       Effect.gen(function* () {
@@ -296,7 +301,7 @@ export const prepareCodexCatalogHarness = (options: {
   readonly agentDirectory: string;
   readonly environment: NodeJS.ProcessEnv;
 }): Effect.Effect<CodexCatalogHarness, LocalCliHarnessError> =>
-  prepareOwnedHarness(options.agentDirectory, CATALOG_HARNESS_ROOT, "codex", (directory) =>
+  prepareOwnedHarness(options.agentDirectory, CODEX_CATALOG_HARNESS_ROOT, "codex", (directory) =>
     prepareStep(() =>
       prepareCodexHome(directory, codexCatalogConfig(), options.environment).then((codexHome) => ({
         env: {

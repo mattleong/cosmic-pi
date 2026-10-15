@@ -138,6 +138,12 @@ export {
   signalProcess,
   signalProcessGroup,
 } from "./src/platform/process-tree.ts";
+export {
+  currentProcessIdentity,
+  processLiveness,
+  type ProcessIdentity,
+  type ProcessLiveness,
+} from "./src/platform/process-start.ts";
 export { synchronousMonotonicNow, synchronousNow } from "./src/platform/native-clock.ts";
 export { synchronousRandomHex, synchronousRandomUuid } from "./src/platform/native-crypto.ts";
 export { sha256Text } from "./src/security/sha256.ts";

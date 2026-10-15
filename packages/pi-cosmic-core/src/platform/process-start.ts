@@ -1,4 +1,5 @@
 import { nodeLockFs as fs, nodeSpawnSync } from "./node-builtins.ts";
+import { signalProcess } from "./process-tree.ts";
 
 const PS_TIMEOUT_MILLIS = 2_000;
 
@@ -22,4 +23,34 @@ export const processStartIdentity = (pid: number): string | undefined => {
   } catch {
     return undefined;
   }
+};
+
+/** One process: its PID and, when the OS reports it, its start identity. */
+export interface ProcessIdentity {
+  readonly pid: number;
+  readonly started?: string | undefined;
+}
+
+/**
+ * `dead` needs positive evidence: the PID is absent, or it now belongs to a process that started
+ * at a different time. A present PID without a comparable start identity stays `unknown`.
+ */
+export type ProcessLiveness = "alive" | "dead" | "unknown";
+
+let ownIdentity: ProcessIdentity | undefined;
+
+export const currentProcessIdentity = (): ProcessIdentity => {
+  ownIdentity ??= { pid: process.pid, started: processStartIdentity(process.pid) };
+  return ownIdentity;
+};
+
+export const processLiveness = (identity: ProcessIdentity): ProcessLiveness => {
+  if (signalProcess(identity.pid, 0) === "absent") return "dead";
+  if (identity.started === undefined) return "unknown";
+  const started =
+    identity.pid === process.pid
+      ? currentProcessIdentity().started
+      : processStartIdentity(identity.pid);
+  if (started === undefined) return "unknown";
+  return started === identity.started ? "alive" : "dead";
 };

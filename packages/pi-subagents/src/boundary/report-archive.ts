@@ -1,3 +1,6 @@
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { safeSubagentDirectorySegment } from "./child-process.ts";
 import {
   nodeFsPromises as fs,
@@ -5,6 +8,11 @@ import {
   nodePath as path,
   nodeWriteFileSync,
 } from "./node-builtins.ts";
+import {
+  PRIVATE_STATE_RETENTION_MILLIS,
+  REPORT_ARCHIVE_ROOT,
+  SUBAGENT_STATE_ROOT,
+} from "./private-state.ts";
 
 export interface ArchivedReport {
   readonly path: string;
@@ -19,11 +27,10 @@ export interface ReportArchiveEntry {
 
 export type ReportArchive = (entry: ReportArchiveEntry) => ArchivedReport | undefined;
 
-const RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1000;
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
 export const reportArchiveRoot = (agentDirectory: string): string =>
-  path.join(agentDirectory, "subagents", "reports");
+  path.join(agentDirectory, SUBAGENT_STATE_ROOT, REPORT_ARCHIVE_ROOT);
 
 /**
  * Writes each delivered report to a private file keyed by the Pi session, so the parent can
@@ -55,47 +62,64 @@ interface ArchivedFile {
   readonly modified: number;
 }
 
-const listArchivedFiles = (root: string): Promise<ReadonlyArray<ArchivedFile>> =>
-  fs
-    .readdir(root, { withFileTypes: true })
-    .then((sessions) =>
-      Promise.all(
-        sessions
-          .filter((entry) => entry.isDirectory())
-          .map((session) => {
-            const directory = path.join(root, session.name);
-            return fs.readdir(directory).then((names) =>
-              Promise.all(
-                names.map((name) => {
-                  const file = path.join(directory, name);
-                  return fs
-                    .stat(file)
-                    .then((stat) => ({ file, size: stat.size, modified: stat.mtimeMs }));
+const attempt = <A>(evaluate: () => PromiseLike<A>): Effect.Effect<Option.Option<A>> =>
+  Effect.tryPromise(evaluate).pipe(Effect.option);
+
+const sessionDirectories = (root: string): Effect.Effect<ReadonlyArray<string>> =>
+  attempt(() => fs.readdir(root, { withFileTypes: true })).pipe(
+    Effect.map((entries) =>
+      Option.getOrElse(entries, () => []).flatMap((entry) =>
+        entry.isDirectory() ? [path.join(root, entry.name)] : [],
+      ),
+    ),
+  );
+
+const archivedFiles = (directory: string): Effect.Effect<ReadonlyArray<ArchivedFile>> =>
+  attempt(() => fs.readdir(directory)).pipe(
+    Effect.flatMap((names) =>
+      Effect.forEach(
+        Option.getOrElse(names, () => []),
+        (name) => {
+          const file = path.join(directory, name);
+          return attempt(() => fs.stat(file)).pipe(
+            Effect.map(
+              Option.map(
+                (stat): ArchivedFile => ({
+                  file,
+                  size: stat.size,
+                  modified: stat.mtimeMs,
                 }),
               ),
-            );
-          }),
+            ),
+          );
+        },
       ),
-    )
-    .then((sessions) => sessions.flat());
+    ),
+    Effect.map((files) => files.flatMap(Option.toArray)),
+  );
 
-/** Removes reports older than a week, then the oldest reports beyond the size cap. */
-export const pruneReportArchive = (agentDirectory: string, now: number): Promise<void> => {
-  const root = reportArchiveRoot(agentDirectory);
-  return listArchivedFiles(root)
-    .then((files) => {
-      const expired = files.filter((file) => now - file.modified > RETENTION_MILLIS);
-      const kept = files
-        .filter((file) => now - file.modified <= RETENTION_MILLIS)
-        .toSorted((left, right) => right.modified - left.modified);
-      let total = 0;
-      const overflow = kept.filter((file) => (total += file.size) > MAX_ARCHIVE_BYTES);
-      return Promise.all(
-        [...expired, ...overflow].map((file) => fs.rm(file.file, { force: true })),
-      );
-    })
-    .then(
-      () => undefined,
-      () => undefined,
+/**
+ * Removes reports older than a week, then the oldest reports beyond the size cap, then session
+ * directories left empty. A file or directory that can't be read or removed is skipped.
+ */
+export const pruneReportArchive = (agentDirectory: string): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const directories = yield* sessionDirectories(reportArchiveRoot(agentDirectory));
+    const files = (yield* Effect.forEach(directories, archivedFiles)).flat();
+    const expired = files.filter((file) => now - file.modified > PRIVATE_STATE_RETENTION_MILLIS);
+    const kept = files
+      .filter((file) => now - file.modified <= PRIVATE_STATE_RETENTION_MILLIS)
+      .toSorted((left, right) => right.modified - left.modified);
+    let total = 0;
+    const overflow = kept.filter((file) => (total += file.size) > MAX_ARCHIVE_BYTES);
+    yield* Effect.forEach(
+      [...expired, ...overflow],
+      (file) => attempt(() => fs.rm(file.file, { force: true })),
+      { discard: true },
     );
-};
+    // rmdir removes only directories that are now empty.
+    yield* Effect.forEach(directories, (directory) => attempt(() => fs.rmdir(directory)), {
+      discard: true,
+    });
+  });

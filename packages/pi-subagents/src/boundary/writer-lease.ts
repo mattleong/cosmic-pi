@@ -10,6 +10,7 @@ import {
 } from "pi-cosmic-core";
 import { ensurePrivateDirectory } from "./harness-shared.ts";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
+import { SUBAGENT_STATE_ROOT, WRITER_LEASE_ROOT } from "./private-state.ts";
 
 const MAX_FILESYSTEM_IDENTITY_CHARS = 256;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
@@ -113,7 +114,7 @@ export const makeWriterLease = (
   agentDirectory: string,
   lock: CrossProcessLockContract,
 ): WriterLeaseContract => {
-  const packageRoot = nodePath.join(agentDirectory, "subagents");
+  const packageRoot = nodePath.join(agentDirectory, SUBAGENT_STATE_ROOT);
   const owners = new WeakMap<WriterLease, Ownership>();
 
   const denied = (reason: string) =>
@@ -224,7 +225,7 @@ export class WriterLeaseService extends Context.Service<WriterLeaseService, Writ
     ).pipe(
       Layer.provide(
         CrossProcessLock.layer({
-          directory: nodePath.join(options.agentDirectory, "subagents", "writer-leases-v3"),
+          directory: nodePath.join(options.agentDirectory, SUBAGENT_STATE_ROOT, WRITER_LEASE_ROOT),
         }),
       ),
     );

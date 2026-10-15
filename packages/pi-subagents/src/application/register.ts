@@ -22,7 +22,6 @@ import {
   makePiSessionRuntimeSlot,
   type PiSessionRuntimeSlot,
   notifyAtHostBoundary,
-  synchronousNow,
 } from "pi-cosmic-core";
 import {
   promptSubagentActivityInput,
@@ -33,11 +32,7 @@ import { registerActiveRunsPrompt } from "../boundary/host-active-runs-prompt.ts
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
 import { hostNotifier } from "../boundary/host-notifier.ts";
 import { registerParentWake } from "../boundary/host-parent-wake.ts";
-import {
-  sessionReportArchive,
-  pruneReportArchive,
-  type ReportArchive,
-} from "../boundary/report-archive.ts";
+import { sessionReportArchive, type ReportArchive } from "../boundary/report-archive.ts";
 import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { subagentProjectionBridge } from "../boundary/host-ui.ts";
@@ -230,6 +225,7 @@ export function registerSubagentApplication(
         const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
         const layer = subagentApplicationLayer({
           sessionKey: activation.sessionKey,
+          sweepPrivateState: activation.trigger === "start",
           cwd: activation.cwd,
           agentDirectory: activation.agentDirectory,
           projectTrusted: activation.projectTrusted,
@@ -366,10 +362,8 @@ export function registerSubagentApplication(
         if (activation.trigger !== "tree") replay.publish();
         bridge.publish(prepared.projection);
         currentActivation = activation;
-        if (activation.sessionKey) {
+        if (activation.sessionKey)
           reportArchive = sessionReportArchive(activation.agentDirectory, activation.sessionKey);
-          pruneReportArchive(activation.agentDirectory, synchronousNow()).catch(() => undefined);
-        }
         showSessionFooter();
         if (activation.trigger === "reload" && activation.sessionKey)
           profileReloadHandoff.clear(activation.sessionKey);

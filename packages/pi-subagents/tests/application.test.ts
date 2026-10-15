@@ -227,6 +227,26 @@ describe("subagent Pi registration", () => {
     },
   );
 
+  effectTest("sweeps private state on session starts but not on reload or /tree", function* () {
+    const sweeps: Array<boolean | undefined> = [];
+    const makeLayer = SubagentLayers.subagentApplicationLayer;
+    const capture = vi
+      .spyOn(SubagentLayers, "subagentApplicationLayer")
+      .mockImplementation((options) => {
+        sweeps.push(options.sweepPrivateState);
+        return makeLayer(options);
+      });
+    yield* Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore()));
+    const ctx = sessionContext();
+    const { emit } = applicationFixture();
+    yield* settle(() => emit("session_start", ctx));
+    yield* settle(() => emit("session_tree", ctx));
+    yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "reload" }));
+    yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "new" }));
+    yield* settle(() => emit("session_shutdown", ctx));
+    expect(sweeps).toEqual([true, false, false, true]);
+  });
+
   effectTest("retired tools cannot run against a replacement session", function* () {
     const ctx = sessionContext({ isProjectTrusted: () => false });
     const { emit, tools } = applicationFixture();

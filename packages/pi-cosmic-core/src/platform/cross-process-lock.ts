@@ -5,8 +5,7 @@ import * as Schema from "effect/Schema";
 import { sha256Text } from "../security/sha256.ts";
 import { synchronousRandomHex } from "./native-crypto.ts";
 import { nodeFsConstants as flags, nodeLockFs as fs, nodePath as path } from "./node-builtins.ts";
-import { processStartIdentity } from "./process-start.ts";
-import { signalProcess } from "./process-tree.ts";
+import { currentProcessIdentity, processLiveness } from "./process-start.ts";
 
 export class CrossProcessLockError extends Schema.TaggedError<CrossProcessLockError>()(
   "CrossProcessLockError",
@@ -97,17 +96,7 @@ const writeOwner = (directory: string, owner: Owner) => {
   fs.renameSync(temporary, path.join(directory, "owner.json"));
   syncDirectory(directory);
 };
-let ownStart: string | undefined | null = null;
-const currentProcessStart = (): string | undefined => {
-  if (ownStart === null) ownStart = processStartIdentity(process.pid);
-  return ownStart;
-};
-const dead = (owner: Owner): boolean => {
-  if (signalProcess(owner.pid, 0) === "absent") return true;
-  if (owner.started === undefined) return false;
-  const started = processStartIdentity(owner.pid);
-  return started !== undefined && started !== owner.started;
-};
+const dead = (owner: Owner): boolean => processLiveness(owner) === "dead";
 const retire = (directory: string, owner: Owner, root: string) => {
   const current = readOwner(directory);
   if (current.token !== owner.token || current.phase !== "quiescent") throw recovery();
@@ -243,7 +232,7 @@ export const acquireNativeLock = (
     retireDeadOwner(directory, previous, root);
     return retryAfterRetire ? acquireNativeLock(namespace, options) : undefined;
   }
-  const started = currentProcessStart();
+  const { started } = currentProcessIdentity();
   const owner: Owner = {
     version: 1,
     token: randomToken(),
