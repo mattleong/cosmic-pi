@@ -125,7 +125,9 @@ const ensurePrivateRoot = (root: string): void => {
   privateDirectory(root, root);
 };
 
-const readPreviousOwner = (directory: string): Owner | undefined => {
+const OWNER_READ_ATTEMPTS = 3;
+
+const readPreviousOwner = (directory: string, attempt = 1): Owner | undefined => {
   try {
     return readOwner(directory);
   } catch (error) {
@@ -137,6 +139,9 @@ const readPreviousOwner = (directory: string): Owner | undefined => {
     if (code("ENOENT")(statError)) return undefined;
     throw statError;
   }
+  // A releasing owner can move its slot away and a successor publish a new one between the two
+  // reads above; a slot that keeps lacking its owner record is damaged.
+  if (attempt < OWNER_READ_ATTEMPTS) return readPreviousOwner(directory, attempt + 1);
   throw recovery(directory);
 };
 
