@@ -20,6 +20,7 @@ import {
   type ProcessTransportRuntime,
 } from "../src/boundary/process-transport.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import { stringMatching } from "./support/matchers.ts";
 
 const boundary = {
   spawn: vi.fn<ProcessTransportRuntime["spawn"]>(),
@@ -215,7 +216,7 @@ describe("shared process transport", () => {
       }),
   );
 
-  it.effect("keeps native outbound frame limits and terminates parser overflow", () =>
+  it.effect("keeps native outbound frame limits and summarizes oversized inbound lines", () =>
     Effect.gen(function* () {
       const f = fixture();
       const { handle, release } = yield* openNative(f);
@@ -226,8 +227,15 @@ describe("shared process transport", () => {
       expect((yield* handle.send(oversized).pipe(Effect.flip)).code).toBe("transport_not_sent");
       expect(f.writes).toEqual([]);
       f.stdout.emit("data", Buffer.alloc(MAX_PROCESS_LINE_BYTES + 1, "x"));
-      expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
-      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force");
+      f.stdout.emit("data", Buffer.from('\n{"type":"result"}\n'));
+      const skipped = yield* Queue.take(handle.events);
+      expect(skipped).toMatchObject({ type: "oversized_line", bytes: MAX_PROCESS_LINE_BYTES + 1 });
+      handle.acknowledge(skipped);
+      expect(yield* Queue.take(handle.events)).toMatchObject({
+        type: "message",
+        value: { type: "result" },
+      });
+      expect(boundary.terminate).not.toHaveBeenCalled();
       yield* release;
       expect(f.writes).toEqual([]);
     }),
@@ -413,7 +421,7 @@ describe("Pi transport policy", () => {
     }),
   );
   it.effect(
-    "captures early IPC, leaves parser overflow to the backend, and preserves Pi frame policy",
+    "captures early IPC, passes oversized events to the backend, and preserves Pi frame policy",
     () =>
       Effect.gen(function* () {
         const f = fixture();
@@ -449,8 +457,21 @@ describe("Pi transport policy", () => {
         );
         yield* handle.send({ type: "prompt", message: "x".repeat(MAX_PROCESS_LINE_BYTES) });
         expect(f.writes[0]?.length).toBeGreaterThan(MAX_PROCESS_LINE_BYTES);
-        f.stdout.emit("data", Buffer.alloc(MAX_PROCESS_LINE_BYTES + 1, "x"));
-        expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
+        const aggregate = `{"type":"agent_end","messages":[{"role":"toolResult","content":"${"x".repeat(6 * 1024 * 1024)}"}],"willRetry":false}\n`;
+        for (let offset = 0; offset < aggregate.length; offset += 64 * 1024)
+          f.stdout.emit("data", Buffer.from(aggregate.slice(offset, offset + 64 * 1024)));
+        f.stdout.emit("data", Buffer.from('{"type":"agent_settled"}\n'));
+        const skipped = yield* Queue.take(handle.events);
+        expect(skipped).toMatchObject({
+          type: "oversized_line",
+          bytes: aggregate.length - 1,
+          prefix: stringMatching(/^\{"type":"agent_end","messages":/),
+          suffix: stringMatching(/"willRetry":false\}$/),
+        });
+        expect(yield* Queue.take(handle.events)).toMatchObject({
+          type: "rpc_message",
+          value: { type: "agent_settled" },
+        });
         expect(boundary.terminate).not.toHaveBeenCalled();
         yield* closeScope(scope);
         expect(f.writes.at(-1)).toContain('"abort"');

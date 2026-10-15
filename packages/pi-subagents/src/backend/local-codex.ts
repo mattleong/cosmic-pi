@@ -33,7 +33,12 @@ import {
 import { localCliInterrupts, type LocalCliInterrupt } from "./local-cli-interruption.ts";
 import { toBackendExit, type BackendLaunchRequest } from "./model.ts";
 import { localCliEventIngress } from "./local-cli-events.ts";
-import { correlatedRequest, protocolError, supervisorError } from "./driver-shared.ts";
+import {
+  correlatedRequest,
+  oversizedLineError,
+  protocolError,
+  supervisorError,
+} from "./driver-shared.ts";
 import { deliverTerminalReport, localCliBackendDriver } from "./local-cli-driver.ts";
 
 const RPC_TIMEOUT = "10 seconds";
@@ -261,6 +266,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   const consumeRaw = (raw: LocalCliWireEvent): Effect.Effect<void> => {
     if (raw.type === "protocol_error")
       return offer({ type: "protocol_error", message: raw.message }, raw);
+    if (raw.type === "oversized_line") return offer(oversizedLineError("Codex", raw), raw);
     return decodeCodexEnvelope(raw.value).pipe(
       Effect.flatMap((envelope) => {
         if (envelope.type === "server_request")

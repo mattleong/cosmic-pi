@@ -1,8 +1,12 @@
 import { toolOutputPreview } from "./tool-output-preview.ts";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
+import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
+import { omittedOutputPreview } from "./driver-shared.ts";
 import type { SubagentUsage } from "../run/model.ts";
 
 const MAX_ID_CHARS = 256;
@@ -417,6 +421,42 @@ export const decodeClaudeProtocolEvent = (
         return { type: "ignored" };
     }
   });
+
+const OversizedClaudeFields = Schema.Struct({
+  type: Schema.optional(Name),
+  "message.content.0.type": Schema.optional(Name),
+  "message.content.0.tool_use_id": Schema.optional(Id),
+});
+const decodeOversizedClaudeFields = Schema.decodeUnknownOption(OversizedClaudeFields);
+
+/**
+ * Claude Code repeats a tool result's images or documents in its `user` line, so one large read can
+ * push the line past the limit. Each such line carries one result whose id leads the content, so
+ * the subagent can still close the tool. Every other oversized line stays a protocol error.
+ */
+export const oversizedClaudeProtocolEvent = (
+  line: OversizedLine,
+): ClaudeProtocolEvent | undefined => {
+  const fields = decodeOversizedClaudeFields(Object.fromEntries(jsonPrefixScalars(line.prefix)));
+  if (Option.isNone(fields)) return undefined;
+  const { type, "message.content.0.type": partType } = fields.value;
+  const toolUseId = fields.value["message.content.0.tool_use_id"];
+  if (type === "stream_event") return { type: "activity" };
+  if (type !== "user" || partType !== "tool_result" || toolUseId === undefined) return undefined;
+  return {
+    type: "user",
+    text: "",
+    toolResults: [
+      { id: toolUseId, isError: false, outputPreview: omittedOutputPreview(line.bytes) },
+    ],
+    contentKind: "blocks",
+    textLength: 0,
+    isSynthetic: false,
+    isReplay: false,
+    isMeta: false,
+    isCompactSummary: false,
+  };
+};
 
 export const decodeClaudeInitializeControlResponse =
   Schema.decodeUnknownEffect(InitializeControlResponse);

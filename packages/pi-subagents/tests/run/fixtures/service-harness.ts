@@ -31,6 +31,7 @@ import {
   type ChildProcessHandle,
   type ChildWireEvent,
 } from "../../../src/boundary/child-process.ts";
+import type { OversizedLine } from "../../../src/boundary/bounded-line-parser.ts";
 import type { ProcessExit } from "../../../src/boundary/process-transport.ts";
 import { SubagentProcessError } from "../../../src/run/errors.ts";
 import type {
@@ -188,6 +189,7 @@ export interface FakeChildControl {
   readonly offer: (value: RpcWireValue) => void;
   readonly offerIpc: (value: IpcWireValue) => void;
   readonly offerProtocolError: (message: string) => void;
+  readonly offerOversizedLine: (line: OversizedLine) => void;
   readonly exit: (
     exitCode?: number | null,
     diagnostic?: { readonly stderr?: string; readonly signal?: string },
@@ -368,6 +370,8 @@ export function fakeChildLayer(
           };
           const offerProtocolError = (message: string) =>
             Queue.offerUnsafe(events, { type: "protocol_error", message });
+          const offerOversizedLine = (line: OversizedLine) =>
+            Queue.offerUnsafe(events, { type: "oversized_line", ...line });
           const exit: FakeChildControl["exit"] = (exitCode = 0, diagnostic = {}) => {
             Queue.endUnsafe(events);
             Deferred.doneUnsafe(exited, Effect.succeed({ exitCode, stderr: "", ...diagnostic }));
@@ -478,6 +482,7 @@ export function fakeChildLayer(
             offer,
             offerIpc,
             offerProtocolError,
+            offerOversizedLine,
             exit,
             failExit,
           });

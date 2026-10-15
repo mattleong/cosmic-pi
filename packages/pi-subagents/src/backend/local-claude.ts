@@ -26,12 +26,13 @@ import { localClaudeDiagnostics } from "./local-claude-diagnostics.ts";
 import { localClaudeUsage, usageComponentsTotal } from "./local-claude-usage.ts";
 import { localClaudeUserEvents } from "./local-claude-user-events.ts";
 import { localCliEventIngress } from "./local-cli-events.ts";
-import { supervisorError } from "./driver-shared.ts";
+import { oversizedLineError, supervisorError } from "./driver-shared.ts";
 import { deliverTerminalReport, localCliBackendDriver } from "./local-cli-driver.ts";
 import { CLAUDE_NATIVE_AGENT_TOOLS } from "./claude-policy.ts";
 import {
   claudeInterruptFrame,
   decodeClaudeProtocolEvent,
+  oversizedClaudeProtocolEvent,
   type ClaudeProtocolEvent,
 } from "./local-claude-protocol.ts";
 
@@ -223,6 +224,79 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       );
     });
 
+  const consumeEvent = (
+    event: ClaudeProtocolEvent,
+    raw: LocalCliWireEvent,
+    sequence: number,
+  ): Effect.Effect<void> => {
+    const recordInbound =
+      event.type === "activity" || event.type === "ignored"
+        ? Effect.void
+        : recordDebug({
+            kind: "inbound",
+            sequence,
+            protocolType: event.type,
+            epoch: handleState.assignmentEpoch,
+          });
+    return diagnostics
+      .observe(event.type, event.type === "init" ? event.cliVersion : undefined)
+      .pipe(
+        Effect.andThen(recordInbound),
+        Effect.andThen(
+          ((): Effect.Effect<void> => {
+            switch (event.type) {
+              case "ignored":
+                return release(raw);
+              case "init":
+                return onInit(event, raw);
+              case "activity":
+                return offer(
+                  { type: "activity", assignmentEpoch: handleState.assignmentEpoch },
+                  raw,
+                );
+              case "background_tasks": {
+                if (!isSameClaudeSession(event.sessionId, handleState.nativeSessionId))
+                  return release(raw);
+                const wasRunning = handleState.backgroundTasks > 0;
+                handleState.backgroundTasks = event.taskIds.length;
+                for (const taskId of event.taskIds)
+                  if (handleState.topLevelTaskIds.size < MAX_TRACKED_BACKGROUND_TASKS)
+                    handleState.topLevelTaskIds.add(taskId);
+                return (
+                  wasRunning && event.taskIds.length === 0
+                    ? onBackgroundTasksSettled()
+                    : Effect.void
+                ).pipe(
+                  Effect.andThen(
+                    offer({ type: "activity", assignmentEpoch: handleState.assignmentEpoch }, raw),
+                  ),
+                );
+              }
+              case "task_notification":
+                if (
+                  isSameClaudeSession(event.sessionId, handleState.nativeSessionId) &&
+                  handleState.topLevelTaskIds.has(event.taskId)
+                )
+                  handleState.notificationSinceResult = true;
+                return offer(
+                  { type: "activity", assignmentEpoch: handleState.assignmentEpoch },
+                  raw,
+                );
+              case "user":
+                return onUser(event, raw, sequence);
+              case "control_response":
+                return control.onControlResponse(event, raw);
+              case "assistant":
+                return onAssistant(event, raw);
+              case "result":
+                return onResult(event, raw);
+            }
+            return absurd(event);
+          })(),
+        ),
+      );
+  };
+
   const consumeRaw = (raw: LocalCliWireEvent): Effect.Effect<void> =>
     Effect.suspend(() => {
       const sequence = nextWireSequence();
@@ -230,78 +304,16 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
         return diagnostics
           .observe("protocol-error")
           .pipe(Effect.andThen(offer({ type: "protocol_error", message: raw.message }, raw)));
+      if (raw.type === "oversized_line") {
+        const event = oversizedClaudeProtocolEvent(raw);
+        return event
+          ? consumeEvent(event, raw, sequence)
+          : diagnostics
+              .observe("protocol-error")
+              .pipe(Effect.andThen(offer(oversizedLineError("Claude Code", raw), raw)));
+      }
       return decodeClaudeProtocolEvent(raw.value).pipe(
-        Effect.flatMap((event) => {
-          const recordInbound =
-            event.type === "activity" || event.type === "ignored"
-              ? Effect.void
-              : recordDebug({
-                  kind: "inbound",
-                  sequence,
-                  protocolType: event.type,
-                  epoch: handleState.assignmentEpoch,
-                });
-          return diagnostics
-            .observe(event.type, event.type === "init" ? event.cliVersion : undefined)
-            .pipe(
-              Effect.andThen(recordInbound),
-              Effect.andThen(
-                ((): Effect.Effect<void> => {
-                  switch (event.type) {
-                    case "ignored":
-                      return release(raw);
-                    case "init":
-                      return onInit(event, raw);
-                    case "activity":
-                      return offer(
-                        { type: "activity", assignmentEpoch: handleState.assignmentEpoch },
-                        raw,
-                      );
-                    case "background_tasks": {
-                      if (!isSameClaudeSession(event.sessionId, handleState.nativeSessionId))
-                        return release(raw);
-                      const wasRunning = handleState.backgroundTasks > 0;
-                      handleState.backgroundTasks = event.taskIds.length;
-                      for (const taskId of event.taskIds)
-                        if (handleState.topLevelTaskIds.size < MAX_TRACKED_BACKGROUND_TASKS)
-                          handleState.topLevelTaskIds.add(taskId);
-                      return (
-                        wasRunning && event.taskIds.length === 0
-                          ? onBackgroundTasksSettled()
-                          : Effect.void
-                      ).pipe(
-                        Effect.andThen(
-                          offer(
-                            { type: "activity", assignmentEpoch: handleState.assignmentEpoch },
-                            raw,
-                          ),
-                        ),
-                      );
-                    }
-                    case "task_notification":
-                      if (
-                        isSameClaudeSession(event.sessionId, handleState.nativeSessionId) &&
-                        handleState.topLevelTaskIds.has(event.taskId)
-                      )
-                        handleState.notificationSinceResult = true;
-                      return offer(
-                        { type: "activity", assignmentEpoch: handleState.assignmentEpoch },
-                        raw,
-                      );
-                    case "user":
-                      return onUser(event, raw, sequence);
-                    case "control_response":
-                      return control.onControlResponse(event, raw);
-                    case "assistant":
-                      return onAssistant(event, raw);
-                    case "result":
-                      return onResult(event, raw);
-                  }
-                  return absurd(event);
-                })(),
-              ),
-            );
-        }),
+        Effect.flatMap((event) => consumeEvent(event, raw, sequence)),
         Effect.catch(() =>
           offer(
             { type: "protocol_error", message: "Claude Code emitted an invalid stream event." },

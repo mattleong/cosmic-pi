@@ -1,6 +1,12 @@
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
+import { formatBytes } from "pi-cosmic-core";
+import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
+import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
+import { MAX_PROCESS_LINE_BYTES } from "../boundary/process-transport.ts";
+import type { BackendEvent } from "./model.ts";
 import {
   processError,
   SubagentProtocolError,
@@ -10,6 +16,19 @@ import {
 
 export const protocolError = (message: string): SubagentProtocolError =>
   new SubagentProtocolError({ message });
+
+/** Stands in for tool output whose transport line exceeded the limit. */
+export const omittedOutputPreview = (bytes: number): string =>
+  `Output not shown: ${formatBytes(bytes)} exceeds the ${formatBytes(MAX_PROCESS_LINE_BYTES)} line limit.`;
+
+export const oversizedLineError = (source: string, line: OversizedLine): BackendEvent => {
+  const type = jsonPrefixScalars(line.prefix).get("type");
+  const event = Predicate.isString(type) ? `${type} event` : "unrecognized line";
+  return {
+    type: "protocol_error",
+    message: `${source} emitted a ${formatBytes(line.bytes)} ${event}, over the ${formatBytes(MAX_PROCESS_LINE_BYTES)} line limit.`,
+  };
+};
 
 export const supervisorError =
   (operation: string) =>

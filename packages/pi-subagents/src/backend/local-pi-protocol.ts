@@ -1,7 +1,11 @@
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
+import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
+import { omittedOutputPreview } from "./driver-shared.ts";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
 
@@ -181,6 +185,51 @@ export const decodeRpcEnvelope = (
     const ignored = yield* Schema.decodeUnknownEffect(IgnoredEventSchema)(value);
     return { type: "ignored" as const, eventType: ignored.type };
   });
+
+const OversizedRpcFieldsSchema = Schema.Struct({
+  type: ProtocolNameSchema,
+  toolCallId: Schema.optional(ProtocolIdSchema),
+  toolName: Schema.optional(ProtocolNameSchema),
+  "message.role": Schema.optional(ProtocolNameSchema),
+});
+const decodeOversizedRpcFields = Schema.decodeUnknownOption(OversizedRpcFieldsSchema);
+// Pi writes `isError` after the tool result, optionally followed by `durationMs`.
+const TOOL_END_ERROR_SUFFIX = /"isError":(true|false)(?:,"durationMs":[\d.eE+-]+)?\}$/;
+
+/**
+ * Pi repeats whole messages and tool results in aggregate, session, and tool events, so one large
+ * image can push a line past the limit. The subagent needs none of those payloads. It keeps what
+ * the leading fields identify and leaves every other oversized event a protocol error.
+ */
+export const oversizedRpcEnvelope = (line: OversizedLine): RpcChildEnvelope | undefined => {
+  const fields = decodeOversizedRpcFields(Object.fromEntries(jsonPrefixScalars(line.prefix)));
+  if (Option.isNone(fields)) return undefined;
+  const { type, toolCallId, toolName, "message.role": role } = fields.value;
+  switch (type) {
+    case "agent_end":
+      return { type };
+    case "turn_end":
+    case "entry_appended":
+    case "tool_execution_update":
+      return { type: "ignored", eventType: type };
+    case "message_start":
+    case "message_end":
+      return role === undefined || role === "assistant"
+        ? undefined
+        : { type: "ignored", eventType: type };
+    case "tool_execution_end":
+      return toolCallId === undefined || toolName === undefined
+        ? undefined
+        : {
+            type,
+            toolCallId,
+            toolName,
+            isError: TOOL_END_ERROR_SUFFIX.exec(line.suffix)?.[1] === "true",
+            result: omittedOutputPreview(line.bytes),
+          };
+  }
+  return undefined;
+};
 
 const EffortSchema = Schema.Literals(SUBAGENT_EFFORTS);
 const RpcStateModelSchema = Schema.Struct({

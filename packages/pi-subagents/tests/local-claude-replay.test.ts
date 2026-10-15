@@ -40,6 +40,7 @@ import {
   takeBackendEvent,
 } from "./fixtures/backend-supervisor.ts";
 import { objectContaining, stringContaining } from "./support/matchers.ts";
+import { OVERSIZED_IMAGE_DATA, oversizedLine } from "./support/oversized-line.ts";
 
 const wireJson = Schema.decodeUnknownSync(Schema.Json);
 type ReplayScenario =
@@ -90,6 +91,7 @@ interface ReplayHarness {
   ) => Effect.Effect<void>;
   readonly acceptReport: (epoch: number, forward?: boolean) => Effect.Effect<void>;
   readonly activity: Effect.Effect<void>;
+  readonly oversized: (event: ClaudeInboundFrame) => Effect.Effect<void>;
   readonly resultError: (
     kind: "assignment" | "foreign-session" | "unknown-input",
   ) => Effect.Effect<void>;
@@ -432,6 +434,13 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           },
         }),
       ),
+      oversized: (event) =>
+        Effect.sync(() => {
+          Queue.offerUnsafe(childEvents, {
+            type: "oversized_line",
+            ...oversizedLine(wireJson(event)),
+          });
+        }),
       rejectReplay: (kind) =>
         Effect.sync(() => {
           if (!pendingGuidance) return;
@@ -1212,6 +1221,49 @@ describe("local Claude task-notification replays", () => {
         yield* harness.continuationResult();
         yield* harness.activity;
         expect(yield* take(backend)).toMatchObject({ type: "tool_started" });
+      }),
+    ),
+  );
+
+  it.effect("closes a tool whose result line exceeds the transport limit", () =>
+    withRunningBackend("steering", 12, (backend, harness) =>
+      Effect.gen(function* () {
+        yield* harness.activity;
+        expect(yield* take(backend)).toMatchObject({
+          type: "tool_started",
+          toolCallId: "private-tool-id",
+        });
+        expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
+        const image = { type: "base64", media_type: "image/png", data: OVERSIZED_IMAGE_DATA };
+        yield* harness.oversized({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                tool_use_id: "private-tool-id",
+                type: "tool_result",
+                content: [{ type: "image", source: image }],
+              },
+            ],
+          },
+          parent_tool_use_id: null,
+          session_id: "claude-replay-session",
+          uuid: "tool-result-uuid",
+        });
+        expect(yield* take(backend)).toMatchObject({
+          type: "tool_finished",
+          toolCallId: "private-tool-id",
+          toolName: "Bash",
+          isError: false,
+        });
+        yield* harness.oversized({ type: "stream_event", event: { delta: OVERSIZED_IMAGE_DATA } });
+        expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
+        yield* harness.oversized({
+          type: "assistant",
+          message: { role: "assistant", content: [{ type: "text", text: OVERSIZED_IMAGE_DATA }] },
+        });
+        expect(yield* take(backend)).toMatchObject({ type: "protocol_error" });
       }),
     ),
   );

@@ -19,7 +19,13 @@ import {
 import { PI_SUBAGENT_CAPABILITIES } from "../run/model.ts";
 import { localPiUsage } from "./local-pi-usage.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
-import { decodeRpcEnvelope, decodeRpcStateData, rpcStateModelId } from "./local-pi-protocol.ts";
+import {
+  decodeRpcEnvelope,
+  decodeRpcStateData,
+  oversizedRpcEnvelope,
+  rpcStateModelId,
+  type RpcChildEnvelope,
+} from "./local-pi-protocol.ts";
 import {
   normalizeParentContact,
   normalizeRpcEvent,
@@ -27,7 +33,7 @@ import {
 } from "./local-pi-events.ts";
 import { localPiRpc } from "./local-pi-rpc.ts";
 import { MAX_ERROR_CHARS, sanitizeStreamDiagnostic } from "../run/state.ts";
-import { protocolError } from "./driver-shared.ts";
+import { oversizedLineError, protocolError } from "./driver-shared.ts";
 import {
   toBackendExit,
   type BackendAssistantTerminal,
@@ -130,9 +136,67 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     Effect.forkScoped,
   );
 
+  const consumeEnvelope = (
+    envelope: RpcChildEnvelope,
+    event: ChildWireEvent,
+  ): Effect.Effect<void, Schema.SchemaError> => {
+    if (envelope.type === "response") {
+      const resolution = resolveResponse(envelope);
+      if (resolution === "mismatched")
+        return offer(
+          {
+            type: "protocol_error",
+            message: "Subagent returned a mismatched RPC response command.",
+          },
+          event,
+        );
+      return release(event);
+    }
+    if (envelope.type === "extension_ui_request")
+      return child
+        .send({
+          type: "extension_ui_response",
+          id: envelope.id,
+          cancelled: true,
+        })
+        .pipe(Effect.ignore, Effect.ensuring(release(event)));
+    if (
+      envelope.type === "ignored" &&
+      ["turn_end", "compaction_end", "entry_appended"].includes(envelope.eventType)
+    )
+      requestUsage();
+    if (
+      envelope.type === "agent_start" ||
+      (envelope.type === "message_start" && envelope.message.role === "assistant")
+    ) {
+      latestTerminal = undefined;
+      pendingSettlement = undefined;
+    }
+    const eventAssignmentEpoch = assignmentEpoch;
+    return normalizeRpcEvent(envelope, eventAssignmentEpoch).pipe(
+      Effect.flatMap((normalized) => {
+        if (normalized?.type === "assistant_message") latestTerminal = normalized.terminal;
+        if (normalized?.type === "run_settled") {
+          pendingSettlement = { ...normalized, terminal: latestTerminal };
+          requestUsage();
+          return release(event);
+        }
+        return normalized ? offer(normalized, event) : release(event);
+      }),
+    );
+  };
+
   const consumeChildEvent = (event: ChildWireEvent): Effect.Effect<void> => {
     if (event.type === "protocol_error")
       return offer({ type: "protocol_error", message: event.message }, event);
+    if (event.type === "oversized_line") {
+      const envelope = oversizedRpcEnvelope(event);
+      return envelope
+        ? consumeEnvelope(envelope, event).pipe(
+            Effect.catch(() => offer(oversizedLineError("Subagent", event), event)),
+          )
+        : offer(oversizedLineError("Subagent", event), event);
+    }
     if (event.type === "parent_contact") {
       const contact = event.value;
       if (
@@ -146,52 +210,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       return offer(normalizeParentContact(contact, assignmentEpoch, child), event);
     }
     return decodeRpcEnvelope(event.value).pipe(
-      Effect.flatMap((envelope) => {
-        if (envelope.type === "response") {
-          const resolution = resolveResponse(envelope);
-          if (resolution === "mismatched")
-            return offer(
-              {
-                type: "protocol_error",
-                message: "Subagent returned a mismatched RPC response command.",
-              },
-              event,
-            );
-          return release(event);
-        }
-        if (envelope.type === "extension_ui_request")
-          return child
-            .send({
-              type: "extension_ui_response",
-              id: envelope.id,
-              cancelled: true,
-            })
-            .pipe(Effect.ignore, Effect.ensuring(release(event)));
-        if (
-          envelope.type === "ignored" &&
-          ["turn_end", "compaction_end", "entry_appended"].includes(envelope.eventType)
-        )
-          requestUsage();
-        if (
-          envelope.type === "agent_start" ||
-          (envelope.type === "message_start" && envelope.message.role === "assistant")
-        ) {
-          latestTerminal = undefined;
-          pendingSettlement = undefined;
-        }
-        const eventAssignmentEpoch = assignmentEpoch;
-        return normalizeRpcEvent(envelope, eventAssignmentEpoch).pipe(
-          Effect.flatMap((normalized) => {
-            if (normalized?.type === "assistant_message") latestTerminal = normalized.terminal;
-            if (normalized?.type === "run_settled") {
-              pendingSettlement = { ...normalized, terminal: latestTerminal };
-              requestUsage();
-              return release(event);
-            }
-            return normalized ? offer(normalized, event) : release(event);
-          }),
-        );
-      }),
+      Effect.flatMap((envelope) => consumeEnvelope(envelope, event)),
       Effect.catch(() =>
         offer(
           {

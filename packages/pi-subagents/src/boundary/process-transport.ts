@@ -7,7 +7,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import { confirmProcessGroupExit } from "pi-cosmic-core";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
-import { attachBoundedLineParser } from "./bounded-line-parser.ts";
+import { attachBoundedLineParser, type OversizedLine } from "./bounded-line-parser.ts";
 import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
@@ -27,7 +27,8 @@ export interface ProcessExit {
 
 export type ProcessWireEvent<Message> =
   | Message
-  | { readonly type: "protocol_error"; readonly message: string };
+  | { readonly type: "protocol_error"; readonly message: string }
+  | ({ readonly type: "oversized_line" } & OversizedLine);
 
 export interface ProcessTransportHandle<Message, Frame> {
   readonly pid: number;
@@ -163,6 +164,11 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
                 Buffer.byteLength(line, "utf8") + 1,
               );
             },
+            onOversizedLine: (line) =>
+              offer(
+                { type: "oversized_line", ...line },
+                Buffer.byteLength(line.prefix, "utf8") + Buffer.byteLength(line.suffix, "utf8"),
+              ),
             onOverflow: () => {
               offer({
                 type: "protocol_error",

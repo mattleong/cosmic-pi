@@ -1,5 +1,3 @@
-import { StringDecoder } from "node:string_decoder";
-
 export interface BoundedLineInput {
   on(event: "data", listener: (value: Buffer | string) => void): void;
   once(event: "end" | "close", listener: () => void): void;
@@ -9,70 +7,140 @@ export interface BoundedLineInput {
   ): void;
 }
 
+/** A line longer than the parser keeps, summarized by its ends so a reader can classify it. */
+export interface OversizedLine {
+  readonly prefix: string;
+  readonly suffix: string;
+  readonly bytes: number;
+}
+
 export interface BoundedLineParserOptions {
   readonly maxLineBytes: number;
   readonly maxQueuedBytes: number;
   readonly onLine: (line: string) => void;
+  /** Receives oversized lines and keeps parsing after them. Without it, one overflows the parser. */
+  readonly onOversizedLine?: (line: OversizedLine) => void;
   readonly onOverflow: () => void;
 }
+
+export const OVERSIZED_LINE_PREFIX_BYTES = 2 * 1024;
+const OVERSIZED_LINE_SUFFIX_BYTES = 256;
+const NEWLINE = 0x0a;
+
+interface SkippedLine {
+  readonly prefix: Buffer;
+  suffix: Buffer;
+  bytes: number;
+}
+
+const withTail = (tail: Buffer, segment: Buffer): Buffer => {
+  if (segment.length >= OVERSIZED_LINE_SUFFIX_BYTES)
+    return Buffer.from(segment.subarray(segment.length - OVERSIZED_LINE_SUFFIX_BYTES));
+  const kept = tail.subarray(
+    Math.max(0, tail.length - OVERSIZED_LINE_SUFFIX_BYTES + segment.length),
+  );
+  return Buffer.concat([kept, segment]);
+};
+
+const lineText = (bytes: Buffer): string => {
+  const text = bytes.toString("utf8");
+  return text.endsWith("\r") ? text.slice(0, -1) : text;
+};
 
 export function attachBoundedLineParser(
   stream: BoundedLineInput,
   options: BoundedLineParserOptions,
 ): () => void {
-  const decoder = new StringDecoder("utf8");
   const chunks: Buffer[] = [];
   let queuedBytes = 0;
-  let buffered = "";
+  let line: Buffer[] = [];
+  let lineBytes = 0;
+  let skipped: SkippedLine | undefined;
   let draining = false;
   let overflowed = false;
   let finalized = false;
   let detached = false;
 
+  const reset = () => {
+    chunks.length = 0;
+    queuedBytes = 0;
+    line = [];
+    lineBytes = 0;
+    skipped = undefined;
+  };
+
   const overflow = () => {
     if (overflowed || detached) return;
     overflowed = true;
-    chunks.length = 0;
-    queuedBytes = 0;
-    buffered = "";
+    reset();
     options.onOverflow();
   };
 
-  const emitLine = (line: string) => {
-    const text = line.endsWith("\r") ? line.slice(0, -1) : line;
+  const append = (segment: Buffer) => {
+    if (segment.length === 0) return;
+    if (skipped) {
+      skipped.bytes += segment.length;
+      skipped.suffix = withTail(skipped.suffix, segment);
+      return;
+    }
+    if (lineBytes + segment.length <= options.maxLineBytes) {
+      line.push(segment);
+      lineBytes += segment.length;
+      return;
+    }
+    if (!options.onOversizedLine) return overflow();
+    const parts = [...line, segment];
+    const bytes = lineBytes + segment.length;
+    const suffix = parts.reduce<Buffer>(withTail, Buffer.alloc(0));
+    skipped = {
+      prefix: Buffer.concat(parts, Math.min(bytes, OVERSIZED_LINE_PREFIX_BYTES)),
+      suffix,
+      bytes,
+    };
+    line = [];
+    lineBytes = 0;
+  };
+
+  const finishLine = () => {
+    const oversized = skipped;
+    if (oversized) {
+      skipped = undefined;
+      options.onOversizedLine?.({
+        prefix: oversized.prefix.toString("utf8"),
+        suffix: lineText(oversized.suffix),
+        bytes: oversized.bytes,
+      });
+      return;
+    }
+    if (lineBytes === 0) return;
+    const text = lineText(Buffer.concat(line, lineBytes));
+    line = [];
+    lineBytes = 0;
     if (text) options.onLine(text);
   };
 
-  const emitFrames = (final: boolean) => {
+  const consume = (chunk: Buffer) => {
+    let start = 0;
     for (;;) {
-      if (overflowed) break;
-      const index = buffered.indexOf("\n");
-      if (index < 0) break;
-      const line = buffered.slice(0, index);
-      buffered = buffered.slice(index + 1);
-      if (Buffer.byteLength(line, "utf8") > options.maxLineBytes) return overflow();
-      emitLine(line);
+      const end = chunk.indexOf(NEWLINE, start);
+      append(chunk.subarray(start, end < 0 ? chunk.length : end));
+      if (end < 0 || overflowed) return;
+      finishLine();
+      if (overflowed || detached) return;
+      start = end + 1;
     }
-    if (overflowed) return;
-    if (Buffer.byteLength(buffered, "utf8") > options.maxLineBytes) return overflow();
-    if (!final || !buffered) return;
-    const line = buffered;
-    buffered = "";
-    emitLine(line);
   };
 
   const drain = () => {
     if (draining || overflowed || detached) return;
     draining = true;
     try {
-      while (chunks.length > 0) {
-        if (overflowed) break;
-        const chunk = chunks.shift();
-        if (!chunk) break;
+      for (let chunk = chunks.shift(); chunk; chunk = chunks.shift()) {
         queuedBytes -= chunk.length;
-        buffered += decoder.write(chunk);
-        emitFrames(false);
+        consume(chunk);
+        if (overflowed || detached) return;
       }
+      if (finalized) finishLine();
     } finally {
       draining = false;
     }
@@ -91,9 +159,6 @@ export function attachBoundedLineParser(
     if (finalized || detached) return;
     finalized = true;
     drain();
-    if (overflowed) return;
-    buffered += decoder.end();
-    emitFrames(true);
   };
 
   stream.on("data", onData);
@@ -106,8 +171,6 @@ export function attachBoundedLineParser(
     stream.off("data", onData);
     stream.off("end", finalize);
     stream.off("close", finalize);
-    chunks.length = 0;
-    queuedBytes = 0;
-    buffered = "";
+    reset();
   };
 }
