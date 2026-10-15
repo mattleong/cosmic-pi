@@ -1,7 +1,9 @@
 import type {
   AgentBeforeSettleEventResult,
+  CustomMessageEntryDraft,
   ExtensionAPI,
   ExtensionContext,
+  SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
 import {
   clipText,
@@ -12,18 +14,38 @@ import {
 } from "pi-cosmic-core";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
 import { isActiveRunState } from "../run/model.ts";
+import {
+  COMPLETION_MESSAGE_TYPE,
+  type NoticeDelivery,
+  QUESTION_MESSAGE_TYPE,
+} from "./host-notifier.ts";
+import { hasUnansweredNotice } from "./notice-wake.ts";
 
 export const QUESTION_REMINDER_MESSAGE_TYPE = "pi-subagents-question-reminder";
+export const WAKE_MESSAGE_TYPE = "pi-subagents-wake";
+
+const ROOT_NOTICE_TYPES: ReadonlySet<string> = new Set([
+  COMPLETION_MESSAGE_TYPE,
+  QUESTION_MESSAGE_TYPE,
+]);
+
+// After a compaction the parent becomes idle once the host finishes its own handlers.
+const IDLE_CHECK_LIMIT = 40;
+
+const WAKE_TEXT =
+  "Subagent updates arrived while you were busy and are shown above. Act on them now: reply to any question with subagent_reply, review reports, and continue the task.";
 
 export interface ParentWakeHost {
   readonly projection: () => SubagentProjection;
   /** Waits for headless work to drain; undefined when subagents are inactive. */
   readonly drain: () => Promise<void> | undefined;
+  /** Whether the parent session has neither a run nor a compaction in progress. */
+  readonly isIdle: () => boolean;
+  /** Runs `check` again shortly, outside the current host callback. */
+  readonly later: (check: () => void) => void;
 }
 
-export interface ParentWake {
-  /** Whether a finished child may start a parent turn now. */
-  readonly mayStartTurn: () => boolean;
+export interface ParentWake extends NoticeDelivery {
   /** Holds wakes for the rest of this session, as it shuts down. */
   readonly hold: () => void;
 }
@@ -58,19 +80,54 @@ const isHeadless = (ctx: ExtensionContext): boolean =>
 
 const hasUi = (ctx: ExtensionContext): boolean => invokeHostCallback(() => ctx.hasUI, false);
 
+const settleResult = (
+  entries: ReadonlyArray<SessionBoundaryDraft>,
+  added: ReadonlyArray<CustomMessageEntryDraft>,
+  shouldContinue: boolean,
+): AgentBeforeSettleEventResult | undefined =>
+  shouldContinue ? { entries: [...entries, ...added], continue: true } : undefined;
+
 /**
- * Owns when finished children may wake the root session. A user interrupt holds wakes until the
- * user's next prompt; a pending child question gets one reminder before the turn settles; and a
- * headless parent waits for running children instead of exiting under them.
+ * Owns when finished children may wake the root session. A notice starts a turn only while the
+ * parent is idle. While the parent is busy Pi appends it at the end of the current turn, outside
+ * the steering queue that Esc, dequeue, and tree navigation clear, and this owner continues the
+ * settling run so the model sees it. A user interrupt holds wakes until the user's next prompt; a
+ * pending child question gets one reminder before the turn settles; and a headless parent waits for
+ * running children instead of exiting under them.
  */
 export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): ParentWake {
   let held = false;
+  // A notice was appended without a turn and no settle boundary has shown it to the model yet.
+  let owed = false;
   const reminded = new Set<string>();
   const escalated = new Set<string>();
 
+  const wake = (): void => {
+    owed = false;
+    invokeHostCallback(() => {
+      pi.sendMessage(
+        { customType: WAKE_MESSAGE_TYPE, content: WAKE_TEXT, display: false },
+        { triggerTurn: true },
+      );
+    }, undefined);
+  };
+  const wakeWhenIdle = (checks = 0): void => {
+    if (!owed || held) return;
+    if (invokeHostCallback(host.isIdle, false)) {
+      wake();
+      return;
+    }
+    if (checks < IDLE_CHECK_LIMIT) host.later(() => wakeWhenIdle(checks + 1));
+  };
+
   pi.on("agent_settled", (event, ctx) => {
-    if (!event.aborted) return;
+    if (!event.aborted) {
+      // A notice that arrived after the last settle boundary still needs a turn.
+      if (owed && !held) wake();
+      return;
+    }
     held = true;
+    owed = false;
     const active = host.projection().runs.filter((run) => isActiveRunState(run.state)).length;
     if (active > 0 && hasUi(ctx))
       notifyAtHostBoundary(
@@ -80,56 +137,80 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
       );
   });
 
-  pi.on("before_agent_start", (event) => {
-    if (event.messageType === "user") held = false;
+  pi.on("input", (event) => {
+    if (event.source !== "extension") held = false;
   });
 
   pi.on("session_start", () => {
     held = false;
+    owed = false;
   });
+
+  // A manual compaction makes the parent busy without a run; wake it once compaction ends.
+  pi.on("session_compact", () => wakeWhenIdle());
+  pi.on("session_compact_failed", () => wakeWhenIdle());
 
   pi.on(
     "agent_before_settle",
-    (event, ctx): AgentBeforeSettleEventResult | Promise<undefined> | undefined => {
+    (
+      event,
+      ctx,
+    ):
+      | AgentBeforeSettleEventResult
+      | Promise<AgentBeforeSettleEventResult | undefined>
+      | undefined => {
       if (event.outcome !== "completed") return undefined;
+      const landed = !held && hasUnansweredNotice(event.context, ROOT_NOTICE_TYPES);
+      owed = false;
       const questions = pendingQuestions(host.projection());
       const live = new Set(questions.map(questionKey));
       for (const key of reminded) if (!live.has(key)) reminded.delete(key);
       for (const key of escalated) if (!live.has(key)) escalated.delete(key);
       const fresh = questions.filter((run) => !reminded.has(questionKey(run)));
-      if (fresh.length > 0) {
-        for (const run of fresh) reminded.add(questionKey(run));
-        return {
-          entries: [
-            {
-              type: "custom_message",
-              customType: QUESTION_REMINDER_MESSAGE_TYPE,
-              content: reminderText(fresh),
-              display: false,
-            },
-          ],
-          continue: true,
-        };
+      for (const run of fresh) reminded.add(questionKey(run));
+      const reminder: ReadonlyArray<CustomMessageEntryDraft> =
+        fresh.length > 0
+          ? [
+              {
+                type: "custom_message",
+                customType: QUESTION_REMINDER_MESSAGE_TYPE,
+                content: reminderText(fresh),
+                display: false,
+              },
+            ]
+          : [];
+      if (fresh.length === 0) {
+        const ignored = questions.filter((run) => !escalated.has(questionKey(run)));
+        if (ignored.length > 0 && hasUi(ctx)) {
+          for (const run of ignored) escalated.add(questionKey(run));
+          notifyAtHostBoundary(
+            ctx,
+            ignored.length === 1 && ignored[0]
+              ? `Subagent ${label(ignored[0])} is waiting for a reply`
+              : `${ignored.length} subagents are waiting for replies`,
+            "warning",
+          );
+        }
       }
-      const ignored = questions.filter((run) => !escalated.has(questionKey(run)));
-      if (ignored.length > 0 && hasUi(ctx)) {
-        for (const run of ignored) escalated.add(questionKey(run));
-        notifyAtHostBoundary(
-          ctx,
-          ignored.length === 1 && ignored[0]
-            ? `Subagent ${label(ignored[0])} is waiting for a reply`
-            : `${ignored.length} subagents are waiting for replies`,
-          "warning",
-        );
-      }
-      if (!isHeadless(ctx)) return undefined;
+      const result = settleResult(event.entries, reminder, landed || fresh.length > 0);
+      if (result || !isHeadless(ctx)) return result;
       if (!host.projection().runs.some((run) => isActiveRunState(run.state))) return undefined;
-      return host.drain()?.then(() => undefined);
+      // Notices delivered while draining are appended at this boundary, after the last reply.
+      return host.drain()?.then(() => {
+        const arrived = owed && !held;
+        owed = false;
+        return settleResult(event.entries, [], arrived);
+      });
     },
   );
 
   return {
-    mayStartTurn: () => !held,
+    deliver: (send) => {
+      const startTurn = !held && invokeHostCallback(host.isIdle, false);
+      const accepted = send(startTurn);
+      if (accepted && !startTurn && !held) owed = true;
+      return accepted;
+    },
     hold: () => {
       held = true;
     },

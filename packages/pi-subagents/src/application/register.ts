@@ -67,6 +67,7 @@ import {
 } from "./profile-reload-handoff.ts";
 
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
+const PARENT_IDLE_CHECK_INTERVAL = "50 millis";
 
 export interface SubagentApplicationBoundaries {
   readonly loadSettings: (
@@ -156,10 +157,14 @@ export function registerSubagentApplication(
             .run(SubagentService.use((service) => service.awaitParentDrain))
             .catch(() => undefined)
         : undefined,
+    isIdle: () => currentActivation?.ctx.isIdle() ?? false,
+    later: (check) => {
+      slot.fork(Effect.sleep(PARENT_IDLE_CHECK_INTERVAL).pipe(Effect.andThen(Effect.sync(check))));
+    },
   });
   let reportArchive: ReportArchive | undefined;
   const notify = hostNotifier(pi, {
-    triggerTurn: wake.mayStartTurn,
+    delivery: wake,
     archive: () => reportArchive,
   });
   let startupFailureTools: ReadonlyArray<string> = [];

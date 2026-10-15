@@ -193,19 +193,30 @@ const questionContent = (
 
 const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
-const steer = (
+export const COMPLETION_MESSAGE_TYPE = "pi-subagents-completed";
+export const QUESTION_MESSAGE_TYPE = "pi-subagents-question";
+
+const sendNotice = (
   pi: ExtensionAPI,
   message: Omit<Parameters<ExtensionAPI["sendMessage"]>[0], "display">,
-  triggerTurn = true,
+  triggerTurn: boolean,
 ): boolean =>
   invokeHostCallback(() => {
     pi.sendMessage({ ...message, display: true }, { deliverAs: "steer", triggerTurn });
     return true;
   }, false);
 
+/** Decides whether a notice starts a parent turn, and learns when one was appended without one. */
+export interface NoticeDelivery {
+  /** Runs `send` once; it starts a turn only when told to and returns whether Pi accepted it. */
+  readonly deliver: (send: (startTurn: boolean) => boolean) => boolean;
+}
+
+const STARTS_TURN: NoticeDelivery = { deliver: (send) => send(true) };
+
 export interface HostNotifierOptions {
-  /** False while the user's interrupt holds wakes: messages are appended without starting a turn. */
-  readonly triggerTurn?: () => boolean;
+  /** The parent wake policy; without one every notice starts or steers a turn. */
+  readonly delivery?: NoticeDelivery;
   /** The current session's report archive, if subagents are active. */
   readonly archive?: () => ReportArchive | undefined;
 }
@@ -214,42 +225,49 @@ export function hostNotifier(
   pi: ExtensionAPI,
   options: HostNotifierOptions = {},
 ): SubagentNotifier {
-  const triggerTurn = options.triggerTurn ?? (() => true);
+  const delivery = options.delivery ?? STARTS_TURN;
   return (notification) => {
     if (notification.type === "completed") {
+      const chunks = completionChunks(notification.runs, options.archive?.());
       const deliveredCompletionKeys: string[] = [];
-      for (const chunk of completionChunks(notification.runs, options.archive?.())) {
-        const accepted = steer(
-          pi,
-          {
-            customType: "pi-subagents-completed",
-            content: chunk.content,
-            details: {
-              version: 1,
-              kind: "completed",
-              total: chunk.runs.length,
-              failed: chunk.runs.filter((run) => run.outcome === "failed").length,
-              warnings: chunk.runs.filter((run) => Boolean(run.warning?.trim())).length,
-              ...(chunk.runs.length === 1 &&
-                chunk.runs[0] !== undefined && { name: displayName(chunk.runs[0].name) }),
+      delivery.deliver((startTurn) => {
+        for (const [index, chunk] of chunks.entries()) {
+          // Only the last chunk may start the turn, so the earlier ones are already in place.
+          const accepted = sendNotice(
+            pi,
+            {
+              customType: COMPLETION_MESSAGE_TYPE,
+              content: chunk.content,
+              details: {
+                version: 1,
+                kind: "completed",
+                total: chunk.runs.length,
+                failed: chunk.runs.filter((run) => run.outcome === "failed").length,
+                warnings: chunk.runs.filter((run) => Boolean(run.warning?.trim())).length,
+                ...(chunk.runs.length === 1 &&
+                  chunk.runs[0] !== undefined && { name: displayName(chunk.runs[0].name) }),
+              },
             },
-          },
-          triggerTurn(),
-        );
-        if (!accepted) break;
-        for (const run of chunk.runs) deliveredCompletionKeys.push(`${run.id}:${run.generation}`);
-      }
+            startTurn && index === chunks.length - 1,
+          );
+          if (!accepted) break;
+          for (const run of chunk.runs) deliveredCompletionKeys.push(`${run.id}:${run.generation}`);
+        }
+        return deliveredCompletionKeys.length > 0;
+      });
       return { deliveredCompletionKeys };
     }
     return {
-      actionAccepted: steer(
-        pi,
-        {
-          customType: "pi-subagents-question",
-          details: { version: 1, kind: "question", name: displayName(notification.name) },
-          content: clip(questionContent(notification)),
-        },
-        triggerTurn(),
+      actionAccepted: delivery.deliver((startTurn) =>
+        sendNotice(
+          pi,
+          {
+            customType: QUESTION_MESSAGE_TYPE,
+            details: { version: 1, kind: "question", name: displayName(notification.name) },
+            content: clip(questionContent(notification)),
+          },
+          startTurn,
+        ),
       ),
     };
   };
