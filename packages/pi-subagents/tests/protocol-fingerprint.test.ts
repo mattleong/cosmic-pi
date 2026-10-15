@@ -16,4 +16,12 @@ describe("root-child protocol fingerprint", () => {
       "Restart Pi",
     );
   });
+
+  it("rejects a child that runs a different Pi version than its parent", () => {
+    const parentOnOlderPi = protocolFingerprint("1.1.9");
+    expect(parentOnOlderPi).not.toBe(protocolFingerprint());
+    expect(protocolMismatch({ [PROTOCOL_FINGERPRINT_ENV]: parentOnOlderPi })).toContain(
+      "Restart Pi",
+    );
+  });
 });
