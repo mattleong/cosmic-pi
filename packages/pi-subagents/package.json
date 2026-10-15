@@ -51,6 +51,8 @@
     "test": "vitest run",
     "smoke:local-claude-replay": "PI_SUBAGENTS_REAL_CLAUDE_REPLAY_SMOKE=1 vitest run tests/local-claude-replay-real-smoke.test.ts",
     "smoke:local-claude-steering": "PI_SUBAGENTS_REAL_CLAUDE_STEERING_SMOKE=1 vitest run tests/local-claude-steering-real-smoke.test.ts --maxWorkers=1 --reporter=verbose --silent=false",
+    "smoke:local-claude-sandbox": "PI_SUBAGENTS_REAL_CLAUDE_SANDBOX_SMOKE=1 vitest run tests/local-cli-sandbox-real-smoke.test.ts --reporter=verbose --silent=false",
+    "smoke:local-codex-sandbox": "PI_SUBAGENTS_REAL_CODEX_SANDBOX_SMOKE=1 vitest run tests/local-cli-sandbox-real-smoke.test.ts --reporter=verbose --silent=false",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
   },
