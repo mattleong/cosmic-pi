@@ -71,6 +71,7 @@ export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
         ...context,
         delivery: inertDelivery,
         closeRecordScope: () => Effect.void,
+        claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
       }),
     ),
   );

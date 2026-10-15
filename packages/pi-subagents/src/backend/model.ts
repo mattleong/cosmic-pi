@@ -173,6 +173,8 @@ export interface BackendControls {
   readonly deliverNotification?:
     | ((message: string) => Effect.Effect<void, SubagentError>)
     | undefined;
+  /** False once turn input restarted the child after it emitted this `run_settled` event. */
+  readonly isSettlementCurrent?: ((event: BackendEvent) => boolean) | undefined;
 }
 
 export interface BackendHandle {

@@ -4,7 +4,7 @@ import type { RunRecord, WithRunLock } from "./internal.ts";
 
 interface TurnInputAdmission {
   count: number;
-  drained: Deferred.Deferred<void> | undefined;
+  readonly drained: Array<Deferred.Deferred<void>>;
 }
 
 export function turnInputGates(withLock: WithRunLock) {
@@ -12,7 +12,7 @@ export function turnInputGates(withLock: WithRunLock) {
   const admitTurnInput = (record: RunRecord): void => {
     const admission = turnInputs.get(record);
     if (admission) admission.count += 1;
-    else turnInputs.set(record, { count: 1, drained: undefined });
+    else turnInputs.set(record, { count: 1, drained: [] });
   };
   const releaseTurnInput = (record: RunRecord): Effect.Effect<void> =>
     withLock(
@@ -22,12 +22,12 @@ export function turnInputGates(withLock: WithRunLock) {
         admission.count -= 1;
         if (admission.count > 0) return;
         turnInputs.delete(record);
-        if (admission.drained) Deferred.doneUnsafe(admission.drained, Effect.void);
+        for (const drained of admission.drained) Deferred.doneUnsafe(drained, Effect.void);
       }),
     );
   const claimTurnInputDrain = (record: RunRecord, drained: Deferred.Deferred<void>): void => {
     const admission = turnInputs.get(record);
-    if (admission && admission.count > 0) admission.drained = drained;
+    if (admission && admission.count > 0) admission.drained.push(drained);
     else Deferred.doneUnsafe(drained, Effect.void);
   };
   return { admitTurnInput, releaseTurnInput, claimTurnInputDrain };

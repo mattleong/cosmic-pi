@@ -44,6 +44,7 @@ export interface RunSettlementDependencies extends Pick<
 > {
   readonly delivery: RunNotificationDelivery;
   readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
+  readonly claimTurnInputDrain: (record: RunRecord, drained: Deferred.Deferred<void>) => void;
 }
 
 export type AssignmentActivationReplay =
@@ -68,8 +69,15 @@ const reportPairStatus = (record: RunRecord, report: BackendReport) => {
 };
 
 export function settlementOperations(dependencies: RunSettlementDependencies) {
-  const { ownerScope, withLock, publish, delivery, closeRecordScope, sendPeerNotices } =
-    dependencies;
+  const {
+    ownerScope,
+    withLock,
+    publish,
+    delivery,
+    closeRecordScope,
+    sendPeerNotices,
+    claimTurnInputDrain,
+  } = dependencies;
 
   const mergeUsageLocked = (record: RunRecord, usage: SubagentUsage) => {
     const merged = addUsage(record.view.usage, usage);
@@ -479,12 +487,18 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     record: RunRecord,
     assignmentEpoch: number,
     terminal?: BackendAssistantTerminal,
+    isCurrent: () => boolean = () => true,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const phase = yield* withLock(
         Effect.sync(() => settledAssignmentLocked(record, assignmentEpoch, terminal)),
       );
       if (phase !== "running") return;
+      // Guidance or a descendant notice admitted before this settlement may restart the child.
+      const turnInputsDrained = yield* Deferred.make<void>();
+      yield* withLock(Effect.sync(() => claimTurnInputDrain(record, turnInputsDrained)));
+      yield* Deferred.await(turnInputsDrained);
+      if (!isCurrent()) return;
       if (record.pauseRequested) {
         const now = yield* Clock.currentTimeMillis;
         if (yield* pauseFromEvent(record, now, assignmentEpoch)) return;

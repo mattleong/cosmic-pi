@@ -260,7 +260,12 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
       case "run_started":
         return settlement.runStartedFromBackend(record, event.assignmentEpoch);
       case "run_settled":
-        return settlement.runSettledFromBackend(record, event.assignmentEpoch, event.terminal);
+        return settlement.runSettledFromBackend(
+          record,
+          event.assignmentEpoch,
+          event.terminal,
+          () => record.process?.controls.isSettlementCurrent?.(event) ?? true,
+        );
       case "report":
         return settlement.acceptBackendReport(record, event);
       case "assistant_message":

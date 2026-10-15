@@ -351,7 +351,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   };
   const { closeRecordScope } = cleanup;
 
-  const settlement = settlementOperations({ ...runContext, delivery, closeRecordScope });
+  const settlement = settlementOperations({
+    ...runContext,
+    delivery,
+    closeRecordScope,
+    claimTurnInputDrain,
+  });
 
   const processControls = processControlOperations(withLock);
 

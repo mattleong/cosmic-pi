@@ -13,6 +13,7 @@ import {
 import {
   InvalidSubagentRequestError,
   isOutcomeUncertain,
+  processError,
   SubagentProcessError,
   type SubagentError,
 } from "../run/errors.ts";
@@ -22,6 +23,7 @@ import { requireNodeExecutable } from "../boundary/node-executable.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import {
   decodeRpcEnvelope,
+  decodeRpcPromptData,
   decodeRpcStateData,
   oversizedRpcEnvelope,
   rpcStateModelId,
@@ -120,6 +122,13 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   let usageDirty = false;
   let usageReady = false;
   let pendingSettlement: Extract<BackendEvent, { type: "run_settled" }> | undefined;
+  // The settlement last handed to the run, until a new child turn makes it stale.
+  let offeredSettlement: BackendEvent | undefined;
+  const restartTurn = () => {
+    latestTerminal = undefined;
+    pendingSettlement = undefined;
+    offeredSettlement = undefined;
+  };
   const reconcileUsage = Effect.gen(function* () {
     if (transportFailure) return yield* transportFailure;
     const response = yield* rpc({ type: "get_session_stats" });
@@ -142,7 +151,10 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       yield* Effect.ignore(reconcileUsage);
       if (settlement && settlement === pendingSettlement) {
         pendingSettlement = undefined;
-        if (settlement.assignmentEpoch === assignmentEpoch) yield* offer(settlement);
+        if (settlement.assignmentEpoch === assignmentEpoch) {
+          offeredSettlement = settlement;
+          yield* offer(settlement);
+        }
       }
     }
   });
@@ -187,10 +199,8 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     if (
       envelope.type === "agent_start" ||
       (envelope.type === "message_start" && envelope.message.role === "assistant")
-    ) {
-      latestTerminal = undefined;
-      pendingSettlement = undefined;
-    }
+    )
+      restartTurn();
     const eventAssignmentEpoch = assignmentEpoch;
     return normalizeRpcEvent(envelope, eventAssignmentEpoch).pipe(
       Effect.flatMap((normalized) => {
@@ -325,8 +335,36 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
           }),
         ),
       ),
+    // A steering prompt queues into a working child and starts a turn in one that has settled, so
+    // guidance sent while the run finishes is never left in a queue with no run to consume it.
     steer: (message: string) =>
-      withTurnControl(rpc({ type: "steer", message }).pipe(Effect.asVoid)),
+      withTurnControl(
+        rpc({ type: "prompt", message, streamingBehavior: "steer" }).pipe(
+          Effect.flatMap((response) =>
+            decodeRpcPromptData(response.data).pipe(
+              Effect.mapError(() =>
+                processError(
+                  "deliver guidance to",
+                  "guidance_outcome_uncertain",
+                  "Subagent returned an unreadable guidance disposition; the guidance may already have applied. Inspect subagent status before retrying.",
+                ),
+              ),
+            ),
+          ),
+          Effect.flatMap(({ disposition }) => {
+            if (disposition === "handled")
+              return Effect.fail(
+                processError(
+                  "deliver guidance to",
+                  "guidance_not_delivered",
+                  "Subagent handled the guidance before it reached the model, for example as a slash command; nothing was queued.",
+                ),
+              );
+            if (disposition === "started") restartTurn();
+            return Effect.void;
+          }),
+        ),
+      ),
     interrupt: withTurnControl(
       Effect.gen(function* () {
         yield* ipcAck(
@@ -371,6 +409,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       ),
     notifyPeers: (message: string) =>
       child.sendContactControl({ channel: "pi-subagents", type: "peer_notice", message }),
+    isSettlementCurrent: (event: BackendEvent) => event === offeredSettlement,
     deliverNotification: (message: string) =>
       withTurnControl(
         ipcAck(

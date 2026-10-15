@@ -250,6 +250,12 @@ type RpcStateData = Schema.Schema.Type<typeof RpcStateDataSchema>;
 
 export const decodeRpcStateData = Schema.decodeUnknownEffect(RpcStateDataSchema);
 
+const RpcPromptDataSchema = Schema.Struct({
+  disposition: Schema.Literals(["started", "queued", "handled"]),
+});
+
+export const decodeRpcPromptData = Schema.decodeUnknownEffect(RpcPromptDataSchema);
+
 export const rpcStateModelId = (model: RpcStateData["model"]): string | undefined =>
   Predicate.isString(model) ? model : model ? `${model.provider}/${model.id}` : undefined;
 
@@ -294,8 +300,12 @@ export const assistantText = (message: Schema.Schema.Type<typeof AssistantMessag
 type CorrelatedRpcCommand =
   | { readonly type: "get_state"; readonly id?: string | undefined }
   | { readonly type: "get_session_stats"; readonly id?: string | undefined }
-  | { readonly type: "prompt"; readonly id?: string | undefined; readonly message: string }
-  | { readonly type: "steer"; readonly id?: string | undefined; readonly message: string }
+  | {
+      readonly type: "prompt";
+      readonly id?: string | undefined;
+      readonly message: string;
+      readonly streamingBehavior?: "steer" | undefined;
+    }
   | { readonly type: "clear_queue"; readonly id?: string | undefined }
   | { readonly type: "abort"; readonly id?: string | undefined }
   | { readonly type: "set_session_name"; readonly id?: string | undefined; readonly name: string };

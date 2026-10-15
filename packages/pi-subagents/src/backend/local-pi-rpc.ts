@@ -11,22 +11,30 @@ import type { LocalPiParentControl, RpcCommand, RpcResponse } from "./local-pi-p
 const RPC_TIMEOUT = "10 seconds";
 
 const RPC_OUTCOME_CODES = new Map<RpcCommand["type"], string>([
-  ["steer", "guidance_outcome_uncertain"],
   ["abort", "interrupt_outcome_uncertain"],
   ["set_session_name", "rename_outcome_uncertain"],
 ]);
-const rpcOutcomeCode = (command: RpcCommand["type"]): string =>
-  RPC_OUTCOME_CODES.get(command) ?? `${command}_outcome_uncertain`;
+
+const isGuidance = (command: RpcCommand): boolean =>
+  command.type === "prompt" && command.streamingBehavior === "steer";
+
+const commandLabel = (command: RpcCommand): string =>
+  isGuidance(command) ? "guidance" : command.type;
+
+const rpcOutcomeCode = (command: RpcCommand): string =>
+  isGuidance(command)
+    ? "guidance_outcome_uncertain"
+    : (RPC_OUTCOME_CODES.get(command.type) ?? `${command.type}_outcome_uncertain`);
 
 const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): SubagentError =>
   Predicate.isTagged(error, "SubagentProcessError") && error.code === "transport_outcome_uncertain"
     ? new SubagentProcessError({
         operation: `execute ${command.type} in`,
-        code: rpcOutcomeCode(command.type),
+        code: rpcOutcomeCode(command),
         message:
           command.type === "clear_queue"
             ? `${error.message} Queue clearing could not be confirmed; abort was not sent. Inspect subagent status before retrying interrupt.`
-            : `${error.message} Inspect subagent status before retrying ${command.type}.`,
+            : `${error.message} Inspect subagent status before retrying ${commandLabel(command)}.`,
       })
     : error;
 
@@ -72,11 +80,11 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
       timeoutError: () =>
         new SubagentProcessError({
           operation: "await RPC response from",
-          code: rpcOutcomeCode(command.type),
+          code: rpcOutcomeCode(command),
           message:
             command.type === "clear_queue"
               ? "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent. Inspect subagent status before retrying interrupt."
-              : `Subagent did not answer ${command.type}; the command may already have applied. Inspect subagent status before retrying.`,
+              : `Subagent did not answer ${commandLabel(command)}; the command may already have applied. Inspect subagent status before retrying.`,
         }),
       awaitEarlyResponse: true,
     }).pipe(

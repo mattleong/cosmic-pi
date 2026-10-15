@@ -148,6 +148,14 @@ export const expectInterruptBeforeUse = <A, E>(
     yield* Fiber.join(cancellation);
   });
 
+// A steering prompt carries guidance, so tests address it apart from the assignment prompt.
+export type FakeCommandType = RpcCommand["type"] | "steer";
+
+type GuidanceDisposition = "started" | "queued" | "handled";
+
+const commandType = (command: RpcCommand): FakeCommandType =>
+  command.type === "prompt" && command.streamingBehavior === "steer" ? "steer" : command.type;
+
 type RpcWireValue = Extract<ChildWireEvent, { readonly type: "rpc_message" }>["value"];
 type IpcWireValue = Extract<ChildWireEvent, { readonly type: "parent_contact" }>["value"];
 type AcknowledgedIpcControlType = Extract<
@@ -165,19 +173,20 @@ export interface FakeChildControl {
   readonly ipc: LocalPiParentControl[];
   readonly terminations: Array<"graceful" | "force">;
   readonly released: () => number;
-  readonly sent: (type: RpcCommand["type"]) => boolean;
+  readonly sent: (type: FakeCommandType) => boolean;
   readonly sentIpc: <T extends LocalPiParentControl["type"]>(
     type: T,
     matches?: (message: IpcControlOf<T>) => boolean,
   ) => boolean;
-  readonly commandTypes: (...only: RpcCommand["type"][]) => RpcCommand["type"][];
+  readonly commandTypes: (...only: FakeCommandType[]) => FakeCommandType[];
   readonly settle: (text?: string) => void;
-  readonly failNext: (type: RpcCommand["type"], error: string) => void;
-  readonly failTransportNext: (type: RpcCommand["type"], code: string) => void;
+  readonly failNext: (type: FakeCommandType, error: string) => void;
+  readonly failTransportNext: (type: FakeCommandType, code: string) => void;
   readonly failNextIpc: (code: string) => void;
   readonly rejectNextParentReply: () => void;
-  readonly dropNext: (type: RpcCommand["type"]) => void;
-  readonly gateNextSend: (type: RpcCommand["type"], gate: Deferred.Deferred<void>) => void;
+  readonly dropNext: (type: FakeCommandType) => void;
+  readonly gateNextSend: (type: FakeCommandType, gate: Deferred.Deferred<void>) => void;
+  readonly answerNextGuidance: (disposition: GuidanceDisposition) => void;
   readonly gateNextIpc: (gate: Deferred.Deferred<void>) => void;
   readonly gateNextIpcType: (
     type: LocalPiParentControl["type"],
@@ -185,7 +194,7 @@ export interface FakeChildControl {
   ) => void;
   readonly ackNextIpcBeforeSendSettles: (type: AcknowledgedIpcControlType) => void;
   readonly gateRelease: (gate: Deferred.Deferred<void>) => void;
-  readonly beforeNextResponse: (type: RpcCommand["type"], value: RpcWireValue) => void;
+  readonly beforeNextResponse: (type: FakeCommandType, value: RpcWireValue) => void;
   readonly offer: (value: RpcWireValue) => void;
   readonly offerIpc: (value: IpcWireValue) => void;
   readonly offerProtocolError: (message: string) => void;
@@ -219,17 +228,17 @@ export function fakeChildLayer(
     readonly reclaimGate?: Deferred.Deferred<void> | undefined;
     readonly initialFailures?: ReadonlyArray<{
       readonly spawnIndex: number;
-      readonly type: RpcCommand["type"];
+      readonly type: FakeCommandType;
       readonly error: string;
     }>;
     readonly initialTransportFailures?: ReadonlyArray<{
       readonly spawnIndex: number;
-      readonly type: RpcCommand["type"];
+      readonly type: FakeCommandType;
       readonly code: string;
     }>;
     readonly initialSendGates?: ReadonlyArray<{
       readonly spawnIndex: number;
-      readonly type: RpcCommand["type"];
+      readonly type: FakeCommandType;
       readonly gate: Deferred.Deferred<void>;
     }>;
   } = {},
@@ -281,18 +290,18 @@ export function fakeChildLayer(
           const forSpawn = <A extends { readonly spawnIndex: number }>(
             initial: ReadonlyArray<A> = [],
           ) => initial.filter((entry) => entry.spawnIndex === spawnIndex);
-          const failures: Array<{ readonly type: RpcCommand["type"]; readonly error: string }> =
+          const failures: Array<{ readonly type: FakeCommandType; readonly error: string }> =
             forSpawn(options.initialFailures);
-          const dropped: RpcCommand["type"][] = remainingInitialStateDrops > 0 ? ["get_state"] : [];
+          const dropped: FakeCommandType[] = remainingInitialStateDrops > 0 ? ["get_state"] : [];
           const transportFailures: Array<{
-            readonly type: RpcCommand["type"];
+            readonly type: FakeCommandType;
             readonly code: string;
           }> = forSpawn(options.initialTransportFailures);
           const ipcFailures: string[] = [];
           let rejectedParentReplies = 0;
           if (remainingInitialStateDrops > 0) remainingInitialStateDrops -= 1;
           const sendGates: Array<{
-            readonly type: RpcCommand["type"];
+            readonly type: FakeCommandType;
             readonly gate: Deferred.Deferred<void>;
           }> = forSpawn(options.initialSendGates);
           const ipcGates: Array<{
@@ -300,8 +309,9 @@ export function fakeChildLayer(
             readonly gate: Deferred.Deferred<void>;
           }> = [];
           const earlyIpcAcks: AcknowledgedIpcControlType[] = [];
+          const guidanceDispositions: GuidanceDisposition[] = [];
           const beforeResponses: Array<{
-            readonly type: RpcCommand["type"];
+            readonly type: FakeCommandType;
             readonly value: RpcWireValue;
           }> = [];
 
@@ -391,8 +401,8 @@ export function fakeChildLayer(
             send: (command) =>
               Effect.gen(function* () {
                 commands.push(command);
-                const forCommand = (entry: { readonly type: RpcCommand["type"] }) =>
-                  entry.type === command.type;
+                const forCommand = (entry: { readonly type: FakeCommandType }) =>
+                  entry.type === commandType(command);
                 const gate = takeFirst(sendGates, forCommand)?.gate;
                 if (gate) yield* Deferred.await(gate);
                 const transportFailure = takeFirst(transportFailures, forCommand);
@@ -404,7 +414,7 @@ export function fakeChildLayer(
                   });
                 const before = takeFirst(beforeResponses, forCommand);
                 if (before) offer(before.value);
-                if (takeFirst(dropped, (type) => type === command.type) !== undefined)
+                if (takeFirst(dropped, (type) => type === commandType(command)) !== undefined)
                   return undefined;
                 const failure = takeFirst(failures, forCommand);
                 offer(
@@ -424,6 +434,14 @@ export function fakeChildLayer(
                         ...(command.type === "get_state" && { data: stateData }),
                         ...(command.type === "get_session_stats" && {
                           data: { tokens: { ...tokens }, cost },
+                        }),
+                        ...(command.type === "prompt" && {
+                          data: {
+                            disposition:
+                              commandType(command) === "steer"
+                                ? (guidanceDispositions.shift() ?? "queued")
+                                : "started",
+                          },
                         }),
                       },
                 );
@@ -458,12 +476,13 @@ export function fakeChildLayer(
             ipc,
             terminations,
             released: () => releaseCount,
-            sent: (type) => commands.some((command) => command.type === type),
+            sent: (type) => commands.some((command) => commandType(command) === type),
             sentIpc: (type, matches = () => true) => ipc.filter(isIpcControl(type)).some(matches),
             commandTypes: (...only) =>
-              commands.flatMap(({ type }) =>
-                only.length === 0 || only.includes(type) ? [type] : [],
-              ),
+              commands.flatMap((command) => {
+                const type = commandType(command);
+                return only.length === 0 || only.includes(type) ? [type] : [];
+              }),
             settle: (text = "Assignment complete.") => {
               offer(assistantMessageEndFrame(text));
               offer({ type: "agent_settled" });
@@ -474,6 +493,7 @@ export function fakeChildLayer(
             rejectNextParentReply: () => void (rejectedParentReplies += 1),
             dropNext: (type) => void dropped.push(type),
             gateNextSend: (type, gate) => void sendGates.push({ type, gate }),
+            answerNextGuidance: (disposition) => void guidanceDispositions.push(disposition),
             gateNextIpc: (gate) => void ipcGates.push({ type: undefined, gate }),
             gateNextIpcType: (type, gate) => void ipcGates.push({ type, gate }),
             ackNextIpcBeforeSendSettles: (type) => void earlyIpcAcks.push(type),
