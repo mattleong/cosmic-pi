@@ -1198,7 +1198,12 @@ describe("private supervisor channel", () => {
           message: "x".repeat(16 * 1024 + 1),
         }),
       );
-      expect(oversizedString).toMatchObject({ result: { isError: true } });
+      expect(oversizedString).toMatchObject({
+        result: {
+          isError: true,
+          content: [{ type: "text", text: stringContaining("16,384") }],
+        },
+      });
 
       child.stdin.write("{not-json}\n");
       expect(yield* step(() => rpc.next(isNullIdError(-32700)))).toMatchObject({

@@ -1,16 +1,23 @@
-import { synchronousRandomUuid } from "pi-cosmic-core";
+import { isJsonObject, synchronousRandomUuid } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
-  type SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
+  MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
+  MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+  MAX_SUPERVISOR_MCP_REPORT_CHARS,
+  SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
+  SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
-  type SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
+  SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
+  SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "./mcp-contract.ts";
 import {
@@ -69,24 +76,82 @@ const decodeReportArguments = Schema.decodeUnknownOption(
   exactArguments,
 );
 
+interface ArgumentRule {
+  readonly key: string;
+  readonly maximum: number;
+  readonly pattern: RegExp;
+  readonly mismatch: string;
+}
+
+const nonblankRule = (key: string, maximum: number): ArgumentRule => ({
+  key,
+  maximum,
+  pattern: new RegExp(SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE, "u"),
+  mismatch: `${key} is blank; provide nonblank text.`,
+});
+const MESSAGE_RULES: ReadonlyArray<ArgumentRule> = SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS.map((key) =>
+  nonblankRule(key, MAX_SUPERVISOR_MCP_MESSAGE_CHARS),
+);
+const REPORT_RULES: ReadonlyArray<ArgumentRule> = [
+  {
+    key: SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS[0],
+    maximum: MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
+    pattern: new RegExp(SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE, "u"),
+    mismatch: `${SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS[0]} must start with a letter or digit and use only letters, digits, ".", "_", ":", or "-".`,
+  },
+  nonblankRule(SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS[1], MAX_SUPERVISOR_MCP_REPORT_CHARS),
+];
+// Argument names are echoed only when short and plain; other caller text never is.
+const ECHOABLE_KEY = /^[A-Za-z0-9_]{1,64}$/u;
+const count = (value: number): string => value.toLocaleString("en-US");
+
+// Names the first failing argument and its limit so the child can correct the call.
+const argumentProblem = (
+  tool: string,
+  rules: ReadonlyArray<ArgumentRule>,
+  args: Schema.Json | undefined,
+): string | undefined => {
+  const accepted = rules.map((rule) => rule.key).join(" and ");
+  if (!isJsonObject(args)) return `${tool} takes an object with ${accepted}.`;
+  const unexpected = Object.keys(args).find((key) => !rules.some((rule) => rule.key === key));
+  if (unexpected !== undefined)
+    return `Unexpected argument${ECHOABLE_KEY.test(unexpected) ? ` ${unexpected}` : ""}; ${tool} takes only ${accepted}.`;
+  for (const rule of rules) {
+    const value = args[rule.key];
+    if (value === undefined) return `Missing ${rule.key}.`;
+    if (!Predicate.isString(value)) return `${rule.key} must be a string.`;
+    if (value.length > rule.maximum)
+      return `${rule.key} is ${count(value.length)} characters; the limit is ${count(rule.maximum)}. Shorten it and resubmit.`;
+    if (!rule.pattern.test(value)) return rule.mismatch;
+  }
+  return undefined;
+};
+
+const UNSUPPORTED_ARGUMENTS = "Tool input is malformed or unsupported.";
+
+/** Decodes a tool call, or explains which argument to fix. */
 export const decodeSupervisorToolCall = (
   name: string,
   args: Schema.Json | undefined,
-): SupervisorToolCall | undefined => {
-  if (name === SUPERVISOR_MCP_TOOL_NAMES[3])
-    return Option.getOrUndefined(
-      Option.map(decodeReportArguments(args), ({ delivery_id, report }) => ({
-        kind: "report" as const,
-        deliveryId: delivery_id,
-        report,
-      })),
-    );
+): Result.Result<SupervisorToolCall, string> => {
+  if (name === SUPERVISOR_MCP_TOOL_NAMES[3]) {
+    const problem = argumentProblem(name, REPORT_RULES, args);
+    if (problem !== undefined) return Result.fail(problem);
+    return Option.match(decodeReportArguments(args), {
+      onNone: () => Result.fail(UNSUPPORTED_ARGUMENTS),
+      onSome: ({ delivery_id, report }) =>
+        Result.succeed({ kind: "report" as const, deliveryId: delivery_id, report }),
+    });
+  }
   const kind = MESSAGE_KINDS[SUPERVISOR_MCP_MESSAGE_TOOL_NAMES.findIndex((tool) => tool === name)];
-  return kind
-    ? Option.getOrUndefined(
-        Option.map(decodeMessageArguments(args), ({ message }) => ({ kind, message })),
-      )
-    : undefined;
+  if (kind === undefined)
+    return Result.fail(`Unknown tool; use one of ${SUPERVISOR_MCP_TOOL_NAMES.join(", ")}.`);
+  const problem = argumentProblem(name, MESSAGE_RULES, args);
+  if (problem !== undefined) return Result.fail(problem);
+  return Option.match(decodeMessageArguments(args), {
+    onNone: () => Result.fail(UNSUPPORTED_ARGUMENTS),
+    onSome: ({ message }) => Result.succeed({ kind, message }),
+  });
 };
 
 const uncertain = () =>

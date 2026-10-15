@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
 import { constVoid } from "effect/Function";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import { isJsonObject } from "pi-cosmic-core";
@@ -96,11 +97,11 @@ const main = Effect.gen(function* () {
 
   const executeTool = (request: ToolCall) => {
     const call = decodeSupervisorToolCall(request.name, request.arguments);
-    return call
-      ? runSupervisorTool(supervisor, call).pipe(
+    return Result.isSuccess(call)
+      ? runSupervisorTool(supervisor, call.success).pipe(
           Effect.map((result) => toolResult(result.text, result.isError)),
         )
-      : Effect.succeed(toolResult("Tool input is malformed, excessive, or unsupported.", true));
+      : Effect.succeed(toolResult(`Not delivered: ${call.failure}`, true));
   };
 
   const writeToolResponse = (value: Schema.Json): Effect.Effect<void> =>
