@@ -44,7 +44,11 @@ import {
   listWorkspaceRecords,
   removeWorkspaceTrees,
 } from "./git-worktree-recovery.ts";
-import { publishWorkspace, requiredLeaseDirectories } from "./git-worktree-integration.ts";
+import {
+  publishWorkspace,
+  removePublicationBackups,
+  requiredLeaseDirectories,
+} from "./git-worktree-integration.ts";
 
 const ownerNamespace = (token: string) => `workspace-owner:${token}`;
 
@@ -466,15 +470,16 @@ export const gitWorkspaceEngine = (registry: string) =>
           "integrate",
           "Changed-file ancestors changed; prepare and test again before integration.",
         );
-      const result = yield* publishWorkspace(registry, record, before, prepared, preparation);
+      const publication = yield* publishWorkspace(registry, record, before, prepared, preparation);
       const after = yield* sourceIdentity(record.handle.sourceRoot);
       if (after.head !== identity.head || after.index !== identity.index)
         return yield* workspaceFailure(
           "integrate",
           "Concurrent source branch/index mutation detected; inspect the retained publication journal.",
         );
-      const integrated: WorkspaceRecord = { ...result, status: "integrated" };
+      const integrated: WorkspaceRecord = { ...publication.record, status: "integrated" };
       yield* saveWorkspaceRecord(registry, integrated);
+      const remainingBackupPaths = yield* removePublicationBackups(publication.backups);
       const uncapturedPaths = workerTree.excludedPaths;
       const treeRemovalFailed = target.retainTrees
         ? false
@@ -492,6 +497,7 @@ export const gitWorkspaceEngine = (registry: string) =>
         workerRoot: worker(record),
         uncapturedPaths,
         treeRemovalFailed,
+        remainingBackupPaths,
       };
     }, locked);
 

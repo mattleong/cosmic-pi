@@ -752,6 +752,7 @@ const workspaceService: SubagentServiceDoubleInput = {
       workerRoot: "/agent/git-workspaces/ws-1/worker",
       uncapturedPaths: [],
       treeRemovalFailed: false,
+      remainingBackupPaths: [],
       leaseReleaseUnconfirmed: false,
     }),
   workspaceDiscard: () => Effect.void,
@@ -766,6 +767,7 @@ const leftoverWorkspace: SubagentServiceDoubleInput = {
       workerRoot: "/agent/git-workspaces/ws-1/worker",
       uncapturedPaths: ["src/Billing/Invoice.cs", "assets/logo.svg"],
       treeRemovalFailed: false,
+      remainingBackupPaths: ["/project/db/.pi-workspace-old-4f1c2a9e-0d3b-4e7a-9c55-1b2d3e4f5a6b"],
       leaseReleaseUnconfirmed: true,
     }),
 };

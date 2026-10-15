@@ -209,6 +209,7 @@ describe("workspace tool", () => {
               workerRoot: "/agent/git-workspaces/w/worker",
               uncapturedPaths: [],
               treeRemovalFailed: false,
+              remainingBackupPaths: [],
               leaseReleaseUnconfirmed: false,
               ...outcome,
             }),
@@ -223,12 +224,13 @@ describe("workspace tool", () => {
     const leftover = yield* integrate({
       uncapturedPaths: ["src/Billing/Invoice.cs", "go.mod"],
       treeRemovalFailed: true,
+      remainingBackupPaths: ["/project/src/.pi-workspace-old-1"],
       leaseReleaseUnconfirmed: true,
     });
     const summary = compactWorkspaceSummary(leftover, "integrate");
     expect(summary?.outcome).toBe("warning");
     const issues = summary?.issues ?? [];
-    expect(issues).toHaveLength(3);
+    expect(issues).toHaveLength(4);
     const text = leftover.content[0]?.type === "text" ? leftover.content[0].text : "";
     for (const issue of issues) {
       expect(issue.severity).toBe("warning");
@@ -239,5 +241,6 @@ describe("workspace tool", () => {
     }
     expect(text).toContain("src/Billing/Invoice.cs");
     expect(text).toContain("/agent/git-workspaces/w/worker");
+    expect(text).toContain("/project/src/.pi-workspace-old-1");
   });
 });

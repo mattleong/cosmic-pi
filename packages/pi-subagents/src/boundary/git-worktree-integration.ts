@@ -7,7 +7,16 @@ import {
   workspaceIO,
   workspaceIOIfPresent,
 } from "./git-worktree-process.ts";
-import { createWorkspaceDirectory, publishWorkspaceFile } from "./git-worktree-publish.ts";
+import {
+  createWorkspaceDirectory,
+  publishWorkspaceFile,
+  removeWorkspaceBackups,
+  type WorkspaceBackupRemovalRequest,
+} from "./git-worktree-publish.ts";
+import {
+  publicationBackupPrefix,
+  publicationTemporaryPrefix,
+} from "./git-worktree-publish-helper.ts";
 import {
   readWorkspaceFile,
   type SnapshotEntry,
@@ -124,8 +133,8 @@ const journalEntry = (
     const token = yield* newWorkspaceId;
     return {
       path: name,
-      temporaryPath: path.join(path.dirname(name), `.pi-workspace-new-${token}`),
-      backupPath: path.join(path.dirname(name), `.pi-workspace-old-${token}`),
+      temporaryPath: path.join(path.dirname(name), `${publicationTemporaryPrefix}${token}`),
+      backupPath: path.join(path.dirname(name), `${publicationBackupPrefix}${token}`),
       before: expected && {
         oid: expected.oid,
         mode: expected.mode,
@@ -175,6 +184,7 @@ const publishEntries = (
 ) =>
   Effect.gen(function* () {
     let publishedCount = journal.publishedCount ?? 0;
+    const backups = new Map<string, WorkspaceBackupRemovalRequest>();
     for (const entry of journal.journal ?? []) {
       const directory = path.dirname(path.join(root, entry.path));
       const identity = directories.get(directory);
@@ -196,13 +206,33 @@ const publishEntries = (
       if (result.status !== "success")
         return yield* workspaceFailure(
           "integrate",
-          "Publication conflict or uncertainty; inspect the retained journal, captured backup and temporary file. No automatic rollback occurred.",
+          "Publication conflict or uncertainty; inspect the retained journal, backups and any temporary file. No automatic rollback occurred.",
         );
+      if (expected)
+        backups.set(directory, {
+          directory,
+          ...identity,
+          names: [...(backups.get(directory)?.names ?? []), path.basename(entry.backupPath)],
+        });
       publishedCount += 1;
       yield* saveWorkspaceRecord(registry, { ...journal, publishedCount });
     }
-    return { ...journal, publishedCount };
+    return { record: { ...journal, publishedCount }, backups: [...backups.values()] };
   });
+
+/**
+ * Deletes the preimage backups a publication left beside the files it replaced or deleted. Call it
+ * only once the integration has committed: until then the backups are the manual recovery copy.
+ * Returns the backup paths that remain.
+ */
+export const removePublicationBackups = (backups: ReadonlyArray<WorkspaceBackupRemovalRequest>) =>
+  Effect.forEach(backups, (group) =>
+    removeWorkspaceBackups(group).pipe(
+      Effect.map((result) => result.retained),
+      Effect.orElseSucceed(() => group.names),
+      Effect.map((names) => names.map((name) => path.join(group.directory, name))),
+    ),
+  ).pipe(Effect.map((paths) => paths.flat()));
 
 export const publishWorkspace = (
   registry: string,

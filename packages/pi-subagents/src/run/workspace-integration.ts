@@ -14,6 +14,7 @@ export interface WorkspaceIntegrationOutcome {
   readonly workerRoot: string;
   readonly uncapturedPaths: ReadonlyArray<string>;
   readonly treeRemovalFailed: boolean;
+  readonly remainingBackupPaths: ReadonlyArray<string>;
   readonly leaseReleaseUnconfirmed: boolean;
 }
 

@@ -14,6 +14,7 @@ import { it } from "@effect/vitest";
 import {
   createWorkspaceDirectory,
   publishWorkspaceFile,
+  removeWorkspaceBackups,
 } from "../../src/boundary/git-worktree-publish.ts";
 
 const roots: string[] = [];
@@ -109,6 +110,7 @@ describe("anchored workspace publication", () => {
         ).toBe("conflict");
         expect(fs.readFileSync(nodePath.join(r.directory, r.name), "utf8")).toBe("editor");
         expect(fs.readFileSync(nodePath.join(r.directory, r.backupName), "utf8")).toBe("editor");
+        expect(fs.existsSync(nodePath.join(r.directory, r.temporaryName))).toBe(false);
       }),
   );
   it("never overwrites an editor save after capture", () => {
@@ -117,6 +119,7 @@ describe("anchored workspace publication", () => {
     expect(hooked(r, `fs.writeFileSync('target','editor');`).status).toBe("conflict");
     expect(fs.readFileSync(nodePath.join(r.directory, r.name), "utf8")).toBe("editor");
     expect(fs.readFileSync(nodePath.join(r.directory, r.backupName), "utf8")).toBe("before");
+    expect(fs.existsSync(nodePath.join(r.directory, r.temporaryName))).toBe(false);
   });
   it("an ancestor swap cannot redirect leaf operations", () => {
     const root = setup();
@@ -138,6 +141,45 @@ describe("anchored workspace publication", () => {
     expect(fs.readFileSync(nodePath.join(outside, "target"), "utf8")).toBe("outside");
     expect(fs.readFileSync(nodePath.join(original + "-moved", "target"), "utf8")).toBe("after");
   });
+  it.effect("removes regular backups in the anchored directory and names those that remain", () =>
+    Effect.gen(function* () {
+      const r = setup();
+      const at = (name: string) => nodePath.join(r.directory, name);
+      const anchor = {
+        directory: r.directory,
+        directoryDev: r.directoryDev,
+        directoryIno: r.directoryIno,
+      };
+      fs.writeFileSync(at(".pi-workspace-old-file"), "before");
+      fs.mkdirSync(at(".pi-workspace-old-directory"));
+      fs.symlinkSync("target", at(".pi-workspace-old-link"));
+      const removal = yield* removeWorkspaceBackups({
+        ...anchor,
+        names: [
+          ".pi-workspace-old-file",
+          ".pi-workspace-old-directory",
+          ".pi-workspace-old-link",
+          ".pi-workspace-old-gone",
+        ],
+      });
+      expect(removal.retained).toEqual([".pi-workspace-old-directory", ".pi-workspace-old-link"]);
+      expect(fs.existsSync(at(".pi-workspace-old-file"))).toBe(false);
+
+      fs.writeFileSync(at(".pi-workspace-old-moved"), "before");
+      const moved = yield* removeWorkspaceBackups({
+        ...anchor,
+        directoryIno: r.directoryIno + 1,
+        names: [".pi-workspace-old-moved"],
+      });
+      expect(moved.retained).toEqual([".pi-workspace-old-moved"]);
+      expect(fs.readFileSync(at(".pi-workspace-old-moved"), "utf8")).toBe("before");
+
+      fs.writeFileSync(at(r.name), "user file");
+      const refused = yield* Effect.exit(removeWorkspaceBackups({ ...anchor, names: [r.name] }));
+      expect(refused._tag).toBe("Failure");
+      expect(fs.readFileSync(at(r.name), "utf8")).toBe("user file");
+    }),
+  );
   it.effect("creates directories exclusively and checks the anchor identity", () =>
     Effect.gen(function* () {
       const r = setup();

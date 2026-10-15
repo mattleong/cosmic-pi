@@ -4,18 +4,25 @@ import * as Schema from "effect/Schema";
 import { runBoundedProcessNode } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import {
+  backupRemovalResultSchema,
   publicationInputLimit,
   publicationResultSchema,
   directoryResultSchema,
+  type BackupRemovalWireRequest,
   type DirectoryWireRequest,
   type PublicationWireRequest,
 } from "./git-worktree-publish-helper.ts";
 
-export interface WorkspaceDirectoryRequest {
+interface AnchoredDirectory {
   readonly directory: string;
   readonly directoryDev: number;
   readonly directoryIno: number;
+}
+export interface WorkspaceDirectoryRequest extends AnchoredDirectory {
   readonly name: string;
+}
+export interface WorkspaceBackupRemovalRequest extends AnchoredDirectory {
+  readonly names: ReadonlyArray<string>;
 }
 export interface WorkspacePublicationRequest extends WorkspaceDirectoryRequest {
   readonly backupName: string;
@@ -36,9 +43,12 @@ const decodePublicationResult = Schema.decodeUnknownEffect(
 const decodeDirectoryResult = Schema.decodeUnknownEffect(
   Schema.fromJsonString(directoryResultSchema),
 );
+const decodeBackupRemovalResult = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(backupRemovalResultSchema),
+);
 const launch = <A, E>(
   directory: string,
-  request: PublicationWireRequest | DirectoryWireRequest,
+  request: PublicationWireRequest | DirectoryWireRequest | BackupRemovalWireRequest,
   decode: (stdout: string) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
@@ -77,3 +87,7 @@ export const publishWorkspaceFile = (request: WorkspacePublicationRequest) => {
 
 export const createWorkspaceDirectory = ({ directory, ...fields }: WorkspaceDirectoryRequest) =>
   launch(directory, { ...fields, operation: "mkdir" }, decodeDirectoryResult);
+
+/** Deletes publication backups in one directory; the result names those still present. */
+export const removeWorkspaceBackups = ({ directory, ...fields }: WorkspaceBackupRemovalRequest) =>
+  launch(directory, { ...fields, operation: "remove-backups" }, decodeBackupRemovalResult);

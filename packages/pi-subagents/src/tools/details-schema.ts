@@ -56,7 +56,7 @@ const nonNegativeInteger = nonNegativeNumber.check(Schema.isInt());
 const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =>
   Schema.Array(schema).check(Schema.isMaxLength(maximum));
 
-const MAX_WORKSPACE_WARNINGS = 3;
+const MAX_WORKSPACE_WARNINGS = 4;
 const MAX_WORKSPACE_WARNING_DETAIL_CHARS = 4_096;
 const WorkspaceWarningSchema = Schema.Struct({
   code: NonEmptyText(MAX_FAILURE_CODE_CHARS),

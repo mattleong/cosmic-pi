@@ -113,5 +113,7 @@ export interface WorkspaceIntegration {
   readonly workerRoot: string;
   readonly uncapturedPaths: ReadonlyArray<string>;
   readonly treeRemovalFailed: boolean;
+  /** Preimage backups left in the source checkout because deleting them failed. */
+  readonly remainingBackupPaths: ReadonlyArray<string>;
 }
 export type WorkspaceAcquired = (handle: WorkspaceHandle) => void;

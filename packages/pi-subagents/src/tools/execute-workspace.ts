@@ -39,17 +39,21 @@ const MAX_LISTED_PATHS = 8;
 const fileName = (name: string) =>
   clipText(sanitizeTerminalLine(name.replace(/\/+$/u, "").split("/").pop() ?? ""), 40) || "A file";
 
+const listedPaths = (paths: ReadonlyArray<string>) => {
+  const listed = paths
+    .slice(0, MAX_LISTED_PATHS)
+    .map((name) => JSON.stringify(clipText(name, 256)))
+    .join(", ");
+  const more =
+    paths.length > MAX_LISTED_PATHS ? ` and ${paths.length - MAX_LISTED_PATHS} more` : "";
+  return `${listed}${more}`;
+};
+
 function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWarning[] {
   const warnings: WorkspaceWarning[] = [];
   const paths = outcome.uncapturedPaths;
   const worker = JSON.stringify(outcome.workerRoot);
   if (paths.length > 0) {
-    const listed = paths
-      .slice(0, MAX_LISTED_PATHS)
-      .map((name) => JSON.stringify(clipText(name, 256)))
-      .join(", ");
-    const more =
-      paths.length > MAX_LISTED_PATHS ? ` and ${paths.length - MAX_LISTED_PATHS} more` : "";
     const onlyPath = paths.length === 1 ? paths[0] : undefined;
     warnings.push({
       code: "worker-retained",
@@ -57,7 +61,7 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
         onlyPath !== undefined
           ? `${fileName(onlyPath)} wasn't in the proposal, so the working copy was kept`
           : `${countLabel(paths.length, "file")} weren't in the proposal, so the working copy was kept`,
-      detail: `The workspace snapshot did not capture these worker files, so they were neither reviewed nor integrated: ${listed}${more}. The worker tree, which these paths are relative to, was kept at ${worker} so they are not lost. Copy any you need into the parent checkout, then discard this workspace to delete the tree.`,
+      detail: `The workspace snapshot did not capture these worker files, so they were neither reviewed nor integrated: ${listedPaths(paths)}. The worker tree, which these paths are relative to, was kept at ${worker} so they are not lost. Copy any you need into the parent checkout, then discard this workspace to delete the tree.`,
     });
   }
   if (outcome.treeRemovalFailed)
@@ -65,6 +69,16 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
       code: "workspace-trees-remain",
       message: "The proposal's working copies couldn't be deleted",
       detail: `The integration committed, but removing the workspace's worker and test trees failed; the worker tree at ${worker} and any test trees beside it remain on disk. Discard this workspace to retry the removal.`,
+    });
+  const backups = outcome.remainingBackupPaths;
+  if (backups.length > 0)
+    warnings.push({
+      code: "integration-backups-remain",
+      message:
+        backups.length === 1
+          ? "A backup of a replaced file couldn't be deleted from the checkout"
+          : `${countLabel(backups.length, "backup")} of replaced files couldn't be deleted from the checkout`,
+      detail: `The integration committed, but deleting these backups from the parent checkout failed: ${listedPaths(backups)}. Each holds a file's content from before the integration; delete them once that content is no longer needed.`,
     });
   if (outcome.leaseReleaseUnconfirmed)
     warnings.push({

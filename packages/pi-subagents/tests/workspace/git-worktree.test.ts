@@ -1,5 +1,6 @@
 import { expect, vi } from "vitest";
 import * as publication from "../../src/boundary/git-worktree-integration.ts";
+import * as files from "../../src/boundary/git-worktree-publish.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -267,6 +268,93 @@ test("snapshots current edits without HEAD secrets and publishes binary/mode/del
   expect(yield* io(() => fs.readFile(path.join(root, ".git/index")))).toEqual(index);
   expect(yield* git(root, ["rev-parse", "HEAD"])).toBe(head);
   expect(yield* readText(root, ".env")).toBe("SECRET=never-copy-this-head-value\n");
+});
+
+const publicationArtifacts = (root: string) =>
+  io(() => fs.readdir(root, { recursive: true })).pipe(
+    Effect.map((names) =>
+      names.filter((name) => path.basename(name).startsWith(".pi-workspace-")).toSorted(),
+    ),
+  );
+
+test("leaves no publication backups or temporary files in the checkout after integration", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "replaced\n");
+  yield* writeFile(path.join(handle.cwd, "src/added.ts"), "added\n");
+  yield* io(() => fs.chmod(path.join(handle.cwd, "other.txt"), 0o755));
+  yield* io(() => fs.unlink(path.join(handle.cwd, "binary.dat")));
+  yield* io(() => fs.mkdir(path.join(handle.cwd, "feature/nested"), { recursive: true }));
+  yield* writeFile(path.join(handle.cwd, "feature/nested/new.ts"), "nested\n");
+  const { revision, integration } = yield* prepareIntegration(handle);
+  expect(revision.changedPaths).toEqual([
+    "binary.dat",
+    "feature/nested/new.ts",
+    "other.txt",
+    "src/added.ts",
+    "src/main.ts",
+  ]);
+  const integrated = yield* service.integrate(integration);
+  expect(integrated.remainingBackupPaths).toEqual([]);
+  expect(yield* readText(root, "src/main.ts")).toBe("replaced\n");
+  expect(yield* readText(root, "src/added.ts")).toBe("added\n");
+  expect(yield* readText(root, "feature/nested/new.ts")).toBe("nested\n");
+  expect((yield* io(() => fs.stat(path.join(root, "other.txt")))).mode & 0o111).not.toBe(0);
+  expect(yield* exists(path.join(root, "binary.dat"))).toBe(false);
+  expect(yield* publicationArtifacts(root)).toEqual([]);
+});
+
+test("reports a backup it couldn't delete without failing the committed integration", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "replaced\n");
+  yield* writeFile(path.join(handle.cwd, "other.txt"), "also replaced\n");
+  const { integration } = yield* prepareIntegration(handle);
+  const original = publication.publishWorkspace;
+  let blocked = "";
+  const spy = vi.spyOn(publication, "publishWorkspace").mockImplementation((...args) =>
+    Effect.gen(function* () {
+      const published = yield* original(...args);
+      const entry = published.record.journal?.find((item) => item.path === "src/main.ts");
+      blocked = path.join(root, entry?.backupPath ?? "");
+      yield* io(() => fs.rm(blocked));
+      yield* io(() => fs.mkdir(blocked));
+      return published;
+    }),
+  );
+  const integrated = yield* service
+    .integrate(integration)
+    .pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+  expect(integrated.record.status).toBe("integrated");
+  expect(integrated.remainingBackupPaths).toEqual([blocked]);
+  expect(yield* readText(root, "src/main.ts")).toBe("replaced\n");
+  expect(yield* publicationArtifacts(root)).toEqual([path.relative(root, blocked)]);
+});
+
+test("keeps backups for manual recovery when publication stops partway", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "other.txt"), "published first\n");
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "never published\n");
+  const { integration } = yield* prepareIntegration(handle);
+  const original = files.publishWorkspaceFile;
+  const spy = vi.spyOn(files, "publishWorkspaceFile").mockImplementation((request) =>
+    Effect.gen(function* () {
+      if (request.name === "main.ts")
+        yield* writeFile(path.join(request.directory, request.name), "editor save\n");
+      return yield* original(request);
+    }),
+  );
+  const failure = yield* failureOf(service.integrate(integration)).pipe(
+    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
+  );
+  expect(failure.message).toContain("No automatic rollback");
+  const record = yield* service.inspect(workspaceTarget(handle));
+  expect(record.status).toBe("integrating");
+  expect(record.publishedCount).toBe(1);
+  expect(yield* readText(root, "other.txt")).toBe("published first\n");
+  expect(yield* readText(root, "src/main.ts")).toBe("editor save\n");
+  const backups = (record.journal ?? []).map((entry) => entry.backupPath).toSorted();
+  expect(yield* publicationArtifacts(root)).toEqual(backups);
+  expect(yield* readText(root, backups[0]!)).toBe("other\n");
+  expect(yield* fails(service.discard(workspaceTarget(handle)))).toBe(true);
 });
 
 test("binds acceptance to unchanged worker, tested tree and source preimages", function* (service, root) {

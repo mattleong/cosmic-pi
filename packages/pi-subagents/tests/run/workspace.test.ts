@@ -230,6 +230,7 @@ function fixture({
             workerRoot: entry.handle.cwd,
             uncapturedPaths: [],
             treeRemovalFailed: false,
+            remainingBackupPaths: [],
           };
         }),
       ),

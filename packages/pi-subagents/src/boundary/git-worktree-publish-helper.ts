@@ -5,6 +5,8 @@ const fs = process.getBuiltinModule("node:fs");
 if (!fs) throw new Error("Node filesystem unavailable");
 
 export const publicationInputLimit = 48 * 1024 * 1024;
+export const publicationBackupPrefix = ".pi-workspace-old-";
+export const publicationTemporaryPrefix = ".pi-workspace-new-";
 const image = Schema.Struct({ bytes: Schema.String, mode: Schema.Finite });
 const publicationRequestSchema = Schema.Struct({
   directoryDev: Schema.Finite,
@@ -27,7 +29,19 @@ export const directoryResultSchema = Schema.Struct({
   directoryDev: Schema.Finite,
   directoryIno: Schema.Finite,
 });
-const inputSchema = Schema.Union([directoryRequestSchema, publicationRequestSchema]);
+const backupRemovalRequestSchema = Schema.Struct({
+  operation: Schema.Literal("remove-backups"),
+  directoryDev: Schema.Finite,
+  directoryIno: Schema.Finite,
+  names: Schema.Array(Schema.String),
+});
+export type BackupRemovalWireRequest = typeof backupRemovalRequestSchema.Type;
+export const backupRemovalResultSchema = Schema.Struct({ retained: Schema.Array(Schema.String) });
+const inputSchema = Schema.Union([
+  directoryRequestSchema,
+  backupRemovalRequestSchema,
+  publicationRequestSchema,
+]);
 export const publicationResultSchema = Schema.Struct({
   status: Schema.Literals(["success", "conflict", "uncertain"]),
   reason: Schema.Literals([
@@ -161,12 +175,21 @@ const writeTemporary = (name: string, after: PublicationImage) => {
     fs.closeSync(temporary);
   }
 };
+// Only for a definite conflict: the temporary file was never linked to the target, so it holds
+// nothing recovery needs.
+const discardTemporary = (r: PublicationWireRequest) => {
+  if (r.after === undefined) return;
+  try {
+    fs.unlinkSync(r.temporaryName);
+  } catch {}
+};
 const restoreUnmatchedCapture = (r: PublicationWireRequest, stat: FileStat) => {
   if (stat.isFile() && !stat.isSymbolicLink()) {
     try {
       fs.linkSync(r.backupName, r.name);
     } catch {}
   }
+  discardTemporary(r);
   syncDirectory();
 };
 const installPublished = (r: PublicationWireRequest): "published" | "destination-exists" => {
@@ -175,8 +198,12 @@ const installPublished = (r: PublicationWireRequest): "published" | "destination
       fs.linkSync(r.temporaryName, r.name);
       fs.unlinkSync(r.temporaryName);
     } catch (error) {
+      if (exists(error)) {
+        discardTemporary(r);
+        syncDirectory();
+        return "destination-exists";
+      }
       syncDirectory();
-      if (exists(error)) return "destination-exists";
       throw error;
     }
   } else if (inspect(r.name)) {
@@ -250,6 +277,40 @@ const createDirectory = (r: DirectoryWireRequest) =>
     catch: () => new PublicationHelperError(),
   });
 
+// A name that is no longer a regular file was replaced by someone else, so it stays.
+const removeBackup = (name: string) => {
+  try {
+    const stat = inspect(name);
+    if (stat === undefined) return true;
+    if (!stat.isFile()) return false;
+    fs.unlinkSync(name);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const removeBackups = (r: BackupRemovalWireRequest) =>
+  Effect.try({
+    try: () => {
+      if (
+        !validAnchor(r) ||
+        !r.names.every((name) => validLeaf(name) && name.startsWith(publicationBackupPrefix))
+      )
+        throw new Error("invalid input");
+      if (!anchorMatches(r)) return { retained: r.names };
+      const retained = r.names.filter((name) => !removeBackup(name));
+      syncDirectory();
+      return { retained };
+    },
+    catch: () => new PublicationHelperError(),
+  });
+
+const handleRequest = (request: typeof inputSchema.Type) => {
+  if (!("operation" in request)) return executePublication(request);
+  return request.operation === "mkdir" ? createDirectory(request) : removeBackups(request);
+};
+
 export const publicationMain = () =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -276,12 +337,12 @@ export const publicationMain = () =>
           catch: () => new PublicationHelperError(),
         });
         const request = yield* Schema.decodeEffect(Schema.fromJsonString(inputSchema))(input);
-        return "operation" in request
-          ? yield* createDirectory(request)
-          : yield* executePublication(request);
+        return yield* handleRequest(request);
       }).pipe(Effect.orElseSucceed(() => fallback));
       const encoded = yield* Schema.encodeEffect(
-        Schema.fromJsonString(Schema.Union([publicationResultSchema, directoryResultSchema])),
+        Schema.fromJsonString(
+          Schema.Union([publicationResultSchema, directoryResultSchema, backupRemovalResultSchema]),
+        ),
       )(output);
       yield* Effect.try({
         try: () => process.stdout.write(encoded),
