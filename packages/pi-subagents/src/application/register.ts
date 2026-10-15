@@ -41,6 +41,7 @@ import { sessionReportArchive, type ReportArchive } from "../boundary/report-arc
 import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { restoreSessionUsage, sessionUsageRecorder } from "../boundary/host-session-usage.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
+import { registerUserInputSignal } from "../boundary/host-user-input.ts";
 import { subagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { SessionProfileOverrideSeed } from "../profiles/session-overrides.ts";
 import {
@@ -149,6 +150,7 @@ export function registerSubagentApplication(
     tools: [...SUBAGENT_TOOL_NAME_SET],
   });
   const receipts = registerSubagentErrorReceipts(pi);
+  const userInput = registerUserInputSignal(pi);
   const bridge = subagentProjectionBridge(pi.events);
   const profileOverrideHandoff = createProfileOverrideHandoff();
   const sessionFooter = subagentSessionFooter(pi.events);
@@ -351,7 +353,7 @@ export function registerSubagentApplication(
           const keptActive = new Set(activeSubagentTools(pi));
           registerSubagentTools(
             pi,
-            { ...prepared.toolRuntime, scheduleAnimation, run },
+            { ...prepared.toolRuntime, scheduleAnimation, run, userInput },
             { receipts, owner: receipts.activate() },
             replay.shell,
           );

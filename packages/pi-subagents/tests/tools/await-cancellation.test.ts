@@ -267,3 +267,73 @@ it.live("ends a wait at its timeout without stopping the child", () =>
     expect(status.state).toBe("running");
   }),
 );
+
+it.live("ends a wait for the user's next message without stopping the child", () =>
+  Effect.gen(function* () {
+    const { tools, pi, runtime, service } = yield* managedTools;
+    const userInput = new AbortController();
+    registerSubagentTools(pi, {
+      environment: { cwd: "/project", projectTrusted: true },
+      run: (effect, signal) => runtime.run(effect, signal),
+      userInput: () => userInput.signal,
+    });
+    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
+    const progress = Deferred.makeUnsafe<void>();
+    const pending = executeTool(
+      tools.get("subagent_await")!,
+      { runIds: [child.id], until: "all_finished" },
+      { callID: "user-input-await", update: () => Deferred.doneUnsafe(progress, Effect.void) },
+    );
+    yield* Deferred.await(progress);
+    userInput.abort();
+    const result = yield* step(() => pending);
+    expect(result.structuredContent).toMatchObject({ outcome: "user_input" });
+    expect(result.details).toMatchObject({ cancelled: true, endedByUserInput: true });
+    expect(result.content[0]).toMatchObject({ text: stringContaining("user sent a message") });
+    const status = yield* step(() => runtime.run(service.status(child.id)));
+    expect(status.state).toBe("running");
+  }),
+);
+
+it.live("returns a question from a run the caller is not awaiting", () =>
+  Effect.gen(function* () {
+    const { fixture, tools, pi, runtime, service } = yield* managedTools;
+    registerSubagentTools(pi, {
+      environment: { cwd: "/project", projectTrusted: true },
+      run: (effect, signal) => runtime.run(effect, signal),
+    });
+    const awaited = yield* step(() =>
+      runtime.run(service.startSessionOwned(nativeReportRequest({ name: "awaited" }))),
+    );
+    const asking = yield* step(() =>
+      runtime.run(service.startSessionOwned(nativeReportRequest({ name: "asking" }))),
+    );
+    const progress = Deferred.makeUnsafe<void>();
+    const pending = executeTool(
+      tools.get("subagent_await")!,
+      { runIds: [awaited.id], until: "all_finished" },
+      { callID: "sibling-question", update: () => Deferred.doneUnsafe(progress, Effect.void) },
+    );
+    yield* Deferred.await(progress);
+    fixture.backend.controls[1]!.offer({
+      type: "supervisor_contact",
+      assignmentEpoch: 1,
+      requestId: "question-from-sibling",
+      kind: "question",
+      message: "May I rename the module?",
+    });
+    const result = yield* step(() => pending);
+    expect(result.structuredContent).toMatchObject({
+      outcome: "attention",
+      requestedRunIds: [awaited.id],
+    });
+    expect(result.content[0]).toMatchObject({ text: stringContaining("May I rename the module?") });
+    expect(result.details).toMatchObject({
+      attentionRequired: true,
+      awaitedRunIds: [awaited.id],
+      cards: [{ id: awaited.id }, { id: asking.id, state: "waiting_for_parent" }],
+    });
+    const status = yield* step(() => runtime.run(service.status(awaited.id)));
+    expect(status.state).toBe("running");
+  }),
+);

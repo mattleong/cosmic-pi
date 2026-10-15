@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
+import * as Predicate from "effect/Predicate";
 import * as Match from "effect/Match";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import { invokeHostCallback } from "pi-cosmic-core";
@@ -44,6 +45,7 @@ import {
 import {
   awaitExecutionFor,
   observeAwaitInterruption,
+  type AwaitEnding,
   type AwaitExecution,
 } from "./execute-await.ts";
 import { executeModelsAction } from "./execute-models.ts";
@@ -72,6 +74,8 @@ export interface SubagentToolRuntime {
     | undefined;
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
   readonly toolPresentation?: SubagentToolPresentation | undefined;
+  /** The signal the user's next message aborts; ends root awaits so the parent can read it. */
+  readonly userInput?: (() => AbortSignal) | undefined;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SubagentService | SubagentProfileService | SubagentBackendRegistry>,
     signal?: AbortSignal,
@@ -112,6 +116,15 @@ const forEachOutcome = <R>(
       ),
     })),
   );
+
+// Runs asking this caller a question appear beside the awaited hierarchy.
+const withQuestionRuns = (
+  contextRuns: ReadonlyArray<SubagentRunView>,
+  questions: ReadonlyArray<SubagentRunView>,
+): ReadonlyArray<SubagentRunView> => {
+  const shown = new Set(contextRuns.map((run) => run.id));
+  return [...contextRuns, ...questions.filter((run) => !shown.has(run.id))];
+};
 
 type AwaitedLifecycleResult = Effect.Success<ReturnType<typeof forEachOutcome>>;
 
@@ -197,16 +210,18 @@ export const executeSubagentActionEffect = (
         readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
         readonly awaitContextRuns?: ReadonlyArray<SubagentRunView>;
       } = () => ({}),
+      questions: ReadonlyArray<SubagentRunView> = [],
     ) =>
       Effect.gen(function* () {
         const runs = observations.map((observation) => observation.run);
-        const attentionRequired = runs.some(isParentActionRequiredRun);
+        const attention = [...runs, ...questions];
+        const attentionRequired = attention.some(isParentActionRequiredRun);
         if (scripted && attentionRequired)
           return yield* invalidRequest(
             "scripted_parent_attention_required",
-            `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(runs)}`,
+            `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(attention)}`,
           );
-        const prefix = [...sections, attentionRecoveryText(runs)].filter(Boolean).join("\n\n");
+        const prefix = [...sections, attentionRecoveryText(attention)].filter(Boolean).join("\n\n");
         const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
         const additional = extra();
         const contract =
@@ -216,6 +231,7 @@ export const executeSubagentActionEffect = (
                 fullyRenderedIds: formatted.fullyRenderedIds,
                 until: input.args.until,
                 requestedRunIds: requestedAwaitIds ?? [],
+                questionsElsewhere: questions.length > 0,
               })
             : input.tool === SUBAGENT_TOOL_NAME.status
               ? statusContract({
@@ -384,13 +400,15 @@ export const executeSubagentActionEffect = (
             ids,
             input.args.until,
             state.update,
-            (observations) =>
+            (observations, questions = []) =>
               completeObservations(
                 observations,
                 [state.progressText(observations.map((observation) => observation.run))],
-                () => ({ awaitContextRuns: state.contextRuns() }),
+                () => ({ awaitContextRuns: withQuestionRuns(state.contextRuns(), questions) }),
+                questions,
               ),
             (outcome) => outcome.fullyRenderedIds,
+            callerRunId,
           )
           .pipe(Effect.map(({ result }) => result));
       }
@@ -445,11 +463,16 @@ export const executeSubagentAction = (
       : undefined;
   const timeoutSeconds =
     input.tool === SUBAGENT_TOOL_NAME.await ? input.args.timeoutSeconds : undefined;
-  // The timeout ends only this wait, exactly like a cancellation; children keep running.
+  // The timeout and the user's next message end only this wait, exactly like a cancellation;
+  // children keep running.
   const timeout =
     timeoutSeconds === undefined ? undefined : AbortSignal.timeout(timeoutSeconds * 1000);
-  const waitSignal =
-    timeout === undefined ? signal : signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const userInput =
+    input.tool === SUBAGENT_TOOL_NAME.await && !runtime.proxyCall
+      ? runtime.userInput?.()
+      : undefined;
+  const endings = [signal, timeout, userInput].filter(Predicate.isNotUndefined);
+  const waitSignal = endings.length > 1 ? AbortSignal.any(endings) : endings[0];
   const executing = runtime.proxyCall
     ? runtime.proxyCall(input, waitSignal, awaitState?.markInterrupted)
     : runtime.run(
@@ -470,11 +493,15 @@ export const executeSubagentAction = (
       );
   return executing.catch((cause: unknown) => {
     if (!awaitState?.wasInterrupted()) throw cause;
-    const timedOut = timeout?.aborted === true && signal?.aborted !== true;
-    const result = awaitState.cancelled(
-      runtime.proxyCall !== undefined,
-      timedOut ? timeoutSeconds : undefined,
-    );
+    const ending: AwaitEnding =
+      signal?.aborted === true
+        ? { kind: "cancelled" }
+        : timeout?.aborted === true && timeoutSeconds !== undefined
+          ? { kind: "timed_out", seconds: timeoutSeconds }
+          : userInput?.aborted === true
+            ? { kind: "user_input" }
+            : { kind: "cancelled" };
+    const result = awaitState.cancelled(runtime.proxyCall !== undefined, ending);
     invokeHostCallback(() => onUpdate?.(result), undefined);
     return result;
   });

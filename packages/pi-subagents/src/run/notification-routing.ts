@@ -42,6 +42,28 @@ const canAcceptNotification = (record: RunRecord): boolean =>
   !record.pauseRequested &&
   record.process?.controls.deliverNotification !== undefined;
 
+/** Pi ancestors that can take a notification about `sourceRunId`, nearest first. */
+const notifiableAncestors = (
+  records: ReadonlyMap<string, RunRecord>,
+  sourceRunId: string,
+): ReadonlyArray<RunRecord> => {
+  let parentRunId = records.get(sourceRunId)?.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+  const candidates: RunRecord[] = [];
+  while (parentRunId !== SUBAGENT_ROOT_RUN_ID) {
+    const parent = records.get(parentRunId);
+    if (!parent) break;
+    if (parent.view.runtime === "pi" && canAcceptNotification(parent)) candidates.push(parent);
+    parentRunId = parent.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+  }
+  return candidates;
+};
+
+/** The run that a question from `sourceRunId` reaches first; undefined for the root session. */
+export const questionRecipientRunId = (
+  records: ReadonlyMap<string, RunRecord>,
+  sourceRunId: string,
+): string | undefined => notifiableAncestors(records, sourceRunId)[0]?.view.id;
+
 export function notificationRouter(dependencies: RunNotificationRoutingDependencies) {
   const { records, withLock, admitTurnInput, releaseTurnInput, notifyHost } = dependencies;
 
@@ -61,14 +83,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
     message: string,
   ): Effect.Effect<boolean | "uncertain"> =>
     Effect.suspend(() => {
-      let parentRunId = records.get(sourceRunId)?.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-      const candidates: RunRecord[] = [];
-      while (parentRunId !== SUBAGENT_ROOT_RUN_ID) {
-        const parent = records.get(parentRunId);
-        if (!parent) break;
-        if (parent.view.runtime === "pi" && canAcceptNotification(parent)) candidates.push(parent);
-        parentRunId = parent.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-      }
+      const candidates = notifiableAncestors(records, sourceRunId);
       const attempt = (index: number): Effect.Effect<boolean | "uncertain"> => {
         const candidate = candidates[index];
         if (!candidate) return Effect.succeed(false);

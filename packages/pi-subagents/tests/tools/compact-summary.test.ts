@@ -797,6 +797,46 @@ describe("subagent compact semantic policy", () => {
     expect(proxyDetails).not.toContain("await the requested targets again");
   });
 
+  it("surfaces a question from a run the await did not target, and a wait the user ended", () => {
+    const receipt = awaitReceipt(
+      [
+        view({ id: "target", name: "parser", state: "running" }),
+        view({
+          id: "PRIVATE-RUN",
+          name: "lexer",
+          state: "waiting_for_parent",
+          question: { requestId: "q-1", message: "May I rename the module?" },
+        }),
+      ],
+      { awaitedRunIds: ["target"], attentionRequired: true },
+    );
+    const asked = summarize("await", receipt, "settled", { runIds: ["target"] });
+    expect(asked?.outcome).toBe("warning");
+    const question = asked?.issues?.find((issue) => issue.message.includes("lexer"));
+    expect(question?.severity).toBe("warning");
+    expect(question?.message).toContain("May I rename the module?");
+    expect(asked?.issues?.some((issue) => issue.code === "parent-action")).toBe(false);
+    for (const issue of asked?.issues ?? [])
+      expect(issueMessageStyleProblems(issue.message, { forbidden: ["PRIVATE-RUN"] })).toEqual([]);
+
+    const ended = summarize(
+      "await",
+      awaitReceipt([view({ id: "target", state: "running" })], {
+        awaitedRunIds: ["target"],
+        cancelled: true,
+        endedByUserInput: true,
+      }),
+      "settled",
+      { runIds: ["target"] },
+    );
+    expect(ended?.outcome).not.toBe("error");
+    expect(ended?.outcome).not.toBe("cancelled");
+    const userInput = ended?.issues?.find((issue) => issue.code === "await-user-input");
+    expect(userInput?.severity).toBe("info");
+    expect(issueMessageStyleProblems(userInput?.message ?? "")).toEqual([]);
+    expect(userInput?.detail).toContain("NOT stopped");
+  });
+
   it("does not turn a completed descendant into a missing target's completion", () => {
     const summary = summarize(
       "await",

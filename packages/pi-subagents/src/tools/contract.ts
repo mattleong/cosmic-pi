@@ -249,6 +249,8 @@ export interface AwaitContractInput {
   readonly fullyRenderedIds: ReadonlySet<string>;
   readonly until: SubagentAwaitUntil;
   readonly requestedRunIds: ReadonlyArray<string>;
+  /** Another run that the caller did not await asked it a question. */
+  readonly questionsElsewhere?: boolean | undefined;
 }
 
 export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract => {
@@ -257,7 +259,10 @@ export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract 
   );
   return {
     ...envelope(SUBAGENT_TOOL_NAME.await),
-    outcome: targets.some((target) => target.parentActionRequired) ? "attention" : "finished",
+    outcome:
+      input.questionsElsewhere === true || targets.some((target) => target.parentActionRequired)
+        ? "attention"
+        : "finished",
     until: input.until,
     requestedRunIds: [...input.requestedRunIds],
     targets,
@@ -270,7 +275,7 @@ export interface CancelledAwaitContractInput {
   readonly until: SubagentAwaitUntil;
   readonly cleanup: "confirmed" | "unconfirmed";
   readonly deliveryAttemptedIds?: ReadonlySet<string>;
-  readonly timedOut?: boolean | undefined;
+  readonly ending?: "cancelled" | "timed_out" | "user_input" | undefined;
 }
 
 export const cancelledAwaitContract = (
@@ -279,7 +284,7 @@ export const cancelledAwaitContract = (
   const observed = new Set(input.runs.map((run) => run.id));
   return {
     ...envelope(SUBAGENT_TOOL_NAME.await),
-    outcome: input.timedOut ? "timed_out" : "cancelled",
+    outcome: input.ending ?? "cancelled",
     until: input.until,
     requestedRunIds: [...input.requestedRunIds],
     targets: input.runs.map((run) => ({

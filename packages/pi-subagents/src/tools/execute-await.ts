@@ -2,6 +2,7 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/p
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Match from "effect/Match";
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
 import {
   isAssignmentFinishedRunState,
@@ -31,6 +32,12 @@ export const observeAwaitInterruption = <A, E, R>(
         ),
       )
     : effect;
+
+/** Why a wait ended before its targets finished; children keep running in every case. */
+export type AwaitEnding =
+  | { readonly kind: "cancelled" }
+  | { readonly kind: "timed_out"; readonly seconds: number }
+  | { readonly kind: "user_input" };
 
 export function awaitExecutionFor(
   ids: ReadonlyArray<string>,
@@ -90,13 +97,18 @@ export function awaitExecutionFor(
   };
   const cancelled = (
     proxyCleanupUnconfirmed = false,
-    timedOutSeconds?: number,
+    ending: AwaitEnding = { kind: "cancelled" },
   ): AgentToolResult<unknown> => {
     const unfinished = latestRuns.filter((run) => !isAssignmentFinishedRunState(run.state)).length;
-    const ended =
-      timedOutSeconds === undefined
-        ? "Await cancelled"
-        : `Await timed out after ${timedOutSeconds}s`;
+    const timedOutSeconds = ending.kind === "timed_out" ? ending.seconds : undefined;
+    const ended = Match.value(ending).pipe(
+      Match.when({ kind: "timed_out" }, ({ seconds }) => `Await timed out after ${seconds}s`),
+      Match.when(
+        { kind: "user_input" },
+        () => "Await ended because the user sent a message; read it before waiting again",
+      ),
+      Match.orElse(() => "Await cancelled"),
+    );
     const summary =
       latestRuns.length === 0
         ? `${ended} before progress was observed; selected run states are unobserved.`
@@ -123,7 +135,7 @@ export function awaitExecutionFor(
           until,
           cleanup: proxyCleanupUnconfirmed ? "unconfirmed" : "confirmed",
           deliveryAttemptedIds,
-          timedOut: timedOutSeconds !== undefined,
+          ending: ending.kind,
         }),
       ),
       details: awaitDetails({
@@ -133,6 +145,7 @@ export function awaitExecutionFor(
         awaitUntil: until,
         cancelled: true,
         timedOutSeconds,
+        ...(ending.kind === "user_input" && { endedByUserInput: true as const }),
         ...(proxyCleanupUnconfirmed && { cancellationCleanup: "unconfirmed" as const }),
         ...(latestRuns.some(isParentActionRequiredRun) && { attentionRequired: true }),
       }),

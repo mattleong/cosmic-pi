@@ -88,6 +88,14 @@ function selectionIssues(
   );
 }
 
+/** Only the attention issues of `cards`, for runs a call reports without targeting them. */
+export function compactAttentionIssues(cards: readonly SubagentRunCard[]): CompactIssue[] {
+  const issues: CompactIssue[] = [];
+  for (const card of cards)
+    attentionIssues(card, cardLabel(card), cardIssueAdder(issues, card), false);
+  return issues;
+}
+
 export function compactRunIssues(
   cards: readonly SubagentRunCard[],
   options: RunIssueOptions = {},

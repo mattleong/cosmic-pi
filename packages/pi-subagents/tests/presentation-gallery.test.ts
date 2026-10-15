@@ -376,7 +376,27 @@ const awaitScenarios = Effect.gen(function* () {
     args: awaitInput.args,
     result: cancellation.cancelled(),
   };
-  return [live, settled, cancelled];
+  const userInput: ToolScenario = {
+    tool: awaitInput.tool,
+    title: "user sent a message",
+    args: awaitInput.args,
+    result: cancellation.cancelled(false, { kind: "user_input" }),
+  };
+  const siblingQuestion = yield* scenario("another worker asks a question", awaitInput, {
+    service: {
+      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
+        Effect.suspend(() =>
+          use(
+            [
+              { run: authReview },
+              { run: { ...docsSweep, state: "running", finalText: undefined } },
+            ],
+            [dbMigration],
+          ),
+        ),
+    },
+  });
+  return [live, settled, cancelled, userInput, siblingQuestion];
 });
 
 const candidate = (

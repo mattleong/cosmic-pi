@@ -11,6 +11,7 @@ import {
   type SubagentRunView,
 } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
+import { questionRecipientRunId } from "./notification-routing.ts";
 import { failedStartRecoveryForRecord } from "./retry.ts";
 import type {
   SubagentAwaitUntil,
@@ -231,22 +232,41 @@ export function completionObservationOperations(
       acquireCompletionClaims(ids, claimAll).pipe(Scope.provide(scope), Effect.flatMap(use)),
     );
 
+  // Questions from runs the caller is not awaiting, which nonetheless reach this caller first.
+  const questionsForCallerLocked = (
+    claim: CompletionClaim,
+    callerRunId: string | undefined,
+  ): ReadonlyArray<SubagentRunView> => {
+    const targets = new Set(claim.selected);
+    return [...records.values()].flatMap((record) =>
+      !targets.has(record) &&
+      record.view.state === "waiting_for_parent" &&
+      record.view.question !== undefined &&
+      questionRecipientRunId(records, record.view.id) === callerRunId
+        ? [redactCompletionReport(withTreeMetadata(record.view))]
+        : [],
+    );
+  };
+
+  interface TerminalObservations {
+    readonly observations: ReadonlyArray<SubagentRunObservation>;
+    readonly questions: ReadonlyArray<SubagentRunView>;
+  }
+
   const waitForTerminalObservations = (
     claim: CompletionClaim,
     until: SubagentAwaitUntil,
+    callerRunId: string | undefined,
     onUpdate?: (
       runs: ReadonlyArray<SubagentRunView>,
       projection?: ReadonlyArray<SubagentRunView>,
     ) => void,
-  ): Effect.Effect<ReadonlyArray<SubagentRunObservation>, SubagentRuntimeClosedError> => {
+  ): Effect.Effect<TerminalObservations, SubagentRuntimeClosedError> => {
     const emitUpdate = (runs: ReadonlyArray<SubagentRunView>) =>
       Effect.sync(() =>
         invokeHostCallback(() => onUpdate?.(runs, currentProjection().runs), undefined),
       );
-    const waitLoop = (): Effect.Effect<
-      ReadonlyArray<SubagentRunObservation>,
-      SubagentRuntimeClosedError
-    > =>
+    const waitLoop = (): Effect.Effect<TerminalObservations, SubagentRuntimeClosedError> =>
       withLock(
         Effect.sync(() => {
           const observations = claim.selected.map((record) =>
@@ -256,18 +276,19 @@ export function completionObservationOperations(
           const terminalCount = runs.filter((run) =>
             isAssignmentFinishedRunState(run.state),
           ).length;
-          const parentActionRequired = runs.some(isParentActionRequiredRun);
+          const questions = questionsForCallerLocked(claim, callerRunId);
+          const parentActionRequired = runs.some(isParentActionRequiredRun) || questions.length > 0;
           const done =
             parentActionRequired ||
             (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
-          if (done) return { done: true as const, runs, observations };
+          if (done) return { done: true as const, runs, result: { observations, questions } };
           return { done: false as const, runs, revision: currentProjection().revision };
         }),
       ).pipe(
         Effect.tap(({ runs }) => emitUpdate(runs)),
         Effect.flatMap((step) =>
           step.done
-            ? Effect.succeed(step.observations)
+            ? Effect.succeed(step.result)
             : waitForRevision(step.revision).pipe(Effect.andThen(waitLoop())),
         ),
       );
@@ -279,15 +300,16 @@ export function completionObservationOperations(
     onUpdate,
     use,
     questionCoverage,
+    callerRunId,
   ) => {
     if (ids.length === 0)
       return Effect.fail(
         invalidRequest("run_ids_required", "Await requires at least one subagent run ID."),
       );
     return withCompletionClaims(ids, true, (claim) =>
-      waitForTerminalObservations(claim, until, onUpdate).pipe(
-        Effect.flatMap((observations) =>
-          use(observations).pipe(
+      waitForTerminalObservations(claim, until, callerRunId, onUpdate).pipe(
+        Effect.flatMap(({ observations, questions }) =>
+          use(observations, questions).pipe(
             Effect.flatMap((result) => {
               const covered = questionCoverage?.(result);
               return withLock(

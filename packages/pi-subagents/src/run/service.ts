@@ -161,8 +161,17 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
           projection?: ReadonlyArray<SubagentRunView>,
         ) => void)
       | undefined,
-    use: (observations: ReadonlyArray<SubagentRunObservation>) => Effect.Effect<A, E, R>,
+    /**
+     * Receives the target observations and any other run whose question reaches this caller,
+     * which ends the wait as well.
+     */
+    use: (
+      observations: ReadonlyArray<SubagentRunObservation>,
+      questions?: ReadonlyArray<SubagentRunView>,
+    ) => Effect.Effect<A, E, R>,
     questionCoverage?: (result: A) => ReadonlySet<string>,
+    /** The awaiting run, or undefined for the root session. */
+    callerRunId?: string,
   ) => Effect.Effect<A, SubagentError | E, R>;
   readonly list: Effect.Effect<ReadonlyArray<SubagentRunView>>;
   readonly status: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;

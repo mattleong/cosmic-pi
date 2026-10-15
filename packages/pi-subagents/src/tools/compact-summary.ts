@@ -26,7 +26,11 @@ import {
   requestedTargets,
   type SummaryArguments,
 } from "./compact-heading.ts";
-import { compactRunIssues, hasChangesToReview } from "./compact-run-issues.ts";
+import {
+  compactAttentionIssues,
+  compactRunIssues,
+  hasChangesToReview,
+} from "./compact-run-issues.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { summarizeStart } from "./compact-start-summary.ts";
 
@@ -104,6 +108,7 @@ function awaitIssues(
   issues: CompactIssue[],
   cards: readonly SubagentRunCard[],
   targets: readonly string[],
+  asking: readonly SubagentRunCard[],
 ): void {
   summary.counters = [awaitCounter(cards, targets.length, summary.subject)];
   if (cards.length < targets.length) {
@@ -124,7 +129,15 @@ function awaitIssues(
       detail:
         "Descendants are context only; this await summarizes requested targets. Inspect subagent_list or subagent_status for descendant state.",
     });
-  if (details.cancelled && details.timedOutSeconds !== undefined) {
+  if (details.cancelled && details.endedByUserInput) {
+    issues.push({
+      severity: "info",
+      code: "await-user-input",
+      message: "Stopped waiting to read your message; subagents keep running",
+      detail:
+        "Await ended for new user input; child runs were NOT stopped. Await the requested targets again when their results are needed.",
+    });
+  } else if (details.cancelled && details.timedOutSeconds !== undefined) {
     summary.outcome = "warning";
     issues.push({
       severity: "warning",
@@ -149,6 +162,7 @@ function awaitIssues(
   }
   if (
     details.attentionRequired &&
+    asking.length === 0 &&
     !cards.some(
       (card) =>
         card.question !== undefined ||
@@ -305,13 +319,20 @@ function summarizeDetails(
   omissionIssue(details, summary, issues);
   if (details.action === "models") return summarizeModels(details, summary, issues);
   const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
+  // An await also returns for a question from a run it did not target.
+  const asking =
+    details.action === "await" && targets
+      ? details.cards.filter((card) => !targets.includes(card.id) && card.question !== undefined)
+      : [];
   summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
   const requestedPause = details.action === "interrupt";
   if (summary.outcome === "success") summary.outcome = cardOutcome(details.action, cards);
-  if (details.action === "await") awaitIssues(details, summary, issues, cards, targets ?? []);
+  if (details.action === "await")
+    awaitIssues(details, summary, issues, cards, targets ?? [], asking);
   else runIssues(details, summary, issues, cards);
   const quietHistory = phase === "settled" && summary.outcome === "success" && issues.length === 0;
   issues.push(...compactRunIssues(cards, { quietHistory, requestedPause }));
+  issues.push(...compactAttentionIssues(asking));
   labelChangesToReview(summary, cards);
   const severity = compactIssueSeverity(issues);
   if (severity === "error") summary.outcome = "error";
