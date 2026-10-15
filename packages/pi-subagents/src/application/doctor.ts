@@ -195,7 +195,9 @@ const gitCheck: Effect.Effect<DoctorCheck> = gitInstallation.pipe(
         ),
   ),
   Effect.catch((error) =>
-    Effect.succeed(check("Git", "warning", `${error.message} ${error.detail ?? ""}`.trim())),
+    Effect.succeed(
+      check("Git", "warning", [error.message, ...(error.detail?.split("\n") ?? [])].join(" ")),
+    ),
   ),
 );
 
