@@ -44,6 +44,7 @@ import {
   type SubagentProjection,
   type SubagentRunView,
   type SubagentControlExpectation,
+  type SubagentUsage,
 } from "./model.ts";
 import { sortRuns } from "./projection.ts";
 import { closeRunsLeafFirst } from "./shutdown.ts";
@@ -51,7 +52,11 @@ import { projectRunTree } from "./tree.ts";
 import { allocateRuntimeNamespace, identityAllocators } from "./identity.ts";
 import { notificationRouter } from "./notification-routing.ts";
 import { parentDrainAwaiter } from "./parent-drain.ts";
-import { emptySessionUsageLedger, sessionUsageLocked } from "./session-usage.ts";
+import {
+  emptySessionUsageLedger,
+  sessionUsageLocked,
+  takeUnrecordedUsageLocked,
+} from "./session-usage.ts";
 import { sessionStartOperations } from "./session-starts.ts";
 import { subtreeStopper } from "./subtree-stop.ts";
 import { turnInputGates } from "./turn-input.ts";
@@ -71,6 +76,10 @@ export interface SubagentServiceOptions {
   readonly workspaceOwnerId?: string;
   readonly workspaceSourceCwd?: string;
   readonly publish?: (projection: SubagentProjection) => void;
+  /** Subagent usage that earlier runtimes recorded in this session. */
+  readonly restoredSessionUsage?: SubagentUsage | undefined;
+  /** Records usage in the session once a run's assignment settles, and at shutdown. */
+  readonly recordSessionUsage?: ((usage: SubagentUsage) => void) | undefined;
   readonly notify?: (
     notification: SubagentNotification,
   ) => SubagentNotificationDelivery | undefined | void;
@@ -220,7 +229,19 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
-  const sessionUsage = emptySessionUsageLedger();
+  const sessionUsage = emptySessionUsageLedger(options.restoredSessionUsage);
+  const recordSessionUsage = (includeActive: boolean) =>
+    Effect.sync(() =>
+      takeUnrecordedUsageLocked(sessionUsage, records.values(), includeActive),
+    ).pipe(
+      Effect.flatMap((usage) =>
+        Effect.forEach(
+          usage,
+          (settled) => Effect.try(() => options.recordSessionUsage?.(settled)).pipe(Effect.ignore),
+          { discard: true },
+        ),
+      ),
+    );
   const writerPools = new WriterPools();
   const frozenProjection = (revision: number): SubagentProjection =>
     Object.freeze({
@@ -253,6 +274,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 Effect.flatMap((projection) =>
                   Effect.try(() => options.publish?.(projection)).pipe(Effect.ignore),
                 ),
+                Effect.andThen(recordSessionUsage(false)),
               ),
         ),
       ),
@@ -493,6 +515,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ).pipe(
       Effect.andThen(questionnaires.invalidate),
       Effect.andThen(closeRunsLeafFirst({ records, withLock, cleanup })),
+      Effect.andThen(withLock(recordSessionUsage(true))),
       Effect.asVoid,
       Effect.ensuring(PubSub.shutdown(projectionRef.pubsub)),
     ),

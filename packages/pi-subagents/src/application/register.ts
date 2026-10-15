@@ -34,6 +34,7 @@ import { hostNotifier } from "../boundary/host-notifier.ts";
 import { registerParentWake } from "../boundary/host-parent-wake.ts";
 import { sessionReportArchive, type ReportArchive } from "../boundary/report-archive.ts";
 import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
+import { restoreSessionUsage, sessionUsageRecorder } from "../boundary/host-session-usage.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { subagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { SessionProfileOverrideSeed } from "../profiles/session-overrides.ts";
@@ -240,6 +241,10 @@ export function registerSubagentApplication(
           publish: (projection) => {
             if (ownsActivation()) bridge.publish(projection);
           },
+          restoredSessionUsage: restoreSessionUsage(activation.ctx),
+          // Not gated on activation authority: runs closed while this runtime is replaced still
+          // spent their usage in this session.
+          recordSessionUsage: sessionUsageRecorder(pi, activation.ctx),
           notify: (notification) =>
             ownsActivation() && currentActivation === activation
               ? notify(notification)

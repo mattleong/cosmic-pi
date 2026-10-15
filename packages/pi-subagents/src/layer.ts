@@ -52,6 +52,8 @@ export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   /** Root session starts sweep private state that crashed or killed sessions left behind. */
   readonly sweepPrivateState?: boolean | undefined;
   readonly publish: (projection: SubagentProjection) => void;
+  readonly restoredSessionUsage?: SubagentServiceOptions["restoredSessionUsage"];
+  readonly recordSessionUsage?: SubagentServiceOptions["recordSessionUsage"];
   readonly notify: SubagentNotifier;
   readonly proxyHandler: NonNullable<SubagentServiceOptions["proxyHandler"]>;
   readonly questionnaireHandler: NonNullable<SubagentServiceOptions["questionnaireHandler"]>;
@@ -81,6 +83,8 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         workspaceSourceCwd: options.cwd,
         ...(options.sessionKey && { workspaceOwnerId: options.sessionKey }),
         publish: options.publish,
+        restoredSessionUsage: options.restoredSessionUsage,
+        recordSessionUsage: options.recordSessionUsage,
         notify: options.notify,
         questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: inspection.config.writerWorkspaceMode,
