@@ -49,6 +49,8 @@ import {
 } from "./local-cli-driver.ts";
 
 const RPC_TIMEOUT = "10 seconds";
+// Bounds the threads one Codex process can account; later threads go uncounted, never recounted.
+const MAX_USAGE_THREADS = 64;
 
 interface PendingResponse {
   readonly method: CodexRequest["method"];
@@ -87,7 +89,8 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     { offer, release },
     () => assignmentEpoch,
   );
-  let cumulativeUsage: SubagentUsage = emptyUsage();
+  // Each thread reports only its own running total; native sub-agents run in their own threads.
+  const threadUsage = new Map<string, SubagentUsage>();
 
   const cancelPending = (error: SubagentError) => {
     for (const pending of responses.values())
@@ -103,23 +106,23 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   );
 
   const onUsage = (event: CodexUsage, raw: LocalCliWireEvent) => {
+    const known = threadUsage.get(event.threadId);
+    if (known === undefined && threadUsage.size >= MAX_USAGE_THREADS) return release(raw);
+    const previous = known ?? emptyUsage();
     const delta: SubagentUsage = {
-      input: Math.max(0, event.total.inputTokens - cumulativeUsage.input),
-      output: Math.max(0, event.total.outputTokens - cumulativeUsage.output),
-      cacheRead: Math.max(0, event.total.cachedInputTokens - cumulativeUsage.cacheRead),
-      cacheWrite: Math.max(
-        0,
-        (event.total.cacheWriteInputTokens ?? 0) - cumulativeUsage.cacheWrite,
-      ),
-      totalTokens: Math.max(0, event.total.totalTokens - cumulativeUsage.totalTokens),
+      input: Math.max(0, event.total.inputTokens - previous.input),
+      output: Math.max(0, event.total.outputTokens - previous.output),
+      cacheRead: Math.max(0, event.total.cachedInputTokens - previous.cacheRead),
+      cacheWrite: Math.max(0, (event.total.cacheWriteInputTokens ?? 0) - previous.cacheWrite),
+      totalTokens: Math.max(0, event.total.totalTokens - previous.totalTokens),
     };
-    cumulativeUsage = {
-      input: Math.max(cumulativeUsage.input, event.total.inputTokens),
-      output: Math.max(cumulativeUsage.output, event.total.outputTokens),
-      cacheRead: Math.max(cumulativeUsage.cacheRead, event.total.cachedInputTokens),
-      cacheWrite: Math.max(cumulativeUsage.cacheWrite, event.total.cacheWriteInputTokens ?? 0),
-      totalTokens: Math.max(cumulativeUsage.totalTokens, event.total.totalTokens),
-    };
+    threadUsage.set(event.threadId, {
+      input: Math.max(previous.input, event.total.inputTokens),
+      output: Math.max(previous.output, event.total.outputTokens),
+      cacheRead: Math.max(previous.cacheRead, event.total.cachedInputTokens),
+      cacheWrite: Math.max(previous.cacheWrite, event.total.cacheWriteInputTokens ?? 0),
+      totalTokens: Math.max(previous.totalTokens, event.total.totalTokens),
+    });
     return offer({ type: "assistant_message", assignmentEpoch, usage: delta }, raw);
   };
 
@@ -284,6 +287,8 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         if (event.type === "ignored") return release(raw);
         if (event.type === "warning")
           return offer({ type: "warning", message: event.message }, raw);
+        // Every thread in this private app-server belongs to the child, so all of it is spend.
+        if (event.type === "usage") return onUsage(event, raw);
         if (isForeignNotification(event)) return release(raw);
         switch (event.type) {
           case "turn_started":
@@ -301,8 +306,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               },
               raw,
             );
-          case "usage":
-            return onUsage(event, raw);
           case "item_started":
             return onItemStarted(event, raw);
           case "item_completed":

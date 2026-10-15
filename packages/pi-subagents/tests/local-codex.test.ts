@@ -140,37 +140,57 @@ it.effect("Codex completes when the reminded turn submits its report", () =>
   ),
 );
 
+// Codex reports each thread's own running total; native sub-agents run in threads of their own.
+const usageDeltas = (updates: ReadonlyArray<readonly [threadId: string, totalTokens: number]>) =>
+  Effect.gen(function* () {
+    const { backend, childEvents } = yield* startedCodex(() => Effect.succeed(true));
+    const deltas: number[] = [];
+    for (const [threadId, totalTokens] of updates) {
+      const usage = {
+        inputTokens: totalTokens,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens,
+      };
+      Queue.offerUnsafe(childEvents, {
+        type: "message",
+        value: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId,
+            turnId: threadId === "thread" ? "turn" : `${threadId}-turn`,
+            tokenUsage: { total: usage, last: usage },
+          },
+        },
+      });
+      const event = yield* Queue.take(backend.events);
+      if (event.type !== "assistant_message") return yield* Effect.die("Missing usage event");
+      deltas.push(event.usage.totalTokens);
+    }
+    return deltas;
+  });
+
 it.effect("Codex never recounts usage after a cumulative snapshot regresses", () =>
   Effect.scoped(
-    Effect.gen(function* () {
-      const { backend, childEvents } = yield* startedCodex(() => Effect.succeed(true));
-      const totals: number[] = [];
-      for (const totalTokens of [10, 5, 10, 15]) {
-        const usage = {
-          inputTokens: totalTokens,
-          cachedInputTokens: 0,
-          outputTokens: 0,
-          reasoningOutputTokens: 0,
-          totalTokens,
-        };
-        Queue.offerUnsafe(childEvents, {
-          type: "message",
-          value: {
-            method: "thread/tokenUsage/updated",
-            params: {
-              threadId: "thread",
-              turnId: "turn",
-              tokenUsage: { total: usage, last: usage },
-            },
-          },
-        });
-        const event = yield* Queue.take(backend.events);
-        if (event.type !== "assistant_message") return yield* Effect.die("Missing usage event");
-        totals.push(event.usage.totalTokens);
-      }
-      expect(totals).toEqual([10, 0, 0, 5]);
-      return undefined;
-    }),
+    usageDeltas([
+      ["thread", 10],
+      ["thread", 5],
+      ["thread", 10],
+      ["thread", 15],
+    ]).pipe(Effect.map((deltas) => expect(deltas).toEqual([10, 0, 0, 5]))),
+  ),
+);
+
+it.effect("Codex counts its native sub-agent threads alongside the main thread", () =>
+  Effect.scoped(
+    usageDeltas([
+      ["thread", 10],
+      ["sub-agent", 7],
+      ["thread", 15],
+      ["sub-agent", 9],
+      ["sub-agent", 4],
+    ]).pipe(Effect.map((deltas) => expect(deltas).toEqual([10, 7, 5, 2, 0]))),
   ),
 );
 
