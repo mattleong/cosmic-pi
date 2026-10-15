@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "@effect/vitest";
+import { vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as os from "node:os";
 import {
@@ -13,9 +14,10 @@ import { exists, temporaryDirectory, workspaceTests, writeFile } from "./fixture
 const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-git-home-")));
 await fs.mkdir(path.join(home, ".config", "git"), { recursive: true });
 await fs.writeFile(path.join(home, ".config", "git", "ignore"), "**/local-notes.md\n");
-process.env.HOME = home;
-process.env.GIT_CONFIG_GLOBAL = "/dev/null";
-delete process.env.XDG_CONFIG_HOME;
+const inherited = { ...process.env };
+vi.stubEnv("HOME", home);
+vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
+vi.stubEnv("XDG_CONFIG_HOME", undefined);
 afterAll(() => fs.rm(home, { recursive: true, force: true }));
 
 describe("Git installation", () => {
@@ -32,7 +34,7 @@ describe("Git installation", () => {
       const user = yield* temporaryDirectory("pi-git-user-");
       const config = path.join(user, "gitconfig");
       yield* writeFile(config, "[core]\n\texcludesFile = ~/custom-ignore\n");
-      const base = { PATH: process.env.PATH, HOME: user };
+      const base = { PATH: inherited.PATH, HOME: user };
       const configured = yield* resolveGitInstallation({ ...base, GIT_CONFIG_GLOBAL: config });
       expect(configured.excludesFile).toBe(path.join(user, "custom-ignore"));
       expect(gitVersionSupported(configured.version)).toBe(true);

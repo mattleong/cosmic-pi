@@ -156,7 +156,7 @@ const executeWorkspaceList = (
         nextOffset === undefined
           ? "End of workspace list."
           : `More workspaces: call list with offset=${nextOffset}.`,
-        "Metadata visibility does not authorize recovery. If ownership/cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan.",
+        "Metadata visibility does not authorize recovery. If ownership/cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan. When the user asks, discard deletes an orphan whose creating session has ended once no writer holds it.",
       ].join("\n"),
       {
         operation: "list",

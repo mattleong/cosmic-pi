@@ -50,6 +50,8 @@ export const WorkspaceRecordSchema = Schema.Struct({
   ]),
   baseline: Schema.String,
   predecessorWorkspaceId: Schema.optional(Schema.String),
+  /** Names the lease the creating session holds while it runs; a free lease proves it ended. */
+  ownerLease: Schema.optional(Schema.String),
   excludedPaths: Schema.optional(Schema.Array(Schema.String)),
   revision: Schema.optional(WorkspaceRevisionSchema),
   preparation: Schema.optional(WorkspacePreparationSchema),
@@ -91,6 +93,9 @@ export interface WorkspaceTarget {
 export interface WorkspaceSetupTarget extends WorkspaceTarget {
   /** Checks the prepared test tree instead of the worker tree. */
   readonly preparationId?: string | undefined;
+}
+export interface WorkspaceOrphanTarget {
+  readonly workspaceId: string;
 }
 export interface WorkspaceSettledTarget extends WorkspaceTarget {
   readonly processCleanupConfirmed: true;

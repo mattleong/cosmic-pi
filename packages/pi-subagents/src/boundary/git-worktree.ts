@@ -1,9 +1,12 @@
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import { CrossProcessLock } from "pi-cosmic-core";
+import * as Option from "effect/Option";
+import { CrossProcessLock, type CrossProcessLease } from "pi-cosmic-core";
 import type {
   WorkspaceAcquired,
   WorkspaceHandle,
   WorkspaceIntegrationTarget,
+  WorkspaceOrphanTarget,
   WorkspaceRecord,
   WorkspaceRevisionTarget,
   WorkspaceSettledTarget,
@@ -31,11 +34,19 @@ import {
   syncWorkspaceDirectory,
   validWorkspaceId,
   workspaceDirectory,
+  sourceLockNamespace,
+  withFreeLock,
   withWorkspaceStoreLock,
   workspaceLockDirectory,
 } from "./git-worktree-store.ts";
-import { listWorkspaceRecords, removeWorkspaceTrees } from "./git-worktree-recovery.ts";
+import {
+  collectWorkspaceRecords,
+  listWorkspaceRecords,
+  removeWorkspaceTrees,
+} from "./git-worktree-recovery.ts";
 import { publishWorkspace, requiredLeaseDirectories } from "./git-worktree-integration.ts";
+
+const ownerNamespace = (token: string) => `workspace-owner:${token}`;
 
 const treeOf = (repository: string, revision: string) =>
   git(repository, ["rev-parse", `${revision}^{tree}`]).pipe(Effect.flatMap(oid));
@@ -68,8 +79,10 @@ const revision = (record: WorkspaceRecord, id: string) => {
 
 // Symlinks are refused below the agent directory, not in the path that leads to it: ~/.pi is often
 // a symlink, and macOS reaches /tmp and /var through one.
-const resolveAgentDirectory = (agentDirectory: string) =>
-  Effect.promise(() => fs.realpath(agentDirectory).catch(() => path.resolve(agentDirectory)));
+export const workspaceRegistry = (agentDirectory: string) =>
+  Effect.promise(() => fs.realpath(agentDirectory).catch(() => path.resolve(agentDirectory))).pipe(
+    Effect.map((root) => path.join(root, "git-workspaces")),
+  );
 
 const ATTRIBUTE_OVERRIDES =
   "* !text !eol !crlf !filter !ident !working-tree-encoding !diff !merge\n";
@@ -87,14 +100,36 @@ const neutralizeAttributes = (repository: string) =>
     );
   });
 
-export const gitWorkspaceEngine = (agentDirectory: string) =>
+/** The engine for `registry` (see workspaceRegistry); CrossProcessLock must use its lock directory. */
+export const gitWorkspaceEngine = (registry: string) =>
   Effect.gen(function* () {
-    const registry = path.join(yield* resolveAgentDirectory(agentDirectory), "git-workspaces");
     const lockDirectory = workspaceLockDirectory(registry);
-    const locks = yield* CrossProcessLock.use((lock) => Effect.succeed(lock)).pipe(
-      Effect.provide(CrossProcessLock.layer({ directory: lockDirectory })),
-    );
+    const locks = yield* CrossProcessLock;
     const owned = new Set<string>();
+    // Held from this engine's first workspace until its scope closes, so another session can
+    // prove this one ended before discarding a workspace it left behind.
+    let presence: { readonly token: string; readonly lease: CrossProcessLease } | undefined;
+    yield* Effect.addFinalizer(() =>
+      Effect.try({
+        try: () => presence?.lease.release(),
+        catch: () => workspaceFailure("lock", "The workspace owner lease couldn't be released."),
+      }).pipe(Effect.ignore),
+    );
+    const ownerPresence = Effect.gen(function* () {
+      if (presence) return presence.token;
+      const token = yield* newWorkspaceId;
+      const lease = yield* locks
+        .tryAcquire(ownerNamespace(token))
+        .pipe(
+          Effect.mapError(() =>
+            workspaceFailure("lock", "The workspace owner lease couldn't be acquired."),
+          ),
+        );
+      if (!lease)
+        return yield* workspaceFailure("lock", "The workspace owner lease is already held.");
+      presence = { token, lease };
+      return token;
+    });
     const directory = (record: WorkspaceRecord) =>
       workspaceDirectory(registry, record.handle.workspaceId);
     const repository = (record: WorkspaceRecord) => path.join(directory(record), "repo.git");
@@ -121,17 +156,9 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
           scanNewContent,
         });
       });
-    const checked = (target: WorkspaceTarget, requireLiveOwner = true) =>
+    const managedRecord = (workspaceId: string) =>
       Effect.gen(function* () {
-        const record = yield* readWorkspaceRecord(registry, target.workspaceId);
-        if (
-          record.handle.ownerId !== target.ownerId ||
-          (requireLiveOwner && !owned.has(target.workspaceId))
-        )
-          return yield* workspaceFailure(
-            "authorization",
-            "Workspace is not owned by this parent and live session.",
-          );
+        const record = yield* readWorkspaceRecord(registry, workspaceId);
         const relative = subdirectory(record);
         if (
           relative.startsWith("..") ||
@@ -144,11 +171,24 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
           );
         return record;
       });
+    const checked = (target: WorkspaceTarget, requireLiveOwner = true) =>
+      Effect.gen(function* () {
+        const record = yield* managedRecord(target.workspaceId);
+        if (
+          record.handle.ownerId !== target.ownerId ||
+          (requireLiveOwner && !owned.has(target.workspaceId))
+        )
+          return yield* workspaceFailure(
+            "authorization",
+            "Workspace is not owned by this parent and live session.",
+          );
+        return record;
+      });
     const lockedSource = <A, E, R>(sourceRoot: string, effect: Effect.Effect<A, E, R>) =>
       withWorkspaceStoreLock(locks, lockDirectory, sourceRoot, effect);
     // The source root never changes for a record, so reading it before the lock is safe; the
     // operation itself rereads the record under the lock.
-    const locked = <A, E, R>(effect: Effect.Effect<A, E, R>, target: WorkspaceTarget) =>
+    const locked = <A, E, R>(effect: Effect.Effect<A, E, R>, target: WorkspaceOrphanTarget) =>
       readWorkspaceRecord(registry, target.workspaceId).pipe(
         Effect.flatMap((record) => lockedSource(record.handle.sourceRoot, effect)),
       );
@@ -182,6 +222,7 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
           status: "creating",
           baseline: "",
           predecessorWorkspaceId: predecessor?.handle.workspaceId,
+          ownerLease: yield* ownerPresence,
         };
         yield* Effect.gen(function* () {
           yield* workspaceIO("create", () => fs.mkdir(dir, { mode: 0o700 }));
@@ -469,6 +510,7 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
         handle: record.handle,
         baseline: record.baseline,
         predecessorWorkspaceId: record.predecessorWorkspaceId,
+        ownerLease: record.ownerLease,
         excludedPaths: record.excludedPaths,
         status: "active",
       };
@@ -511,6 +553,52 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
         return undefined;
       });
     const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target), target);
+    // An orphan's creating session has ended (its owner lease is free); the caller separately
+    // proves no writer still holds the worker tree.
+    const discardOrphan = Effect.fn("GitWorkspaceEngine.discardOrphan")(function* (
+      target: WorkspaceOrphanTarget,
+    ) {
+      if (owned.has(target.workspaceId))
+        return yield* workspaceFailure(
+          "authorization",
+          "This session owns the workspace; discard it as its parent.",
+        );
+      const record = yield* managedRecord(target.workspaceId);
+      if (record.ownerLease === undefined)
+        return yield* workspaceFailure(
+          "authorization",
+          "The workspace has no owner evidence, so its session can't be shown to have ended.",
+        );
+      if (record.status === "integrating")
+        return yield* workspaceFailure(
+          "discard",
+          "Partial publication backups require manual recovery before discard.",
+        );
+      const discarded = yield* withFreeLock(
+        locks,
+        lockDirectory,
+        ownerNamespace(record.ownerLease),
+        Effect.gen(function* () {
+          yield* removeWorkspaceTrees(registry, record);
+          yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
+        }),
+      );
+      if (Option.isNone(discarded))
+        return yield* workspaceFailure(
+          "authorization",
+          "The session that created this workspace is still running.",
+        );
+      return undefined;
+    }, locked);
+    const collectGarbage = Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      return yield* collectWorkspaceRecords(registry, {
+        now,
+        owned: (workspaceId) => owned.has(workspaceId),
+        whenSourceFree: (sourceRoot, effect) =>
+          withFreeLock(locks, lockDirectory, sourceLockNamespace(sourceRoot), effect),
+      });
+    });
     // A setup command may only add ignored or excluded files such as dependencies; anything else
     // would enter the worker's proposal or invalidate the prepared tree.
     const setupChanges = Effect.fn("GitWorkspaceEngine.setupChanges")(function* (
@@ -567,6 +655,8 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
       revise,
       fork,
       discard,
+      discardOrphan,
+      collectGarbage,
       setupChanges,
       inspect,
       list,

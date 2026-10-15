@@ -2,8 +2,9 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
-import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
-import { gitWorkspaceEngine } from "../boundary/git-worktree.ts";
+import { CrossProcessLock, nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
+import { gitWorkspaceEngine, workspaceRegistry } from "../boundary/git-worktree.ts";
+import { workspaceLockDirectory } from "../boundary/git-worktree-store.ts";
 import type {
   WorkspaceAcquired,
   WorkspaceError,
@@ -11,6 +12,7 @@ import type {
   WorkspaceIntegration,
   WorkspaceIntegrationTarget,
   WorkspaceListing,
+  WorkspaceOrphanTarget,
   WorkspacePreparation,
   WorkspaceRecord,
   WorkspaceRevision,
@@ -42,6 +44,8 @@ export interface WorkspaceServiceContract {
     target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
   ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
+  /** Discards a workspace whose creating session provably ended; the caller proves its writer stopped. */
+  readonly discardOrphan: (target: WorkspaceOrphanTarget) => Effect.Effect<void, WorkspaceError>;
   /** Paths a setup command changed relative to the tree it ran in. */
   readonly setupChanges: (
     target: WorkspaceSetupTarget,
@@ -59,14 +63,35 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
   static readonly layer = (options: {
     readonly agentDirectory: string;
   }): Layer.Layer<WorkspaceService, WorkspaceError> =>
+    Layer.unwrap(
+      workspaceRegistry(options.agentDirectory).pipe(
+        Effect.map((registry) =>
+          WorkspaceService.layerAt(registry).pipe(
+            Layer.provide(CrossProcessLock.layer({ directory: workspaceLockDirectory(registry) })),
+          ),
+        ),
+      ),
+    ).pipe(Layer.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));
+
+  private static readonly layerAt = (registry: string) =>
     Layer.effect(
       WorkspaceService,
       Effect.gen(function* () {
-        const engine = yield* gitWorkspaceEngine(options.agentDirectory);
+        const engine = yield* gitWorkspaceEngine(registry);
         const lock = yield* Semaphore.make(1);
         const safe = yield* SafeFile;
         const run = <A, E>(effect: Effect.Effect<A, E, SafeFile>) =>
           lock.withPermits(1)(effect.pipe(Effect.provideService(SafeFile, safe)));
+        // Collection holds the service's permit, so the first operation sees its result.
+        yield* lock.take(1);
+        yield* engine.collectGarbage.pipe(
+          Effect.provideService(SafeFile, safe),
+          Effect.catch((error) =>
+            Effect.logWarning(`Workspace records were not collected: ${error.message}`),
+          ),
+          Effect.ensuring(lock.release(1)),
+          Effect.forkScoped,
+        );
         return WorkspaceService.of({
           create: (input) => run(engine.create(input)),
           freeze: (input) => run(engine.freeze(input)),
@@ -75,11 +100,12 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           revise: (input) => run(engine.revise(input)),
           fork: (input) => run(engine.fork(input)),
           discard: (input) => run(engine.discard(input)),
+          discardOrphan: (input) => run(engine.discardOrphan(input)),
           setupChanges: (input) => run(engine.setupChanges(input)),
           inspect: (input) => run(engine.inspect(input)),
           list: (input) => run(engine.list(input)),
           listAll: run(engine.listAll),
         });
       }),
-    ).pipe(Layer.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));
+    );
 }

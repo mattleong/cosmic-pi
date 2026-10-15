@@ -92,7 +92,7 @@ A completed writer report does not approve its changes. Its direct parent follow
 3. Run relevant tests in that combined cwd. Do not edit the prepared tree. Worker-only tests do not replace this combined test pass.
 4. After review and passing tests, call `integrate` with the exact `workspaceId`, `revisionId`, and `preparationId`. It applies the proposal as uncommitted edits, preserving the parent index and local work. It does not merge a branch, stage, or commit.
 
-For rejected changes, `revise` takes a workspace ID and concrete feedback in `message` and starts a successor writer; await that run and review again. `list` pages workspace metadata with optional `offset`.
+For rejected changes, `revise` takes a workspace ID and concrete feedback in `message` and starts a successor writer; await that run and review again. `list` pages workspace metadata with optional `offset`. The root may also `discard` an orphaned workspace once the session that created it has ended and no writer holds its worker tree.
 
 A snapshot refusal names the file, the rule that fired, and a remedy in its detail. Tracked files are copied whatever their names, including committed test fixtures that contain credential-like strings; dependency and build directories stay out even when tracked, and untracked files with credential-shaped names are never copied. Only content the source index doesn't already hold is scanned for credential patterns, so staging a deliberate fixture lets the snapshot proceed.
 

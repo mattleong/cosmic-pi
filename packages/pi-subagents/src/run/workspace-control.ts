@@ -18,6 +18,7 @@ import {
   type WorkspaceIntegrationOutcome,
 } from "./workspace-integration.ts";
 import { workspaceLaunchOperations } from "./workspace-launch.ts";
+import { workspaceOrphanOperations } from "./workspace-orphan.ts";
 import {
   workspaceReviewOperations,
   type WorkspaceReview,
@@ -135,7 +136,7 @@ export function workspaceControl(dependencies: WorkspaceControlDependencies) {
       if (pending)
         return {
           code: "unresolved-workspace",
-          reason: `Unresolved workspace ${pending.handle.workspaceId} remains at ${pending.handle.cwd}. Inspect subagent_workspace list. If its original coordinator is unavailable, preserve the directory, independently confirm every old writer process is stopped, and recover its diff manually; this session cannot attest cleanup or delete it.`,
+          reason: `Unresolved workspace ${pending.handle.workspaceId} remains at ${pending.handle.cwd}. Inspect subagent_workspace list. If the session that created it has ended, recover anything you need from its directory, then subagent_workspace discard deletes it once no writer holds it. Otherwise preserve the directory until that session integrates or discards it.`,
         };
       return undefined;
     });
@@ -205,9 +206,22 @@ export function workspaceControl(dependencies: WorkspaceControlDependencies) {
         Effect.sync(() => ({ ...listing, records: listing.records.map(currentRecord) })),
       );
     });
+  const review = workspaceReviewOperations(context);
+  const discardOrphan = workspaceOrphanOperations(context, sourceRecords);
+  // The root may discard a workspace no live binding owns once its creating session has ended.
+  const workspaceDiscard: WorkspaceCoordinatorContract["workspaceDiscard"] = (
+    workspaceId,
+    caller = SUBAGENT_ROOT_RUN_ID,
+  ) =>
+    Effect.suspend(() =>
+      caller === SUBAGENT_ROOT_RUN_ID && !state.bindings.has(workspaceId)
+        ? discardOrphan(workspaceId)
+        : review.workspaceDiscard(workspaceId, caller),
+    );
   return {
     ...workspaceLaunchOperations(context),
-    ...workspaceReviewOperations(context),
+    ...review,
+    workspaceDiscard,
     workspaceIntegrate: workspaceIntegrationOperations(context),
     workspaceList,
     inspectWriterWorkspace,

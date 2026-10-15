@@ -170,6 +170,19 @@ const releaseLease = (lease: CrossProcessLease) =>
     ),
   );
 
+/** Runs `effect` under a lease on `namespace` when it is free, without waiting. */
+export const withFreeLock = <A, E, R>(
+  locks: CrossProcessLockContract,
+  directory: string,
+  namespace: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<Option.Option<A>, E | WorkspaceError, R> =>
+  Effect.acquireUseRelease(
+    locks.tryAcquire(namespace).pipe(Effect.mapError((error) => lockFailure(error, directory))),
+    (lease) => (lease ? Effect.asSome(effect) : Effect.succeed(Option.none<A>())),
+    (lease) => (lease ? releaseLease(lease) : Effect.void),
+  );
+
 /**
  * Serializes workspace operations on one source checkout across every Pi process sharing the
  * agent directory, waiting interruptibly for another session's operation to finish.
@@ -182,12 +195,11 @@ export const withWorkspaceStoreLock = <A, E, R>(
 ): Effect.Effect<A, E | WorkspaceError, R> =>
   Effect.gen(function* () {
     const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(WORKSPACE_LOCK_WAIT);
-    const attempt: Effect.Effect<A, E | WorkspaceError, R> = Effect.acquireUseRelease(
-      locks
-        .tryAcquire(sourceLockNamespace(sourceRoot))
-        .pipe(Effect.mapError((error) => lockFailure(error, directory))),
-      (lease) => (lease ? effect.pipe(Effect.map(Option.some)) : Effect.succeed(Option.none<A>())),
-      (lease) => (lease ? releaseLease(lease) : Effect.void),
+    const attempt: Effect.Effect<A, E | WorkspaceError, R> = withFreeLock(
+      locks,
+      directory,
+      sourceLockNamespace(sourceRoot),
+      effect,
     ).pipe(
       Effect.flatMap((result) =>
         Option.isSome(result)

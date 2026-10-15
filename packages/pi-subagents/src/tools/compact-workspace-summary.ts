@@ -124,7 +124,7 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
       step(
         "orphan-recovery",
         "Listing a workspace does not authorize its recovery",
-        "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan.",
+        "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan. When the user asks, discard deletes an orphan whose creating session has ended once no writer holds it.",
       ),
     );
   if (details.nextOffset !== undefined)

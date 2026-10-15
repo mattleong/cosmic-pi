@@ -90,7 +90,9 @@ it.effect("stops waiting when interrupted", () =>
 const exitedProcessId = Effect.gen(function* () {
   const child = nodeSpawn("/usr/bin/true", [], { stdio: "ignore" });
   const pid = child.pid ?? 0;
-  yield* Effect.promise(() => new Promise((resolve) => child.once("exit", resolve)));
+  yield* Effect.callback<void>((resume) => {
+    child.once("exit", () => resume(Effect.void));
+  });
   yield* waitForDead(pid);
   return pid;
 });

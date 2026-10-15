@@ -1,5 +1,12 @@
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import type { UnavailableWorkspaceArtifact, WorkspaceRecord } from "../workspace/model.ts";
+import * as Option from "effect/Option";
+import type { SafeFile } from "pi-cosmic-core";
+import type {
+  UnavailableWorkspaceArtifact,
+  WorkspaceError,
+  WorkspaceRecord,
+} from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   checkDirectory,
@@ -9,7 +16,12 @@ import {
   workspaceIO,
   workspaceIOIfPresent,
 } from "./git-worktree-process.ts";
-import { readWorkspaceRecord, validWorkspaceId, workspaceDirectory } from "./git-worktree-store.ts";
+import {
+  readWorkspaceRecord,
+  syncWorkspaceDirectory,
+  validWorkspaceId,
+  workspaceDirectory,
+} from "./git-worktree-store.ts";
 
 // Line-based porcelain works with Git before 2.36; workspace paths never contain a newline.
 const registrations = (repository: string) =>
@@ -116,4 +128,91 @@ export const listWorkspaceRecords = (registry: string) =>
     if (!after || before.dev !== after.dev || before.ino !== after.ino)
       return yield* workspaceFailure("registry", "Workspace registry changed during listing.");
     return { records, unavailable };
+  });
+
+/** Discarded and integrated records stay this long for inspection, like delivered reports. */
+export const WORKSPACE_RECORD_RETENTION = Duration.days(7);
+
+const COLLECTED_PREFIX = ".collected-";
+
+const finished = (record: WorkspaceRecord) =>
+  record.status === "discarded" || record.status === "integrated";
+
+const editableTree = (name: string) =>
+  name === "worker" || name === "seed" || name.startsWith("prepare-");
+
+// Renaming first keeps a half-removed directory out of every listing.
+const removeCollected = (registry: string, workspaceId: string) =>
+  Effect.gen(function* () {
+    const retired = path.join(registry, `${COLLECTED_PREFIX}${workspaceId}`);
+    yield* Effect.gen(function* () {
+      yield* workspaceIO("collect", () =>
+        fs.rename(workspaceDirectory(registry, workspaceId), retired),
+      );
+      yield* syncWorkspaceDirectory(registry);
+    }).pipe(Effect.uninterruptible);
+    yield* workspaceIO("collect", () => fs.rm(retired, { recursive: true, force: true }));
+  });
+
+const collectRecord = (registry: string, workspaceId: string, now: number) =>
+  Effect.gen(function* () {
+    const record = yield* readWorkspaceRecord(registry, workspaceId);
+    if (!finished(record)) return false;
+    const directory = workspaceDirectory(registry, workspaceId);
+    yield* checkDirectory(directory);
+    const saved = yield* workspaceIO("collect", () => fs.stat(path.join(directory, "record.json")));
+    if (now - saved.mtimeMs < Duration.toMillis(WORKSPACE_RECORD_RETENTION)) return false;
+    const names = yield* workspaceIO("collect", () => fs.readdir(directory));
+    if (names.some(editableTree)) return false;
+    yield* removeCollected(registry, workspaceId);
+    return true;
+  });
+
+export interface WorkspaceCollection {
+  readonly now: number;
+  /** Records this session still owns are never collected. */
+  readonly owned: (workspaceId: string) => boolean;
+  /** Runs under the source checkout's lock, or returns none while another session holds it. */
+  readonly whenSourceFree: (
+    sourceRoot: string,
+    effect: Effect.Effect<boolean, WorkspaceError, SafeFile>,
+  ) => Effect.Effect<Option.Option<boolean>, WorkspaceError, SafeFile>;
+}
+
+/**
+ * Deletes discarded and integrated records once they are a week old, unless an editable tree
+ * remains (such as a worker kept for files integration left out) or a later fork still names
+ * the record as its predecessor. Unreadable artifacts are never touched.
+ */
+export const collectWorkspaceRecords = (registry: string, collection: WorkspaceCollection) =>
+  Effect.gen(function* () {
+    const { records } = yield* listWorkspaceRecords(registry);
+    const referenced = new Set(records.flatMap((record) => record.predecessorWorkspaceId ?? []));
+    const collected: string[] = [];
+    for (const record of records) {
+      const workspaceId = record.handle.workspaceId;
+      if (!finished(record) || referenced.has(workspaceId) || collection.owned(workspaceId))
+        continue;
+      const removed = yield* collection
+        .whenSourceFree(
+          record.handle.sourceRoot,
+          collectRecord(registry, workspaceId, collection.now),
+        )
+        .pipe(
+          Effect.catchTag("WorkspaceError", (error) =>
+            Effect.logWarning(`Workspace record was not collected: ${error.message}`).pipe(
+              Effect.annotateLogs("workspaceId", workspaceId),
+              Effect.as(Option.none<boolean>()),
+            ),
+          ),
+        );
+      if (Option.getOrElse(removed, () => false)) collected.push(workspaceId);
+    }
+    const names = yield* workspaceIOIfPresent("collect", () => fs.readdir(registry));
+    for (const name of names ?? [])
+      if (name.startsWith(COLLECTED_PREFIX))
+        yield* workspaceIO("collect", () =>
+          fs.rm(path.join(registry, name), { recursive: true, force: true }),
+        );
+    return collected;
   });

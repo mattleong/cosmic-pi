@@ -217,7 +217,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.workspace]: {
     label: "Manage Writer Workspace",
     description:
-      "Review and integrate worktree writers' proposals as their direct parent. review freezes a finished writer's changes and returns the diff in pages; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. integrate applies the exact revisionId and preparationId as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. revise asks the writer for another pass; discard deletes a rejected proposal.",
+      "Review and integrate worktree writers' proposals as their direct parent. review freezes a finished writer's changes and returns the diff in pages; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. integrate applies the exact revisionId and preparationId as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. revise asks the writer for another pass; discard deletes a rejected proposal, or an orphaned workspace whose session has ended.",
     promptSnippet: "Review, test, and integrate worktree writers' proposals",
     promptGuidelines: [
       "A worktree writer's report is a proposal, not approval. Review every diff page of its revision, prepare it, and run the relevant tests in the prepared cwd without editing it; then integrate that exact revisionId and preparationId without asking first. Don't stage or commit parent changes.",

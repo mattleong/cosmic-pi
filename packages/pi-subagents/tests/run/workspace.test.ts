@@ -111,6 +111,7 @@ type GatedOperation = "freeze" | "prepare" | "discard";
 
 interface EngineHooks {
   afterCreate: Effect.Effect<void>;
+  orphanOwnerEnded?: boolean;
   createFailure?: WorkspaceError;
   before: { [Operation in GatedOperation]?: Effect.Effect<void> | undefined };
   failDiscard: boolean;
@@ -250,6 +251,19 @@ function fixture({
           }),
         ),
       ),
+    discardOrphan: ({ workspaceId }) =>
+      Effect.suspend(() => {
+        const entry = entries.get(workspaceId);
+        if (!entry || !hooks.orphanOwnerEnded)
+          return Effect.fail(
+            new WorkspaceError({
+              operation: "authorization",
+              message: "The session that created this workspace is still running.",
+            }),
+          );
+        entries.set(workspaceId, { ...entry, status: "discarded" });
+        return Effect.void;
+      }),
     discard: (target) =>
       gated("discard", requireEntry(target)).pipe(
         Effect.flatMap((entry) =>
@@ -359,9 +373,39 @@ describe("writer workspace orchestration", () => {
       expect(yield* service.workspaceDiscard("orphan").pipe(Effect.flip)).toMatchObject({
         code: "workspace_owner_unavailable",
       });
+      expect(f.entries.get("orphan")?.status).toBe("active");
+      expect(yield* service.workspaceDiscard("unrelated").pipe(Effect.flip)).toMatchObject({
+        code: "workspace_owner_unavailable",
+      });
       f.entries.set("orphan", { ...f.entries.get("orphan")!, status: "discarded" });
       expect((yield* service.inspectWriterWorkspace).blockedCode).toBeUndefined();
-      expect(f.acquired).toEqual([]);
+      expect(f.released).toEqual(f.acquired);
+    });
+  });
+
+  it.effect("discards an orphan of an ended session while holding its writer lease", () => {
+    const f = fixture();
+    f.hooks.orphanOwnerEnded = true;
+    f.entries.set("orphan", record("orphan", "old-session/root", "/repo", "frozen"));
+    return withService(f.layer, function* (service) {
+      expect((yield* service.inspectWriterWorkspace).blockedCode).toBe("unresolved-workspace");
+      yield* service.workspaceDiscard("orphan");
+      expect(f.entries.get("orphan")?.status).toBe("discarded");
+      expect(f.acquired).toEqual(["/private/orphan"]);
+      expect(f.released).toEqual(["/private/orphan"]);
+      expect((yield* service.inspectWriterWorkspace).blockedCode).toBeUndefined();
+    });
+  });
+
+  it.effect("keeps an orphan while a writer still holds its worker tree", () => {
+    const f = fixture({ writerLeases: fakeWriterLeaseLayer({ failAcquire: true }) });
+    f.hooks.orphanOwnerEnded = true;
+    f.entries.set("orphan", record("orphan", "old-session/root", "/repo", "active"));
+    return withService(f.layer, function* (service) {
+      expect(yield* service.workspaceDiscard("orphan").pipe(Effect.flip)).toMatchObject({
+        code: "workspace_process_unsettled",
+      });
+      expect(f.entries.get("orphan")?.status).toBe("active");
     });
   });
 
