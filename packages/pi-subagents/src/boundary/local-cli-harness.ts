@@ -22,6 +22,7 @@ import {
   readValidatedCodexAuth,
   removePrivateDirectory,
   safeAgentDirectory,
+  tomlString,
   writeExclusive,
 } from "./harness-shared.ts";
 import {
@@ -80,6 +81,8 @@ export interface LocalCliHarness {
   readonly executable: string;
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
+  /** The child's private temp directory inside the harness, removed with it. */
+  readonly temporaryDirectory?: string | undefined;
 }
 
 export class LocalCliHarnessError extends Schema.TaggedError<LocalCliHarnessError>()(
@@ -149,7 +152,18 @@ const CODEX_DISABLED_FEATURES =
     " ",
   );
 
-const codexBaseConfig = (openaiFastMode = false): ReadonlyArray<string> => [
+const CODEX_TEMPORARY_DIRECTORY = "tmp";
+
+const temporaryEnvironment = (directory: string): NodeJS.ProcessEnv => ({
+  TMPDIR: directory,
+  TMP: directory,
+  TEMP: directory,
+});
+
+const codexBaseConfig = (
+  openaiFastMode = false,
+  temporaryDirectory?: string,
+): ReadonlyArray<string> => [
   'approval_policy = "never"',
   'web_search = "disabled"',
   "[analytics]",
@@ -157,6 +171,10 @@ const codexBaseConfig = (openaiFastMode = false): ReadonlyArray<string> => [
   "[shell_environment_policy]",
   'inherit = "core"',
   'exclude = ["OPENAI_API_KEY", "CODEX_HOME", "PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PI_SUBAGENT_RUN_ID"]',
+  // zsh writes here-documents under TMPPREFIX, which defaults to /tmp, rather than TMPDIR.
+  ...(temporaryDirectory === undefined
+    ? []
+    : [`set = { TMPPREFIX = ${tomlString(nodePath.join(temporaryDirectory, "zsh"))} }`]),
   "[agents]",
   "enabled = true",
   "[features]",
@@ -167,8 +185,29 @@ const codexBaseConfig = (openaiFastMode = false): ReadonlyArray<string> => [
   "hooks = false",
 ];
 
-const codexConfig = (supervisor: SupervisorConnectionMetadata, openaiFastMode: boolean): string =>
-  [...codexBaseConfig(openaiFastMode), supervisor.codexMcp.tomlFragment, ""].join("\n");
+/**
+ * Every turn sends its own sandbox policy; this gives the thread's configured workspace-write
+ * default the same temp-directory rule.
+ */
+const codexWorkspaceWriteConfig = (temporaryDirectory: string): ReadonlyArray<string> => [
+  "[sandbox_workspace_write]",
+  `writable_roots = [${tomlString(temporaryDirectory)}]`,
+  "network_access = false",
+  "exclude_tmpdir_env_var = true",
+  "exclude_slash_tmp = true",
+];
+
+const codexConfig = (
+  supervisor: SupervisorConnectionMetadata,
+  openaiFastMode: boolean,
+  temporaryDirectory: string,
+): string =>
+  [
+    ...codexBaseConfig(openaiFastMode, temporaryDirectory),
+    ...codexWorkspaceWriteConfig(temporaryDirectory),
+    supervisor.codexMcp.tomlFragment,
+    "",
+  ].join("\n");
 
 const codexCatalogConfig = (): string => [...codexBaseConfig(), ""].join("\n");
 
@@ -260,16 +299,24 @@ const buildLocalCliHarness = (
         }));
     }
 
-    return prepareCodexHome(
-      directory,
-      codexConfig(request.supervisor, request.launch.openaiFastMode),
-      sourceEnvironment,
-    ).then((codexHome) => ({
-      directory,
-      executable,
-      args: codexArgv(),
-      env: { ...env, CODEX_HOME: codexHome },
-    }));
+    // Codex writers may not write the shared /tmp or $TMPDIR; this is their private temp space.
+    const temporaryDirectory = nodePath.join(directory, CODEX_TEMPORARY_DIRECTORY);
+    return fs
+      .mkdir(temporaryDirectory, { mode: 0o700 })
+      .then(() =>
+        prepareCodexHome(
+          directory,
+          codexConfig(request.supervisor, request.launch.openaiFastMode, temporaryDirectory),
+          sourceEnvironment,
+        ),
+      )
+      .then((codexHome) => ({
+        directory,
+        executable,
+        args: codexArgv(),
+        env: { ...env, ...temporaryEnvironment(temporaryDirectory), CODEX_HOME: codexHome },
+        temporaryDirectory,
+      }));
   });
 
 export const prepareLocalCliHarness = (

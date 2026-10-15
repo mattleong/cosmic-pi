@@ -56,6 +56,8 @@ export interface LocalCliPreflightRequest {
 
 export interface LocalCliProcessHandle extends LocalCliHandle {
   readonly claudeDebug?: LocalClaudeDebugRecorder | undefined;
+  /** The child's private temp directory, removed with its harness after the process exits. */
+  readonly temporaryDirectory?: string | undefined;
 }
 
 export interface LocalCliProcessContract {
@@ -275,7 +277,14 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
     cwd: request.launch.cwd,
     writer: request.launch.writeIntent === "writer",
   });
-  return claudeDebug ? { ...transport, claudeDebug } : transport;
+  const handle: LocalCliProcessHandle = {
+    ...transport,
+    ...(claudeDebug && { claudeDebug }),
+    ...(harness.temporaryDirectory !== undefined && {
+      temporaryDirectory: harness.temporaryDirectory,
+    }),
+  };
+  return handle;
 });
 
 export const makeLocalCliProcess = (options: LocalCliHarnessOptions): LocalCliProcessContract => {

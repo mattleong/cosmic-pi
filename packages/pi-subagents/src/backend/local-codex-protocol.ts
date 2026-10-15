@@ -369,13 +369,33 @@ export const threadStartRequest = (
 
 const input = (text: string) => [{ type: "text", text, text_elements: [] }] as const;
 
+/**
+ * Writers may write their cwd and their private temp directory, never the shared `/tmp` or
+ * `$TMPDIR`; read-only children write nothing.
+ */
+export const codexSandboxPolicy = (
+  writeIntent: "read-only" | "writer",
+  temporaryDirectory: string | undefined,
+) =>
+  writeIntent === "writer"
+    ? ({
+        type: "workspaceWrite",
+        writableRoots: temporaryDirectory === undefined ? [] : [temporaryDirectory],
+        networkAccess: false,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      } as const)
+    : ({ type: "readOnly", networkAccess: false } as const);
+
+export type CodexSandboxPolicy = ReturnType<typeof codexSandboxPolicy>;
+
 export const turnStartRequest = (
   id: string,
   threadId: string,
   text: string,
   model: string,
   effort: string,
-  writeIntent: "read-only" | "writer",
+  sandboxPolicy: CodexSandboxPolicy,
   openaiFastMode: boolean,
 ) => ({
   id,
@@ -388,10 +408,7 @@ export const turnStartRequest = (
     effort,
     model,
     multiAgentMode: "explicitRequestOnly" as const,
-    sandboxPolicy:
-      writeIntent === "writer"
-        ? ({ type: "workspaceWrite", writableRoots: [], networkAccess: false } as const)
-        : ({ type: "readOnly", networkAccess: false } as const),
+    sandboxPolicy,
     ...(openaiFastMode && ({ serviceTier: FAST_SERVICE_TIER } as const)),
   },
 });

@@ -10,6 +10,7 @@ import * as Ref from "effect/Ref";
 import { deferredPromise, temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
 import {
   prepareLocalCliHarness,
+  removeLocalCliHarness,
   sanitizeLocalCliEnvironment,
 } from "../src/boundary/local-cli-harness.ts";
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
@@ -39,6 +40,27 @@ const supervisor = (directory: string) =>
     connectionConfigPath: nodePath.join(directory, "supervisor", "connection.json"),
     args: ["/private/helper.mjs", "--config", "/private/connection.json"],
   });
+
+const SHARED_TEMPORARY_DIRECTORY = "/shared/tmp";
+
+/** Codex needs a credential; the parent's temp variables name the shared temp directory. */
+const codexEnvironment = (environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv => ({
+  ...environment,
+  OPENAI_API_KEY: "sk-fixture",
+  TMPDIR: SHARED_TEMPORARY_DIRECTORY,
+  TMP: SHARED_TEMPORARY_DIRECTORY,
+  TEMP: SHARED_TEMPORARY_DIRECTORY,
+});
+
+/** What a child can leave behind: a directory tree without owner write or search access. */
+const lockDirectoryTree = (directory: string) =>
+  Effect.promise(() =>
+    fs
+      .mkdir(nodePath.join(directory, "cache", "module"), { recursive: true })
+      .then(() => fs.writeFile(nodePath.join(directory, "cache", "module", "file.txt"), "x"))
+      .then(() => fs.chmod(nodePath.join(directory, "cache", "module"), 0o500))
+      .then(() => fs.chmod(nodePath.join(directory, "cache"), 0o000)),
+  );
 
 const harnessEntries = (agentDirectory: string) =>
   fs.readdir(nodePath.join(agentDirectory, "subagents", "local-cli-v1")).catch((cause: unknown) => {
@@ -182,6 +204,55 @@ describe("local CLI harness ownership", () => {
       yield* Fiber.join(interrupted);
       expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
     }).pipe(Effect.scoped),
+  );
+
+  it.live("points a Codex child's temp variables at a private directory its harness owns", () =>
+    Effect.gen(function* () {
+      const test = yield* setup;
+      const harness = yield* prepareLocalCliHarness(
+        { agentDirectory: test.agentDirectory, environment: codexEnvironment(test.environment) },
+        {
+          runtime: "codex",
+          launch: backendLaunch({ writeIntent: "writer" }),
+          supervisor: supervisor(test.directory),
+        },
+      );
+      const temporary = harness.temporaryDirectory ?? "";
+      const stat = yield* Effect.promise(() => fs.lstat(temporary));
+      expect({ directory: stat.isDirectory(), mode: stat.mode & 0o777 }).toEqual({
+        directory: true,
+        mode: 0o700,
+      });
+      expect([harness.env.TMPDIR, harness.env.TMP, harness.env.TEMP]).toEqual([
+        temporary,
+        temporary,
+        temporary,
+      ]);
+      yield* removeLocalCliHarness(harness.directory);
+      expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
+    }),
+  );
+
+  it.live("removes a Codex child's temp directory even after the child locked part of it", () =>
+    Effect.gen(function* () {
+      const test = yield* setup;
+      const service = makeLocalCliProcess({
+        agentDirectory: test.agentDirectory,
+        environment: codexEnvironment(test.environment),
+        executables: { claude: executable, codex: executable },
+      });
+      yield* service
+        .spawn({
+          runtime: "codex",
+          launch: backendLaunch(),
+          supervisor: supervisor(test.directory),
+        })
+        .pipe(
+          Effect.tap((child) => lockDirectoryTree(child.temporaryDirectory ?? "")),
+          Effect.scoped,
+        );
+      expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
+    }),
   );
 
   it.live("releases the process before removing its scoped harness", () =>

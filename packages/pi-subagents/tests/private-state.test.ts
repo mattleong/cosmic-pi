@@ -96,6 +96,22 @@ describe("private state sweep", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.live("removes abandoned state whose child locked a directory in its temp space", () =>
+    Effect.gen(function* () {
+      const agent = yield* temporaryAgent;
+      const harnesses = path.join(agent, "subagents", "local-cli-v1");
+      const harness = path.join(harnesses, "codex-agent-r1-2-0123456789ab");
+      const locked = path.join(harness, "tmp", "cache");
+      yield* entry(harness, { "tmp/cache/module/file.txt": "x" }, { pid: yield* exitedProcessId });
+      yield* io(() => fs.chmod(path.join(locked, "module"), 0o500));
+      yield* io(() => fs.chmod(locked, 0o000));
+
+      yield* sweepAbandonedPrivateState(agent);
+
+      expect(yield* io(() => fs.readdir(harnesses))).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("keeps state a live process owns, however old", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;

@@ -7,7 +7,8 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Predicate from "effect/Predicate";
-import type { LocalCliHandle, LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
+import type { LocalCliProcessHandle } from "../boundary/local-cli-process.ts";
+import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type { SupervisorChannelHandle } from "../boundary/supervisor-channel.ts";
 import { isOutcomeUncertain, processError, type SubagentError } from "../run/errors.ts";
 import { emptyUsage, type SubagentUsage } from "../run/model.ts";
@@ -18,6 +19,7 @@ import {
   InitializeResult,
   initializedNotification,
   initializeRequest,
+  codexSandboxPolicy,
   ThreadStartResult,
   threadStartRequest,
   turnInterruptRequest,
@@ -67,10 +69,11 @@ type CodexTurnCompleted = Extract<CodexNotification, { readonly type: "turn_comp
 
 const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function* (
   request: BackendLaunchRequest,
-  child: LocalCliHandle,
+  child: LocalCliProcessHandle,
   supervisor: SupervisorChannelHandle,
 ) {
   const scope = yield* Scope.Scope;
+  const sandboxPolicy = codexSandboxPolicy(request.writeIntent, child.temporaryDirectory);
   const { events, offer, release, acknowledge } = yield* localCliEventIngress(child.acknowledge);
   const responses = new Map<string, PendingResponse>();
   let nextRequestId = 1;
@@ -213,7 +216,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
           REPORT_REMINDER,
           request.model,
           request.effort,
-          request.writeIntent,
+          sandboxPolicy,
           request.openaiFastMode,
         ),
       TurnStartResult,
@@ -507,7 +510,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                     message,
                     request.model,
                     request.effort,
-                    request.writeIntent,
+                    sandboxPolicy,
                     request.openaiFastMode,
                   ),
                 TurnStartResult,

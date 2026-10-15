@@ -74,10 +74,38 @@ export const safeAgentDirectory = (agentDirectory: string): Promise<string> => {
     );
 };
 
+/** Restores owner access to every directory in a private tree, one directory at a time. */
+const restoreDirectoryAccess = (path: string): Promise<void> =>
+  fs.lstat(path).then((stat) =>
+    stat.isDirectory()
+      ? fs
+          .chmod(path, 0o700)
+          .then(() => fs.readdir(path))
+          .then((names) =>
+            names.reduce<Promise<void>>(
+              (previous, name) =>
+                previous.then(() => restoreDirectoryAccess(nodePath.join(path, name))),
+              Promise.resolve(),
+            ),
+          )
+      : undefined,
+  );
+
+/**
+ * Removes a private tree. A child may write its private temp directory, so a directory it left
+ * without owner write or search access is opened back up before a second attempt.
+ */
+export const removePrivateTree = (path: string): Promise<void> =>
+  fs
+    .rm(path, { recursive: true, force: true })
+    .catch(() =>
+      restoreDirectoryAccess(path).then(() => fs.rm(path, { recursive: true, force: true })),
+    );
+
 export const removePrivateDirectory = (directory: string): Promise<void> =>
   fs.lstat(directory).then((stat) => {
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
-    return fs.rm(directory, { recursive: true, force: false });
+    return removePrivateTree(directory);
   });
 
 const isJsonArray = (value: Schema.Json): value is ReadonlyArray<Schema.Json> =>

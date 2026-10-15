@@ -8,9 +8,12 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
-import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
+import type { CodexSandboxPolicy } from "../src/backend/local-codex-protocol.ts";
+import type { LocalCliProcessHandle } from "../src/boundary/local-cli-process.ts";
+import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import type { SupervisorChannelHandle } from "../src/boundary/supervisor-channel.ts";
 import { SupervisorChannelError } from "../src/boundary/supervisor-channel-errors.ts";
+import type { SubagentWriteIntent } from "../src/domain/routing.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 import {
   backendLaunch,
@@ -27,13 +30,23 @@ const report = {
   text: "Done",
 };
 
-const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedReport"]) =>
+const startedCodex = (
+  hasAcceptedReport: SupervisorChannelHandle["hasAcceptedReport"],
+  options: {
+    readonly writeIntent?: SubagentWriteIntent;
+    readonly temporaryDirectory?: string;
+  } = {},
+) =>
   Effect.gen(function* () {
     const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
     const supervisorEvents = yield* Queue.unbounded<SupervisorEvent, Cause.Done>();
     const turnInputs: string[] = [];
-    const child: LocalCliHandle = {
+    const sandboxPolicies: CodexSandboxPolicy[] = [];
+    const child: LocalCliProcessHandle = {
       pid: 1,
+      ...(options.temporaryDirectory !== undefined && {
+        temporaryDirectory: options.temporaryDirectory,
+      }),
       events: childEvents,
       // The transport settles its exit receipt before it ends the frame queue.
       awaitExit: Effect.succeed({ exitCode: 0, stderr: "" }),
@@ -42,7 +55,10 @@ const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedRep
       send: (frame) =>
         Effect.sync(() => {
           if (!("id" in frame) || !("method" in frame)) return;
-          if (frame.method === "turn/start") turnInputs.push(frame.params.input[0].text);
+          if (frame.method === "turn/start") {
+            turnInputs.push(frame.params.input[0].text);
+            sandboxPolicies.push(frame.params.sandboxPolicy);
+          }
           const result = Match.value(frame.method).pipe(
             Match.when("initialize", () => ({
               codexHome: "/tmp",
@@ -72,11 +88,13 @@ const startedCodex = (hasAcceptedReport: SupervisorChannelHandle["hasAcceptedRep
     const backend = yield* localCodexBackendDriver(
       { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
       { open: () => Effect.succeed(supervisor) },
-    ).spawn(backendLaunch({ runId: report.runId }));
+    ).spawn(
+      backendLaunch({ runId: report.runId, writeIntent: options.writeIntent ?? "read-only" }),
+    );
     yield* backend.controls.initialize;
     yield* backend.controls.start("Start", 1);
     expect(yield* Queue.take(backend.events)).toMatchObject({ type: "run_started" });
-    return { backend, childEvents, supervisorEvents, turnInputs };
+    return { backend, childEvents, supervisorEvents, turnInputs, sandboxPolicies };
   });
 
 const finishTurn = (childEvents: Queue.Queue<LocalCliWireEvent, Cause.Done>, text: string) => {
@@ -138,6 +156,38 @@ it.effect("Codex completes when the reminded turn submits its report", () =>
       expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
     }),
   ),
+);
+
+const PRIVATE_TEMPORARY_DIRECTORY = "/agent/subagents/local-cli-v1/codex-run/tmp";
+
+it.effect.each([
+  [
+    "writer",
+    {
+      type: "workspaceWrite",
+      writableRoots: [PRIVATE_TEMPORARY_DIRECTORY],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    },
+  ],
+  ["read-only", { type: "readOnly", networkAccess: false }],
+] as const)(
+  "Codex %s turns, reminders included, never write the shared /tmp or $TMPDIR",
+  ([writeIntent, sandboxPolicy]) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, childEvents, sandboxPolicies } = yield* startedCodex(
+          () => Effect.succeed(false),
+          { writeIntent, temporaryDirectory: PRIVATE_TEMPORARY_DIRECTORY },
+        );
+        finishTurn(childEvents, "No report yet.");
+        expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
+        expect(yield* Queue.take(backend.events)).toEqual({ type: "activity", assignmentEpoch: 1 });
+        yield* yieldUntil(() => sandboxPolicies.length === 2);
+        expect(sandboxPolicies).toEqual([sandboxPolicy, sandboxPolicy]);
+      }),
+    ),
 );
 
 // Codex reports each thread's own running total; native sub-agents run in threads of their own.

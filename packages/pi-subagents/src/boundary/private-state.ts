@@ -9,7 +9,7 @@ import {
   type ProcessLiveness,
   synchronousRandomHex,
 } from "pi-cosmic-core";
-import { safeAgentDirectory } from "./harness-shared.ts";
+import { removePrivateTree, safeAgentDirectory } from "./harness-shared.ts";
 import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 
 /** Private state nobody has touched for this long is abandoned, whoever owned it. */
@@ -139,7 +139,7 @@ const removeEntry = (parent: string, name: string): Effect.Effect<boolean> => {
     Effect.flatMap((renamed) =>
       Option.isNone(renamed)
         ? Effect.succeed(false)
-        : io(() => fs.rm(tombstone, { recursive: true, force: true })).pipe(Effect.as(true)),
+        : io(() => removePrivateTree(tombstone)).pipe(Effect.as(true)),
     ),
   );
 };
@@ -164,7 +164,7 @@ const sweepEntries = (
     let removed = 0;
     for (const entry of yield* directoryEntries(parent)) {
       if (entry.name.startsWith(TOMBSTONE_PREFIX)) {
-        yield* io(() => fs.rm(nodePath.join(parent, entry.name), { recursive: true, force: true }));
+        yield* io(() => removePrivateTree(nodePath.join(parent, entry.name)));
         removed += 1;
         continue;
       }
