@@ -619,6 +619,49 @@ describe("subagent v6 profile configuration and resolution", () => {
     });
   });
 
+  it("moves soft efforts to the nearest level the runtime and model support", () => {
+    const routed = (runtime: "claude" | "codex", parentEffort: "off" | "minimal" | "max") =>
+      resolveProfilePlan(
+        "generalist",
+        resolveTestConfig(
+          document({
+            profiles: {
+              generalist: candidate({
+                runtime,
+                model: runtime === "claude" ? "sonnet" : "gpt-5.4",
+              }),
+            },
+          }),
+        ),
+        { ...environment, parentModel: { model: "openai/gpt-parent", effort: parentEffort } },
+      );
+    expect(routed("claude", "off")).toMatchObject({
+      attempts: [{ effort: "low", effortWasExplicit: false }],
+    });
+    expect(routed("claude", "minimal")).toMatchObject({ attempts: [{ effort: "low" }] });
+    expect(routed("codex", "off")).toMatchObject({ attempts: [{ effort: "minimal" }] });
+    expect(routed("codex", "max")).toMatchObject({ attempts: [{ effort: "max" }] });
+    const planner = resolveTestConfig(
+      document({ profiles: { planner: candidate({ model: "openai/gpt-review" }) } }),
+    );
+    expect(PROFILE_DEFINITIONS.planner.defaultEffort).toBe("xhigh");
+    expect(resolveProfilePlan("planner", planner, environment)).toMatchObject({
+      attempts: [{ effort: "high", effortWasExplicit: false }],
+    });
+  });
+
+  it("keeps explicit efforts strict", () => {
+    const config = resolveTestConfig(
+      document({
+        profiles: { reviewer: candidate({ model: "openai/gpt-parent", effort: "medium" }) },
+      }),
+    );
+    expect(resolveProfilePlan("reviewer", config, environment)).toMatchObject({
+      kind: "failed",
+      skippedCandidates: [{ code: "pi_effort_unsupported" }],
+    });
+  });
+
   it("requires stable fork context for local Pi and never degrades to fresh", () => {
     expect(resolveProfilePlan("oracle", resolveTestConfig(document()), environment)).toMatchObject({
       kind: "resolved",

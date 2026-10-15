@@ -32,6 +32,23 @@ export const subagentRuntimeSupportsEffort = (
   effort: SubagentEffort,
 ): boolean => subagentRuntimeEfforts(runtime).includes(effort);
 
+/**
+ * The supported effort nearest to `effort`, the way Pi clamps thinking levels: the next higher
+ * supported level, else the next lower one. Unchanged when nothing is supported.
+ */
+export const clampSubagentEffort = (
+  effort: SubagentEffort,
+  supported: ReadonlyArray<SubagentEffort>,
+): SubagentEffort => {
+  if (supported.includes(effort)) return effort;
+  const index = SUBAGENT_EFFORTS.indexOf(effort);
+  return (
+    SUBAGENT_EFFORTS.slice(index + 1).find((candidate) => supported.includes(candidate)) ??
+    SUBAGENT_EFFORTS.slice(0, index).findLast((candidate) => supported.includes(candidate)) ??
+    effort
+  );
+};
+
 export const decodeSubagentEffort = flow(
   decodeUnknownOrUndefined(Schema.String),
   (text): SubagentEffort | undefined => {

@@ -1,11 +1,13 @@
 import * as Match from "effect/Match";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
-import type {
-  SubagentContextMode,
-  SubagentEffort,
-  SubagentHost,
-  SubagentRuntime,
-  SubagentWriteIntent,
+import {
+  clampSubagentEffort,
+  subagentRuntimeEfforts,
+  type SubagentContextMode,
+  type SubagentEffort,
+  type SubagentHost,
+  type SubagentRuntime,
+  type SubagentWriteIntent,
 } from "../domain/routing.ts";
 import { PROFILE_DEFINITIONS } from "./definitions.ts";
 import {
@@ -114,7 +116,19 @@ const resolveCandidate = (
   const skipCandidate = (code: string, reason: string): CandidateResult => ({
     skipped: { candidateIndex, candidate: label, code, reason },
   });
-  const accept = (model = candidate.model): CandidateResult => ({
+  // Explicit efforts stay strict; soft defaults and the inherited parent level can name a level
+  // this runtime or model lacks, such as "off" for Claude, so they move to the nearest one.
+  const softEffort = (modelEfforts: ReadonlyArray<SubagentEffort> | undefined) =>
+    clampSubagentEffort(
+      profileDefaultEffort ?? environment.parentModel?.effort ?? "high",
+      subagentRuntimeEfforts(candidate.runtime).filter(
+        (effort) => modelEfforts === undefined || modelEfforts.includes(effort),
+      ),
+    );
+  const accept = (
+    model = candidate.model,
+    modelEfforts?: ReadonlyArray<SubagentEffort>,
+  ): CandidateResult => ({
     attempt: {
       source: candidate.model === "parent" ? "profile-parent-candidate" : "profile-candidate",
       candidateIndex,
@@ -125,7 +139,7 @@ const resolveCandidate = (
       writeIntent: candidate.writeIntent,
       openaiFastMode: candidate.openaiFastMode ?? false,
       closeOnReport: candidate.closeOnReport,
-      effort: hardEffort ?? profileDefaultEffort ?? environment.parentModel?.effort ?? "high",
+      effort: hardEffort ?? softEffort(modelEfforts),
       effortWasExplicit: hardEffort !== undefined,
     },
   });
@@ -168,7 +182,7 @@ const resolveCandidate = (
         "fast_mode_unsupported",
         `Pi model ${resolvedModel} does not support fast mode.`,
       );
-    return accept(resolvedModel);
+    return accept(resolvedModel, supportedEfforts);
   };
 
   if (candidate.context === "fork" && !environment.forkAvailable)
