@@ -12,6 +12,11 @@ import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import { nodeFsConstants, nodeFsPromises as fs } from "../boundary/node-builtins.ts";
 import { nodeExecutableProblem } from "../boundary/node-executable.ts";
 import { describeWorkspaceSetup } from "../boundary/workspace-setup.ts";
+import {
+  gitInstallation,
+  gitVersionSupported,
+  MINIMUM_GIT_VERSION,
+} from "../boundary/git-installation.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import type { ProfileCandidateAttempt } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
@@ -168,6 +173,7 @@ export const runSubagentDoctor = (
         ? check("Worktree setup", "ok", describeWorkspaceSetup(config.workspaceSetup))
         : check("Worktree setup", "ok", "none; isolated writers start without dependencies"),
     );
+    checks.push(yield* gitCheck);
     if (input.activityViewAvailable !== undefined)
       checks.push(
         input.activityViewAvailable
@@ -176,6 +182,22 @@ export const runSubagentDoctor = (
       );
     return checks;
   });
+
+// Isolated (worktree) writers need Git; shared-checkout writers don't, so problems are warnings.
+const gitCheck: Effect.Effect<DoctorCheck> = gitInstallation.pipe(
+  Effect.map((installation) =>
+    gitVersionSupported(installation.version)
+      ? check("Git", "ok", `${installation.version} at ${installation.executable}`)
+      : check(
+          "Git",
+          "warning",
+          `${installation.version} at ${installation.executable}; isolated writers need ${MINIMUM_GIT_VERSION.join(".")} or later`,
+        ),
+  ),
+  Effect.catch((error) =>
+    Effect.succeed(check("Git", "warning", `${error.message} ${error.detail ?? ""}`.trim())),
+  ),
+);
 
 // Readiness runs the same preflight a launch does, bounded so a hung CLI can't stall the report.
 const readinessFailure = (

@@ -77,6 +77,7 @@ describe("subagents doctor", () => {
       expect(probed.filter((model) => model === "haiku")).toHaveLength(1);
       expect(byLabel.get("Private state")?.status).toBe("ok");
       expect(byLabel.get("Node")?.status).toBe("ok");
+      expect(byLabel.get("Git")?.status).toBe("ok");
       expect(byLabel.get("Activity view")?.status).toBe("warning");
     }).pipe(Effect.scoped),
   );

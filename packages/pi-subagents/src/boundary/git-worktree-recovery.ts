@@ -4,7 +4,6 @@ import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   checkDirectory,
   git,
-  gitFields,
   isSharedOrForeign,
   workspaceFailure,
   workspaceIO,
@@ -12,10 +11,14 @@ import {
 } from "./git-worktree-process.ts";
 import { readWorkspaceRecord, validWorkspaceId, workspaceDirectory } from "./git-worktree-store.ts";
 
+// Line-based porcelain works with Git before 2.36; workspace paths never contain a newline.
 const registrations = (repository: string) =>
-  gitFields(repository, ["worktree", "list", "--porcelain", "-z"]).pipe(
-    Effect.map((fields) =>
-      fields.filter((field) => field.startsWith("worktree ")).map((field) => field.slice(9)),
+  git(repository, ["worktree", "list", "--porcelain"]).pipe(
+    Effect.map((output) =>
+      output
+        .split("\n")
+        .filter((line) => line.startsWith("worktree "))
+        .map((line) => line.slice(9)),
     ),
   );
 

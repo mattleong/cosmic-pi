@@ -52,6 +52,7 @@ The tool/proxy boundary never accepts caller ancestry, owner IDs, or a caller-su
 
 Workspace engine details:
 
+- `boundary/git-installation.ts` resolves Git once per process: `/usr/bin/git` when present, else the first absolute `git` on the user's PATH. Workspace creation requires Git 2.31 or later. The user's excludes file is resolved the way Git resolves it and passed to every isolated Git call, which otherwise runs without global or system configuration.
 - `boundary/git-worktree-recovery.ts` owns record listing and editable-tree removal.
   Listing separates valid records from fixed-size unavailable-artifact diagnostics and revalidates registry security and identity after scanning.
   Registry failures, defects, and interruption still reject the listing; individual unreadable records do not hide healthy neighbors.

@@ -17,8 +17,10 @@ import {
   oid,
   workspaceFailure,
   workspaceIO,
+  workspaceRefusal,
   writeWorkspaceFile,
 } from "./git-worktree-process.ts";
+import { supportedGitInstallation } from "./git-installation.ts";
 import { captureSnapshot, inspectSource, sourceIdentity } from "./git-worktree-snapshot.ts";
 import {
   initializeWorkspaceStore,
@@ -247,6 +249,17 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
       });
 
     const create = Effect.fn("GitWorkspaceEngine.create")(function* (input: CreateWorkspaceInput) {
+      yield* supportedGitInstallation;
+      if (/\p{Cc}/u.test(registry))
+        return yield* workspaceRefusal(
+          "create",
+          "The agent directory path can't hold workspaces.",
+          {
+            path: registry,
+            rule: "workspace paths must not contain control characters such as newlines",
+            remedy: "Move the Pi agent directory to a path without control characters.",
+          },
+        );
       yield* initializeWorkspaceStore(registry);
       return yield* locked(createInternal(input));
     });
