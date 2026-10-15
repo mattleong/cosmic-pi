@@ -50,6 +50,7 @@ import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import { registerForkPromptCacheHooks } from "./fork-prompt-cache.ts";
+import { registerChildSettle } from "./host-child-settle.ts";
 import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
 import { nodeWriteSync } from "./node-builtins.ts";
@@ -117,6 +118,7 @@ interface ChildSessionInput {
   detachRelay?: (() => void) | undefined;
   readonly cwd: string;
   readonly projectTrusted: boolean;
+  readonly isIdle: () => boolean;
   token: number | undefined;
 }
 
@@ -139,6 +141,7 @@ export function registerSubagentChildBridge(
   const pending = parentCorrelations<string>();
   const pendingProxy = parentCorrelations<AgentToolResult<unknown>>();
   let currentSession: ChildSessionInput | undefined;
+  const deliverNotice = registerChildSettle(pi, () => currentSession?.isIdle() ?? false);
 
   const removeProxyNames = (): void =>
     invokeHostCallback(() => {
@@ -185,17 +188,7 @@ export function registerSubagentChildBridge(
       return;
     }
     if (message.type === "proxy_notification") {
-      const ok = invokeHostCallback(() => {
-        pi.sendMessage(
-          {
-            customType: "pi-subagents-proxy-notification",
-            content: message.message,
-            display: true,
-          },
-          { deliverAs: "steer", triggerTurn: true },
-        );
-        return true;
-      }, false);
+      const ok = deliverNotice(message.message);
       forkContact(input, {
         channel: "pi-subagents",
         type: "proxy_notification_ack",
@@ -462,6 +455,7 @@ export function registerSubagentChildBridge(
       questionnaires: new Set(),
       cwd: captured.cwd,
       projectTrusted: isProjectTrusted(ctx),
+      isIdle: () => ctx.isIdle(),
       token: undefined,
     };
     currentSession = input;
