@@ -7,6 +7,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import { deferredPromise, temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
 import {
   prepareLocalCliHarness,
@@ -68,6 +69,34 @@ const harnessEntries = (agentDirectory: string) =>
     throw cause;
   });
 
+/** Claude temp roots a test created in its own parent rather than `/tmp`. */
+const claudeTemporaryRoots = (parent: string) =>
+  Effect.promise(() =>
+    fs.readdir(parent).then((names) => names.filter((name) => name.startsWith("pi-claude-"))),
+  );
+
+const exists = (path: string) =>
+  Effect.promise(() =>
+    fs.lstat(path).then(
+      () => true,
+      () => false,
+    ),
+  );
+
+const decodeClaudeSettings = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      sandbox: Schema.Struct({
+        filesystem: Schema.Struct({ denyWrite: Schema.Array(Schema.String) }),
+      }),
+    }),
+  ),
+);
+
+/** Claude Code keeps sandboxed Bash in `<root>/claude-<uid>` only while that fits in 44 bytes. */
+const CLAUDE_SHORT_TEMPORARY_BYTES = 44;
+const LARGEST_UID = 4_294_967_294;
+
 describe("local CLI harness ownership", () => {
   it("passes proxy and certificate settings in either case", () => {
     const sanitized = sanitizeLocalCliEnvironment(
@@ -116,6 +145,7 @@ describe("local CLI harness ownership", () => {
             environment: test.environment,
             harnessFault: "after-claude-settings",
             harnessCleanupFault,
+            claudeTemporaryParent: test.directory,
           },
           { runtime: "claude", launch: backendLaunch(), supervisor: supervisor(test.directory) },
         ),
@@ -124,6 +154,7 @@ describe("local CLI harness ownership", () => {
       expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toHaveLength(
         remaining,
       );
+      expect(yield* claudeTemporaryRoots(test.directory)).toEqual([]);
     }),
   );
 
@@ -182,6 +213,7 @@ describe("local CLI harness ownership", () => {
           Deferred.doneUnsafe(entered, Effect.void);
           return gate.promise;
         },
+        claudeTemporaryParent: test.directory,
       });
       const target = yield* Effect.scoped(
         service.spawn({
@@ -203,7 +235,77 @@ describe("local CLI harness ownership", () => {
       gate.resolve();
       yield* Fiber.join(interrupted);
       expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
+      expect(yield* claudeTemporaryRoots(test.directory)).toEqual([]);
     }).pipe(Effect.scoped),
+  );
+
+  it.live("gives a Claude child a private temp root short enough for its sandboxed Bash", () =>
+    Effect.gen(function* () {
+      const test = yield* setup;
+      const harness = yield* prepareLocalCliHarness(
+        {
+          agentDirectory: test.agentDirectory,
+          environment: { ...test.environment, TMPDIR: SHARED_TEMPORARY_DIRECTORY },
+        },
+        { runtime: "claude", launch: backendLaunch(), supervisor: supervisor(test.directory) },
+      );
+      const temporary = harness.temporaryDirectory;
+      const stat = yield* Effect.promise(() => fs.lstat(temporary));
+      expect({
+        directory: stat.isDirectory(),
+        mode: stat.mode & 0o777,
+        owned: yield* exists(nodePath.join(temporary, "owner.json")),
+      }).toEqual({ directory: true, mode: 0o700, owned: true });
+      expect(
+        Buffer.byteLength(nodePath.join(temporary, `claude-${LARGEST_UID}`)),
+      ).toBeLessThanOrEqual(CLAUDE_SHORT_TEMPORARY_BYTES);
+      expect([
+        harness.env.CLAUDE_CODE_TMPDIR,
+        harness.env.TMPDIR,
+        harness.env.TMP,
+        harness.env.TEMP,
+      ]).toEqual([temporary, temporary, temporary, temporary]);
+      const settings = decodeClaudeSettings(
+        yield* Effect.promise(() =>
+          fs.readFile(nodePath.join(harness.directory, "settings.json"), "utf8"),
+        ),
+      );
+      const sharedClaudeTemporary = nodePath.join(
+        yield* Effect.promise(() => fs.realpath("/tmp")),
+        `claude-${process.getuid?.() ?? ""}`,
+      );
+      expect(settings.sandbox.filesystem.denyWrite).toContain(sharedClaudeTemporary);
+
+      yield* removeLocalCliHarness(harness);
+      expect(yield* exists(temporary)).toBe(false);
+      expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
+    }),
+  );
+
+  it.live(
+    "removes a Claude child's temp root with its process, even after the child locked it",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* setup;
+        const service = makeLocalCliProcess({
+          agentDirectory: test.agentDirectory,
+          environment: test.environment,
+          executables: { claude: executable, codex: executable },
+          claudeTemporaryParent: test.directory,
+        });
+        yield* service
+          .spawn({
+            runtime: "claude",
+            launch: backendLaunch(),
+            supervisor: supervisor(test.directory),
+          })
+          .pipe(
+            Effect.tap((child) => lockDirectoryTree(child.temporaryDirectory ?? "")),
+            Effect.scoped,
+          );
+        expect(yield* claudeTemporaryRoots(test.directory)).toEqual([]);
+        expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
+      }),
   );
 
   it.live("points a Codex child's temp variables at a private directory its harness owns", () =>
@@ -228,7 +330,7 @@ describe("local CLI harness ownership", () => {
         temporary,
         temporary,
       ]);
-      yield* removeLocalCliHarness(harness.directory);
+      yield* removeLocalCliHarness(harness);
       expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
     }),
   );
@@ -289,6 +391,7 @@ describe("local CLI harness ownership", () => {
         agentDirectory: test.agentDirectory,
         environment: test.environment,
         executables: { claude: executable, codex: executable },
+        claudeTemporaryParent: test.directory,
       });
       yield* service
         .spawn({

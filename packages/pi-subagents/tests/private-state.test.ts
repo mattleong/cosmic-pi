@@ -133,7 +133,7 @@ describe("private state sweep", () => {
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const harness = yield* prepareLocalCliHarness(
-        { agentDirectory: agent, environment: {} },
+        { agentDirectory: agent, environment: {}, claudeTemporaryParent: agent },
         {
           runtime: "claude",
           launch: backendLaunch(),
@@ -141,10 +141,53 @@ describe("private state sweep", () => {
         },
       );
       yield* age(harness.directory, 30);
+      yield* age(harness.temporaryDirectory, 30);
 
-      yield* sweepAbandonedPrivateState(agent);
+      yield* sweepAbandonedPrivateState(agent, { claudeTemporaryParent: agent });
 
       expect(yield* exists(path.join(harness.directory, "settings.json"))).toBe(true);
+      expect(yield* exists(path.join(harness.temporaryDirectory, "owner.json"))).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("removes only this package's abandoned Claude temp roots from the shared parent", () =>
+    Effect.gen(function* () {
+      const agent = yield* temporaryAgent;
+      const parent = path.join(agent, "tmp");
+      const elsewhere = path.join(agent, "elsewhere");
+      const deadOwner = { pid: yield* exitedProcessId };
+      const abandoned = path.join(parent, "pi-claude-Ab3dE9");
+      const live = path.join(parent, "pi-claude-Fg5hI7");
+      const tombstone = path.join(parent, ".swept-pi-claude-Jk1lM2-0123456789ab");
+      const linked = path.join(parent, "pi-claude-No4pQ6");
+      const kept = [
+        live,
+        linked,
+        elsewhere,
+        path.join(parent, "pi-claude-tool-results"),
+        path.join(parent, "pi-subagents-tool-results-tests"),
+        path.join(parent, ".swept-something-else"),
+      ];
+      yield* entry(abandoned, { "claude-501/tasks/output.txt": "x" }, deadOwner);
+      yield* entry(live, { "claude-501/file.txt": "x" });
+      yield* io(() => recordPrivateStateOwner(live));
+      yield* entry(tombstone, { "claude-501/file.txt": "x" });
+      yield* entry(elsewhere, { "file.txt": "x" }, deadOwner);
+      yield* io(() => fs.symlink(elsewhere, linked));
+      for (const directory of kept.slice(3))
+        yield* entry(directory, { "file.txt": "x" }, deadOwner);
+
+      yield* sweepAbandonedPrivateState(agent, { claudeTemporaryParent: parent });
+
+      expect(yield* exists(abandoned)).toBe(false);
+      expect(yield* exists(tombstone)).toBe(false);
+      for (const directory of kept) expect(yield* exists(directory)).toBe(true);
+      expect(yield* exists(path.join(elsewhere, "file.txt"))).toBe(true);
+      expect(
+        (yield* io(() => fs.readdir(parent))).filter((name) =>
+          name.startsWith(".swept-pi-claude-"),
+        ),
+      ).toEqual([]);
     }).pipe(Effect.scoped),
   );
 

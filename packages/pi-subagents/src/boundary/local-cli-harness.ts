@@ -19,6 +19,7 @@ import {
 import type { SubagentRuntime } from "../domain/routing.ts";
 import {
   ensurePrivateDirectory,
+  nodeErrorCode,
   readValidatedCodexAuth,
   removePrivateDirectory,
   safeAgentDirectory,
@@ -26,6 +27,8 @@ import {
   writeExclusive,
 } from "./harness-shared.ts";
 import {
+  CLAUDE_TEMPORARY_PARENT,
+  CLAUDE_TEMPORARY_PREFIX,
   CODEX_CATALOG_HARNESS_ROOT,
   LOCAL_CLI_HARNESS_ROOT,
   recordPrivateStateOwner,
@@ -68,6 +71,8 @@ export interface LocalCliHarnessOptions {
   readonly harnessFault?: "after-claude-settings" | undefined;
   readonly harnessCleanupFault?: boolean | undefined;
   readonly afterHarnessDirectoryCreated?: (() => Promise<void>) | undefined;
+  /** Where Claude children's temp roots are created; `/tmp` unless a test points elsewhere. */
+  readonly claudeTemporaryParent?: string | undefined;
 }
 
 export interface LocalCliHarnessRequest {
@@ -81,7 +86,15 @@ export interface LocalCliHarness {
   readonly executable: string;
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
-  /** The child's private temp directory inside the harness, removed with it. */
+  /**
+   * The child's private temp directory, removed with the harness. Codex's lives inside the
+   * harness; Claude's is a short root of its own under `/tmp` with its own owner record.
+   */
+  readonly temporaryDirectory: string;
+}
+
+interface OwnedHarnessDirectories {
+  readonly directory: string;
   readonly temporaryDirectory?: string | undefined;
 }
 
@@ -211,17 +224,46 @@ const codexConfig = (
 
 const codexCatalogConfig = (): string => [...codexBaseConfig(), ""].join("\n");
 
+const removeTemporaryDirectory = (directory: string | undefined): Promise<void> =>
+  directory === undefined
+    ? Promise.resolve()
+    : removePrivateDirectory(directory).catch((cause: unknown) => {
+        if (nodeErrorCode(cause) !== "ENOENT") throw cause;
+      });
+
+/** Removes the child's temp directory first, so a harness never outlives a temp root it names. */
 export const removeLocalCliHarness = (
-  directory: string,
+  harness: OwnedHarnessDirectories,
 ): Effect.Effect<void, LocalCliHarnessError> =>
-  Effect.tryPromise({ try: () => removePrivateDirectory(directory), catch: harnessCleanupFailed });
+  Effect.tryPromise({
+    try: () =>
+      removeTemporaryDirectory(harness.temporaryDirectory).then(() =>
+        removePrivateDirectory(harness.directory),
+      ),
+    catch: harnessCleanupFailed,
+  });
+
+/** Runs `cleanup` when `effect` fails; a cleanup failure is reported instead of the cause. */
+const cleanupOnFailure = <Value>(
+  effect: Effect.Effect<Value, LocalCliHarnessError>,
+  cleanup: Effect.Effect<void, LocalCliHarnessError>,
+): Effect.Effect<Value, LocalCliHarnessError> =>
+  effect.pipe(
+    Effect.catchCause((cause) =>
+      cleanup.pipe(
+        Effect.catchCause(() => Effect.fail(harnessCleanupFailed())),
+        Effect.andThen(Effect.failCause(cause)),
+      ),
+    ),
+  );
 
 const prepareOwnedHarness = <Harness>(
   agentDirectory: string,
   rootName: string,
   namePrefix: string,
   build: (directory: string) => Effect.Effect<Harness, LocalCliHarnessError>,
-  cleanup: (directory: string) => Effect.Effect<void, LocalCliHarnessError> = removeLocalCliHarness,
+  cleanup: (directory: string) => Effect.Effect<void, LocalCliHarnessError> = (directory) =>
+    removeLocalCliHarness({ directory }),
 ): Effect.Effect<Harness, LocalCliHarnessError> =>
   Effect.uninterruptible(
     Effect.gen(function* () {
@@ -234,14 +276,11 @@ const prepareOwnedHarness = <Harness>(
       yield* Effect.interruptible(prepareStep(() => ensurePrivateDirectory(packageRoot)));
       yield* Effect.interruptible(prepareStep(() => ensurePrivateDirectory(root)));
       yield* prepareStep(() => fs.mkdir(directory, { mode: 0o700 }));
-      return yield* prepareStep(() => recordPrivateStateOwner(directory)).pipe(
-        Effect.andThen(build(directory)),
-        Effect.catchCause((cause) =>
-          cleanup(directory).pipe(
-            Effect.catchCause(() => Effect.fail(harnessCleanupFailed())),
-            Effect.andThen(Effect.failCause(cause)),
-          ),
+      return yield* cleanupOnFailure(
+        prepareStep(() => recordPrivateStateOwner(directory)).pipe(
+          Effect.andThen(build(directory)),
         ),
+        cleanup(directory),
       );
     }),
   );
@@ -264,26 +303,55 @@ const prepareCodexHome = (
     .then(() => codexHome);
 };
 
-const buildLocalCliHarness = (
+interface HarnessLaunch {
+  readonly executable: string;
+  readonly sourceEnvironment: NodeJS.ProcessEnv;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+const harnessLaunch = (
   options: LocalCliHarnessOptions,
   request: LocalCliHarnessRequest,
   directory: string,
-): Promise<LocalCliHarness> =>
+): Promise<HarnessLaunch> =>
   fs.lstat(directory).then((directoryStat) => {
     if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink())
       throw new Error("unsafe-harness-directory");
-    const executable = options.executables?.[request.runtime] ?? request.runtime;
     const sourceEnvironment = options.environment ?? process.env;
-    const env = sanitizeLocalCliEnvironment(sourceEnvironment, request.runtime, request.launch);
+    return {
+      executable: options.executables?.[request.runtime] ?? request.runtime,
+      sourceEnvironment,
+      env: sanitizeLocalCliEnvironment(sourceEnvironment, request.runtime, request.launch),
+    };
+  });
 
-    if (request.runtime === "claude") {
+/**
+ * Claude Code's per-user temp directory, shared with the user's other Claude Code sessions.
+ * Sandboxed Bash falls back to it when a private temp path is too long.
+ */
+const sharedClaudeTemporaryDirectory = (): Promise<string> => {
+  const uid = process.getuid?.();
+  if (uid === undefined) return Promise.reject(new Error("claude-uid-unavailable"));
+  return fs
+    .realpath(CLAUDE_TEMPORARY_PARENT)
+    .then((parent) => nodePath.join(parent, `claude-${uid}`));
+};
+
+const buildClaudeHarness = (
+  options: LocalCliHarnessOptions,
+  request: LocalCliHarnessRequest,
+  directory: string,
+  temporaryDirectory: string,
+): Promise<LocalCliHarness> =>
+  Promise.all([harnessLaunch(options, request, directory), sharedClaudeTemporaryDirectory()]).then(
+    ([launch, sharedTemporaryDirectory]) => {
       const settingsPath = nodePath.join(directory, "settings.json");
       const mcpPath = nodePath.join(directory, "mcp.json");
       const promptPath = nodePath.join(directory, "system-prompt.md");
       const writerPolicy = claudeWriterCwdPolicy(request.launch.cwd);
       return writeExclusive(
         settingsPath,
-        `${JSON.stringify(claudeSettings(request.launch, writerPolicy))}\n`,
+        `${JSON.stringify(claudeSettings(request.launch, writerPolicy, sharedTemporaryDirectory))}\n`,
       )
         .then(() => {
           if (options.harnessFault === "after-claude-settings")
@@ -293,12 +361,24 @@ const buildLocalCliHarness = (
         .then(() => writeExclusive(promptPath, request.launch.systemPrompt))
         .then(() => ({
           directory,
-          executable,
+          executable: launch.executable,
           args: claudeArgv(request.launch, { settingsPath, mcpPath, promptPath }, writerPolicy),
-          env,
+          env: {
+            ...launch.env,
+            ...temporaryEnvironment(temporaryDirectory),
+            CLAUDE_CODE_TMPDIR: temporaryDirectory,
+          },
+          temporaryDirectory,
         }));
-    }
+    },
+  );
 
+const buildCodexHarness = (
+  options: LocalCliHarnessOptions,
+  request: LocalCliHarnessRequest,
+  directory: string,
+): Promise<LocalCliHarness> =>
+  harnessLaunch(options, request, directory).then((launch) => {
     // Codex writers may not write the shared /tmp or $TMPDIR; this is their private temp space.
     const temporaryDirectory = nodePath.join(directory, CODEX_TEMPORARY_DIRECTORY);
     return fs
@@ -307,16 +387,43 @@ const buildLocalCliHarness = (
         prepareCodexHome(
           directory,
           codexConfig(request.supervisor, request.launch.openaiFastMode, temporaryDirectory),
-          sourceEnvironment,
+          launch.sourceEnvironment,
         ),
       )
       .then((codexHome) => ({
         directory,
-        executable,
+        executable: launch.executable,
         args: codexArgv(),
-        env: { ...env, ...temporaryEnvironment(temporaryDirectory), CODEX_HOME: codexHome },
+        env: { ...launch.env, ...temporaryEnvironment(temporaryDirectory), CODEX_HOME: codexHome },
         temporaryDirectory,
       }));
+  });
+
+/**
+ * Claude Code puts its own temp files and sandboxed Bash's `$TMPDIR` under `CLAUDE_CODE_TMPDIR`,
+ * so each Claude child gets a fresh 0700 root there instead of the user's shared directory.
+ */
+const prepareClaudeHarness = (
+  options: LocalCliHarnessOptions,
+  request: LocalCliHarnessRequest,
+  directory: string,
+): Effect.Effect<LocalCliHarness, LocalCliHarnessError> =>
+  Effect.gen(function* () {
+    const parent = options.claudeTemporaryParent ?? CLAUDE_TEMPORARY_PARENT;
+    const temporaryDirectory = yield* prepareStep(() =>
+      fs.mkdtemp(nodePath.join(parent, CLAUDE_TEMPORARY_PREFIX)),
+    );
+    return yield* cleanupOnFailure(
+      prepareStep(() =>
+        recordPrivateStateOwner(temporaryDirectory).then(() =>
+          buildClaudeHarness(options, request, directory, temporaryDirectory),
+        ),
+      ),
+      Effect.tryPromise({
+        try: () => removePrivateDirectory(temporaryDirectory),
+        catch: harnessCleanupFailed,
+      }),
+    );
   });
 
 export const prepareLocalCliHarness = (
@@ -331,12 +438,14 @@ export const prepareLocalCliHarness = (
       Effect.gen(function* () {
         if (options.afterHarnessDirectoryCreated)
           yield* prepareStep(options.afterHarnessDirectoryCreated);
-        return yield* prepareStep(() => buildLocalCliHarness(options, request, directory));
+        return yield* request.runtime === "claude"
+          ? prepareClaudeHarness(options, request, directory)
+          : prepareStep(() => buildCodexHarness(options, request, directory));
       }),
     (directory) =>
       options.harnessCleanupFault
         ? Effect.fail(harnessCleanupFailed())
-        : removeLocalCliHarness(directory),
+        : removeLocalCliHarness({ directory }),
   );
 
 export interface CodexCatalogHarness {
@@ -355,7 +464,7 @@ export const prepareCodexCatalogHarness = (options: {
           ...sanitizeLocalCliEnvironment(options.environment, "codex"),
           CODEX_HOME: codexHome,
         },
-        release: removeLocalCliHarness(directory),
+        release: removeLocalCliHarness({ directory }),
       })),
     ),
   );

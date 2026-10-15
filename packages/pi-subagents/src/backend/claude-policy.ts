@@ -89,9 +89,15 @@ const claudeAllowedTools = (
   ...CLAUDE_NATIVE_AGENT_TOOLS,
 ];
 
+/**
+ * `sharedTemporaryDirectory` is Claude Code's per-user temp directory. Each child has a private
+ * one, but sandboxed Bash falls back to the shared one when the private path is too long, so
+ * denying it makes that fallback fail closed rather than write where other sessions read.
+ */
 export const claudeSettings = (
   launch: ClaudeLaunchPolicyRequest,
   writerPolicy: ClaudeWriterCwdPolicy | undefined,
+  sharedTemporaryDirectory: string,
 ) => ({
   permissions: {
     defaultMode: "dontAsk",
@@ -105,7 +111,10 @@ export const claudeSettings = (
     allowUnsandboxedCommands: false,
     filesystem: {
       allowWrite: launch.writeIntent === "writer" && writerPolicy ? [writerPolicy.cwd] : [],
-      denyWrite: launch.writeIntent === "read-only" ? [launch.cwd] : [],
+      denyWrite: [
+        ...(launch.writeIntent === "read-only" ? [launch.cwd] : []),
+        sharedTemporaryDirectory,
+      ],
     },
     network: {
       allowedDomains: [],

@@ -259,7 +259,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         ),
       ),
     ),
-    (owned) => removeLocalCliHarness(owned.directory).pipe(Effect.orDie),
+    (owned) => removeLocalCliHarness(owned).pipe(Effect.orDie),
   );
   const sourceEnvironment = options.environment ?? process.env;
   const claudeDebug =
@@ -280,9 +280,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   const handle: LocalCliProcessHandle = {
     ...transport,
     ...(claudeDebug && { claudeDebug }),
-    ...(harness.temporaryDirectory !== undefined && {
-      temporaryDirectory: harness.temporaryDirectory,
-    }),
+    temporaryDirectory: harness.temporaryDirectory,
   };
   return handle;
 });

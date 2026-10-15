@@ -23,6 +23,15 @@ export const SUPERVISOR_CHANNEL_ROOT = "supervisor-channels-v3";
 export const WRITER_LEASE_ROOT = "writer-leases-v3";
 export const LOCAL_CLAUDE_DEBUG_ROOT = "local-claude-debug-v1";
 
+/**
+ * Claude children's private temp roots live directly under `/tmp`: Claude Code gives sandboxed
+ * Bash its `<root>/claude-<uid>` directory only while that path fits in 44 bytes.
+ */
+export const CLAUDE_TEMPORARY_PARENT = "/tmp";
+export const CLAUDE_TEMPORARY_PREFIX = "pi-claude-";
+const CLAUDE_TEMPORARY_NAME = /^pi-claude-[A-Za-z0-9]{6}$/u;
+const CLAUDE_TEMPORARY_TOMBSTONE = /^\.swept-pi-claude-[A-Za-z0-9]{6}-[0-9a-f]{12}$/u;
+
 const OWNED_ENTRY_ROOTS = [
   LOCAL_CLI_HARNESS_ROOT,
   CODEX_CATALOG_HARNESS_ROOT,
@@ -149,56 +158,104 @@ const isRealDirectory = (path: string): Effect.Effect<boolean> =>
     Effect.map(Option.exists((stat) => stat.isDirectory() && !stat.isSymbolicLink())),
   );
 
+const isOwnedRealDirectory = (path: string, uid: number): Effect.Effect<boolean> =>
+  io(() => fs.lstat(path)).pipe(
+    Effect.map(
+      Option.exists((stat) => stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === uid),
+    ),
+  );
+
 const directoryEntries = (directory: string) =>
   io(() => fs.readdir(directory, { withFileTypes: true })).pipe(
     Effect.map(Option.getOrElse(() => [])),
   );
 
+interface SweepPolicy {
+  readonly isCandidate: (name: string) => boolean;
+  readonly isTombstone: (name: string) => boolean;
+  /** In a directory other users can write, only real directories this user owns are touched. */
+  readonly ownerUid?: number | undefined;
+}
+
+const PRIVATE_ROOT_POLICY: SweepPolicy = {
+  isCandidate: () => true,
+  isTombstone: (name) => name.startsWith(TOMBSTONE_PREFIX),
+};
+
 /** Sweeps one directory's entries; returns how many it removed. */
 const sweepEntries = (
   context: SweepContext,
   parent: string,
-  isCandidate: (name: string) => boolean,
+  policy: SweepPolicy,
 ): Effect.Effect<number> =>
   Effect.gen(function* () {
     let removed = 0;
     for (const entry of yield* directoryEntries(parent)) {
-      if (entry.name.startsWith(TOMBSTONE_PREFIX)) {
-        yield* io(() => removePrivateTree(nodePath.join(parent, entry.name)));
+      const tombstone = policy.isTombstone(entry.name);
+      if (!tombstone && (!entry.isDirectory() || !policy.isCandidate(entry.name))) continue;
+      const path = nodePath.join(parent, entry.name);
+      if (policy.ownerUid !== undefined && !(yield* isOwnedRealDirectory(path, policy.ownerUid)))
+        continue;
+      if (tombstone) {
+        yield* io(() => removePrivateTree(path));
         removed += 1;
         continue;
       }
-      if (!entry.isDirectory() || !isCandidate(entry.name)) continue;
-      if (!(yield* isAbandoned(context, nodePath.join(parent, entry.name)))) continue;
+      if (!(yield* isAbandoned(context, path))) continue;
       if (yield* removeEntry(parent, entry.name)) removed += 1;
     }
     return removed;
   });
 
+/** Claude temp roots share `/tmp` with every user, so only this user's real directories qualify. */
+const sweepClaudeTemporaryRoots = (context: SweepContext, parent: string): Effect.Effect<void> => {
+  const uid = process.getuid?.();
+  return uid === undefined
+    ? Effect.void
+    : sweepEntries(context, parent, {
+        isCandidate: (name) => CLAUDE_TEMPORARY_NAME.test(name),
+        isTombstone: (name) => CLAUDE_TEMPORARY_TOMBSTONE.test(name),
+        ownerUid: uid,
+      }).pipe(Effect.asVoid);
+};
+
+export interface PrivateStateSweepOptions {
+  readonly claudeTemporaryParent?: string | undefined;
+}
+
 /**
  * Removes private run state that crashed or killed Pi sessions left behind: local Pi run
  * directories under `subagents/<session>/`, local CLI harnesses (which can hold a copied Codex
- * credential), and supervisor channel state. Reports, writer leases, debug ledgers, and writer
- * workspaces have their own owners and are never touched. Every entry failure is ignored.
+ * credential), supervisor channel state, and Claude children's temp roots under `/tmp`. Reports,
+ * writer leases, debug ledgers, and writer workspaces have their own owners and are never
+ * touched. Every entry failure is ignored.
  */
-export const sweepAbandonedPrivateState = (agentDirectory: string): Effect.Effect<void> =>
+export const sweepAbandonedPrivateState = (
+  agentDirectory: string,
+  options: PrivateStateSweepOptions = {},
+): Effect.Effect<void> =>
   Effect.gen(function* () {
+    const context: SweepContext = { now: yield* Clock.currentTimeMillis, liveness: new Map() };
+    yield* sweepClaudeTemporaryRoots(
+      context,
+      options.claudeTemporaryParent ?? CLAUDE_TEMPORARY_PARENT,
+    );
     const canonical = yield* io(() => safeAgentDirectory(agentDirectory));
     if (Option.isNone(canonical)) return;
     const root = nodePath.join(canonical.value, SUBAGENT_STATE_ROOT);
     if (!(yield* isRealDirectory(root))) return;
-    const context: SweepContext = { now: yield* Clock.currentTimeMillis, liveness: new Map() };
     for (const name of OWNED_ENTRY_ROOTS) {
       const owned = nodePath.join(root, name);
-      if (yield* isRealDirectory(owned)) yield* sweepEntries(context, owned, () => true);
+      if (yield* isRealDirectory(owned)) yield* sweepEntries(context, owned, PRIVATE_ROOT_POLICY);
     }
     for (const entry of yield* directoryEntries(root)) {
       if (!entry.isDirectory() || entry.name.startsWith(".") || NAMED_ROOTS.has(entry.name))
         continue;
       const session = nodePath.join(root, entry.name);
-      const removed = yield* sweepEntries(context, session, (name) =>
-        name.startsWith(RUN_DIRECTORY_PREFIX),
-      );
+      const removed = yield* sweepEntries(context, session, {
+        ...PRIVATE_ROOT_POLICY,
+        isCandidate: (name) => name.startsWith(RUN_DIRECTORY_PREFIX),
+      });
       if (removed > 0) yield* io(() => fs.rmdir(session));
     }
   });
