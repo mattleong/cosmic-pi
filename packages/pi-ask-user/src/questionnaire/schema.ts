@@ -84,11 +84,8 @@ export const AskUserParameters = Type.Object({
 
 export const MAX_WORK_DESCRIPTION_LENGTH = 500;
 
-const WorkDescription = Type.String({
-  minLength: 1,
-  maxLength: MAX_WORK_DESCRIPTION_LENGTH,
-  pattern: "\\S",
-});
+// Nonblank text is checked at admission: providers such as llama.cpp reject `pattern`.
+const WorkDescription = Type.String({ minLength: 1, maxLength: MAX_WORK_DESCRIPTION_LENGTH });
 
 export const AskUserAsyncParameters = Type.Object({
   ...AskUserParameters.properties,

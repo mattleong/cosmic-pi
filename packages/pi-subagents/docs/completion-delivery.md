@@ -124,7 +124,7 @@ Finished observations classify `reportStatus` before redacting text: `available`
 - `subagent.ts` is the registration door; it derives each self-contained Pi output declaration with pi-cosmic-core's shared `toPiToolOutputSchema`.
   `schema.ts` holds the one tool catalog, `SUBAGENT_TOOL_SCHEMAS`: each tool name's parameter schema plus any cross-field validator.
   Registration walks the catalog in `SUBAGENT_TOOL_NAMES` order.
-- Root execution, the fleet proxy, and the nested-Pi wire all carry the same tool-keyed `{ tool, args }` input, whose args are exactly the wire JSON; `proxy-protocol.ts` decodes only own catalog names with TypeBox `Check` plus the entry's validator.
+- Root execution, the fleet proxy, and the nested-Pi wire all carry the same tool-keyed `{ tool, args }` input, whose args are exactly the wire JSON; `proxy-protocol.ts` decodes only own catalog names with TypeBox `Check`, the nonblank-string check, and the entry's validator. `arguments.ts` builds the registered `prepareArguments` hooks that give the model precise argument errors.
 - `model.ts` contains plain tool outcome and profile DTOs.
   `execute-models.ts` owns the whole `models` action (static profile-route discovery, its formatted text, and compact details).
   `execute-start.ts` owns the whole public start-batch orchestration: request validation, the one profile snapshot per batch, the `generalist` default for omitted profiles, route resolution, partial outcome publication with hostile update containment, and request-ordered receipts.

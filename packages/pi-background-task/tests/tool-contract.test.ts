@@ -10,7 +10,7 @@ import {
   captureRegistrations,
   issueMessageStyleProblems,
 } from "pi-code-previews/testing";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import { backgroundTaskNotFound } from "../src/task/errors.ts";
 import type { BackgroundLogEvent, BackgroundTaskStatus } from "../src/task/model.ts";
@@ -77,6 +77,12 @@ const registeredTool = (overrides: ServiceOverrides) =>
     registerBackgroundTaskTool(pi, { run: taskServiceRunner(taskServiceDouble(overrides)) }),
   ).tools[0]!;
 const ctx = extensionContextFixture({ cwd: "/project" });
+
+describe("background_task parameters", () => {
+  it("declare only provider-portable schema keywords", () => {
+    expect(toolSchemaPortabilityProblems(registeredTool({}).parameters)).toEqual([]);
+  });
+});
 
 describe("background_task contract", () => {
   it.effect("projects every successful action from domain facts into one strict contract", () =>

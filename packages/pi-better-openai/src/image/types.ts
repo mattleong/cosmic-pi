@@ -16,15 +16,14 @@ export const MAX_IMAGE_INPUTS = 5;
 export const IMAGE_ACTIONS = ["auto", "generate", "edit"] as const;
 export type ImageAction = (typeof IMAGE_ACTIONS)[number];
 
-const NON_WHITESPACE_PATTERN = "\\S";
 const PROMPT_MAX_LENGTH = 32_768;
 const PATH_MAX_LENGTH = 4_096;
 const MODEL_MAX_LENGTH = 256;
+// Nonblank text is checked by ToolParamsSchema: providers such as llama.cpp reject `pattern`.
 const boundedJsonString = (maximum: number) => ({
   type: "string" as const,
   minLength: 1,
   maxLength: maximum,
-  pattern: NON_WHITESPACE_PATTERN,
 });
 export const TOOL_PARAMS = {
   type: "object",

@@ -124,7 +124,7 @@ describe("OpenAIImageService", () => {
     }).pipe(provideBuiltLayer(serviceLayer));
   });
 
-  it.effect("rejects unknown or unreadable parameters before any request", () => {
+  it.effect("rejects unknown, blank, or unreadable parameters before any request", () => {
     const requests: StreamingHttpTestRequest[] = [];
     const hostile = new Proxy(
       { prompt: "hostile keys" },
@@ -149,7 +149,13 @@ describe("OpenAIImageService", () => {
     });
     return Effect.gen(function* () {
       const service = yield* OpenAIImageService;
-      for (const params of [{ prompt: "extra key", detail: "high" }, hostile, throwingPrompt]) {
+      for (const params of [
+        { prompt: "extra key", detail: "high" },
+        { prompt: " \n\t " },
+        { prompt: "blank input path", images: [" "] },
+        hostile,
+        throwingPrompt,
+      ]) {
         const failure = yield* service.generate(params).pipe(Effect.flip);
         expect(failure).toBeInstanceOf(OpenAIImageError);
         expect(failure).toMatchObject({ operation: "params" });

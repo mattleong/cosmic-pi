@@ -3,7 +3,11 @@ import { vi } from "vitest";
 import * as Effect from "effect/Effect";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ExtensionCommand, ExtensionSubcommand } from "pi-cosmic-core";
-import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
+import {
+  extensionContextFixture,
+  recordingExtensionHost,
+  toolSchemaPortabilityProblems,
+} from "pi-cosmic-core/testing";
 import { OPENAI_IMAGE_TOOL, registerOpenAIImage } from "../src/image/register.ts";
 import { OpenAIImageService } from "../src/image/service.ts";
 import type { CodexImageResult } from "../src/image/types.ts";
@@ -55,6 +59,7 @@ function fixture() {
     ui: { notify },
   });
   return {
+    tool: () => tools.get(OPENAI_IMAGE_TOOL)!,
     invoke: () => handler("draw a comet", ctx),
     execute: (onUpdate: Parameters<ToolDefinition["execute"]>[3]) =>
       tools
@@ -71,6 +76,12 @@ function fixture() {
     runFixture,
   };
 }
+
+describe("image tool parameters", () => {
+  it("declares only provider-portable schema keywords", () => {
+    expect(toolSchemaPortabilityProblems(fixture().tool().parameters)).toEqual([]);
+  });
+});
 
 describe("image command delivery authority", () => {
   for (const retirement of ["replacement", "abort", "both"] as const) {

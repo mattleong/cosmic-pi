@@ -6,6 +6,7 @@ import {
   deferredPromise,
   extensionContextFixture,
   recordingExtensionHost,
+  toolSchemaPortabilityProblems,
 } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, vi } from "vitest";
 import type { LocalPiContact, LocalPiParentControl } from "../src/backend/local-pi-protocol.ts";
@@ -190,6 +191,24 @@ describe("local Pi child bridge", () => {
         expect(guidelines).toContain(NESTED_START_GUIDELINE);
         expect(guidelines).not.toContain(NORMAL_START_GUIDELINE);
         expect(() => bridge.latestTool(SUBAGENT_TOOL_NAME.workspace)).toThrow();
+      } finally {
+        yield* step(bridge.shutdown);
+      }
+    },
+  );
+  effectTest(
+    "declares portable child tool schemas and rejects blank parent contact text",
+    function* () {
+      const bridge = makeHarness();
+      try {
+        yield* step(() => bridge.start());
+        for (const tool of bridge.tools)
+          expect(toolSchemaPortabilityProblems(tool.parameters)).toEqual([]);
+        const contact = bridge.latestTool("contact_parent");
+        expect(() => contact.prepareArguments?.({ kind: "question", message: " \n" })).toThrow(
+          "message must contain non-whitespace text",
+        );
+        expect(bridge.contacts).toEqual([]);
       } finally {
         yield* step(bridge.shutdown);
       }

@@ -30,7 +30,7 @@ import {
 } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
 import {
-  prepareSubagentStartArguments,
+  subagentArgumentPreparer,
   subagentToolAction,
   SUBAGENT_TOOL_SCHEMAS,
   type SubagentToolInput,
@@ -47,7 +47,7 @@ const targetsLabel = (args: SummaryArguments) =>
 
 type SubagentToolSpec<N extends SubagentToolName> = Pick<
   ToolDefinition<SubagentToolParameters<N>>,
-  "label" | "description" | "promptSnippet" | "promptGuidelines" | "prepareArguments" | "renderCall"
+  "label" | "description" | "promptSnippet" | "promptGuidelines" | "renderCall"
 > & {
   readonly lease?: (
     presentation: SubagentToolPresentation,
@@ -77,6 +77,26 @@ const TOOL_INPUTS: SubagentToolInputs = {
   [SUBAGENT_TOOL_NAME.workspace]: (args) => ({ tool: SUBAGENT_TOOL_NAME.workspace, args }),
 };
 
+type SubagentArgumentPreparers = {
+  readonly [N in SubagentToolName]: NonNullable<
+    ToolDefinition<SubagentToolParameters<N>>["prepareArguments"]
+  >;
+};
+
+const ARGUMENT_PREPARERS: SubagentArgumentPreparers = {
+  [SUBAGENT_TOOL_NAME.models]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.models),
+  [SUBAGENT_TOOL_NAME.start]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.start),
+  [SUBAGENT_TOOL_NAME.list]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.list),
+  [SUBAGENT_TOOL_NAME.status]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.status),
+  [SUBAGENT_TOOL_NAME.await]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.await),
+  [SUBAGENT_TOOL_NAME.send]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.send),
+  [SUBAGENT_TOOL_NAME.reply]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.reply),
+  [SUBAGENT_TOOL_NAME.lifecycle]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.lifecycle),
+  [SUBAGENT_TOOL_NAME.rename]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.rename),
+  [SUBAGENT_TOOL_NAME.claims]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.claims),
+  [SUBAGENT_TOOL_NAME.workspace]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.workspace),
+};
+
 const SCRIPTED_SUBAGENT_GUIDELINE =
   "Native codemode can script read-only delegation with subagent_start, subagent_await, subagent_status, subagent_models, subagent_list, subagent_rename, and lifecycle stop, which return version-1 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, claims, and integration to the main agent.";
 
@@ -100,7 +120,6 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Start 1–32 background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or isolated worktrees, per the session setting; only the main session can start worktree writers. A shared-checkout writer without `writes` claims has the checkout to itself; parallel writers need disjoint exact claims. Subagents started from a codemode script, and their descendants, stay read-only. A start that fails after launch reports whether cleanup finished and whether retry is available.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     promptGuidelines: START_GUIDELINES,
-    prepareArguments: prepareSubagentStartArguments,
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(
         Array.isArray(args.agents) ? args.agents : [],
@@ -264,6 +283,7 @@ export function registerSubagentTools(
         },
       }),
       parameters: SUBAGENT_TOOL_SCHEMAS[name].parameters,
+      prepareArguments: ARGUMENT_PREPARERS[name],
       execute: (id, args, ...rest) => {
         const input = TOOL_INPUTS[name](args);
         return settlePresentation(

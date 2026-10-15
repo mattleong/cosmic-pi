@@ -11,6 +11,7 @@ import type { BackendProxyResult } from "../backend/model.ts";
 import { invalidRequest, type InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentToolName } from "../run/tool-policy.ts";
+import { blankStringPath } from "./arguments.ts";
 import { SubagentContractSchema, encodeSubagentContract } from "./contract-schema.ts";
 import {
   SUBAGENT_TOOL_SCHEMAS,
@@ -106,7 +107,11 @@ const decodeToolArguments = <N extends SubagentToolName>(
   args: Schema.Json,
 ): SubagentToolInput<N> | undefined => {
   const { parameters, validate } = TOOL_SCHEMAS[tool];
-  return Check(parameters, args) && validate?.(args) === undefined ? { tool, args } : undefined;
+  return Check(parameters, args) &&
+    blankStringPath(args) === undefined &&
+    validate?.(args) === undefined
+    ? { tool, args }
+    : undefined;
 };
 
 export const decodeSubagentProxyRequest = (

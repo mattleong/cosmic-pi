@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
 import { captureRegistrations, issueMessageStyleProblems } from "pi-code-previews/testing";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
@@ -85,6 +85,14 @@ const outcomes: AskUserOutcome[] = [
     ],
   },
 ];
+
+describe("registered questionnaire parameters", () => {
+  it("declare only provider-portable schema keywords", () => {
+    const tools = registered();
+    expect(tools.length).toBe(3);
+    for (const tool of tools) expect(toolSchemaPortabilityProblems(tool.parameters)).toEqual([]);
+  });
+});
 
 describe("registered questionnaire structured results", () => {
   it.effect(

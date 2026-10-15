@@ -1,7 +1,5 @@
-import { flow } from "effect/Function";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
-import { StringEnum, validateToolArguments } from "@earendil-works/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
@@ -20,9 +18,11 @@ import {
 } from "../run/limits.ts";
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME, type SubagentToolName } from "../run/tool-policy.ts";
+import { decodeArgumentsObject, replacementField, toolArgumentPreparer } from "./arguments.ts";
 
 const strictObjectOptions = { additionalProperties: false } as const;
-const nonblank = (maxLength: number) => ({ minLength: 1, maxLength, pattern: ".*\\S.*" }) as const;
+// Nonblank text is enforced by argument preparation: providers such as llama.cpp reject `pattern`.
+const nonblank = (maxLength: number) => ({ minLength: 1, maxLength }) as const;
 const nonblankString = (maxLength: number, description?: string) =>
   Type.String({ ...(description !== undefined && { description }), ...nonblank(maxLength) });
 const RunIdParameter = Type.String(nonblank(MAX_PROTOCOL_ID_CHARS));
@@ -342,19 +342,7 @@ export const subagentToolAction = <N extends SubagentToolName>(
   input: SubagentToolInput<N>,
 ): ToolActions[N] => TOOL_ACTIONS[input.tool](input.args);
 
-const START_ARGUMENTS_TOOL = {
-  name: SUBAGENT_TOOL_NAME.start,
-  description: "subagent_start arguments",
-  parameters: StartParameters,
-};
-
-const StartArguments = Schema.declare((input): input is SubagentStartInput =>
-  Check(StartParameters, input),
-);
-const decodeValidatedStartArguments = Schema.decodeUnknownOption(StartArguments);
-const decodeArgumentsObject = Schema.decodeUnknownOption(
-  Schema.Record(Schema.String, Schema.MutableJson),
-);
+const START_SPEC_FIELDS = Object.keys(StartSpecFields);
 
 const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
   agents.forEach((candidate, index) => {
@@ -367,36 +355,33 @@ const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
       );
   });
 
-const startArgumentsFromObject = (args: JsonObject): SubagentStartInput => {
+const inspectStartArguments = (args: JsonObject): void => {
   const agents = args.agents;
-  if (Array.isArray(agents)) checkStartAgents(agents);
-  else if (Object.hasOwn(args, "task"))
-    throw new Error(
-      '[invalid_start_shape] subagent_start requires { agents: [{ task: "..." }] }; wrap the top-level launch fields in the agents array.',
-    );
-  return Option.getOrThrowWith(
-    decodeValidatedStartArguments(
-      validateToolArguments(START_ARGUMENTS_TOOL, {
-        type: "toolCall",
-        id: "prepare-arguments",
-        name: SUBAGENT_TOOL_NAME.start,
-        arguments: args,
-      }),
-    ),
-    () =>
-      new Error(
-        `Validation failed for tool "${SUBAGENT_TOOL_NAME.start}": arguments did not match the launch schema.`,
-      ),
+  if (Array.isArray(agents)) return checkStartAgents(agents);
+  const misplaced = Object.keys(args).filter(
+    (key) =>
+      START_SPEC_FIELDS.includes(key) || replacementField(key, START_SPEC_FIELDS) !== undefined,
+  );
+  if (misplaced.length === 0) return undefined;
+  const renamed = misplaced.flatMap((key) => {
+    const replacement = replacementField(key, START_SPEC_FIELDS);
+    return replacement ? [`"${replacement}" for "${key}"`] : [];
+  });
+  throw new Error(
+    `[invalid_start_shape] subagent_start requires { agents: [{ task: "..." }] }; move ${misplaced.map((key) => `"${key}"`).join(", ")} into an agents entry.${renamed.length > 0 ? ` Inside it, use ${renamed.join(", ")}.` : ""}`,
   );
 };
 
-export const prepareSubagentStartArguments = flow(
-  decodeArgumentsObject,
-  Option.getOrThrowWith(
-    () =>
-      new Error(
-        `Validation failed for tool "${SUBAGENT_TOOL_NAME.start}": arguments must be a JSON object.`,
-      ),
-  ),
-  startArgumentsFromObject,
-);
+/**
+ * Pi `prepareArguments` hook for one tool: precise argument errors and nonblank text, plus the
+ * launch-shape checks for subagent_start.
+ */
+export const subagentArgumentPreparer = <N extends SubagentToolName>(name: N) => {
+  const parameters: SubagentToolParameters<N> = SUBAGENT_TOOL_SCHEMAS[name].parameters;
+  return toolArgumentPreparer(
+    name,
+    parameters,
+    (value): value is SubagentToolArgs<N> => Check(parameters, value),
+    name === SUBAGENT_TOOL_NAME.start ? inspectStartArguments : undefined,
+  );
+};

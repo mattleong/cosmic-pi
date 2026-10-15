@@ -5,7 +5,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
+import { Check } from "typebox/value";
 import {
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
@@ -36,6 +37,7 @@ import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/pr
 import { decodeSubagentContract, isSubagentContractTool } from "../tools/contract-schema.ts";
 import type { SubagentToolInput } from "../tools/schema.ts";
 import { observeAwaitInterruption } from "../tools/execute-await.ts";
+import { toolArgumentPreparer } from "../tools/arguments.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
 import {
@@ -83,13 +85,14 @@ const proxyFailure = (source: string): ParentContactError => {
 const ContactParentParameters = Type.Object(
   {
     kind: StringEnum(["progress", "question", "warning"] as const),
-    message: Type.String({
-      minLength: 1,
-      maxLength: MAX_PARENT_MESSAGE_CHARS,
-      pattern: ".*\\S.*",
-    }),
+    message: Type.String({ minLength: 1, maxLength: MAX_PARENT_MESSAGE_CHARS }),
   },
   { additionalProperties: false },
+);
+const prepareContactParentArguments = toolArgumentPreparer(
+  "contact_parent",
+  ContactParentParameters,
+  (value): value is Static<typeof ContactParentParameters> => Check(ContactParentParameters, value),
 );
 
 export interface SubagentChildBridgeBoundaries {
@@ -293,6 +296,7 @@ export function registerSubagentChildBridge(
           description:
             "Send progress, record a non-blocking warning in parent-visible run status, or ask a blocking parent question. Repeat warnings in the final report; use a question instead when a risk could invalidate work the parent is doing now.",
           parameters: ContactParentParameters,
+          prepareArguments: prepareContactParentArguments,
           executionMode: "sequential",
           execute(_toolCallId, params, signal) {
             if (!isActivationCurrent(input, token))
