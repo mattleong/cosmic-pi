@@ -7,7 +7,7 @@ Shared Effect v4 foundations for the Cosmic Pi extensions. It's a library, not a
 - **Session runtimes:** a runtime slot that creates one Effect runtime per Pi session and replaces or disposes it safely.
 - **Platform services:** typed JSON documents, JSON and streaming HTTP, files, paths, the agent directory, and cross-process locks.
 - **Configuration helpers:** schema-first scoped config stores and tolerant decoding that keeps valid fields when others are invalid.
-- **Coordination:** single-flight refresh, subscription polling, and per-file serialization across independent runtimes.
+- **Coordination:** single-flight refresh, subscription polling, and per-file serialization across independent runtimes and Pi processes.
 - **Host edges:** the shared `/<extension>` command registrar, settings argument parsing, session capture helpers, and Pi tool output schemas.
 - **Security:** secret-safe tagged errors, redaction, and terminal sanitization.
 - **Test kit:** `pi-cosmic-core/testing` with in-memory documents, fake HTTP layers, lifecycle probes, Pi host fixtures and a recording extension host, and a real-process IPC harness; `pi-cosmic-core/testing/sdk` runs real Pi SDK sessions with faux inference.

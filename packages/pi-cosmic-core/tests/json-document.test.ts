@@ -14,6 +14,7 @@ import {
   type JsonObject,
 } from "../src/platform/json-document.ts";
 import { provideBuiltLayer } from "../index.ts";
+import { inProcessDocumentLock } from "./support/json-documents.ts";
 
 const fsFailure = (tag: PlatformError.SystemErrorTag, method: string) =>
   PlatformError.systemError({ _tag: tag, module: "FileSystem", method });
@@ -56,7 +57,7 @@ function documentLayer(initial: Readonly<Record<string, string | Uint8Array>>) {
   return {
     files,
     fileSystem,
-    layer: JsonDocumentStore.layer.pipe(
+    layer: JsonDocumentStore.layerWith(inProcessDocumentLock).pipe(
       Layer.provide(Layer.merge(Layer.succeed(FileSystem.FileSystem, fileSystem), Path.layer)),
     ),
   };

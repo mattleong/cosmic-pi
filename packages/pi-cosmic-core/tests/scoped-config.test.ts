@@ -11,6 +11,7 @@ import { JsonDocumentError } from "../src/platform/errors.ts";
 import { JsonDocumentStore, type JsonObject } from "../src/platform/json-document.ts";
 import { makeCapturedLogger, makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { decodeTolerantFields } from "../src/config/tolerant-fields.ts";
+import { inProcessDocumentLock } from "./support/json-documents.ts";
 import {
   commitPreferredScope,
   makeScopedConfigStore,
@@ -166,7 +167,7 @@ testLayer(Path.layer)("scoped config store", (test) => {
         const inspected = yield* Deferred.make<void>();
         const committed = yield* Deferred.make<void>();
         const logger = makeCapturedLogger();
-        const documents = JsonDocumentStore.layer.pipe(
+        const documents = JsonDocumentStore.layerWith(inProcessDocumentLock).pipe(
           Layer.provide(
             FileSystem.layerNoop({
               exists: () =>
@@ -174,6 +175,7 @@ testLayer(Path.layer)("scoped config store", (test) => {
                   Effect.tap(() => Deferred.succeed(inspected, undefined)),
                   Effect.tap(() => Deferred.await(committed)),
                 ),
+              makeDirectory: () => Effect.void,
               readFileString: () =>
                 operation === "read"
                   ? Effect.fail(
@@ -204,10 +206,11 @@ testLayer(Path.layer)("scoped config store", (test) => {
 
   test.effect("does not report a seeded global document when its location cannot be read", () => {
     const logger = makeCapturedLogger();
-    const documents = JsonDocumentStore.layer.pipe(
+    const documents = JsonDocumentStore.layerWith(inProcessDocumentLock).pipe(
       Layer.provide(
         FileSystem.layerNoop({
           exists: () => Effect.succeed(false),
+          makeDirectory: () => Effect.void,
           readFileString: () =>
             Effect.fail(
               PlatformError.systemError({
@@ -234,7 +237,7 @@ testLayer(Path.layer)("scoped config store", (test) => {
         module: "FileSystem",
         method: operation,
       });
-      const documents = JsonDocumentStore.layer.pipe(
+      const documents = JsonDocumentStore.layerWith(inProcessDocumentLock).pipe(
         Layer.provide(
           FileSystem.layerNoop({
             exists: () =>

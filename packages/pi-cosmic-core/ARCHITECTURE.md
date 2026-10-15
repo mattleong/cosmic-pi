@@ -52,11 +52,17 @@ authority is checked beside each actual host callback, so late refreshes cannot 
 
 ## Persistence and resource safety
 
-[JSON document modification](src/platform/json-document.ts) serializes each resolved path across
-cooperating runtimes in one process. It is not cross-process exclusion. Feature stores validate their
-schemas and combine durable writes with private state/projection installation where those must agree.
-Default seeding rechecks existence inside the modification, and trust gates exclude untrusted project
-paths before any read. Atomic file replacement prepares and validates before its rename commit.
+[JSON document writes](src/platform/json-document.ts) resolve the document's real path first:
+symlinks are followed (a dangling link to its missing target), so a linked document stays a link and
+its target is replaced. Each write and modification is serialized on that real path within the
+process, then across same-host processes by a [document lock](src/platform/json-document-lock.ts):
+a `CrossProcessLock` whose private root is a `.<name>.lock` directory beside the document. The root
+stays after release, because removing it would race writers creating owner records inside it. Waiting is bounded (five seconds by default) and fails as a typed
+`lock` document error; a crashed writer's lock is reclaimed by the next writer. Writing creates the
+document's directory. Reads take no lock and rely on the atomic replacement. Feature stores validate
+their schemas and combine durable writes with private state/projection installation where those must
+agree. Default seeding rechecks existence inside the modification, and trust gates exclude untrusted
+project paths before any read. Atomic file replacement prepares and validates before its rename commit.
 
 Process and safe-file capabilities are explicit dependencies; file or network Layers do not silently
 supply process execution. Platform support is limited to macOS and Linux. Scoped process cleanup
@@ -94,6 +100,7 @@ The [workspace Effect guide](../../docs/architecture/effect-v4.md) and
 anchors are the [session lifecycle](tests/session-runtime.test.ts),
 [atomic projection](tests/projection.test.ts), [refresh ownership](tests/refresh-coordinator.test.ts),
 [usage publication](tests/usage-controller.test.ts), [document races](tests/json-document.test.ts),
+[document files and processes](tests/json-document-files.test.ts),
 [process cleanup](tests/process-runner.test.ts), [safe-file](tests/safe-file.test.ts), and
 [cross-process recovery](tests/cross-process-lock.test.ts) tests. These protect observable guarantees;
 module names and helper placement may change with ownership.
