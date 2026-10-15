@@ -14,6 +14,12 @@ import {
   type SubagentWriteIntent,
 } from "../domain/routing.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
+import {
+  classifyCliVersion,
+  LOCAL_CLI_LABELS,
+  LOCAL_CLI_MINIMUM_VERSIONS,
+  type LocalCliVersion,
+} from "../backend/local-cli-version.ts";
 import { acquireLocalClaudeDebug, type LocalClaudeDebugRecorder } from "./local-claude-debug.ts";
 import { readValidatedCodexAuth, safeAgentDirectory } from "./harness-shared.ts";
 import { requireNodeExecutable } from "./node-executable.ts";
@@ -56,6 +62,8 @@ export interface LocalCliProcessContract {
   readonly preflight: (
     request: LocalCliPreflightRequest,
   ) => Effect.Effect<void, InvalidSubagentRequestError>;
+  /** The CLI's reported release, probed once per session. */
+  readonly version?: ((runtime: LocalCliRuntime) => Effect.Effect<LocalCliVersion>) | undefined;
   readonly spawn: (
     request: LocalCliHarnessRequest,
   ) => Effect.Effect<LocalCliProcessHandle, SubagentProcessError, Scope.Scope>;
@@ -114,6 +122,38 @@ const validateLocalPreflightRequest = (
     });
     return undefined;
   });
+
+const runVersionProbe = (
+  options: LocalCliHarnessOptions,
+  runtime: LocalCliRuntime,
+  environment: NodeJS.ProcessEnv,
+): Effect.Effect<LocalCliVersion, InvalidSubagentRequestError> =>
+  runProbeEffect(
+    options.executables?.[runtime] ?? runtime,
+    ["--version"],
+    sanitizeLocalCliEnvironment(environment, runtime),
+  ).pipe(
+    Effect.flatMap((result) => {
+      if (result.cleanupUnconfirmed)
+        return preflightError(
+          `${runtime}_preflight_cleanup_unconfirmed`,
+          `${runtime} version probe cleanup could not be confirmed; no later candidate will be attempted.`,
+        );
+      return Effect.succeed(
+        result.code === 0 && !result.timedOut && !result.overflowed
+          ? classifyCliVersion(runtime, result.stdout)
+          : { status: "unavailable" as const },
+      );
+    }),
+  );
+
+const requireSupportedVersion = (runtime: LocalCliRuntime, version: LocalCliVersion) =>
+  version.status === "unsupported"
+    ? preflightError(
+        `${runtime}_version_unsupported`,
+        `${LOCAL_CLI_LABELS[runtime]} ${version.version} is older than the supported ${LOCAL_CLI_MINIMUM_VERSIONS[runtime]}; update it to use this route.`,
+      )
+    : Effect.void;
 
 const resolveCodexApiKeyFallback = (
   request: LocalCliPreflightRequest,
@@ -238,21 +278,45 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   return claudeDebug ? { ...transport, claudeDebug } : transport;
 });
 
-export const makeLocalCliProcess = (options: LocalCliHarnessOptions): LocalCliProcessContract => ({
-  preflight: Effect.fn("LocalCliProcess.preflight")(function* (request: LocalCliPreflightRequest) {
-    yield* validateLocalPreflightRequest(options, request);
-    const environment = options.environment ?? process.env;
-    const codexApiKeyFallback = yield* resolveCodexApiKeyFallback(request, environment);
-    const result = yield* runLocalPreflightProbe(
-      options,
-      request,
-      environment,
-      codexApiKeyFallback,
+export const makeLocalCliProcess = (options: LocalCliHarnessOptions): LocalCliProcessContract => {
+  const environment = options.environment ?? process.env;
+  // A CLI rarely changes within a session; an unavailable one is probed again next time.
+  const versions = new Map<LocalCliRuntime, LocalCliVersion>();
+  const cachedVersion = (runtime: LocalCliRuntime) =>
+    Effect.suspend(() => {
+      const known = versions.get(runtime);
+      if (known) return Effect.succeed(known);
+      return runVersionProbe(options, runtime, environment).pipe(
+        Effect.tap((probed) =>
+          Effect.sync(() => {
+            if (probed.status !== "unavailable") versions.set(runtime, probed);
+          }),
+        ),
+      );
+    });
+  const version = (runtime: LocalCliRuntime): Effect.Effect<LocalCliVersion> =>
+    cachedVersion(runtime).pipe(
+      Effect.catch(() => Effect.succeed<LocalCliVersion>({ status: "unavailable" })),
     );
-    yield* validateLocalProbeResult(request, result, codexApiKeyFallback);
-  }),
-  spawn: (request) => acquireLocalCli(options, request),
-});
+  return {
+    preflight: Effect.fn("LocalCliProcess.preflight")(function* (
+      request: LocalCliPreflightRequest,
+    ) {
+      yield* validateLocalPreflightRequest(options, request);
+      yield* requireSupportedVersion(request.runtime, yield* cachedVersion(request.runtime));
+      const codexApiKeyFallback = yield* resolveCodexApiKeyFallback(request, environment);
+      const result = yield* runLocalPreflightProbe(
+        options,
+        request,
+        environment,
+        codexApiKeyFallback,
+      );
+      yield* validateLocalProbeResult(request, result, codexApiKeyFallback);
+    }),
+    version,
+    spawn: (request) => acquireLocalCli(options, request),
+  };
+};
 
 export class LocalCliProcess extends Context.Service<LocalCliProcess, LocalCliProcessContract>()(
   "pi-subagents/boundary/local-cli-process/LocalCliProcess",

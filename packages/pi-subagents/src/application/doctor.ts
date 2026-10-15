@@ -1,6 +1,12 @@
 import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { absurd } from "effect/Function";
 import * as Option from "effect/Option";
+import {
+  LOCAL_CLI_LABELS,
+  LOCAL_CLI_MINIMUM_VERSIONS,
+  type LocalCliVersion,
+} from "../backend/local-cli-version.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import { nodeFsConstants, nodeFsPromises as fs } from "../boundary/node-builtins.ts";
@@ -108,12 +114,15 @@ export const runSubagentDoctor = (
     const environment = hostProfileEnvironment(input.pi, input.ctx);
     // Profiles often share a route; each distinct route is probed once.
     const outcomes = new Map<string, string | undefined>();
+    const cliRuntimes = new Set<LocalCliRuntime>();
     for (const id of PROFILE_IDS) {
       const plan = profiles.resolve(snapshot, id, environment);
       if (plan.kind === "failed") {
         checks.push(check(`Profile ${id}`, "failed", plan.message));
         continue;
       }
+      for (const attempt of plan.attempts)
+        if (attempt.host === "local" && attempt.runtime !== "pi") cliRuntimes.add(attempt.runtime);
       const [first] = plan.attempts;
       if (!first) {
         checks.push(check(`Profile ${id}`, "failed", "no eligible route"));
@@ -138,6 +147,11 @@ export const runSubagentDoctor = (
               `${routeLabel(first)}: ${failure}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
             ),
       );
+    }
+
+    for (const runtime of cliRuntimes) {
+      const version = yield* cliVersionCheck(backends, runtime);
+      if (version) checks.push(version);
     }
 
     const writable = yield* Effect.promise(() =>
@@ -189,6 +203,43 @@ const readinessFailure = (
       Effect.timeoutOption(PREFLIGHT_TIMEOUT),
       Effect.map(Option.getOrElse(() => "readiness check timed out")),
     );
+
+type LocalCliRuntime = keyof typeof LOCAL_CLI_LABELS;
+
+const versionCheck = (runtime: LocalCliRuntime, version: LocalCliVersion): DoctorCheck => {
+  const label = `${LOCAL_CLI_LABELS[runtime]} CLI`;
+  const minimum = LOCAL_CLI_MINIMUM_VERSIONS[runtime];
+  switch (version.status) {
+    case "supported":
+      return check(label, "ok", `version ${version.version}`);
+    case "unsupported":
+      return check(
+        label,
+        "failed",
+        `version ${version.version}; subagents need ${minimum} or later, so its routes are skipped`,
+      );
+    case "unrecognized":
+      return check(
+        label,
+        "warning",
+        `version output "${version.output}" isn't recognized; can't confirm ${minimum} or later`,
+      );
+    case "unavailable":
+      return check(label, "warning", "not found, or it didn't report a version");
+  }
+  return absurd(version);
+};
+
+// The version a launch's preflight checks, cached for the session by the CLI boundary.
+const cliVersionCheck = (
+  backends: SubagentBackendRegistry["Service"],
+  runtime: LocalCliRuntime,
+): Effect.Effect<DoctorCheck | undefined> =>
+  backends.resolve({ host: "local", runtime, context: "fresh" }).pipe(
+    Effect.flatMap((driver) => driver.cliVersion ?? Effect.succeed(undefined)),
+    Effect.map((version) => version && versionCheck(runtime, version)),
+    Effect.orElseSucceed(() => undefined),
+  );
 
 const STATUS_GLYPHS = { ok: "✓", warning: "!", failed: "✗" } as const;
 

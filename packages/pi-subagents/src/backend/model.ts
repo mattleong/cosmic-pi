@@ -11,6 +11,7 @@ import type {
   SubagentWriteIntent,
 } from "../domain/routing.ts";
 import type { RuntimeApiKey, SubagentCapability, SubagentUsage } from "../run/model.ts";
+import type { LocalCliVersion } from "./local-cli-version.ts";
 
 export type BackendResumeToken = object;
 
@@ -201,6 +202,8 @@ export interface BackendDriver {
   readonly preflight: (
     request: BackendPreflightRequest,
   ) => Effect.Effect<void, import("../run/errors.ts").InvalidSubagentRequestError>;
+  /** The external CLI release this driver launches, for diagnostics. */
+  readonly cliVersion?: Effect.Effect<LocalCliVersion> | undefined;
   readonly spawn: (
     request: BackendLaunchRequest,
   ) => Effect.Effect<BackendHandle, SubagentError, Scope.Scope>;

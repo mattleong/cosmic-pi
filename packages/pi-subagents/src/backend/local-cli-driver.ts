@@ -34,6 +34,7 @@ import {
   type BackendLaunchRequest,
 } from "./model.ts";
 import { supervisorError } from "./driver-shared.ts";
+import { LOCAL_CLI_LABELS } from "./local-cli-version.ts";
 
 const REPORT_TOOL = SUPERVISOR_MCP_TOOL_NAMES[3];
 
@@ -53,14 +54,9 @@ export const withLocalSupervisorInstructions = (
   ].join("\n\n"),
 });
 
-const RUNTIME_LABELS = {
-  claude: "Claude Code",
-  codex: "Codex",
-} as const satisfies Record<LocalCliRuntime, string>;
-
 /** The exit status on the first line, then the end of the CLI's bounded, redacted stderr. */
 export const localCliExitDiagnostic = (runtime: LocalCliRuntime, exit: ProcessExit): string => {
-  const summary = `${RUNTIME_LABELS[runtime]} exited${exit.exitCode === null ? "" : ` with code ${exit.exitCode}`}${exit.signal ? ` (${exit.signal})` : ""}.`;
+  const summary = `${LOCAL_CLI_LABELS[runtime]} exited${exit.exitCode === null ? "" : ` with code ${exit.exitCode}`}${exit.signal ? ` (${exit.signal})` : ""}.`;
   const stderr = exit.stderr.trim();
   return stderr
     ? `${summary}\n${sanitizeStreamDiagnostic(stderr, MAX_ERROR_CHARS - summary.length - 1)}`
@@ -104,7 +100,7 @@ export const consumeUntilExit = (
             processError(
               "run",
               `local_${runtime}_transport_closed`,
-              `Local ${RUNTIME_LABELS[runtime]} transport closed.`,
+              `Local ${LOCAL_CLI_LABELS[runtime]} transport closed.`,
             ),
         ),
       ),
@@ -153,6 +149,7 @@ export const localCliBackendDriver =
       capabilities: ["steer", "interrupt", "parent-contact"],
       supportsContext: (context) => context === "fresh",
       preflight: (request) => processes.preflight({ runtime, ...request }),
+      ...(processes.version && { cliVersion: processes.version(runtime) }),
       spawn: (request) =>
         Effect.gen(function* () {
           const launch = withLocalSupervisorInstructions(request);
