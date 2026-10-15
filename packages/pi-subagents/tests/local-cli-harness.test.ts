@@ -349,7 +349,7 @@ describe("local CLI harness ownership", () => {
       yield* Effect.promise(() =>
         fs.mkdir(rollouts, { recursive: true }).then(() => fs.writeFile(rollout, "{}\n")),
       );
-      yield* removeLocalCliHarness(harness.directory);
+      yield* removeLocalCliHarness(harness);
       const remains = yield* Effect.promise(() =>
         fs.lstat(rollout).then(
           () => true,
