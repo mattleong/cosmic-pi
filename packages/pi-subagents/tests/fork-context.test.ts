@@ -16,13 +16,23 @@ const tool = {
   parameters: { type: "object" },
 };
 
-const forkRequest = (directory: string, parent: SessionManager) =>
+const forkRequest = (directory: string, parent: SessionManager, sharesParentPromptCache = false) =>
   backendLaunch({
     cwd: directory,
     context: "fork",
     parentSessionId: parent.getSessionId(),
     parentSessionFile: parent.getSessionFile()!,
     parentLeafId: parent.getLeafId()!,
+    sharesParentPromptCache,
+  });
+
+const appendReasonedAnswer = (session: SessionManager, text: string) =>
+  session.appendMessage({
+    ...fauxAssistantMessage(text),
+    content: [
+      { type: "thinking", thinking: "signed private reasoning", thinkingSignature: "signature" },
+      { type: "text", text },
+    ],
   });
 
 describe("forked Pi transcript", () => {
@@ -273,6 +283,100 @@ describe("forked Pi transcript", () => {
           content: "child-owned prompt",
           toolsAdded: [{ name: "child_only" }],
         });
+      }),
+    );
+  }
+});
+
+describe("forked Pi transcript sharing the parent's prompt cache", () => {
+  it.live("keeps the parent's prompt state and reasoning so requests share its prefix", () =>
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory("pi-fork-shared-");
+      const parent = SessionManager.create(directory, directory);
+      parent.appendMessage({
+        role: "system",
+        content: "",
+        sections: { preamble: "parent preamble" },
+        toolsAdded: [tool],
+        timestamp: 1,
+      });
+      const question = parent.appendMessage({ role: "user", content: "question", timestamp: 2 });
+      appendReasonedAnswer(parent, "answer");
+      const compactionId = parent.appendCompaction("summary", question, 42);
+      const labelId = parent.appendLabelChange(question, "parent bookmark");
+      parent.appendMessage({
+        role: "system",
+        content: "",
+        sections: { rules: "parent rules" },
+        toolsRemoved: [{ name: "read" }],
+        timestamp: 3,
+      });
+      parent.appendMessage({ role: "user", content: "fork point", timestamp: 4 });
+      const original = yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"));
+
+      const childFile = yield* createForkedSession(forkRequest(directory, parent, true), directory);
+      const child = SessionManager.open(childFile);
+
+      expect(child.buildSessionContext().messages).toEqual(parent.buildSessionContext().messages);
+      expect(child.getEntry(compactionId)).toHaveProperty("systemMessage");
+      expect(child.getEntry(labelId)).toMatchObject({
+        type: "custom",
+        customType: "pi-subagents-fork-anchor",
+      });
+      expect(toJson(child.getBranch())).toContain("signed private reasoning");
+      expect(yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"))).toBe(
+        original,
+      );
+    }),
+  );
+
+  const unshareable = {
+    "prompt text a section patch cannot withdraw": (parent: SessionManager) => {
+      parent.appendMessage({ role: "system", content: "opaque parent secret", timestamp: 1 });
+      parent.appendMessage({ role: "user", content: "question", timestamp: 2 });
+      appendReasonedAnswer(parent, "answer");
+    },
+    "an encrypted checkpoint the child cannot replay": (parent: SessionManager) => {
+      parent.appendMessage({
+        role: "system",
+        content: "",
+        sections: { preamble: "parent preamble" },
+        timestamp: 1,
+      });
+      parent.appendMessage({ role: "user", content: "question", timestamp: 2 });
+      const answer = appendReasonedAnswer(parent, "answer");
+      parent.appendCompaction(
+        "opaque checkpoint placeholder",
+        answer,
+        100,
+        {
+          type: "pi-better-openai.compaction.v1",
+          checkpoint: { output: [{ type: "compaction", encrypted_content: "parent payload" }] },
+        },
+        true,
+      );
+    },
+  } satisfies Record<string, (parent: SessionManager) => void>;
+  for (const [reason, build] of Object.entries(unshareable)) {
+    it.live(`isolates the fork when the parent branch has ${reason}`, () =>
+      Effect.gen(function* () {
+        const directory = yield* temporaryDirectory("pi-fork-unshareable-");
+        const parent = SessionManager.create(directory, directory);
+        build(parent);
+        parent.appendMessage({ role: "user", content: "fork point", timestamp: 3 });
+
+        const childFile = yield* createForkedSession(
+          forkRequest(directory, parent, true),
+          directory,
+        );
+        const child = SessionManager.open(childFile);
+
+        expect(child.buildSessionContext().messages.map((message) => message.role)).not.toContain(
+          "system",
+        );
+        expect(toJson(child.getBranch())).not.toMatch(
+          /opaque parent secret|parent preamble|signed private reasoning|encrypted_content/,
+        );
       }),
     );
   }

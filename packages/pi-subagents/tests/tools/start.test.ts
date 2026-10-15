@@ -48,7 +48,7 @@ import {
   testBackendRegistry,
   view,
 } from "./fixtures/tool-harness.ts";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, extensionContextFixture, modelFixture } from "pi-cosmic-core/testing";
 import { stringContaining } from "../support/matchers.ts";
 
 const route = (overrides: Partial<DeclaredProfileCandidate> = {}): DeclaredProfileCandidate => ({
@@ -260,6 +260,64 @@ describe("subagent tool", () => {
         skippedCandidates: [{ candidateIndex: 0, code: "write_claims_read_only" }],
       },
     });
+  });
+
+  effectTest("shares the parent's prompt cache only with forks on its capable model", function* () {
+    const capability = { supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true };
+    const parentModel = modelFixture({
+      provider: "anthropic",
+      id: "claude-parent",
+      api: "anthropic-messages",
+      compat: capability,
+    });
+    const otherModel = modelFixture({
+      provider: "anthropic",
+      id: "claude-other",
+      api: "anthropic-messages",
+      compat: capability,
+    });
+    const capableParent = extensionContextFixture({
+      ...context,
+      model: parentModel,
+      modelRegistry: {
+        find: (provider: string, id: string) =>
+          [parentModel, otherModel].find((model) => model.provider === provider && model.id === id),
+        hasConfiguredAuth: () => true,
+        getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
+        getAvailable: () => [parentModel, otherModel],
+      },
+    });
+    const profiles = profileServiceFor({
+      profiles: {
+        oracle: [route({ context: "fork" })],
+        reviewer: [route({ context: "fork", model: "anthropic/claude-other" })],
+        scout: [route()],
+      },
+    });
+    const requests: StartSubagentRequest[] = [];
+    yield* invokeOptionalTool(
+      startTool(requests, { profiles }),
+      {
+        agents: [
+          { task: "Advise", profile: "oracle" },
+          { task: "Review", profile: "reviewer" },
+          { task: "Map", profile: "scout" },
+        ],
+      },
+      { context: capableParent },
+    );
+    expect(
+      Object.fromEntries(
+        requests.map((request) => [request.profile, request.sharesParentPromptCache === true]),
+      ),
+    ).toEqual({ oracle: true, reviewer: false, scout: false });
+
+    const codexRequests: StartSubagentRequest[] = [];
+    yield* invokeOptionalTool(startTool(codexRequests), {
+      agents: [{ task: "Advise", profile: "oracle" }],
+    });
+    expect(codexRequests[0]?.context).toBe("fork");
+    expect(codexRequests[0]?.sharesParentPromptCache).toBeUndefined();
   });
 
   effectTest("uses one active session override for discovery and launch provenance", function* () {

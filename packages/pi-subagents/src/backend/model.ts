@@ -42,6 +42,7 @@ export interface BackendLaunchRequest {
   readonly parentSessionId: string;
   readonly parentSessionFile?: string | undefined;
   readonly parentLeafId?: string | undefined;
+  readonly sharesParentPromptCache?: boolean | undefined;
   readonly resumeToken?: BackendResumeToken | undefined;
   readonly systemPrompt: string;
 }

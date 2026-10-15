@@ -45,6 +45,7 @@ import {
 } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
+import { forkPromptCacheRoute } from "./fork-prompt-cache.ts";
 
 export interface SubagentProfileStartSpec {
   readonly task: string;
@@ -65,6 +66,16 @@ const stableParentLeaf = (ctx: ExtensionContext): string | undefined => {
     return leaf.parentId ?? undefined;
   return leaf.id;
 };
+
+const sharesParentPromptCache = (
+  ctx: ExtensionContext,
+  context: StartSubagentRequest["context"],
+  model: string,
+): boolean =>
+  context === "fork" &&
+  ctx.model !== undefined &&
+  `${ctx.model.provider}/${ctx.model.id}` === model &&
+  forkPromptCacheRoute(ctx.model) !== undefined;
 
 const transferableRuntimeApiKey = (value: string | undefined): value is string =>
   Predicate.isString(value) &&
@@ -373,6 +384,9 @@ const resolvePlannedStart = (
       parentSessionId: ctx.sessionManager.getSessionId(),
       ...(parentSessionFile && { parentSessionFile }),
       ...(parentLeafId && { parentLeafId }),
+      ...(sharesParentPromptCache(ctx, attempt.effectiveContext, resolved.model) && {
+        sharesParentPromptCache: true,
+      }),
     };
     return request;
   });

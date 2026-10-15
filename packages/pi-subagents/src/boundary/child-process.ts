@@ -1,7 +1,9 @@
+import { contentText, type SystemMessage } from "@earendil-works/pi-ai";
 import { sha256Text, synchronousRandomUuid } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 import { PROTOCOL_FINGERPRINT_ENV, protocolFingerprint } from "./protocol-fingerprint.ts";
+import { FORK_PROMPT_CACHE_KEY_ENV, forkPromptCacheKey } from "./fork-prompt-cache.ts";
 import { nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
   getAgentDir,
@@ -48,6 +50,7 @@ const BLOCKED_ENV_KEYS = new Set([
   "PI_SESSION_ID",
   RUNTIME_API_KEY_ENV,
   RUNTIME_API_PROVIDER_ENV,
+  FORK_PROMPT_CACHE_KEY_ENV,
 ]);
 
 export type ChildLaunchRequest = Omit<BackendLaunchRequest, "resumeToken"> & {
@@ -136,6 +139,10 @@ export function childProcessEnvironment(
     [PROTOCOL_FINGERPRINT_ENV]: protocolFingerprint(),
     PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
     PI_SUBAGENT_RUN_ID: request.runId,
+    ...(request.context === "fork" &&
+      request.sharesParentPromptCache && {
+        [FORK_PROMPT_CACHE_KEY_ENV]: forkPromptCacheKey(request.parentSessionId),
+      }),
     ...(request.runtimeApiKey && {
       [RUNTIME_API_KEY_ENV]: Redacted.value(request.runtimeApiKey),
       [RUNTIME_API_PROVIDER_ENV]: request.model.slice(0, request.model.indexOf("/")),
@@ -151,20 +158,41 @@ const isSessionHeader = Schema.is(
 );
 const encodeJsonLine = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
-const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry => {
+// A fork either keeps the parent's prompt state verbatim, so a same-model child's requests start
+// with the parent's cached prefix and its first prompt patch overrides every inherited section, or
+// replaces it with inert anchors.
+type ForkPromptState = "shared" | "isolated";
+
+const hasPromptText = (message: SystemMessage): boolean => contentText(message.content).length > 0;
+
+// Section patches cannot withdraw prompt text, and the child cannot replay encrypted checkpoints.
+const preventsPromptSharing = (entry: SessionEntry): boolean =>
+  (entry.type === "message" && entry.message.role === "system" && hasPromptText(entry.message)) ||
+  (entry.type === "compaction" &&
+    (isEncryptedWorkspaceCheckpoint(entry.details) ||
+      (entry.systemMessage !== undefined && hasPromptText(entry.systemMessage))));
+
+const forkAnchor = (entry: SessionEntry, parentId: string | null): SessionEntry => ({
+  type: "custom",
+  customType: "pi-subagents-fork-anchor",
+  id: entry.id,
+  parentId,
+  timestamp: entry.timestamp,
+});
+
+const cloneEntry = (
+  entry: SessionEntry,
+  parentId: string | null,
+  prompt: ForkPromptState,
+): SessionEntry => {
   if (
     entry.type === "label" ||
-    (entry.type === "message" && entry.message.role === "system") ||
     (entry.type === "compaction" && isEncryptedWorkspaceCheckpoint(entry.details))
-  ) {
-    return {
-      type: "custom",
-      customType: "pi-subagents-fork-anchor",
-      id: entry.id,
-      parentId,
-      timestamp: entry.timestamp,
-    };
-  }
+  )
+    return forkAnchor(entry, parentId);
+  if (prompt === "shared") return { ...entry, parentId };
+  if (entry.type === "message" && entry.message.role === "system")
+    return forkAnchor(entry, parentId);
   if (entry.type === "compaction") {
     const cloned = { ...entry, parentId };
     delete cloned.systemMessage;
@@ -225,9 +253,13 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
       cwd: request.cwd,
       parentSession: request.parentSessionFile,
     };
+    const prompt: ForkPromptState =
+      request.sharesParentPromptCache && !branch.some(preventsPromptSharing)
+        ? "shared"
+        : "isolated";
     let parentId: string | null = null;
     const entries = branch.map((entry) => {
-      const cloned = cloneEntry(entry, parentId);
+      const cloned = cloneEntry(entry, parentId, prompt);
       parentId = cloned.id;
       return cloned;
     });

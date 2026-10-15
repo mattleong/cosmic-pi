@@ -252,6 +252,8 @@ export interface StartSubagentRequest {
   readonly parentSessionId: string;
   readonly parentSessionFile?: string | undefined;
   readonly parentLeafId?: string | undefined;
+  /** A same-model fork whose requests can reuse the parent's cached prompt prefix. */
+  readonly sharesParentPromptCache?: boolean | undefined;
 }
 
 export const hasSubagentCapability = (

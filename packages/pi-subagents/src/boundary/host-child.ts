@@ -49,6 +49,7 @@ import {
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
+import { registerForkPromptCacheHooks } from "./fork-prompt-cache.ts";
 import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
 import { nodeWriteSync } from "./node-builtins.ts";
@@ -449,6 +450,7 @@ export function registerSubagentChildBridge(
   });
 
   registerChildPiFastModeHook(pi, () => pi.getFlag("pi-subagents-fast-mode") === true);
+  registerForkPromptCacheHooks(pi, process.env);
 
   pi.on("session_start", (_event, ctx) => {
     deactivate(currentSession);

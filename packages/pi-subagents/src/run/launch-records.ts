@@ -135,6 +135,7 @@ export const backendLaunchRequest = (
   parentSessionId: request.parentSessionId,
   ...(request.parentSessionFile && { parentSessionFile: request.parentSessionFile }),
   ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
+  ...(request.sharesParentPromptCache && { sharesParentPromptCache: true }),
   systemPrompt: childSystemPrompt(withWriteClaims(request, writeClaims)),
 });
 

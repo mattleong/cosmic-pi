@@ -43,6 +43,25 @@ describe("subagent child process boundary", () => {
       expect(environment[key]).toBeUndefined();
   });
 
+  it("hands the parent's prompt cache key only to forks that share its cache", () => {
+    const inherited = { PATH: "/usr/bin", PI_SUBAGENT_PROMPT_CACHE_KEY: "stale-key" };
+    const sharing = backendLaunch({
+      context: "fork",
+      parentSessionId: "parent-session",
+      sharesParentPromptCache: true,
+    });
+    expect(childProcessEnvironment(inherited, sharing).PI_SUBAGENT_PROMPT_CACHE_KEY).toBe(
+      "parent-session",
+    );
+    for (const request of [
+      backendLaunch({ context: "fork", parentSessionId: "parent-session" }),
+      backendLaunch({ context: "fresh", sharesParentPromptCache: true }),
+    ])
+      expect(childProcessEnvironment(inherited, request).PI_SUBAGENT_PROMPT_CACHE_KEY).toBe(
+        undefined,
+      );
+  });
+
   it("keeps untrusted session identifiers inside one directory segment", () => {
     expect(safeSubagentDirectorySegment("session-123")).toBe("session-123");
     const escaped = safeSubagentDirectorySegment("../../../../tmp/owned");
