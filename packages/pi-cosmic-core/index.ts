@@ -40,8 +40,10 @@ export { JsonHttpClient, JsonHttpResponse } from "./src/platform/json-http.ts";
 export {
   CrossProcessLock,
   CrossProcessLockError,
+  crossProcessLockHolder,
   type CrossProcessLease,
   type CrossProcessLockContract,
+  type CrossProcessLockHolder,
 } from "./src/platform/cross-process-lock.ts";
 export {
   decodeTolerantFields,

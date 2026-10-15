@@ -248,6 +248,25 @@ export const acquireNativeLock = (
   return publishOwner(root, directory, owner) ? ownedLease(root, directory, owner) : undefined;
 };
 
+export interface CrossProcessLockHolder {
+  readonly slot: string;
+  /** The current owner's process id, when its evidence is readable. */
+  readonly ownerPid?: number;
+}
+
+/** Names a namespace's slot and its current owner for diagnostics; it never changes the lock. */
+export const crossProcessLockHolder = (
+  namespace: string,
+  options: CrossProcessLockOptions,
+): CrossProcessLockHolder => {
+  const slot = path.join(options.directory, sha256Text(namespace));
+  try {
+    return { slot, ownerPid: readOwner(slot).pid };
+  } catch {
+    return { slot };
+  }
+};
+
 const failure = (cause: unknown) =>
   cause instanceof CrossProcessLockError
     ? cause

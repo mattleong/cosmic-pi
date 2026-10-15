@@ -2,7 +2,11 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
-import { acquireNativeLock, CrossProcessLock } from "../src/platform/cross-process-lock.ts";
+import {
+  acquireNativeLock,
+  CrossProcessLock,
+  crossProcessLockHolder,
+} from "../src/platform/cross-process-lock.ts";
 import {
   nodeFsPromises as fs,
   nodePath as path,
@@ -40,6 +44,19 @@ it.live("excludes a real process, then admits its polling successor after releas
     expect(acquireNativeLock("fixture", { directory })).toBeUndefined();
     lease?.release();
     expect(nodeLockFs.readdirSync(directory)).toEqual([]);
+  }).pipe(Effect.scoped),
+);
+
+it.live("names a held slot's owner for diagnostics without changing the lock", () =>
+  Effect.gen(function* () {
+    const directory = yield* root;
+    const lease = acquireNativeLock("fixture", { directory });
+    const holder = crossProcessLockHolder("fixture", { directory });
+    expect(holder.slot.startsWith(directory)).toBe(true);
+    expect(holder.ownerPid).toBe(process.pid);
+    expect(acquireNativeLock("fixture", { directory })).toBeUndefined();
+    lease?.release();
+    expect(crossProcessLockHolder("fixture", { directory })).toEqual({ slot: holder.slot });
   }).pipe(Effect.scoped),
 );
 

@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { CrossProcessLock } from "pi-cosmic-core";
 import type {
   WorkspaceAcquired,
   WorkspaceHandle,
@@ -31,6 +32,7 @@ import {
   validWorkspaceId,
   workspaceDirectory,
   withWorkspaceStoreLock,
+  workspaceLockDirectory,
 } from "./git-worktree-store.ts";
 import { listWorkspaceRecords, removeWorkspaceTrees } from "./git-worktree-recovery.ts";
 import { publishWorkspace, requiredLeaseDirectories } from "./git-worktree-integration.ts";
@@ -39,6 +41,12 @@ const treeOf = (repository: string, revision: string) =>
   git(repository, ["rev-parse", `${revision}^{tree}`]).pipe(Effect.flatMap(oid));
 const subdirectory = (record: WorkspaceRecord) =>
   path.relative(record.handle.sourceRoot, record.handle.sourceCwd);
+
+interface SourceCheckout {
+  readonly sourceRoot: string;
+  readonly sourceCwd: string;
+  readonly subdirectory: string;
+}
 
 interface CreateWorkspaceInput {
   readonly sourceCwd: string;
@@ -82,6 +90,10 @@ const neutralizeAttributes = (repository: string) =>
 export const gitWorkspaceEngine = (agentDirectory: string) =>
   Effect.gen(function* () {
     const registry = path.join(yield* resolveAgentDirectory(agentDirectory), "git-workspaces");
+    const lockDirectory = workspaceLockDirectory(registry);
+    const locks = yield* CrossProcessLock.use((lock) => Effect.succeed(lock)).pipe(
+      Effect.provide(CrossProcessLock.layer({ directory: lockDirectory })),
+    );
     const owned = new Set<string>();
     const directory = (record: WorkspaceRecord) =>
       workspaceDirectory(registry, record.handle.workspaceId);
@@ -132,18 +144,21 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
           );
         return record;
       });
-    const locked = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      withWorkspaceStoreLock(registry, effect);
+    const lockedSource = <A, E, R>(sourceRoot: string, effect: Effect.Effect<A, E, R>) =>
+      withWorkspaceStoreLock(locks, lockDirectory, sourceRoot, effect);
+    // The source root never changes for a record, so reading it before the lock is safe; the
+    // operation itself rereads the record under the lock.
+    const locked = <A, E, R>(effect: Effect.Effect<A, E, R>, target: WorkspaceTarget) =>
+      readWorkspaceRecord(registry, target.workspaceId).pipe(
+        Effect.flatMap((record) => lockedSource(record.handle.sourceRoot, effect)),
+      );
 
-    const createInternal = (input: CreateWorkspaceInput, predecessor?: WorkspaceRecord) =>
+    const createInternal = (
+      input: CreateWorkspaceInput,
+      source: SourceCheckout,
+      predecessor?: WorkspaceRecord,
+    ) =>
       Effect.gen(function* () {
-        const source = predecessor
-          ? {
-              sourceRoot: predecessor.handle.sourceRoot,
-              sourceCwd: predecessor.handle.sourceCwd,
-              subdirectory: subdirectory(predecessor),
-            }
-          : yield* inspectSource(input.sourceCwd);
         if (
           registry === source.sourceRoot ||
           registry.startsWith(`${source.sourceRoot}${path.sep}`)
@@ -260,8 +275,9 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
             remedy: "Move the Pi agent directory to a path without control characters.",
           },
         );
+      const source = yield* inspectSource(input.sourceCwd);
       yield* initializeWorkspaceStore(registry);
-      return yield* locked(createInternal(input));
+      return yield* lockedSource(source.sourceRoot, createInternal(input, source));
     });
     const freeze = Effect.fn("GitWorkspaceEngine.freeze")(function* (
       target: WorkspaceSettledTarget,
@@ -472,6 +488,11 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
           ownerId: record.handle.ownerId,
           onAcquired: target.onAcquired,
         },
+        {
+          sourceRoot: record.handle.sourceRoot,
+          sourceCwd: record.handle.sourceCwd,
+          subdirectory: subdirectory(record),
+        },
         record,
       );
     }, locked);
@@ -489,7 +510,7 @@ export const gitWorkspaceEngine = (agentDirectory: string) =>
         owned.delete(target.workspaceId);
         return undefined;
       });
-    const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target));
+    const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target), target);
     // A setup command may only add ignored or excluded files such as dependencies; anything else
     // would enter the worker's proposal or invalidate the prepared tree.
     const setupChanges = Effect.fn("GitWorkspaceEngine.setupChanges")(function* (

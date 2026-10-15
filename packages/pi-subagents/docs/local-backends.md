@@ -53,6 +53,7 @@ The tool/proxy boundary never accepts caller ancestry, owner IDs, or a caller-su
 Workspace engine details:
 
 - `boundary/git-installation.ts` resolves Git once per process: `/usr/bin/git` when present, else the first absolute `git` on the user's PATH. Workspace creation requires Git 2.31 or later. The user's excludes file is resolved the way Git resolves it and passed to every isolated Git call, which otherwise runs without global or system configuration.
+- `boundary/git-worktree-store.ts` owns records and the store lock. Every mutating engine operation holds a pi-cosmic-core `CrossProcessLock` keyed by its source checkout root under `<agent-dir>/git-workspaces/locks`, so sessions in different Pi processes serialize per checkout while other checkouts proceed; listing takes no lock. A waiting operation polls interruptibly for up to two minutes, then fails naming the lock and its owner's process ID. A lock whose owner process has exited is reclaimed on the next attempt. The agent directory is resolved through `realpath` once, so a symlinked `~/.pi` works; symlinks below it are still refused.
 - `boundary/git-worktree-recovery.ts` owns record listing and editable-tree removal.
   Listing separates valid records from fixed-size unavailable-artifact diagnostics and revalidates registry security and identity after scanning.
   Registry failures, defects, and interruption still reject the listing; individual unreadable records do not hide healthy neighbors.
