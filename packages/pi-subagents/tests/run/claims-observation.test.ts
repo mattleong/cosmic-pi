@@ -37,4 +37,25 @@ describe("write-claim tool observation", () => {
     expect(bashCommandMayMutate("bash", { command: "git status --short" })).toBe(false);
     expect(bashCommandMayMutate("bash", { command: "pnpm test" })).toBe(false);
   });
+
+  it("recognizes Git mutations behind global options", () => {
+    for (const command of [
+      "git -C packages/app checkout -- src/a.ts",
+      'git -C "my dir" stash',
+      "git -c core.autocrlf=false stash pop",
+      "git --git-dir=.git --work-tree . reset --hard",
+      "git --no-pager cherry-pick abc123",
+      "git revert HEAD",
+      "git pull --rebase",
+      "git am < fix.patch",
+    ])
+      expect(bashCommandMayMutate("bash", { command })).toBe(true);
+    for (const command of [
+      "git -C packages/app status",
+      "git -c color.ui=never log --oneline",
+      "git --no-pager diff HEAD",
+      "git show HEAD:src/checkout.ts",
+    ])
+      expect(bashCommandMayMutate("bash", { command })).toBe(false);
+  });
 });

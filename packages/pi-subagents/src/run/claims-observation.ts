@@ -54,11 +54,19 @@ export const observeFileWrite = (
     ? collectKnownPaths(args)
     : undefined;
 
+// Global options such as `-C dir`, `-c key=value`, and `--git-dir=path` may precede the subcommand.
+const GIT_ARGUMENT = String.raw`(?:"[^"]*"|'[^']*'|[^\s;&|]+)`;
+const GIT_GLOBAL_OPTION = String.raw`(?:-[Cc]\s+${GIT_ARGUMENT}|--(?:git-dir|work-tree|namespace)\s+${GIT_ARGUMENT}|-{1,2}[A-Za-z][\w-]*(?:=${GIT_ARGUMENT})?)`;
+const GIT_MUTATION = new RegExp(
+  String.raw`\bgit(?:\s+${GIT_GLOBAL_OPTION})*\s+(?:add|am|apply|checkout|cherry-pick|clean|commit|merge|mv|pull|rebase|reset|restore|revert|rm|stash|switch)\b`,
+  "u",
+);
+
 const bashMutationPatterns: ReadonlyArray<RegExp> = [
   /(^|[;&|]\s*)(rm|mv|cp|mkdir|rmdir|touch|tee|install)\b/u,
   /(^|[^<])>{1,2}(?!>)/u,
   /\bsed\b[^\n;&|]*\s-i(?:\s|$)/u,
-  /\bgit\s+(?:add|apply|checkout|clean|commit|merge|mv|rebase|reset|restore|rm|stash|switch)\b/u,
+  GIT_MUTATION,
   /\b(?:npm|pnpm|yarn|bun)\s+(?:add|install|remove|uninstall|update|upgrade)\b/u,
 ];
 
