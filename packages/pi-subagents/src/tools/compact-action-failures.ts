@@ -4,6 +4,8 @@ import type { CompactToolActionFailure, SubagentRunCard } from "./details-schema
 import {
   actionFailureDisposition,
   isUncertainToolFailure,
+  NO_ELIGIBLE_ROUTE_CODES,
+  noEligibleRouteRecovery,
   pendingDeliveryEvidence,
   unconfirmedActionRecovery,
   type ActionFailureDisposition,
@@ -21,6 +23,7 @@ const SCRIPTED_WRITER_RECOVERY: FailureRecoveryRule = [
 ];
 const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   SCRIPTED_WRITER_RECOVERY,
+  [NO_ELIGIBLE_ROUTE_CODES, noEligibleRouteRecovery],
   [
     ["profile", "candidate", "auth", "harness", "model", "unsupported", "confinement", "readiness"],
     "Inspect the effective route with subagent_models or choose a compatible route in /subagents profiles.",

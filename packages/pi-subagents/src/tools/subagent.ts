@@ -104,6 +104,7 @@ const SCRIPTED_SUBAGENT_GUIDELINE =
 const START_GUIDELINES = [
   "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.",
   "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Run several shared-checkout writers only with pairwise-disjoint `writes` claims.",
+  "If a start fails, follow its Next step or tell the user; don't run claude, codex, or pi from the shell instead.",
 ];
 
 const TOOL_SPECS: SubagentToolSpecs = {

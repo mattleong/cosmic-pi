@@ -585,8 +585,13 @@ describe("subagent tool", () => {
           { index: 1, code: "profile_no_eligible_model" },
         ],
       });
-      expect(result?.content[0]?.text).toContain("[profile_unknown]");
-      expect(result?.content[0]?.text).toContain("[profile_no_eligible_model]");
+      const text = result?.content[0]?.text ?? "";
+      expect(text).toContain("[profile_unknown]");
+      expect(text).toContain("[profile_no_eligible_model]");
+      const nextSteps = text.split("\n").filter((line) => line.trim().startsWith("Next:"));
+      expect(nextSteps).toHaveLength(1);
+      expect(nextSteps[0]).toContain("/subagents doctor");
+      expect(nextSteps[0]).toContain("/subagents profiles");
     },
   );
 

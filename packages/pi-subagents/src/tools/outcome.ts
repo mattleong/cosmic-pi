@@ -77,6 +77,15 @@ export const pendingDeliveryEvidence = {
     "Delivery was still being tracked when this call returned; the guidance may already have arrived. Do not resend, retry, interrupt, or replace the worker merely because confirmation is pending. Continue other work or await the worker; stop remains available. Status reports the tracked steeringDelivery state.",
 } as const;
 
+/** Start failures where no configured route candidate can run at all. */
+export const NO_ELIGIBLE_ROUTE_CODES: ReadonlyArray<string> = [
+  "profile_no_eligible_model",
+  "backend_not_implemented",
+];
+
+export const noEligibleRouteRecovery =
+  "No configured candidate for this profile can start. Tell the user: /subagents doctor diagnoses runtimes and authentication, and /subagents profiles edits the route. Don't run claude, codex, or pi from the shell instead.";
+
 export const unconfirmedActionRecovery =
   "The action may already have taken effect. Do not resend, retry, or launch a replacement while the outcome or cleanup is unconfirmed; inspect full subagent_status before choosing recovery.";
 

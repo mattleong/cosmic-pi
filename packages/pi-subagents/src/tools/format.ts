@@ -23,6 +23,8 @@ import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
 import type { SubagentToolAction } from "./schema.ts";
 import {
   actionFailureDisposition,
+  NO_ELIGIBLE_ROUTE_CODES,
+  noEligibleRouteRecovery,
   pendingDeliveryEvidence,
   steeringDeliveryEvidence,
   unconfirmedActionRecovery,
@@ -409,10 +411,12 @@ const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure>): str
           const message = boundedLine(failure.message, 2_048);
           const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
           const recovery = failure.admittedRun;
+          const noEligibleRoute = NO_ELIGIBLE_ROUTE_CODES.includes(failure.code ?? "");
           return [
             `  #${failure.index + 1}${target}${code}: ${message}`,
             recovery ? `    ${formatFailedStartRecovery(recovery)}` : undefined,
             recovery ? `    Next: ${failedStartRecoveryAction(recovery)}` : undefined,
+            !recovery && noEligibleRoute ? `    Next: ${noEligibleRouteRecovery}` : undefined,
           ]
             .filter((line): line is string => line !== undefined)
             .join("\n");
