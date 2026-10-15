@@ -1077,13 +1077,13 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
     generation: 1,
   }),
   {
-    title: "moving in the session tree stops workers",
+    title: "reloading Pi stops workers",
     message: {
       role: "custom",
       customType: STOPPED_RUNS_MESSAGE_TYPE,
       display: true,
       timestamp: 0,
-      content: stoppedRunsContent([authReview, dbMigration], "tree"),
+      content: stoppedRunsContent([authReview, dbMigration], "reload"),
       details: { version: 1, kind: "stopped", total: 2 },
     },
   },

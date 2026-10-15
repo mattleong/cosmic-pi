@@ -30,7 +30,7 @@ import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import * as SubagentLayers from "../src/layer.ts";
-import { captureSubagentControlExpectation } from "../src/run/model.ts";
+import { captureSubagentControlExpectation, type SubagentProjection } from "../src/run/model.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { stringContaining } from "./support/matchers.ts";
 import { encodeFleetActionRequest } from "../src/tools/proxy-fleet.ts";
@@ -251,7 +251,7 @@ describe("subagent Pi registration", () => {
   });
 
   effectTest(
-    "appends pending reports, then lists the runs a tree move or reload stops, without a turn",
+    "reload appends pending reports, then lists the runs it stops, without a turn",
     function* () {
       const makeLayer = SubagentLayers.subagentApplicationLayer;
       const order: string[] = [];
@@ -301,26 +301,77 @@ describe("subagent Pi registration", () => {
       const { emit } = applicationFixture({ sendMessage });
       yield* settle(() => emit("session_start", ctx));
 
-      yield* settle(() => emit("session_tree", ctx));
+      yield* settle(() =>
+        emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
+      );
       expect(order).toEqual(["flush", "pi-subagents-completed", "pi-subagents-stopped"]);
       expect(sendMessage.mock.calls.map(([, options]) => options?.triggerTurn)).toEqual([
         false,
         false,
       ]);
       const stopped = sendMessage.mock.calls[1]?.[0];
+      expect(stopped?.content).toEqual(stringContaining("Reloading Pi"));
       expect(stopped?.content).toEqual(stringContaining("parser-review (agent-1): running"));
       expect(stopped?.content).toEqual(stringContaining("lexer-review (agent-2): paused"));
       expect(stopped?.content).not.toEqual(stringContaining("agent-3"));
       expect(notify).toHaveBeenCalledWith(stringContaining("2 subagents stopped"), "warning");
+    },
+  );
 
-      yield* settle(() =>
-        emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
-      );
-      expect(order.slice(3)).toEqual(["flush", "pi-subagents-completed", "pi-subagents-stopped"]);
-      expect(sendMessage.mock.calls.at(-1)?.[0].content).toEqual(stringContaining("Reloading Pi"));
-      expect(sendMessage.mock.calls.every(([, options]) => options?.triggerTurn === false)).toBe(
-        true,
-      );
+  effectTest(
+    "a tree move stops the runs without adding their reports or a notice to the new branch",
+    function* () {
+      const makeLayer = SubagentLayers.subagentApplicationLayer;
+      const flushes: string[] = [];
+      let publish: ((projection: SubagentProjection) => void) | undefined;
+      const capture = vi
+        .spyOn(SubagentLayers, "subagentApplicationLayer")
+        .mockImplementation((options) => {
+          publish = options.publish;
+          return makeLayer(options).pipe(
+            Layer.merge(
+              Layer.succeed(
+                SubagentService,
+                subagentServiceDouble({
+                  projection: Effect.succeed({ revision: 0, runs: [] }),
+                  deliverPendingCompletions: Effect.sync(() => {
+                    flushes.push("flush");
+                    options.notify({
+                      type: "completed",
+                      runs: [
+                        {
+                          id: "agent-0",
+                          name: "finished-reader",
+                          generation: 1,
+                          outcome: "completed",
+                          finalText: "Pending report.",
+                        },
+                      ],
+                    });
+                  }),
+                }),
+              ),
+            ),
+          );
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore()));
+      const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
+      const notify = vi.fn();
+      const ctx = sessionContext({ hasUI: true, mode: "tui", ui: { notify } }, "tree-session");
+      const { emit } = applicationFixture({ sendMessage });
+      yield* settle(() => emit("session_start", ctx));
+      publish?.({
+        revision: 1,
+        runs: [
+          view({ id: "agent-1", name: "parser-review", state: "running" }),
+          view({ id: "agent-2", name: "done", state: "completed" }),
+        ],
+      });
+
+      yield* settle(() => emit("session_tree", ctx));
+      expect(flushes).toEqual([]);
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledWith(stringContaining("1 subagent stopped"), "warning");
     },
   );
 

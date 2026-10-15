@@ -10,13 +10,12 @@ import { isActiveRunState, type SubagentRunView } from "../run/model.ts";
 
 export const STOPPED_RUNS_MESSAGE_TYPE = "pi-subagents-stopped";
 
-/** Why the session's subagent runtime is being replaced. */
-export type RuntimeRetirement = "tree" | "reload" | "session";
+/** Why the session's subagent runtime is being replaced while the transcript stays. */
+export type RuntimeRetirement = "reload" | "session";
 
 const LISTED_RUNS = 20;
 
 const CAUSE: Record<RuntimeRetirement, string> = {
-  tree: "Moving to another point in the session tree",
   reload: "Reloading Pi",
   session: "Leaving this session",
 };
@@ -72,7 +71,15 @@ export function reportStoppedRuns(
       { triggerTurn: false },
     );
   }, undefined);
-  if (invokeHostCallback(() => ctx.hasUI, false))
+  notifyStoppedRuns(ctx, runs);
+}
+
+/** Tells only the user which subagents a runtime replacement stopped. */
+export function notifyStoppedRuns(
+  ctx: ExtensionContext,
+  runs: ReadonlyArray<SubagentRunView>,
+): void {
+  if (runs.length > 0 && invokeHostCallback(() => ctx.hasUI, false))
     notifyAtHostBoundary(
       ctx,
       `${countLabel(runs.length, "subagent")} stopped; partial work remains in the checkout`,

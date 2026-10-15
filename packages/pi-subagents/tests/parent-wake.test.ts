@@ -216,6 +216,27 @@ describe("parent wake policy", () => {
     }),
   );
 
+  it.effect("does not wake the branch a tree move lands on for a notice owed on the old one", () =>
+    Effect.gen(function* () {
+      const test = harness();
+      test.setIdle(false);
+      yield* Effect.promise(() => test.settle(test.ctx(), settleEvent("completed", [reply()])));
+      test.notify({ type: "completed", runs: [completed] });
+
+      yield* Effect.promise(() =>
+        test.emit("session_tree", test.ctx(), {
+          type: "session_tree",
+          newLeafId: "entry-1",
+          oldLeafId: "entry-2",
+        }),
+      );
+      yield* Effect.promise(() =>
+        test.emit("agent_settled", test.ctx(), { type: "agent_settled", aborted: false }),
+      );
+      expect(test.wakes()).toHaveLength(0);
+    }),
+  );
+
   it.effect("defers the wake for a notice that arrives during a manual compaction", () =>
     Effect.gen(function* () {
       const test = harness();

@@ -46,11 +46,8 @@ export interface ParentWakeHost {
 }
 
 export interface ParentWake extends NoticeDelivery {
-  /**
-   * Holds wakes while the runtime is retired, so its last reports are appended without a turn.
-   * The returned release restores the earlier hold state; a shutdown never calls it.
-   */
-  readonly hold: () => () => void;
+  /** Holds wakes for the rest of this session, as it shuts down. */
+  readonly hold: () => void;
 }
 
 type PendingQuestion = SubagentRunView & {
@@ -149,6 +146,13 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
     owed = false;
   });
 
+  // Notices owed a turn and question reminders belong to the branch the user left.
+  pi.on("session_tree", () => {
+    owed = false;
+    reminded.clear();
+    escalated.clear();
+  });
+
   // A manual compaction makes the parent busy without a run; wake it once compaction ends.
   pi.on("session_compact", () => wakeWhenIdle());
   pi.on("session_compact_failed", () => wakeWhenIdle());
@@ -215,11 +219,7 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
       return accepted;
     },
     hold: () => {
-      const wasHeld = held;
       held = true;
-      return () => {
-        held = wasHeld;
-      };
     },
   };
 }

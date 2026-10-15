@@ -32,6 +32,7 @@ import { registerActiveRunsPrompt } from "../boundary/host-active-runs-prompt.ts
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
 import { hostNotifier } from "../boundary/host-notifier.ts";
 import {
+  notifyStoppedRuns,
   reportStoppedRuns,
   type RuntimeRetirement,
   runsStoppedByReplacement,
@@ -487,8 +488,8 @@ export function registerSubagentApplication(
     bridge.setContext(currentActivation.ctx);
   });
 
-  // Replacing the runtime stops every run, so first append pending reports without a turn, then
-  // tell the model and the user which runs stop.
+  // Reloading or leaving the session stops every run, so first append pending reports without a
+  // turn, then tell the model and the user which runs stop.
   const retireActivation = (ctx: ExtensionContext, cause: RuntimeRetirement): Promise<void> => {
     if (!currentActivation) return Promise.resolve();
     return slot
@@ -505,11 +506,11 @@ export function registerSubagentApplication(
       );
   };
 
+  // Pi switches the branch before this event. The runs belong to the branch the user left, so they
+  // stop without appending their reports or a notice to the new one; only the user is told.
   pi.on("session_tree", (_event, ctx) => {
-    const release = wake.hold();
-    return retireActivation(ctx, "tree")
-      .then(() => prepareActivation(ctx, "tree"))
-      .finally(release);
+    const stopped = currentActivation ? runsStoppedByReplacement(bridge.get().runs) : [];
+    return prepareActivation(ctx, "tree").then(() => notifyStoppedRuns(ctx, stopped));
   });
 
   const shutdownSession = (event: SessionShutdownEvent, ctx: ExtensionContext) => {

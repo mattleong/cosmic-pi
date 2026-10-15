@@ -18,7 +18,7 @@ One root runtime owns the descendant tree and its processes, transports, leases,
 
 Launch planning captures a profile and nesting-policy revision. Candidate fallback ends when service ownership begins. Each assignment has a monotonic epoch; delayed events cannot change a later assignment. Reports and completion claims survive backend cleanup.
 
-Natural completion leaves descendants running. Explicit stop and runtime replacement close the tree leaf-first; replacement first appends pending reports and a notice naming the runs it stops, without starting a turn. Cancelling a caller after ownership transfer stops its wait while the session-scoped commit retains cleanup responsibility.
+Natural completion leaves descendants running. Explicit stop and runtime replacement close the tree leaf-first. `/reload` and leaving the session first append pending reports and a notice naming the runs they stop, without starting a turn; `/tree` stops the runs without adding either to the branch the user moved to. Cancelling a caller after ownership transfer stops its wait while the session-scoped commit retains cleanup responsibility.
 
 ## Critical invariants
 
