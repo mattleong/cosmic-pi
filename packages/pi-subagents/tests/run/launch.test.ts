@@ -392,6 +392,7 @@ describe("SubagentService", () => {
           state: "completed",
           warning: stringContaining("remains quarantined"),
         });
+        expect(oldest?.sessionFile).toBeUndefined();
         const resumeFailure = yield* service.resume(oldestId).pipe(Effect.flip);
         expect(resumeFailure).toMatchObject({ code: "resume_state_reclaimed" });
         expect((yield* service.list).some((run) => run.name === "phase-c-prospective-writer")).toBe(

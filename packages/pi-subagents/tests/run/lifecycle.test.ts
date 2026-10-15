@@ -262,19 +262,25 @@ describe("SubagentService", () => {
     }),
   );
 
-  it.effect("quarantines a stopped run when private state reclamation fails", () => {
-    const { fake, layer } = localServiceFixture(
-      {},
-      fakeChildLayer(Effect.void, { failReclaim: true }),
-    );
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "reclaim-failure" }));
-      const stopped = yield* service.stop(run.id);
-      expect(stopped.state).toBe("stopped");
-      expect(stopped.warning).toContain("remains quarantined");
-      expect(fake.reclaimedRunIds).toEqual([run.id]);
-    });
-  });
+  it.effect(
+    "keeps a stopped run's transcript until the session ends without making it resumable",
+    () =>
+      Effect.gen(function* () {
+        const { fake, layer } = localServiceFixture();
+        const runId = yield* withService(layer, function* (service) {
+          const run = yield* service.start(request({ name: "stopped-transcript" }));
+          yield* yieldUntil(() => fake.controls[0]?.sent("prompt") === true);
+          const stopped = yield* service.stop(run.id);
+          expect(stopped.state).toBe("stopped");
+          expect(stopped.sessionFile).toBe("/tmp/child-session.jsonl");
+          expect(fake.reclaimedRunIds).toEqual([]);
+          const refused = yield* service.resume(run.id, "Continue anyway.").pipe(Effect.flip);
+          expect(refused).toMatchObject({ code: "resume_state_invalid" });
+          return run.id;
+        });
+        expect(fake.reclaimedRunIds).toEqual([runId]);
+      }),
+  );
 
   it.effect("coalesces streamed token activity publications", () => {
     const { fake, projections, layer } = localServiceFixture();
@@ -606,9 +612,10 @@ describe("SubagentService", () => {
         expect((yield* Fiber.join(stopping)).state).toBe("stopped");
         yield* Fiber.await(starting);
         expect((yield* service.status(id!)).state).toBe("stopped");
-        expect(fake.reclaimedRunIds).toContain(id);
+        expect(fake.reclaimedRunIds).toEqual([]);
         expect(cleanupOrder).toEqual(["backend", "lease"]);
       });
+      expect(fake.reclaimedRunIds).toHaveLength(1);
     }),
   );
 

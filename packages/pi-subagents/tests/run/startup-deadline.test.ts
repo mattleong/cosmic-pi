@@ -99,9 +99,10 @@ describe("local Pi startup deadline", () => {
         expect(run.state).toBe("failed");
         expectDiagnostic((yield* service.status(run.id)).error);
         expect(child.released()).toBe(1);
-        expect(fake.reclaimedRunIds).toContain(run.id);
+        expect(fake.reclaimedRunIds).toEqual([]);
         expect(child.sent("prompt")).toBe(false);
       });
+      expect(fake.reclaimedRunIds).toHaveLength(1);
     }),
   );
 

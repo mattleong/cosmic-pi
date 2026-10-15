@@ -64,7 +64,15 @@ export function recordCleanup(
           ),
           Effect.annotateLogs("runId", record.view.id),
         );
-      yield* withLock(Effect.sync(() => void (record.runStateReclaimState = "reclaimed")));
+      yield* withLock(
+        Effect.gen(function* () {
+          record.runStateReclaimState = "reclaimed";
+          if (record.view.sessionFile === undefined) return;
+          const { sessionFile: _reclaimed, ...view } = record.view;
+          record.view = view;
+          yield* publish;
+        }),
+      );
     });
   const markCleanupPending = (record: RunRecord) =>
     withLock(
@@ -77,15 +85,10 @@ export function recordCleanup(
   const clearCleanupPending = (record: RunRecord, scope: Scope.Closeable = record.scope) =>
     withLock(
       Effect.gen(function* () {
-        if (record.scope !== scope) return { owned: false as const, shouldReclaim: false };
+        if (record.scope !== scope) return { owned: false as const };
         const cleanupSettlement = record.cleanupSettlement;
         record.cleanupPending = false;
         record.process = undefined;
-        const shouldReclaim =
-          record.stoppedByParent ||
-          record.view.state === "failed" ||
-          record.view.state === "stopped" ||
-          record.view.state === "stopping";
         const publishRelease =
           record.view.pid !== undefined || isTerminalRunState(record.view.state);
         if (record.view.pid !== undefined) {
@@ -93,22 +96,18 @@ export function recordCleanup(
           record.view = view;
         }
         if (publishRelease) yield* publish;
-        return { owned: true as const, shouldReclaim, cleanupSettlement };
+        return { owned: true as const, cleanupSettlement };
       }),
     ).pipe(
       Effect.flatMap((result) =>
         !result.owned
           ? Effect.void
-          : (result.shouldReclaim ? reclaimRecordRunState(record) : Effect.void).pipe(
-              Effect.tap(() =>
-                withLock(
-                  Effect.sync(() => {
-                    if (record.scope !== scope) return;
-                    record.cleanupDisposition = "confirmed";
-                    Deferred.doneUnsafe(result.cleanupSettlement, Effect.succeed("confirmed"));
-                  }),
-                ),
-              ),
+          : withLock(
+              Effect.sync(() => {
+                if (record.scope !== scope) return;
+                record.cleanupDisposition = "confirmed";
+                Deferred.doneUnsafe(result.cleanupSettlement, Effect.succeed("confirmed"));
+              }),
             ),
       ),
     );
@@ -240,7 +239,6 @@ export function recordCleanup(
               ? clearCleanupPending(record, scope)
               : quarantine("Subagent cleanup failed; the run remains quarantined."),
           ),
-          Effect.catch((error) => quarantine(`Subagent cleanup failed: ${error.message}`)),
           Effect.onInterrupt(() => retainCleanupQuarantine(record, scope)),
           Effect.ensuring(Deferred.succeed(closeSettled, undefined)),
         );
