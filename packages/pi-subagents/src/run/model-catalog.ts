@@ -11,6 +11,11 @@ export interface PiCatalogModel {
 
 const canonicalPiModelId = (model: PiCatalogModel): string => `${model.provider}/${model.id}`;
 
+// Registry context variants ("model@1m") name the same model with a different window.
+const baseModel = (model: string): string => model.split("@", 1)[0]?.toLowerCase() ?? model;
+export const samePiModel = (selected: string, required: string): boolean =>
+  baseModel(selected) === baseModel(required);
+
 type PiModelResolution =
   | { readonly kind: "resolved"; readonly provider: string; readonly id: string }
   | { readonly kind: "ambiguous"; readonly candidates: ReadonlyArray<string> }

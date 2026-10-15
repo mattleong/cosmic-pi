@@ -102,6 +102,8 @@ export type BackendEvent =
       readonly type: "assistant_message";
       readonly assignmentEpoch: number;
       readonly text?: string | undefined;
+      /** The model that produced the reply, when the runtime reports one per message. */
+      readonly model?: string | undefined;
       readonly usage: SubagentUsage;
       readonly terminal?: BackendAssistantTerminal | undefined;
     }

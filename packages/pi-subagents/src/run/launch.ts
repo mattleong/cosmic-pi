@@ -37,6 +37,7 @@ import {
   type RunRecord,
 } from "./internal.ts";
 import { MAX_RETAINED_RUNS } from "./limits.ts";
+import { samePiModel } from "./model-catalog.ts";
 import {
   isActiveRunState,
   isTerminalRunState,
@@ -90,11 +91,6 @@ export interface RunLaunchDependencies extends Pick<
   readonly sessionUsage: SessionUsageLedger;
   readonly currentSpendLimit: Effect.Effect<number | undefined>;
 }
-
-// Registry context variants ("model@1m") name the same model with a different window.
-const baseModel = (model: string): string => model.split("@", 1)[0]?.toLowerCase() ?? model;
-const samePiModel = (selected: string, required: string): boolean =>
-  baseModel(selected) === baseModel(required);
 
 const runtimeClosedError = () =>
   new SubagentRuntimeClosedError({

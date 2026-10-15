@@ -34,6 +34,7 @@ import {
   sanitizeOutputText,
 } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
+import { samePiModel } from "./model-catalog.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
@@ -132,10 +133,12 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     const latestAssistantText = event.text
       ? sanitizeOutputText(event.text, MAX_FINAL_TEXT_CHARS)
       : undefined;
+    const replyModel = event.model;
     return mutateAt(record, event.assignmentEpoch, (current, now) => {
       record.latestAssistantText = latestAssistantText;
       return {
         ...current,
+        ...(replyModel && !samePiModel(replyModel, current.model) && { model: replyModel }),
         lastActivityAt: now,
         ...(latestAssistantText && {
           sessionEvents: appendAssistantSessionEvent(

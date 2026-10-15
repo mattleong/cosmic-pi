@@ -7,6 +7,7 @@ import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
 import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
 import { omittedOutputPreview } from "./driver-shared.ts";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
+import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
 
 const MAX_PROTOCOL_NAME_CHARS = 256;
@@ -254,6 +255,8 @@ export const rpcStateModelId = (model: RpcStateData["model"]): string | undefine
 
 const AssistantMessageSchema = Schema.Struct({
   role: Schema.Literal("assistant"),
+  provider: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.String),
   content: Schema.Array(Schema.Unknown),
   stopReason: Schema.optional(Schema.Literals(["stop", "length", "toolUse", "error", "aborted"])),
   errorMessage: Schema.optional(ProtocolErrorSchema),
@@ -271,6 +274,16 @@ export const decodeAssistantMessage = Effect.fn("SubagentProtocol.decodeAssistan
 
 const TextPartSchema = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const decodeTextPart = decodeUnknownOrUndefined(TextPartSchema);
+
+/** The `provider/model` selector a reply came from; extensions can switch it mid-run. */
+export const assistantModel = (
+  message: Schema.Schema.Type<typeof AssistantMessageSchema>,
+): string | undefined => {
+  const selector = `${message.provider ?? ""}/${message.model ?? ""}`;
+  return message.provider && message.model && isSafeNativeModelSelector(selector)
+    ? selector
+    : undefined;
+};
 
 export const assistantText = (message: Schema.Schema.Type<typeof AssistantMessageSchema>): string =>
   message.content

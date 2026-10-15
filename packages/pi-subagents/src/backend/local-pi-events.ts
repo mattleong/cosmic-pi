@@ -12,6 +12,7 @@ import {
   sanitizeOutputText,
 } from "../run/state.ts";
 import {
+  assistantModel,
   assistantText,
   decodeAssistantMessage,
   type LocalPiContact,
@@ -40,10 +41,12 @@ export const normalizeRpcEvent = (
         Effect.map((message): BackendEvent | undefined => {
           if (!message) return undefined;
           const text = sanitizeOutputText(assistantText(message), MAX_FINAL_TEXT_CHARS);
+          const model = assistantModel(message);
           return {
             type: "assistant_message",
             assignmentEpoch,
             ...(text && { text }),
+            ...(model && { model }),
             usage: emptyUsage(),
             terminal: {
               stopReason: message.stopReason,

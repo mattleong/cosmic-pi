@@ -310,6 +310,32 @@ describe("SubagentService", () => {
     });
   });
 
+  it.effect("names the model a Pi child's replies come from after an extension switches it", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "routed" }));
+      expect(run.model).toBe("openai-codex/gpt-5.6-sol");
+      const reply = (provider: string, model: string, text: string) =>
+        fake.controls[0]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            provider,
+            model,
+            stopReason: "stop",
+            content: [{ type: "text", text }],
+          },
+        });
+      const latest = () => projections.at(-1)?.runs[0];
+      reply("openai-codex", "gpt-5.6-sol@1m", "Same model, wider window.");
+      yield* yieldUntil(() => latest()?.sessionEvents.length === 1);
+      expect(latest()?.model).toBe("openai-codex/gpt-5.6-sol");
+      reply("anthropic", "claude-sonnet-5", "Routed reply.");
+      yield* yieldUntil(() => latest()?.sessionEvents.length === 2);
+      expect((yield* service.status(run.id)).model).toBe("anthropic/claude-sonnet-5");
+    });
+  });
+
   it.effect("counts streamed thinking and tool-call arguments as activity", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
