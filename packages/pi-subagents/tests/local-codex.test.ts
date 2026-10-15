@@ -42,6 +42,7 @@ const startedCodex = (
     const supervisorEvents = yield* Queue.unbounded<SupervisorEvent, Cause.Done>();
     const turnInputs: string[] = [];
     const sandboxPolicies: CodexSandboxPolicy[] = [];
+    const ephemeralThreads: boolean[] = [];
     const child: LocalCliProcessHandle = {
       pid: 1,
       ...(options.temporaryDirectory !== undefined && {
@@ -55,6 +56,7 @@ const startedCodex = (
       send: (frame) =>
         Effect.sync(() => {
           if (!("id" in frame) || !("method" in frame)) return;
+          if (frame.method === "thread/start") ephemeralThreads.push(frame.params.ephemeral);
           if (frame.method === "turn/start") {
             turnInputs.push(frame.params.input[0].text);
             sandboxPolicies.push(frame.params.sandboxPolicy);
@@ -94,7 +96,14 @@ const startedCodex = (
     yield* backend.controls.initialize;
     yield* backend.controls.start("Start", 1);
     expect(yield* Queue.take(backend.events)).toMatchObject({ type: "run_started" });
-    return { backend, childEvents, supervisorEvents, turnInputs, sandboxPolicies };
+    return {
+      backend,
+      childEvents,
+      supervisorEvents,
+      turnInputs,
+      sandboxPolicies,
+      ephemeralThreads,
+    };
   });
 
 const finishTurn = (childEvents: Queue.Queue<LocalCliWireEvent, Cause.Done>, text: string) => {
@@ -155,6 +164,15 @@ it.effect("Codex completes when the reminded turn submits its report", () =>
       expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
       expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
     }),
+  ),
+);
+
+// A native sub-agent spawned with its parent's context loads the parent thread's rollout.
+it.effect("Codex starts a thread whose context native sub-agents can fork", () =>
+  Effect.scoped(
+    startedCodex(() => Effect.succeed(true)).pipe(
+      Effect.map(({ ephemeralThreads }) => expect(ephemeralThreads).toEqual([false])),
+    ),
   ),
 );
 

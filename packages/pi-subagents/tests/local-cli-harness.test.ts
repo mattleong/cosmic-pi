@@ -233,6 +233,33 @@ describe("local CLI harness ownership", () => {
     }),
   );
 
+  it.live("removes the thread rollouts a Codex child persists in its private home", () =>
+    Effect.gen(function* () {
+      const test = yield* setup;
+      const harness = yield* prepareLocalCliHarness(
+        { agentDirectory: test.agentDirectory, environment: codexEnvironment(test.environment) },
+        { runtime: "codex", launch: backendLaunch(), supervisor: supervisor(test.directory) },
+      );
+      const codexHome = harness.env.CODEX_HOME;
+      if (codexHome === undefined) return yield* Effect.die("Codex needs a private home.");
+      const rollouts = nodePath.join(codexHome, "sessions", "2026", "10", "15");
+      const rollout = nodePath.join(rollouts, "rollout-thread.jsonl");
+      yield* Effect.promise(() =>
+        fs.mkdir(rollouts, { recursive: true }).then(() => fs.writeFile(rollout, "{}\n")),
+      );
+      yield* removeLocalCliHarness(harness.directory);
+      const remains = yield* Effect.promise(() =>
+        fs.lstat(rollout).then(
+          () => true,
+          () => false,
+        ),
+      );
+      expect(remains).toBe(false);
+      expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
+      return undefined;
+    }),
+  );
+
   it.live("removes a Codex child's temp directory even after the child locked part of it", () =>
     Effect.gen(function* () {
       const test = yield* setup;

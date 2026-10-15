@@ -393,7 +393,8 @@ export const threadStartRequest = (
       developerInstructions: request.systemPrompt,
       cwd: request.cwd,
       dynamicTools: [],
-      ephemeral: true,
+      // A native sub-agent that forks this thread's context loads the thread's persisted rollout.
+      ephemeral: false,
       experimentalRawEvents: false,
       model: request.model,
       multiAgentMode: "explicitRequestOnly",
