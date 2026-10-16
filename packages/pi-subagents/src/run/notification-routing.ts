@@ -26,12 +26,15 @@ const ancestorMessage = (notification: SubagentNotification): string => {
     );
   const run = notification.runs[0];
   if (!run) return "A descendant subagent finished.";
-  const outcome =
+  const outcome = run.outcome === "failed" ? "failed" : "reported";
+  const detail =
     run.outcome === "failed"
-      ? `failed: ${run.error ?? "No failure detail."}`
-      : `reported: ${run.finalText ?? "No final report."}`;
+      ? (run.error ?? "No failure detail.")
+      : (run.finalText ?? "No final report.");
+  // Put qualifications before the report so bounding a long report cannot drop them.
+  const warning = run.warning ? `Warning: ${run.warning}\n\n` : "";
   return sanitizeOutputText(
-    `Descendant ${run.name} (${run.id}) ${outcome}\n\nUse subagent_status or subagent_await for the full run record.`,
+    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${warning}${detail}\n\nUse subagent_status or subagent_await for the full run record.`,
     32 * 1024,
   );
 };
@@ -39,6 +42,8 @@ const ancestorMessage = (notification: SubagentNotification): string => {
 const canAcceptNotification = (record: RunRecord): boolean =>
   isActiveRunState(record.view.state) &&
   record.view.state !== "paused" &&
+  record.view.state !== "stopping" &&
+  !record.stoppedByParent &&
   !record.pauseRequested &&
   record.process?.controls.deliverNotification !== undefined;
 

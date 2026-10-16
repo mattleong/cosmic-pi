@@ -47,7 +47,7 @@ const completionNotification = (
   const remainingCandidateCount = record.view.remainingCandidateCount ?? 0;
   const retryAvailable =
     completion.outcome === "failed" &&
-    record.view.reportGeneration === 0 &&
+    record.assignment.epoch === 1 &&
     remainingCandidateCount > 0 &&
     record.view.retryExhausted !== true &&
     record.view.retryBlocked !== true &&

@@ -93,7 +93,13 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
       }),
       Effect.ignore,
     );
-    return FiberMap.run(executions, key, execute, { onlyIfMissing: true }).pipe(Effect.asVoid);
+    // The caller owns its wait and completion claims; session-owned commits retain
+    // their separate root scope. Register cancellation before releasing admission.
+    return Effect.uninterruptible(
+      Effect.forkIn(execute, record.scope, { startImmediately: true }).pipe(
+        Effect.flatMap((fiber) => FiberMap.set(executions, key, fiber, { onlyIfMissing: true })),
+      ),
+    );
   };
 }
 

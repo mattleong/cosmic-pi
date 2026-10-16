@@ -8,6 +8,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
+import type { BackendEvent } from "../src/backend/model.ts";
 import type { CodexSandboxPolicy } from "../src/backend/local-codex-protocol.ts";
 import type { LocalCliProcessHandle } from "../src/boundary/local-cli-process.ts";
 import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
@@ -106,6 +107,26 @@ const startedCodex = (
     };
   });
 
+const completeTurn = (
+  childEvents: Queue.Queue<LocalCliWireEvent, Cause.Done>,
+  status: "completed" | "failed" | "interrupted",
+  diagnostic?: string,
+) =>
+  Queue.offerUnsafe(childEvents, {
+    type: "message",
+    value: {
+      method: "turn/completed",
+      params: {
+        threadId: "thread",
+        turn: {
+          id: "turn",
+          status,
+          ...(diagnostic !== undefined && { error: { message: diagnostic } }),
+        },
+      },
+    },
+  });
+
 const finishTurn = (childEvents: Queue.Queue<LocalCliWireEvent, Cause.Done>, text: string) => {
   Queue.offerUnsafe(childEvents, {
     type: "message",
@@ -118,13 +139,7 @@ const finishTurn = (childEvents: Queue.Queue<LocalCliWireEvent, Cause.Done>, tex
       },
     },
   });
-  Queue.offerUnsafe(childEvents, {
-    type: "message",
-    value: {
-      method: "turn/completed",
-      params: { threadId: "thread", turn: { id: "turn", status: "completed" } },
-    },
-  });
+  completeTurn(childEvents, "completed");
 };
 
 it.effect("Codex reminds once, then fails with the reminded turn's final text", () =>
@@ -288,29 +303,97 @@ it.effect("Codex preserves an accepted report behind a full queue and delayed co
   ),
 );
 
-it.effect("Codex keeps a failed report-ownership check distinct from an invalid notification", () =>
+it.effect.each(["completed", "failed"] as const)(
+  "Codex preserves an accepted report delayed by backpressure when its turn is %s",
+  (status) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, childEvents, supervisorEvents, turnInputs } = yield* startedCodex(
+          (epoch) => Effect.succeed(epoch === report.assignmentEpoch),
+        );
+        for (let index = 0; index < 513; index++)
+          Queue.offerUnsafe(supervisorEvents, {
+            type: "supervisor_contact",
+            assignmentEpoch: 1,
+            requestId: `progress-${index}`,
+            kind: "progress",
+            message: "Working",
+          });
+        Queue.offerUnsafe(supervisorEvents, { type: "report", ...report });
+        yield* yieldUntil(() => Queue.sizeUnsafe(backend.events) >= 512);
+        completeTurn(childEvents, status, "Provider failed after report acceptance.");
+        // This later native frame proves completion handling finished, independently of
+        // whether the supervisor report wins the race into the normalized event queue.
+        Queue.offerUnsafe(childEvents, {
+          type: "message",
+          value: { method: "warning", params: { message: "Completion handled." } },
+        });
+        const terminal: BackendEvent[] = [];
+        let reportReceived = false;
+        let completionHandled = false;
+        while (!reportReceived || !completionHandled) {
+          const event = yield* Queue.take(backend.events);
+          backend.acknowledge(event);
+          if (event.type === "report") reportReceived = true;
+          if (event.type === "warning") completionHandled = true;
+          if (event.type === "report" || event.type === "protocol_error") terminal.push(event);
+        }
+        expect(terminal).toEqual([{ type: "report", ...report }]);
+        expect(turnInputs).toEqual(["Start"]);
+      }),
+    ),
+);
+
+it.effect.each([undefined, 2])(
+  "Codex retains native failure when the only accepted report epoch is %s",
+  (acceptedEpoch) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, childEvents, turnInputs } = yield* startedCodex((epoch) =>
+          Effect.succeed(epoch === acceptedEpoch),
+        );
+        completeTurn(childEvents, "failed", "Provider rejected the turn.");
+        expect(yield* Queue.take(backend.events)).toMatchObject({
+          type: "protocol_error",
+          message: stringContaining("Provider rejected the turn."),
+        });
+        expect(turnInputs).toEqual(["Start"]);
+      }),
+    ),
+);
+
+it.effect("Codex does not treat an unowned interruption as report completion", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { backend, childEvents } = yield* startedCodex(() =>
-        Effect.fail(
-          new SupervisorChannelError({
-            operation: "query report",
-            code: "supervisor_closed",
-            message: "Supervisor channel closed.",
-          }),
-        ),
-      );
-      Queue.offerUnsafe(childEvents, {
-        type: "message",
-        value: {
-          method: "turn/completed",
-          params: { threadId: "thread", turn: { id: "turn", status: "completed" } },
-        },
-      });
+      const { backend, childEvents } = yield* startedCodex(() => Effect.succeed(true));
+      completeTurn(childEvents, "interrupted");
       expect(yield* Queue.take(backend.events)).toMatchObject({
         type: "protocol_error",
-        message: stringContaining("Supervisor channel closed."),
+        message: stringContaining("without a matching parent interrupt lifecycle"),
       });
     }),
   ),
+);
+
+it.effect.each(["completed", "failed"] as const)(
+  "Codex keeps a failed report-ownership check distinct from an invalid %s notification",
+  (status) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, childEvents } = yield* startedCodex(() =>
+          Effect.fail(
+            new SupervisorChannelError({
+              operation: "query report",
+              code: "supervisor_closed",
+              message: "Supervisor channel closed.",
+            }),
+          ),
+        );
+        completeTurn(childEvents, status);
+        expect(yield* Queue.take(backend.events)).toMatchObject({
+          type: "protocol_error",
+          message: stringContaining("Supervisor channel closed."),
+        });
+      }),
+    ),
 );

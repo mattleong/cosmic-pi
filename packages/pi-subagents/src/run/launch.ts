@@ -154,6 +154,17 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
           request.writeIntent === "writer"
             ? yield* restore(canonicalizeWriterCwd(writerLeases, request.cwd))
             : undefined;
+        if (
+          request.workspace &&
+          (request.workspace.writerCwd === undefined ||
+            canonicalWriterCwd?.filesystemIdentity !==
+              request.workspace.writerCwd.filesystemIdentity ||
+            canonicalWriterCwd.digest !== request.workspace.writerCwd.digest)
+        )
+          return yield* invalidRequest(
+            "writer_cwd_identity_changed",
+            "The workspace writer directory no longer matches its original lease identity; startup was denied.",
+          );
         const cwd = canonicalWriterCwd?.path ?? request.cwd;
         yield* restore(
           driver.preflight({

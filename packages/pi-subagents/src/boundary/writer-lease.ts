@@ -84,7 +84,7 @@ const validFilesystemIdentity = (cwd: CanonicalWriterCwd): boolean =>
   DIGEST_PATTERN.test(cwd.digest) &&
   sha256Text(cwd.filesystemIdentity) === cwd.digest;
 
-const canonicalize: WriterLeaseContract["canonicalize"] = (cwd) =>
+export const canonicalizeWriterDirectory: WriterLeaseContract["canonicalize"] = (cwd) =>
   Effect.tryPromise({
     try: () =>
       fs.realpath(cwd).then((path) =>
@@ -181,7 +181,7 @@ export const makeWriterLease = (
     });
 
   return {
-    canonicalize,
+    canonicalize: canonicalizeWriterDirectory,
     acquire,
     markSpawnStarted: (lease) =>
       transition(

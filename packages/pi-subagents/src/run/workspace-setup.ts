@@ -1,6 +1,4 @@
 import * as Effect from "effect/Effect";
-import { nodePath as path } from "../boundary/node-builtins.ts";
-import { runWorkspaceSetup } from "../boundary/workspace-setup.ts";
 import type { WorkspaceSetup } from "../config/schema.ts";
 import type { WorkspaceHandle } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
@@ -17,13 +15,34 @@ export const provisionWorkspaceTree = (
   service: WorkspaceServiceContract,
   setup: WorkspaceSetup,
   handle: WorkspaceHandle,
-  tree: { readonly cwd: string; readonly preparationId?: string | undefined },
+  tree: { readonly preparationId?: string | undefined },
+  cleanupPending: (pending: boolean) => void,
 ): Effect.Effect<void, SubagentError> =>
   Effect.gen(function* () {
-    const root = path.resolve(tree.cwd, path.relative(handle.sourceCwd, handle.sourceRoot));
-    yield* runWorkspaceSetup(setup, root).pipe(
-      Effect.mapError((error) => invalid("workspace_setup_failed", error.message)),
-    );
+    cleanupPending(true);
+    yield* service
+      .setup({
+        workspaceId: handle.workspaceId,
+        ownerId: handle.ownerId,
+        preparationId: tree.preparationId,
+        setup,
+      })
+      .pipe(
+        Effect.matchEffect({
+          onFailure: (error) => {
+            if (error.operation === "setup" && !error.cleanupUnconfirmed) cleanupPending(false);
+            return Effect.fail(
+              invalid(
+                error.cleanupUnconfirmed
+                  ? "workspace_setup_cleanup_unconfirmed"
+                  : "workspace_setup_failed",
+                error.detail === undefined ? error.message : `${error.message}\n${error.detail}`,
+              ),
+            );
+          },
+          onSuccess: () => Effect.sync(() => cleanupPending(false)),
+        }),
+      );
     const changed = yield* service
       .setupChanges({
         workspaceId: handle.workspaceId,

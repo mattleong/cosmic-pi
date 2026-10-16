@@ -6,7 +6,11 @@ import type {
   InputEvent,
 } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
+import {
+  extensionContextFixture,
+  recordingExtensionHost,
+  yieldUntil,
+} from "pi-cosmic-core/testing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
@@ -14,6 +18,12 @@ import { hostNotifier } from "../src/boundary/host-notifier.ts";
 import { registerParentWake, WAKE_MESSAGE_TYPE } from "../src/boundary/host-parent-wake.ts";
 import type { SubagentProjection } from "../src/run/model.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
+import {
+  contactParentFrame,
+  localServiceFixture,
+  request,
+  withService,
+} from "./run/fixtures/service-harness.ts";
 import { stringContaining } from "./support/matchers.ts";
 
 type ContextMessage = BoundaryContextPreview["contextMessages"][number];
@@ -270,6 +280,31 @@ describe("parent wake policy", () => {
       expect(test.wakes()).toHaveLength(1);
     }),
   );
+
+  it.effect("reminds only about direct-child questions in the service projection", () => {
+    const { fake, layer, projections } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const direct = yield* service.start(request());
+      yield* service.startSessionOwnedFrom(direct.id, request());
+      const directQuestion = "Which path should the root child take?";
+      const nestedQuestion = "Which path should the nested child take?";
+      fake.controls[0]!.offerIpc(contactParentFrame("direct-question", "question", directQuestion));
+      fake.controls[1]!.offerIpc(contactParentFrame("nested-question", "question", nestedQuestion));
+      yield* yieldUntil(
+        () => projections.at(-1)?.runs.filter((run) => run.question !== undefined).length === 2,
+      );
+      const test = harness(yield* service.projection);
+      const context = test.ctx();
+
+      const reminder = yield* Effect.promise(() => test.settle(context));
+      expect(reminder).toMatchObject({ continue: true });
+      expect(reminder?.entries?.[0]).toMatchObject({ content: stringContaining(directQuestion) });
+      expect(JSON.stringify(reminder?.entries)).not.toContain(nestedQuestion);
+
+      expect(yield* Effect.promise(() => test.settle(context))).toBeUndefined();
+      expect(test.notices).toHaveBeenCalledOnce();
+    });
+  });
 
   it.effect("reminds once about each pending question, then tells the user", () =>
     Effect.gen(function* () {

@@ -650,7 +650,8 @@ describe("SubagentService", () => {
       expect(failure.message).not.toContain("secret-value");
       const failed = yield* service.status(run.id);
       expect(failed.state).toBe("failed");
-      expect(failed.finalText).toBe("Preserved report.");
+      expect(failed.finalText).toBeUndefined();
+      expect(failed.reportStatus).toBe("missing");
       expect(fake.controls[1]?.terminations).toContain("force");
     });
   });

@@ -28,6 +28,7 @@ import {
 import type { SubagentProjection } from "../src/run/model.ts";
 import { beforeAgentStartEvent } from "./fixtures/pi-host.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
+import { localServiceFixture, request, withService } from "./run/fixtures/service-harness.ts";
 
 const reviewer = view({
   id: "agent-1",
@@ -80,6 +81,29 @@ const promptHarness = (initial: SubagentProjection) => {
 };
 
 describe("active subagents prompt section", () => {
+  it.effect("includes launched direct children in live and after-compaction prompts", () => {
+    const { layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const direct = yield* service.start(
+        request({ name: "direct-reviewer", profile: "reviewer" }),
+      );
+      const nested = yield* service.startSessionOwnedFrom(
+        direct.id,
+        request({ name: "nested-scout", profile: "scout" }),
+      );
+      const harness = promptHarness(yield* service.projection);
+      const live = yield* harness.section(keepingModel);
+      expect(live).toContain(direct.id);
+      expect(live).not.toContain(nested.id);
+
+      expect(yield* harness.section(mergingModel)).toBeUndefined();
+      harness.compact("compaction-1");
+      const compacted = yield* harness.section(mergingModel);
+      expect(compacted).toContain(direct.id);
+      expect(compacted).not.toContain(nested.id);
+    });
+  });
+
   it("lists only active direct children and ignores volatile progress", () => {
     const nested = view({ id: "agent-2", parentRunId: "agent-1", state: "running" });
     const done = view({ id: "agent-3", state: "completed" });

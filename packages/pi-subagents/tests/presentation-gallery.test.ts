@@ -840,6 +840,25 @@ const workspaceScenarios = Effect.all([
     { service: workspaceService },
   ),
   scenario(
+    "setup cleanup unconfirmed",
+    {
+      tool: "subagent_workspace",
+      args: { action: "prepare", workspaceId: "ws-1", revisionId: "rev-1" },
+    },
+    {
+      service: {
+        workspacePrepare: () =>
+          Effect.fail(
+            new InvalidSubagentRequestError({
+              code: "workspace_setup_cleanup_unconfirmed",
+              message:
+                "Workspace setup cleanup is unconfirmed; the artifact is quarantined.\nIndependently confirm the setup process and every descendant have stopped. Preserve the proposal and recovery record before manual recovery; restarting Pi does not clear this quarantine.",
+            }),
+          ),
+      },
+    },
+  ),
+  scenario(
     "stale revision",
     {
       tool: "subagent_workspace",

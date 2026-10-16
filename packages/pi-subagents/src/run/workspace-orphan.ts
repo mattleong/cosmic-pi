@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { WorkspaceListing } from "../workspace/model.ts";
+import type { WorkspaceHandle, WorkspaceListing } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { mapWorkspaceError, type WorkspaceControlContext } from "./workspace-binding.ts";
@@ -19,37 +19,55 @@ export function workspaceOrphanOperations(
   const { requireEngine, writerLeases, operations } = context;
   const withStoppedWriter = (
     workspaceId: string,
-    cwd: string,
+    handle: WorkspaceHandle,
     discard: Effect.Effect<void, SubagentError>,
   ): Effect.Effect<void, SubagentError> =>
-    writerLeases.canonicalize(cwd).pipe(
-      Effect.matchEffect({
-        // A worker tree that no longer resolves has no writer left in it.
-        onFailure: () => discard,
-        onSuccess: (identity) =>
-          Effect.acquireUseRelease(
-            writerLeases
-              .acquire({ cwd: identity, runId: `orphan-discard-${workspaceId}` })
-              .pipe(
-                Effect.mapError((error) =>
-                  invalid(
-                    "workspace_process_unsettled",
-                    `A writer may still be running in this workspace.\n${error.message}`,
-                  ),
+    handle.writerCwd === undefined
+      ? Effect.fail(
+          invalid(
+            "workspace_process_unsettled",
+            "This saved workspace has no original writer-directory identity. Automatic discard is unsafe. Independently confirm every writer and descendant has stopped, preserve the proposal and recovery record, then recover its private trees manually.",
+          ),
+        )
+      : Effect.acquireUseRelease(
+          writerLeases
+            .acquire({ cwd: handle.writerCwd, runId: `orphan-discard-${workspaceId}` })
+            .pipe(
+              Effect.mapError((error) =>
+                invalid(
+                  "workspace_process_unsettled",
+                  `A writer may still be running in this workspace.\n${error.message}`,
                 ),
               ),
-            () => discard,
-            (lease) =>
-              writerLeases
-                .release(lease)
-                .pipe(
-                  Effect.catch((error) =>
-                    Effect.logWarning(`Orphan workspace writer lease release: ${error.message}`),
-                  ),
+            ),
+          () =>
+            writerLeases.canonicalize(handle.cwd).pipe(
+              Effect.mapError(() =>
+                invalid(
+                  "workspace_process_unsettled",
+                  "The original worker directory no longer resolves. Preserve its trees and recovery record, confirm every writer and descendant has stopped, then recover the artifact manually.",
                 ),
-          ),
-      }),
-    );
+              ),
+              Effect.flatMap((current) =>
+                current.filesystemIdentity === handle.writerCwd?.filesystemIdentity
+                  ? discard
+                  : Effect.fail(
+                      invalid(
+                        "workspace_process_unsettled",
+                        "The worker path now names a different directory. Automatic discard is unsafe; preserve both trees and the recovery record and recover them manually after confirming all writers have stopped.",
+                      ),
+                    ),
+              ),
+            ),
+          (lease) =>
+            writerLeases
+              .release(lease)
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning(`Orphan workspace writer lease release: ${error.message}`),
+                ),
+              ),
+        );
   const discardOrphan = (
     service: WorkspaceServiceContract,
     workspaceId: string,
@@ -73,7 +91,7 @@ export function workspaceOrphanOperations(
       const record = listing.records.find((entry) => entry.handle.workspaceId === workspaceId);
       if (!record) return yield* invalid("workspace_owner_unavailable", ORPHAN_UNAVAILABLE);
       return yield* operations.withPermits(1)(
-        withStoppedWriter(workspaceId, record.handle.cwd, discardOrphan(service, workspaceId)),
+        withStoppedWriter(workspaceId, record.handle, discardOrphan(service, workspaceId)),
       );
     });
 }

@@ -180,7 +180,15 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
             .prepare({ workspaceId, ownerId: binding.handle.ownerId, revisionId })
             .pipe(Effect.mapError(mapWorkspaceError));
           if (workspaceSetup)
-            yield* provisionWorkspaceTree(service, workspaceSetup, binding.handle, preparation);
+            yield* provisionWorkspaceTree(
+              service,
+              workspaceSetup,
+              binding.handle,
+              preparation,
+              (pending) => {
+                binding.setupCleanupPending = pending;
+              },
+            );
           return preparation;
         }),
       );

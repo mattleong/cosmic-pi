@@ -41,6 +41,8 @@ export const beginNextAssignmentLocked = (
     ...viewPatch,
     assignmentEpoch: record.assignment.epoch,
     state: "starting",
+    // Older report payloads remain owned by their completion generations.
+    finalText: undefined,
     endedAt: undefined,
     warning: undefined,
     warningSource: undefined,

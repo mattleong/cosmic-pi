@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { clipText, invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
-import { isActiveRunState } from "../run/model.ts";
+import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 
 export const ACTIVE_RUNS_PROMPT_SECTION = "active_subagents";
@@ -58,7 +58,9 @@ const runsSection = (
   line: (run: SubagentRunView) => string,
 ): string | undefined => {
   const active = projection.runs.filter(
-    (run) => run.parentRunId === undefined && isActiveRunState(run.state),
+    (run) =>
+      (run.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === SUBAGENT_ROOT_RUN_ID &&
+      isActiveRunState(run.state),
   );
   if (active.length === 0) return undefined;
   const listed = active.slice(0, MAX_LISTED_RUNS).map(line);

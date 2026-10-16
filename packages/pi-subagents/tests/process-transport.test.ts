@@ -319,6 +319,63 @@ describe("shared process transport", () => {
       }),
     );
 
+    for (const mode of ["graceful", "force"] as const) {
+      for (const survives of [true, false])
+        it.effect(
+          `retains detached cleanup evidence after public ${mode} termination when descendants ${survives ? "survive" : "exit"}`,
+          () =>
+            Effect.gen(function* () {
+              detachedUntilSignalled(survives);
+              const { handle, scope, release } = yield* openNative(fixture(), true);
+              yield* handle.terminate(mode);
+              yield* handle.awaitExit;
+              if (survives)
+                expect(yield* releaseFailure(scope)).toMatchObject({ code: "cleanup_unconfirmed" });
+              else yield* release;
+            }),
+        );
+
+      it.effect(`joins a cancelled public ${mode} termination through snapshot and signal`, () =>
+        Effect.gen(function* () {
+          detachedUntilSignalled(true);
+          const snapshotStarted = yield* Deferred.make<void>();
+          const snapshot = yield* Deferred.make<ReadonlyArray<number>>();
+          boundary.detachedGroups.mockReturnValue(
+            Deferred.succeed(snapshotStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(snapshot)),
+            ),
+          );
+          const { handle, scope } = yield* openNative(fixture(), true);
+          const terminating = yield* Effect.forkChild(handle.terminate(mode));
+          yield* Deferred.await(snapshotStarted);
+          const interrupted = yield* Effect.forkChild(Fiber.interrupt(terminating));
+          yield* Effect.yieldNow;
+          expect(interrupted.pollUnsafe()).toBeUndefined();
+          expect(boundary.terminate).not.toHaveBeenCalled();
+          yield* Deferred.succeed(snapshot, [DETACHED_GROUP]);
+          yield* Fiber.join(interrupted);
+          yield* handle.awaitExit;
+          expect(yield* releaseFailure(scope)).toMatchObject({ code: "cleanup_unconfirmed" });
+        }),
+      );
+
+      it.effect(
+        `cannot confirm cleanup after a public ${mode} snapshot defect and leader exit`,
+        () =>
+          Effect.gen(function* () {
+            const f = fixture();
+            const { handle, scope } = yield* openNative(f, true);
+            boundary.detachedGroups.mockReturnValueOnce(Effect.die(new Error("snapshot failed")));
+            const result = yield* Effect.exit(handle.terminate(mode));
+            expect(Exit.isFailure(result) && Cause.hasDies(result.cause)).toBe(true);
+            expect(boundary.terminate).not.toHaveBeenCalled();
+            f.finish();
+            yield* handle.awaitExit;
+            expect(yield* releaseFailure(scope)).toMatchObject({ code: "cleanup_unconfirmed" });
+          }),
+      );
+    }
+
     it.effect("records detached commands before an overflow signals the writer", () =>
       Effect.gen(function* () {
         detachedUntilSignalled(true);

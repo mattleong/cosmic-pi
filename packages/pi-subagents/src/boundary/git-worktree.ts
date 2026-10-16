@@ -2,6 +2,10 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { CrossProcessLock, type CrossProcessLease } from "pi-cosmic-core";
+import type { WorkspaceSetup } from "../config/schema.ts";
+import { WorkspaceError } from "../workspace/model.ts";
+import { canonicalizeWriterDirectory } from "./writer-lease.ts";
+import { runWorkspaceSetup } from "./workspace-setup.ts";
 import type {
   WorkspaceAcquired,
   WorkspaceHandle,
@@ -163,6 +167,13 @@ export const gitWorkspaceEngine = (registry: string) =>
     const managedRecord = (workspaceId: string) =>
       Effect.gen(function* () {
         const record = yield* readWorkspaceRecord(registry, workspaceId);
+        if (record.setupCleanupPending !== undefined)
+          return yield* new WorkspaceError({
+            operation: "setup",
+            message: "Workspace setup cleanup is unconfirmed; the artifact is quarantined.",
+            detail: `Setup tree: ${record.setupCleanupPending}\nIndependently confirm the setup process and every descendant have stopped. Preserve the proposal and recovery record before manually recovering the private trees; restarting Pi does not clear this quarantine.`,
+            cleanupUnconfirmed: true,
+          });
         const relative = subdirectory(record);
         if (
           relative.startsWith("..") ||
@@ -292,11 +303,21 @@ export const gitWorkspaceEngine = (registry: string) =>
             baseline.commit,
           ]);
           yield* checkDirectory(acquired.cwd);
-          yield* saveWorkspaceRecord(registry, { ...record, status: "active" }, () => {
-            owned.add(workspaceId);
-            input.onAcquired?.(acquired);
-          });
-          return acquired;
+          const ready: WorkspaceHandle = {
+            ...acquired,
+            writerCwd: yield* canonicalizeWriterDirectory(acquired.cwd).pipe(
+              Effect.mapError((error) => workspaceFailure("create", error.message)),
+            ),
+          };
+          yield* saveWorkspaceRecord(
+            registry,
+            { ...record, handle: ready, status: "active" },
+            () => {
+              owned.add(workspaceId);
+              input.onAcquired?.(ready);
+            },
+          );
+          return ready;
         }).pipe(
           Effect.catchIf(
             (error) => !error.cleanupUnconfirmed && !predecessor,
@@ -605,6 +626,48 @@ export const gitWorkspaceEngine = (registry: string) =>
           withFreeLock(locks, lockDirectory, sourceLockNamespace(sourceRoot), effect),
       });
     });
+    const setup = Effect.fn("GitWorkspaceEngine.setup")(function* (
+      target: WorkspaceSetupTarget & { readonly setup: WorkspaceSetup },
+    ) {
+      const record = yield* checked(target);
+      const preparation = target.preparationId;
+      if (
+        preparation === undefined
+          ? record.status !== "active"
+          : record.status !== "prepared" || record.preparation?.preparationId !== preparation
+      )
+        return yield* workspaceFailure("setup", "The setup tree is stale or unavailable.");
+      const root =
+        preparation === undefined
+          ? worker(record)
+          : path.join(directory(record), `prepare-${preparation}`);
+      // Persist before spawning. Interruption or a failed cleanup/record commit keeps this proof
+      // missing across runtime replacement; neither caller cleanup nor orphan discard can erase it.
+      yield* Effect.uninterruptibleMask((restore) =>
+        saveWorkspaceRecord(registry, { ...record, setupCleanupPending: root }).pipe(
+          Effect.andThen(
+            restore(runWorkspaceSetup(target.setup, root)).pipe(
+              Effect.matchEffect({
+                onFailure: (error) => {
+                  const failure = new WorkspaceError({
+                    operation: "setup",
+                    message: error.message,
+                    cleanupUnconfirmed: error.cleanupUnconfirmed,
+                  });
+                  return error.cleanupUnconfirmed
+                    ? Effect.fail(failure)
+                    : saveWorkspaceRecord(registry, record).pipe(
+                        Effect.andThen(Effect.fail(failure)),
+                      );
+                },
+                onSuccess: () => saveWorkspaceRecord(registry, record),
+              }),
+            ),
+          ),
+        ),
+      );
+      return undefined;
+    }, locked);
     // A setup command may only add ignored or excluded files such as dependencies; anything else
     // would enter the worker's proposal or invalidate the prepared tree.
     const setupChanges = Effect.fn("GitWorkspaceEngine.setupChanges")(function* (
@@ -663,6 +726,7 @@ export const gitWorkspaceEngine = (registry: string) =>
       discard,
       discardOrphan,
       collectGarbage,
+      setup,
       setupChanges,
       inspect,
       list,

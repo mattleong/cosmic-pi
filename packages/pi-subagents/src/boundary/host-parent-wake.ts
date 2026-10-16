@@ -13,7 +13,7 @@ import {
   sanitizeTerminalLine,
 } from "pi-cosmic-core";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
-import { isActiveRunState } from "../run/model.ts";
+import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import {
   COMPLETION_MESSAGE_TYPE,
   type NoticeDelivery,
@@ -57,7 +57,7 @@ type PendingQuestion = SubagentRunView & {
 const pendingQuestions = (projection: SubagentProjection): ReadonlyArray<PendingQuestion> =>
   projection.runs.filter(
     (run): run is PendingQuestion =>
-      run.parentRunId === undefined &&
+      (run.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === SUBAGENT_ROOT_RUN_ID &&
       run.question !== undefined &&
       run.state === "waiting_for_parent",
   );

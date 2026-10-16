@@ -1,16 +1,29 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import * as TestClock from "effect/testing/TestClock";
+import {
+  extensionContextFixture,
+  recordingExtensionHost,
+  yieldUntil,
+} from "pi-cosmic-core/testing";
+import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
+import { SubagentService } from "../../src/run/service.ts";
+import { executeSubagentActionEffect } from "../../src/tools/execute.ts";
+import { decodeSubagentProxyRequest } from "../../src/tools/proxy-protocol.ts";
 import type { BackendProxyResult } from "../../src/backend/model.ts";
 import type { LocalPiParentControl } from "../../src/backend/local-pi-protocol.ts";
 import {
+  acknowledgeCompletions,
   fakeChildLayer,
+  localServiceFixture,
   request,
   serviceLayer,
   type FakeChildControl,
+  waitForCompleted,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -70,6 +83,133 @@ const hangingHandlerLayer = (
 ) => proxyLayer(fake, started, () => Deferred.await(release).pipe(Effect.as(proxyResult())));
 
 describe("SubagentService parent proxy executions", () => {
+  for (const ending of ["crash", "report"] as const)
+    it.effect(`releases a proxied await when its caller ends by ${ending}`, () => {
+      const host = recordingExtensionHost();
+      const context = extensionContextFixture();
+      let observed = false;
+      let finalized = false;
+      const { fake, layer, notifications } = localServiceFixture({
+        notify: acknowledgeCompletions,
+        proxyHandler: (service, callerRunId, proxyRequest) => {
+          const input = decodeSubagentProxyRequest(proxyRequest);
+          if (input instanceof InvalidSubagentRequestError) return Effect.fail(input);
+          return executeSubagentActionEffect(
+            host.pi,
+            { cwd: "/project", projectTrusted: true },
+            input,
+            () => {
+              observed = true;
+            },
+            context,
+            callerRunId,
+          ).pipe(
+            Effect.provideService(SubagentService, service),
+            Effect.ensuring(
+              Effect.sync(() => {
+                finalized = true;
+              }),
+            ),
+          );
+        },
+      });
+      return withService(layer, function* (service) {
+        const parent = yield* service.start(request({ name: "awaiting-parent" }));
+        const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+        const caller = fake.controls[0]!;
+        caller.offerIpc({
+          channel: "pi-subagents",
+          type: "proxy_request",
+          requestId: "await-child",
+          tool: "subagent_await",
+          argumentsJson: JSON.stringify({ runIds: [child.id], until: "all_finished" }),
+        });
+        yield* yieldUntil(() => observed);
+        if (ending === "crash") caller.exit(1);
+        else caller.settle("Parent report.");
+        yield* yieldUntil(() => finalized && caller.released() === 1);
+        expect((yield* service.status(child.id)).state).toBe("running");
+        expect(fake.controls[1]!.released()).toBe(0);
+
+        let rootObserved = false;
+        const replacement = yield* service
+          .withAwaitTerminalObservations(
+            [child.id],
+            "all_finished",
+            () => {
+              rootObserved = true;
+            },
+            () => Effect.void,
+          )
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => rootObserved);
+        yield* Fiber.interrupt(replacement);
+
+        fake.controls[1]!.settle("Descendant report survives caller cleanup.");
+        yield* waitForCompleted(service, child.id);
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() =>
+          notifications.some(
+            (notification) =>
+              notification.type === "completed" &&
+              notification.runs.some(
+                (run) =>
+                  run.id === child.id &&
+                  run.finalText === "Descendant report survives caller cleanup.",
+              ),
+          ),
+        );
+        expect(responseFor(caller, "await-child")).toBeUndefined();
+        expect(
+          yield* service.withStatusObservations([child.id], ({ observations }) =>
+            Effect.succeed(observations[0]?.run.reportStatus),
+          ),
+        ).toBe("delivered");
+      });
+    });
+
+  it.effect("keeps an admitted nested launch owned by root after the caller crashes", () =>
+    Effect.gen(function* () {
+      const promptGate = yield* Deferred.make<void>();
+      let finalized = false;
+      const { fake, layer, projections } = localServiceFixture(
+        {
+          proxyHandler: (service, callerRunId) =>
+            service.startSessionOwnedFrom(callerRunId, request({ name: "owned-child" })).pipe(
+              Effect.as(proxyResult()),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  finalized = true;
+                }),
+              ),
+            ),
+        },
+        fakeChildLayer(Effect.void, {
+          initialSendGates: [{ spawnIndex: 1, type: "prompt", gate: promptGate }],
+        }),
+      );
+      yield* withService(layer, function* (service) {
+        yield* service.start(request({ name: "launching-parent" }));
+        const caller = fake.controls[0]!;
+        offerProxyRequest(caller, "launch-child");
+        yield* Effect.gen(function* () {
+          yield* yieldUntil(() => fake.controls[1]?.sent("prompt") === true);
+          caller.exit(1);
+          yield* yieldUntil(() => finalized && caller.released() === 1);
+          expect(fake.controls[1]!.released()).toBe(0);
+          expect(responseFor(caller, "launch-child")).toBeUndefined();
+        }).pipe(Effect.ensuring(Deferred.succeed(promptGate, undefined)));
+        yield* yieldUntil(
+          () =>
+            projections
+              .at(-1)
+              ?.runs.some((run) => run.name === "owned-child" && run.state === "running") === true,
+        );
+        expect(fake.controls[1]!.released()).toBe(0);
+      });
+    }),
+  );
+
   it.effect("cancels without responding and keeps processing events before cleanup completes", () =>
     Effect.gen(function* () {
       const fake = fakeChildLayer();

@@ -129,7 +129,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           return binding.record === undefined;
         }),
       );
-      if (!unadmitted) return;
+      if (!unadmitted || binding.setupCleanupPending) return;
       const service = yield* requireEngine;
       yield* service
         .discard({ workspaceId, ownerId, processCleanupConfirmed: true })
@@ -208,7 +208,11 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           const handle = yield* restore(acquiring.pipe(Effect.mapError(mapWorkspaceError)));
           yield* withLock(Effect.sync(() => onAcquired(handle)));
           if (workspaceSetup)
-            yield* restore(provisionWorkspaceTree(service, workspaceSetup, handle, handle));
+            yield* restore(
+              provisionWorkspaceTree(service, workspaceSetup, handle, {}, (pending) => {
+                if (binding) binding.setupCleanupPending = pending;
+              }),
+            );
           return handle;
         });
         return yield* Effect.gen(function* () {
@@ -276,6 +280,11 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
         );
       if (binding.busy !== undefined) return yield* workspaceBusyError();
       if (binding.finished) return yield* workspaceFinishedError();
+      if (binding.setupCleanupPending)
+        return yield* invalid(
+          "workspace_process_unsettled",
+          "Workspace setup cleanup is unconfirmed; this artifact requires manual recovery.",
+        );
       if (record.process !== undefined) return () => {};
       return () => {
         binding.reopenPending = true;

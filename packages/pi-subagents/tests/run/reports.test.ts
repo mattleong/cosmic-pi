@@ -544,6 +544,84 @@ describe("SubagentService", () => {
     },
   );
 
+  for (const consumed of [false, true])
+    it.effect(
+      `isolates a rejected resume from its ${consumed ? "consumed" : "pending"} previous report`,
+      () => {
+        const promptGate = Deferred.makeUnsafe<void>();
+        const { fake, projections, notifications, layer } = localServiceFixture(
+          {},
+          fakeChildLayer(Effect.void, {
+            initialFailures: [{ spawnIndex: 1, type: "prompt", error: "New prompt rejected." }],
+            initialSendGates: [{ spawnIndex: 1, type: "prompt", gate: promptGate }],
+          }),
+        );
+        return withService(layer, function* (service) {
+          const run = yield* service.start(request());
+          const report = "Previous assignment completed successfully.";
+          fake.controls[0]!.settle(report);
+          yield* yieldUntil(() => fake.controls[0]!.released() === 1);
+          const historical = projections.at(-1)?.runs[0];
+          if (consumed) {
+            const first = yield* awaitObservations(service, [run.id]);
+            expect(first[0]).toMatchObject({
+              run: { finalText: report },
+              completionReceipt: { generation: 1 },
+            });
+            const readBack = yield* service.withStatusObservations(
+              [run.id],
+              ({ observations }) => Effect.succeed(observations[0]),
+              { includeDeliveredReports: true },
+            );
+            expect(readBack?.run.finalText).toBe(report);
+            expect(readBack?.completionReceipt).toBeUndefined();
+          }
+          const resuming = yield* service
+            .resume(run.id, "Start a new and different assignment.")
+            .pipe(Effect.flip, Effect.forkScoped);
+          yield* yieldUntil(() => fake.controls[1]?.sent("prompt") === true);
+          expect(projections.at(-1)?.runs[0]).toMatchObject({
+            state: "starting",
+            assignmentEpoch: 2,
+          });
+          expect(projections.at(-1)?.runs[0]?.finalText).toBeUndefined();
+          yield* Deferred.succeed(promptGate, undefined);
+          yield* Fiber.join(resuming);
+
+          const failed = yield* service.withStatusObservations(
+            [run.id],
+            ({ observations }) => Effect.succeed(observations[0]),
+            { includeDeliveredReports: true },
+          );
+          expect(failed).toMatchObject({
+            run: {
+              state: "failed",
+              assignmentEpoch: 2,
+              reportGeneration: 1,
+              reportStatus: "missing",
+            },
+            completionReceipt: { generation: 2 },
+          });
+          expect(failed?.run.finalText).toBeUndefined();
+          expect(failed?.run.error).toContain("New prompt rejected.");
+          expect(historical?.finalText).toBe(report);
+
+          yield* TestClock.adjust("100 millis");
+          yield* yieldUntil(() => notifications.some((notice) => notice.type === "completed"));
+          const completions = notifications.flatMap((notice) =>
+            notice.type === "completed" ? notice.runs : [],
+          );
+          expect(completions.map((completion) => completion.generation)).toEqual(
+            consumed ? [2] : [1, 2],
+          );
+          if (!consumed)
+            expect(completions[0]).toMatchObject({ outcome: "completed", finalText: report });
+          expect(completions.at(-1)).toMatchObject({ outcome: "failed" });
+          expect(completions.at(-1)?.finalText).toBeUndefined();
+        });
+      },
+    );
+
   it.effect("ignores a report after terminal failure", () => {
     const { backend, projections, layer } = nativeReportServiceFixture();
     return withService(layer, function* (service) {

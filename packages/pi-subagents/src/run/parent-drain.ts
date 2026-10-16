@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import { hasEligibleCompletion } from "./completion.ts";
 import type { SubagentRuntimeClosedError } from "./errors.ts";
 import type { RunRecord, WithRunLock } from "./internal.ts";
+import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 
 const WORKING_STATES: ReadonlySet<RunRecord["view"]["state"]> = new Set([
   "starting",
@@ -17,7 +18,11 @@ const drainSettled = (records: ReadonlyMap<string, RunRecord>): boolean => {
   if (hasEligibleCompletion(records)) return false;
   let working = false;
   for (const { view } of records.values()) {
-    if (view.parentRunId === undefined && view.question !== undefined) return true;
+    if (
+      (view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === SUBAGENT_ROOT_RUN_ID &&
+      view.question !== undefined
+    )
+      return true;
     if (WORKING_STATES.has(view.state)) working = true;
   }
   return !working;

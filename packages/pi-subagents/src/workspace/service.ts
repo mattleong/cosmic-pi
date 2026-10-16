@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import { CrossProcessLock, nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
+import type { WorkspaceSetup } from "../config/schema.ts";
 import { gitWorkspaceEngine, workspaceRegistry } from "../boundary/git-worktree.ts";
 import { workspaceLockDirectory } from "../boundary/git-worktree-store.ts";
 import type {
@@ -46,6 +47,10 @@ export interface WorkspaceServiceContract {
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
   /** Discards a workspace whose creating session provably ended; the caller proves its writer stopped. */
   readonly discardOrphan: (target: WorkspaceOrphanTarget) => Effect.Effect<void, WorkspaceError>;
+  /** Runs setup with durable process-cleanup quarantine, including across owner shutdown. */
+  readonly setup: (
+    target: WorkspaceSetupTarget & { readonly setup: WorkspaceSetup },
+  ) => Effect.Effect<void, WorkspaceError>;
   /** Paths a setup command changed relative to the tree it ran in. */
   readonly setupChanges: (
     target: WorkspaceSetupTarget,
@@ -101,6 +106,7 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           fork: (input) => run(engine.fork(input)),
           discard: (input) => run(engine.discard(input)),
           discardOrphan: (input) => run(engine.discardOrphan(input)),
+          setup: (input) => run(engine.setup(input)),
           setupChanges: (input) => run(engine.setupChanges(input)),
           inspect: (input) => run(engine.inspect(input)),
           list: (input) => run(engine.list(input)),

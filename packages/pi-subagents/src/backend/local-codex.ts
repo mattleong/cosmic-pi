@@ -250,16 +250,8 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         raw,
       );
     }
-    if (event.status === "failed")
-      return offer(
-        {
-          type: "protocol_error",
-          message: event.diagnostic
-            ? `Codex turn failed: ${event.diagnostic}`
-            : "Codex turn failed before a supervisor report was accepted.",
-        },
-        raw,
-      );
+    // Accepted supervisor reports remain authoritative even if native failure arrives
+    // before the backpressured report-forwarding stream reaches the run service.
     return supervisor.hasAcceptedReport(completedEpoch).pipe(
       Effect.matchEffect({
         onFailure: (error) =>
@@ -270,8 +262,20 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
             },
             raw,
           ),
-        onSuccess: (accepted) =>
-          accepted ? release(raw) : missingReport(completedEpoch, finalText, raw),
+        onSuccess: (accepted) => {
+          if (accepted) return release(raw);
+          if (event.status === "failed")
+            return offer(
+              {
+                type: "protocol_error",
+                message: event.diagnostic
+                  ? `Codex turn failed: ${event.diagnostic}`
+                  : "Codex turn failed before a supervisor report was accepted.",
+              },
+              raw,
+            );
+          return missingReport(completedEpoch, finalText, raw);
+        },
       }),
     );
   };

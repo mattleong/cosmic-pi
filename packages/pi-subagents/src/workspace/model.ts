@@ -14,6 +14,14 @@ export const WorkspaceHandleSchema = Schema.Struct({
   sourceCwd: Schema.String,
   sourceRoot: Schema.String,
   cwd: Schema.String,
+  /** Original writer-lease identity; absent in records saved before identity retention. */
+  writerCwd: Schema.optional(
+    Schema.Struct({
+      path: Schema.String,
+      filesystemIdentity: Schema.String,
+      digest: Schema.String,
+    }),
+  ),
   /** Tracked files the snapshot left out because they sit in dependency or build directories. */
   omittedTrackedPaths: Schema.optional(Schema.Array(Schema.String)),
 });
@@ -52,6 +60,8 @@ export const WorkspaceRecordSchema = Schema.Struct({
   predecessorWorkspaceId: Schema.optional(Schema.String),
   /** Names the lease the creating session holds while it runs; a free lease proves it ended. */
   ownerLease: Schema.optional(Schema.String),
+  /** Setup may still own processes in this tree. Cleared only after confirmed cleanup. */
+  setupCleanupPending: Schema.optional(Schema.String),
   excludedPaths: Schema.optional(Schema.Array(Schema.String)),
   revision: Schema.optional(WorkspaceRevisionSchema),
   preparation: Schema.optional(WorkspacePreparationSchema),

@@ -30,6 +30,7 @@ export const remainingRouteCandidates = (continuation: ProfileRouteContinuation)
   Math.max(0, continuation.candidates.length - continuation.selectedCandidateIndex - 1);
 
 const retryBlockedByHistory = (record: RunRecord): boolean =>
+  record.assignment.epoch !== 1 ||
   record.view.supersededByRunId !== undefined ||
   record.assignment.outcomeUncertain ||
   hasUnresolvedSteeringDelivery(record.view) ||
@@ -86,7 +87,7 @@ const retrySourceFailure = (
       "retry_source_not_failed",
       `Subagent ${id} must be failed before its next profile candidate can be tried.`,
     );
-  if (record.view.reportGeneration > 0)
+  if (record.assignment.epoch !== 1)
     return invalid(
       "retry_assignment_not_initial",
       `Subagent ${id} failed after a later assignment; its launch-time task cannot be replayed safely on another candidate.`,

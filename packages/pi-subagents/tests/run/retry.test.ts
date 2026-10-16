@@ -471,6 +471,45 @@ describe("explicit profile-route retry", () => {
     });
   });
 
+  it.effect("blocks initial-task replay after an interrupted assignment resumes and fails", () => {
+    const { fake, layer, notifications } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(
+        request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
+      );
+      expect((yield* service.interrupt(run.id)).state).toBe("paused");
+      expect(
+        yield* service.resume(run.id, "Review a different task; do not replay the original."),
+      ).toMatchObject({
+        state: "running",
+        assignmentEpoch: 2,
+        reportGeneration: 0,
+      });
+      fake.controls[0]!.exit(1);
+      yield* yieldUntil(() => fake.controls[0]!.released() === 1);
+
+      expect(yield* Effect.flip(service.claimRetryContinuation(run.id))).toMatchObject({
+        code: "retry_assignment_not_initial",
+      });
+      const observed = yield* service.withStatusObservations([run.id], ({ observations }) =>
+        Effect.succeed(observations[0]),
+      );
+      expect(observed?.recovery).toMatchObject({
+        cleanupDisposition: "confirmed",
+        retryDisposition: "blocked",
+        hasRemainingCandidate: true,
+      });
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.some((notice) => notice.type === "completed"));
+      const completions = notifications.flatMap((notice) =>
+        notice.type === "completed" ? notice.runs : [],
+      );
+      expect(completions).toHaveLength(1);
+      expect(completions[0]).toMatchObject({ id: run.id, outcome: "failed" });
+      expect(completions[0]?.retryAvailable).toBeUndefined();
+    });
+  });
+
   it.effect("returns blocked recovery when admitted-start cleanup is quarantined", () => {
     const { layer } = localServiceFixture({}, rejectedPrompt({ releaseDefect: true }));
     return withService(layer, function* (service) {

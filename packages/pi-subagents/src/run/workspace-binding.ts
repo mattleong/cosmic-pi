@@ -22,6 +22,7 @@ export interface WorkspaceBinding {
   request: StartSubagentRequest;
   record?: RunRecord;
   preparing: boolean;
+  setupCleanupPending?: boolean | undefined;
   busy?: symbol | undefined;
   reopenPending?: boolean | undefined;
   reviewedRevision?: string | undefined;
@@ -136,6 +137,11 @@ export function workspaceControlContext(
           "Workspace mutation requires its authenticated direct parent and live coordinator ownership evidence. Persisted artifacts without cleanup evidence require manual recovery.",
         );
       if (binding.busy !== undefined) return yield* workspaceBusyError();
+      if (binding.setupCleanupPending)
+        return yield* invalid(
+          "workspace_process_unsettled",
+          "Workspace setup cleanup is unconfirmed. Independently confirm the setup process and all descendants have stopped, preserve the proposal and recovery record, then recover the private trees manually. Restarting Pi does not clear this quarantine.",
+        );
       if (
         binding.preparing ||
         (binding.record &&

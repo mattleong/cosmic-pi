@@ -112,6 +112,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
       );
       const detachedGroups = new Set<number>();
+      let detachedSnapshotFailed = false;
       // Descendants reparent once the child dies, so they are recorded before any signal.
       const recordDetachedGroups = Effect.suspend(() =>
         options.confirmDetachedDescendants && child.pid && !settled
@@ -121,17 +122,33 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
               }),
             )
           : Effect.void,
+      ).pipe(
+        Effect.onError(() =>
+          Effect.sync(() => {
+            // A later leader exit must not erase failed discovery from cleanup evidence.
+            detachedSnapshotFailed = true;
+          }),
+        ),
       );
+      // Keep the bounded snapshot and signal together even when a public caller is cancelled.
+      const terminate = (mode: "graceful" | "force") =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* recordDetachedGroups;
+            yield* runtime
+              .terminate(child, mode)
+              .pipe(Effect.mapError((error) => processError("terminate", error)));
+          }),
+        );
       // Pi's bash commands run in their own process groups and die only through its SIGTERM
       // handler, so even an overflow gives the child a grace period before SIGKILL.
       const force = () => {
         runFork(
           Effect.uninterruptible(
             Effect.gen(function* () {
-              yield* recordDetachedGroups;
-              yield* Effect.exit(runtime.terminate(child, "graceful"));
+              yield* Effect.exit(terminate("graceful"));
               yield* waitForExit;
-              yield* Effect.exit(runtime.terminate(child, "force"));
+              yield* Effect.exit(terminate("force"));
             }),
           ),
         );
@@ -313,10 +330,6 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
               ),
           }),
         );
-      const terminate = (mode: "graceful" | "force") =>
-        runtime
-          .terminate(child, mode)
-          .pipe(Effect.mapError((error) => processError("terminate", error)));
       const confirmDetachedGroupsExit = Effect.suspend(() =>
         Effect.forEach(
           [...detachedGroups],
@@ -340,6 +353,10 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
           if (!(yield* waitForExit)) return yield* cleanupUnconfirmed();
         }
         if (!(yield* runtime.confirmGroupExit(pid, 2_000))) return yield* cleanupUnconfirmed();
+        if (detachedSnapshotFailed)
+          return yield* cleanupUnconfirmed(
+            "Detached descendant process groups could not be recorded before termination.",
+          );
         const remaining = yield* confirmDetachedGroupsExit;
         if (remaining.length > 0)
           return yield* cleanupUnconfirmed(

@@ -9,6 +9,7 @@ import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   acknowledgeCompletions,
   completeLocalRun,
+  contactParentFrame,
   fakeChildLayer,
   localServiceFixture,
   request,
@@ -151,6 +152,114 @@ describe("root-owned subagent run tree", () => {
       expect(child.parentRunId).toBe(parent.id);
     });
   });
+
+  for (const outcome of ["completed", "failed"] as const)
+    it.effect(`preserves completion qualifications when a ${outcome} child notifies Pi`, () => {
+      const { fake, projections, notifications, layer } = localServiceFixture();
+      return withService(layer, function* (service) {
+        const parent = yield* service.start(request({ name: "parent" }));
+        const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+        const warning = "Tests could not run; do not rely on this as verified.";
+        fake.controls[1]!.offerIpc(contactParentFrame("warning", "warning", warning));
+        yield* yieldUntil(
+          () =>
+            projections
+              .at(-1)
+              ?.runs.some((run) => run.id === child.id && run.warning === warning) === true,
+        );
+        // The qualification must survive even when the report fills the notification bound.
+        if (outcome === "completed")
+          fake.controls[1]!.settle("Implementation finished.\n".repeat(1500));
+        else fake.controls[1]!.exit(1);
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs.some((run) => run.id === child.id && run.state === outcome) ===
+            true,
+        );
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() => fake.controls[0]!.sentIpc("proxy_notification"));
+        const notice = fake.controls[0]!.ipc.find(
+          (message) => message.type === "proxy_notification",
+        );
+        expect(notice?.message).toContain(warning);
+        expect(notice?.message).toContain(child.id);
+        expect(notifications).toEqual([]);
+      });
+    });
+
+  for (const recipient of ["root", "ancestor"] as const)
+    it.effect(`routes pending completion past a stop-claimed parent to the ${recipient}`, () => {
+      const { fake, projections, notifications, layer } = localServiceFixture({
+        notify: acknowledgeCompletions,
+      });
+      return withService(layer, function* (service) {
+        const ancestor =
+          recipient === "ancestor"
+            ? yield* service.start(request({ name: "surviving-ancestor" }))
+            : undefined;
+        const parent = ancestor
+          ? yield* service.startSessionOwnedFrom(ancestor.id, request({ name: "stopping-parent" }))
+          : yield* service.start(request({ name: "stopping-parent" }));
+        const parentControl = fake.controls.at(-1)!;
+        const blocker = yield* service.startSessionOwnedFrom(
+          parent.id,
+          request({ name: "cleanup-blocker" }),
+        );
+        const blockerControl = fake.controls.at(-1)!;
+        const child = yield* service.startSessionOwnedFrom(
+          parent.id,
+          request({ name: "reported-child" }),
+        );
+        const childControl = fake.controls.at(-1)!;
+        const cleanupGate = yield* Deferred.make<void>();
+        const claimedReport = yield* Deferred.make<void>();
+        let observed = false;
+        const waiter = yield* service
+          .withAwaitTerminalObservations(
+            [child.id],
+            "all_finished",
+            () => {
+              observed = true;
+            },
+            () => Deferred.succeed(claimedReport, undefined).pipe(Effect.andThen(Effect.never)),
+          )
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => observed);
+        childControl.settle("Critical finding that must survive subtree stop.");
+        yield* Deferred.await(claimedReport);
+        blockerControl.gateRelease(cleanupGate);
+        const stopping = yield* service.stop(parent.id).pipe(Effect.forkScoped);
+        yield* Effect.gen(function* () {
+          yield* yieldUntil(
+            () =>
+              projections
+                .at(-1)
+                ?.runs.some((run) => run.id === blocker.id && run.state === "stopping") === true,
+          );
+          expect((yield* service.status(parent.id)).state).toBe("running");
+          yield* Fiber.interrupt(waiter);
+          yield* TestClock.adjust("100 millis");
+          yield* yieldUntil(() =>
+            recipient === "ancestor"
+              ? fake.controls[0]!.sentIpc("proxy_notification", (notice) =>
+                  notice.message.includes(child.id),
+                )
+              : notifications.some(
+                  (notification) =>
+                    notification.type === "completed" &&
+                    notification.runs.some((run) => run.id === child.id),
+                ),
+          );
+          expect(parentControl.sentIpc("proxy_notification")).toBe(false);
+        }).pipe(Effect.ensuring(Deferred.succeed(cleanupGate, undefined)));
+        yield* Fiber.join(stopping);
+        expect(
+          yield* service.withStatusObservations([child.id], ({ observations }) =>
+            Effect.succeed(observations[0]?.run.reportStatus),
+          ),
+        ).toBe("delivered");
+      });
+    });
 
   it.effect("does not duplicate an outcome after notification acknowledgment uncertainty", () => {
     const { fake, notifications, layer } = localServiceFixture({ notify: acknowledgeCompletions });
