@@ -34,6 +34,7 @@ export interface ParentProfileModel {
 export interface ProfileResolutionEnvironment {
   readonly availablePiModels: ReadonlyArray<PiCatalogModel>;
   readonly parentModel?: ParentProfileModel | undefined;
+  readonly parentEffort?: SubagentEffort | undefined;
   readonly forkAvailable: boolean;
   /** Tokens in the parent's context, which a forked child inherits, when Pi knows them. */
   readonly parentContextTokens?: number | undefined;
@@ -120,7 +121,7 @@ const resolveCandidate = (
   // this runtime or model lacks, such as "off" for Claude, so they move to the nearest one.
   const softEffort = (modelEfforts: ReadonlyArray<SubagentEffort> | undefined) =>
     clampSubagentEffort(
-      profileDefaultEffort ?? environment.parentModel?.effort ?? "high",
+      profileDefaultEffort ?? environment.parentEffort ?? environment.parentModel?.effort ?? "high",
       subagentRuntimeEfforts(candidate.runtime).filter(
         (effort) => modelEfforts === undefined || modelEfforts.includes(effort),
       ),

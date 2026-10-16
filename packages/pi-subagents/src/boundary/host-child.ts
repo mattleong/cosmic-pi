@@ -33,7 +33,12 @@ import { clipUtf8Text } from "../run/state.ts";
 import { NESTED_SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { encodeFleetActionRequest, fleetSnapshotProxyRequest } from "../tools/proxy-fleet.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
-import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
+import {
+  decodeSubagentProxyResult,
+  encodeSubagentProxyInput,
+  withSubagentProxyParent,
+} from "../tools/proxy-protocol.ts";
+import type { SubagentParentContext } from "../run/model.ts";
 import { decodeSubagentContract, isSubagentContractTool } from "../tools/contract-schema.ts";
 import type { SubagentToolInput } from "../tools/schema.ts";
 import { observeAwaitInterruption } from "../tools/execute-await.ts";
@@ -48,7 +53,11 @@ import {
 } from "../tools/render-parent.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
-import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
+import {
+  capturePiParentContext,
+  consumeRuntimeApiCredentials,
+  registerChildPiFastModeHook,
+} from "./host-child-pi.ts";
 import { registerForkPromptCacheHooks } from "./fork-prompt-cache.ts";
 import { registerChildSettle } from "./host-child-settle.ts";
 import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
@@ -119,6 +128,7 @@ interface ChildSessionInput {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly isIdle: () => boolean;
+  readonly captureParentContext: () => SubagentParentContext;
   token: number | undefined;
 }
 
@@ -237,6 +247,10 @@ export function registerSubagentChildBridge(
     if (!isActivationCurrent(input, token))
       return Promise.reject(new Error("Subagent proxy is unavailable for this session."));
     const requestId = `proxy-${process.pid}-${nextRequest++}`;
+    const request =
+      encoded.tool === "ask_user"
+        ? encoded
+        : withSubagentProxyParent(encoded, input.captureParentContext());
     if (encoded.tool === "ask_user") input.questionnaires.add(requestId);
     return slot
       .run(
@@ -247,8 +261,8 @@ export function registerSubagentChildBridge(
               channel: "pi-subagents",
               type: "proxy_request",
               requestId,
-              tool: encoded.tool,
-              argumentsJson: encoded.argumentsJson,
+              tool: request.tool,
+              argumentsJson: request.argumentsJson,
             }),
             () => {
               if (isActivationCurrent(input, token))
@@ -456,6 +470,7 @@ export function registerSubagentChildBridge(
       cwd: captured.cwd,
       projectTrusted: isProjectTrusted(ctx),
       isIdle: () => ctx.isIdle(),
+      captureParentContext: () => capturePiParentContext(pi, ctx),
       token: undefined,
     };
     currentSession = input;

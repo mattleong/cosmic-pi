@@ -169,6 +169,7 @@ function fixture({
     });
   let ordinal = 0;
   let revisions = 0;
+  let preparations = 0;
   const engineFor = (leases: WriterLeaseContract): WorkspaceServiceContract => {
     const create: WorkspaceServiceContract["create"] = (input) =>
       Effect.suspend(() =>
@@ -182,9 +183,9 @@ function fixture({
               ownerId: input.ownerId,
               sourceCwd: input.sourceCwd,
               sourceRoot: input.sourceCwd,
-              cwd: `/private/${workspaceId}`,
+              cwd: `/private/${workspaceId}/worker`,
               writerCwd: yield* leases
-                .canonicalize(`/private/${workspaceId}`)
+                .canonicalize(`/private/${workspaceId}/worker`)
                 .pipe(
                   Effect.mapError(
                     (error) => new WorkspaceError({ operation: "create", message: error.message }),
@@ -229,10 +230,11 @@ function fixture({
       prepare: (target) =>
         gated("prepare", requireEntry(target)).pipe(
           Effect.map((entry) => {
+            const preparationId = `prepared-${++preparations}`;
             const preparation = {
-              preparationId: "prepared-1",
+              preparationId,
               revisionId: target.revisionId,
-              cwd: "/private/combined",
+              cwd: `/private/${target.workspaceId}/prepare-${preparationId}`,
               leaseDirectories: [entry.handle.sourceRoot, `${entry.handle.sourceRoot}/packages/b`],
             };
             entries.set(target.workspaceId, { ...entry, status: "prepared", preparation });
@@ -732,7 +734,7 @@ describe("writer workspace orchestration", () => {
           offset: page.nextOffset ?? 0,
         });
         const prepared = yield* service.workspacePrepare(id, page.revisionId);
-        expect(prepared.cwd).toBe("/private/combined");
+        expect(prepared.cwd).not.toBe("/repo");
         yield* service.workspaceIntegrate(id, page.revisionId, prepared.preparationId);
         expect(f.acquired).toContain("/repo");
         expect(f.acquired).toContain("/repo/packages/b");
@@ -1153,7 +1155,7 @@ describe("writer workspace orchestration", () => {
     });
   });
 
-  for (const operation of ["freeze", "prepare", "discard"] as const)
+  for (const operation of ["freeze", "prepare"] as const)
     it.effect(`runs a root workspace ${operation} outside the run lock`, () => {
       const f = fixture();
       return withService(f.layer, function* (service) {
@@ -1166,16 +1168,14 @@ describe("writer workspace orchestration", () => {
         });
         const { entered, release, pause } = yield* pauseAt;
         f.hooks.before[operation] = pause;
-        const running = yield* Match.value(operation)
-          .pipe(
-            Match.when("freeze", () => service.workspaceReview(id).pipe(Effect.asVoid)),
-            Match.when("prepare", () =>
-              service.workspacePrepare(id, first.revisionId).pipe(Effect.asVoid),
-            ),
-            Match.when("discard", () => service.workspaceDiscard(id)),
-            Match.exhaustive,
-          )
-          .pipe(Effect.forkChild);
+        const running = yield* Match.value(operation).pipe(
+          Match.when("freeze", () => service.workspaceReview(id).pipe(Effect.asVoid)),
+          Match.when("prepare", () =>
+            service.workspacePrepare(id, first.revisionId).pipe(Effect.asVoid),
+          ),
+          Match.exhaustive,
+          Effect.forkChild,
+        );
         yield* Deferred.await(entered);
         f.hooks.before[operation] = undefined;
         yield* service.rename(writer.id, "still-responsive");
@@ -1190,6 +1190,85 @@ describe("writer workspace orchestration", () => {
         });
       });
     });
+
+  for (const tree of ["worker", "preparation"] as const)
+    it.effect(`refuses discard while a read-only run holds its ${tree} tree`, () => {
+      const f = fixture();
+      return withService(f.layer, function* (service) {
+        const writer = yield* service.start(repoWriter());
+        const reader =
+          tree === "worker"
+            ? yield* service.startSessionOwnedFrom(writer.id, request())
+            : undefined;
+        yield* completeLocalRun(service, f.children.controls[0]!, writer.id);
+        const id = writer.workspaceId!;
+        const reviewed = yield* service.workspaceReview(id);
+        yield* service.workspaceReview(id, {
+          revisionId: reviewed.revisionId,
+          offset: reviewed.nextOffset!,
+        });
+        const prepared = yield* service.workspacePrepare(id, reviewed.revisionId);
+        const occupant = reader ?? (yield* service.start(request({ cwd: prepared.cwd })));
+        expect((yield* service.status(occupant.id)).state).toBe("running");
+        expect(yield* service.workspaceDiscard(id).pipe(Effect.flip)).toMatchObject({
+          code: "workspace_process_unsettled",
+        });
+        expect(f.entries.get(id)?.status).toBe("prepared");
+        yield* service.stop(occupant.id);
+        yield* service.workspaceDiscard(id);
+        expect(f.entries.get(id)?.status).toBe("discarded");
+      });
+    });
+
+  it.effect("protects a reader in a superseded preparation during discard and integration", () => {
+    const f = fixture();
+    return withService(f.layer, function* (service) {
+      const id = (yield* stoppedWriter(service)).workspaceId!;
+      const tested = yield* reviewAndPrepare(service, id);
+      const previous = f.entries.get(id)!.preparation!;
+      const reader = yield* service.start(request({ cwd: `${previous.cwd}/tests` }));
+      const current = yield* service.workspacePrepare(id, tested.revisionId);
+      expect(current.cwd).not.toBe(previous.cwd);
+      expect(yield* service.workspaceDiscard(id).pipe(Effect.flip)).toMatchObject({
+        code: "workspace_process_unsettled",
+      });
+      expect(f.entries.get(id)?.status).toBe("prepared");
+      yield* service.workspaceIntegrate(id, tested.revisionId, current.preparationId);
+      expect(f.integrations.at(-1)?.retainTrees).toBe(true);
+      expect((yield* service.status(reader.id)).state).toBe("running");
+      yield* service.stop(reader.id);
+      yield* service.workspaceDiscard(id);
+      expect(f.entries.get(id)?.status).toBe("discarded");
+    });
+  });
+
+  it.effect("holds read-only admission closed throughout destructive discard", () => {
+    const f = fixture();
+    return withService(f.layer, function* (service) {
+      const writer = yield* stoppedWriter(service);
+      const gate = yield* pauseAt;
+      f.hooks.before.discard = gate.pause;
+      const discarding = yield* service
+        .workspaceDiscard(writer.workspaceId!)
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(gate.entered);
+      const attempted = yield* Deferred.make<void>();
+      const admitted = yield* Deferred.make<void>();
+      const starting = yield* Deferred.succeed(attempted, undefined).pipe(
+        Effect.andThen(service.start(request({ cwd: writer.cwd }))),
+        Effect.tap(() => Deferred.succeed(admitted, undefined)),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(attempted);
+      yield* Effect.yieldNow;
+      expect(yield* Deferred.isDone(admitted)).toBe(false);
+      expect(f.entries.get(writer.workspaceId!)?.status).toBe("active");
+      yield* Deferred.succeed(gate.release, undefined);
+      yield* Fiber.join(discarding);
+      yield* Fiber.join(starting);
+      expect(f.entries.get(writer.workspaceId!)?.status).toBe("discarded");
+    });
+  });
 
   it.effect("keeps a committed integration when a source lease release fails", () => {
     const f = fixture({

@@ -49,6 +49,7 @@ const rpcResponse = (
     ...(command.id !== undefined && { id: command.id }),
     command: command.type,
     success: options.success ?? true,
+    ...(command.type === "prompt" && { data: { disposition: "started" } }),
     ...(command.type === "get_state" && {
       data: { sessionId: "child", thinkingLevel: "high" },
     }),

@@ -10,7 +10,7 @@ export const MINIMUM_GIT_VERSION = [2, 31] as const;
 export interface GitInstallation {
   readonly executable: string;
   readonly version: string;
-  /** The user's global excludes file, which isolated Git would otherwise never read. */
+  /** Git-expanded global excludes path; relative paths stay relative to each repository. */
   readonly excludesFile?: string;
 }
 
@@ -86,20 +86,26 @@ export const gitVersionSupported = (version: string): boolean => {
 // $XDG_CONFIG_HOME/git/ignore, else ~/.config/git/ignore.
 const userExcludesFile = (executable: string, environment: NodeJS.ProcessEnv) =>
   Effect.gen(function* () {
-    const configured = yield* runGit(
+    const refusal = () =>
+      unavailable(
+        "Git's global ignore configuration couldn't be preserved.",
+        "Check core.excludesFile in your global Git configuration, then retry. Isolated workspaces must retain your ignore rules before copying untracked files.",
+      );
+    const result = yield* runGit(
       executable,
       ["config", "--global", "--path", "--get", "core.excludesFile"],
       environment,
-    ).pipe(
-      Effect.map((result) =>
-        result.code === 0 && !result.timedOut && !result.overflowed
-          ? result.stdout.replace(/\n$/u, "")
-          : undefined,
-      ),
-      Effect.orElseSucceed(() => undefined),
-    );
-    if (configured !== undefined && configured !== "")
-      return usablePath(configured) ? configured : undefined;
+    ).pipe(Effect.mapError(refusal));
+    if (result.timedOut || result.overflowed || result.cleanupUnconfirmed) return yield* refusal();
+    if (result.code === 0) {
+      const configured = result.stdout.replace(/\n$/u, "");
+      if (configured.length > 4096 || hasControlCharacter(configured)) return yield* refusal();
+      // Git resolves relative excludes paths from the repository, not the config file or Pi's
+      // cwd. Preserve that context by passing the value unchanged to each isolated Git call.
+      // An explicitly empty value also overrides Git's default ignore file.
+      return configured;
+    }
+    if (result.code !== 1) return yield* refusal();
     const xdg = environment.XDG_CONFIG_HOME;
     if (usablePath(xdg)) return path.join(xdg, "git", "ignore");
     const home = environment.HOME;

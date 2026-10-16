@@ -5,7 +5,14 @@ import * as Config from "effect/Config";
 import * as Deferred from "effect/Deferred";
 import * as Data from "effect/Data";
 import * as Schema from "effect/Schema";
+import * as Queue from "effect/Queue";
+import type * as Cause from "effect/Cause";
 import { decodeRpcEnvelope, type RpcResponse } from "../src/backend/local-pi-protocol.ts";
+import { localPiBackendDriver } from "../src/backend/local-pi.ts";
+import type { ChildWireEvent } from "../src/boundary/child-process.ts";
+import type { ProcessExit } from "../src/boundary/process-transport.ts";
+import { SubagentProcessError } from "../src/run/errors.ts";
+import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
@@ -27,6 +34,9 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
     const executablePath = yield* Config.String("PATH").pipe(Config.withDefault(""));
     const directory = yield* temporaryDirectory("pi-rpc-input-");
     const exited = yield* Deferred.make<void>();
+    const exitReceipt = yield* Deferred.make<ProcessExit>();
+    const backendEvents = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
+    let stderr = "";
     const child = yield* Effect.acquireRelease(
       Effect.sync(() => {
         const spawned = nodeSpawn(
@@ -57,7 +67,14 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
             stdio: ["pipe", "pipe", "pipe"],
           },
         );
-        spawned.once("close", () => Deferred.doneUnsafe(exited, Effect.void));
+        spawned.once("close", (exitCode, signal) => {
+          Deferred.doneUnsafe(exited, Effect.void);
+          Deferred.doneUnsafe(
+            exitReceipt,
+            Effect.succeed({ exitCode, ...(signal && { signal }), stderr }),
+          );
+          Queue.endUnsafe(backendEvents);
+        });
         return spawned;
       }),
       (running) =>
@@ -66,7 +83,6 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
           yield* Deferred.await(exited);
         }),
     );
-    let stderr = "";
     let buffer = "";
     let nextId = 0;
     const eventTypes: string[] = [];
@@ -96,7 +112,9 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         try {
-          const value = runCallback(decodeJson(line).pipe(Effect.flatMap(decodeRpcEnvelope)));
+          const frame = runCallback(decodeJson(line));
+          Queue.offerUnsafe(backendEvents, { type: "rpc_message", value: frame });
+          const value = runCallback(decodeRpcEnvelope(frame));
           if (value.type !== "response") {
             eventTypes.push(value.type === "ignored" ? value.eventType : value.type);
             continue;
@@ -138,10 +156,71 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
           timeout: 10_000,
         }),
       );
-    return { request, count, awaitEventCount, exited };
+    const driver = localPiBackendDriver({
+      reclaimRunState: () => Effect.void,
+      spawn: () =>
+        Effect.succeed({
+          pid: child.pid ?? 0,
+          events: backendEvents,
+          awaitExit: Deferred.await(exitReceipt),
+          acknowledge: () => {},
+          send: (command) =>
+            Effect.callback<void, SubagentProcessError>((resume) => {
+              child.stdin.write(`${encodeJson(command)}\n`, (error) =>
+                resume(
+                  error
+                    ? Effect.fail(
+                        new SubagentProcessError({
+                          operation: "send fixture command to",
+                          message: "RPC fixture command could not be sent.",
+                        }),
+                      )
+                    : Effect.void,
+                ),
+              );
+            }),
+          sendContactControl: () => Effect.void,
+          terminate: () => Effect.sync(() => void child.kill("SIGKILL")),
+        }),
+    });
+    return {
+      request,
+      count,
+      awaitEventCount,
+      exited,
+      spawnBackend: driver.spawn(backendLaunch()),
+    };
   });
 
 describe("installed Pi RPC input hooks", () => {
+  it.live(
+    "rejects a handled task through the local backend rather than waiting for a nonexistent run",
+    () =>
+      Effect.gen(function* () {
+        const pi = yield* rpcFixture("pi-rpc-input-extension.ts");
+        const backend = yield* pi.spawnBackend;
+        yield* Effect.gen(function* () {
+          yield* backend.controls.initialize;
+          expect(yield* backend.controls.start("handled", 1).pipe(Effect.flip)).toMatchObject({
+            code: "prompt_not_delivered",
+          });
+          expect(yield* backend.controls.steer("handled").pipe(Effect.flip)).toMatchObject({
+            code: "guidance_not_delivered",
+          });
+          // A subsequent RPC response establishes that Pi processed the handled task. It did not
+          // publish an assignment lifecycle for either input.
+          yield* pi.request({ type: "get_state" });
+          expect(pi.count("agent_start")).toBe(0);
+          expect(pi.count("agent_settled")).toBe(0);
+          expect(
+            yield* backend.controls.start("/fixture-shutdown", 2).pipe(Effect.flip),
+          ).toMatchObject({ code: "prompt_not_delivered" });
+          yield* Deferred.await(pi.exited);
+        }).pipe(Effect.timeout("25 seconds"));
+      }),
+    30_000,
+  );
+
   it.live(
     "transforms and handles steer/follow_up through source rpc without credentials or inference",
     () =>

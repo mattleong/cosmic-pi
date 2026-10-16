@@ -75,6 +75,20 @@ const reminderText = (runs: ReadonlyArray<PendingQuestion>): string =>
     "Reply with subagent_reply within the authority the user has already given you, or ask the user. Don't approve anything on the user's behalf.",
   ].join("\n\n");
 
+const questionReminder = (
+  runs: ReadonlyArray<PendingQuestion>,
+): ReadonlyArray<CustomMessageEntryDraft> =>
+  runs.length > 0
+    ? [
+        {
+          type: "custom_message",
+          customType: QUESTION_REMINDER_MESSAGE_TYPE,
+          content: reminderText(runs),
+          display: false,
+        },
+      ]
+    : [];
+
 const isHeadless = (ctx: ExtensionContext): boolean =>
   invokeHostCallback(() => ctx.mode === "print" || ctx.mode === "json", false);
 
@@ -175,17 +189,7 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
       for (const key of escalated) if (!live.has(key)) escalated.delete(key);
       const fresh = questions.filter((run) => !reminded.has(questionKey(run)));
       for (const run of fresh) reminded.add(questionKey(run));
-      const reminder: ReadonlyArray<CustomMessageEntryDraft> =
-        fresh.length > 0
-          ? [
-              {
-                type: "custom_message",
-                customType: QUESTION_REMINDER_MESSAGE_TYPE,
-                content: reminderText(fresh),
-                display: false,
-              },
-            ]
-          : [];
+      const reminder = questionReminder(fresh);
       if (fresh.length === 0) {
         const ignored = questions.filter((run) => !escalated.has(questionKey(run)));
         if (ignored.length > 0 && hasUi(ctx)) {
@@ -206,7 +210,17 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
       return host.drain()?.then(() => {
         const arrived = owed && !held;
         owed = false;
-        return settleResult(event.entries, [], arrived);
+        // Drain may stop for a question before its notifier can acquire the delivery gate.
+        // Continue with the same one-per-question reminder instead of exiting without showing it.
+        const arrivedQuestions = held
+          ? []
+          : pendingQuestions(host.projection()).filter((run) => !reminded.has(questionKey(run)));
+        for (const run of arrivedQuestions) reminded.add(questionKey(run));
+        return settleResult(
+          event.entries,
+          questionReminder(arrivedQuestions),
+          arrived || arrivedQuestions.length > 0,
+        );
       });
     },
   );

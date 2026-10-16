@@ -619,6 +619,24 @@ describe("subagent v6 profile configuration and resolution", () => {
     });
   });
 
+  it("inherits generalist effort independently of parent model availability without overriding profile defaults", () => {
+    const config = resolveTestConfig(
+      document({
+        profiles: {
+          generalist: candidate({ model: "openai/gpt-review" }),
+          oracle: candidate({ model: "openai/gpt-review", context: "fork" }),
+        },
+      }),
+    );
+    const parent = { ...environment, parentModel: undefined, parentEffort: "medium" as const };
+    expect(resolveProfilePlan("generalist", config, parent)).toMatchObject({
+      attempts: [{ effort: "medium", effortWasExplicit: false }],
+    });
+    expect(resolveProfilePlan("oracle", config, parent)).toMatchObject({
+      attempts: [{ effort: "high", effortWasExplicit: false }],
+    });
+  });
+
   it("moves soft efforts to the nearest level the runtime and model support", () => {
     const routed = (runtime: "claude" | "codex", parentEffort: "off" | "minimal" | "max") =>
       resolveProfilePlan(

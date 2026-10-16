@@ -320,6 +320,28 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             assignmentEpoch = nextAssignmentEpoch;
             latestTerminal = undefined;
             return rpc({ type: "prompt", message }).pipe(
+              Effect.flatMap((response) =>
+                decodeRpcPromptData(response.data).pipe(
+                  Effect.mapError(() =>
+                    processError(
+                      "start",
+                      "prompt_outcome_uncertain",
+                      "Subagent did not confirm task admission.\nThe task may already have started; inspect subagent status before retrying.",
+                    ),
+                  ),
+                ),
+              ),
+              Effect.flatMap(({ disposition }) =>
+                disposition === "handled"
+                  ? Effect.fail(
+                      processError(
+                        "start",
+                        "prompt_not_delivered",
+                        "Subagent did not admit the task.\nAn input hook or slash command handled it before it reached the model.",
+                      ),
+                    )
+                  : Effect.void,
+              ),
               Effect.tapError((error) =>
                 Effect.sync(() => {
                   const outcomeUncertain =

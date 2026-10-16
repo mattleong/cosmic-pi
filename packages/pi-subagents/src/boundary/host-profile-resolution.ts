@@ -2,7 +2,7 @@ import * as Predicate from "effect/Predicate";
 
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { freezeSnapshot, invokeHostCallback } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
@@ -18,13 +18,8 @@ import {
   isOutcomeUncertain,
 } from "../run/errors.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
-import {
-  decodeSubagentEffort,
-  type SubagentEffort,
-  type SubagentHost,
-  type SubagentRuntime,
-} from "../domain/routing.ts";
-import type { RuntimeApiKey, StartSubagentRequest } from "../run/model.ts";
+import { type SubagentEffort, type SubagentHost, type SubagentRuntime } from "../domain/routing.ts";
+import type { RuntimeApiKey, StartSubagentRequest, SubagentParentContext } from "../run/model.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import type { SubagentRetryClaim } from "../run/retry.ts";
 import {
@@ -46,6 +41,7 @@ import {
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { forkPromptCacheRoute } from "./fork-prompt-cache.ts";
+import { capturePiParentContext } from "./host-child-pi.ts";
 
 export interface SubagentProfileStartSpec {
   readonly task: string;
@@ -57,25 +53,20 @@ export interface SubagentProfileStartSpec {
 export interface SubagentSessionEnvironment {
   readonly cwd: string;
   readonly projectTrusted: boolean;
+  readonly parentContext?: SubagentParentContext | undefined;
 }
-
-const stableParentLeaf = (ctx: ExtensionContext): string | undefined => {
-  const leaf = ctx.sessionManager.getLeafEntry();
-  if (!leaf) return undefined;
-  if (leaf.type === "message" && leaf.message.role === "assistant")
-    return leaf.parentId ?? undefined;
-  return leaf.id;
-};
 
 const sharesParentPromptCache = (
   ctx: ExtensionContext,
+  parent: SubagentParentContext,
   context: StartSubagentRequest["context"],
   model: string,
-): boolean =>
-  context === "fork" &&
-  ctx.model !== undefined &&
-  `${ctx.model.provider}/${ctx.model.id}` === model &&
-  forkPromptCacheRoute(ctx.model) !== undefined;
+): boolean => {
+  if (context !== "fork" || parent.model !== model) return false;
+  const separator = model.indexOf("/");
+  const parentModel = ctx.modelRegistry.find(model.slice(0, separator), model.slice(separator + 1));
+  return parentModel !== undefined && forkPromptCacheRoute(parentModel) !== undefined;
+};
 
 const transferableRuntimeApiKey = (value: string | undefined): value is string =>
   Predicate.isString(value) &&
@@ -152,15 +143,10 @@ const resolvePiModel = (
     };
   });
 
-const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
-  decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
-
-const parentContextTokens = (ctx: ExtensionContext): number | undefined =>
-  invokeHostCallback(() => ctx.getContextUsage()?.tokens ?? undefined, undefined);
-
 export const hostProfileEnvironment = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
+  parent: SubagentParentContext = capturePiParentContext(pi, ctx),
 ): ProfileResolutionEnvironment => ({
   availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
     provider: model.provider,
@@ -168,14 +154,10 @@ export const hostProfileEnvironment = (
     supportedEfforts: getSupportedThinkingLevels(model),
     contextWindow: model.contextWindow,
   })),
-  ...(parentContextTokens(ctx) !== undefined && { parentContextTokens: parentContextTokens(ctx) }),
-  ...(ctx.model && {
-    parentModel: {
-      model: `${ctx.model.provider}/${ctx.model.id}`,
-      effort: inheritedParentEffort(pi),
-    },
-  }),
-  forkAvailable: Boolean(ctx.sessionManager.getSessionFile() && stableParentLeaf(ctx)),
+  ...(parent.contextTokens !== undefined && { parentContextTokens: parent.contextTokens }),
+  ...(parent.model && { parentModel: { model: parent.model, effort: parent.effort } }),
+  parentEffort: parent.effort,
+  forkAvailable: Boolean(parent.sessionFile && parent.leafId),
 });
 
 const resolveConcreteModel = (
@@ -319,6 +301,7 @@ const resolvePlannedStart = (
   input: PlannedStartInput,
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
+  parent: SubagentParentContext,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentBackendRegistry> =>
   Effect.gen(function* () {
     const { task, normalizedClaims } = yield* validatedStartInput(input.rawInput);
@@ -337,8 +320,8 @@ const resolvePlannedStart = (
         : attempt.reason,
       skippedCandidates: skipped,
     };
-    const parentSessionFile = ctx.sessionManager.getSessionFile();
-    const parentLeafId = stableParentLeaf(ctx);
+    const parentSessionFile = parent.sessionFile;
+    const parentLeafId = parent.leafId;
     if (attempt.effectiveContext === "fork" && (!parentSessionFile || !parentLeafId))
       return yield* new InvalidSubagentRequestError({
         code: "fork_context_unavailable",
@@ -381,10 +364,10 @@ const resolvePlannedStart = (
       effortWasExplicit: attempt.effortWasExplicit,
       activeTools,
       projectTrusted: environment.projectTrusted,
-      parentSessionId: ctx.sessionManager.getSessionId(),
+      parentSessionId: parent.sessionId,
       ...(parentSessionFile && { parentSessionFile }),
       ...(parentLeafId && { parentLeafId }),
-      ...(sharesParentPromptCache(ctx, attempt.effectiveContext, resolved.model) && {
+      ...(sharesParentPromptCache(ctx, parent, attempt.effectiveContext, resolved.model) && {
         sharesParentPromptCache: true,
       }),
     };
@@ -412,7 +395,12 @@ export const resolveProfileStart = (
         code: "profile_unknown",
         message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
       });
-    const plan = profiles.resolve(profileSnapshot, definition.id, hostProfileEnvironment(pi, ctx));
+    const parent = environment.parentContext ?? capturePiParentContext(pi, ctx);
+    const plan = profiles.resolve(
+      profileSnapshot,
+      definition.id,
+      hostProfileEnvironment(pi, ctx, parent),
+    );
     if (plan.kind === "failed")
       return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
     const route = profileSnapshot.effectiveConfig.profiles[definition.id];
@@ -428,6 +416,7 @@ export const resolveProfileStart = (
       },
       ctx,
       environment,
+      parent,
     );
   });
 
@@ -461,9 +450,10 @@ export const resolveProfileRetry = (
       code: "previous_run_failed",
       reason: `Candidate ${claim.continuation.selectedCandidateIndex + 1} failed in ${claim.source.id}: ${claim.source.error ?? "Run failed without a diagnostic."}`,
     };
+    const parent = environment.parentContext ?? capturePiParentContext(pi, ctx);
     const plan = resolveProfileContinuationPlan(
       claim.continuation,
-      hostProfileEnvironment(pi, ctx),
+      hostProfileEnvironment(pi, ctx, parent),
     );
     if (plan.kind === "failed")
       return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
@@ -485,6 +475,7 @@ export const resolveProfileRetry = (
       },
       ctx,
       environment,
+      parent,
     );
     return { ...request, supersedes: { runId: claim.source.id, claimToken: claim.claimToken } };
   });

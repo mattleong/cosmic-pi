@@ -49,7 +49,11 @@ export interface RunSettlementDependencies extends Pick<
 
 export type AssignmentActivationReplay =
   | { readonly kind: "running"; readonly view: SubagentRunView }
-  | { readonly kind: "close-report"; readonly report: BackendReport }
+  | {
+      readonly kind: "committed-report";
+      readonly view: SubagentRunView;
+      readonly notifyPeers: boolean;
+    }
   | {
       readonly kind: "settlement";
       readonly assignmentEpoch: number;
@@ -177,6 +181,52 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     });
   };
 
+  const settleLocked = (
+    record: RunRecord,
+    state: SettlementState,
+    now: number,
+    error?: string,
+    assignmentEpoch?: number,
+  ) =>
+    Effect.gen(function* () {
+      if (
+        settlementBlocked(record, state) ||
+        (assignmentEpoch !== undefined && record.assignment.epoch !== assignmentEpoch)
+      )
+        return { notifyPeers: false, view: snapshotView(record.view) };
+      if (record.initializationPending && state !== "stopped") {
+        record.pendingInitializationSettlement = { state, ...(error && { error }) };
+        return { notifyPeers: false, view: snapshotView(record.view) };
+      }
+      const completedScope =
+        state === "completed" && record.process !== undefined ? record.scope : undefined;
+      if (completedScope) record.cleanupPending = true;
+      const pauseOutcome = record.pauseOutcome;
+      record.pauseOutcome = undefined;
+      record.pauseRequested = false;
+      clearRunActivity(record);
+      const finalText = state === "completed" ? record.latestAssistantText : undefined;
+      const settledError = state === "failed" ? (error ?? "Run failed.") : error;
+      queueCompletionLocked(record, state, finalText, settledError);
+      record.notificationGeneration += 1;
+      delivery.discardQuestionLocked(record.view.id);
+      record.replyPendingRequestId = undefined;
+      if (state === "completed") record.assignment.phase = "reported";
+      record.view = viewForSettlement(record, state, now, finalText, settledError);
+      yield* publish;
+      const view = snapshotView(record.view);
+      if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
+      // Transfer post-commit work with the outcome, not with its interruptible waiter. Peer notices
+      // still precede backend closure, and their interruption cannot abandon cleanup. This fork
+      // never joins under the run lock; its session-owned work acquires it independently.
+      if (completedScope)
+        yield* sendPeerNotices(record.view.id).pipe(
+          Effect.ensuring(closeRecordScope(record, completedScope)),
+          Effect.forkIn(ownerScope),
+        );
+      return { notifyPeers: completedScope === undefined, view };
+    }).pipe(Effect.uninterruptible);
+
   const settle = (
     record: RunRecord,
     state: SettlementState,
@@ -185,47 +235,9 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
   ) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      const result = yield* withLock(
-        Effect.gen(function* () {
-          if (
-            settlementBlocked(record, state) ||
-            (assignmentEpoch !== undefined && record.assignment.epoch !== assignmentEpoch)
-          )
-            return { transitioned: false as const, view: snapshotView(record.view) };
-          if (record.initializationPending && state !== "stopped") {
-            record.pendingInitializationSettlement = { state, ...(error && { error }) };
-            return { transitioned: false as const, view: snapshotView(record.view) };
-          }
-          const completedScope =
-            state === "completed" && record.process !== undefined ? record.scope : undefined;
-          if (completedScope) record.cleanupPending = true;
-          const pauseOutcome = record.pauseOutcome;
-          record.pauseOutcome = undefined;
-          record.pauseRequested = false;
-          clearRunActivity(record);
-          const finalText = state === "completed" ? record.latestAssistantText : undefined;
-          const settledError = state === "failed" ? (error ?? "Run failed.") : error;
-          queueCompletionLocked(record, state, finalText, settledError);
-          record.notificationGeneration += 1;
-          delivery.discardQuestionLocked(record.view.id);
-          record.replyPendingRequestId = undefined;
-          if (state === "completed") record.assignment.phase = "reported";
-          record.view = viewForSettlement(record, state, now, finalText, settledError);
-          yield* publish;
-          const view = snapshotView(record.view);
-          if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
-          return { transitioned: true as const, view, completedScope };
-        }),
-      );
-      const view = result.view;
-      if (!result.transitioned) return view;
-      yield* sendPeerNotices(record.view.id);
-      if (result.completedScope)
-        yield* closeRecordScope(record, result.completedScope).pipe(
-          Effect.forkIn(ownerScope, { startImmediately: true }),
-          Effect.asVoid,
-        );
-      return view;
+      const result = yield* withLock(settleLocked(record, state, now, error, assignmentEpoch));
+      if (result.notifyPeers) yield* sendPeerNotices(record.view.id);
+      return result.view;
     });
 
   const failRun = (
@@ -286,6 +298,17 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       return { kind: "unchanged" as const, view };
     });
 
+  const commitReportLocked = (record: RunRecord, report: BackendReport, now: number) =>
+    Effect.gen(function* () {
+      record.latestAssistantText = report.text;
+      record.lastBackendReport = {
+        assignmentEpoch: report.assignmentEpoch,
+        sequence: report.sequence,
+        deliveryId: report.deliveryId,
+      };
+      return yield* settleLocked(record, "completed", now, undefined, report.assignmentEpoch);
+    }).pipe(Effect.uninterruptible);
+
   const acceptValidatedBackendReport = (record: RunRecord, report: BackendReport) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -322,74 +345,53 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
               `sequence ${report.sequence} arrived while assignment ${report.assignmentEpoch} was ${record.assignment.phase}.`,
               now,
             );
-          return { kind: "close" as const, report };
+          const committed = yield* commitReportLocked(record, report, now);
+          return { kind: "committed" as const, ...committed };
         }),
       );
-      if (decision.kind !== "close") return decision.view;
-
-      const prepared = yield* withLock(
-        Effect.sync(() => {
-          if (
-            isInactiveRunRecord(record) ||
-            record.assignment.epoch !== decision.report.assignmentEpoch ||
-            record.assignment.phase !== "running"
-          )
-            return false;
-          record.latestAssistantText = decision.report.text;
-          return true;
-        }),
-      );
-      if (!prepared) return snapshotView(record.view);
-      const completed = yield* settle(
-        record,
-        "completed",
-        undefined,
-        decision.report.assignmentEpoch,
-      );
-      if (completed.state === "completed")
-        yield* withLock(
-          Effect.sync(() => {
-            if (record.assignment.epoch === decision.report.assignmentEpoch)
-              record.lastBackendReport = {
-                assignmentEpoch: decision.report.assignmentEpoch,
-                sequence: decision.report.sequence,
-                deliveryId: decision.report.deliveryId,
-              };
-          }),
-        );
-      return completed;
+      if (decision.kind === "committed" && decision.notifyPeers)
+        yield* sendPeerNotices(record.view.id);
+      return decision.view;
     });
 
   const activateAssignmentLocked = (
     record: RunRecord,
     runningView: SubagentRunView,
   ): Effect.Effect<AssignmentActivationReplay> =>
-    Effect.suspend(() => {
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
       const pendingReport = record.assignment.pendingReport;
       const pendingRunSettled = record.assignment.pendingRunSettled;
       record.assignment.phase = "running";
       record.assignment.pendingReport = undefined;
       record.assignment.pendingRunSettled = false;
       record.view = runningView;
-      const replay: AssignmentActivationReplay = pendingReport
-        ? { kind: "close-report", report: pendingReport }
-        : pendingRunSettled
-          ? {
-              kind: "settlement",
-              assignmentEpoch: record.assignment.epoch,
-              terminal: pendingRunSettled.terminal,
-            }
-          : { kind: "running", view: snapshotView(record.view) };
-      return publish.pipe(Effect.as(replay));
-    });
+      if (pendingReport) {
+        // The buffered report owns this activation. No running projection or post-lock replay may
+        // let process exit/failure overtake its completion payload and retry eligibility.
+        const committed = yield* commitReportLocked(record, pendingReport, now);
+        return { kind: "committed-report" as const, ...committed };
+      }
+      const replay: AssignmentActivationReplay = pendingRunSettled
+        ? {
+            kind: "settlement",
+            assignmentEpoch: record.assignment.epoch,
+            terminal: pendingRunSettled.terminal,
+          }
+        : { kind: "running", view: snapshotView(record.view) };
+      yield* publish;
+      return replay;
+    }).pipe(Effect.uninterruptible);
 
   const replayAssignmentActivation = (
     record: RunRecord,
     replay: AssignmentActivationReplay,
   ): Effect.Effect<SubagentRunView> => {
     switch (replay.kind) {
-      case "close-report":
-        return acceptValidatedBackendReport(record, replay.report);
+      case "committed-report":
+        return replay.notifyPeers
+          ? sendPeerNotices(record.view.id).pipe(Effect.as(replay.view))
+          : Effect.succeed(replay.view);
       case "settlement":
         return runSettledFromBackend(record, replay.assignmentEpoch, replay.terminal).pipe(
           Effect.map(() => snapshotView(record.view)),

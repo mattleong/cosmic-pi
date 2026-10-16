@@ -504,7 +504,9 @@ export const gitWorkspaceEngine = (registry: string) =>
       const uncapturedPaths = workerTree.excludedPaths;
       const treeRemovalFailed = target.retainTrees
         ? false
-        : yield* removeWorkspaceTrees(registry, integrated, uncapturedPaths.length > 0).pipe(
+        : yield* removeWorkspaceTrees(registry, integrated, {
+            keepWorker: uncapturedPaths.length > 0,
+          }).pipe(
             Effect.as(false),
             Effect.catchTag("WorkspaceError", (error) =>
               Effect.logWarning(`Integrated workspace trees remain on disk: ${error.message}`).pipe(
@@ -606,7 +608,7 @@ export const gitWorkspaceEngine = (registry: string) =>
         lockDirectory,
         ownerNamespace(record.ownerLease),
         Effect.gen(function* () {
-          yield* removeWorkspaceTrees(registry, record);
+          yield* removeWorkspaceTrees(registry, record, { requireOriginalWorker: true });
           yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
         }),
       );

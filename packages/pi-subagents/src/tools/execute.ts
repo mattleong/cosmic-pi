@@ -25,6 +25,7 @@ import {
 } from "../run/errors.ts";
 import {
   isParentActionRequiredRun,
+  SUBAGENT_ROOT_RUN_ID,
   type StartSubagentRequest,
   type SubagentControlExpectation,
   type SubagentRunView,
@@ -181,7 +182,14 @@ export const executeSubagentActionEffect = (
   SubagentError,
   SubagentService | SubagentProfileService | SubagentBackendRegistry
 > => {
-  if (input.tool === SUBAGENT_TOOL_NAME.models) return executeModelsAction(input.args, pi, ctx);
+  if (input.tool === SUBAGENT_TOOL_NAME.models)
+    return callerRunId && !environment.parentContext
+      ? SubagentService.use((service) => service.captureLaunchParent(callerRunId)).pipe(
+          Effect.flatMap((parent) =>
+            executeModelsAction(input.args, pi, ctx, parent.parentContext),
+          ),
+        )
+      : executeModelsAction(input.args, pi, ctx, environment.parentContext);
   if (input.tool === SUBAGENT_TOOL_NAME.workspace)
     return executeWorkspaceAction(input.args, callerRunId);
 
@@ -195,6 +203,10 @@ export const executeSubagentActionEffect = (
     presentSubagentResult(input, result, requestedAwaitIds);
   return Effect.gen(function* () {
     const service = yield* SubagentService;
+    const launchEnvironment =
+      callerRunId && !environment.parentContext && input.tool === SUBAGENT_TOOL_NAME.start
+        ? { ...environment, ...(yield* service.captureLaunchParent(callerRunId)) }
+        : environment;
     const authorize = (ids: ReadonlyArray<string>) =>
       callerRunId ? service.authorizeTargets(callerRunId, ids) : Effect.void;
     const startOwned = (request: StartSubagentRequest) =>
@@ -306,11 +318,22 @@ export const executeSubagentActionEffect = (
               return Effect.acquireUseRelease(
                 service.claimRetryContinuation(id),
                 (claim) =>
-                  resolveProfileRetry(pi, claim, ctx, environment).pipe(
+                  Effect.gen(function* () {
+                    const parentId = claim.source.parentRunId;
+                    const parent =
+                      parentId && parentId !== SUBAGENT_ROOT_RUN_ID
+                        ? yield* service.captureLaunchParent(parentId)
+                        : undefined;
+                    return yield* resolveProfileRetry(pi, claim, ctx, {
+                      ...environment,
+                      parentContext: undefined,
+                      ...parent,
+                    });
+                  }).pipe(
                     Effect.tapError((error) =>
                       subagentErrorCode(error) === "retry_route_exhausted"
                         ? service.exhaustRetryClaim(id, claim.claimToken)
-                        : isUncertainToolFailure(error)
+                        : isUncertainToolFailure({ code: subagentErrorCode(error) })
                           ? service.blockRetryClaim(id, claim.claimToken)
                           : Effect.void,
                     ),
@@ -374,7 +397,7 @@ export const executeSubagentActionEffect = (
           agents: input.args.agents,
           pi,
           ctx,
-          environment,
+          environment: launchEnvironment,
           startOwned,
           onUpdate,
           readOnly: scripted,

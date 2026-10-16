@@ -17,6 +17,7 @@ const unexpectedService: SubagentServiceContract = {
   startSessionOwned: () => unexpected("startSessionOwned"),
   startScriptSessionOwned: () => unexpected("startScriptSessionOwned"),
   startSessionOwnedFrom: () => unexpected("startSessionOwnedFrom"),
+  captureLaunchParent: () => unexpected("captureLaunchParent"),
   visibleList: () => unexpected("visibleList"),
   authorizeTargets: () => unexpected("authorizeTargets"),
   claimRetryContinuation: () => unexpected("claimRetryContinuation"),

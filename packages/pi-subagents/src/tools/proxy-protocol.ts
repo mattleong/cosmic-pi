@@ -8,6 +8,9 @@ import {
 } from "pi-ask-user/protocol";
 import { Check } from "typebox/value";
 import type { BackendProxyResult } from "../backend/model.ts";
+import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
+import { isSafeNativeModelSelector } from "../profiles/model.ts";
+import type { SubagentParentContext } from "../run/model.ts";
 import { invalidRequest, type InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentToolName } from "../run/tool-policy.ts";
@@ -31,6 +34,64 @@ export const encodeSubagentProxyInput = (input: SubagentToolInput): SubagentProx
 });
 
 const MAX_PROXY_JSON_CHARS = 2 * 1024 * 1024;
+const ParentContextSchema = Schema.Struct({
+  sessionId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+  sessionFile: Schema.optionalKey(
+    Schema.String.check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(4096),
+      Schema.isPattern(/^[^\0\r\n]+$/),
+    ),
+  ),
+  leafId: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
+  model: Schema.optionalKey(
+    Schema.String.check(Schema.isMaxLength(256), Schema.makeFilter(isSafeNativeModelSelector)),
+  ),
+  effort: Schema.Literals(SUBAGENT_EFFORTS),
+  contextTokens: Schema.optionalKey(
+    Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+  ),
+});
+const ParentEnvelopeSchema = Schema.Struct({
+  parentContext: ParentContextSchema,
+  argumentsJson: Schema.String.check(Schema.isMaxLength(MAX_PROXY_JSON_CHARS)),
+});
+const decodeParentEnvelope = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ParentEnvelopeSchema),
+  {
+    onExcessProperty: "error",
+  },
+);
+const hasParentEnvelope = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ parentContext: Schema.Unknown })),
+);
+
+/** The bridge adds facts outside public tool arguments; only an authenticated run may bind them. */
+export const withSubagentProxyParent = (
+  request: SubagentProxyRequest,
+  parentContext: SubagentParentContext,
+): SubagentProxyRequest => ({
+  tool: request.tool,
+  argumentsJson: JSON.stringify({ parentContext, argumentsJson: request.argumentsJson }),
+});
+
+export const decodeSubagentProxyParent = (
+  request: SubagentProxyRequest,
+):
+  | { readonly request: SubagentProxyRequest; readonly parentContext?: SubagentParentContext }
+  | InvalidSubagentRequestError => {
+  if (request.argumentsJson.length > MAX_PROXY_JSON_CHARS)
+    return invalid("Nested subagent request arguments exceeded their bound.");
+  const decoded = decodeParentEnvelope(request.argumentsJson);
+  if (Option.isSome(decoded))
+    return {
+      request: { tool: request.tool, argumentsJson: decoded.value.argumentsJson },
+      parentContext: decoded.value.parentContext,
+    };
+  return Option.isSome(hasParentEnvelope(request.argumentsJson))
+    ? invalid("Nested Pi parent context failed strict validation.")
+    : { request };
+};
 const decodeQuestionnaireJson = Schema.decodeUnknownOption(
   Schema.fromJsonString(QuestionnaireRequestSchema),
   { onExcessProperty: "error" },

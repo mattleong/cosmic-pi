@@ -9,6 +9,7 @@ import {
   resolveProfileStart,
   type SubagentSessionEnvironment,
 } from "../boundary/host-profile-resolution.ts";
+import { capturePiParentContext } from "../boundary/host-child-pi.ts";
 import type { SubagentSelectionProvenance } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SubagentBackendRegistry } from "../backend/service.ts";
@@ -182,6 +183,10 @@ export const executeStartBatch = (
     const specs = yield* startSpecs(input.agents);
     const profileService = yield* SubagentProfileService;
     const profileSnapshot = yield* profileService.capture;
+    const environment = {
+      ...input.environment,
+      parentContext: input.environment.parentContext ?? capturePiParentContext(input.pi, input.ctx),
+    };
     const partialOutcomes = new Map<number, SubagentStartOutcome>();
     const publishOutcome = (outcome: SubagentStartOutcome) =>
       Effect.sync(() => {
@@ -202,7 +207,7 @@ export const executeStartBatch = (
         );
       });
     const resolveRequest = (spec: SubagentStartSpec) =>
-      resolveProfileStart(input.pi, spec, input.ctx, input.environment, profileSnapshot).pipe(
+      resolveProfileStart(input.pi, spec, input.ctx, environment, profileSnapshot).pipe(
         Effect.map((request) => ({
           ...request,
           nestingPolicy: profileSnapshot.effectiveConfig.nesting,

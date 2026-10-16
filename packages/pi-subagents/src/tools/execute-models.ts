@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
+import type { SubagentParentContext } from "../run/model.ts";
 import { profileCandidateLabel, PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { encodeSubagentContract } from "./contract-schema.ts";
@@ -41,13 +42,14 @@ export const executeModelsAction = (
   input: SubagentModelsInput,
   pi: ExtensionAPI,
   ctx: ExtensionContext,
+  parentContext?: SubagentParentContext,
 ): Effect.Effect<AgentToolResult<unknown>, never, SubagentProfileService> =>
   Effect.gen(function* () {
     const profileService = yield* SubagentProfileService;
     const snapshot = yield* profileService.capture;
     const { fallbackProfile } = snapshot.effectiveConfig;
     const ids: ReadonlyArray<ProfileId> = input.profile ? [input.profile] : PROFILE_IDS;
-    const environment = hostProfileEnvironment(pi, ctx);
+    const environment = hostProfileEnvironment(pi, ctx, parentContext);
     const profiles: ReadonlyArray<SubagentProfileView> = ids.flatMap((id) => {
       const definition = profileService.definition(id);
       if (!definition) return [];

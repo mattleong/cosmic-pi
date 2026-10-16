@@ -4,7 +4,9 @@ import { MAX_TOOL_OUTPUT_CHARS } from "../src/run/limits.ts";
 import {
   decodeSubagentProxyRequest,
   decodeSubagentProxyResult,
+  decodeSubagentProxyParent,
   encodeSubagentProxyInput,
+  withSubagentProxyParent,
 } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
 import { startContract } from "../src/tools/contract.ts";
@@ -51,6 +53,61 @@ const request = (count: number) => ({
 });
 
 describe("nested Pi proxy protocol", () => {
+  const parentContext = {
+    sessionId: "child-session",
+    sessionFile: "/sessions/child.jsonl",
+    leafId: "child-findings",
+    model: "openai/child-model",
+    effort: "medium" as const,
+    contextTokens: 123,
+  };
+
+  it("keeps bridge parent facts separate from public launch arguments", () => {
+    const input: SubagentToolInput = {
+      tool: "subagent_start",
+      args: { agents: [{ task: "Inspect the package", profile: "scout" }] },
+    };
+    const encoded = encodeSubagentProxyInput(input);
+    const envelope = withSubagentProxyParent(encoded, parentContext);
+    expect(decodeSubagentProxyRequest(envelope)).toBeInstanceOf(InvalidSubagentRequestError);
+    const decoded = decodeSubagentProxyParent(envelope);
+    expect(decoded).toEqual({ request: encoded, parentContext });
+    if (decoded instanceof InvalidSubagentRequestError) throw decoded;
+    expect(decodeSubagentProxyRequest(decoded.request)).toEqual(input);
+    expect(decodeSubagentProxyParent(encoded)).toEqual({ request: encoded });
+  });
+
+  it.each([
+    { callerRunId: "root" },
+    { projectTrusted: true },
+    { activeTools: ["write"] },
+    { runtimeApiKey: "not-a-capability" },
+    { sessionId: "" },
+    { sessionFile: "/sessions/injected\nfile.jsonl" },
+    { model: "not a native selector" },
+    { effort: "default" },
+    { contextTokens: -1 },
+  ])("rejects malformed parent facts and caller authority %j", (override) => {
+    expect(
+      decodeSubagentProxyParent({
+        tool: "subagent_start",
+        argumentsJson: JSON.stringify({
+          parentContext: { ...parentContext, ...override },
+          argumentsJson: JSON.stringify({ agents: [{ task: "Inspect" }] }),
+        }),
+      }),
+    ).toBeInstanceOf(InvalidSubagentRequestError);
+  });
+
+  it("does not admit parent facts as public start-item fields", () => {
+    expect(
+      decodeSubagentProxyRequest({
+        tool: "subagent_start",
+        argumentsJson: JSON.stringify({ agents: [{ task: "Inspect", parentContext }] }),
+      }),
+    ).toBeInstanceOf(InvalidSubagentRequestError);
+  });
+
   it("round-trips discovery and rename contracts while rejecting report-text injection", () => {
     const run = view({
       id: "a",

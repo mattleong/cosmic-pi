@@ -95,6 +95,17 @@ export const runsWithin = (
     ),
   );
 
+/** The engine validates this layout; never infer a broader root from an unrelated path. */
+export const workspaceArtifactDirectory = (handle: WorkspaceHandle): string | undefined => {
+  if (!isWithin(handle.sourceCwd, handle.sourceRoot)) return undefined;
+  const sourceSuffix = handle.sourceCwd.slice(handle.sourceRoot.replace(/\/$/u, "").length);
+  if (sourceSuffix.split("/").some((part) => part === "." || part === "..")) return undefined;
+  const workerSuffix = `/worker${sourceSuffix}`;
+  if (!handle.cwd.endsWith(workerSuffix)) return undefined;
+  const directory = handle.cwd.slice(0, -workerSuffix.length);
+  return directory.endsWith(`/${handle.workspaceId}`) ? directory : undefined;
+};
+
 export const workspaceFinishedError = () =>
   invalid(
     "workspace_finished",

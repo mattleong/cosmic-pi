@@ -56,7 +56,7 @@ import { SubagentService } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import { isPendingDeliveryError } from "../tools/outcome.ts";
-import { decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
+import { decodeSubagentProxyParent, decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import {
   decodeFleetActionRequest,
   executeFleetSnapshot,
@@ -285,16 +285,21 @@ export function registerSubagentApplication(
                   code: "proxy_caller_disconnected",
                   message: "The subagent session was replaced.",
                 });
-              if (request.tool === FLEET_SNAPSHOT_TOOL_NAME)
-                return yield* executeFleetSnapshot(request, callerRunId).pipe(
+              const decoded = decodeSubagentProxyParent(request);
+              if (decoded instanceof InvalidSubagentRequestError) return yield* decoded;
+              const parent = decoded.parentContext
+                ? yield* service.captureLaunchParent(callerRunId, decoded.parentContext)
+                : undefined;
+              if (decoded.request.tool === FLEET_SNAPSHOT_TOOL_NAME)
+                return yield* executeFleetSnapshot(decoded.request, callerRunId).pipe(
                   Effect.provideService(SubagentService, service),
                 );
               const fleetAction =
-                request.tool === FLEET_ACTION_TOOL_NAME
-                  ? decodeFleetActionRequest(request)
+                decoded.request.tool === FLEET_ACTION_TOOL_NAME
+                  ? decodeFleetActionRequest(decoded.request)
                   : undefined;
               if (fleetAction instanceof InvalidSubagentRequestError) return yield* fleetAction;
-              const input = fleetAction?.input ?? decodeSubagentProxyRequest(request);
+              const input = fleetAction?.input ?? decodeSubagentProxyRequest(decoded.request);
               if (input instanceof InvalidSubagentRequestError) return yield* input;
               const caller = (yield* service.visibleList(callerRunId)).find(
                 (run) => run.id === callerRunId,
@@ -306,7 +311,11 @@ export function registerSubagentApplication(
                 });
               return yield* executeSubagentActionEffect(
                 pi,
-                { cwd: caller.cwd, projectTrusted: activation.projectTrusted },
+                {
+                  cwd: caller.cwd,
+                  projectTrusted: activation.projectTrusted,
+                  ...(parent && { parentContext: parent.parentContext }),
+                },
                 input,
                 undefined,
                 activation.ctx,

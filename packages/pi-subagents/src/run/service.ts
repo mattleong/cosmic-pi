@@ -40,6 +40,8 @@ import { settlementOperations } from "./settlement.ts";
 import {
   type FailedStartRecovery,
   type StartSubagentRequest,
+  type SubagentLaunchParent,
+  type SubagentParentContext,
   type SubagentRetrySupersession,
   type SubagentProjection,
   type SubagentRunView,
@@ -136,6 +138,10 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     callerRunId: string,
     request: StartSubagentRequest,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly captureLaunchParent: (
+    runId: string,
+    nativeContext?: SubagentParentContext,
+  ) => Effect.Effect<SubagentLaunchParent, SubagentError>;
   readonly visibleList: (callerRunId: string) => Effect.Effect<ReadonlyArray<SubagentRunView>>;
   readonly authorizeTargets: (
     callerRunId: string,
@@ -498,6 +504,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
     setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,
     startSessionOwnedFrom: starts.startSessionOwnedFrom,
+    captureLaunchParent: starts.captureLaunchParent,
     ...visibilityOperations(runContext),
     startRetrySessionOwned: starts.startRetrySessionOwned,
     list,

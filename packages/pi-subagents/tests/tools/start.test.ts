@@ -134,10 +134,21 @@ describe("subagent tool", () => {
 
   effectTest("resolves authenticated child starts through the caller's session", function* () {
     const callers: Array<readonly [string, string | undefined]> = [];
+    const requests: StartSubagentRequest[] = [];
     const service = subagentServiceDouble({
+      captureLaunchParent: () =>
+        Effect.succeed({
+          cwd: "/child-project",
+          parentContext: {
+            sessionId: "child-session",
+            model: "openai-codex/gpt-5.6-sol",
+            effort: "medium",
+          },
+        }),
       startSessionOwnedFrom: (callerRunId, request) =>
         Effect.sync(() => {
           callers.push([callerRunId, request.profile]);
+          requests.push(request);
           return view({ id: `child-${callers.length}`, profile: request.profile });
         }),
     });
@@ -169,6 +180,11 @@ describe("subagent tool", () => {
       ["authenticated-caller", "scout"],
       ["authenticated-caller", "generalist"],
     ]);
+    expect(requests[1]).toMatchObject({
+      cwd: "/child-project",
+      effort: "medium",
+      parentSessionId: "child-session",
+    });
     expect(proxied.usage).toBeUndefined();
     expect(decodeSubagentProxyResult(encodeSubagentProxyPayload(proxied) ?? "")).toBeDefined();
   });

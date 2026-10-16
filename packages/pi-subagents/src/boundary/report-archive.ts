@@ -1,3 +1,4 @@
+import { synchronousRandomUuid } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -46,9 +47,11 @@ export const sessionReportArchive = (agentDirectory: string, sessionKey: string)
       nodeMkdirSync(directory, { recursive: true, mode: 0o700 });
       const file = path.join(
         directory,
-        `${safeSubagentDirectorySegment(entry.id)}-${entry.generation}.md`,
+        `${safeSubagentDirectorySegment(entry.id)}-${entry.generation}-${synchronousRandomUuid()}.md`,
       );
-      nodeWriteFileSync(file, entry.text, { mode: 0o600 });
+      // Run ids restart in every process. Exclusive creation also preserves an old link if the
+      // archive identity ever collides; the notifier can fall back to an inline report.
+      nodeWriteFileSync(file, entry.text, { mode: 0o600, flag: "wx" });
       return { path: file, lines: entry.text.split("\n").length };
     } catch {
       return undefined;

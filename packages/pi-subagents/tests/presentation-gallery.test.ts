@@ -329,7 +329,35 @@ const startScenarios = Effect.gen(function* () {
     },
     { service: { startSessionOwned: () => Effect.fail(scriptedWriterAdmissionError()) } },
   );
-  return [settled, still, blockedWriter, blockedDescendant];
+  const promptFailures: ToolScenario[] = [];
+  for (const uncertain of [false, true]) {
+    promptFailures.push(
+      yield* scenario(
+        uncertain ? "task admission unconfirmed" : "input hook handled the task",
+        {
+          tool: "subagent_start",
+          args: {
+            agents: [{ name: "task-review", profile: "reviewer", task: "Review the change" }],
+          },
+        },
+        {
+          service: {
+            startSessionOwned: () =>
+              Effect.fail(
+                new SubagentProcessError({
+                  operation: "start",
+                  code: uncertain ? "prompt_outcome_uncertain" : "prompt_not_delivered",
+                  message: uncertain
+                    ? "Subagent did not confirm task admission.\nThe task may already have started; inspect subagent status before retrying."
+                    : "Subagent did not admit the task.\nAn input hook or slash command handled it before it reached the model.",
+                }),
+              ),
+          },
+        },
+      ),
+    );
+  }
+  return [settled, still, blockedWriter, blockedDescendant, ...promptFailures];
 });
 
 const awaitInput: SubagentToolInput<"subagent_await"> = {
@@ -838,6 +866,22 @@ const workspaceScenarios = Effect.all([
     "discard",
     { tool: "subagent_workspace", args: { action: "discard", workspaceId: "ws-1" } },
     { service: workspaceService },
+  ),
+  scenario(
+    "discard blocked by a reader in an older preparation",
+    { tool: "subagent_workspace", args: { action: "discard", workspaceId: "ws-1" } },
+    {
+      service: {
+        workspaceDiscard: () =>
+          Effect.fail(
+            new InvalidSubagentRequestError({
+              code: "workspace_process_unsettled",
+              message:
+                "A run still uses this workspace. Stop it and confirm cleanup before discard.",
+            }),
+          ),
+      },
+    },
   ),
   scenario(
     "setup cleanup unconfirmed",

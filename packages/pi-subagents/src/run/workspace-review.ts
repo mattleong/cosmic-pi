@@ -9,6 +9,9 @@ import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
   mapWorkspaceError,
+  runHoldsCwd,
+  runsWithin,
+  workspaceArtifactDirectory,
   type WorkspaceBinding,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
@@ -41,7 +44,8 @@ const engineRevision = (service: WorkspaceServiceContract, { handle }: Workspace
   );
 
 export function workspaceReviewOperations(context: WorkspaceControlContext) {
-  const { withLock, state, requireBinding, requireEngine, operations, workspaceSetup } = context;
+  const { records, withLock, state, requireBinding, requireEngine, operations, workspaceSetup } =
+    context;
   const hold = <A>(
     workspaceId: string,
     caller: string,
@@ -200,21 +204,36 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
     Effect.gen(function* () {
       const service = yield* requireEngine;
       yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
-        Effect.gen(function* () {
-          yield* service
-            .discard({
-              workspaceId,
-              ownerId: binding.handle.ownerId,
-              processCleanupConfirmed: true,
-            })
-            .pipe(Effect.mapError(mapWorkspaceError));
-          yield* withLock(
-            Effect.gen(function* () {
-              yield* heldLocked();
-              binding.finished = true;
-            }),
-          );
-        }),
+        // Like integration, destructive cleanup holds admission closed from the cwd check
+        // through removal. Natural writer completion does not stop its read-only descendants.
+        withLock(
+          Effect.gen(function* () {
+            yield* heldLocked();
+            const artifact = yield* service
+              .inspect({ workspaceId, ownerId: binding.handle.ownerId })
+              .pipe(Effect.mapError(mapWorkspaceError));
+            const directory = workspaceArtifactDirectory(artifact.handle);
+            if (!directory)
+              return yield* invalid(
+                "workspace_owner_unavailable",
+                "Workspace paths do not match the managed artifact layout.",
+              );
+            if ([...runsWithin(records, [directory]).keys()].some(runHoldsCwd))
+              return yield* invalid(
+                "workspace_process_unsettled",
+                "A run still uses this workspace. Stop it and confirm cleanup before discard.",
+              );
+            yield* service
+              .discard({
+                workspaceId,
+                ownerId: binding.handle.ownerId,
+                processCleanupConfirmed: true,
+              })
+              .pipe(Effect.mapError(mapWorkspaceError));
+            binding.finished = true;
+            return undefined;
+          }),
+        ),
       );
     });
   return { workspaceReview, workspacePrepare, workspaceDiscard };

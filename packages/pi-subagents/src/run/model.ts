@@ -222,6 +222,21 @@ export interface SubagentRetrySupersession {
   readonly claimToken: string;
 }
 
+/** Native facts captured by the immediate Pi parent, never launch authority or credentials. */
+export interface SubagentParentContext {
+  readonly sessionId: string;
+  readonly sessionFile?: string | undefined;
+  readonly leafId?: string | undefined;
+  readonly model?: string | undefined;
+  readonly effort: SubagentEffort;
+  readonly contextTokens?: number | undefined;
+}
+
+export interface SubagentLaunchParent {
+  readonly cwd: string;
+  readonly parentContext: SubagentParentContext;
+}
+
 export interface StartSubagentRequest {
   readonly name?: string | undefined;
   readonly parentRunId?: string | undefined;

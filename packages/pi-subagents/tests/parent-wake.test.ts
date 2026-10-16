@@ -12,7 +12,10 @@ import {
   yieldUntil,
 } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vitest";
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
 import { registerParentWake, WAKE_MESSAGE_TYPE } from "../src/boundary/host-parent-wake.ts";
@@ -353,6 +356,66 @@ describe("parent wake policy", () => {
       test.setProjection(projectionOf([view({ state: "completed" })]));
       yield* Effect.promise(() => test.settle(test.ctx("print")));
       expect(test.drain).toHaveBeenCalledOnce();
+    }),
+  );
+
+  for (const mode of ["print", "json"] as const) {
+    it.effect(`continues ${mode} drain for a question blocked behind nested delivery`, () => {
+      const test = harness();
+      test.setIdle(false);
+      const { fake, layer, notifications } = localServiceFixture({
+        publish: test.setProjection,
+        notify: test.notify,
+      });
+      return withService(layer, function* (service) {
+        test.drain.mockImplementation(() => Effect.runPromise(service.awaitParentDrain));
+        const parent = yield* service.start(request({ name: "nested-parent" }));
+        yield* service.startSessionOwnedFrom(parent.id, request({ name: "nested-child" }));
+        const asking = yield* service.start(request({ name: "root-child" }));
+        const deliveryGate = yield* Deferred.make<void>();
+        yield* Effect.addFinalizer(() => Deferred.succeed(deliveryGate, undefined));
+        fake.controls[0]?.gateNextIpcType("proxy_notification", deliveryGate);
+        fake.controls[1]?.offerIpc(
+          contactParentFrame("nested-question", "question", "Question for the nested parent."),
+        );
+        yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
+        const settling = yield* Effect.promise(() => test.settle(test.ctx(mode))).pipe(
+          Effect.forkScoped,
+        );
+        yield* yieldUntil(() => test.drain.mock.calls.length > 0);
+        const question = "Question for the root parent.";
+        fake.controls[2]?.offerIpc(contactParentFrame("root-question", "question", question));
+
+        const result = yield* Fiber.join(settling);
+        expect(result).toMatchObject({ continue: true });
+        expect(JSON.stringify(result?.entries)).toContain(question);
+        const rootNotifications = () =>
+          notifications.filter((item) => item.type === "question" && item.id === asking.id);
+        expect(rootNotifications()).toEqual([]);
+        expect(test.sendMessage).not.toHaveBeenCalled();
+        // A reminder is not a notifier acknowledgement. An already-reminded question must not
+        // cause either another continuation or an indefinite drain on the still-running sibling.
+        expect(yield* Effect.promise(() => test.settle(test.ctx(mode)))).toBeUndefined();
+
+        yield* Deferred.succeed(deliveryGate, undefined);
+        yield* yieldUntil(() => rootNotifications().length === 1);
+        yield* TestClock.adjust("1 second");
+        expect(rootNotifications()).toHaveLength(1);
+        expect(test.turns()).toEqual([false]);
+        expect(yield* Effect.promise(() => test.settle(test.ctx(mode)))).toBeUndefined();
+      });
+    });
+  }
+
+  it.effect("does not continue for a new question when wakes are held during drain", () =>
+    Effect.gen(function* () {
+      const test = harness(projectionOf([view({ state: "running" })]));
+      test.drain.mockImplementationOnce(() => {
+        test.setProjection(projectionOf([waiting("agent-1")]));
+        test.wake.hold();
+        return Promise.resolve();
+      });
+      expect(yield* Effect.promise(() => test.settle(test.ctx("print")))).toBeUndefined();
     }),
   );
 

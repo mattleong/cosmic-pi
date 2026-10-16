@@ -11,7 +11,16 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
+import { CrossProcessLock, nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
+import { collectWorkspaceRecords } from "../../src/boundary/git-worktree-recovery.ts";
+import {
+  sourceLockNamespace,
+  withFreeLock,
+  workspaceLockDirectory,
+} from "../../src/boundary/git-worktree-store.ts";
+import type { WorkspaceHandle } from "../../src/workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import {
@@ -95,6 +104,79 @@ for (const replaced of [false, true]) {
     60_000,
   );
 }
+
+it.live(
+  "preserves both worker trees when its path is replaced while orphan discard waits for the source lock",
+  () =>
+    Effect.gen(function* () {
+      const temporary = yield* temporaryDirectory("pi-orphan-cleanup-race-");
+      const source = path.join(temporary, "source");
+      const agent = path.join(temporary, "agent");
+      yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
+      yield* commitRepository(source, [["main.ts", "baseline\n"]]);
+      const creator = yield* openService(agent);
+      const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
+      const target = workspaceTarget(handle);
+      const revision = yield* creator.service.freeze(target);
+      const preparation = yield* creator.service.prepare({
+        ...target,
+        revisionId: revision.revisionId,
+      });
+      yield* creator.close;
+      const successor = yield* openService(agent);
+      const registry = path.join(agent, "git-workspaces");
+      const lockDirectory = workspaceLockDirectory(registry);
+      const verified = yield* Deferred.make<void>();
+      const leases = yield* WriterLeaseService.pipe(
+        Effect.provide(WriterLeaseService.layer({ agentDirectory: agent })),
+      );
+      const context = workspaceControlContext({
+        ownerScope: yield* Scope.Scope,
+        records: new Map(),
+        withLock: (effect) => effect,
+        writerLeases: {
+          ...leases,
+          canonicalize: (cwd) =>
+            leases.canonicalize(cwd).pipe(Effect.tap(() => Deferred.succeed(verified, undefined))),
+        },
+        writerPools: { size: 0 },
+        engine: successor.service,
+        initialMode: "worktree",
+        ownerId: "new",
+        sourceCwd: source,
+        isClosed: () => false,
+      });
+      const renamed = `${handle.cwd}-original`;
+      const pending = yield* Effect.gen(function* () {
+        const locks = yield* CrossProcessLock;
+        return yield* withFreeLock(
+          locks,
+          lockDirectory,
+          sourceLockNamespace(source),
+          Effect.gen(function* () {
+            const discard = yield* workspaceOrphanOperations(
+              context,
+              Effect.succeed,
+            )(handle.workspaceId).pipe(Effect.result, Effect.forkChild);
+            yield* Deferred.await(verified);
+            yield* io(() => fs.rename(handle.cwd, renamed));
+            // Retain valid worktree metadata: Git would otherwise happily remove this copy.
+            yield* io(() => fs.cp(renamed, handle.cwd, { recursive: true }));
+            yield* writeFile(path.join(handle.cwd, "replacement.ts"), "preserve replacement\n");
+            return discard;
+          }),
+        );
+      }).pipe(Effect.provide(CrossProcessLock.layer({ directory: lockDirectory })));
+      const outcome = yield* Fiber.join(Option.getOrThrow(pending));
+      expect(outcome).toMatchObject({ failure: { code: "workspace_operation_failed" } });
+      expect(yield* exists(path.join(renamed, "main.ts"))).toBe(true);
+      expect(yield* exists(path.join(handle.cwd, "replacement.ts"))).toBe(true);
+      expect(yield* exists(path.join(preparation.cwd, "main.ts"))).toBe(true);
+      expect((yield* successor.service.listAll).records[0]?.status).toBe("prepared");
+      yield* successor.close;
+    }),
+  60_000,
+);
 
 for (const prepared of [false, true]) {
   for (const interrupted of [false, true]) {
@@ -199,9 +281,15 @@ it.live(
         "authorization",
       );
       expect(yield* exists(handle.cwd)).toBe(true);
+      const revision = yield* creator.service.freeze(workspaceTarget(handle));
+      const preparation = yield* creator.service.prepare({
+        ...workspaceTarget(handle),
+        revisionId: revision.revisionId,
+      });
       yield* creator.close;
       yield* successor.service.discardOrphan(target);
       expect(yield* exists(handle.cwd)).toBe(false);
+      expect(yield* exists(preparation.cwd)).toBe(false);
       expect((yield* successor.service.listAll).records.map((record) => record.status)).toEqual([
         "discarded",
       ]);
@@ -273,4 +361,50 @@ test("collects week-old finished records but keeps unintegrated work and fork pr
     expect(remaining).toContain(handle.workspaceId);
   expect(yield* exists(path.join(registry, expired.workspaceId))).toBe(false);
   expect((yield* io(() => fs.readdir(registry))).some((name) => name.startsWith("."))).toBe(false);
+});
+
+test("keeps an integrated predecessor referenced by a retry fork after the collection scan", function* (service, root, agent) {
+  const predecessor = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  const target = workspaceTarget(predecessor);
+  yield* writeFile(path.join(predecessor.cwd, "src/main.ts"), "integrated\n");
+  const revision = yield* service.freeze(target);
+  const preparation = yield* service.prepare({ ...target, revisionId: revision.revisionId });
+  yield* service.integrate({
+    ...target,
+    revisionId: revision.revisionId,
+    preparationId: preparation.preparationId,
+  });
+  yield* age(agent, predecessor.workspaceId, 8);
+  const registry = path.join(agent, "git-workspaces");
+  const lockDirectory = workspaceLockDirectory(registry);
+  const forked = yield* Deferred.make<WorkspaceHandle>();
+  const collected = yield* Effect.gen(function* () {
+    const locks = yield* CrossProcessLock;
+    return yield* collectWorkspaceRecords(registry, {
+      now: yield* Clock.currentTimeMillis,
+      owned: () => false,
+      // This is another session's collection: the live owner can retry after the initial
+      // listing, but must commit its fork under the same source lock collection will take.
+      whenSourceFree: (sourceRoot, effect) =>
+        service.fork(target).pipe(
+          Effect.tap((handle) => Deferred.succeed(forked, handle)),
+          Effect.andThen(
+            withFreeLock(locks, lockDirectory, sourceLockNamespace(sourceRoot), effect),
+          ),
+        ),
+    });
+  }).pipe(
+    Effect.provide(
+      Layer.merge(
+        CrossProcessLock.layer({ directory: lockDirectory }),
+        SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer)),
+      ),
+    ),
+  );
+  expect(collected).not.toContain(predecessor.workspaceId);
+  expect(yield* exists(path.join(registry, predecessor.workspaceId))).toBe(true);
+  const fork = yield* Deferred.await(forked);
+  yield* service.discard(workspaceTarget(fork));
+  expect(yield* exists(fork.cwd)).toBe(false);
+  expect((yield* service.inspect(workspaceTarget(fork))).status).toBe("discarded");
 });

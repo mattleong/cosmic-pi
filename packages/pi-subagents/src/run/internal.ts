@@ -24,6 +24,7 @@ import {
   hasSubagentCapability,
   isTerminalRunState,
   type SubagentCapability,
+  type SubagentParentContext,
   type SubagentRunView,
 } from "./model.ts";
 import { snapshotView } from "./state.ts";
@@ -86,6 +87,8 @@ export interface RunRecord {
   readonly driver: BackendDriver;
   launch: BackendLaunchRequest;
   resumeToken?: BackendResumeToken | undefined;
+  /** Latest native parent facts admitted through this run's authenticated Pi channel. */
+  parentContext?: SubagentParentContext | undefined;
   process?: BackendHandle | undefined;
   backendSpawnAttempt?:
     | { readonly scope: Scope.Closeable; readonly settled: Deferred.Deferred<void> }

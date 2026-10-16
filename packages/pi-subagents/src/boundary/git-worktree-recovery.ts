@@ -15,7 +15,9 @@ import {
   workspaceFailure,
   workspaceIO,
   workspaceIOIfPresent,
+  workspaceRefusal,
 } from "./git-worktree-process.ts";
+import { canonicalizeWriterDirectory } from "./writer-lease.ts";
 import {
   readWorkspaceRecord,
   syncWorkspaceDirectory,
@@ -37,10 +39,10 @@ const registrations = (repository: string) =>
 export const removeWorkspaceTrees = (
   registry: string,
   record: WorkspaceRecord,
-  keepWorker = false,
+  options: { readonly keepWorker?: boolean; readonly requireOriginalWorker?: boolean } = {},
 ) =>
   Effect.gen(function* () {
-    const removedWorker = (name: string) => name === "worker" && !keepWorker;
+    const removedWorker = (name: string) => name === "worker" && !options.keepWorker;
     const directory = workspaceDirectory(registry, record.handle.workspaceId);
     const repository = path.join(directory, "repo.git");
     const names = yield* workspaceIO("discard", () => fs.readdir(directory));
@@ -76,11 +78,30 @@ export const removeWorkspaceTrees = (
           "Seed registration remains without its editable tree.",
         );
     }
-    for (const name of names.filter(
-      (entry) => removedWorker(entry) || /^prepare-[a-f0-9-]{36}$/u.test(entry),
-    )) {
+    // Keep the worker available for identity checks until every preparation is gone.
+    const trees = names
+      .filter((entry) => removedWorker(entry) || /^prepare-[a-f0-9-]{36}$/u.test(entry))
+      .toSorted((left, right) => Number(left === "worker") - Number(right === "worker"));
+    for (const name of trees) {
       const tree = path.join(directory, name);
       yield* checkDirectory(tree);
+      if (options.requireOriginalWorker) {
+        const refusal = () =>
+          workspaceRefusal("discard", "The original worker directory changed; discard is unsafe.", {
+            path: record.handle.cwd,
+            rule: "orphan cleanup must still name the original writer-directory identity",
+            remedy:
+              "Preserve both trees and the recovery record. Independently confirm every writer and descendant has stopped, then recover the artifact manually.",
+          });
+        const original = record.handle.writerCwd;
+        if (!original) return yield* refusal();
+        // Service, source-lock, and predecessor checks can all wait. Revalidate at removal,
+        // not merely before entering the engine, while the original writer lease is held.
+        const current = yield* canonicalizeWriterDirectory(record.handle.cwd).pipe(
+          Effect.mapError(refusal),
+        );
+        if (current.filesystemIdentity !== original.filesystemIdentity) return yield* refusal();
+      }
       yield* git(repository, ["worktree", "remove", "--force", tree]);
     }
     const remaining = yield* workspaceIO("discard", () => fs.readdir(directory));
@@ -158,6 +179,14 @@ const collectRecord = (registry: string, workspaceId: string, now: number) =>
   Effect.gen(function* () {
     const record = yield* readWorkspaceRecord(registry, workspaceId);
     if (!finished(record)) return false;
+    // Fork creation holds this source lock too. The pre-lock listing is only a candidate
+    // scan: a retry may have persisted a new predecessor reference while collection waited.
+    const current = yield* listWorkspaceRecords(registry);
+    if (
+      current.unavailable.length > 0 ||
+      current.records.some((entry) => entry.predecessorWorkspaceId === workspaceId)
+    )
+      return false;
     const directory = workspaceDirectory(registry, workspaceId);
     yield* checkDirectory(directory);
     const saved = yield* workspaceIO("collect", () => fs.stat(path.join(directory, "record.json")));

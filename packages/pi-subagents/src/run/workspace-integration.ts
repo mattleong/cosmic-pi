@@ -7,6 +7,7 @@ import {
   mapWorkspaceError,
   runHoldsCwd,
   runsWithin,
+  workspaceArtifactDirectory,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
 
@@ -68,12 +69,13 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
           const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].toSorted(
             (left, right) => left.digest.localeCompare(right.digest),
           );
-          const proposalTrees = [
-            binding.handle.cwd,
-            artifact.preparation.cwd,
-            ...(binding.record ? [binding.record.view.cwd] : []),
-          ];
-          const retainTrees = [...runsWithin(records, proposalTrees).keys()].some(runHoldsCwd);
+          const directory = workspaceArtifactDirectory(artifact.handle);
+          if (!directory)
+            return yield* invalid(
+              "workspace_owner_unavailable",
+              "Workspace paths do not match the managed artifact layout.",
+            );
+          const retainTrees = [...runsWithin(records, [directory]).keys()].some(runHoldsCwd);
           return yield* Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               const owned: WriterLease[] = [];
