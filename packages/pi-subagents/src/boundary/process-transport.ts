@@ -1,11 +1,15 @@
-import type * as Cause from "effect/Cause";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FiberSet from "effect/FiberSet";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import { confirmProcessGroupExit } from "pi-cosmic-core";
+import { cleanupFailureDiagnostic } from "../run/cleanup-diagnostic.ts";
+import type { BackendCleanupVerifier } from "../backend/model.ts";
+import type { SubagentCleanupDiagnostic } from "../run/model.ts";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, type OversizedLine } from "./bounded-line-parser.ts";
 import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
@@ -31,6 +35,7 @@ export type ProcessWireEvent<Message> =
   | ({ readonly type: "oversized_line" } & OversizedLine);
 
 export interface ProcessTransportHandle<Message, Frame> {
+  readonly cleanupVerifier?: BackendCleanupVerifier | undefined;
   readonly pid: number;
   readonly events: Queue.Dequeue<ProcessWireEvent<Message>, Cause.Done>;
   readonly acknowledge: (event: ProcessWireEvent<Message>) => void;
@@ -38,6 +43,16 @@ export interface ProcessTransportHandle<Message, Frame> {
   readonly send: (frame: Frame) => Effect.Effect<void, SubagentProcessError>;
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
 }
+
+const processCleanupDiagnostic = (
+  phase: SubagentCleanupDiagnostic["phase"],
+  failure: SubagentProcessError,
+) => cleanupFailureDiagnostic(phase, Cause.fail(failure));
+
+const observeCleanupPhase = <A, E, R>(
+  phase: SubagentCleanupDiagnostic["phase"],
+  effect: Effect.Effect<A, E, R>,
+) => effect.pipe(Effect.catchCause((cause) => Effect.fail(cleanupFailureDiagnostic(phase, cause))));
 
 const cleanupUnconfirmed = (
   message = "Process tree exit was not confirmed after forced termination.",
@@ -112,21 +127,41 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
       );
       const detachedGroups = new Set<number>();
-      let detachedSnapshotFailed = false;
+      const cleanupFailures = new Map<unknown, SubagentCleanupDiagnostic>();
+      let detachedSnapshotComplete = !options.confirmDetachedDescendants;
+      let detachedSnapshotFailure: SubagentCleanupDiagnostic | undefined;
+      const failAttested = (evidence: SubagentCleanupDiagnostic) => {
+        const failure = cleanupUnconfirmed(evidence.message);
+        cleanupFailures.set(failure, evidence);
+        return Effect.fail(failure);
+      };
+      const attest = <A, E, R>(
+        phase: SubagentCleanupDiagnostic["phase"],
+        effect: Effect.Effect<A, E, R>,
+      ) =>
+        effect.pipe(
+          Effect.catchCause((cause) => {
+            const evidence = cleanupFailureDiagnostic(phase, cause);
+            return failAttested(evidence);
+          }),
+        );
       // Descendants reparent once the child dies, so they are recorded before any signal.
       const recordDetachedGroups = Effect.suspend(() =>
         options.confirmDetachedDescendants && child.pid && !settled
           ? runtime.detachedGroups(child.pid).pipe(
               Effect.map((groups) => {
                 for (const group of groups) detachedGroups.add(group);
+                // A table completed after leader exit cannot prove discovery was complete.
+                if (!settled && child.exitCode === null && child.signalCode === null)
+                  detachedSnapshotComplete = true;
               }),
             )
           : Effect.void,
       ).pipe(
-        Effect.onError(() =>
+        Effect.onError((cause) =>
           Effect.sync(() => {
-            // A later leader exit must not erase failed discovery from cleanup evidence.
-            detachedSnapshotFailed = true;
+            // A later leader exit or successful table must not erase incomplete discovery.
+            detachedSnapshotFailure ??= cleanupFailureDiagnostic("descendant-snapshot", cause);
           }),
         ),
       );
@@ -134,10 +169,13 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
       const terminate = (mode: "graceful" | "force") =>
         Effect.uninterruptible(
           Effect.gen(function* () {
-            yield* recordDetachedGroups;
+            const snapshot = yield* Effect.exit(recordDetachedGroups);
             yield* runtime
               .terminate(child, mode)
               .pipe(Effect.mapError((error) => processError("terminate", error)));
+            // Incomplete discovery retains quarantine evidence, but must not leave the owned child alive.
+            if (Exit.isFailure(snapshot)) return yield* Effect.failCause(snapshot.cause);
+            return undefined;
           }),
         );
       // Pi's bash commands run in their own process groups and die only through its SIGTERM
@@ -340,9 +378,60 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
           { concurrency: "unbounded" },
         ),
       ).pipe(Effect.map((remaining) => remaining.flat()));
+      const observe = Effect.gen(function* () {
+        if (!settled && child.exitCode === null && child.signalCode === null)
+          return yield* Effect.fail(
+            processCleanupDiagnostic(
+              "process-exit",
+              cleanupUnconfirmed("The exact child process has not exited."),
+            ),
+          );
+        if (detachedSnapshotFailure) return yield* Effect.fail(detachedSnapshotFailure);
+        if (!detachedSnapshotComplete)
+          return yield* Effect.fail(
+            processCleanupDiagnostic(
+              "descendant-snapshot",
+              cleanupUnconfirmed("No complete pre-exit descendant snapshot was retained."),
+            ),
+          );
+        yield* observeCleanupPhase(
+          "process-group",
+          runtime
+            .confirmGroupExit(pid, 2_000)
+            .pipe(
+              Effect.flatMap((gone) =>
+                gone
+                  ? Effect.void
+                  : cleanupUnconfirmed("The original process group is still present."),
+              ),
+            ),
+        );
+        const remaining = yield* observeCleanupPhase(
+          "descendant-groups",
+          confirmDetachedGroupsExit,
+        );
+        if (remaining.length > 0)
+          return yield* Effect.fail(
+            processCleanupDiagnostic(
+              "descendant-groups",
+              cleanupUnconfirmed("Recorded detached descendant groups are still present."),
+            ),
+          );
+        return undefined;
+      });
+      const cleanupVerifier: BackendCleanupVerifier = {
+        diagnostic: (reason) =>
+          Cause.isDieReason(reason)
+            ? cleanupFailures.get(reason.defect)
+            : Cause.isFailReason(reason)
+              ? cleanupFailures.get(reason.error)
+              : undefined,
+        canVerify: () => detachedSnapshotFailure === undefined && detachedSnapshotComplete,
+        verify: observe,
+      };
       const release = Effect.gen(function* () {
-        yield* recordDetachedGroups;
-        yield* options.requestAbort?.(send) ?? Effect.void;
+        yield* Effect.exit(recordDetachedGroups);
+        yield* attest("backend-scope", options.requestAbort?.(send) ?? Effect.void);
         yield* Effect.sleep("100 millis");
         yield* Effect.exit(terminate("graceful"));
         if (yield* waitForExit) {
@@ -350,17 +439,25 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
           yield* terminate("force").pipe(Effect.ignore);
         } else {
           yield* Effect.exit(terminate("force"));
-          if (!(yield* waitForExit)) return yield* cleanupUnconfirmed();
+          if (!(yield* waitForExit))
+            return yield* detachedSnapshotFailure
+              ? failAttested(detachedSnapshotFailure)
+              : attest("process-exit", cleanupUnconfirmed());
         }
-        if (!(yield* runtime.confirmGroupExit(pid, 2_000))) return yield* cleanupUnconfirmed();
-        if (detachedSnapshotFailed)
-          return yield* cleanupUnconfirmed(
-            "Detached descendant process groups could not be recorded before termination.",
-          );
-        const remaining = yield* confirmDetachedGroupsExit;
+        if (detachedSnapshotFailure) return yield* failAttested(detachedSnapshotFailure);
+        yield* attest(
+          "process-group",
+          runtime
+            .confirmGroupExit(pid, 2_000)
+            .pipe(Effect.flatMap((gone) => (gone ? Effect.void : cleanupUnconfirmed()))),
+        );
+        const remaining = yield* attest("descendant-groups", confirmDetachedGroupsExit);
         if (remaining.length > 0)
-          return yield* cleanupUnconfirmed(
-            `Detached descendant process groups ${remaining.join(", ")} were still running after the subagent exited.`,
+          return yield* attest(
+            "descendant-groups",
+            cleanupUnconfirmed(
+              `Detached descendant process groups ${remaining.join(", ")} were still running after the subagent exited.`,
+            ),
           );
         return undefined;
       });
@@ -369,6 +466,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
       );
       return {
         pid,
+        cleanupVerifier,
         events,
         acknowledge,
         awaitExit: Deferred.await(exited),

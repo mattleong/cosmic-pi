@@ -1,8 +1,9 @@
 import { type CompactIssue } from "pi-code-previews";
-import { runAttention } from "../run/attention.ts";
+import { runAttention, runCleanupAttention } from "../run/attention.ts";
 import { isTerminalRunState } from "../run/model.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
+import { cleanupRecoveryText } from "./format.ts";
 import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
 
 type AddIssue = (
@@ -91,8 +92,11 @@ function selectionIssues(
 /** Only the attention issues of `cards`, for runs a call reports without targeting them. */
 export function compactAttentionIssues(cards: readonly SubagentRunCard[]): CompactIssue[] {
   const issues: CompactIssue[] = [];
-  for (const card of cards)
-    attentionIssues(card, cardLabel(card), cardIssueAdder(issues, card), false);
+  for (const card of cards) {
+    const add = cardIssueAdder(issues, card);
+    attentionIssues(card, cardLabel(card), add, false);
+    cleanupIssues(card, cardLabel(card), add);
+  }
   return issues;
 }
 
@@ -106,6 +110,7 @@ export function compactRunIssues(
     const label = cardLabel(card);
     const add = cardIssueAdder(issues, card);
     attentionIssues(card, label, add, options.requestedPause === true);
+    cleanupIssues(card, label, add);
     if (card.steeringDelivery) {
       const evidence = steeringDeliveryEvidence[card.steeringDelivery];
       add(
@@ -167,6 +172,15 @@ function containmentIssues(card: SubagentRunCard, label: string, id: string, add
         : []),
     ].join("\n"),
   );
+  if (runCleanupAttention(card) !== undefined) {
+    add(
+      "info",
+      "containment-await-cleanup",
+      `${label}: file-access review is blocked by unconfirmed cleanup`,
+      "Claim containment and cleanup quarantine are independent. Review the full write audit, but resolve cleanup before reopening claim admission or replacing the offender.",
+    );
+    return;
+  }
   if (!terminal && card.capabilities.includes("resume"))
     add(
       "info",
@@ -206,6 +220,7 @@ function attentionIssues(
       );
       return;
     case "paused":
+      if (runCleanupAttention(card) !== undefined) return;
       add(
         requestedPause ? "info" : "warning",
         "paused-recovery",
@@ -233,6 +248,22 @@ function attentionIssues(
   }
 }
 
+function cleanupIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
+  const attention = runCleanupAttention(card);
+  if (attention === undefined) return;
+  const messages = {
+    pending: "cleanup verification is pending",
+    quarantined: "cleanup remains unconfirmed",
+    "pool-quarantined": "writer admission is blocked by cleanup quarantine",
+  };
+  add(
+    "warning",
+    `cleanup-${attention}`,
+    `${label}: ${messages[attention]}`,
+    cleanupRecoveryText(card).join("\n"),
+  );
+}
+
 function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
   const retryGuidance =
     "Inspect expanded details and full subagent_status for cleanup and retry disposition. Do not retry when execution is uncertain or cleanup is unconfirmed; missing projected retry data does not establish eligibility.";
@@ -251,7 +282,7 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
       `${label} failed`,
       `Run failed; inspect full status.\n${retryGuidance}`,
     );
-  if (card.state === "stopping")
+  if (card.state === "stopping" && card.cleanup === undefined)
     add(
       "warning",
       "cleanup-pending",
@@ -263,7 +294,9 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
       "info",
       "stopped-cleanup",
       `${label} stopped`,
-      "Inspect full status for cleanup confirmation before replacement or recovery.",
+      card.cleanup?.disposition === "confirmed"
+        ? "This run’s process cleanup and writer ownership release are confirmed; a shared pool may still hold other members."
+        : "Task state is stopped; inspect full status for cleanup verification before replacement or recovery.",
     );
   const systemSourced = card.warningSource === "system";
   const fallback = systemSourced ? "reported a system warning" : "reported a warning";

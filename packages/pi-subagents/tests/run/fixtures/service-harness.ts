@@ -1,4 +1,4 @@
-import type * as Cause from "effect/Cause";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import { localPiBackendDriver } from "../../../src/backend/local-pi.ts";
 import type {
   BackendDriver,
+  BackendCleanupVerifier,
   BackendEvent,
   BackendLaunchRequest,
   BackendReport,
@@ -38,6 +39,7 @@ import type {
   StartSubagentRequest,
   SteeringDeliveryState,
   SubagentProjection,
+  SubagentCleanupDiagnostic,
   SubagentRunView,
 } from "../../../src/run/model.ts";
 import type { ProfileRouteContinuation } from "../../../src/profiles/model.ts";
@@ -167,7 +169,69 @@ type IpcControlOf<T extends LocalPiParentControl["type"]> = Extract<
   { readonly type: T }
 >;
 
+export interface FakeCleanupControl {
+  readonly fail: (
+    diagnostic: SubagentCleanupDiagnostic,
+    recoverable?: boolean,
+    mixed?: boolean,
+  ) => void;
+  readonly confirm: () => void;
+  readonly gate: (gate: Deferred.Deferred<void>) => void;
+  readonly verifications: () => number;
+}
+
+const cleanupFixture = () => {
+  let diagnostic: SubagentCleanupDiagnostic | undefined;
+  let failure: SubagentProcessError | undefined;
+  let recoverable = true;
+  let confirmed = true;
+  let mixed = false;
+  let gate: Deferred.Deferred<void> | undefined;
+  let verifications = 0;
+  const control: FakeCleanupControl = {
+    fail: (nextDiagnostic, nextRecoverable = true, nextMixed = false) => {
+      diagnostic = nextDiagnostic;
+      failure = new SubagentProcessError({ operation: "fixture cleanup", ...nextDiagnostic });
+      recoverable = nextRecoverable;
+      confirmed = false;
+      mixed = nextMixed;
+    },
+    confirm: () => {
+      confirmed = true;
+    },
+    gate: (nextGate) => {
+      gate = nextGate;
+    },
+    verifications: () => verifications,
+  };
+  const verifier: BackendCleanupVerifier = {
+    canVerify: () => recoverable,
+    diagnostic: (reason) =>
+      (Cause.isDieReason(reason) && reason.defect === failure) ||
+      (Cause.isFailReason(reason) && reason.error === failure)
+        ? diagnostic
+        : undefined,
+    verify: Effect.gen(function* () {
+      verifications += 1;
+      if (gate) yield* Deferred.await(gate);
+      if (!confirmed && diagnostic) return yield* Effect.fail(diagnostic);
+      return undefined;
+    }),
+  };
+  const release = Effect.suspend(() =>
+    failure
+      ? Effect.failCause(
+          mixed
+            ? Cause.combine(Cause.die(failure), Cause.die(new Error("Unrelated finalizer failed.")))
+            : Cause.die(failure),
+        )
+      : Effect.void,
+  );
+  return { control, verifier, release };
+};
+
 export interface FakeChildControl {
+  readonly cleanup: FakeCleanupControl;
   readonly launch: ChildLaunchRequest;
   readonly commands: RpcCommand[];
   readonly ipc: LocalPiParentControl[];
@@ -285,6 +349,7 @@ export function fakeChildLayer(
           const commands: RpcCommand[] = [];
           const ipc: LocalPiParentControl[] = [];
           const terminations: Array<"graceful" | "force"> = [];
+          const cleanup = cleanupFixture();
           let releaseCount = 0;
           let releaseGate: Deferred.Deferred<void> | undefined;
           const forSpawn = <A extends { readonly spawnIndex: number }>(
@@ -394,6 +459,7 @@ export function fakeChildLayer(
             );
           };
           const handle: ChildProcessHandle = {
+            cleanupVerifier: cleanup.verifier,
             pid: 10_000 + controls.length,
             events,
             acknowledge: () => {},
@@ -471,6 +537,7 @@ export function fakeChildLayer(
             terminate: (mode) => Effect.sync(() => void terminations.push(mode)),
           };
           controls.push({
+            cleanup: cleanup.control,
             launch,
             commands,
             ipc,
@@ -514,7 +581,7 @@ export function fakeChildLayer(
               options.onRelease?.(spawnIndex);
               Queue.endUnsafe(events);
               if (options.releaseDefect) return yield* Effect.die("fixture release defect");
-              return undefined;
+              return yield* cleanup.release;
             }),
           };
         }),

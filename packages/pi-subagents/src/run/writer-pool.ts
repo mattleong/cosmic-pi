@@ -25,6 +25,8 @@ export interface WriterPoolView {
 export class WriterPoolEntry implements WriterPoolView {
   readonly #members = new Set<string>();
   readonly #violationRunIds = new Set<string>();
+  readonly #cleanupQuarantinedRunIds = new Set<string>();
+  #leaseCleanupUncertain = false;
   #state: WriterPoolState = "pending";
   #lease: WriterLease | undefined;
   #preparationError: SubagentError | undefined;
@@ -55,7 +57,15 @@ export class WriterPoolEntry implements WriterPoolView {
   }
 
   get state(): WriterPoolState {
-    return this.#state;
+    return this.cleanupQuarantined ? "quarantined" : this.#state;
+  }
+
+  get cleanupQuarantined(): boolean {
+    return this.#leaseCleanupUncertain || this.#cleanupQuarantinedRunIds.size > 0;
+  }
+
+  get leaseCleanupUncertain(): boolean {
+    return this.#leaseCleanupUncertain;
   }
 
   get lease(): WriterLease | undefined {
@@ -109,7 +119,8 @@ export class WriterPoolEntry implements WriterPoolView {
   }
 
   detachAfterCleanupLocked(runId: string): Scope.Closeable | undefined {
-    if (!this.#members.has(runId)) return undefined;
+    if (!this.#members.has(runId) || this.#leaseCleanupUncertain) return undefined;
+    this.#cleanupQuarantinedRunIds.delete(runId);
     if (this.#members.size > 1) {
       this.#members.delete(runId);
       return undefined;
@@ -139,10 +150,9 @@ export class WriterPoolEntry implements WriterPoolView {
     this.#pauseReason = undefined;
   }
 
-  quarantineLocked(): void {
-    this.#state = "quarantined";
-    this.#admissionPaused = true;
-    this.#pauseReason = "A writer process or lease cleanup could not be confirmed.";
+  quarantineLocked(runId: string, leaseCleanupUncertain = false): void {
+    this.#cleanupQuarantinedRunIds.add(runId);
+    this.#leaseCleanupUncertain ||= leaseCleanupUncertain;
   }
 }
 

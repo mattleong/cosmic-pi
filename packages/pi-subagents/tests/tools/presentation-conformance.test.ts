@@ -464,6 +464,108 @@ it("keeps agent recovery steps out of the collapsed preview style", () => {
   }
 });
 
+it.each(["compact", "preview"] as const)(
+  "keeps accepted reports and cleanup quarantine independent in registered %s callbacks",
+  (style) => {
+    const tools = withPresentationSettings({ toolCallCollapsedStyle: style }, () => registered());
+    const run = view({
+      id: "quarantined-run",
+      name: "Cleanup worker",
+      state: "completed",
+      finalText: "Accepted report evidence sentinel",
+      writeIntent: "writer",
+      writeAudit: { observedFileWrites: [], violations: [], bashWriteHints: 0 },
+      cleanup: {
+        disposition: "quarantined",
+        recovery: "stop",
+        diagnostic: {
+          phase: "process-group",
+          code: "group_live",
+          message: "Cleanup diagnostic head\nCleanup diagnostic tail sentinel",
+        },
+      },
+      writerCleanupQuarantined: true,
+    });
+    for (const toolName of ["subagent_await", "subagent_lifecycle"] as const) {
+      const awaiting = toolName === "subagent_await";
+      const details = awaiting
+        ? awaitDetails({
+            runs: [run],
+            awaitedRunIds: [run.id],
+            awaitUntil: "all_finished",
+            attentionRequired: true,
+          })
+        : compactToolDetails({ action: "stop", runs: [run] });
+      const result = { content: [], details };
+      const original = structuredClone(result);
+      const harness = createToolPresentationHarness(tools.find((tool) => tool.name === toolName)!, {
+        width: 160,
+      });
+      for (const { expanded, text } of harness.cycle(
+        { runIds: [run.id], ...(awaiting ? { until: "all_finished" } : { action: "stop" }) },
+        result,
+      )) {
+        expect(text).toMatch(/cleanup.*unconfirmed/i);
+        expect(text).not.toMatch(/resume_admission|outside.*claims|wrote to|worker failed/i);
+        expect(text.includes("Cleanup diagnostic tail sentinel")).toBe(expanded);
+        expect(text.includes("group_live")).toBe(expanded);
+        if (awaiting) expect(text.includes("Accepted report evidence sentinel")).toBe(expanded);
+      }
+      expect(result).toEqual(original);
+    }
+    const tool = tools.find((entry) => entry.name === "subagent_lifecycle")!;
+    for (const writerCleanupQuarantined of [false, true]) {
+      const confirmed = compactToolDetails({
+        action: "stop",
+        runs: [{ ...run, cleanup: { disposition: "confirmed" }, writerCleanupQuarantined }],
+      });
+      const harness = createToolPresentationHarness(tool);
+      harness.call({ action: "stop", runIds: [run.id] }, { expanded: false });
+      harness.result({ content: [], details: confirmed }, { expanded: false });
+      expect(/cleanup quarantine/i.test(harness.render(160).join("\n"))).toBe(
+        writerCleanupQuarantined,
+      );
+    }
+  },
+);
+
+it.each(["compact", "preview"] as const)(
+  "sanitizes historical cleanup diagnostic codes in %s expansion",
+  (style) => {
+    const tool = withPresentationSettings(
+      { toolCallCollapsedStyle: style },
+      () => registered().find((entry) => entry.name === "subagent_status")!,
+    );
+    const base = compactToolDetails({ action: "status", runs: [view({ state: "completed" })] });
+    if (!("cards" in base)) throw new Error("Expected run cards.");
+    const details = {
+      ...base,
+      cards: base.cards.map((card) =>
+        Object.assign({}, card, {
+          cleanup: {
+            disposition: "quarantined",
+            recovery: "manual",
+            diagnostic: {
+              phase: "backend-scope",
+              code: "\u001b[31mapi_key=historical-secret",
+              message: "Historical cleanup evidence",
+            },
+          },
+        }),
+      ),
+    };
+    const harness = createToolPresentationHarness(tool);
+    for (const { text, expanded } of harness.cycle(
+      { runIds: ["agent-1"] },
+      { content: [], details },
+    )) {
+      expect(text).not.toContain("historical-secret");
+      expect(text).not.toContain("\u001b");
+      expect(text.includes("Historical cleanup evidence")).toBe(expanded);
+    }
+  },
+);
+
 it("retains failures, cancelled waits and uncertain cleanup across expansion toggles", () => {
   const tool = registered().find((entry) => entry.name === "subagent_await")!;
   for (const scenario of [

@@ -51,6 +51,7 @@ import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProcessInitializer } from "./process-lifecycle.ts";
 import type { WriterPoolLookup, WriterPools } from "./writer-pool.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
+import { cleanupFailureDiagnostic } from "./cleanup-diagnostic.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
 import { failedStartRecoveryForRecord } from "./retry.ts";
@@ -416,9 +417,13 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             ? attempt.record
             : yield* cleanup.reclaimRecordRunState(attempt.candidate).pipe(
                 Effect.andThen(admitReclaimed(attempt.candidate)),
-                Effect.onError(() =>
+                Effect.onError((cause) =>
                   cleanup
-                    .retainCleanupQuarantine(attempt.candidate, attempt.candidate.scope)
+                    .retainCleanupQuarantine(
+                      attempt.candidate,
+                      attempt.candidate.scope,
+                      cleanupFailureDiagnostic("backend-scope", cause),
+                    )
                     .pipe(Effect.andThen(clearEvictionClaim(attempt.candidate))),
                 ),
               );

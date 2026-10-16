@@ -14,6 +14,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
 import { processGroupSignalError } from "pi-cosmic-core";
 import { ChildProcess } from "../src/boundary/child-process.ts";
+import { SubagentProcessError } from "../src/run/errors.ts";
 import { acquireLocalCliTransport } from "../src/boundary/local-cli-transport.ts";
 import {
   MAX_PROCESS_LINE_BYTES,
@@ -65,6 +66,7 @@ const fixture = () => {
     stderr: { value: stderr },
   });
   const finish = () => {
+    Object.defineProperty(child, "exitCode", { value: 0 });
     child.emit("close", 0, null);
   };
   boundary.spawn.mockReturnValue(child);
@@ -368,7 +370,7 @@ describe("shared process transport", () => {
             boundary.detachedGroups.mockReturnValueOnce(Effect.die(new Error("snapshot failed")));
             const result = yield* Effect.exit(handle.terminate(mode));
             expect(Exit.isFailure(result) && Cause.hasDies(result.cause)).toBe(true);
-            expect(boundary.terminate).not.toHaveBeenCalled();
+            expect(boundary.terminate).toHaveBeenCalledWith(f.child, mode);
             f.finish();
             yield* handle.awaitExit;
             expect(yield* releaseFailure(scope)).toMatchObject({ code: "cleanup_unconfirmed" });
@@ -493,6 +495,118 @@ describe("shared process transport", () => {
       );
       expect(Cause.squash(cause)).toMatchObject({ code: "cleanup_unconfirmed" });
       expect(f.stdin.destroyed).toBe(true);
+    }),
+  );
+
+  it.effect("observes late exact-child exit without repeating termination", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      boundary.terminate.mockReturnValue(Effect.void);
+      const { handle, scope } = yield* openNative(f);
+      const cause = yield* finishTimed(
+        Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip),
+      );
+      const verifier = handle.cleanupVerifier;
+      if (!verifier) return yield* Effect.die("Missing cleanup verifier");
+      expect(
+        cause.reasons.map(verifier.diagnostic).find((diagnostic) => diagnostic !== undefined),
+      ).toMatchObject({ phase: "process-exit" });
+      expect(yield* verifier.verify.pipe(Effect.flip)).toMatchObject({ phase: "process-exit" });
+      const signals = boundary.terminate.mock.calls.length;
+      f.finish();
+      yield* verifier.verify;
+      expect(boundary.terminate.mock.calls.length).toBe(signals);
+      return undefined;
+    }),
+  );
+
+  it.effect(
+    "requires original and fully recorded detached group absence without resnapshotting or signalling",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture();
+        boundary.detachedGroups.mockReturnValue(Effect.succeed([8888]));
+        boundary.confirmGroupExit.mockReturnValue(Effect.succeed(false));
+        const { handle, scope } = yield* openNative(f, true);
+        const cause = yield* finishTimed(
+          Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip),
+        );
+        const verifier = handle.cleanupVerifier;
+        if (!verifier) return yield* Effect.die("Missing cleanup verifier");
+        expect(verifier.canVerify()).toBe(true);
+        expect(
+          cause.reasons.map(verifier.diagnostic).find((diagnostic) => diagnostic !== undefined),
+        ).toMatchObject({ phase: "process-group" });
+        expect(
+          Cause.die(new Error("unrelated finalizer")).reasons.map(verifier.diagnostic),
+        ).toEqual([undefined]);
+        const signals = boundary.terminate.mock.calls.length;
+        const snapshots = boundary.detachedGroups.mock.calls.length;
+        boundary.confirmGroupExit.mockImplementation((group) => Effect.succeed(group !== 8888));
+        expect(yield* verifier.verify.pipe(Effect.flip)).toMatchObject({
+          phase: "descendant-groups",
+        });
+        boundary.confirmGroupExit.mockReturnValue(Effect.succeed(true));
+        yield* verifier.verify;
+        expect(boundary.terminate.mock.calls.length).toBe(signals);
+        expect(boundary.detachedGroups.mock.calls.length).toBe(snapshots);
+        return undefined;
+      }),
+  );
+
+  it.effect(
+    "fails closed on attempted incomplete snapshots but still terminates the owned child",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture();
+        boundary.detachedGroups.mockReturnValue(
+          Effect.fail(
+            new SubagentProcessError({
+              operation: "snapshot descendants",
+              code: "snapshot_incomplete",
+              message: "ps failed: Authorization: Bearer secret-value",
+            }),
+          ),
+        );
+        const { handle, scope } = yield* openNative(f, true);
+        const cause = yield* finishTimed(
+          Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip),
+        );
+        const verifier = handle.cleanupVerifier;
+        if (!verifier) return yield* Effect.die("Missing cleanup verifier");
+        expect(f.child.exitCode).toBe(0);
+        expect(boundary.terminate).toHaveBeenCalled();
+        expect(verifier.canVerify()).toBe(false);
+        const diagnostic = cause.reasons
+          .map(verifier.diagnostic)
+          .find((evidence) => evidence !== undefined);
+        expect(diagnostic).toMatchObject({
+          phase: "descendant-snapshot",
+          code: "snapshot_incomplete",
+        });
+        expect(diagnostic?.message).not.toContain("secret-value");
+        expect(yield* verifier.verify.pipe(Effect.flip)).toMatchObject({
+          phase: "descendant-snapshot",
+        });
+        return undefined;
+      }),
+  );
+
+  it.effect("does not infer a complete recovery snapshot after natural writer exit", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const { handle, scope } = yield* openNative(f, true);
+      f.finish();
+      boundary.confirmGroupExit.mockReturnValue(Effect.succeed(false));
+      yield* finishTimed(Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip));
+      const verifier = handle.cleanupVerifier;
+      if (!verifier) return yield* Effect.die("Missing cleanup verifier");
+      expect(verifier.canVerify()).toBe(false);
+      boundary.confirmGroupExit.mockReturnValue(Effect.succeed(true));
+      expect(yield* verifier.verify.pipe(Effect.flip)).toMatchObject({
+        phase: "descendant-snapshot",
+      });
+      return undefined;
     }),
   );
 

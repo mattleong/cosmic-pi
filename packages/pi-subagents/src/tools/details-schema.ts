@@ -134,6 +134,27 @@ const WriteAuditSchema = Schema.Struct({
   bashWriteHints: nonNegativeInteger,
 });
 
+export const MAX_CLEANUP_DIAGNOSTIC_MESSAGE_CHARS = 1_024;
+export const MAX_CLEANUP_DIAGNOSTIC_CODE_CHARS = 80;
+export const RunCleanupSchema = Schema.Struct({
+  disposition: Schema.Literals(["pending", "confirmed", "quarantined"]),
+  recovery: Schema.optionalKey(Schema.Literals(["stop", "manual"])),
+  diagnostic: Schema.optionalKey(
+    Schema.Struct({
+      phase: Schema.Literals([
+        "backend-scope",
+        "process-exit",
+        "process-group",
+        "descendant-snapshot",
+        "descendant-groups",
+        "writer-lease",
+      ]),
+      code: Schema.optionalKey(NonEmptyText(MAX_CLEANUP_DIAGNOSTIC_CODE_CHARS)),
+      message: NonEmptyText(MAX_CLEANUP_DIAGNOSTIC_MESSAGE_CHARS),
+    }),
+  ),
+});
+
 const WorkspaceCardFields = {
   writerWorkspaceMode: Schema.optionalKey(WriterWorkspaceModeSchema),
   workspaceId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
@@ -194,6 +215,8 @@ export const SubagentRunCardSchema = Schema.Struct({
   writeAudit: Schema.optionalKey(WriteAuditSchema),
   writeAdmissionPaused: Schema.optionalKey(Schema.Literal(true)),
   writeViolationOffender: Schema.optionalKey(Schema.Literal(true)),
+  cleanup: Schema.optionalKey(RunCleanupSchema),
+  writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
   capabilities: boundedArray(
     Schema.Literals(PI_SUBAGENT_CAPABILITIES),
     PI_SUBAGENT_CAPABILITIES.length,

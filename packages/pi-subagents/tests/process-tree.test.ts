@@ -1,5 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
-import { confirmProcessGroupExit, signalProcess, signalProcessGroup } from "pi-cosmic-core";
+import {
+  confirmProcessGroupExit,
+  signalProcess,
+  signalProcessGroup,
+  type BoundedProcessResult,
+} from "pi-cosmic-core";
 import { once } from "node:events";
 import * as Effect from "effect/Effect";
 import {
@@ -42,6 +47,7 @@ process.stdout.write(String(child.pid) + "\\n");`,
 
   it("finds process groups that owned members started, however deeply nested", () => {
     const table = [
+      "    2     0     0 S", // Linux kernel processes need not belong to a user process group.
       "  100     1   100 Ss",
       "  101   100   100 S",
       "  200   100   200 Ss",
@@ -53,6 +59,43 @@ process.stdout.write(String(child.pid) + "\\n");`,
     ].join("\n");
     expect(new Set(descendantGroupsFromTable(table, 100))).toEqual(new Set([200, 300]));
   });
+
+  it("rejects malformed or ownerless snapshots rather than silently dropping process rows", () => {
+    for (const table of [
+      "100 1 100 S\nmalformed",
+      "100 1 100 S extra",
+      "0 1 100 S",
+      "100 1 999 S",
+      "100 1 100 S\n101 100 0 S",
+      "",
+    ])
+      expect(descendantGroupsFromTable(table, 100)).toBeUndefined();
+  });
+
+  for (const fault of [
+    "failed",
+    "overflowed",
+    "timedOut",
+    "cleanupUnconfirmed",
+    "malformed",
+  ] as const)
+    it.effect(`fails closed on ${fault} detached descendant discovery`, () =>
+      Effect.gen(function* () {
+        const result: BoundedProcessResult = {
+          code: fault === "failed" ? 1 : 0,
+          signal: null,
+          stdout: fault === "malformed" ? "not a process table" : "100 1 100 S",
+          stderr: "process table unavailable",
+          overflowed: fault === "overflowed",
+          timedOut: fault === "timedOut",
+          cleanupUnconfirmed: fault === "cleanupUnconfirmed",
+        };
+        const error = yield* detachedDescendantGroups(100, () => Effect.succeed(result)).pipe(
+          Effect.flip,
+        );
+        expect(error.code).toMatch(/^descendant_snapshot_/);
+      }),
+    );
 
   it.live("finds a detached command group that survives its owner's group signal", () =>
     Effect.gen(function* () {

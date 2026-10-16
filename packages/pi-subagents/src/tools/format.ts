@@ -1,7 +1,8 @@
 import { absurd } from "effect/Function";
-import { runAttention, type AttentionRun } from "../run/attention.ts";
+import { runAttention, runCleanupAttention, type AttentionRun } from "../run/attention.ts";
 import {
   sanitizeTerminalLine,
+  sanitizeDiagnosticContent,
   stripTerminalControls as sanitizeTerminalText,
   synchronousNow,
   countLabel,
@@ -71,6 +72,11 @@ const claimContainmentRecovery = (run: AttentionRun): ReadonlyArray<string> => {
   const canResume = run.state === "paused" && run.capabilities.includes("resume");
   const terminal = isTerminalRunState(run.state);
   const header = `Claim containment for ${runTarget(run)} after: ${audit || "an out-of-claim write"}.`;
+  if (runCleanupAttention(run) !== undefined)
+    return [
+      header,
+      "Claim recovery remains blocked until process and writer cleanup is confirmed. Review the audit separately; cleanup quarantine is not a claim-admission pause.",
+    ];
   if (run.state !== "paused" && !terminal)
     return [
       header,
@@ -127,42 +133,107 @@ const ordinaryPauseRecovery = (run: AttentionRun): ReadonlyArray<string> => {
   ];
 };
 
-const pausedAdmissionPeerRecovery = (run: AttentionRun): ReadonlyArray<string> => [
-  `Writer admission is paused for ${runTarget(run)} because its cwd pool is under claim containment.`,
-  "1. Inspect subagent_list and the paused or stopped offender's subagent_status write audit.",
-  "2. Do not change this peer's claims. Contain or clean up the recorded offender first.",
-  "3. Use resume_admission only after every offender is paused or terminal, then continue or await this peer.",
-];
+const pausedAdmissionPeerRecovery = (run: AttentionRun): ReadonlyArray<string> => {
+  const header = `Writer admission is paused for ${runTarget(run)} because its cwd pool is under claim containment.`;
+  if (runCleanupAttention(run) !== undefined)
+    return [
+      header,
+      "Claim recovery also waits for independent cleanup verification. Inspect the recorded offender's write audit without changing this peer's claims.",
+    ];
+  return [
+    header,
+    "1. Inspect subagent_list and the paused or stopped offender's subagent_status write audit.",
+    "2. Do not change this peer's claims. Contain or clean up the recorded offender first.",
+    "3. Use resume_admission only after every offender is paused or terminal, then continue or await this peer.",
+  ];
+};
+
+export const cleanupEvidenceText = (
+  run: Pick<AttentionRun, "cleanup" | "writerCleanupQuarantined">,
+): string => {
+  const cleanup = run.cleanup;
+  return [
+    cleanup === undefined ? undefined : `Cleanup verification: ${cleanup.disposition}`,
+    cleanup?.diagnostic === undefined
+      ? undefined
+      : [
+          cleanup.diagnostic.phase,
+          cleanup.diagnostic.code === undefined
+            ? undefined
+            : sanitizeDiagnosticContent(cleanup.diagnostic.code, { maximumLength: 80 }),
+          sanitizeDiagnosticContent(cleanup.diagnostic.message, { maximumLength: 1_024 }),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+    run.writerCleanupQuarantined === true
+      ? "Writer pool is quarantined by unconfirmed cleanup"
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+export const cleanupRecoveryText = (run: AttentionRun): ReadonlyArray<string> => {
+  const attention = runCleanupAttention(run);
+  if (attention === undefined) return [];
+  const evidence = cleanupEvidenceText(run);
+  if (attention === "pool-quarantined")
+    return [
+      `Writer admission for ${runTarget(run)} is blocked by cleanup quarantine, independently of claim containment.`,
+      evidence,
+      "Inspect subagent_list and the quarantined run's full subagent_status. Recover that run's cleanup; do not stop healthy peers or change their claims to clear the pool.",
+    ];
+  if (attention === "pending")
+    return [
+      `Cleanup verification is pending for ${runTarget(run)}.`,
+      evidence,
+      "Wait for cleanup verification before retrying or reusing writer resources; terminal task state is not confirmation.",
+    ];
+  return [
+    `Cleanup is unconfirmed for ${runTarget(run)}; its task outcome and accepted report are unchanged.`,
+    evidence,
+    run.cleanup?.recovery === "stop"
+      ? `Request observational cleanup verification with subagent_lifecycle({ action: "stop", runIds: [${JSON.stringify(run.id)}] }). This also stops any active descendants. Only confirmed cleanup releases held resources.`
+      : "Manual inspection is required. Cleanup cannot safely be reverified automatically; do not retry, delete leases, or reuse held resources.",
+  ];
+};
 
 export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string => {
   const attention = runs.filter(
-    (run) => isParentActionRequiredRun(run) || run.writeViolationOffender === true,
+    (run) =>
+      isParentActionRequiredRun(run) ||
+      run.writeViolationOffender === true ||
+      runCleanupAttention(run) !== undefined,
   );
   if (attention.length === 0) return "";
   const parentActionRequired = attention.some(isParentActionRequiredRun);
   return [
     parentActionRequired
       ? "Parent action required; other unfinished subagents continue independently."
-      : "Write-claim containment is still in progress; other unfinished subagents continue independently.",
+      : "Recovery verification is still in progress; other unfinished subagents continue independently.",
     ...attention.flatMap((run) => {
       const state = runAttention(run);
-      switch (state?.kind) {
-        case "containment":
-          return claimContainmentRecovery(run);
-        case "admission-paused":
-          return pausedAdmissionPeerRecovery(run);
-        case "paused":
-          return ordinaryPauseRecovery(run);
-        case "question":
-          return [
-            `Question from ${sanitizeTerminalLine(run.name)}: ${boundedLine(state.message, 512)}`,
-            `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
-          ];
-        case "question-unavailable":
-        case undefined:
-          return [];
-      }
-      return absurd(state);
+      const cleanup = cleanupRecoveryText(run);
+      const claim = ((): ReadonlyArray<string> => {
+        switch (state?.kind) {
+          case "containment":
+            return claimContainmentRecovery(run);
+          case "admission-paused":
+            return pausedAdmissionPeerRecovery(run);
+          case "paused":
+            return runCleanupAttention(run) === undefined ? ordinaryPauseRecovery(run) : [];
+          case "question":
+            return [
+              `Question from ${sanitizeTerminalLine(run.name)}: ${boundedLine(state.message, 512)}`,
+              `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
+            ];
+          case "question-unavailable":
+          case undefined:
+            return [];
+        }
+        return absurd(state);
+      })();
+      return claim.concat(cleanup);
     }),
   ].join("\n");
 };
@@ -334,6 +405,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     ...identityStatusFields(run, route),
     ...selectionStatusFields(run),
     ...writeStatusFields(run),
+    cleanupEvidenceText(run) || undefined,
     ...activityStatusFields(run),
     finalReportStatus(run),
   ]

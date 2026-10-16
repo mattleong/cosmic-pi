@@ -2,21 +2,17 @@ import * as Match from "effect/Match";
 import { decodeFullScreenPrintable } from "pi-cosmic-ui/manager/keymap";
 import type { ListDetailPane } from "pi-cosmic-ui/manager/list-detail";
 import { Key, matchesKey, type Input } from "@earendil-works/pi-tui";
-import {
-  hasUnresolvedSteeringDelivery,
-  isActiveRunState,
-  type SubagentRunView,
-} from "../run/model.ts";
+import { hasUnresolvedSteeringDelivery, type SubagentRunView } from "../run/model.ts";
 import {
   canInterruptRun,
   canRenameRun,
   canResumeRun,
+  canStopRun,
   runMessageMode,
   type RunMessageMode,
 } from "./run-state.ts";
 
-export const canStop = (run: SubagentRunView): boolean =>
-  isActiveRunState(run.state) && run.state !== "stopping";
+export const canStop = canStopRun;
 
 export type FleetPromptKind = RunMessageMode | "resume" | "rename";
 

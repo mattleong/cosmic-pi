@@ -2,27 +2,23 @@ import { absurd } from "effect/Function";
 import { countLabel } from "pi-cosmic-core";
 import type { SubagentRunView } from "../run/model.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import { formatRun } from "./format.ts";
+import { cleanupEvidenceText, cleanupRecoveryText, formatRun } from "./format.ts";
 import type { SubagentToolAction } from "./schema.ts";
 
 const stopAcknowledgement = (run: SubagentRunView): string => {
-  switch (run.state) {
-    case "stopped":
-      return `${run.id} is stopped.`;
-    case "completed":
-      return `${run.id} was already finished; no stop was needed.`;
-    case "failed":
-      return `${run.id} had already failed; no stop was needed.`;
-    case "stopping":
-      return `Stop cleanup is still in progress for ${run.id}.`;
-    case "starting":
-    case "running":
-    case "waiting_for_parent":
-    case "paused":
-    case "reported":
-      return `Stop requested for ${run.id}; current state is ${runStateLabel(run.state)}.`;
+  const task = `${run.id}: task state is ${runStateLabel(run.state)}.`;
+  const disposition = run.cleanup?.disposition;
+  switch (disposition) {
+    case "confirmed":
+      return [`${task} Cleanup is confirmed for this run.`, ...cleanupRecoveryText(run)].join("\n");
+    case "pending":
+      return `${task} Cleanup verification is still pending.`;
+    case "quarantined":
+      return [task, ...cleanupRecoveryText(run)].join("\n");
+    case undefined:
+      return `${task} Cleanup verification is unknown in this observation; terminal state does not confirm cleanup.`;
   }
-  return absurd(run.state);
+  return absurd(disposition);
 };
 
 const claimsAcknowledgement = (
@@ -32,13 +28,15 @@ const claimsAcknowledgement = (
   const contained =
     claimsAction === "resume_admission" || runs.some((run) => run.writeAdmissionPaused === true);
   return [
-    ...runs.map(
-      (run) =>
-        `${run.id}: ${run.writeClaims?.length ? run.writeClaims.join(", ") : run.writeIntent === "writer" ? "exclusive writer" : "read-only"}${run.writeAdmissionPaused ? " · admission paused" : ""}`,
-    ),
-    contained
-      ? "Claim-containment recovery uses resume_admission, then lifecycle resume with the authoritative claims, or stop and replace when resume is unavailable. Do not use subagent_reply for containment."
-      : "For a waiting worker, send the resulting authoritative claim set in subagent_reply before work continues.",
+    ...runs.flatMap((run) => [
+      `${run.id}: ${run.writeClaims?.length ? run.writeClaims.join(", ") : run.writeIntent === "writer" ? "exclusive writer" : "read-only"}${run.writeAdmissionPaused ? " · claim admission paused" : ""}`,
+      cleanupRecoveryText(run).join("\n") || cleanupEvidenceText(run),
+    ]),
+    runs.some((run) => run.cleanup?.disposition === "quarantined" || run.writerCleanupQuarantined)
+      ? "Cleanup quarantine is separate from claim containment. Resolve cleanup before claim recovery or writer reuse."
+      : contained
+        ? "Claim-containment recovery uses resume_admission, then lifecycle resume with the authoritative claims, or stop and replace when resume is unavailable. Do not use subagent_reply for containment."
+        : "For a waiting worker, send the resulting authoritative claim set in subagent_reply before work continues.",
   ].join("\n");
 };
 

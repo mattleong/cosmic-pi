@@ -650,7 +650,7 @@ describe("subagent tool", () => {
     },
   );
 
-  effectTest("renders state-aware stop acknowledgements for terminal no-ops", function* () {
+  effectTest("keeps terminal task states distinct from unobserved stop cleanup", function* () {
     const service = subagentServiceDouble({
       stop: (id) =>
         Effect.succeed(
@@ -671,10 +671,69 @@ describe("subagent tool", () => {
         runIds: ["agent-complete", "agent-failed", "agent-stopped"],
       },
     );
-    expect(result?.content[0]?.text).toContain("agent-complete was already finished");
-    expect(result?.content[0]?.text).toContain("agent-failed had already failed");
-    expect(result?.content[0]?.text).toContain("agent-stopped is stopped.");
+    const text = resultText(result!);
+    expect(text).toMatch(/cleanup verification is unknown/i);
+    expect(text).not.toMatch(/no stop was needed|cleanup is confirmed/i);
+    expect(result?.structuredContent).toMatchObject({
+      results: [
+        { target: { state: "completed" } },
+        { target: { state: "failed" } },
+        { target: { state: "stopped" } },
+      ],
+    });
   });
+
+  effectTest(
+    "acknowledges pending, unconfirmed, and confirmed cleanup without replacing the task outcome",
+    function* () {
+      for (const disposition of ["pending", "quarantined", "confirmed"] as const) {
+        const run = view({
+          state: "completed",
+          finalText: "Completed report sentinel",
+          writeIntent: "writer",
+          cleanup: {
+            disposition,
+            ...(disposition === "quarantined" && {
+              recovery: "stop" as const,
+              diagnostic: {
+                phase: "process-group" as const,
+                code: "group_live",
+                message: "Verification diagnostic sentinel",
+              },
+            }),
+          },
+          writerCleanupQuarantined: disposition !== "pending",
+        });
+        const result = yield* invokeOptionalTool(
+          captureSubagentTools(
+            subagentServiceDouble({
+              stop: () => Effect.succeed(run),
+            }),
+          ).get("subagent_lifecycle"),
+          { action: "stop", runIds: [run.id] },
+        );
+        const text = resultText(result!);
+        expect(result?.structuredContent).toMatchObject({
+          results: [
+            { status: "succeeded", target: { state: "completed", cleanup: { disposition } } },
+          ],
+        });
+        expect(text).not.toContain("resume_admission");
+        if (disposition === "quarantined") {
+          expect(text).toContain("Verification diagnostic sentinel");
+          expect(text).toMatch(/action: "stop"/);
+          expect(text).not.toMatch(/cleanup is confirmed/i);
+        } else if (disposition === "pending") {
+          expect(text).toMatch(/verification.*pending/i);
+          expect(text).not.toMatch(/cleanup is confirmed/i);
+        } else {
+          expect(text).toMatch(/cleanup is confirmed for this run/i);
+          expect(text).toMatch(/quarantine/i);
+          expect(text).toMatch(/do not stop healthy peers/i);
+        }
+      }
+    },
+  );
 
   effectTest(
     "returns structured failures for single-target reply and rename operations",

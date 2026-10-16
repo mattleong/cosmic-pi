@@ -2,6 +2,7 @@ import { compactIssueSeverity } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import { countLabel } from "pi-cosmic-core";
 import { hasUnresolvedSteeringDelivery } from "../run/model.ts";
+import { runCleanupAttention } from "../run/attention.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import type {
   CompactIssue,
@@ -167,6 +168,7 @@ function awaitIssues(
       (card) =>
         card.question !== undefined ||
         card.writeAdmissionPaused === true ||
+        runCleanupAttention(card) !== undefined ||
         card.state === "paused" ||
         card.state === "waiting_for_parent",
     )
@@ -268,12 +270,20 @@ function cardOutcome(
   action: string,
   cards: readonly SubagentRunCard[],
 ): NonNullable<CompactSummary["outcome"]> {
-  if (cards.some((card) => card.state === "stopping" || hasUnresolvedSteeringDelivery(card)))
+  if (
+    cards.some(
+      (card) =>
+        card.state === "stopping" ||
+        card.cleanup?.disposition === "pending" ||
+        hasUnresolvedSteeringDelivery(card),
+    )
+  )
     return "uncertain";
   if (
     cards.some(
       (card) =>
         card.writeAdmissionPaused === true ||
+        runCleanupAttention(card) !== undefined ||
         card.question !== undefined ||
         (card.state === "paused" && action !== "interrupt") ||
         card.state === "waiting_for_parent",
@@ -319,10 +329,14 @@ function summarizeDetails(
   omissionIssue(details, summary, issues);
   if (details.action === "models") return summarizeModels(details, summary, issues);
   const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
-  // An await also returns for a question from a run it did not target.
+  // An await also returns for parent attention from a run it did not target.
   const asking =
     details.action === "await" && targets
-      ? details.cards.filter((card) => !targets.includes(card.id) && card.question !== undefined)
+      ? details.cards.filter(
+          (card) =>
+            !targets.includes(card.id) &&
+            (card.question !== undefined || runCleanupAttention(card) !== undefined),
+        )
       : [];
   summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
   const requestedPause = details.action === "interrupt";

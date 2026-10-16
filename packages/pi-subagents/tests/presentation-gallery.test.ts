@@ -52,7 +52,7 @@ import {
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import { scriptedWriterAdmissionError } from "../src/run/launch-policy.ts";
 import { SubagentService } from "../src/run/service.ts";
-import { awaitDetails, startDetails } from "../src/tools/details.ts";
+import { awaitDetails, compactToolDetails, startDetails } from "../src/tools/details.ts";
 import {
   CONTACT_PARENT_LABEL,
   contactParentCompactSummary,
@@ -990,6 +990,70 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
       systemWarning: "Context window 91% full",
     }),
   ]),
+  awaited(
+    "completed writer with zero violations and cleanup quarantine",
+    [
+      view({
+        name: "cleanup-worker",
+        state: "completed",
+        finalText: "Finished the requested changes; focused tests passed.",
+        writeIntent: "writer",
+        writeClaims: ["src/cleanup.ts"],
+        writeAudit: { observedFileWrites: ["src/cleanup.ts"], violations: [], bashWriteHints: 0 },
+        cleanup: {
+          disposition: "quarantined",
+          recovery: "stop",
+          diagnostic: {
+            phase: "process-group",
+            code: "process_cleanup_unconfirmed",
+            message:
+              "The worker finished, but a descendant process group could not be verified absent.\nVerification evidence is retained; a stop request can recheck without restarting work.",
+          },
+        },
+        writerCleanupQuarantined: true,
+      }),
+    ],
+    { attentionRequired: true },
+  ),
+  awaited(
+    "claim containment coexists with manual cleanup quarantine",
+    [
+      containedWriter({
+        state: "completed",
+        finalText: "Completed report retained for review.",
+        cleanup: {
+          disposition: "quarantined",
+          recovery: "manual",
+          diagnostic: {
+            phase: "writer-lease",
+            code: "lease_release_unconfirmed",
+            message:
+              "Lease release failed with an uncertain outcome; preserve held resources for manual inspection.",
+          },
+        },
+        writerCleanupQuarantined: true,
+      }),
+    ],
+    { attentionRequired: true },
+  ),
+  {
+    tool: "subagent_lifecycle",
+    title: "stop verified this member but another cleanup still quarantines the pool",
+    args: { action: "stop", runIds: ["agent-1"] },
+    result: {
+      content: [],
+      details: compactToolDetails({
+        action: "stop",
+        runs: [
+          view({
+            state: "completed",
+            cleanup: { disposition: "confirmed" },
+            writerCleanupQuarantined: true,
+          }),
+        ],
+      }),
+    },
+  },
   awaited("writer changes ready for review", [
     view({
       state: "completed",

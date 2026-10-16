@@ -10,7 +10,12 @@ import type {
   SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
-import type { RuntimeApiKey, SubagentCapability, SubagentUsage } from "../run/model.ts";
+import type {
+  RuntimeApiKey,
+  SubagentCapability,
+  SubagentUsage,
+  SubagentCleanupDiagnostic,
+} from "../run/model.ts";
 import type { LocalCliVersion } from "./local-cli-version.ts";
 
 export type BackendResumeToken = object;
@@ -177,7 +182,15 @@ export interface BackendControls {
   readonly isSettlementCurrent?: ((event: BackendEvent) => boolean) | undefined;
 }
 
+/** Only the cleanup owner can attest a failure; verification must never signal stale process IDs. */
+export interface BackendCleanupVerifier {
+  readonly canVerify: () => boolean;
+  readonly diagnostic: (reason: Cause.Reason<unknown>) => SubagentCleanupDiagnostic | undefined;
+  readonly verify: Effect.Effect<void, SubagentCleanupDiagnostic>;
+}
+
 export interface BackendHandle {
+  readonly cleanupVerifier?: BackendCleanupVerifier | undefined;
   readonly pid?: number | undefined;
   readonly events: Queue.Dequeue<BackendEvent, Cause.Done>;
   readonly awaitExit: Effect.Effect<BackendExit, SubagentError>;

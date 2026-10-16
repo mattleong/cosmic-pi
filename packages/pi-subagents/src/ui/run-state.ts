@@ -8,9 +8,11 @@ import {
 import {
   hasSubagentCapability,
   hasUnresolvedSteeringDelivery,
+  isActiveRunState,
   type SubagentRunState,
   type SubagentRunView,
 } from "../run/model.ts";
+import { runCleanupAttention } from "../run/attention.ts";
 
 const RUN_STATE_KINDS = {
   starting: "pending",
@@ -49,8 +51,14 @@ export const canInterruptRun = (run: SubagentRunView): boolean =>
   hasSubagentCapability(run, "interrupt") &&
   !hasUnresolvedSteeringDelivery(run);
 
+export const canStopRun = (run: SubagentRunView): boolean =>
+  (isActiveRunState(run.state) && run.state !== "stopping") ||
+  (run.cleanup?.disposition === "quarantined" && run.cleanup.recovery === "stop");
+
 export const canResumeRun = (run: SubagentRunView): boolean =>
-  (run.state === "paused" || run.state === "completed") && hasSubagentCapability(run, "resume");
+  (run.state === "paused" || run.state === "completed") &&
+  runCleanupAttention(run) === undefined &&
+  hasSubagentCapability(run, "resume");
 
 const UNNAMEABLE_STATES: ReadonlySet<SubagentRunState> = new Set([
   "starting",

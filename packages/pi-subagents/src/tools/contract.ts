@@ -38,7 +38,7 @@ import {
   type SubagentStartContract,
   type SubagentStatusContract,
 } from "./contract-schema.ts";
-import { nonNegativeInteger } from "./details-projection.ts";
+import { nonNegativeInteger, projectRunCleanup } from "./details-projection.ts";
 import { MAX_FAILURE_CODE_CHARS } from "./details-schema.ts";
 import type { SubagentActionFailure, SubagentStartFailure, SubagentStartOutcome } from "./model.ts";
 import { actionFailureDisposition } from "./outcome.ts";
@@ -145,7 +145,12 @@ const targetFields = (
   const profile = knownProfile(run.profile);
   const attention = projectAttention(run);
   const error = metadata(run.error, MAX_CONTRACT_ERROR_CHARS);
+  const cleanup = projectRunCleanup(run.cleanup);
   return {
+    ...(cleanup !== undefined && { cleanup }),
+    ...(run.writerCleanupQuarantined !== undefined && {
+      writerCleanupQuarantined: run.writerCleanupQuarantined,
+    }),
     runId: run.id,
     name: projectName(run.name) || "subagent",
     ...(profile !== undefined && { profile }),

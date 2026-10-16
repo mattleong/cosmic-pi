@@ -16,7 +16,12 @@ import {
 } from "../run/model.ts";
 import { MAX_NAME_CHARS } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
-import { MAX_CARD_QUESTION_CHARS, MAX_FAILURE_CODE_CHARS, NonEmptyText } from "./details-schema.ts";
+import {
+  MAX_CARD_QUESTION_CHARS,
+  MAX_FAILURE_CODE_CHARS,
+  NonEmptyText,
+  RunCleanupSchema,
+} from "./details-schema.ts";
 import { ModelsContractFields } from "./discovery-contract-schema.ts";
 import type { ActionFailureDisposition } from "./outcome.ts";
 import { AWAIT_UNTIL, type SubagentLifecycleInput } from "./schema.ts";
@@ -112,6 +117,8 @@ const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
     predecessorRunId: Schema.optionalKey(RunIdSchema),
     successorRunId: Schema.optionalKey(RunIdSchema),
     parentActionRequired: Schema.Boolean,
+    cleanup: Schema.optionalKey(RunCleanupSchema),
+    writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
     attention: Schema.optionalKey(AttentionSchema),
     retry: Schema.optionalKey(Schema.Struct(RecoveryFields)),
     warnings: Schema.Array(

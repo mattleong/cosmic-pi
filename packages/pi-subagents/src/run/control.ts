@@ -42,6 +42,7 @@ export interface RunControlDependencies extends Pick<
   readonly claimTurnInputDrain: (record: RunRecord, drained: Deferred.Deferred<void>) => void;
   readonly processControls: RunProcessControls;
   readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
+  readonly verifyCleanup: RunRecordCleanup["verifyCleanup"];
   readonly settle: RunSettlement["settle"];
 }
 
@@ -65,6 +66,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
     publish,
     sendPeerNotices,
     closeRecordScope,
+    verifyCleanup,
     settle,
   } = dependencies;
 
@@ -431,6 +433,9 @@ export function controlOperations(dependencies: RunControlDependencies) {
               record: selected,
               cleanupRequired: selected.cleanupPending,
               preserveOutcome: true,
+              recoverCleanup:
+                selected.cleanupDisposition === "quarantined" ||
+                selected.cleanupVerification !== undefined,
             };
           if (selected.view.state === "stopping")
             return { record: selected, cleanupRequired: true as const };
@@ -450,9 +455,10 @@ export function controlOperations(dependencies: RunControlDependencies) {
           return { record: selected, cleanupRequired: true as const };
         }),
       ),
-      ({ record, cleanupRequired, preserveOutcome }) =>
+      ({ record, cleanupRequired, preserveOutcome, recoverCleanup }) =>
         cleanupRequired
           ? closeRecordScope(record).pipe(
+              Effect.andThen(recoverCleanup ? verifyCleanup(record) : Effect.void),
               Effect.andThen(() =>
                 preserveOutcome
                   ? Effect.succeed(snapshotView(record.view))

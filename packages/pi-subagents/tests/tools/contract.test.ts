@@ -262,6 +262,101 @@ describe("await contract", () => {
   });
 });
 
+describe("cleanup evidence", () => {
+  it("keeps completed work and its delivered report separate from cleanup quarantine", () => {
+    const run = finished("cleanup-run", {
+      name: "Worker",
+      finalText: "Accepted report body",
+      reportStatus: "available",
+      cleanup: {
+        disposition: "quarantined",
+        recovery: "stop",
+        diagnostic: {
+          phase: "process-group",
+          code: "group_still_live",
+          message: "Cleanup diagnostic sentinel",
+        },
+      },
+      writerCleanupQuarantined: true,
+    });
+    const target = decoded(
+      "subagent_status",
+      statusContract({
+        observations: [{ run, completionReceipt: receipt(run.id) }],
+        fullyRenderedIds: new Set([run.id]),
+        missingRunIds: [],
+      }),
+    ).targets[0]!;
+    expect(target).toMatchObject({
+      state: "completed",
+      finished: true,
+      parentActionRequired: true,
+      cleanup: run.cleanup,
+      writerCleanupQuarantined: true,
+      report: { status: "delivered", text: run.finalText },
+    });
+    expect(target).not.toHaveProperty("attention");
+    const verified = decoded(
+      "subagent_lifecycle",
+      lifecycleContract("stop", [
+        {
+          runId: run.id,
+          run: { ...run, cleanup: { disposition: "confirmed" }, writerCleanupQuarantined: false },
+        },
+      ]),
+    );
+    expect(verified.results[0]).toMatchObject({
+      status: "succeeded",
+      target: {
+        state: "completed",
+        cleanup: { disposition: "confirmed" },
+        writerCleanupQuarantined: false,
+      },
+    });
+    const historical = decoded(
+      "subagent_status",
+      statusContract({
+        observations: [{ run: finished("old") }],
+        fullyRenderedIds: new Set(),
+        missingRunIds: [],
+      }),
+    ).targets[0];
+    expect(historical).not.toHaveProperty("cleanup");
+    expect(historical).not.toHaveProperty("writerCleanupQuarantined");
+  });
+
+  it("preserves claim containment and independently redacts bounded cleanup diagnostics", () => {
+    const target = decoded(
+      "subagent_status",
+      statusContract({
+        observations: [
+          {
+            run: containedWriter({
+              state: "completed",
+              cleanup: {
+                disposition: "quarantined",
+                recovery: "manual",
+                diagnostic: {
+                  phase: "writer-lease",
+                  code: "x".repeat(100),
+                  message: `token=lease-secret\n${"detail ".repeat(300)}`,
+                },
+              },
+            }),
+          },
+        ],
+        fullyRenderedIds: new Set(),
+        missingRunIds: [],
+      }),
+    ).targets[0]!;
+    expect(target.attention).toMatchObject({ kind: "containment" });
+    expect(target.cleanup?.diagnostic?.code?.length).toBeLessThanOrEqual(80);
+    expect(target.cleanup?.diagnostic?.message.length).toBeLessThanOrEqual(1_024);
+    expect(JSON.stringify(target)).not.toContain("lease-secret");
+    expect(target.cleanup?.recovery).toBe("manual");
+  });
+});
+
 describe("retry lineage and failures", () => {
   it("keeps requested predecessors, successors, and per-target uncertainty separate", () => {
     const contract = decoded(

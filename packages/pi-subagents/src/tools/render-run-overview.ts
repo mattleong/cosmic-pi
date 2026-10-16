@@ -22,7 +22,7 @@ import { isAssignmentFinishedRunState } from "../run/model.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { profileOptionLabel } from "./compact-run-issues.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
-import { attentionRecoveryText } from "./format.ts";
+import { attentionRecoveryText, cleanupEvidenceText } from "./format.ts";
 import { DESCENDANTS_OMITTED } from "./render-await.ts";
 import { renderResponsiveRunRows, type RunHierarchy } from "./render-run-rows.ts";
 
@@ -145,7 +145,13 @@ const runStateDiagnostics = (run: SubagentRunCard, width: number, theme: Theme):
       ? wrapTextWithAnsi(theme.fg("accent", sanitizeTerminalLine(run.progress)), width)
       : []),
     ...(writer ? dimLines(writer, width, theme) : []),
-    ...(run.writeAdmissionPaused ? dimLines("Writer admission paused", width, theme) : []),
+    ...(run.writeAdmissionPaused
+      ? dimLines("Writer admission paused after claim containment", width, theme)
+      : []),
+    ...cleanupEvidenceText(run)
+      .split("\n")
+      .filter(Boolean)
+      .flatMap((line) => dimLines(line, width, theme)),
     ...(run.writeAudit?.violations ?? []).flatMap((violation) =>
       dimLines(`Outside claims · ${violation.path} · ${violation.toolName}`, width, theme),
     ),

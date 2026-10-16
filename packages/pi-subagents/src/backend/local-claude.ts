@@ -415,6 +415,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     },
     acknowledge,
     terminate: child.terminate,
+    cleanupVerifier: child.cleanupVerifier,
     cancelPending,
   };
 });

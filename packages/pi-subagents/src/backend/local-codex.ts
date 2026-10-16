@@ -569,6 +569,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     },
     acknowledge,
     terminate: child.terminate,
+    cleanupVerifier: child.cleanupVerifier,
     cancelPending,
   };
 });

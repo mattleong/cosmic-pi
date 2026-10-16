@@ -44,6 +44,7 @@ const fixture = Effect.gen(function* () {
     ...turnInputGates(withLock),
     processControls: processControlOperations(withLock),
     closeRecordScope: () => Effect.sync(() => void deliveries.push("stop")),
+    verifyCleanup: () => Effect.void,
     settle: () => Effect.die("Unexpected settlement"),
   });
   return { context, controls, deliveries, record, waiting, withLock };

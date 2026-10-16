@@ -1,6 +1,7 @@
 import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
 import { countLabel, formatCost, formatTokens, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { SubagentRunView } from "../run/model.ts";
+import { cleanupEvidenceText, cleanupRecoveryText } from "../tools/format.ts";
 
 const RECENT_EVENTS = 12;
 
@@ -78,6 +79,7 @@ export const runActivityDetail = (run: SubagentRunView): string =>
     [
       bounded(`Model: ${run.model}:${run.effort}`, 1_024),
       run.question ? `Question for parent: ${bounded(run.question.message, 1_000)}` : "",
+      section("Cleanup", cleanupRecoveryText(run).join("\n") || cleanupEvidenceText(run), 3_000),
       outcome(run),
       section("Task", run.task, 2_000),
       section("Recent activity", recentActivity(run), 3_000),

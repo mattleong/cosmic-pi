@@ -1,5 +1,6 @@
 import { ACTIVITY_LIMITS, type ActivityItem } from "pi-cosmic-ui/activity";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { runCleanupAttention } from "../run/attention.ts";
 import {
   isActiveRunState,
   isParentActionRequiredRun,
@@ -18,6 +19,7 @@ import {
   canInterruptRun,
   canRenameRun,
   canResumeRun,
+  canStopRun,
   runMessageMode,
   type RunMessageMode,
 } from "./run-state.ts";
@@ -39,12 +41,19 @@ const RUN_STATUS = {
 function activityAttention(run: SubagentRunView) {
   if (run.writeAdmissionPaused) {
     const blockedReason = run.writeViolationOffender
-      ? isParentActionRequiredRun({ ...run, question: undefined })
+      ? isParentActionRequiredRun({
+          ...run,
+          question: undefined,
+          cleanup: undefined,
+          writerCleanupQuarantined: undefined,
+        })
         ? "file-access-review"
         : "write-containment"
       : "file-access";
     return { status: "blocked", blockedReason } as const;
   }
+  const cleanup = runCleanupAttention(run);
+  if (cleanup !== undefined) return { status: "blocked", blockedReason: "parent-review" } as const;
   if (run.state === "waiting_for_parent" && run.question !== undefined)
     return { status: "needs-input", inputTarget: "parent" } as const;
   if (run.state === "paused" || run.state === "waiting_for_parent")
@@ -62,12 +71,14 @@ const MESSAGE_ACTIONS = {
 export function runActions(run: SubagentRunView, title: string) {
   const mode = run.writeAdmissionPaused ? undefined : runMessageMode(run);
   return [
-    ...(isActiveRunState(run.state)
+    ...(isActiveRunState(run.state) || canStopRun(run)
       ? [
           {
             id: "stop",
-            label: "Stop",
-            confirmation: `Stop "${title}" and all its subagents?`,
+            label: isActiveRunState(run.state) ? "Stop" : "Verify cleanup",
+            confirmation: isActiveRunState(run.state)
+              ? `Stop "${title}" and all its subagents?`
+              : `Verify cleanup for "${title}" and stop any active subagents?`,
             handoff: false as const,
           },
         ]
@@ -94,11 +105,23 @@ const runIdentity = (run: SubagentRunView): string =>
     run.reportGeneration,
     run.sessionId ?? null,
     run.question?.requestId ?? null,
+    run.cleanup ?? null,
+    run.writerCleanupQuarantined ?? null,
   ]);
 
 const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
   const reason = run.state === "failed" ? run.error : undefined;
-  const summary = reason ? reason.split("\n", 1)[0] : (run.currentTool ?? run.progress);
+  const cleanup = runCleanupAttention(run);
+  const summary =
+    cleanup === "quarantined"
+      ? "Cleanup remains unconfirmed; the task outcome is unchanged"
+      : cleanup === "pending"
+        ? "Cleanup verification is pending"
+        : cleanup === "pool-quarantined"
+          ? "Writer admission is blocked by another run's cleanup"
+          : reason
+            ? reason.split("\n", 1)[0]
+            : (run.currentTool ?? run.progress);
   return summary
     ? { summary: sanitizeDiagnosticContent(summary, { maximumLength: ACTIVITY_LIMITS.text }) }
     : {};

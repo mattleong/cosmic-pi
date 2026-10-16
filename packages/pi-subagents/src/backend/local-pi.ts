@@ -460,6 +460,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     controls,
     acknowledge,
     terminate: child.terminate,
+    cleanupVerifier: child.cleanupVerifier,
     cancelPending,
   };
 });

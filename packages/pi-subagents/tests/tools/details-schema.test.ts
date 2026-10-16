@@ -30,6 +30,46 @@ const actionFailuresOf = (value: CompactSubagentToolDetails | undefined) => {
 };
 
 describe("subagent detail evidence", () => {
+  it("retains redacted cleanup evidence at every density without inferring historical cleanup", () => {
+    const historical = compactToolDetails({ action: "status", runs: [view()] });
+    expect(decodeCompactToolDetails(historical)).toEqual(historical);
+    expect(historical).not.toHaveProperty("cards.0.cleanup");
+    expect(historical).not.toHaveProperty("cards.0.writerCleanupQuarantined");
+    const run = view({
+      state: "completed",
+      finalText: "Accepted work report",
+      writeIntent: "writer",
+      writeAudit: { observedFileWrites: [], violations: [], bashWriteHints: 0 },
+      cleanup: {
+        disposition: "quarantined",
+        recovery: "stop",
+        diagnostic: {
+          phase: "process-group",
+          code: "cleanup_unconfirmed",
+          message: `token=cleanup-secret\n${"diagnostic ".repeat(200)}`,
+        },
+      },
+      writerCleanupQuarantined: true,
+    });
+    for (const density of ["full", "compact", "minimal"] as const) {
+      const card = projectSubagentRunCard(run, density);
+      expect(card).toMatchObject({
+        state: "completed",
+        cleanup: { disposition: "quarantined", recovery: "stop" },
+        writerCleanupQuarantined: true,
+      });
+      expect(card.cleanup?.diagnostic?.message.length).toBeLessThanOrEqual(1_024);
+      expect(JSON.stringify(card.cleanup)).not.toContain("cleanup-secret");
+      expect(card).not.toHaveProperty("writeViolationOffender");
+      expect(card).not.toHaveProperty("writeAdmissionPaused");
+      const details = { version: 2, action: "status", runCount: 1, cards: [card] };
+      expect(decodeCompactToolDetails(details)).toEqual(details);
+    }
+    const details = compactToolDetails({ action: "status", runs: [run] });
+    expect(decodeCompactToolDetails(details)).toEqual(details);
+    expect(Object.isFrozen(decodeCompactToolDetails(details))).toBe(true);
+  });
+
   it("keeps typed pending delivery additive, send-scoped, and distinct from uncertainty", () => {
     const pending = compactToolDetails({
       action: "send",

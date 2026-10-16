@@ -57,6 +57,80 @@ const messages = (issues: readonly CompactIssue[] | undefined) =>
 const evidence = (issues: readonly CompactIssue[] | undefined) =>
   `${messages(issues)}\n${issueDetails(issues)}`;
 
+it("treats cleanup quarantine as warning rather than failed work or successful stop", () => {
+  const run = view({
+    state: "completed",
+    finalText: "Accepted report sentinel",
+    writeIntent: "writer",
+    writeAudit: { observedFileWrites: [], violations: [], bashWriteHints: 0 },
+    cleanup: {
+      disposition: "quarantined",
+      recovery: "stop",
+      diagnostic: {
+        phase: "process-group",
+        code: "group_live",
+        message: "Diagnostic evidence sentinel",
+      },
+    },
+    writerCleanupQuarantined: true,
+  });
+  for (const action of ["status", "stop"] as const) {
+    const summary = summarize(
+      action === "stop" ? "lifecycle" : action,
+      compactToolDetails({ action, runs: [run] }),
+      "settled",
+      { action },
+    );
+    expect(summary?.outcome).toBe("warning");
+    expect(summary?.issues?.some((issue) => issue.severity === "error")).toBe(false);
+    expect(
+      (summary?.issues ?? []).flatMap((issue) => issueMessageStyleProblems(issue.message)),
+    ).toEqual([]);
+    expect(messages(summary?.issues)).not.toContain("Diagnostic evidence sentinel");
+    expect(issueDetails(summary?.issues)).toContain("Diagnostic evidence sentinel");
+    expect(issueDetails(summary?.issues)).not.toContain("resume_admission");
+  }
+  const awaited = summarize(
+    "await",
+    awaitReceipt([run], {
+      awaitedRunIds: [run.id],
+      attentionRequired: true,
+    }),
+    "settled",
+    { runIds: [run.id] },
+  );
+  expect(awaited?.outcome).toBe("warning");
+  expect(awaited?.issues?.some((issue) => issue.code === "parent-action")).toBe(false);
+  expect(awaited?.issues?.filter((issue) => issue.severity === "warning")).toHaveLength(1);
+  const context = summarize(
+    "await",
+    awaitReceipt([view({ id: "target", state: "completed" }), { ...run, finalText: undefined }], {
+      awaitedRunIds: ["target"],
+      attentionRequired: true,
+    }),
+    "settled",
+    { runIds: ["target"] },
+  );
+  expect(issueDetails(context?.issues)).toContain("Diagnostic evidence sentinel");
+  expect(context?.issues?.some((issue) => issue.code === "parent-action")).toBe(false);
+  const confirmed = summarize(
+    "lifecycle",
+    compactToolDetails({
+      action: "stop",
+      runs: [
+        {
+          ...run,
+          cleanup: { disposition: "confirmed" },
+          writerCleanupQuarantined: false,
+        },
+      ],
+    }),
+    "settled",
+    { action: "stop" },
+  );
+  expect(confirmed?.outcome).toBe("success");
+});
+
 const pending = {
   index: 0,
   name: "worker",

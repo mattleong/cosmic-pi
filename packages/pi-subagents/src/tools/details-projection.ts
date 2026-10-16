@@ -1,4 +1,4 @@
-import { safeTextPrefix, stripTerminalControls } from "pi-cosmic-core";
+import { safeTextPrefix, sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   MAX_PROFILE_CANDIDATES,
@@ -17,6 +17,8 @@ import {
   sanitizeName,
 } from "../run/state.ts";
 import {
+  MAX_CLEANUP_DIAGNOSTIC_CODE_CHARS,
+  MAX_CLEANUP_DIAGNOSTIC_MESSAGE_CHARS,
   MAX_CARD_MODEL_CHARS,
   MAX_CARD_PROVENANCE_CHARS,
   MAX_CARD_QUESTION_CHARS,
@@ -184,6 +186,34 @@ const projectWorkspaceFields = (value: {
   }),
 });
 
+// Keep complete bounded cleanup evidence at every density; it gates safe recovery.
+export const projectRunCleanup = (
+  cleanup: SubagentRunView["cleanup"],
+): SubagentRunCard["cleanup"] => {
+  if (cleanup === undefined) return undefined;
+  const diagnostic = cleanup.diagnostic;
+  const code =
+    diagnostic?.code === undefined
+      ? undefined
+      : sanitizeDiagnosticContent(diagnostic.code, {
+          maximumLength: MAX_CLEANUP_DIAGNOSTIC_CODE_CHARS,
+        }).trim();
+  return {
+    disposition: cleanup.disposition,
+    ...(cleanup.recovery !== undefined && { recovery: cleanup.recovery }),
+    ...(diagnostic !== undefined && {
+      diagnostic: {
+        phase: diagnostic.phase,
+        ...(code && { code }),
+        message:
+          sanitizeDiagnosticContent(diagnostic.message, {
+            maximumLength: MAX_CLEANUP_DIAGNOSTIC_MESSAGE_CHARS,
+          }).trim() || "Cleanup verification detail unavailable.",
+      },
+    }),
+  };
+};
+
 const projectWriteCardFields = (
   run: SubagentRunView,
   density: DetailDensity,
@@ -191,7 +221,12 @@ const projectWriteCardFields = (
   const limits = DENSITY_LIMITS[density];
   const violationLimit =
     density === "minimal" && !run.writeViolationOffender ? 0 : limits.writeViolations;
+  const cleanup = projectRunCleanup(run.cleanup);
   return {
+    ...(cleanup !== undefined && { cleanup }),
+    ...(run.writerCleanupQuarantined !== undefined && {
+      writerCleanupQuarantined: run.writerCleanupQuarantined,
+    }),
     ...projectWorkspaceFields(run),
     ...(run.writeClaims !== undefined && {
       writeClaims: run.writeClaims

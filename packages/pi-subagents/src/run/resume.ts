@@ -187,6 +187,10 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             record.scope = nextScope;
             record.cleanupSettlement = nextCleanupSettlement;
             record.cleanupPending = false;
+            record.cleanupDisposition = "pending";
+            record.cleanupRecovery = undefined;
+            record.cleanupVerification = undefined;
+            record.view = { ...record.view, cleanup: undefined };
             record.closingScope = undefined;
             record.closingScopeSettled = undefined;
             record.writerPool = writerPool;

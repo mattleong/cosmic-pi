@@ -93,7 +93,12 @@ describe("SubagentService", () => {
         expect(counts.release).toBe(0);
         expect(projections.at(-1)?.runs[0]).toMatchObject({
           state: "failed",
-          warning: stringContaining("ownership remain quarantined"),
+          cleanup: {
+            disposition: "quarantined",
+            recovery: "manual",
+            diagnostic: { phase: "backend-scope" },
+          },
+          writerCleanupQuarantined: true,
         });
         const conflict = yield* service
           .start(
@@ -126,7 +131,7 @@ describe("SubagentService", () => {
               (candidate) =>
                 candidate.id === run.id &&
                 candidate.state === "failed" &&
-                candidate.warning?.includes("ownership remain quarantined") === true,
+                candidate.cleanup?.disposition === "quarantined",
             ) === true,
       );
 
@@ -461,7 +466,12 @@ describe("SubagentService", () => {
       expect(counts.release).toBe(1);
       expect(stopped).toMatchObject({
         state: "stopped",
-        warning: stringContaining("ownership remain quarantined"),
+        cleanup: {
+          disposition: "quarantined",
+          recovery: "manual",
+          diagnostic: { phase: "writer-lease" },
+        },
+        writerCleanupQuarantined: true,
       });
       const conflict = yield* service
         .start(writer("blocked-after-release-failure"))
@@ -570,7 +580,8 @@ describe("SubagentService", () => {
       );
       yield* service.start(claimedWriter("claimed-peer", ["src/b.ts"]));
       const stopped = yield* service.stop(defective.id);
-      expect(stopped.warning).toContain("ownership remain quarantined");
+      expect(stopped.cleanup?.disposition).toBe("quarantined");
+      expect(stopped.writeAdmissionPaused).not.toBe(true);
 
       const conflict = yield* service
         .start(claimedWriter("disjoint-but-quarantined", ["src/c.ts"]))
@@ -591,7 +602,12 @@ describe("SubagentService", () => {
       const stopped = yield* service.stop(first.id);
       expect(stopped).toMatchObject({
         state: "stopped",
-        warning: stringContaining("ownership remain quarantined"),
+        cleanup: {
+          disposition: "quarantined",
+          recovery: "manual",
+          diagnostic: { phase: "backend-scope" },
+        },
+        writerCleanupQuarantined: true,
       });
       expect(fake.controls[0]?.released()).toBe(1);
 

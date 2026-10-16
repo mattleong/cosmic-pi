@@ -15,7 +15,6 @@ import {
   request,
   withService,
 } from "./fixtures/service-harness.ts";
-import { stringContaining } from "../support/matchers.ts";
 import {
   InvalidSubagentRequestError,
   SubagentNotFoundError,
@@ -322,9 +321,11 @@ describe("SubagentService", () => {
       const secondId = afterFailure[1]?.id ?? "";
       const thirdId = afterFailure[2]?.id ?? "";
       expect(afterFailure).toHaveLength(50);
-      expect(afterFailure.find((run) => run.id === firstId)?.warning).toContain(
-        "remains quarantined",
-      );
+      expect(afterFailure.find((run) => run.id === firstId)?.cleanup).toMatchObject({
+        disposition: "quarantined",
+        recovery: "manual",
+        diagnostic: { phase: "backend-scope", code: "fixture_reclaim_failed" },
+      });
       expect(afterFailure.some((run) => run.name === "blocked")).toBe(false);
       expect(fake.reclaimedRunIds).toEqual([firstId]);
       const retried = yield* service.start(request({ name: "blocked-retry" })).pipe(Effect.flip);
@@ -390,7 +391,11 @@ describe("SubagentService", () => {
         const oldest = (yield* service.list).find((run) => run.id === oldestId);
         expect(oldest).toMatchObject({
           state: "completed",
-          warning: stringContaining("remains quarantined"),
+          cleanup: {
+            disposition: "quarantined",
+            recovery: "manual",
+            diagnostic: { phase: "backend-scope" },
+          },
         });
         expect(oldest?.sessionFile).toBeUndefined();
         const resumeFailure = yield* service.resume(oldestId).pipe(Effect.flip);

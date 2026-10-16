@@ -97,6 +97,16 @@ export interface RunRecord {
   readonly nativeAgents: Set<string>;
   cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">;
   cleanupDisposition: "pending" | "confirmed" | "quarantined";
+  cleanupRecovery?:
+    | { readonly scope: Scope.Closeable; readonly process: BackendHandle }
+    | undefined;
+  cleanupVerification?:
+    | {
+        readonly scope: Scope.Closeable;
+        readonly process: BackendHandle;
+        readonly settled: Deferred.Deferred<void>;
+      }
+    | undefined;
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
   retryClaim?: { readonly token: string } | undefined;
   pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;

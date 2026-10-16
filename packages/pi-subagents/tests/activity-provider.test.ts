@@ -45,6 +45,103 @@ const runActionIds = (patch: Partial<SubagentRunView>) =>
   );
 
 describe("subagent activity provider", () => {
+  effectTest(
+    "offers stop verification for terminal recoverable cleanup without changing completed work",
+    function* () {
+      const run = view({
+        id: "selected",
+        state: "completed",
+        finalText: "Accepted work report sentinel",
+        cleanup: {
+          disposition: "quarantined",
+          recovery: "stop",
+          diagnostic: {
+            phase: "process-group",
+            code: "group_live",
+            message: "Cleanup detail sentinel",
+          },
+        },
+        writerCleanupQuarantined: true,
+      });
+      const { bridge, transport, act, dispose, invoke } = promptedProvider([run]);
+      const item = subagentActivityItems(bridge.get())[0]!;
+      expect(item.status).toBe("blocked");
+      expect(item.actions?.map((action) => action.id)).toContain("stop");
+      const detail = subagentActivityDetail(bridge.get(), run.id)!;
+      expect(detail).toContain("Cleanup detail sentinel");
+      expect(detail).toContain("Accepted work report sentinel");
+      expect(detail).not.toContain("resume_admission");
+      const signal = new AbortController().signal;
+      yield* step(() => invoke("stop", signal));
+      expect(act).toHaveBeenCalledWith(
+        run.id,
+        "stop",
+        signal,
+        undefined,
+        captureSubagentControlExpectation(run),
+      );
+      const manual = {
+        ...run,
+        cleanup: { disposition: "quarantined" as const, recovery: "manual" as const },
+      };
+      bridge.publish({ revision: 2, runs: [manual] });
+      expect(
+        subagentActivityItems(bridge.get())[0]!.actions?.map((action) => action.id),
+      ).not.toContain("stop");
+      yield* step(() =>
+        expect(
+          transport.capability()!.invoke!(run.id, "stop", item.revision, signal),
+        ).rejects.toThrow(),
+      );
+      const confirmed = {
+        ...run,
+        cleanup: { disposition: "confirmed" as const },
+        writerCleanupQuarantined: false,
+      };
+      bridge.publish({ revision: 3, runs: [confirmed] });
+      const done = subagentActivityItems(bridge.get())[0]!;
+      expect(done.status).toBe("done");
+      expect(done.actions?.map((action) => action.id)).not.toContain("stop");
+      dispose();
+    },
+  );
+
+  it("revises cleanup details without requiring a task-state change", () => {
+    const run = view({
+      state: "completed",
+      cleanup: {
+        disposition: "quarantined",
+        recovery: "stop",
+        diagnostic: { phase: "process-group", message: "First diagnostic" },
+      },
+    });
+    const before = subagentActivityItems({ revision: 1, runs: [run] })[0]!;
+    const after = subagentActivityItems({
+      revision: 2,
+      runs: [
+        {
+          ...run,
+          cleanup: {
+            ...run.cleanup!,
+            diagnostic: { phase: "process-group", message: "Second diagnostic" },
+          },
+        },
+      ],
+    })[0]!;
+    expect(after.revision).not.toBe(before.revision);
+    expect(after.status).toBe(before.status);
+    const containing = {
+      ...run,
+      state: "running" as const,
+      writeIntent: "writer" as const,
+      writeAdmissionPaused: true,
+      writeViolationOffender: true,
+    };
+    const projection = { revision: 3, runs: [containing] };
+    expect(subagentActivityItems(projection)[0]?.blockedReason).toBe("write-containment");
+    expect(subagentActivityDetail(projection, run.id)).toContain("First diagnostic");
+  });
+
   effectTest("revokes an action capability when only its assignment epoch changes", function* () {
     const selected = view({ id: "selected", assignmentEpoch: 1 });
     const { bridge, transport, act, dispose, invoke } = promptedProvider([selected]);

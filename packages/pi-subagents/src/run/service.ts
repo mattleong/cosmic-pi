@@ -3,6 +3,8 @@ import { questionnaireLifetimes } from "./questionnaire-lifetime.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -239,7 +241,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const writerLeases = yield* WriterLeaseService;
   const workspaceEngine = yield* Effect.serviceOption(WorkspaceService);
   const initialProfiles = yield* profileService.capture;
-  const ownerScope = yield* Effect.scope;
+  // Register operation ownership before shutdown, so retirement revokes publication before joins.
+  const ownerScope = yield* Scope.fork(yield* Effect.scope, "sequential");
   const proxyRuns = yield* FiberMap.make<string, void, never>();
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
@@ -278,7 +281,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     allocateRunIdentity,
   } = identityAllocators(runtimeNamespace);
   const publish = Effect.uninterruptible(
-    questionnaires.invalidate.pipe(
+    Effect.sync(() => {
+      for (const record of records.values()) {
+        const quarantined = record.writerPool?.cleanupQuarantined ? true : undefined;
+        if (record.view.writerCleanupQuarantined !== quarantined)
+          record.view = { ...record.view, writerCleanupQuarantined: quarantined };
+      }
+    }).pipe(
+      Effect.andThen(questionnaires.invalidate),
       Effect.andThen(
         Effect.suspend(() =>
           closed
@@ -389,6 +399,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     releaseTurnInput,
     claimTurnInputDrain,
     closeRecordScope,
+    verifyCleanup: cleanup.verifyCleanup,
     settle: settlement.settle,
   });
 
@@ -535,6 +546,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       }),
     ).pipe(
       Effect.andThen(questionnaires.invalidate),
+      Effect.andThen(Scope.close(ownerScope, Exit.void)),
       Effect.andThen(closeRunsLeafFirst({ records, withLock, cleanup })),
       Effect.andThen(withLock(recordSessionUsage(true))),
       Effect.asVoid,

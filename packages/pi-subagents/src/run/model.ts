@@ -117,7 +117,27 @@ export const hasUnresolvedSteeringDelivery = (run: {
   readonly steeringDelivery?: SteeringDeliveryState | undefined;
 }): boolean => run.steeringDelivery === "pending" || run.steeringDelivery === "unresolved";
 
+export interface SubagentCleanupDiagnostic {
+  readonly phase:
+    | "backend-scope"
+    | "process-exit"
+    | "process-group"
+    | "descendant-snapshot"
+    | "descendant-groups"
+    | "writer-lease";
+  readonly code?: string | undefined;
+  readonly message: string;
+}
+
+export interface SubagentCleanup {
+  readonly disposition: "pending" | "confirmed" | "quarantined";
+  readonly recovery?: "stop" | "manual" | undefined;
+  readonly diagnostic?: SubagentCleanupDiagnostic | undefined;
+}
+
 export interface SubagentRunView {
+  readonly cleanup?: SubagentCleanup | undefined;
+  readonly writerCleanupQuarantined?: boolean | undefined;
   readonly steeringDelivery?: SteeringDeliveryState | undefined;
   readonly id: string;
   readonly name: string;
@@ -277,10 +297,19 @@ export const hasSubagentCapability = (
 ): boolean => run.capabilities.includes(capability);
 
 export const isParentActionRequiredRun = (
-  run: Pick<SubagentRunView, "state" | "writeAdmissionPaused" | "writeViolationOffender"> & {
+  run: Pick<
+    SubagentRunView,
+    | "state"
+    | "writeAdmissionPaused"
+    | "writeViolationOffender"
+    | "cleanup"
+    | "writerCleanupQuarantined"
+  > & {
     readonly question?: unknown;
   },
 ): boolean =>
+  run.cleanup?.disposition === "quarantined" ||
+  run.writerCleanupQuarantined === true ||
   (run.state === "waiting_for_parent" && run.question !== undefined) ||
   run.state === "paused" ||
   (run.writeAdmissionPaused === true &&

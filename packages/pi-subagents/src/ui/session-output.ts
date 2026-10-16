@@ -27,6 +27,7 @@ import {
   type SubagentSessionEvent,
 } from "../run/model.ts";
 import { steeringDeliveryEvidence } from "../tools/outcome.ts";
+import { cleanupEvidenceText, cleanupRecoveryText } from "../tools/format.ts";
 import { aggregateUsage } from "./metrics.ts";
 import { runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 import {
@@ -384,6 +385,17 @@ export function renderSubagentSessionOutput(
   container.addChild(markdownBlock(run.task, theme));
   addBlock(container, theme.fg("muted", theme.bold("Activity")));
   addSteeringDelivery(container, run, theme);
+  const cleanup = cleanupRecoveryText(run).join("\n") || cleanupEvidenceText(run);
+  if (cleanup)
+    addBlock(
+      container,
+      theme.fg(
+        run.cleanup?.disposition === "confirmed" && !run.writerCleanupQuarantined
+          ? "dim"
+          : "warning",
+        sanitizeTerminalText(cleanup),
+      ),
+    );
   addLiveActivity(container, run, theme, now);
   addAssistantConclusion(container, run, theme);
   if (options.showTechnicalDetails) addTechnicalDetails(container, run, theme);

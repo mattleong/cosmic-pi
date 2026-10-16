@@ -23,7 +23,18 @@ export default function rpcFauxFixture(pi: ExtensionAPI) {
   const faux = fauxProvider({ provider: "rpc-faux", tokensPerSecond: 0 });
   faux.setResponses(Array.from({ length: RESPONSES }, () => echoLatestUserText));
   pi.registerProvider(faux.provider);
-  pi.on("session_start", () => pi.setModel(faux.getModel()).then(() => undefined));
+  pi.on("session_start", (_event, ctx) =>
+    // Registration queues auth discovery; settle it before selecting the offline provider.
+    ctx.modelRegistry.refresh({ providers: ["rpc-faux"], allowNetwork: false }).then(() => {
+      const expected = faux.getModel();
+      const model = ctx.modelRegistry.find(expected.provider, expected.id);
+      if (model === undefined) throw new Error("Offline RPC fixture model was not registered.");
+      return pi.setModel(model).then((selected) => {
+        if (!selected) throw new Error("Offline RPC fixture model was not selected.");
+        return undefined;
+      });
+    }),
+  );
   pi.registerCommand("fixture-shutdown", {
     description: "Stop the offline RPC fixture",
     handler: (_args, ctx) => {

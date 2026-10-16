@@ -10,8 +10,20 @@ export interface AttentionRun {
   readonly writeAudit?: SubagentRunView["writeAudit"] | undefined;
   readonly writeAdmissionPaused?: boolean | undefined;
   readonly writeViolationOffender?: boolean | undefined;
+  readonly cleanup?: SubagentRunView["cleanup"] | undefined;
+  readonly writerCleanupQuarantined?: boolean | undefined;
   readonly capabilities: SubagentRunView["capabilities"];
 }
+
+/** Cleanup is independent of claim containment; both may need attention. */
+export const runCleanupAttention = (
+  run: Pick<AttentionRun, "cleanup" | "writerCleanupQuarantined">,
+): "pending" | "quarantined" | "pool-quarantined" | undefined =>
+  run.cleanup?.disposition === "pending" || run.cleanup?.disposition === "quarantined"
+    ? run.cleanup.disposition
+    : run.writerCleanupQuarantined === true
+      ? "pool-quarantined"
+      : undefined;
 
 export type RunAttention =
   | { readonly kind: "containment" }

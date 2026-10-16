@@ -121,7 +121,7 @@ describe("explicit profile-route retry", () => {
             code: "retry_outcome_uncertain",
           });
           if (cleanupFailure)
-            expect((yield* service.status(run.id)).warning).toContain("quarantined");
+            expect((yield* service.status(run.id)).cleanup?.disposition).toBe("quarantined");
           else expect(control.released()).toBe(1);
           expect(
             notifications.some(
@@ -537,7 +537,7 @@ describe("explicit profile-route retry", () => {
       const failedRun = yield* startFailedReviewer(service, fake);
       const blocked = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);
       expect(blocked).toMatchObject({ code: "retry_cleanup_unconfirmed" });
-      expect((yield* service.status(failedRun.id)).warning).toContain("quarantined");
+      expect((yield* service.status(failedRun.id)).cleanup?.disposition).toBe("quarantined");
     });
   });
 

@@ -60,6 +60,27 @@ const makeFleet = (
   };
 };
 
+it("verifies recoverable terminal cleanup but does not automate manual quarantine", () => {
+  for (const recovery of ["stop", "manual"] as const) {
+    const member = run("cleanup-run", {
+      state: "completed",
+      finalText: "Accepted report sentinel",
+      cleanup: {
+        disposition: "quarantined",
+        recovery,
+        diagnostic: { phase: "process-group", message: "Diagnostic detail sentinel" },
+      },
+    });
+    const { component, press, actions, setRuns } = makeFleet([member], { height: 40 });
+    press("x", "x");
+    expect(actions.stop).toHaveBeenCalledTimes(recovery === "stop" ? 1 : 0);
+    setRuns([{ ...member, cleanup: { disposition: "confirmed" } }]);
+    press("x", "x");
+    expect(actions.stop).toHaveBeenCalledTimes(recovery === "stop" ? 1 : 0);
+    component.dispose();
+  }
+});
+
 it("keeps the selected row reachable through live shrinking and growing", () => {
   const fixture = makeFleet(
     Array.from({ length: 40 }, (_, index) => run(`item-${index}`)),
