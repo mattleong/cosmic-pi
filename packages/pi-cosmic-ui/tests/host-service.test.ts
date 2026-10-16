@@ -102,7 +102,7 @@ describe("Cosmic UI host service", () => {
       exec: (command, args) => {
         if (command === "gh") {
           pullRequestCalls++;
-          return execOk("42\n");
+          return execOk('{"number":42,"url":"https://git.example.test/team/project/pull/42"}');
         }
         gitCalls++;
         return execOk(args.includes("diff") ? "10\t4\ta.ts\n" : "## main...origin/main\n M a.ts\n");
@@ -117,6 +117,9 @@ describe("Cosmic UI host service", () => {
         linesChanged: 4,
       });
       expect(MutableRef.get(projection).pullRequestNumber).toBe(42);
+      expect(MutableRef.get(projection).pullRequestUrl).toBe(
+        "https://git.example.test/team/project/pull/42",
+      );
       expect(gitCalls).toBe(2);
       expect(pullRequestCalls).toBe(1);
       yield* service.refreshAll();
@@ -126,6 +129,9 @@ describe("Cosmic UI host service", () => {
       yield* service.refreshAll();
       expect(gitCalls).toBe(6);
       expect(pullRequestCalls).toBe(2);
+      yield* service.invalidateProbes;
+      expect(MutableRef.get(projection).pullRequestNumber).toBeUndefined();
+      expect(MutableRef.get(projection).pullRequestUrl).toBeUndefined();
     }).pipe(provideBuiltLayer(layer));
   });
 
@@ -149,22 +155,30 @@ describe("Cosmic UI host service", () => {
   });
 
   it.effect("degrades nonzero and failed probes without failing refresh", () => {
-    let fail = false;
+    let outcome: "success" | "nonzero" | "rejection" = "success";
     const { layer, projection } = serviceLayer({
-      exec: (command) =>
-        fail
-          ? Promise.reject(new Error("unavailable"))
-          : Promise.resolve(execResult(command === "gh" ? "" : "fatal", 1)),
+      exec: (command) => {
+        if (outcome === "rejection") return Promise.reject(new Error("unavailable"));
+        if (outcome === "nonzero") return Promise.resolve(execResult("unavailable", 1));
+        return execOk(
+          command === "gh"
+            ? '{"number":42,"url":"https://git.example.test/team/project/pull/42"}'
+            : "## main\n",
+        );
+      },
     });
     return Effect.gen(function* () {
       const service = yield* CosmicUiService;
-      yield* service.refreshAll(true);
-      expect(MutableRef.get(projection).gitStatus).toBeUndefined();
-      expect(MutableRef.get(projection).pullRequestNumber).toBeUndefined();
-      fail = true;
-      yield* service.refreshAll(true);
-      expect(MutableRef.get(projection).gitStatus).toBeUndefined();
-      expect(MutableRef.get(projection).pullRequestNumber).toBeUndefined();
+      for (const failure of ["nonzero", "rejection"] as const) {
+        outcome = "success";
+        yield* service.refreshAll(true);
+        expect(MutableRef.get(projection).pullRequestUrl).toBeDefined();
+        outcome = failure;
+        yield* service.refreshAll(true);
+        expect(MutableRef.get(projection).gitStatus).toBeUndefined();
+        expect(MutableRef.get(projection).pullRequestNumber).toBeUndefined();
+        expect(MutableRef.get(projection).pullRequestUrl).toBeUndefined();
+      }
     }).pipe(provideBuiltLayer(layer));
   });
 
@@ -257,16 +271,26 @@ describe("Cosmic UI host service", () => {
       yield* service.invalidateProbes;
       const next = yield* service.refreshAll(true).pipe(Effect.forkScoped);
       yield* resolveWith(oldResolvers.get("git"), execResult("## old\n M old.ts\n"));
-      yield* resolveWith(oldResolvers.get("gh"), execResult("1\n"));
+      yield* resolveWith(
+        oldResolvers.get("gh"),
+        execResult('{"number":1,"url":"https://git.example.test/team/project/pull/1"}'),
+      );
       yield* yieldUntil(() => nextResolvers.size === 2);
       expect(MutableRef.get(projection).gitStatus).toBeUndefined();
       expect(MutableRef.get(projection).pullRequestNumber).toBeUndefined();
+      expect(MutableRef.get(projection).pullRequestUrl).toBeUndefined();
       yield* resolveWith(nextResolvers.get("git"), execResult("## new\n"));
-      yield* resolveWith(nextResolvers.get("gh"), execResult("2\n"));
+      yield* resolveWith(
+        nextResolvers.get("gh"),
+        execResult('{"number":2,"url":"https://git.example.test/team/project/pull/2"}'),
+      );
       yield* Fiber.join(old);
       yield* Fiber.join(next);
       expect(MutableRef.get(projection).gitStatus).toMatchObject({ modified: 0 });
       expect(MutableRef.get(projection).pullRequestNumber).toBe(2);
+      expect(MutableRef.get(projection).pullRequestUrl).toBe(
+        "https://git.example.test/team/project/pull/2",
+      );
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 

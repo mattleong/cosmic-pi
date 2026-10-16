@@ -35,6 +35,7 @@ export interface FooterRepositoryProjection {
   readonly totals: FooterTotals;
   readonly gitStatus: FooterGitStatus | undefined;
   readonly pullRequestNumber: number | undefined;
+  readonly pullRequestUrl: string | undefined;
   readonly homeDirectory: string | undefined;
 }
 

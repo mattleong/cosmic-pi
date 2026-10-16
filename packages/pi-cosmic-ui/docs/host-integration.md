@@ -18,6 +18,10 @@ All above-editor widgets share Pi's shrinking layout slot. A questionnaire dock 
 
 [VimSettingsAdapter](../src/manager/settings-adapter.ts) deliberately accesses pi-tui's private `searchInput`, `setValue`, `applyFilter`, and `submenuComponent`. This keeps keyboard focus aligned with the child and clears a hidden search filter when leaving search without closing the settings surface. Keep this bridge narrow and inspect it directly on pi-tui upgrades. [Adapter tests](../tests/settings-adapter.test.ts) cover focus and filter behavior; the bridge is not evidence that those internals are a public Pi contract.
 
+## Pull-request footer links
+
+The repository probe decodes `gh`'s PR number and actual URL together with Effect Schema, including enterprise hosts. Only HTTP(S) URLs without whitespace or control characters are admitted. Number and URL publish and invalidate together. Footer rendering adds Pi's OSC 8 hyperlink only after fitting and clipping plain text; clipped PR text remains unlinked, and the link closes before separators, padding, or following content. [Probe tests](../tests/probe.test.ts), [service tests](../tests/host-service.test.ts), and [footer tests](../tests/footer-primitives.test.ts) cover malformed output, terminal safety, invalidation, and narrow widths.
+
 ## Usage and main-agent throughput
 
 [application.ts](../src/application.ts) derives footer totals from complete validated `sessionManager.getEntries()` snapshots, including persisted auxiliary usage such as cache warming. Malformed reads preserve the last complete same-session totals; a replacement resets them. Message-end events never add charges. The host has no public extension `entry_appended` event, so an idle ticker also reconciles persisted usage. It neither republishes nor renders unchanged totals. [Extension tests](../tests/extension.test.ts) cover idle warming, duplicate events, failed reads, and replacement.

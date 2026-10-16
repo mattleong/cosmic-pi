@@ -2,8 +2,20 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { applyGitNumstat, parseGitStatus } from "../footer/git.ts";
+import { isSafeWebUrl } from "../footer/hyperlink.ts";
 import { PiExec, type PiExecContract } from "../boundary/host-exec.ts";
+
+const decodePullRequest = decodeUnknownOrUndefined(
+  Schema.fromJsonString(
+    Schema.Struct({
+      number: Schema.Int.check(Schema.isGreaterThan(0)),
+      url: Schema.String.check(Schema.makeFilter(isSafeWebUrl)),
+    }),
+  ),
+);
 
 const repositoryProbe = (exec: PiExecContract) => ({
   git: Effect.fn("RepositoryProbe.git")(function* (cwd: string, isCurrent: () => boolean) {
@@ -26,12 +38,11 @@ const repositoryProbe = (exec: PiExecContract) => ({
   pullRequest: Effect.fn("RepositoryProbe.pullRequest")(
     (cwd: string) =>
       exec
-        .exec("gh", ["pr", "view", "--json", "number", "--jq", ".number"], { cwd, timeout: 3_000 })
+        .exec("gh", ["pr", "view", "--json", "number,url"], { cwd, timeout: 3_000 })
         .pipe(
-          Effect.map((result) => {
-            const parsed = Number(result.stdout.trim());
-            return result.code === 0 && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
-          }),
+          Effect.map((result) =>
+            result.code === 0 ? decodePullRequest(result.stdout) : undefined,
+          ),
         ),
     Effect.withSpan("pi-cosmic-ui.probe.pull-request"),
   ),

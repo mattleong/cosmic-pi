@@ -29,6 +29,8 @@ Other Cosmic Pi extensions detect it automatically. Without it, they fall back t
 
 `/subagents` and `/tasks` open the same manager focused on their section. In the manager, use `j`/`k` or the arrows to move, `h`/`l` to collapse or expand, Enter to inspect, `?` for help, and `q` to close. Number keys and letter shortcuts such as `x` (stop) run the selected item's actions; destructive actions ask for confirmation.
 
+Pull-request numbers open the URL reported by `gh` in terminals that support OSC 8 hyperlinks. Other terminals display the same plain text.
+
 ### What tok/s measures
 
 The row uses `~` for estimates, with no extra live/completed labels.

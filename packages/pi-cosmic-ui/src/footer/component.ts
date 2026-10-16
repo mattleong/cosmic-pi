@@ -79,6 +79,7 @@ function footerLines(
   theme: CosmicFooterTheme,
   compact: boolean,
   currentContextUsage: FooterContextUsage,
+  pullRequestUrl: string | undefined,
 ): string[] {
   const identity = text.filter((entry) => entry.region === "identity");
   const repositoryIdentity = identity.filter(isRepositoryIdentity);
@@ -94,7 +95,7 @@ function footerLines(
         : renderContributionLine(modelIdentity, width, theme, compact),
     );
   if (repositoryIdentity.length)
-    lines.push(renderContributionLine(repositoryIdentity, width, theme, compact));
+    lines.push(renderContributionLine(repositoryIdentity, width, theme, compact, pullRequestUrl));
   if (metricEntries.length) lines.push(...renderMetricsLines(metricEntries, width, theme, compact));
   lines.push(
     ...detailLines(
@@ -160,8 +161,9 @@ export function createFooterComponent(options: {
             entry.kind === "status" ? [[entry.id, entry] as const] : [],
           ),
         );
+        const projection = options.projection();
         const contributions: CosmicFooterContribution[] = [
-          ...builtinContributions(host, options.projection(), statusPlacements),
+          ...builtinContributions(host, projection, statusPlacements),
           ...registrySnapshot.contributions,
         ];
         const text = applyTextDecorations(
@@ -174,7 +176,14 @@ export function createFooterComponent(options: {
         );
         const compact =
           config.footer.density === "compact" || (config.footer.density === "auto" && width < 72);
-        const lines = footerLines(text, width, theme, compact, currentContextUsage);
+        const lines = footerLines(
+          text,
+          width,
+          theme,
+          compact,
+          currentContextUsage,
+          projection.pullRequestUrl,
+        );
         return lines.map((line) => clipToWidth(line, width, ""));
       }, []);
     },

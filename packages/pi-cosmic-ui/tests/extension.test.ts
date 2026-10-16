@@ -51,7 +51,7 @@ function harness(dependencies?: CosmicUiApplicationDependencies) {
   const exec = vi.fn((command: string, args: string[], _options?: { signal?: AbortSignal }) =>
     execOk(
       command === "gh"
-        ? "42\n"
+        ? '{"number":42,"url":"https://github.com/team/project/pull/42"}'
         : args.includes("diff")
           ? "10\t4\tchanged.ts\n"
           : "## main...origin/main\n M changed.ts\n?? new.ts\n",
@@ -506,7 +506,13 @@ describe("Cosmic UI extension", () => {
       Effect.gen(function* () {
         const h = harness();
         const { startup: first, aborted } = yield* startWithPendingProbes(h);
-        h.exec.mockImplementation((command) => execOk(command === "gh" ? "7\n" : "## current\n"));
+        h.exec.mockImplementation((command) =>
+          execOk(
+            command === "gh"
+              ? '{"number":7,"url":"https://github.com/team/project/pull/7"}'
+              : "## current\n",
+          ),
+        );
         const secondContext = withSession(h.ctx, {
           getCwd: () => "/tmp/replacement",
           getSessionName: () => "replacement",

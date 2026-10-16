@@ -40,6 +40,7 @@ const initialProjection = (totals = emptyTotals()): CosmicUiProjection => ({
   totals,
   gitStatus: undefined,
   pullRequestNumber: undefined,
+  pullRequestUrl: undefined,
   pullRequestCheckedAt: 0,
   probeRevision: 0,
   homeDirectory: undefined,
@@ -138,17 +139,18 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
               now - current.pullRequestCheckedAt < PULL_REQUEST_REFRESH_INTERVAL_MS
             )
               return undefined;
-            const number = yield* probes
+            const pullRequest = yield* probes
               .pullRequest(currentCwd())
               .pipe(Effect.orElseSucceed(() => undefined));
-            return { checkedAt: now, number };
+            return { checkedAt: now, pullRequest };
           }),
         commit: (value) =>
           value === undefined
             ? Effect.void
             : commit((current) => ({
                 ...current,
-                pullRequestNumber: value.number,
+                pullRequestNumber: value.pullRequest?.number,
+                pullRequestUrl: value.pullRequest?.url,
                 pullRequestCheckedAt: value.checkedAt,
               })),
         spanName: "pi-cosmic-ui.refresh.pull-request",
@@ -174,6 +176,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
                 ...current,
                 gitStatus: undefined,
                 pullRequestNumber: undefined,
+                pullRequestUrl: undefined,
                 pullRequestCheckedAt: 0,
                 probeRevision: current.probeRevision + 1,
               })),

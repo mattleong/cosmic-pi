@@ -6,6 +6,7 @@ import type {
   CosmicFooterTheme,
 } from "../protocol/protocol.ts";
 import { clipToWidth } from "../manager/chrome.ts";
+import { webHyperlink } from "./hyperlink.ts";
 
 export function alignSides(left: string, right: string, width: number): string {
   if (width <= 0) return "";
@@ -132,12 +133,16 @@ export function styledContributionLine(
   clipped: string,
   raw: string,
   theme: CosmicFooterTheme,
+  pullRequestUrl?: string,
 ): string {
+  // Link only complete, fitted text so clipping cannot leave an open hyperlink.
   if (clipped !== raw) return theme.fg("text", clipped);
   return entries
     .flatMap((entry) => {
       const text = contributionText(entry, compact);
-      return text ? [tone(theme, entry, text)] : [];
+      if (!text) return [];
+      const styled = tone(theme, entry, text);
+      return [entry.id === "pullRequest" ? webHyperlink(styled, pullRequestUrl) : styled];
     })
     .join(theme.fg("dim", " • "));
 }
@@ -147,6 +152,7 @@ export function renderContributionLine(
   width: number,
   theme: CosmicFooterTheme,
   compact: boolean,
+  pullRequestUrl?: string,
 ): string {
   if (width <= 0) return "";
   const visible = ranked(contributions);
@@ -165,8 +171,22 @@ export function renderContributionLine(
   const clippedLeft = clipToWidth(leftRaw, leftAvailable, "…");
   const leftWidth = visibleWidth(clippedLeft);
 
-  const styledLeft = styledContributionLine(fittedLeft, compact, clippedLeft, leftRaw, theme);
-  const styledRight = styledContributionLine(fittedRight, compact, clippedRight, rightRaw, theme);
+  const styledLeft = styledContributionLine(
+    fittedLeft,
+    compact,
+    clippedLeft,
+    leftRaw,
+    theme,
+    pullRequestUrl,
+  );
+  const styledRight = styledContributionLine(
+    fittedRight,
+    compact,
+    clippedRight,
+    rightRaw,
+    theme,
+    pullRequestUrl,
+  );
   if (!clippedRight) return clipToWidth(styledLeft, width, "");
   if (!clippedLeft) return clipToWidth(styledRight, width, "");
 
