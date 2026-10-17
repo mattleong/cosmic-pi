@@ -30,7 +30,7 @@ A route is exactly `"disabled"`, one candidate, or a non-empty ordered candidate
 - optional `openaiFastMode`, defaulting to false; when true, eligible Pi or Codex candidates request OpenAI's `priority` service tier;
 - optional `closeOnReport`, omitted or `true` only.
 
-Optional root `workspaceSetup` is allowed only in a trusted project document; see [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle).
+Optional root `workspaceSetup` and `workspaceVerify` are allowed only in a trusted project document; see [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle).
 
 Native selectors use one fail-closed 256-character grammar across config, settings, and all three local adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, including Pi registry context variants such as `cursor/gpt-5.5@1m`, plus Claude's optional exact long-context suffix such as `[1m]`.
 
@@ -60,7 +60,7 @@ The launch contract, delegation policy, and explicit retry are documented in [Pu
 
 Good delegation candidates include unfamiliar or multi-package codebase reconnaissance, external research that can run beside local inspection, implementation planning, and independent review.
 
-For scoped parallel implementation, with one cooperative checkout by default or separate worktrees when `worktree` is selected:
+For scoped parallel implementation, in the session's default writer workspace or per writer with `isolation`:
 
 ```json
 {
@@ -71,9 +71,9 @@ For scoped parallel implementation, with one cooperative checkout by default or 
       "writes": ["packages/auth/src/token.ts", "packages/auth/tests/token.test.ts"]
     },
     {
-      "task": "Implement typed authentication errors in the assigned file.",
+      "task": "Implement typed authentication errors in packages/auth/src/errors.ts.",
       "profile": "worker",
-      "writes": ["packages/auth/src/errors.ts"]
+      "isolation": "worktree"
     }
   ]
 }
@@ -83,16 +83,20 @@ Repeat retry only on a failed successor, and use generalist only after `retry_ro
 
 ## Reviewing and integrating worktree proposals
 
-Writer workspace mode, admission, snapshot limits, revise, resume, and post-integration cleanup are documented in [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle). The parent's procedure:
+Writer workspace mode, admission, snapshot limits, apply, verification, revise, resume, automatic cleanup, nested worktree writers, and post-integration cleanup are documented in [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle). The parent's procedure:
 
-A completed writer report does not approve its changes. Its direct parent follows this procedure automatically, without asking for routine user approval:
+A completed writer report does not approve its changes, and nothing applies them automatically. A completed writer that changed no files has its workspace discarded automatically once its cleanup is confirmed. Otherwise its direct parent takes one of two paths, without asking for routine user approval. A worktree writer that started worktree writers does the same into its own worker tree before it reports.
+
+For small or trusted changes, call `subagent_workspace` with `{"action":"apply","workspaceId":"..."}` after process cleanup. It freezes, prepares, runs the project's `workspaceVerify` command when configured, and integrates as uncommitted edits in one call; the result says whether the diff was read and whether verification passed. Failed verification applies nothing, and that preparation can never be integrated: inspect its prepared tree, then revise or discard, or take the careful path.
+
+For risky changes, take the careful path:
 
 1. Call `subagent_workspace` with `{"action":"review","workspaceId":"..."}` after process cleanup. Keep the returned `revisionId` and inspect every diff page, passing the same ID and each `nextOffset` back to `review`. Pages contain up to 16,000 characters and are not summaries.
 2. Call `prepare` with the workspace ID and exact reviewed revision ID. This creates a separate cwd combining the proposal with current parent edits.
 3. Run relevant tests in that combined cwd. Do not edit the prepared tree. Worker-only tests do not replace this combined test pass.
 4. After review and passing tests, call `integrate` with the exact `workspaceId`, `revisionId`, and `preparationId`. It applies the proposal as uncommitted edits, preserving the parent index and local work. It does not merge a branch, stage, or commit.
 
-For rejected changes, `revise` takes a workspace ID and concrete feedback in `message` and starts a successor writer; await that run and review again. `list` pages workspace metadata with optional `offset`. The root may also `discard` an orphaned workspace once the session that created it has ended and no writer holds its worker tree.
+For rejected changes, `revise` takes a workspace ID and concrete feedback in `message` and starts a successor writer; await that run, then apply or review its new revision. `list` pages workspace metadata with optional `offset`. The root may also `discard` an orphaned workspace once the session that created it has ended and no writer holds its worker tree.
 
 A snapshot refusal names the file, the rule that fired, and a remedy in its detail. Tracked files are copied whatever their names, including committed test fixtures that contain credential-like strings; dependency and build directories stay out even when tracked, and untracked files with credential-shaped names are never copied. Only content the source index doesn't already hold is scanned for credential patterns, so staging a deliberate fixture lets the snapshot proceed.
 

@@ -10,9 +10,10 @@ import {
   yieldUntil,
 } from "pi-cosmic-core/testing";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
-import { SubagentService } from "../../src/run/service.ts";
+import { SubagentService, type SubagentServiceOptions } from "../../src/run/service.ts";
 import { executeSubagentActionEffect } from "../../src/tools/execute.ts";
 import { decodeSubagentProxyRequest } from "../../src/tools/proxy-protocol.ts";
+import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import type { BackendProxyResult } from "../../src/backend/model.ts";
 import type { LocalPiParentControl } from "../../src/backend/local-pi-protocol.ts";
 import {
@@ -25,6 +26,7 @@ import {
   waitForCompleted,
   withService,
 } from "./fixtures/service-harness.ts";
+import { stoppedWriter, workspaceFixture } from "./fixtures/workspace-engine.ts";
 
 type ProxyResponse = Extract<LocalPiParentControl, { readonly type: "proxy_response" }>;
 
@@ -74,7 +76,68 @@ const hangingHandlerLayer = (
   release: Deferred.Deferred<void>,
 ) => proxyLayer(fake, started, () => Deferred.await(release).pipe(Effect.as(proxyResult())));
 
+/** Routes proxied calls like the root coordinator: the caller is the authenticated channel's run. */
+const coordinatorProxyOptions = (): SubagentServiceOptions => {
+  const host = recordingExtensionHost();
+  const context = extensionContextFixture();
+  return {
+    proxyHandler: (service, callerRunId, proxyRequest) => {
+      const input = decodeSubagentProxyRequest(proxyRequest);
+      if (input instanceof InvalidSubagentRequestError) return Effect.fail(input);
+      return executeSubagentActionEffect(
+        host.pi,
+        { cwd: "/repo", projectTrusted: true },
+        input,
+        undefined,
+        context,
+        callerRunId,
+      ).pipe(Effect.provideService(SubagentService, service));
+    },
+  };
+};
+
 describe("SubagentService parent proxy executions", () => {
+  it.effect("binds proxied workspace calls to the authenticated caller", () => {
+    const fake = fakeChildLayer();
+    const f = workspaceFixture({ children: fake, serviceOptions: coordinatorProxyOptions() });
+    return withService(f.layer, function* (service) {
+      const writer = yield* stoppedWriter(service);
+      const workspaceId = writer.workspaceId!;
+      yield* service.start(request({ name: "nested-caller" }));
+      const caller = fake.controls[1]!;
+      const attempts = [
+        { requestId: "review", args: { action: "review", workspaceId } },
+        { requestId: "discard", args: { action: "discard", workspaceId } },
+        // Arguments cannot name a different caller; strict validation refuses the extra field.
+        {
+          requestId: "forged",
+          args: { action: "discard", workspaceId, callerRunId: "root", ownerId: "session-1/root" },
+        },
+      ];
+      for (const { requestId, args } of attempts)
+        caller.offerIpc({
+          channel: "pi-subagents",
+          type: "proxy_request",
+          requestId,
+          tool: SUBAGENT_TOOL_NAME.workspace,
+          argumentsJson: JSON.stringify(args),
+        });
+      yield* yieldUntil(() => attempts.every(({ requestId }) => responseFor(caller, requestId)));
+      const refusalCode = (requestId: string, code: string) => {
+        const response = responseFor(caller, requestId);
+        expect(response?.ok).toBe(false);
+        expect(response?.payloadJson).toContain(`"code":"${code}"`);
+      };
+      refusalCode("review", "workspace_owner_unavailable");
+      refusalCode("discard", "workspace_owner_unavailable");
+      refusalCode("forged", "proxy_request_invalid");
+      expect(f.entries.get(workspaceId)?.status).toBe("active");
+      // The owner itself still reaches the workspace, so the refusals were about the caller.
+      yield* service.workspaceDiscard(workspaceId);
+      expect(f.entries.get(workspaceId)?.status).toBe("discarded");
+    });
+  });
+
   for (const ending of ["crash", "report"] as const)
     it.effect(`releases a proxied await when its caller ends by ${ending}`, () => {
       const host = recordingExtensionHost();

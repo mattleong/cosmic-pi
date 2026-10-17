@@ -30,7 +30,7 @@ import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-p
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { PARENT_REPLY_PREFIX } from "../supervisor/protocol.ts";
 import { clipUtf8Text } from "../run/state.ts";
-import { NESTED_SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
+import { nestedSubagentToolNames, SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { encodeFleetActionRequest, fleetSnapshotProxyRequest } from "../tools/proxy-fleet.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import {
@@ -61,7 +61,11 @@ import {
 import { registerForkPromptCacheHooks } from "./fork-prompt-cache.ts";
 import { registerChildSettle } from "./host-child-settle.ts";
 import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
-import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
+import {
+  isSubagentChildProcess,
+  isWorkspaceParentChildProcess,
+  subagentChildRunId,
+} from "./host-environment.ts";
 import { nodeWriteSync } from "./node-builtins.ts";
 import { protocolMismatch } from "./protocol-fingerprint.ts";
 import {
@@ -72,8 +76,11 @@ import {
 
 const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
-const CHILD_PROXY_TOOL_NAMES = [...NESTED_SUBAGENT_TOOL_NAMES, "contact_parent"];
-const CHILD_PRIVATE_TOOL_NAME_SET: ReadonlySet<string> = new Set(CHILD_PROXY_TOOL_NAMES);
+// Every private name is removed on deactivation, whichever surface this child registered.
+const CHILD_PRIVATE_TOOL_NAME_SET: ReadonlySet<string> = new Set([
+  ...SUBAGENT_TOOL_NAMES,
+  "contact_parent",
+]);
 let nextRequest = 1;
 
 const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
@@ -147,6 +154,8 @@ export function registerSubagentChildBridge(
   if (runtimeApi.apiKey && runtimeApi.provider)
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
 
+  const workspaceParent = isWorkspaceParentChildProcess();
+  const proxyToolNames = [...nestedSubagentToolNames(workspaceParent), "contact_parent"];
   const ipc = boundaries.openIpc();
   const pending = parentCorrelations<string>();
   const pendingProxy = parentCorrelations<AgentToolResult<unknown>>();
@@ -433,6 +442,8 @@ export function registerSubagentChildBridge(
             run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
           },
           { receipts, owner: receipts.activate() },
+          withCodePreviewShell,
+          { workspaceParent },
         );
         registerContactParent(input, token, scheduleAnimation);
         const runId = subagentChildRunId();
@@ -446,7 +457,7 @@ export function registerSubagentChildBridge(
             () => isActivationCurrent(input, token),
           );
         if (!isActivationCurrent(input, token)) throw new Error("Stale child activation.");
-        pi.setActiveTools([...new Set([...pi.getActiveTools(), ...CHILD_PROXY_TOOL_NAMES])]);
+        pi.setActiveTools([...new Set([...pi.getActiveTools(), ...proxyToolNames])]);
       } catch {
         deactivate(input);
         if (slot.isCurrent(token)) slot.shutdown().catch(() => undefined);

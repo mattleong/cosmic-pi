@@ -12,6 +12,20 @@ function reviewPosition(details: WorkspaceToolDetails): string {
   return `${first ? "first" : "next"} diff page, more to read`;
 }
 
+// Narrower fallbacks first drop the file count, then the review state, keeping verification.
+function applyCounters(details: WorkspaceToolDetails): string[] {
+  if (details.verification === undefined || details.changedPathCount === undefined) return [];
+  if (details.verification === "failed")
+    return ["not applied · verification failed", "not applied"];
+  const verified = details.verification === "passed" ? "verified" : "not verified";
+  const reviewed = details.reviewed ? "reviewed" : "unreviewed";
+  return [
+    `${countLabel(details.changedPathCount, "file")} applied · ${reviewed} · ${verified}`,
+    `${reviewed} · ${verified}`,
+    verified,
+  ];
+}
+
 export function workspaceReceiptLine(details: WorkspaceToolDetails): string | undefined {
   switch (details.operation) {
     case "list": {
@@ -22,9 +36,13 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
         details.listedCount < details.workspaceCount
           ? `${details.listedCount} of ${countLabel(details.workspaceCount, "workspace")}`
           : countLabel(details.listedCount, "workspace");
-      return details.unavailableCount
-        ? `${listed}, ${details.unavailableCount} unreadable`
-        : listed;
+      const sourceless = details.sourceUnavailableCount ?? 0;
+      const unreadable = (details.unavailableCount ?? 0) - sourceless;
+      return [
+        listed,
+        ...(unreadable > 0 ? [`${unreadable} unreadable`] : []),
+        ...(sourceless > 0 ? [`${sourceless} missing their source`] : []),
+      ].join(", ");
     }
     case "review":
       return reviewPosition(details);
@@ -32,6 +50,8 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
       return "ready to test";
     case "integrate":
       return "integrated";
+    case "apply":
+      return applyCounters(details)[0];
     case "revise":
       return "revision requested";
     case "discard":
@@ -45,6 +65,11 @@ function validListCounts(details: WorkspaceToolDetails): boolean {
     details.workspaceCount !== undefined &&
     details.listedCount !== undefined &&
     details.listedCount > details.workspaceCount
+  )
+    return false;
+  if (
+    details.sourceUnavailableCount !== undefined &&
+    details.sourceUnavailableCount > (details.unavailableCount ?? 0)
   )
     return false;
   return (
@@ -88,19 +113,49 @@ type WorkspaceOperationReceipt = WorkspaceToolDetails &
         readonly revisionId: string;
         readonly preparationId: string;
       }
+    | {
+        readonly operation: "apply";
+        readonly workspaceId: string;
+        readonly revisionId: string;
+        readonly preparationId: string;
+        readonly changedPathCount: number;
+        readonly reviewed: boolean;
+        readonly verification: NonNullable<WorkspaceToolDetails["verification"]>;
+      }
   );
+
+type WorkspaceApplyReceipt = Extract<WorkspaceOperationReceipt, { readonly operation: "apply" }>;
 
 type WorkspaceReviewReceipt = Extract<WorkspaceOperationReceipt, { readonly operation: "review" }>;
 
 function hasOperationReceipt(details: WorkspaceToolDetails): details is WorkspaceOperationReceipt {
   if (details.operation === "list") return true;
   if (!details.workspaceId) return false;
-  if (["review", "prepare", "integrate"].includes(details.operation) && !details.revisionId)
+  if (
+    ["review", "prepare", "integrate", "apply"].includes(details.operation) &&
+    !details.revisionId
+  )
+    return false;
+  if (
+    details.operation === "apply" &&
+    (details.changedPathCount === undefined ||
+      details.reviewed === undefined ||
+      details.verification === undefined)
+  )
     return false;
   return (
-    !["prepare", "integrate"].includes(details.operation) || details.preparationId !== undefined
+    !["prepare", "integrate", "apply"].includes(details.operation) ||
+    details.preparationId !== undefined
   );
 }
+
+const asWarnings = (details: WorkspaceToolDetails): CompactIssue[] =>
+  (details.warnings ?? []).map((warning) => ({
+    severity: "warning",
+    code: warning.code,
+    message: warning.message,
+    detail: warning.detail,
+  }));
 
 const step = (code: string, message: string, detail: string): CompactIssue => ({
   severity: "info",
@@ -111,13 +166,25 @@ const step = (code: string, message: string, detail: string): CompactIssue => ({
 
 function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
   const issues: CompactIssue[] = [];
-  if ((details.unavailableCount ?? 0) > 0)
+  const sourceless = details.sourceUnavailableCount ?? 0;
+  if ((details.unavailableCount ?? 0) > sourceless)
     issues.push({
       severity: "warning",
       code: "workspace-records-unavailable",
       message: "Some workspace records are unreadable; ownership and cleanup are unknown",
       detail:
         "Incomplete workspace metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
+    });
+  if (sourceless > 0)
+    issues.push({
+      severity: "warning",
+      code: "workspace-source-unavailable",
+      message:
+        sourceless === 1
+          ? "A nested workspace's source workspace is missing or unreadable"
+          : `${sourceless} nested workspaces' source workspaces are missing or unreadable`,
+      detail:
+        "These nested workspaces name a source workspace whose record is missing or unreadable (source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
     });
   if (!isEmptyList(details))
     issues.push(
@@ -167,6 +234,44 @@ function reviewIssues(details: WorkspaceReviewReceipt): CompactIssue[] {
   ];
 }
 
+function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
+  const ids = `workspaceId=${details.workspaceId}, revisionId=${details.revisionId}, preparationId=${details.preparationId}`;
+  const command = details.verificationCommand ?? "the configured verification command";
+  if (details.verification === "failed")
+    return [
+      {
+        severity: "error",
+        code: "verification-failed",
+        message: "Verification failed, so the proposal wasn't applied",
+        detail: [
+          `Command: ${command}`,
+          ...(details.verificationMessage ? [`Failure: ${details.verificationMessage}`] : []),
+          `Nothing was applied and parent files are unchanged. ${ids}; this preparation can't be integrated.`,
+          `Prepared tree: ${details.preparedCwd ?? "see expanded details"}. Inspect it without editing, then revise or discard the workspace, or review every page, prepare again, and integrate that new preparation.`,
+        ].join("\n"),
+      },
+    ];
+  return [
+    ...asWarnings(details),
+    ...(details.reviewed
+      ? []
+      : [
+          step(
+            "applied-unreviewed",
+            "The diff wasn't read before apply",
+            "Apply integrated the proposal without a complete diff review. Inspect the changed files in the parent checkout if the change needs review.",
+          ),
+        ]),
+    details.verification === "passed"
+      ? step("applied-verified", "Verification passed before apply", `Command: ${command}`)
+      : step(
+          "applied-unverified",
+          "No verification is configured, so the change wasn't tested",
+          "Run relevant tests in the parent checkout before relying on this change.",
+        ),
+  ];
+}
+
 function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
   switch (details.operation) {
     case "list":
@@ -196,12 +301,9 @@ function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
         },
       ];
     case "integrate":
-      return (details.warnings ?? []).map((warning) => ({
-        severity: "warning",
-        code: warning.code,
-        message: warning.message,
-        detail: warning.detail,
-      }));
+      return asWarnings(details);
+    case "apply":
+      return applyIssues(details);
     case "discard":
       return [];
   }
@@ -232,7 +334,8 @@ export function compactWorkspaceSummary(
   return {
     action: operation === "list" ? "inspect" : operation,
     subject: "Proposed changes",
-    counters: line === undefined ? [] : [line],
+    counters:
+      details.operation === "apply" ? applyCounters(details) : line === undefined ? [] : [line],
     metadata: details.operation === "list" && line === undefined ? ["workspace metadata"] : [],
     issues,
     outcome: compactIssueSeverity(issues) ?? "success",

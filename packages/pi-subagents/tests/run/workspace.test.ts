@@ -8,7 +8,7 @@ import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { WriterLeaseReleaseError, WriterLeaseService } from "../../src/boundary/writer-lease.ts";
 import { WorkspaceError, type WorkspaceRecord } from "../../src/workspace/model.ts";
-import type { SubagentServiceContract } from "../../src/run/service.ts";
+import type { StartSubagentRequest } from "../../src/run/model.ts";
 import {
   completeLocalRun,
   fakeWriterLeaseLayer,
@@ -48,17 +48,23 @@ const record = (
   baseline: "baseline",
 });
 
-const expectModeSwitchBlocked = (service: SubagentServiceContract) =>
-  Effect.gen(function* () {
-    let persisted = false;
-    const persist = Effect.sync(() => {
-      persisted = true;
-    });
-    expect(
-      yield* service.setWriterWorkspaceMode("shared-checkout", persist).pipe(Effect.flip),
-    ).toMatchObject({ code: "workspace_mode_busy" });
-    expect(persisted).toBe(false);
-  });
+const sharedWriter = (overrides: Partial<StartSubagentRequest> = {}) =>
+  repoWriter({ writerWorkspaceModeOverride: "shared-checkout", ...overrides });
+
+interface CanonicalizeGate {
+  cwd?: string;
+  pause: Effect.Effect<void>;
+}
+
+/** Pauses writer cwd canonicalization for one directory, holding its launch before admission. */
+const canonicalizeGate = () => {
+  const gate: CanonicalizeGate = { pause: Effect.void };
+  const writerLeases = leasesWith((base) => ({
+    canonicalize: (cwd) =>
+      (cwd === gate.cwd ? gate.pause : Effect.void).pipe(Effect.andThen(base.canonicalize(cwd))),
+  }));
+  return { gate, writerLeases };
+};
 
 describe("writer workspace orchestration", () => {
   it.effect("refuses admission when the acquired writer directory is replaced", () => {
@@ -109,7 +115,11 @@ describe("writer workspace orchestration", () => {
         expect(yield* operation.pipe(Effect.flip)).toMatchObject({
           code: "workspace_process_unsettled",
         });
-      yield* expectModeSwitchBlocked(service);
+      yield* service.setWriterWorkspaceMode("shared-checkout", Effect.void);
+      expect(yield* service.inspectWriterWorkspace).toEqual({
+        mode: "shared-checkout",
+        unresolvedWorkspaceCount: 1,
+      });
     });
   });
 
@@ -194,32 +204,24 @@ describe("writer workspace orchestration", () => {
       expect(f.entries.size).toBe(0);
       expect(f.acquired).toEqual([]);
       expect(f.canonicalized).toEqual([]);
-      expect((yield* service.inspectWriterWorkspace).blockedCode).toBeUndefined();
       expect(yield* service.list).toHaveLength(1);
     });
   });
 
-  it.effect(
-    "nested readers inspect their parent's effective cwd but nested writers fail before artifact creation",
-    () => {
-      const f = fixture();
-      return withService(f.layer, function* (service) {
-        const parent = yield* service.start(repoWriter());
-        const child = yield* service.startSessionOwnedFrom(
-          parent.id,
-          request({ cwd: "/wrong-source", writeIntent: "read-only" }),
-        );
-        expect(child.cwd).toBe(parent.cwd);
-        expect(child.workspaceId).toBeUndefined();
-        expect(f.children.controls[1]?.launch.cwd).toBe(parent.cwd);
-        const failure = yield* service
-          .startSessionOwnedFrom(parent.id, repoWriter())
-          .pipe(Effect.flip);
-        expect(failure).toMatchObject({ code: "workspace_nested_writer_unsupported" });
-        expect(f.entries.size).toBe(1);
-      });
-    },
-  );
+  it.effect("nested readers inspect their parent's effective cwd without a workspace", () => {
+    const f = fixture();
+    return withService(f.layer, function* (service) {
+      const parent = yield* service.start(repoWriter());
+      const child = yield* service.startSessionOwnedFrom(
+        parent.id,
+        request({ cwd: "/wrong-source", writeIntent: "read-only" }),
+      );
+      expect(child.cwd).toBe(parent.cwd);
+      expect(child.workspaceId).toBeUndefined();
+      expect(f.children.controls[1]?.launch.cwd).toBe(parent.cwd);
+      expect(f.entries.size).toBe(1);
+    });
+  });
 
   it.effect(
     "requires complete immutable review and source lease before uncommitted integration",
@@ -245,7 +247,7 @@ describe("writer workspace orchestration", () => {
         expect(f.released).toContain("/repo");
         expect(f.released).toContain("/repo/packages/b");
         expect(f.entries.get(id)?.status).toBe("integrated");
-        expect((yield* service.inspectWriterWorkspace).blockedCode).toBeUndefined();
+        expect(yield* service.inspectWriterWorkspace).toEqual({ mode: "worktree" });
       });
     },
   );
@@ -259,7 +261,7 @@ describe("writer workspace orchestration", () => {
       yield* Fiber.interrupt(starting);
       expect(f.children.controls).toHaveLength(0);
       expect(f.statuses()).toEqual(["discarded"]);
-      expect((yield* service.inspectWriterWorkspace).blockedCode).toBeUndefined();
+      expect(yield* service.inspectWriterWorkspace).toEqual({ mode: "worktree" });
     });
   });
 
@@ -359,9 +361,89 @@ describe("writer workspace orchestration", () => {
       const writer = yield* Fiber.join(starting);
       expect(writer.cwd).toBe("/repo");
       expect(writer.writerWorkspaceMode).toBe("shared-checkout");
-      expect(
-        yield* service.setWriterWorkspaceMode("worktree", Effect.void).pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_mode_busy" });
+      yield* service.setWriterWorkspaceMode("worktree", Effect.void);
+      expect(yield* service.status(writer.id)).toMatchObject({
+        cwd: "/repo",
+        writerWorkspaceMode: "shared-checkout",
+      });
+    });
+  });
+
+  it.effect("launches each writer in its own isolation and the rest in the default", () => {
+    const f = fixture();
+    return withService(f.layer, function* (service) {
+      yield* service.setWriterWorkspaceMode("shared-checkout", Effect.void);
+      const isolated = yield* service.start(
+        repoWriter({ writerWorkspaceModeOverride: "worktree" }),
+      );
+      const shared = yield* service.start(repoWriter());
+      expect(isolated).toMatchObject({ writerWorkspaceMode: "worktree" });
+      expect(isolated.workspaceId).toBeDefined();
+      expect(isolated.cwd).toBe(f.entries.get(isolated.workspaceId!)?.handle.cwd);
+      expect(shared).toMatchObject({ cwd: "/repo", writerWorkspaceMode: "shared-checkout" });
+      expect(shared.workspaceId).toBeUndefined();
+      expect(f.acquired).toContain("/repo");
+      expect(f.entries.size).toBe(1);
+    });
+  });
+
+  it.effect("launches a shared-checkout writer in source when the default is worktree", () => {
+    const f = fixture();
+    return withService(f.layer, function* (service) {
+      const writer = yield* service.start(sharedWriter());
+      expect(writer).toMatchObject({ cwd: "/repo", writerWorkspaceMode: "shared-checkout" });
+      expect(writer.workspaceId).toBeUndefined();
+      expect(f.entries.size).toBe(0);
+    });
+  });
+
+  it.effect("ignores isolation for read-only launches", () => {
+    const f = fixture();
+    return withService(f.layer, function* (service) {
+      const reader = yield* service.start(
+        request({
+          cwd: "/repo",
+          writeIntent: "read-only",
+          writerWorkspaceModeOverride: "worktree",
+        }),
+      );
+      expect(reader.cwd).toBe("/repo");
+      expect(reader.workspaceId).toBeUndefined();
+      expect(reader.writerWorkspaceMode).toBeUndefined();
+      expect(f.entries.size).toBe(0);
+    });
+  });
+
+  it.effect("integration waits only for shared-checkout writers in the target checkout", () => {
+    const { gate, writerLeases } = canonicalizeGate();
+    const f = fixture({ writerLeases });
+    return withService(f.layer, function* (service) {
+      const id = (yield* stoppedWriter(service)).workspaceId!;
+      const tested = yield* reviewAndPrepare(service, id);
+      const integrate = service.workspaceIntegrate(id, tested.revisionId, tested.preparationId);
+      yield* service.start(sharedWriter({ cwd: "/elsewhere" }));
+      for (const cwd of ["/repo", "/repo/packages/a", "/"]) {
+        const writer = yield* service.start(sharedWriter({ cwd }));
+        expect(yield* integrate.pipe(Effect.flip)).toMatchObject({ code: "workspace_target_busy" });
+        yield* service.stop(writer.id);
+      }
+      const reserved = yield* pauseAt;
+      gate.cwd = "/repo/packages/a";
+      gate.pause = reserved.pause;
+      const launching = yield* service
+        .start(sharedWriter({ cwd: "/repo/packages/a" }))
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(reserved.entered);
+      expect(yield* integrate.pipe(Effect.flip)).toMatchObject({ code: "workspace_target_busy" });
+      yield* Deferred.succeed(reserved.release, undefined);
+      yield* service.stop((yield* Fiber.join(launching)).id);
+      const create = yield* gateCreate(f);
+      const creating = yield* service.start(repoWriter()).pipe(Effect.forkChild);
+      yield* Deferred.await(create.entered);
+      yield* integrate;
+      expect(f.entries.get(id)?.status).toBe("integrated");
+      yield* Deferred.succeed(create.release, undefined);
+      expect((yield* Fiber.join(creating)).workspaceId).toBeDefined();
     });
   });
 });

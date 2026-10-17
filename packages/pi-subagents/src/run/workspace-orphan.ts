@@ -90,6 +90,15 @@ export function workspaceOrphanOperations(
       );
       const record = listing.records.find((entry) => entry.handle.workspaceId === workspaceId);
       if (!record) return yield* invalid("workspace_owner_unavailable", ORPHAN_UNAVAILABLE);
+      // The engine refuses too; this names the children to discard first.
+      const children = yield* service
+        .unresolvedChildren({ workspaceId })
+        .pipe(Effect.mapError(mapWorkspaceError));
+      if (children.length > 0)
+        return yield* invalid(
+          "workspace_children_unresolved",
+          `Child workspaces created from this workspace are unresolved (${children.join(", ")}). Discard them first, children before their parent.`,
+        );
       return yield* operations.withPermits(1)(
         withStoppedWriter(workspaceId, record.handle, discardOrphan(service, workspaceId)),
       );

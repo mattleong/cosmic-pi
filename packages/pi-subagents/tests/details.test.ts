@@ -265,6 +265,29 @@ describe("persisted subagent details version 2", () => {
     expect(decoded).toEqual(details);
     expect(Object.isFrozen(decoded)).toBe(true);
   });
+
+  it("persists a worktree writer's workspace outcome at every density", () => {
+    const outcomes = [
+      { status: "auto-discarded" },
+      { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 },
+    ] as const;
+    for (const workspaceOutcome of outcomes) {
+      const writer: SubagentRunView = {
+        ...run(),
+        writeIntent: "writer",
+        writerWorkspaceMode: "worktree",
+        workspaceId: "ws-1",
+        workspaceOutcome,
+      };
+      for (const density of ["full", "compact", "minimal"] as const)
+        expect(projectSubagentRunCard(writer, density).workspaceOutcome).toEqual(workspaceOutcome);
+      const details = compactToolDetails({ action: "status", runs: [writer] });
+      const decoded = decodeCompactToolDetails(details);
+      expect(
+        decoded?.action === "models" ? undefined : decoded?.cards[0]?.workspaceOutcome,
+      ).toEqual(workspaceOutcome);
+    }
+  });
 });
 
 const auditedRun = (offender: boolean): SubagentRunView => ({

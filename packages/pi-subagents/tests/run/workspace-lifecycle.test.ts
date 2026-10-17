@@ -82,6 +82,39 @@ describe("writer workspace lifecycle", () => {
     });
   });
 
+  it.effect("a mode switch leaves existing writers' revisions and retries in worktrees", () => {
+    const f = workspaceFixture();
+    return withService(f.layer, function* (service) {
+      const active = yield* service.start(repoWriter());
+      const completed = yield* completedWriter(service, f);
+      const failed = yield* failedWriter(service, f);
+      yield* service.setWriterWorkspaceMode("shared-checkout", Effect.void);
+      expect(yield* service.inspectWriterWorkspace).toEqual({
+        mode: "shared-checkout",
+        unresolvedWorkspaceCount: 3,
+      });
+      expect(yield* service.status(active.id)).toMatchObject({
+        writerWorkspaceMode: "worktree",
+        workspaceId: active.workspaceId,
+      });
+      const revised = yield* service.workspaceRevise(completed.workspaceId!, "Cover the edge.");
+      expect(revised).toMatchObject({
+        cwd: completed.cwd,
+        workspaceId: completed.workspaceId,
+        writerWorkspaceMode: "worktree",
+      });
+      const retried = yield* retry(service, failed);
+      expect(retried.writerWorkspaceMode).toBe("worktree");
+      expect(retried.workspaceId).toBeDefined();
+      expect(retried.workspaceId).not.toBe(failed.workspaceId);
+      expect(f.entries.size).toBe(4);
+      expect(yield* service.start(repoWriter())).toMatchObject({
+        cwd: "/repo",
+        writerWorkspaceMode: "shared-checkout",
+      });
+    });
+  });
+
   it.effect("route retry refuses to fork from an integrated workspace", () => {
     const f = workspaceFixture();
     return withService(f.layer, function* (service) {

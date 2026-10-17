@@ -4,7 +4,7 @@ import { isTerminalRunState } from "../run/model.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 import { cleanupRecoveryText, OUTSIDE_WORKSPACE_RESUME_GUIDANCE } from "./format.ts";
-import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
+import { countLabel, failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
 
 type AddIssue = (
   severity: CompactIssue["severity"],
@@ -32,6 +32,7 @@ const cardLabel = (card: Pick<SubagentRunCard, "id" | "name">) =>
   (card.name === card.id ? "Subagent" : card.name).slice(0, 60);
 
 export const hasChangesToReview = (card: SubagentRunCard): boolean =>
+  card.workspaceOutcome?.status !== "auto-discarded" &&
   (Boolean(card.finalText) || card.finalTextTruncated === true) &&
   card.writeIntent === "writer" &&
   (card.writerWorkspaceMode === "worktree" || Boolean(card.workspaceId));
@@ -350,14 +351,38 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
   reportEvidenceIssues(card, label, add);
 }
 
-function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
-  if (hasChangesToReview(card))
+function workspaceOutcomeIssue(card: SubagentRunCard, label: string, add: AddIssue): void {
+  const outcome = card.workspaceOutcome;
+  if (outcome?.status === "auto-discarded") {
     add(
       "info",
-      "workspace-approval",
-      `${label}: changes are ready for review`,
-      "A report does not approve workspace integration.",
+      "workspace-outcome",
+      `${label}: workspace discarded automatically, no changes`,
+      "The writer changed no files, so its workspace was discarded after cleanup. Nothing needs review.",
     );
+    return;
+  }
+  if (outcome === undefined && !hasChangesToReview(card)) return;
+  const workspace = card.workspaceId ? ` workspaceId=${card.workspaceId}` : "";
+  add(
+    "info",
+    outcome ? "workspace-outcome" : "workspace-approval",
+    outcome
+      ? `${label}: ${countLabel(outcome.changedFileCount, "changed file")}${outcome.uncapturedFileCount ? ` (+${outcome.uncapturedFileCount} uncaptured)` : ""} proposed; apply or review`
+      : `${label}: changes are ready for review`,
+    [
+      `Apply small or trusted changes with subagent_workspace action=apply${workspace}; for risky ones, review every diff page, prepare, test, and integrate. A report does not approve workspace integration.`,
+      ...(outcome?.uncapturedFileCount
+        ? [
+            "Uncaptured files, such as .env or vendored code, are not part of the proposal and stay in the worker tree.",
+          ]
+        : []),
+    ].join("\n"),
+  );
+}
+
+function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
+  workspaceOutcomeIssue(card, label, add);
   const clipped =
     (card.finalTextTruncated === true && card.finalText !== undefined) ||
     (card.errorTruncated === true && card.error !== undefined);

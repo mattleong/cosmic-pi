@@ -29,6 +29,14 @@ test.each(["compact"] as const)(
           error: "PRIVATE_STACK_TRACE",
           retryAvailable: true,
         },
+        {
+          id: "PRIVATE_RUN_ID_WRITER",
+          name: "Writer",
+          generation: 1,
+          outcome: "completed",
+          finalText: "Done.",
+          workspaceOutcome: { status: "proposal", changedFileCount: 2 },
+        },
       ],
     });
     notify({
@@ -59,7 +67,8 @@ test.each(["compact"] as const)(
               : "AGENT_QUESTION",
           ),
         ).toBe(expanded);
-        if (!expanded) expect(text).not.toMatch(/subagent_reply|subagent_lifecycle/);
+        if (!expanded)
+          expect(text).not.toMatch(/subagent_reply|subagent_lifecycle|subagent_workspace/);
         expect(JSON.stringify(message)).toBe(before);
       }
       const history = render(

@@ -5,10 +5,7 @@ import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
 import { workspaceControlContext } from "../../src/run/workspace-binding.ts";
 import { workspaceOrphanOperations } from "../../src/run/workspace-orphan.ts";
 import * as Clock from "effect/Clock";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import { CrossProcessLock } from "pi-cosmic-core";
@@ -24,21 +21,12 @@ import {
   exists,
   failureOf,
   io,
+  openWorkspaceService,
   temporaryDirectory,
   workspaceTarget,
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
-
-const openService = (agentDirectory: string) =>
-  Effect.gen(function* () {
-    const scope = yield* Scope.make();
-    const context = yield* Layer.buildWithScope(WorkspaceService.layer({ agentDirectory }), scope);
-    return {
-      service: Context.get(context, WorkspaceService),
-      close: Scope.close(scope, Exit.void),
-    };
-  });
 
 for (const replaced of [false, true]) {
   it.live(
@@ -50,7 +38,7 @@ for (const replaced of [false, true]) {
         const agent = path.join(temporary, "agent");
         yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
         yield* commitRepository(source, [["pkg/main.ts", "baseline\n"]]);
-        const creator = yield* openService(agent);
+        const creator = yield* openWorkspaceService(agent);
         const handle = yield* creator.service.create({
           sourceCwd: path.join(source, "pkg"),
           ownerId: "old/root",
@@ -73,13 +61,12 @@ for (const replaced of [false, true]) {
           expect((yield* leases.canonicalize(handle.cwd)).digest).not.toBe(identity.digest);
         }
         yield* creator.close;
-        const successor = yield* openService(agent);
+        const successor = yield* openWorkspaceService(agent);
         const context = workspaceControlContext({
           ownerScope: yield* Scope.Scope,
           records: new Map(),
           withLock: (effect) => effect,
           writerLeases: leases,
-          writerPools: { size: 0 },
           engine: successor.service,
           initialMode: "worktree",
           ownerId: "new",
@@ -110,7 +97,7 @@ it.live(
       const agent = path.join(temporary, "agent");
       yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
       yield* commitRepository(source, [["main.ts", "baseline\n"]]);
-      const creator = yield* openService(agent);
+      const creator = yield* openWorkspaceService(agent);
       const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       const target = workspaceTarget(handle);
       const revision = yield* creator.service.freeze(target);
@@ -119,7 +106,7 @@ it.live(
         revisionId: revision.revisionId,
       });
       yield* creator.close;
-      const successor = yield* openService(agent);
+      const successor = yield* openWorkspaceService(agent);
       const registry = path.join(agent, "git-workspaces");
       const lockDirectory = workspaceLockDirectory(registry);
       const verified = yield* Deferred.make<void>();
@@ -135,7 +122,6 @@ it.live(
           canonicalize: (cwd) =>
             leases.canonicalize(cwd).pipe(Effect.tap(() => Deferred.succeed(verified, undefined))),
         },
-        writerPools: { size: 0 },
         engine: successor.service,
         initialMode: "worktree",
         ownerId: "new",
@@ -183,10 +169,10 @@ it.live(
       const agent = path.join(temporary, "agent");
       yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
       yield* commitRepository(source, [["main.ts", "baseline\n"]]);
-      const creator = yield* openService(agent);
+      const creator = yield* openWorkspaceService(agent);
       const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       yield* writeFile(path.join(handle.cwd, "main.ts"), "unreviewed\n");
-      const successor = yield* openService(agent);
+      const successor = yield* openWorkspaceService(agent);
       const target = { workspaceId: handle.workspaceId };
       expect((yield* failureOf(successor.service.discardOrphan(target))).operation).toBe(
         "authorization",

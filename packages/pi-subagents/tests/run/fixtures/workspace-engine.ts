@@ -5,12 +5,17 @@ import {
   type WriterLeaseContract,
   WriterLeaseService,
 } from "../../../src/boundary/writer-lease.ts";
+import { isWithin } from "../../../src/run/workspace-binding.ts";
 import {
   WorkspaceError,
+  workspaceCheckoutRoot,
   type UnavailableWorkspaceArtifact,
   type WorkspaceIntegrationTarget,
+  type WorkspaceQuarantineObserver,
   type WorkspaceRecord,
   type WorkspaceTarget,
+  type WorkspaceVerifyTarget,
+  type WorkspaceWorkerChanges,
 } from "../../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/workspace/service.ts";
 import type { StartSubagentRequest } from "../../../src/run/model.ts";
@@ -50,16 +55,42 @@ export const leasesWith = (override: (base: WriterLeaseContract) => Partial<Writ
     ),
   ).pipe(Layer.provide(fakeWriterLeaseLayer()));
 
-type GatedOperation = "freeze" | "prepare" | "discard";
+type GatedOperation =
+  | "create"
+  | "freeze"
+  | "prepare"
+  | "discard"
+  | "setup"
+  | "verify"
+  | "inspectWorkerChanges";
 
 interface EngineHooks {
   afterCreate: Effect.Effect<void>;
   orphanOwnerEnded?: boolean;
   createFailure?: WorkspaceError;
   setupFailure?: WorkspaceError | undefined;
+  verifyFailure?: WorkspaceError | undefined;
+  verifyOutputTail: string;
+  workerChanges: WorkspaceWorkerChanges | WorkspaceError;
   before: { [Operation in GatedOperation]?: Effect.Effect<void> | undefined };
   failDiscard: boolean;
 }
+
+// Like the real engine, a command's quarantine clears unless its cleanup is unconfirmed, and an
+// interrupted command is modeled as confirmed stopped.
+const quarantined = <A>(
+  observer: WorkspaceQuarantineObserver,
+  effect: Effect.Effect<A, WorkspaceError>,
+) =>
+  effect.pipe(
+    Effect.tapError((error) =>
+      Effect.sync(() => {
+        if (!error.cleanupUnconfirmed) observer.onQuarantineCleared?.();
+      }),
+    ),
+    Effect.tap(() => Effect.sync(() => observer.onQuarantineCleared?.())),
+    Effect.onInterrupt(() => Effect.sync(() => observer.onQuarantineCleared?.())),
+  );
 
 export const pauseAt = Effect.gen(function* () {
   const entered = yield* Deferred.make<void>();
@@ -76,6 +107,12 @@ export const gateCreate = (f: ReturnType<typeof workspaceFixture>) =>
       }),
     ),
   );
+
+const finished = (entry: WorkspaceRecord) =>
+  entry.status === "integrated" || entry.status === "discarded";
+
+const refuse = (operation: string, message: string) =>
+  Effect.fail(new WorkspaceError({ operation, message }));
 
 export function workspaceFixture({
   sourceCwd = "/repo",
@@ -94,10 +131,18 @@ export function workspaceFixture({
   readonly workspaceSetup?: { readonly command: ReadonlyArray<string> };
   readonly serviceOptions?: SubagentServiceOptions;
 } = {}) {
-  const hooks: EngineHooks = { afterCreate: Effect.void, before: {}, failDiscard: false };
+  const hooks: EngineHooks = {
+    afterCreate: Effect.void,
+    verifyOutputTail: "verified",
+    // Like the revisions it freezes, the fixture's worker tree has changed by default.
+    workerChanges: { changedPaths: ["file.ts"], uncapturedPaths: [] },
+    before: {},
+    failDiscard: false,
+  };
   const gated = <A, E>(operation: GatedOperation, effect: Effect.Effect<A, E>) =>
     Effect.suspend(() => hooks.before[operation] ?? Effect.void).pipe(Effect.andThen(effect));
   const integrations: WorkspaceIntegrationTarget[] = [];
+  const verifications: WorkspaceVerifyTarget[] = [];
   const entries = new Map<string, WorkspaceRecord>();
   const unavailable: UnavailableWorkspaceArtifact[] = [];
   const requireEntry = (target: WorkspaceTarget) =>
@@ -107,22 +152,83 @@ export function workspaceFixture({
         return yield* new WorkspaceError({ operation: "inspect", message: "Unknown owner" });
       return entry;
     });
+  const requirePreparation = (target: WorkspaceVerifyTarget) =>
+    requireEntry(target).pipe(
+      Effect.filterOrFail(
+        (entry) =>
+          entry.status === "prepared" && entry.preparation?.preparationId === target.preparationId,
+        () =>
+          new WorkspaceError({
+            operation: "verify",
+            message: "The verification tree is stale or unavailable.",
+          }),
+      ),
+    );
+  // Like the real engine, children are the unfinished workspaces created from a worker tree.
+  const childrenOf = (workspaceId: string) =>
+    [...entries.values()].flatMap((entry) =>
+      entry.handle.sourceWorkspaceId === workspaceId && !finished(entry)
+        ? [entry.handle.workspaceId]
+        : [],
+    );
+  // A nested workspace prepares and integrates only into a still-open source worker tree.
+  const requireOpenSource = (entry: WorkspaceRecord, operation: string) => {
+    const sourceId = entry.handle.sourceWorkspaceId;
+    const source = sourceId === undefined ? undefined : entries.get(sourceId);
+    return sourceId === undefined ||
+      (source && ["active", "frozen", "prepared"].includes(source.status))
+      ? Effect.succeed(entry)
+      : refuse(operation, "The source workspace's worker tree is no longer open.");
+  };
+  // Like the real engine, a private source must be the named source workspace's active worker tree.
+  const nestedSource = (input: Parameters<WorkspaceServiceContract["create"]>[0]) =>
+    Effect.gen(function* () {
+      const named = input.sourceWorkspace;
+      if (!named) {
+        if (input.sourceCwd.startsWith("/private/"))
+          return yield* refuse(
+            "create",
+            "The session directory is inside private workspace storage.",
+          );
+        return { sourceRoot: input.sourceCwd };
+      }
+      const parent = entries.get(named.workspaceId);
+      if (
+        !parent ||
+        parent.handle.ownerId !== named.ownerId ||
+        parent.status !== "active" ||
+        !isWithin(input.sourceCwd, parent.handle.cwd)
+      )
+        return yield* refuse(
+          "create",
+          "The session directory isn't the source workspace's worker tree.",
+        );
+      return {
+        sourceRoot: parent.handle.cwd,
+        sourceWorkspaceId: parent.handle.workspaceId,
+        checkoutRoot: workspaceCheckoutRoot(parent.handle),
+      };
+    });
   let ordinal = 0;
   let revisions = 0;
   let preparations = 0;
   const engineFor = (leases: WriterLeaseContract): WorkspaceServiceContract => {
     const create: WorkspaceServiceContract["create"] = (input) =>
-      Effect.suspend(() =>
-        hooks.createFailure ? Effect.fail(hooks.createFailure) : Effect.void,
+      gated(
+        "create",
+        Effect.suspend(() =>
+          hooks.createFailure ? Effect.fail(hooks.createFailure) : Effect.void,
+        ),
       ).pipe(
-        Effect.andThen(
+        Effect.andThen(nestedSource(input)),
+        Effect.flatMap((source) =>
           Effect.gen(function* () {
             const workspaceId = `workspace-${++ordinal}`;
             const handle = {
               workspaceId,
               ownerId: input.ownerId,
               sourceCwd: input.sourceCwd,
-              sourceRoot: input.sourceCwd,
+              ...source,
               cwd: `/private/${workspaceId}/worker`,
               writerCwd: yield* leases
                 .canonicalize(`/private/${workspaceId}/worker`)
@@ -146,10 +252,47 @@ export function workspaceFixture({
       );
     return {
       create,
-      setup: () =>
-        Effect.suspend(() => (hooks.setupFailure ? Effect.fail(hooks.setupFailure) : Effect.void)),
+      setup: (input) =>
+        quarantined(
+          input,
+          gated(
+            "setup",
+            Effect.suspend(() =>
+              hooks.setupFailure ? Effect.fail(hooks.setupFailure) : Effect.void,
+            ),
+          ),
+        ),
+      // Like the real engine, a failed verification keeps the preparation.
+      verify: (input) =>
+        quarantined(
+          input,
+          requirePreparation(input).pipe(
+            Effect.tap(() => Effect.sync(() => verifications.push(input))),
+            Effect.andThen(
+              gated(
+                "verify",
+                Effect.suspend(() =>
+                  hooks.verifyFailure
+                    ? Effect.fail(hooks.verifyFailure)
+                    : Effect.succeed({ outputTail: hooks.verifyOutputTail }),
+                ),
+              ),
+            ),
+          ),
+        ),
       setupChanges: () => Effect.succeed([]),
+      inspectWorkerChanges: (target) =>
+        gated("inspectWorkerChanges", requireEntry(target)).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              hooks.workerChanges instanceof WorkspaceError
+                ? Effect.fail(hooks.workerChanges)
+                : Effect.succeed(hooks.workerChanges),
+            ),
+          ),
+        ),
       inspect: requireEntry,
+      unresolvedChildren: ({ workspaceId }) => Effect.sync(() => childrenOf(workspaceId)),
       list: ({ ownerId }) =>
         Effect.sync(() =>
           [...entries.values()].filter((entry) => entry.handle.ownerId === ownerId),
@@ -177,6 +320,7 @@ export function workspaceFixture({
         ),
       prepare: (target) =>
         gated("prepare", requireEntry(target)).pipe(
+          Effect.flatMap((entry) => requireOpenSource(entry, "prepare")),
           Effect.map((entry) => {
             const preparationId = `prepared-${++preparations}`;
             const preparation = {
@@ -191,6 +335,7 @@ export function workspaceFixture({
         ),
       integrate: (target) =>
         requireEntry(target).pipe(
+          Effect.flatMap((entry) => requireOpenSource(entry, "integrate")),
           Effect.map((entry) => {
             integrations.push(target);
             const integrated = { ...entry, status: "integrated" as const };
@@ -214,17 +359,25 @@ export function workspaceFixture({
         ),
       fork: (target) =>
         requireEntry(target).pipe(
-          Effect.flatMap((entry) =>
-            create({
+          Effect.flatMap((entry) => {
+            const sourceId = entry.handle.sourceWorkspaceId;
+            const source = sourceId === undefined ? undefined : entries.get(sourceId);
+            return create({
               sourceCwd: entry.handle.sourceCwd,
               ownerId: entry.handle.ownerId,
+              sourceWorkspace: source && {
+                workspaceId: source.handle.workspaceId,
+                ownerId: source.handle.ownerId,
+              },
               onAcquired: target.onAcquired,
-            }),
-          ),
+            });
+          }),
         ),
       discardOrphan: ({ workspaceId }) =>
         Effect.suspend(() => {
           const entry = entries.get(workspaceId);
+          if (childrenOf(workspaceId).length > 0)
+            return refuse("discard", "Unresolved child workspaces use this worker tree.");
           if (!entry || !hooks.orphanOwnerEnded)
             return Effect.fail(
               new WorkspaceError({
@@ -238,13 +391,15 @@ export function workspaceFixture({
       discard: (target) =>
         gated("discard", requireEntry(target)).pipe(
           Effect.flatMap((entry) =>
-            hooks.failDiscard
-              ? Effect.fail(
-                  new WorkspaceError({ operation: "discard", message: "Fixture failure" }),
-                )
-              : Effect.sync(() => {
-                  entries.set(target.workspaceId, { ...entry, status: "discarded" });
-                }),
+            childrenOf(target.workspaceId).length > 0
+              ? refuse("discard", "Unresolved child workspaces use this worker tree.")
+              : hooks.failDiscard
+                ? Effect.fail(
+                    new WorkspaceError({ operation: "discard", message: "Fixture failure" }),
+                  )
+                : Effect.sync(() => {
+                    entries.set(target.workspaceId, { ...entry, status: "discarded" });
+                  }),
           ),
         ),
     };
@@ -260,23 +415,20 @@ export function workspaceFixture({
       onAcquire: (lease) => acquired.push(lease.canonicalCwd),
       onRelease: (lease) => released.push(lease.canonicalCwd),
     });
-  const layer = serviceLayer(
-    {
-      ...serviceOptions,
-      writerWorkspaceMode: "worktree",
-      workspaceOwnerId: "session-1",
-      workspaceSourceCwd: sourceCwd,
-      workspaceSetup,
-    },
-    profiles,
-    leaseLayer,
-  ).pipe(
+  const options: SubagentServiceOptions = {
+    ...serviceOptions,
+    writerWorkspaceMode: "worktree",
+    workspaceOwnerId: "session-1",
+    workspaceSourceCwd: sourceCwd,
+    workspaceSetup,
+  };
+  const engineLayer = Layer.effect(
+    WorkspaceService,
+    Effect.map(WriterLeaseService, engineFor),
+  ).pipe(Layer.provide(leaseLayer));
+  const layer = serviceLayer(options, profiles, leaseLayer).pipe(
     Layer.provide(children.layer),
-    Layer.provide(
-      Layer.effect(WorkspaceService, Effect.map(WriterLeaseService, engineFor)).pipe(
-        Layer.provide(leaseLayer),
-      ),
-    ),
+    Layer.provide(engineLayer),
   );
   const statuses = () => [...entries.values()].map((entry) => entry.status);
   return {
@@ -284,11 +436,16 @@ export function workspaceFixture({
     unavailable,
     children,
     layer,
+    /** For a service over other backends: its options, writer leases, and this engine. */
+    options,
+    leaseLayer,
+    engineLayer,
     acquired,
     released,
     canonicalized,
     hooks,
     integrations,
+    verifications,
     statuses,
   };
 }

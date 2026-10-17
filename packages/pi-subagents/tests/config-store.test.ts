@@ -127,6 +127,34 @@ describe("SubagentConfigStore activation", () => {
     }),
   );
 
+  it.effect("activates a trusted project's verification command and refuses a global one", () =>
+    Effect.gen(function* () {
+      const workspaceVerify = { command: ["pnpm", "validate"], timeoutSeconds: 900 };
+      const { store } = yield* setup({
+        [GLOBAL]: v6({}),
+        [PROJECT]: { version: 6, workspaceSetup: { command: ["pnpm", "install"] } },
+      });
+      expect((yield* store.load(CWD, AGENT, true)).workspaceVerify).toBeUndefined();
+
+      const trusted = yield* setup({
+        [GLOBAL]: v6({}),
+        [PROJECT]: { version: 6, workspaceVerify },
+      });
+      expect((yield* trusted.store.load(CWD, AGENT, true)).workspaceVerify).toEqual(
+        workspaceVerify,
+      );
+      expect((yield* trusted.store.load(CWD, AGENT, false)).workspaceVerify).toBeUndefined();
+
+      const global = yield* setup({ [GLOBAL]: { version: 6, workspaceVerify } });
+      yield* rejects(global.store.load(CWD, AGENT, true), "activate", GLOBAL);
+      const invalid = yield* setup({
+        [GLOBAL]: v6({}),
+        [PROJECT]: { version: 6, workspaceVerify: { command: ["pnpm"], timeoutSeconds: 0 } },
+      });
+      yield* rejects(invalid.store.load(CWD, AGENT, true), "activate", PROJECT);
+    }),
+  );
+
   it.effect("fails activation closed on an unreadable document", () =>
     Effect.gen(function* () {
       const unreadable = Layer.succeed(

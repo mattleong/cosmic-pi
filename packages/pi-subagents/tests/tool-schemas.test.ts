@@ -2,12 +2,15 @@ import { validateToolArguments } from "@earendil-works/pi-ai";
 import { captureRegistrations } from "pi-code-previews/testing";
 import { toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
+import { WRITER_WORKSPACE_MODES } from "../src/config/schema.ts";
 import { toolDefinitions as supervisorToolDefinitions } from "../src/supervisor/mcp-wire.ts";
 import {
   claimsOperationError,
   subagentArgumentPreparer,
   SUBAGENT_TOOL_SCHEMAS,
+  workspaceOperationError,
 } from "../src/tools/schema.ts";
+import { replacementField } from "../src/tools/arguments.ts";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
 
 const registeredTools = (nested: boolean) =>
@@ -54,6 +57,48 @@ describe("subagent argument preparation", () => {
         { type: "toolCall", id: "call", name: "subagent_start", arguments: prepared },
       ),
     ).toEqual(prepared);
+  });
+
+  it("rejects an unknown isolation value and names the allowed modes", () => {
+    const rejected = () => prepareStart({ agents: [{ task: "Edit", isolation: "sandbox" }] });
+    expect(rejected).toThrow(/\[invalid_arguments\]/u);
+    expect(rejected).toThrow(
+      new RegExp(`isolation[^\\n]*${WRITER_WORKSPACE_MODES.join(", ")}`, "u"),
+    );
+  });
+
+  it("suggests isolation for workspace-style start keys", () => {
+    const accepted = Object.keys(
+      SUBAGENT_TOOL_SCHEMAS.subagent_start.parameters.properties.agents.items.properties,
+    );
+    for (const key of ["workspace", "worktree", "workspace_mode", "writerWorkspaceMode"])
+      expect(replacementField(key, accepted)).toBe("isolation");
+  });
+});
+
+describe("workspace apply arguments", () => {
+  const prepareWorkspace = subagentArgumentPreparer("subagent_workspace");
+
+  it("accepts a workspace with an optional revision pin", () => {
+    for (const args of [
+      { action: "apply", workspaceId: "ws-1" },
+      { action: "apply", workspaceId: "ws-1", revisionId: "rev-1" },
+    ] as const) {
+      expect(prepareWorkspace(args)).toEqual(args);
+      expect(workspaceOperationError(args)).toBeUndefined();
+    }
+  });
+
+  it("rejects a missing workspace and fields that belong to other actions", () => {
+    expect(() => prepareWorkspace({ action: "apply", workspaceId: "ws-1", force: true })).toThrow(
+      /\[invalid_arguments\]/u,
+    );
+    for (const args of [
+      { action: "apply" },
+      { action: "apply", workspaceId: "ws-1", preparationId: "prep-1" },
+      { action: "apply", workspaceId: "ws-1", message: "Ship it." },
+    ] as const)
+      expect(workspaceOperationError(args)).toEqual(expect.any(String));
   });
 });
 

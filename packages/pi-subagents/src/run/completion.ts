@@ -64,6 +64,7 @@ const completionNotification = (
     ...(completion.warning && { warning: completion.warning }),
     ...(record.view.profile && { profile: record.view.profile }),
     ...(retryAvailable && { retryAvailable: true, remainingCandidateCount }),
+    ...(record.view.workspaceOutcome && { workspaceOutcome: record.view.workspaceOutcome }),
   };
 };
 

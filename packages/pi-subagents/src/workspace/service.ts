@@ -15,18 +15,29 @@ import type {
   WorkspaceListing,
   WorkspaceOrphanTarget,
   WorkspacePreparation,
+  WorkspaceQuarantineObserver,
   WorkspaceRecord,
   WorkspaceRevision,
   WorkspaceRevisionTarget,
   WorkspaceSettledTarget,
   WorkspaceSetupTarget,
   WorkspaceTarget,
+  WorkspaceTreeCommand,
+  WorkspaceVerification,
+  WorkspaceVerifyTarget,
+  WorkspaceWorkerChanges,
 } from "./model.ts";
 
 export interface WorkspaceServiceContract {
+  /**
+   * Snapshots `sourceCwd` into a new workspace. A source inside private workspace storage must be
+   * `sourceWorkspace`'s live, active worker tree or a directory in it; the new workspace then
+   * integrates into that tree, and the source's worker tree is kept until it is resolved.
+   */
   readonly create: (input: {
     readonly sourceCwd: string;
     readonly ownerId: string;
+    readonly sourceWorkspace?: WorkspaceTarget | undefined;
     readonly onAcquired?: WorkspaceAcquired | undefined;
   }) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly freeze: (
@@ -47,15 +58,36 @@ export interface WorkspaceServiceContract {
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
   /** Discards a workspace whose creating session provably ended; the caller proves its writer stopped. */
   readonly discardOrphan: (target: WorkspaceOrphanTarget) => Effect.Effect<void, WorkspaceError>;
-  /** Runs setup with durable process-cleanup quarantine, including across owner shutdown. */
+  /**
+   * Runs setup with durable process-cleanup quarantine, including across owner shutdown. A failure
+   * without `cleanupUnconfirmed` leaves no quarantine; a failed or interrupted preparation setup
+   * withdraws that preparation.
+   */
   readonly setup: (
-    target: WorkspaceSetupTarget & { readonly setup: WorkspaceSetup },
+    target: WorkspaceSetupTarget & WorkspaceQuarantineObserver & { readonly setup: WorkspaceSetup },
   ) => Effect.Effect<void, WorkspaceError>;
+  /**
+   * Runs a verification command in a prepared tree under the same quarantine as setup, then
+   * requires the tree unchanged apart from ignored or excluded files. Failure keeps the
+   * preparation and carries the output tail in `detail`.
+   */
+  readonly verify: (
+    target: WorkspaceVerifyTarget &
+      WorkspaceQuarantineObserver & { readonly verify: WorkspaceTreeCommand },
+  ) => Effect.Effect<WorkspaceVerification, WorkspaceError>;
   /** Paths a setup command changed relative to the tree it ran in. */
   readonly setupChanges: (
     target: WorkspaceSetupTarget,
   ) => Effect.Effect<ReadonlyArray<string>, WorkspaceError>;
+  /** Compares the worker tree with its baseline without freezing or saving anything. */
+  readonly inspectWorkerChanges: (
+    target: WorkspaceSettledTarget,
+  ) => Effect.Effect<WorkspaceWorkerChanges, WorkspaceError>;
   readonly inspect: (target: WorkspaceTarget) => Effect.Effect<WorkspaceRecord, WorkspaceError>;
+  /** Workspaces created from this one's worker tree that are neither integrated nor discarded. */
+  readonly unresolvedChildren: (
+    target: WorkspaceOrphanTarget,
+  ) => Effect.Effect<ReadonlyArray<string>, WorkspaceError>;
   readonly list: (input: {
     readonly ownerId: string;
   }) => Effect.Effect<ReadonlyArray<WorkspaceRecord>, WorkspaceError>;
@@ -108,10 +140,16 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           fork: (input) => run(engine.fork(input)),
           discard: (input) => run(engine.discard(input)),
           discardOrphan: (input) => run(engine.discardOrphan(input)),
-          // Setup takes the permit only around its record changes, never while its command runs.
+          // Setup and verify take the permit only around their record changes, never while their
+          // command runs.
           setup: (input) => provided(engine.setup(input)),
+          verify: (input) => provided(engine.verify(input)),
           setupChanges: (input) => run(engine.setupChanges(input)),
+          inspectWorkerChanges: (input) => run(engine.inspectWorkerChanges(input)),
           inspect: (input) => run(engine.inspect(input)),
+          // A lock-free listing: callers check it under the run lock, so it never waits behind
+          // engine work, and this process's in-flight creates are tracked by their launches.
+          unresolvedChildren: (input) => provided(engine.unresolvedChildren(input)),
           list: (input) => run(engine.list(input)),
           listAll: run(engine.listAll),
         });

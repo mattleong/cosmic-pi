@@ -194,10 +194,33 @@ const infoExcludePath = (repository: string) =>
     Effect.map(([file = ""]) => file),
   );
 
-/** The ignore rules Git applies in `root`, after checking that Git can read each file. */
-const readableIgnoreRules = (root: string) =>
+// preserveIgnoreRules records a private repository's excludes file in its own config. Reading it
+// back with the isolated Git configuration keeps the user's include, includeIf and global excludes
+// resolution away from private repositories and their trees.
+const privateExcludesFile = (repository: string) =>
+  git(repository, ["config", "--local", "--get", "core.excludesFile"]).pipe(
+    Effect.map((value) => value.replace(/\n$/u, "")),
+    Effect.catchIf(
+      (error) => !error.cleanupUnconfirmed,
+      () =>
+        workspaceRefusal("snapshot", "A private workspace's ignore rules couldn't be read.", {
+          path: repository,
+          rule: "a private workspace repository records its source's excludes file as core.excludesFile",
+          remedy:
+            "Integrate or discard the source workspace and start the writer from the real checkout.",
+        }),
+    ),
+  );
+
+/**
+ * The ignore rules Git applies in `root`, after checking that Git can read each file. A private
+ * repository or tree uses only the rules recorded in its repository.
+ */
+const readableIgnoreRules = (root: string, privateRepository = false) =>
   Effect.gen(function* () {
-    const excludesFile = yield* repositoryExcludesFile(root);
+    const excludesFile = privateRepository
+      ? yield* privateExcludesFile(root)
+      : yield* repositoryExcludesFile(root);
     // An empty value disables the excludes file; a relative one is relative to the checkout.
     if (excludesFile) yield* readIgnoreFile(path.resolve(root, excludesFile));
     const infoExclude = yield* readIgnoreFile(yield* infoExcludePath(root));
@@ -206,13 +229,17 @@ const readableIgnoreRules = (root: string) =>
 
 /**
  * Gives a new private repository the ignore rules Git applies in `origin` (the source checkout,
- * or a predecessor's private repository for a fork), so worker and prepared trees ignore what the
- * source ignores: its info/exclude and its effective excludes file, which repository-local config
- * keeps ahead of the user's global configuration.
+ * or a predecessor's or source workspace's private repository), so worker and prepared trees
+ * ignore what the source ignores: its info/exclude and its effective excludes file, which
+ * repository-local config keeps ahead of the user's global configuration.
  */
-export const preserveIgnoreRules = (repository: string, origin: string) =>
+export const preserveIgnoreRules = (
+  repository: string,
+  origin: string,
+  options: { readonly privateOrigin?: boolean } = {},
+) =>
   Effect.gen(function* () {
-    const { excludesFile, infoExclude } = yield* readableIgnoreRules(origin);
+    const { excludesFile, infoExclude } = yield* readableIgnoreRules(origin, options.privateOrigin);
     const info = path.join(repository, "info");
     yield* workspaceIO("create", () => fs.mkdir(info, { recursive: true, mode: 0o700 }));
     if (infoExclude) yield* writeWorkspaceFile(path.join(info, "exclude"), infoExclude, 0o600);
@@ -476,6 +503,8 @@ export interface CaptureOptions {
   readonly requiredPaths?: ReadonlyArray<string>;
   /** Refuse credential-like content the index doesn't already hold (source checkouts only). */
   readonly scanNewContent?: boolean;
+  /** `root` is a private workspace tree: apply only the ignore rules its repository records. */
+  readonly privateRepository?: boolean;
 }
 
 export const captureSnapshot = (
@@ -486,7 +515,7 @@ export const captureSnapshot = (
 ) =>
   Effect.gen(function* () {
     const index = yield* readIndex(yield* gitFields(root, ["ls-files", "--stage", "-v", "-z"]));
-    const { excludesFile } = yield* readableIgnoreRules(root);
+    const { excludesFile } = yield* readableIgnoreRules(root, options.privateRepository);
     // The isolated Git reads no global configuration, so the user's excludes file is explicit.
     const untracked = yield* gitFields(root, [
       ...(excludesFile === undefined ? [] : ["-c", `core.excludesFile=${excludesFile}`]),

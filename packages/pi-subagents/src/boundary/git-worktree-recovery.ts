@@ -2,10 +2,11 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { SafeFile } from "pi-cosmic-core";
-import type {
-  UnavailableWorkspaceArtifact,
-  WorkspaceError,
-  WorkspaceRecord,
+import {
+  workspaceCheckoutRoot,
+  type UnavailableWorkspaceArtifact,
+  type WorkspaceError,
+  type WorkspaceRecord,
 } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
@@ -126,18 +127,43 @@ const inspectRegistry = (registry: string) =>
     return stat;
   });
 
+/** The most source-workspace links between a nested workspace and its real checkout. */
+export const MAX_WORKSPACE_NESTING = 8;
+
+export const workerTree = (registry: string, workspaceId: string) =>
+  path.join(workspaceDirectory(registry, workspaceId), "worker");
+
+// Each link must name a listed record whose worker tree is the child's source, and the chain must
+// end at the real checkout the record names, so a nested record is attributed to its checkout.
+const sourceChainResolves = (
+  registry: string,
+  record: WorkspaceRecord,
+  listed: ReadonlyMap<string, WorkspaceRecord>,
+) => {
+  let current = record;
+  for (let links = 0; links <= MAX_WORKSPACE_NESTING; links += 1) {
+    const sourceId = current.handle.sourceWorkspaceId;
+    if (sourceId === undefined)
+      return links === 0 || current.handle.sourceRoot === record.handle.checkoutRoot;
+    const source = listed.get(sourceId);
+    if (!source || current.handle.sourceRoot !== workerTree(registry, sourceId)) return false;
+    current = source;
+  }
+  return false;
+};
+
 export const listWorkspaceRecords = (registry: string) =>
   Effect.gen(function* () {
-    const records: WorkspaceRecord[] = [];
+    const read: WorkspaceRecord[] = [];
     const unavailable: UnavailableWorkspaceArtifact[] = [];
     const before = yield* inspectRegistry(registry);
-    if (!before) return { records, unavailable };
+    if (!before) return { records: read, unavailable };
     const names = yield* workspaceIO("registry", () => fs.readdir(registry));
     for (const workspaceId of names.filter(validWorkspaceId).toSorted()) {
       const record = yield* readWorkspaceRecord(registry, workspaceId).pipe(
         Effect.catchTag("WorkspaceError", () => Effect.void),
       );
-      if (record) records.push(record);
+      if (record) read.push(record);
       else
         unavailable.push({
           workspaceId,
@@ -148,16 +174,46 @@ export const listWorkspaceRecords = (registry: string) =>
     const after = yield* inspectRegistry(registry);
     if (!after || before.dev !== after.dev || before.ino !== after.ino)
       return yield* workspaceFailure("registry", "Workspace registry changed during listing.");
+    const listed = new Map(read.map((record) => [record.handle.workspaceId, record]));
+    const records: WorkspaceRecord[] = [];
+    for (const record of read)
+      if (sourceChainResolves(registry, record, listed)) records.push(record);
+      else
+        unavailable.push({
+          workspaceId: record.handle.workspaceId,
+          status: "unavailable",
+          reason: "source-workspace-unavailable",
+        });
     return { records, unavailable };
   });
+
+const finished = (record: WorkspaceRecord) =>
+  record.status === "discarded" || record.status === "integrated";
+
+/**
+ * Workspaces created from `workspaceId`'s worker tree that are neither integrated nor discarded.
+ * Unreadable records grant nothing and block nothing here; listing reports them separately.
+ */
+export const unresolvedChildWorkspaces = (registry: string, workspaceId: string) =>
+  listWorkspaceRecords(registry).pipe(
+    Effect.map(({ records }) =>
+      records
+        .filter((record) => record.handle.sourceWorkspaceId === workspaceId && !finished(record))
+        .map((record) => record.handle.workspaceId),
+    ),
+  );
 
 /** Discarded and integrated records stay this long for inspection, like delivered reports. */
 export const WORKSPACE_RECORD_RETENTION = Duration.days(7);
 
 const COLLECTED_PREFIX = ".collected-";
 
-const finished = (record: WorkspaceRecord) =>
-  record.status === "discarded" || record.status === "integrated";
+// A fork names its predecessor; a nested workspace names its source workspace, whose record its
+// listing attribution needs until the nested record is collected too.
+const references = (record: WorkspaceRecord) => [
+  ...(record.predecessorWorkspaceId === undefined ? [] : [record.predecessorWorkspaceId]),
+  ...(record.handle.sourceWorkspaceId === undefined ? [] : [record.handle.sourceWorkspaceId]),
+];
 
 const editableTree = (name: string) =>
   name === "worker" || name === "seed" || name.startsWith("prepare-");
@@ -179,12 +235,12 @@ const collectRecord = (registry: string, workspaceId: string, now: number) =>
   Effect.gen(function* () {
     const record = yield* readWorkspaceRecord(registry, workspaceId);
     if (!finished(record)) return false;
-    // Fork creation holds this source lock too. The pre-lock listing is only a candidate
-    // scan: a retry may have persisted a new predecessor reference while collection waited.
+    // Fork and nested creation hold this checkout's lock too. The pre-lock listing is only a
+    // candidate scan: a retry or nested writer may have persisted a new reference meanwhile.
     const current = yield* listWorkspaceRecords(registry);
     if (
       current.unavailable.length > 0 ||
-      current.records.some((entry) => entry.predecessorWorkspaceId === workspaceId)
+      current.records.some((entry) => references(entry).includes(workspaceId))
     )
       return false;
     const directory = workspaceDirectory(registry, workspaceId);
@@ -201,22 +257,23 @@ export interface WorkspaceCollection {
   readonly now: number;
   /** Records this session still owns are never collected. */
   readonly owned: (workspaceId: string) => boolean;
-  /** Runs under the source checkout's lock, or returns none while another session holds it. */
+  /** Runs under the real checkout's lock, or returns none while another session holds it. */
   readonly whenSourceFree: (
-    sourceRoot: string,
+    checkoutRoot: string,
     effect: Effect.Effect<boolean, WorkspaceError, SafeFile>,
   ) => Effect.Effect<Option.Option<boolean>, WorkspaceError, SafeFile>;
 }
 
 /**
  * Deletes discarded and integrated records once they are a week old, unless an editable tree
- * remains (such as a worker kept for files integration left out) or a later fork still names
- * the record as its predecessor. Unreadable artifacts are never touched.
+ * remains (such as a worker kept for files integration left out), a later fork still names the
+ * record as its predecessor, or a nested workspace names it as its source. Unreadable artifacts
+ * are never touched.
  */
 export const collectWorkspaceRecords = (registry: string, collection: WorkspaceCollection) =>
   Effect.gen(function* () {
     const { records } = yield* listWorkspaceRecords(registry);
-    const referenced = new Set(records.flatMap((record) => record.predecessorWorkspaceId ?? []));
+    const referenced = new Set(records.flatMap(references));
     const collected: string[] = [];
     for (const record of records) {
       const workspaceId = record.handle.workspaceId;
@@ -224,7 +281,7 @@ export const collectWorkspaceRecords = (registry: string, collection: WorkspaceC
         continue;
       const removed = yield* collection
         .whenSourceFree(
-          record.handle.sourceRoot,
+          workspaceCheckoutRoot(record.handle),
           collectRecord(registry, workspaceId, collection.now),
         )
         .pipe(

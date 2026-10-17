@@ -72,11 +72,13 @@ import { WriterPools } from "./writer-pool.ts";
 import { writeClaimControl } from "./write-claim-control.ts";
 import { workspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
 import { WorkspaceService } from "../workspace/service.ts";
-import type { WorkspaceSetup, WriterWorkspaceMode } from "../config/schema.ts";
+import type { WorkspaceSetup, WorkspaceVerify, WriterWorkspaceMode } from "../config/schema.ts";
 
 export interface SubagentServiceOptions {
   readonly writerWorkspaceMode?: WriterWorkspaceMode;
   readonly workspaceSetup?: WorkspaceSetup | undefined;
+  /** A trusted project's check that isolated writer trees must pass before their changes apply. */
+  readonly workspaceVerify?: WorkspaceVerify | undefined;
   readonly workspaceOwnerId?: string;
   readonly workspaceSourceCwd?: string;
   readonly publish?: (projection: SubagentProjection) => void;
@@ -344,6 +346,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     engine: Option.getOrUndefined(workspaceEngine),
     initialMode: options.writerWorkspaceMode ?? initialProfiles.effectiveConfig.writerWorkspaceMode,
     workspaceSetup: options.workspaceSetup,
+    workspaceVerify: options.workspaceVerify,
     ownerId: options.workspaceOwnerId ?? runtimeNamespace,
     ...(options.workspaceSourceCwd && { sourceCwd: options.workspaceSourceCwd }),
     isClosed: () => closed,
@@ -386,6 +389,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     delivery,
     closeRecordScope,
     claimTurnInputDrain,
+    settleCompletedWorkspace: workspaces.settleCompletedWorkspace,
   });
 
   const processControls = processControlOperations(withLock);
@@ -517,6 +521,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     workspacePrepare: workspaces.workspacePrepare,
     workspaceIntegrate: workspaces.workspaceIntegrate,
     workspaceDiscard: workspaces.workspaceDiscard,
+    workspaceApply: workspaces.workspaceApply,
     workspaceRevise: workspaces.revise(launch.start),
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
     setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,

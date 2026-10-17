@@ -45,6 +45,7 @@ const unexpectedService: SubagentServiceContract = {
   workspacePrepare: () => unexpected("workspacePrepare"),
   workspaceIntegrate: () => unexpected("workspaceIntegrate"),
   workspaceDiscard: () => unexpected("workspaceDiscard"),
+  workspaceApply: () => unexpected("workspaceApply"),
   workspaceRevise: () => unexpected("workspaceRevise"),
   inspectWriterWorkspace: unexpected("inspectWriterWorkspace"),
   setWriterWorkspaceMode: () => unexpected("setWriterWorkspaceMode"),

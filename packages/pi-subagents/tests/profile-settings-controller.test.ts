@@ -365,18 +365,15 @@ describe("profile settings controller", () => {
     yield* closeDashboard(fixture, running);
   });
 
-  effectTest("does not switch the workspace while the coordinator reports a blocker", function* () {
+  effectTest("changes the workspace default while workspaces remain unresolved", function* () {
     const fixture = setup();
     vi.mocked(fixture.managerActions.inspectWriterWorkspace).mockResolvedValue({
       mode: "worktree",
-      blockedReason: "Unresolved workspace ws-1 remains at /private/tmp/ws-1.",
-      blockedCode: "unresolved-workspace",
+      unresolvedWorkspaceCount: 2,
     });
     yield* step(() => fixture.settings("writerWorkspace shared-checkout"));
-    expect(fixture.managerActions.setWriterWorkspaceMode).not.toHaveBeenCalled();
-    const [message] = fixture.ui.notify.mock.calls.at(-1) ?? [];
-    expect(message).not.toMatch(/ws-1|\/private/u);
-    expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
+    expect(fixture.managerActions.setWriterWorkspaceMode).toHaveBeenCalledWith("shared-checkout");
+    expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "error");
   });
 
   effectTest("a change from a replaced session cannot change its successor", function* () {

@@ -1,18 +1,25 @@
 import * as Effect from "effect/Effect";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
-import type {
-  WorkspaceListing,
-  WorkspacePreparation,
-  WorkspaceRecord,
+import {
+  type WorkspaceListing,
+  type WorkspacePreparation,
+  type WorkspaceRecord,
+  workspaceCheckoutRoot,
 } from "../workspace/model.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
-import { isActiveRunState, SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
+import type { RunContext } from "./internal.ts";
+import { SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
 import {
   isWithin,
   workspaceControlContext,
   mapWorkspaceError,
   type WorkspaceControlDependencies,
 } from "./workspace-binding.ts";
+import {
+  workspaceApplyOperations,
+  type WorkspaceApplyOptions,
+  type WorkspaceApplyResult,
+} from "./workspace-apply.ts";
 import {
   workspaceIntegrationOperations,
   type WorkspaceIntegrationOutcome,
@@ -24,21 +31,13 @@ import {
   type WorkspaceReview,
   type WorkspaceReviewOptions,
 } from "./workspace-review.ts";
-
-export type WriterWorkspaceBlockCode =
-  | "writers-active"
-  | "records-unavailable"
-  | "unresolved-workspace";
-
-interface WorkspaceBlock {
-  readonly code: WriterWorkspaceBlockCode;
-  readonly reason: string;
-}
+import { workspaceSettleOperations } from "./workspace-settle.ts";
 
 export interface WriterWorkspaceInspection {
+  /** The default for writers whose start item doesn't set isolation. */
   readonly mode: WriterWorkspaceMode;
-  readonly blockedReason?: string;
-  readonly blockedCode?: WriterWorkspaceBlockCode;
+  /** Present when this checkout still has workspaces that are neither integrated nor discarded. */
+  readonly unresolvedWorkspaceCount?: number;
 }
 
 export interface WorkspaceCoordinatorContract {
@@ -59,6 +58,15 @@ export interface WorkspaceCoordinatorContract {
     preparationId: string,
     callerRunId?: string,
   ) => Effect.Effect<WorkspaceIntegrationOutcome, SubagentError>;
+  /**
+   * The direct parent's one-step freeze, prepare, setup, verify, and integrate; it does not
+   * require the diff to be read. A failed verification integrates nothing.
+   */
+  readonly workspaceApply: (
+    workspaceId: string,
+    options?: WorkspaceApplyOptions,
+    callerRunId?: string,
+  ) => Effect.Effect<WorkspaceApplyResult, SubagentError>;
   readonly workspaceDiscard: (
     workspaceId: string,
     callerRunId?: string,
@@ -75,9 +83,11 @@ export interface WorkspaceCoordinatorContract {
   ) => Effect.Effect<void, SubagentError | E, R>;
 }
 
-export function workspaceControl(dependencies: WorkspaceControlDependencies) {
+export function workspaceControl(
+  dependencies: WorkspaceControlDependencies & Pick<RunContext, "publish">,
+) {
   const context = workspaceControlContext(dependencies);
-  const { engine, ownerId, records, writerPools, withLock, isClosed, state, ownerFor } = context;
+  const { engine, ownerId, withLock, isClosed, state, ownerFor } = context;
   const { requireEngine, sourceCwd, writerLeases } = context;
   const sourceRecords = (listing: WorkspaceListing) =>
     Effect.gen(function* () {
@@ -90,65 +100,29 @@ export function workspaceControl(dependencies: WorkspaceControlDependencies) {
           : undefined;
       return {
         unavailable: listing.unavailable,
+        // A nested workspace belongs to the real checkout at the top of its chain.
         records: entries.filter(
           (record) =>
-            owned(record) || (source !== undefined && isWithin(source, record.handle.sourceRoot)),
+            owned(record) ||
+            (source !== undefined && isWithin(source, workspaceCheckoutRoot(record.handle))),
         ),
       };
     });
-  const workspaceBlock = (): Effect.Effect<WorkspaceBlock | undefined, SubagentError> =>
+  const unresolvedWorkspaceCount = Effect.gen(function* () {
+    if (!engine) return 0;
+    const listing = yield* engine.listAll.pipe(Effect.mapError(mapWorkspaceError));
+    return (yield* sourceRecords(listing)).records.filter(
+      (record) => record.status !== "integrated" && record.status !== "discarded",
+    ).length;
+  });
+  // Informational only: unreadable recovery records leave the count out instead of failing.
+  const inspectWriterWorkspace: Effect.Effect<WriterWorkspaceInspection, SubagentError> =
     Effect.gen(function* () {
-      if (
-        state.integrationQuarantined ||
-        state.reservations > 0 ||
-        [...records.values()].some(
-          (record) =>
-            record.view.writeIntent === "writer" &&
-            (isActiveRunState(record.view.state) ||
-              record.cleanupPending ||
-              record.cleanupDisposition === "quarantined" ||
-              record.evictionClaim !== undefined),
-        ) ||
-        writerPools.size > 0
-      )
-        return {
-          code: "writers-active",
-          reason: "Writers, admission reservations, or quarantined writer ownership remain.",
-        };
-      const busy = [...state.bindings.values()].find((binding) => binding.busy !== undefined);
-      if (busy)
-        return {
-          code: "unresolved-workspace",
-          reason: `Workspace ${busy.handle.workspaceId} has an operation in progress. Retry once it finishes.`,
-        };
-      const listing: WorkspaceListing = engine
-        ? yield* engine.listAll.pipe(Effect.mapError(mapWorkspaceError))
-        : { records: [], unavailable: [] };
-      if (listing.unavailable.length > 0)
-        return {
-          code: "records-unavailable",
-          reason:
-            "Workspace recovery metadata is unavailable. Ownership, source identity, and cleanup are unknown; preserve the artifacts and resolve them manually before changing workspace mode.",
-        };
-      const pending = (yield* sourceRecords(listing)).records.find(
-        (record) => record.status !== "integrated" && record.status !== "discarded",
-      );
-      if (pending)
-        return {
-          code: "unresolved-workspace",
-          reason: `Unresolved workspace ${pending.handle.workspaceId} remains at ${pending.handle.cwd}. Inspect subagent_workspace list. If the session that created it has ended, recover anything you need from its directory, then subagent_workspace discard deletes it once no writer holds it. Otherwise preserve the directory until that session integrates or discards it.`,
-        };
-      return undefined;
+      const mode = yield* Effect.sync(() => state.mode);
+      const unresolved = yield* unresolvedWorkspaceCount.pipe(Effect.orElseSucceed(() => 0));
+      return { mode, ...(unresolved > 0 && { unresolvedWorkspaceCount: unresolved }) };
     });
-  const inspectWriterWorkspace = withLock(
-    Effect.gen(function* () {
-      const block = yield* workspaceBlock();
-      return {
-        mode: state.mode,
-        ...(block && { blockedReason: block.reason, blockedCode: block.code }),
-      };
-    }),
-  );
+  // The mode is a default for later launches; existing runs and workspaces keep their own.
   const setWriterWorkspaceMode: WorkspaceCoordinatorContract["setWriterWorkspaceMode"] = (
     next,
     persist,
@@ -157,8 +131,6 @@ export function workspaceControl(dependencies: WorkspaceControlDependencies) {
       Effect.gen(function* () {
         if (isClosed())
           return yield* invalid("workspace_runtime_closed", "The subagent session is closed.");
-        const block = yield* workspaceBlock();
-        if (block) return yield* invalid("workspace_mode_busy", block.reason);
         yield* Effect.uninterruptible(
           persist.pipe(
             Effect.andThen(
@@ -184,11 +156,13 @@ export function workspaceControl(dependencies: WorkspaceControlDependencies) {
         }),
         ...(record.excludedPaths !== undefined && { excludedPaths: record.excludedPaths }),
       };
-    // A preparation whose setup failed or is still running cannot be integrated.
+    // A preparation whose setup failed or is still running cannot be integrated. One that
+    // failed verification stays listed for inspection, and integration refuses it.
     if (
       binding &&
       record.status === "prepared" &&
-      record.preparation?.preparationId !== binding.testedPreparation
+      record.preparation?.preparationId !== binding.testedPreparation &&
+      record.preparation?.preparationId !== binding.verificationFailedPreparation
     ) {
       const { preparation: _preparation, preparedTree: _preparedTree, ...frozen } = record;
       return { ...frozen, status: "frozen" };
@@ -217,6 +191,7 @@ export function workspaceControl(dependencies: WorkspaceControlDependencies) {
       );
     });
   const review = workspaceReviewOperations(context);
+  const integration = workspaceIntegrationOperations(context);
   const discardOrphan = workspaceOrphanOperations(context, sourceRecords);
   // The root may discard a workspace no live binding owns once its creating session has ended.
   const workspaceDiscard: WorkspaceCoordinatorContract["workspaceDiscard"] = (
@@ -230,9 +205,17 @@ export function workspaceControl(dependencies: WorkspaceControlDependencies) {
     );
   return {
     ...workspaceLaunchOperations(context),
-    ...review,
+    workspaceReview: review.workspaceReview,
+    workspacePrepare: review.workspacePrepare,
     workspaceDiscard,
-    workspaceIntegrate: workspaceIntegrationOperations(context),
+    workspaceIntegrate: integration.workspaceIntegrate,
+    workspaceApply: workspaceApplyOperations(context, review.held, integration.integrateLocked),
+    /** Forked once a worktree writer completes; see `workspaceSettleOperations`. */
+    settleCompletedWorkspace: workspaceSettleOperations(
+      context,
+      dependencies.publish,
+      review.held.discardLocked,
+    ),
     workspaceList,
     inspectWriterWorkspace,
     setWriterWorkspaceMode,

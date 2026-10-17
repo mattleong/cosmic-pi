@@ -1,7 +1,9 @@
 import { it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import type * as Scope from "effect/Scope";
+import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 import * as os from "node:os";
 import { git, workspaceIO } from "../../../src/boundary/git-worktree-process.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../../src/boundary/node-builtins.ts";
@@ -45,6 +47,17 @@ export const fails = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.exit(effect).pipe(Effect.map(Exit.isFailure));
 export const failureOf = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.flip(effect).pipe(Effect.orDie);
+
+/** A workspace service with its own scope, like another Pi session sharing the agent directory. */
+export const openWorkspaceService = (agentDirectory: string) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const context = yield* Layer.buildWithScope(WorkspaceService.layer({ agentDirectory }), scope);
+    return {
+      service: Context.get(context, WorkspaceService),
+      close: Scope.close(scope, Exit.void),
+    };
+  });
 
 export const workspaceTarget = (handle: WorkspaceHandle) => ({
   workspaceId: handle.workspaceId,

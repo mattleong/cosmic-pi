@@ -92,6 +92,7 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: inspection.config.writerWorkspaceMode,
         workspaceSetup: inspection.config.workspaceSetup,
+        workspaceVerify: inspection.config.workspaceVerify,
         proxyHandler: options.proxyHandler,
       });
     }),

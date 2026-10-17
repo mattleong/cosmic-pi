@@ -6,6 +6,7 @@ import {
   sanitizeDiagnosticContent,
   sanitizeTerminalLine,
 } from "pi-cosmic-core";
+import type { SubagentWorkspaceOutcome } from "../run/model.ts";
 import type { ArchivedReport, ReportArchive } from "./report-archive.ts";
 
 export interface SubagentCompletionNotification {
@@ -19,6 +20,7 @@ export interface SubagentCompletionNotification {
   readonly retryAvailable?: boolean | undefined;
   readonly profile?: string | undefined;
   readonly remainingCandidateCount?: number | undefined;
+  readonly workspaceOutcome?: SubagentWorkspaceOutcome | undefined;
 }
 
 export type SubagentNotification =
@@ -83,6 +85,19 @@ const reportText = (report: string, archived: ArchivedReport | undefined): strin
   return `${preview}\n\n[Preview: ${preview.length.toLocaleString("en-US")} of ${report.length.toLocaleString("en-US")} characters. Full report (${archived.lines} lines): ${archived.path}]`;
 };
 
+const workspaceOutcomeText = (
+  outcome: SubagentWorkspaceOutcome | undefined,
+): string | undefined => {
+  if (outcome === undefined) return undefined;
+  if (outcome.status === "auto-discarded")
+    return "Workspace: discarded automatically because the writer changed no files; nothing needs review.";
+  const files = `${outcome.changedFileCount} changed file${outcome.changedFileCount === 1 ? "" : "s"}`;
+  const uncaptured = outcome.uncapturedFileCount
+    ? ` (+${outcome.uncapturedFileCount} uncaptured, which the proposal can't carry)`
+    : "";
+  return `Workspace proposal: ${files}${uncaptured}. Apply small or trusted changes with subagent_workspace action=apply; review, prepare, and integrate risky ones. subagent_status shows the workspaceId.`;
+};
+
 const completionBody = (run: SubagentCompletionNotification, archived?: ArchivedReport): string => {
   const warning = run.warning?.trim();
   const report = run.finalText?.trim() ?? "";
@@ -95,7 +110,9 @@ const completionBody = (run: SubagentCompletionNotification, archived?: Archived
   const retry = run.retryAvailable
     ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with subagent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
     : undefined;
+  // The workspace outcome leads so that truncating a long report can't drop it.
   return [
+    workspaceOutcomeText(run.workspaceOutcome),
     primary,
     warning && warning !== run.error?.trim() ? `Warning: ${warning}` : undefined,
     retry,

@@ -22,6 +22,10 @@ const FIELD_ALIASES: ReadonlyMap<string, string> = new Map([
   ["subagentType", "profile"],
   ["agent", "profile"],
   ["agent_type", "profile"],
+  ["workspace", "isolation"],
+  ["worktree", "isolation"],
+  ["workspaceMode", "isolation"],
+  ["writerWorkspaceMode", "isolation"],
 ]);
 
 export const decodeArgumentsObject = Schema.decodeUnknownOption(
@@ -89,7 +93,12 @@ export const replacementField = (
   accepted: ReadonlyArray<string>,
 ): string | undefined => {
   const camel = key.replace(/_([a-z])/gu, (_match, letter: string) => letter.toUpperCase());
-  return [FIELD_ALIASES.get(key), camel, `${camel}s`, camel.replace(/s$/u, "")].find(
+  return [
+    FIELD_ALIASES.get(key) ?? FIELD_ALIASES.get(camel),
+    camel,
+    `${camel}s`,
+    camel.replace(/s$/u, ""),
+  ].find(
     (candidate) => candidate !== undefined && candidate !== key && accepted.includes(candidate),
   );
 };

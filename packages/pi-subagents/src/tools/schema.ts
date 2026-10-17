@@ -3,6 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
+import { WRITER_WORKSPACE_MODES } from "../config/schema.ts";
 import { PROFILE_DEFINITIONS } from "../profiles/definitions.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
@@ -53,6 +54,12 @@ const StartSpecFields = {
       "Exact workspace-relative POSIX file path assigned to this writer.",
       "Cooperative exact-file claims for writer profiles. Omit for exclusive whole-workspace writer ownership.",
     ),
+  ),
+  isolation: Type.Optional(
+    StringEnum(WRITER_WORKSPACE_MODES, {
+      description:
+        "Where a writer works: shared-checkout edits your checkout; worktree edits a private copy you apply, or review and integrate. Omit for the session default; read-only profiles ignore it.",
+    }),
   ),
 } as const;
 
@@ -205,10 +212,13 @@ export const claimsOperationError = (operation: SubagentClaimsInput): string | u
 
 export const WorkspaceParameters = Type.Object(
   {
-    action: StringEnum(["list", "review", "prepare", "integrate", "discard", "revise"] as const, {
-      description:
-        "list needs no target. review freezes a cleaned-up workspace or pages an exact revision. prepare needs revisionId; integrate also needs preparationId. revise needs message and invalidates prior review/preparation. discard needs workspaceId only.",
-    }),
+    action: StringEnum(
+      ["list", "review", "prepare", "integrate", "apply", "discard", "revise"] as const,
+      {
+        description:
+          "list needs no target. apply needs workspaceId: it freezes, prepares, runs the configured verification, and integrates in one call; revisionId optionally pins the revision. review freezes a cleaned-up workspace or pages an exact revision. prepare needs revisionId; integrate also needs preparationId. revise needs message and invalidates prior review/preparation. discard needs workspaceId only.",
+      },
+    ),
     workspaceId: Type.Optional(RunIdParameter),
     revisionId: Type.Optional(RunIdParameter),
     preparationId: Type.Optional(RunIdParameter),
@@ -224,7 +234,7 @@ export const WorkspaceParameters = Type.Object(
         minimum: 1,
         maximum: 16_000,
         description:
-          "Maximum review characters per page; default 16000. Read every page before integration.",
+          "Maximum review characters per page; default 16000. The careful path reads every page before prepare and integrate.",
       }),
     ),
     message: Type.Optional(MessageParameters),
@@ -240,6 +250,7 @@ const WORKSPACE_ACTION_FIELDS = {
   review: { required: ["workspaceId"], optional: ["revisionId", "offset", "limit"] },
   prepare: { required: ["workspaceId", "revisionId"], optional: [] },
   integrate: { required: ["workspaceId", "revisionId", "preparationId"], optional: [] },
+  apply: { required: ["workspaceId"], optional: ["revisionId"] },
   discard: { required: ["workspaceId"], optional: [] },
   revise: { required: ["workspaceId", "message"], optional: [] },
 } satisfies Record<

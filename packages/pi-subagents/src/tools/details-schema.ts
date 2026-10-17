@@ -56,7 +56,7 @@ const nonNegativeInteger = nonNegativeNumber.check(Schema.isInt());
 const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =>
   Schema.Array(schema).check(Schema.isMaxLength(maximum));
 
-const MAX_WORKSPACE_WARNINGS = 4;
+const MAX_WORKSPACE_WARNINGS = 6;
 const MAX_WORKSPACE_WARNING_DETAIL_CHARS = 4_096;
 const WorkspaceWarningSchema = Schema.Struct({
   code: NonEmptyText(MAX_FAILURE_CODE_CHARS),
@@ -65,10 +65,21 @@ const WorkspaceWarningSchema = Schema.Struct({
 });
 export type WorkspaceWarning = typeof WorkspaceWarningSchema.Type;
 
+export const WORKSPACE_VERIFICATION_STATUSES = ["passed", "not-configured", "failed"] as const;
+export const MAX_WORKSPACE_VERIFICATION_TEXT_CHARS = 512;
+
 export const WorkspaceToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
   action: Schema.Literal("workspace"),
-  operation: Schema.Literals(["list", "review", "prepare", "integrate", "discard", "revise"]),
+  operation: Schema.Literals([
+    "list",
+    "review",
+    "prepare",
+    "integrate",
+    "apply",
+    "discard",
+    "revise",
+  ]),
   workspaceId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   revisionId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   preparationId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
@@ -78,6 +89,14 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   workspaceCount: Schema.optionalKey(nonNegativeInteger),
   unavailableCount: Schema.optionalKey(nonNegativeInteger),
   listedCount: Schema.optionalKey(nonNegativeInteger),
+  /** Listed entries whose nested source workspace chain can't be resolved; within `unavailableCount`. */
+  sourceUnavailableCount: Schema.optionalKey(nonNegativeInteger),
+  changedPathCount: Schema.optionalKey(nonNegativeInteger),
+  /** Whether the parent had read every diff page of the applied revision. */
+  reviewed: Schema.optionalKey(Schema.Boolean),
+  verification: Schema.optionalKey(Schema.Literals(WORKSPACE_VERIFICATION_STATUSES)),
+  verificationCommand: Schema.optionalKey(NonEmptyText(MAX_WORKSPACE_VERIFICATION_TEXT_CHARS)),
+  verificationMessage: Schema.optionalKey(NonEmptyText(MAX_WORKSPACE_VERIFICATION_TEXT_CHARS)),
   preparedCwd: Schema.optionalKey(NonEmptyText(1_024)),
   successorRunId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   warnings: Schema.optionalKey(boundedArray(WorkspaceWarningSchema, MAX_WORKSPACE_WARNINGS)),
@@ -162,8 +181,18 @@ const WorkspaceCardFields = {
   sourceCwd: Schema.optionalKey(NonEmptyText(1_024)),
 };
 
+const WorkspaceOutcomeCardSchema = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("auto-discarded") }),
+  Schema.Struct({
+    status: Schema.Literal("proposal"),
+    changedFileCount: nonNegativeInteger,
+    uncapturedFileCount: Schema.optionalKey(nonNegativeInteger),
+  }),
+]);
+
 export const SubagentRunCardSchema = Schema.Struct({
   ...WorkspaceCardFields,
+  workspaceOutcome: Schema.optionalKey(WorkspaceOutcomeCardSchema),
   id: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
   name: NonEmptyText(MAX_NAME_CHARS),
   state: Schema.Literals(SUBAGENT_RUN_STATES),

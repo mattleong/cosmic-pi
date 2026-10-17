@@ -12,6 +12,7 @@ import {
   runHoldsCwd,
   runsWithin,
   workspaceArtifactDirectory,
+  type WorkspaceAccess,
   type WorkspaceBinding,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
@@ -29,8 +30,10 @@ export interface WorkspaceReviewOptions {
   readonly limit?: number;
 }
 
-interface HeldBinding {
+/** A binding this operation keeps busy; `heldLocked` confirms, under the run lock, it still does. */
+export interface HeldBinding {
   readonly binding: WorkspaceBinding;
+  readonly token: symbol;
   readonly heldLocked: () => Effect.Effect<void, SubagentError>;
 }
 
@@ -42,15 +45,22 @@ const engineRecord = (service: WorkspaceServiceContract, { handle }: WorkspaceBi
 export function workspaceReviewOperations(context: WorkspaceControlContext) {
   const { records, withLock, state, requireBinding, requireEngine, operations, workspaceSetup } =
     context;
+  const { requireChildrenResolved } = context;
+  /**
+   * Marks the binding busy for `use`, so resume, revise, fork, and other operations refuse it. A
+   * workspace that is the source of unresolved child workspaces is refused.
+   */
   const hold = <A>(
     workspaceId: string,
     caller: string,
     use: (held: HeldBinding) => Effect.Effect<A, SubagentError>,
+    access?: WorkspaceAccess,
   ): Effect.Effect<A, SubagentError> =>
     Effect.acquireUseRelease(
       withLock(
         Effect.gen(function* () {
-          const binding = yield* requireBinding(workspaceId, caller);
+          const binding = yield* requireBinding(workspaceId, caller, undefined, access);
+          yield* requireChildrenResolved(binding);
           const token = Symbol("workspace operation");
           binding.busy = token;
           return {
@@ -80,7 +90,9 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
     workspaceId: string,
     caller: string,
     use: (held: HeldBinding) => Effect.Effect<A, SubagentError>,
-  ): Effect.Effect<A, SubagentError> => operations.withPermits(1)(hold(workspaceId, caller, use));
+    access?: WorkspaceAccess,
+  ): Effect.Effect<A, SubagentError> =>
+    operations.withPermits(1)(hold(workspaceId, caller, use, access));
   const reviewedRevision = (
     service: WorkspaceServiceContract,
     binding: WorkspaceBinding,
@@ -114,6 +126,103 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
       if (revision && (status === "frozen" || status === "prepared")) return revision;
       return yield* service.freeze(target).pipe(Effect.mapError(mapWorkspaceError));
     });
+  /** Freezes or reuses the current revision; a freeze after resume or revision settles its reopen. */
+  const settledRevision = (
+    service: WorkspaceServiceContract,
+    { binding, heldLocked }: HeldBinding,
+    revisionId: string | undefined,
+  ): Effect.Effect<WorkspaceRevision, SubagentError> =>
+    Effect.gen(function* () {
+      const reopened = binding.reopenPending === true && !revisionId;
+      const revision = yield* reviewedRevision(service, binding, revisionId);
+      yield* withLock(
+        heldLocked().pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              if (reopened) binding.reopenPending = undefined;
+            }),
+          ),
+        ),
+      );
+      return revision;
+    });
+  /**
+   * Prepares the revision and provisions its tree. The preparation is untested until the caller
+   * records it, after any verification it requires.
+   */
+  const prepareHeld = (
+    service: WorkspaceServiceContract,
+    { binding }: HeldBinding,
+    revisionId: string,
+  ): Effect.Effect<WorkspacePreparation, SubagentError> =>
+    Effect.gen(function* () {
+      // The engine replaces any earlier preparation, which is no longer tested from here on.
+      yield* withLock(
+        Effect.sync(() => {
+          binding.testedPreparation = undefined;
+          binding.verificationFailedPreparation = undefined;
+        }),
+      );
+      const preparation = yield* service
+        .prepare({
+          workspaceId: binding.handle.workspaceId,
+          ownerId: binding.handle.ownerId,
+          revisionId,
+        })
+        .pipe(Effect.mapError(mapWorkspaceError));
+      if (workspaceSetup)
+        yield* provisionWorkspaceTree(
+          service,
+          workspaceSetup,
+          binding.handle,
+          preparation,
+          (pending) => {
+            binding.setupCleanupPending = pending;
+          },
+        );
+      return preparation;
+    });
+  const markTested = ({ binding, heldLocked }: HeldBinding, preparation: WorkspacePreparation) =>
+    withLock(
+      heldLocked().pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            binding.testedPreparation = preparation.preparationId;
+          }),
+        ),
+      ),
+    );
+  /**
+   * Like integration, destructive cleanup holds admission closed from the cwd check through
+   * removal, so callers run this under the run lock. Natural writer completion does not stop its
+   * read-only descendants.
+   */
+  const discardLocked = (
+    service: WorkspaceServiceContract,
+    binding: WorkspaceBinding,
+  ): Effect.Effect<void, SubagentError> =>
+    Effect.gen(function* () {
+      const { workspaceId, ownerId } = binding.handle;
+      const artifact = yield* service
+        .inspect({ workspaceId, ownerId })
+        .pipe(Effect.mapError(mapWorkspaceError));
+      const directory = workspaceArtifactDirectory(artifact.handle);
+      if (!directory)
+        return yield* invalid(
+          "workspace_owner_unavailable",
+          "Workspace paths do not match the managed artifact layout.",
+        );
+      if ([...runsWithin(records, [directory]).keys()].some(runHoldsCwd))
+        return yield* invalid(
+          "workspace_process_unsettled",
+          "A run still uses this workspace. Stop it and confirm cleanup before discard.",
+        );
+      yield* service
+        .discard({ workspaceId, ownerId, processCleanupConfirmed: true })
+        .pipe(Effect.mapError(mapWorkspaceError));
+      binding.finished = true;
+      return undefined;
+    });
   const workspaceReview = (
     workspaceId: string,
     options: WorkspaceReviewOptions = {},
@@ -134,14 +243,13 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
           "Diff offset must be a nonnegative integer and limit must be 1 through 16000.",
         );
       const service = yield* requireEngine;
-      return yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
+      return yield* operate(workspaceId, caller, (held) =>
         Effect.gen(function* () {
-          const reopened = binding.reopenPending === true && !options.revisionId;
-          const revision = yield* reviewedRevision(service, binding, options.revisionId);
+          const { binding, heldLocked } = held;
+          const revision = yield* settledRevision(service, held, options.revisionId);
           return yield* withLock(
             Effect.gen(function* () {
               yield* heldLocked();
-              if (reopened) binding.reopenPending = undefined;
               if (offset > revision.diff.length)
                 return yield* invalid(
                   "workspace_diff_bounds",
@@ -173,8 +281,9 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
   ): Effect.Effect<WorkspacePreparation, SubagentError> =>
     Effect.gen(function* () {
       const service = yield* requireEngine;
-      return yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
+      return yield* operate(workspaceId, caller, (held) =>
         Effect.gen(function* () {
+          const { binding } = held;
           const { revision } = yield* engineRecord(service, binding);
           if (
             binding.reviewedRevision !== revisionId ||
@@ -185,34 +294,9 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
               "workspace_review_incomplete",
               "Read every page of this exact immutable revision before preparing integration.",
             );
-          // The engine replaces any earlier preparation, which is no longer tested from here on.
-          yield* withLock(
-            Effect.sync(() => {
-              binding.testedPreparation = undefined;
-            }),
-          );
-          const preparation = yield* service
-            .prepare({ workspaceId, ownerId: binding.handle.ownerId, revisionId })
-            .pipe(Effect.mapError(mapWorkspaceError));
-          if (workspaceSetup)
-            yield* provisionWorkspaceTree(
-              service,
-              workspaceSetup,
-              binding.handle,
-              preparation,
-              (pending) => {
-                binding.setupCleanupPending = pending;
-              },
-            );
-          yield* withLock(
-            heldLocked().pipe(
-              Effect.andThen(
-                Effect.sync(() => {
-                  binding.testedPreparation = preparation.preparationId;
-                }),
-              ),
-            ),
-          );
+          // The careful path leaves testing to the parent, so a configured verify does not run here.
+          const preparation = yield* prepareHeld(service, held, revisionId);
+          yield* markTested(held, preparation);
           return preparation;
         }),
       );
@@ -223,38 +307,20 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
   ): Effect.Effect<void, SubagentError> =>
     Effect.gen(function* () {
       const service = yield* requireEngine;
-      yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
-        // Like integration, destructive cleanup holds admission closed from the cwd check
-        // through removal. Natural writer completion does not stop its read-only descendants.
-        withLock(
-          Effect.gen(function* () {
-            yield* heldLocked();
-            const artifact = yield* service
-              .inspect({ workspaceId, ownerId: binding.handle.ownerId })
-              .pipe(Effect.mapError(mapWorkspaceError));
-            const directory = workspaceArtifactDirectory(artifact.handle);
-            if (!directory)
-              return yield* invalid(
-                "workspace_owner_unavailable",
-                "Workspace paths do not match the managed artifact layout.",
-              );
-            if ([...runsWithin(records, [directory]).keys()].some(runHoldsCwd))
-              return yield* invalid(
-                "workspace_process_unsettled",
-                "A run still uses this workspace. Stop it and confirm cleanup before discard.",
-              );
-            yield* service
-              .discard({
-                workspaceId,
-                ownerId: binding.handle.ownerId,
-                processCleanupConfirmed: true,
-              })
-              .pipe(Effect.mapError(mapWorkspaceError));
-            binding.finished = true;
-            return undefined;
-          }),
-        ),
+      // Once the direct parent is inactive, the root or its ancestors may discard, never integrate.
+      yield* operate(
+        workspaceId,
+        caller,
+        ({ binding, heldLocked }) =>
+          withLock(heldLocked().pipe(Effect.andThen(discardLocked(service, binding)))),
+        "discard",
       );
     });
-  return { workspaceReview, workspacePrepare, workspaceDiscard };
+  return {
+    workspaceReview,
+    workspacePrepare,
+    workspaceDiscard,
+    /** Phases a multi-step operation composes while it keeps one binding busy. */
+    held: { hold, settledRevision, prepareHeld, discardLocked },
+  };
 }

@@ -26,7 +26,7 @@ import {
   type DelegationMode,
   type SubagentNestingPolicy,
 } from "../config/schema.ts";
-import type { WriterWorkspaceBlockCode } from "../run/workspace-control.ts";
+import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
 import type { FleetManagerActions } from "./controller.ts";
 import {
   SCOPE_LABELS,
@@ -95,12 +95,13 @@ const SCOPES = [
 
 const UNTRUSTED = "Trust this project before changing its subagent settings";
 
-const WORKSPACE_BLOCKS = {
-  "writers-active": "Can't change the writer workspace while writer subagents are active",
-  "records-unavailable": "Can't change the writer workspace: its recovery records can't be read",
-  "unresolved-workspace":
-    "Can't change the writer workspace until an earlier writer's changes are integrated or discarded",
-} satisfies Record<WriterWorkspaceBlockCode, string>;
+const WORKSPACE_DESCRIPTION =
+  "Default for writers that don't set isolation. Saved for new sessions.";
+
+const unresolvedSummary = ({ unresolvedWorkspaceCount }: WriterWorkspaceInspection) =>
+  unresolvedWorkspaceCount === undefined
+    ? undefined
+    : `Unresolved workspaces: ${unresolvedWorkspaceCount}`;
 
 const isWorkspaceMode = Schema.is(WriterWorkspaceModeSchema);
 const isDelegationMode = Schema.is(DelegationModeSchema);
@@ -249,13 +250,7 @@ function subagentSettingsCommand(
         .inspectWriterWorkspace()
         .then((snapshot): SettingsResult | Promise<SettingsResult> => {
           if (!isWorkspaceMode(value))
-            return failed(`${WORKSPACE} must be worktree or shared-checkout`);
-          if (snapshot.blockedReason)
-            return failed(
-              snapshot.blockedCode
-                ? WORKSPACE_BLOCKS[snapshot.blockedCode]
-                : "Can't change the writer workspace right now",
-            );
+            return failed(`${WORKSPACE} must be ${WRITER_WORKSPACE_MODES.join(" or ")}`);
           if (snapshot.mode === value || !stillCurrent()) return succeeded;
           return actions
             .setWriterWorkspaceMode(value)
@@ -326,9 +321,10 @@ function subagentSettingsCommand(
         const delegationLine = (scope: ProfileSettingsScope) =>
           `  ${scope}: ${scopeDelegation(inspection, scope) ?? INHERIT}`;
         const effective = inspection.session.effectiveConfig;
+        const unresolved = unresolvedSummary(workspace);
         return [
           "Subagents settings",
-          `  ${WORKSPACE} = ${workspace.mode}${workspace.blockedCode ? ` (${WORKSPACE_BLOCKS[workspace.blockedCode]})` : ""}`,
+          `  ${WORKSPACE} = ${workspace.mode} (default)${unresolved ? `; ${unresolved}` : ""}`,
           `  ${DELEGATION} = ${effective.delegation} (in effect)`,
           `  maxDirectChildren = ${effective.nesting.maxDirectChildren}, maxDepth = ${effective.nesting.maxDepth}, maxActiveRuns = ${effective.nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS} (in effect)`,
           `  workspaceSetup = ${effective.workspaceSetup ? describeWorkspaceSetup(effective.workspaceSetup) : "none"} (project; applies after /reload)`,
@@ -351,11 +347,12 @@ function subagentSettingsCommand(
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
         const scopes = editableScopes(trusted);
+        const unresolved = unresolvedSummary(workspace);
         const items: SettingItem[] = [
           {
             id: WORKSPACE,
             label: "Writer workspace",
-            description: `Where writer subagents make changes. Saved for new sessions.${workspace.blockedCode ? ` ${WORKSPACE_BLOCKS[workspace.blockedCode]}.` : ""}`,
+            description: `${WORKSPACE_DESCRIPTION}${unresolved ? ` ${unresolved}.` : ""}`,
             currentValue: workspace.mode,
             values: [...WRITER_WORKSPACE_MODES],
           },
@@ -390,7 +387,7 @@ function subagentSettingsCommand(
     descriptors: [
       {
         id: WORKSPACE,
-        description: "Where writer subagents make changes. Saved for new sessions.",
+        description: WORKSPACE_DESCRIPTION,
         values: [...WRITER_WORKSPACE_MODES],
         currentValue: () => "",
       },
@@ -418,7 +415,8 @@ function subagentSettingsCommand(
     notes: () => [
       "Delegation and nesting limits apply to the named scope, session by default. Session",
       `changes apply now; global and project changes after /reload, and project wins. ${INHERIT}`,
-      "clears a scope's own value. The writer workspace applies to new sessions and ignores the scope.",
+      "clears a scope's own value. The writer workspace default applies to later launches and new",
+      "sessions and ignores the scope; running writers and existing workspaces keep their mode.",
     ],
     scopes: SCOPES,
     scopeBlocked: (ctx, scope) =>

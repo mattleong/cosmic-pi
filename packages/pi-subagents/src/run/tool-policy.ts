@@ -21,10 +21,25 @@ export const SUBAGENT_TOOL_NAME = Object.freeze({
 export const SUBAGENT_TOOL_NAMES = Object.freeze(Object.values(SUBAGENT_TOOL_NAME));
 export type SubagentToolName = (typeof SUBAGENT_TOOL_NAMES)[number];
 
-/** Only the root session can launch, and so review or integrate, worktree writers. */
+/** Nested children that are not worktree writers have no workspaces to review or integrate. */
 export const NESTED_SUBAGENT_TOOL_NAMES = Object.freeze(
   SUBAGENT_TOOL_NAMES.filter((name) => name !== SUBAGENT_TOOL_NAME.workspace),
 );
+
+/**
+ * An admitted Pi worktree writer may own worktree writer children through the root coordinator,
+ * which rechecks that authority on every proxied call.
+ */
+export const isWorkspaceParentRequest = (request: StartSubagentRequest): boolean =>
+  request.runtime === "pi" &&
+  request.writeIntent === "writer" &&
+  request.writerWorkspaceMode === "worktree" &&
+  request.workspace !== undefined;
+
+export const nestedSubagentToolNames = (
+  workspaceParent: boolean,
+): ReadonlyArray<SubagentToolName> =>
+  workspaceParent ? SUBAGENT_TOOL_NAMES : NESTED_SUBAGENT_TOOL_NAMES;
 
 export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT = [
   "herdr_agent_start",
@@ -111,6 +126,11 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
       ? [
           "You work in an isolated workspace, named with your task. Work only there; don't write into the source checkout or another worker's directory.",
           "Your changes are a proposal: don't stage, commit, merge, or integrate them. Your parent reviews and tests them before integrating. The isolation is not a security sandbox.",
+        ]
+      : []),
+    ...(isWorkspaceParentRequest(request)
+      ? [
+          `You may start worktree writer children (isolation: worktree) for parallel slices of your task. Their workspaces are yours: review, prepare, and integrate each one into your own workspace with subagent_workspace, or discard it.${request.writes ? " Their changes count against your own write claims." : ""} Integrate or discard every child workspace before you report, because unresolved child workspaces block your parent's integration.`,
         ]
       : []),
     request.writeIntent === "writer"

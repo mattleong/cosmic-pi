@@ -12,7 +12,7 @@ import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import type { SubagentErrorReceiptOwner } from "../boundary/host-tool-result.ts";
 import {
-  NESTED_SUBAGENT_TOOL_NAMES,
+  nestedSubagentToolNames,
   SUBAGENT_TOOL_NAME,
   SUBAGENT_TOOL_NAMES,
   type SubagentToolName,
@@ -38,7 +38,11 @@ import {
 } from "./schema.ts";
 import { countLabel, invokeHostCallback, toPiToolOutputSchema } from "pi-cosmic-core";
 import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
-import { NESTED_START_GUIDELINE, NORMAL_START_GUIDELINE } from "../delegation/prompt.ts";
+import {
+  NESTED_START_GUIDELINE,
+  NESTED_WORKSPACE_PARENT_START_GUIDELINE,
+  NORMAL_START_GUIDELINE,
+} from "../delegation/prompt.ts";
 
 const quoted = (message: string | undefined) => (message ? `“${message}”` : "");
 
@@ -103,7 +107,7 @@ const SCRIPTED_SUBAGENT_GUIDELINE =
 // The audience-specific delegation rule from delegation/prompt.ts is prepended at registration.
 const START_GUIDELINES = [
   "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.",
-  "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Run several shared-checkout writers only with pairwise-disjoint `writes` claims.",
+  "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Set isolation: worktree for writers whose change you'll review and apply as a diff or that run while you edit. Run several shared-checkout writers only with pairwise-disjoint `writes` claims.",
   "If a start fails, follow its Next step or tell the user; don't run claude, codex, or pi from the shell instead.",
 ];
 
@@ -118,7 +122,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Start 1–32 background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or isolated worktrees, per the session setting; only the main session can start worktree writers. A shared-checkout writer without `writes` claims has the checkout to itself; parallel writers need disjoint exact claims. Subagents started from a codemode script, and their descendants, stay read-only. A start that fails after launch reports whether cleanup finished and whether retry is available.",
+      "Start 1–32 background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: set isolation per agent, or omit it for the session default; only the main session and worktree writers can start worktree writers. A shared-checkout writer without `writes` claims has the checkout to itself; parallel writers need disjoint exact claims. Subagents started from a codemode script, and their descendants, stay read-only. A start that fails after launch reports whether cleanup finished and whether retry is available.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     promptGuidelines: START_GUIDELINES,
     renderCall: (args, theme, context) =>
@@ -217,11 +221,11 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.workspace]: {
     label: "Manage Writer Workspace",
     description:
-      "Review and integrate worktree writers' proposals as their direct parent. review freezes a finished writer's changes and returns the diff in pages; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. integrate applies the exact revisionId and preparationId as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. revise asks the writer for another pass; discard deletes a rejected proposal, or an orphaned workspace whose session has ended.",
-    promptSnippet: "Review, test, and integrate worktree writers' proposals",
+      "Apply, review, and integrate worktree writers' proposals as their direct parent. apply freezes, prepares, runs the project's configured verification, and integrates in one call, without requiring the diff to be read; its result says whether the diff was reviewed and whether it was verified, and failed verification applies nothing. The careful path: review freezes a finished writer's changes and returns the diff in pages; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. integrate applies the exact revisionId and preparationId as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. revise asks the writer for another pass; discard deletes a rejected proposal, or an orphaned workspace whose session has ended.",
+    promptSnippet: "Apply, or review, test, and integrate, worktree writers' proposals",
     promptGuidelines: [
-      "A worktree writer's report is a proposal, not approval. Review every diff page of its revision, prepare it, and run the relevant tests in the prepared cwd without editing it; then integrate that exact revisionId and preparationId without asking first. Don't stage or commit parent changes.",
-      "If review or tests fail, revise with concrete feedback, await the successor, and review its new revision from the beginning. A stale preparation needs a fresh prepare and test run. Discard only proposals you mean to delete.",
+      "A worktree writer's report is a proposal, not approval, and nothing applies it automatically. For small or trusted changes, call apply; for risky changes, review every diff page, prepare that revision, run the relevant tests in the prepared cwd without editing it, then integrate that exact revisionId and preparationId. Either path needs no user confirmation. Don't stage or commit parent changes.",
+      "Failed verification blocks the proposal: inspect the prepared tree, then revise or discard it, or review every page and integrate a fresh preparation after its tests pass. If review or tests fail, revise with concrete feedback, await the successor, and review or apply its new revision. A stale preparation needs a fresh prepare and test run. Discard only proposals you mean to delete.",
     ],
     renderCall: (args, theme) => renderSubagentCall("Writer workspace", args.action ?? "", theme),
   },
@@ -244,6 +248,8 @@ export function registerSubagentTools(
   runtime: SubagentToolRuntime,
   receiptOwner?: SubagentErrorReceiptOwner,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
+  /** A nested worktree writer also reviews and integrates its own worktree writer children. */
+  nestedSurface: { readonly workspaceParent: boolean } = { workspaceParent: false },
 ): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
   const panelOwnsHierarchy = (
@@ -269,7 +275,11 @@ export function registerSubagentTools(
       ...spec,
       ...(name === SUBAGENT_TOOL_NAME.start && {
         promptGuidelines: [
-          nested ? NESTED_START_GUIDELINE : NORMAL_START_GUIDELINE,
+          nested
+            ? nestedSurface.workspaceParent
+              ? NESTED_WORKSPACE_PARENT_START_GUIDELINE
+              : NESTED_START_GUIDELINE
+            : NORMAL_START_GUIDELINE,
           ...(spec.promptGuidelines ?? []),
           ...(scriptable ? [SCRIPTED_SUBAGENT_GUIDELINE] : []),
         ],
@@ -365,6 +375,8 @@ export function registerSubagentTools(
     });
     return wrapped;
   };
-  for (const name of nested ? NESTED_SUBAGENT_TOOL_NAMES : SUBAGENT_TOOL_NAMES)
+  for (const name of nested
+    ? nestedSubagentToolNames(nestedSurface.workspaceParent)
+    : SUBAGENT_TOOL_NAMES)
     pi.registerTool(buildTool(name));
 }

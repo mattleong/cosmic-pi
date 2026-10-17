@@ -140,6 +140,28 @@ describe("subagent tool", () => {
     expect(requests).toHaveLength(1);
   });
 
+  effectTest("threads isolation to writer launches and ignores it for readers", function* () {
+    const requests: StartSubagentRequest[] = [];
+    const result = yield* invokeOptionalTool(startTool(requests), {
+      agents: [
+        { task: "Implement token parsing", profile: "worker", isolation: "worktree" },
+        { task: "Implement the docs", profile: "worker" },
+        { task: "Map the auth flow", profile: "scout", isolation: "worktree" },
+      ],
+    });
+    expect(result?.details).not.toHaveProperty("startFailures");
+    expect(requests.map((request) => request.writerWorkspaceModeOverride)).toEqual([
+      "worktree",
+      undefined,
+      undefined,
+    ]);
+    expect(requests.map((request) => request.writeIntent)).toEqual([
+      "writer",
+      "writer",
+      "read-only",
+    ]);
+  });
+
   effectTest("rejects remote configuration before readiness or service start", function* () {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({

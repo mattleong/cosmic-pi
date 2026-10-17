@@ -61,7 +61,26 @@ export const WorkspaceSetupSchema = Schema.Struct({
   ),
 });
 export type WorkspaceSetup = typeof WorkspaceSetupSchema.Type;
-const WORKSPACE_SETUP_KEYS = new Set(["command", "timeoutSeconds"]);
+const WORKSPACE_COMMAND_KEYS = new Set(["command", "timeoutSeconds"]);
+
+export const DEFAULT_WORKSPACE_VERIFY_TIMEOUT_SECONDS = 600;
+/** A trusted project's command that checks an isolated writer's tree before its changes apply. */
+export const WorkspaceVerifySchema = Schema.Struct({
+  command: Schema.Array(
+    Schema.String.check(
+      Schema.isBetweenLength(1, MAX_WORKSPACE_SETUP_ARGUMENT_CHARS),
+      Schema.isPattern(/\S/u),
+    ),
+  ).check(Schema.isBetweenLength(1, MAX_WORKSPACE_SETUP_ARGUMENTS)),
+  timeoutSeconds: Schema.optionalKey(
+    Schema.Finite.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(MAX_WORKSPACE_SETUP_TIMEOUT_SECONDS),
+    ),
+  ),
+});
+export type WorkspaceVerify = typeof WorkspaceVerifySchema.Type;
 
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
@@ -98,6 +117,7 @@ export interface SubagentConfigFile {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly delegation?: DelegationMode | undefined;
   readonly workspaceSetup?: WorkspaceSetup | undefined;
+  readonly workspaceVerify?: WorkspaceVerify | undefined;
   readonly sessionSpendLimit?: number | undefined;
 }
 
@@ -378,6 +398,7 @@ const ROOT_KEYS = new Set([
   "writerWorkspaceMode",
   "delegation",
   "workspaceSetup",
+  "workspaceVerify",
   "sessionSpendLimit",
 ]);
 
@@ -408,21 +429,24 @@ const decodeDefaultProfileSet = (rawRoot: ProbedFields, scope: string, diagnosti
   return { defaultProfileSet, invalidDefaultProfileSet };
 };
 
-// Setup commands are repository-specific, so only a project document may declare one.
-const decodeWorkspaceSetup = (
+// Setup and verification commands are repository-specific, so only a project document may
+// declare one.
+const decodeWorkspaceCommand = (
   rawRoot: ProbedFields,
+  key: "workspaceSetup" | "workspaceVerify",
+  schema: typeof WorkspaceSetupSchema | typeof WorkspaceVerifySchema,
   scope: string,
   diagnostics: string[],
-): WorkspaceSetup | undefined => {
-  const path = `${scope}.workspaceSetup`;
-  const field = readField(rawRoot, "workspaceSetup", path, diagnostics);
+): WorkspaceSetup | WorkspaceVerify | undefined => {
+  const path = `${scope}.${key}`;
+  const field = readField(rawRoot, key, path, diagnostics);
   if (!field.present) return undefined;
   const fields = probeFields(field.value);
   if (
     scope === "project" &&
     fields !== undefined &&
-    ownKeysAre(fields, WORKSPACE_SETUP_KEYS) &&
-    Schema.is(WorkspaceSetupSchema)(fields)
+    ownKeysAre(fields, WORKSPACE_COMMAND_KEYS) &&
+    Schema.is(schema)(fields)
   )
     return Object.freeze({ ...fields, command: Object.freeze([...fields.command]) });
   diagnostics.push(path);
@@ -442,7 +466,20 @@ const decodeCurrentBody = (
     WriterWorkspaceModeSchema,
   );
   const delegation = readRootField(rawRoot, "delegation", scope, diagnostics, DelegationModeSchema);
-  const workspaceSetup = decodeWorkspaceSetup(rawRoot, scope, diagnostics);
+  const workspaceSetup = decodeWorkspaceCommand(
+    rawRoot,
+    "workspaceSetup",
+    WorkspaceSetupSchema,
+    scope,
+    diagnostics,
+  );
+  const workspaceVerify = decodeWorkspaceCommand(
+    rawRoot,
+    "workspaceVerify",
+    WorkspaceVerifySchema,
+    scope,
+    diagnostics,
+  );
   const sessionSpendLimit = readRootField(
     rawRoot,
     "sessionSpendLimit",
@@ -466,6 +503,7 @@ const decodeCurrentBody = (
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
       ...(delegation !== undefined && { delegation }),
       ...(workspaceSetup !== undefined && { workspaceSetup }),
+      ...(workspaceVerify !== undefined && { workspaceVerify }),
       ...(sessionSpendLimit !== undefined && { sessionSpendLimit }),
     },
     invalidProfileSetRoutes: decoded?.invalidProfileSetRoutes ?? {},

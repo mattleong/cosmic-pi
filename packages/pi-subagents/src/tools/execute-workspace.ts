@@ -7,9 +7,14 @@ import { Check } from "typebox/value";
 import { invalidRequest } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
+import type { WorkspaceApplyResult } from "../run/workspace-apply.ts";
 import type { WorkspaceIntegrationOutcome } from "../run/workspace-integration.ts";
 import { UnavailableWorkspaceArtifactSchema, WorkspaceRecordSchema } from "../workspace/model.ts";
-import type { WorkspaceToolDetails, WorkspaceWarning } from "./details-schema.ts";
+import {
+  MAX_WORKSPACE_VERIFICATION_TEXT_CHARS,
+  type WorkspaceToolDetails,
+  type WorkspaceWarning,
+} from "./details-schema.ts";
 import {
   WorkspaceParameters,
   workspaceOperationError,
@@ -64,6 +69,16 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
       detail: `The workspace snapshot did not capture these worker files, so they were neither reviewed nor integrated: ${listedPaths(paths)}. The worker tree, which these paths are relative to, was kept at ${worker} so they are not lost. Copy any you need into the parent checkout, then discard this workspace to delete the tree.`,
     });
   }
+  const children = outcome.retainedForChildren ?? [];
+  if (children.length > 0)
+    warnings.push({
+      code: "worker-retained-for-children",
+      message:
+        children.length === 1
+          ? "The working copy was kept for an unresolved child workspace"
+          : `The working copy was kept for ${countLabel(children.length, "unresolved child workspace")}`,
+      detail: `The integration committed, but child workspaces created from the worker tree are still unresolved: ${listedPaths(children)}. The worker tree at ${worker} stays until each child is integrated or discarded; then discard this workspace to delete the tree.`,
+    });
   if (outcome.treeRemovalFailed)
     warnings.push({
       code: "workspace-trees-remain",
@@ -110,6 +125,7 @@ const WorkspaceMetadataSchema = Schema.Struct({
   status: WorkspaceRecordSchema.fields.status,
   cwd: Schema.String,
   sourceCwd: Schema.String,
+  sourceWorkspaceId: Schema.optional(Schema.String),
   revisionId: Schema.optional(Schema.String),
   preparationId: Schema.optional(Schema.String),
 });
@@ -133,6 +149,9 @@ const executeWorkspaceList = (
         status: record.status,
         cwd: record.handle.cwd,
         sourceCwd: record.handle.sourceCwd,
+        ...(record.handle.sourceWorkspaceId !== undefined && {
+          sourceWorkspaceId: record.handle.sourceWorkspaceId,
+        }),
         ...(record.revision && { revisionId: record.revision.revisionId }),
         ...(record.preparation && { preparationId: record.preparation.preparationId }),
       })),
@@ -159,12 +178,20 @@ const executeWorkspaceList = (
       lines.push(line);
     }
     const nextOffset = offset + lines.length < entries.length ? offset + lines.length : undefined;
+    const sourceUnavailableCount = listing.unavailable.filter(
+      (entry) => entry.reason === "source-workspace-unavailable",
+    ).length;
     return result(
       [
         ...lines,
-        ...(listing.unavailable.length > 0
+        ...(listing.unavailable.length > sourceUnavailableCount
           ? [
               "Incomplete workspace metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
+            ]
+          : []),
+        ...(sourceUnavailableCount > 0
+          ? [
+              "Some nested workspaces name a source workspace whose record is missing or unreadable (reason source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
             ]
           : []),
         nextOffset === undefined
@@ -177,6 +204,7 @@ const executeWorkspaceList = (
         offset,
         workspaceCount: entries.length,
         unavailableCount: listing.unavailable.length,
+        ...(sourceUnavailableCount > 0 && { sourceUnavailableCount }),
         listedCount: lines.length,
         displayContent: { offset: 0, length: lines.join("\n").length },
         ...(nextOffset !== undefined && { nextOffset }),
@@ -253,6 +281,105 @@ const executeWorkspacePrepare = (
     );
   });
 
+const PASSED_TAIL_LINES = 8;
+const PASSED_TAIL_CHARS = 1_000;
+
+const verificationText = (text: string) =>
+  clipText(sanitizeTerminalLine(text), MAX_WORKSPACE_VERIFICATION_TEXT_CHARS);
+
+const lastLines = (text: string, lines: number, chars: number) =>
+  text.trimEnd().split("\n").slice(-lines).join("\n").slice(-chars);
+
+const outputSection = (heading: string, tail: string) =>
+  tail.trim() ? [heading, "BEGIN OUTPUT TAIL", tail, "END OUTPUT TAIL"] : [`${heading} (empty)`];
+
+const appliedReviewLine = (reviewed: boolean) =>
+  reviewed
+    ? "Reviewed: every diff page of this revision was read before apply."
+    : "Unreviewed: apply ran without the diff being read. Inspect the changed files in the parent checkout if the change needs review.";
+
+const applyVerificationLines = (
+  verification: Extract<WorkspaceApplyResult, { readonly integrated: true }>["verification"],
+) =>
+  verification.status === "passed"
+    ? {
+        status: [`Verified: ${sanitizeTerminalLine(verification.command.join(" "))} passed.`],
+        output: outputSection(
+          "Verification output tail:",
+          lastLines(verification.outputTail, PASSED_TAIL_LINES, PASSED_TAIL_CHARS),
+        ),
+      }
+    : {
+        status: [
+          "Not verified: no workspace verification command is configured, so the change wasn't tested. Run relevant tests in the parent checkout.",
+        ],
+        output: [],
+      };
+
+const executeWorkspaceApply = (
+  service: SubagentServiceContract,
+  operation: SubagentWorkspaceInput,
+  receipt: WorkspaceReceipt,
+  callerRunId: string,
+) =>
+  Effect.gen(function* () {
+    const workspaceId = operation.workspaceId ?? "";
+    const applied = yield* service.workspaceApply(
+      workspaceId,
+      operation.revisionId === undefined ? {} : { revisionId: operation.revisionId },
+      callerRunId,
+    );
+    const ids = `workspace ${workspaceId}, revision ${applied.revisionId}, preparationId=${applied.preparationId}`;
+    const changed = `Changed files (${applied.changedPathCount}): ${applied.changedPaths.length > 0 ? listedPaths(applied.changedPaths) : "none listed"}${applied.changedPathCount > applied.changedPaths.length ? ` (${applied.changedPathCount - applied.changedPaths.length} not listed)` : ""}`;
+    const command =
+      "command" in applied.verification
+        ? verificationText(applied.verification.command.join(" "))
+        : "";
+    const metadata = {
+      ...receipt,
+      revisionId: applied.revisionId,
+      preparationId: applied.preparationId,
+      changedPathCount: applied.changedPathCount,
+      reviewed: applied.reviewed,
+      verification: applied.verification.status,
+      ...(command && { verificationCommand: command }),
+      ...(applied.preparedCwd.length <= 1_024 && { preparedCwd: applied.preparedCwd }),
+    };
+    if (!applied.integrated) {
+      const { verification } = applied;
+      const heading = `Verification failed for ${ids}. Nothing was applied; parent files are unchanged, and this preparation can't be integrated.`;
+      const body = [
+        `Command: ${sanitizeTerminalLine(verification.command.join(" "))}`,
+        `Failure: ${sanitizeTerminalLine(verification.message)}`,
+        `Prepared tree (inspect it; don't edit it): ${applied.preparedCwd}`,
+        changed,
+        ...outputSection("Verification output tail:", verification.outputTail),
+      ].join("\n");
+      const message = verificationText(verification.message);
+      return result([heading, body, `Next steps: ${applied.nextSteps}`].join("\n"), {
+        ...metadata,
+        ...(message && { verificationMessage: message }),
+        displayContent: { offset: heading.length + 1, length: body.length },
+      });
+    }
+    const warnings = integrationWarnings(applied);
+    const { status, output } = applyVerificationLines(applied.verification);
+    const heading = [
+      `Applied ${ids} as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.`,
+      appliedReviewLine(applied.reviewed),
+      ...status,
+    ].join("\n");
+    const body = [changed, ...output].join("\n");
+    return result(
+      [heading, body, ...warnings.map((warning) => `Warning: ${warning.detail}`)].join("\n"),
+      {
+        ...metadata,
+        ...(warnings.length > 0 && { warnings }),
+        displayContent: { offset: heading.length + 1, length: body.length },
+      },
+    );
+  });
+
 export const executeWorkspaceAction = (
   operation: SubagentWorkspaceInput,
   callerRunId = SUBAGENT_ROOT_RUN_ID,
@@ -283,6 +410,8 @@ export const executeWorkspaceAction = (
         );
         return integrationResult(outcome, { ...receipt, revisionId, preparationId });
       }
+      case "apply":
+        return yield* executeWorkspaceApply(service, operation, receipt, callerRunId);
       case "discard":
         yield* service.workspaceDiscard(workspaceId, callerRunId);
         return result(

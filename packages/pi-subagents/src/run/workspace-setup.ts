@@ -10,6 +10,8 @@ const MAX_LISTED_CHANGES = 5;
 /**
  * Runs the project's setup command at the root of an isolated tree, then requires that it changed
  * only ignored or excluded files so dependencies never become part of a proposal or test tree.
+ * `cleanupPending` stays set until the engine reports its quarantine cleared, so an interrupted
+ * setup stays quarantined here exactly when the engine couldn't confirm its cleanup.
  */
 export const provisionWorkspaceTree = (
   service: WorkspaceServiceContract,
@@ -26,22 +28,17 @@ export const provisionWorkspaceTree = (
         ownerId: handle.ownerId,
         preparationId: tree.preparationId,
         setup,
+        onQuarantineCleared: () => cleanupPending(false),
       })
       .pipe(
-        Effect.matchEffect({
-          onFailure: (error) => {
-            if (error.operation === "setup" && !error.cleanupUnconfirmed) cleanupPending(false);
-            return Effect.fail(
-              invalid(
-                error.cleanupUnconfirmed
-                  ? "workspace_setup_cleanup_unconfirmed"
-                  : "workspace_setup_failed",
-                error.detail === undefined ? error.message : `${error.message}\n${error.detail}`,
-              ),
-            );
-          },
-          onSuccess: () => Effect.sync(() => cleanupPending(false)),
-        }),
+        Effect.mapError((error) =>
+          invalid(
+            error.cleanupUnconfirmed
+              ? "workspace_setup_cleanup_unconfirmed"
+              : "workspace_setup_failed",
+            error.detail === undefined ? error.message : `${error.message}\n${error.detail}`,
+          ),
+        ),
       );
     const changed = yield* service
       .setupChanges({

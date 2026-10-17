@@ -45,6 +45,10 @@ export interface RunSettlementDependencies extends Pick<
   readonly delivery: RunNotificationDelivery;
   readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
   readonly claimTurnInputDrain: (record: RunRecord, drained: Deferred.Deferred<void>) => void;
+  /** Session-owned follow-up for a completed worktree writer; it never delays delivery. */
+  readonly settleCompletedWorkspace?:
+    | ((record: RunRecord, assignmentEpoch: number) => Effect.Effect<void>)
+    | undefined;
 }
 
 export type AssignmentActivationReplay =
@@ -81,6 +85,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     closeRecordScope,
     sendPeerNotices,
     claimTurnInputDrain,
+    settleCompletedWorkspace,
   } = dependencies;
 
   const mergeUsageLocked = (record: RunRecord, usage: SubagentUsage) => {
@@ -222,6 +227,14 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       if (completedScope)
         yield* sendPeerNotices(record.view.id).pipe(
           Effect.ensuring(closeRecordScope(record, completedScope)),
+          Effect.forkIn(ownerScope),
+        );
+      if (
+        state === "completed" &&
+        record.view.workspaceId !== undefined &&
+        settleCompletedWorkspace
+      )
+        yield* settleCompletedWorkspace(record, record.assignment.epoch).pipe(
           Effect.forkIn(ownerScope),
         );
       return { notifyPeers: completedScope === undefined, view };

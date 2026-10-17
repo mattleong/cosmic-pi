@@ -12,10 +12,18 @@ import {
   registerSubagentChildBridge,
   type SubagentChildBridgeBoundaries,
 } from "../src/boundary/host-child.ts";
+import { childProcessEnvironment, childToolPolicy } from "../src/boundary/child-process.ts";
 import type { LocalPiChildIpcHandlers, ParentContactError } from "../src/boundary/local-pi-ipc.ts";
+import {
+  NESTED_START_GUIDELINE,
+  NESTED_WORKSPACE_PARENT_START_GUIDELINE,
+} from "../src/delegation/prompt.ts";
+import { backendLaunchRequest } from "../src/run/launch-records.ts";
+import type { StartSubagentRequest } from "../src/run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../src/run/tool-policy.ts";
 import { statusContract } from "../src/tools/contract.ts";
 import { view } from "./fixtures/run-view.ts";
+import { request as startRequest } from "./run/fixtures/service-harness.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
 import { pickQuestionnaire } from "./support/questionnaire.ts";
@@ -391,6 +399,98 @@ describe("local Pi child bridge", () => {
         "Subagent proxy is unavailable for this session.",
       ),
     );
+    yield* settle(harness.shutdown);
+  });
+});
+
+const workspace = {
+  workspaceId: "ws-child",
+  ownerId: "session-1/root",
+  sourceCwd: "/repo",
+  sourceRoot: "/repo",
+  cwd: "/private/ws-child",
+};
+
+/** Launches an admitted run and returns the marker its Pi child process would see. */
+const childWorkspaceMarker = (overrides: Partial<StartSubagentRequest>) => {
+  const launch = backendLaunchRequest(
+    {
+      request: startRequest(overrides),
+      parentRunId: "root",
+      cwd: "/project",
+      writeClaims: undefined,
+    },
+    { id: "child-1", name: "child" },
+  );
+  // The coordinator's own marker never leaks into a child that is not a workspace parent.
+  const environment = childProcessEnvironment({ PI_SUBAGENT_WORKSPACE_PARENT: "1" }, launch);
+  return { launch, marker: environment.PI_SUBAGENT_WORKSPACE_PARENT };
+};
+
+const nestedSurfaces: ReadonlyArray<
+  readonly [string, Partial<StartSubagentRequest>, workspaceParent: boolean]
+> = [
+  [
+    "worktree writer",
+    { writeIntent: "writer", writerWorkspaceMode: "worktree", workspace, cwd: workspace.cwd },
+    true,
+  ],
+  ["reader", {}, false],
+  [
+    "shared-checkout writer",
+    { writeIntent: "writer", writerWorkspaceMode: "shared-checkout" },
+    false,
+  ],
+];
+
+describe("nested workspace surface", () => {
+  for (const [kind, overrides, workspaceParent] of nestedSurfaces)
+    effectTest(
+      `${workspaceParent ? "exposes" : "withholds"} subagent_workspace for a ${kind} child`,
+      function* () {
+        const { launch, marker } = childWorkspaceMarker(overrides);
+        // Always stub, so a marker inherited from an enclosing subagent can't leak in.
+        vi.stubEnv("PI_SUBAGENT_WORKSPACE_PARENT", marker);
+        const harness = makeHarness();
+        yield* settle(harness.start);
+        const names = harness.tools.map((tool) => tool.name);
+        expect(names.includes(SUBAGENT_TOOL_NAME.workspace)).toBe(workspaceParent);
+        expect(harness.activeTools().includes(SUBAGENT_TOOL_NAME.workspace)).toBe(workspaceParent);
+        expect(
+          childToolPolicy(["read"], launch.workspaceParent === true).enabled.includes(
+            SUBAGENT_TOOL_NAME.workspace,
+          ),
+        ).toBe(workspaceParent);
+        expect(harness.latestTool(SUBAGENT_TOOL_NAME.start).promptGuidelines).toContain(
+          workspaceParent ? NESTED_WORKSPACE_PARENT_START_GUIDELINE : NESTED_START_GUIDELINE,
+        );
+        yield* settle(harness.shutdown);
+        expect(harness.activeTools()).toEqual(["read"]);
+      },
+    );
+
+  effectTest("proxies a worktree writer's workspace calls to the root coordinator", function* () {
+    vi.stubEnv("PI_SUBAGENT_WORKSPACE_PARENT", "1");
+    const harness = makeHarness();
+    yield* settle(harness.start);
+    const pending = execute(
+      harness.latestTool(SUBAGENT_TOOL_NAME.workspace),
+      { action: "list" },
+      undefined,
+    );
+    const proxied = yield* harness.awaitContact("proxy_request", {
+      tool: SUBAGENT_TOOL_NAME.workspace,
+    });
+    harness.currentListener().handlers.onControl({
+      channel: "pi-subagents",
+      type: "proxy_response",
+      requestId: proxied.requestId,
+      ok: true,
+      payloadJson: '{"content":[{"type":"text","text":"No workspaces."}]}',
+    });
+    expect(yield* step(() => pending)).toMatchObject({
+      content: [{ type: "text", text: "No workspaces." }],
+    });
     yield* settle(harness.shutdown);
   });
 });

@@ -64,6 +64,10 @@ export const renderSubagentStartCall = (
     container.addChild(
       new Text(theme.fg("dim", `  Task: ${escapeControlChars(agent.task)}`), 0, 0),
     );
+    if (agent.isolation !== undefined)
+      container.addChild(
+        new Text(theme.fg("dim", `  Isolation: ${escapeControlChars(agent.isolation)}`), 0, 0),
+      );
     if (agent.writes !== undefined)
       container.addChild(
         new Text(

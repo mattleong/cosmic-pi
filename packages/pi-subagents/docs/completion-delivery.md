@@ -142,7 +142,7 @@ Explicit stop may observationally reverify transport cleanup only when `cleanup.
   `execute-await.ts` owns call-local progress and cancellation evidence, and `execute.ts` keeps action dispatch, authorization, and post-finalizer Promise cancellation translation.
 - `execute-result.ts` separates text, persisted display details, and version-1 script results.
   `contract-schema.ts` defines the authoritative Effect output schemas, and `contract.ts` projects domain facts.
-- `execute-workspace.ts` dispatches strict workspace operations through the coordinator, pages complete immutable diffs, and keeps patches out of persisted detail metadata.
+- `execute-workspace.ts` dispatches strict workspace operations through the coordinator, pages complete immutable diffs, and keeps patches and verification output out of persisted detail metadata.
 - Root scripts may inspect profile routes, launch read-only assignments, list runs, await, inspect status, rename, and stop; see [Native Pi codemode scripting](native-codemode.md).
   All other coordinator tools and every nested-Pi coordinator definition remain model-only.
 - `boundary/host-tool-result.ts` owns bounded activation, call, and detail-identity receipts that set Pi's tool error flag without discarding returned evidence, including decoded child-proxy results.
@@ -180,7 +180,7 @@ Explicit stop may observationally reverify transport cleanup only when `cleanup.
 - Worker and system warnings, questions, and errors are quoted by their first line (common service failures by name) unless the text opens with agent guidance.
   Run IDs, full text, and agent procedures stay in the expanded-only `detail`.
   Retry guidance travels in the failure's own detail, and a failed launch's cleanup and retry state share one line.
-- Routine facts are `info` issues: a stop the status already shows, a pause or stop the call itself requested, a retry moving past its failed option, a list's omitted report text, and an isolated writer's report awaiting review (also a `changes ready for review` heading label).
+- Routine facts are `info` issues: a stop the status already shows, a pause or stop the call itself requested, a retry moving past its failed option, a list's omitted report text, and an isolated writer's workspace outcome: a proposal awaiting apply or review (also a `changes ready for review` heading label), or an automatic discard, which needs no review.
   Recovery steps with no human-facing fact are `info` issues, shown only on expansion.
 - Any error issue makes the outcome an error, and a warning issue turns success into warning; uncertain and cancelled classifications stay.
 - Static discovery counts eligible options and disabled or unavailable profiles without claiming launch readiness.
@@ -193,7 +193,7 @@ Explicit stop may observationally reverify transport cleanup only when `cleanup.
 - `compact-run-issues.ts` never derives grant paths or cleanup or retry authority from bounded cards.
   `compact-start-summary.ts` owns launch-slot issues and the start outcome.
   `compact-workspace-summary.ts` retains pagination and exact review, test, and integration gates using receipt-only display metadata.
-  Workspace rows show operation receipts or bounded counts; pagination, orphan recovery, and review, test, and integration gates are info issues, and only an explicit empty list drops generic orphan-recovery guidance.
+  Workspace rows show operation receipts or bounded counts, and apply rows whether the diff was reviewed and verified; failed verification is an error issue. Pagination, orphan recovery, and review, test, and integration gates are info issues, and only an explicit empty list drops generic orphan-recovery guidance.
 - Report-only omissions use the strict optional `reportsOnlyOmitted: true` producer flag; generic, error, and uncertain omissions retain warnings and full-status guidance.
   Await summaries count requested targets, not descendant context, and omitted projections point to full status.
 - Compact expansion uses content-only callbacks.
@@ -208,6 +208,7 @@ Explicit stop may observationally reverify transport cleanup only when `cleanup.
 - `application/messages.ts` registers root and child message renderers.
   Pure `ui/notification.ts` shows one human row in both collapsed styles (typed counts and the lone run's display name, or a neutral mark for untyped forwarded and peer notices) and the full content only once expanded.
 - `host-notifier.ts` attaches display-only counts and a lone run's name without altering message content, delivery keys, or acknowledgement behavior.
+  A completed worktree writer's notification leads with its workspace outcome when that is already known at delivery, so truncating a long report can't drop it.
 
 ## Activity provider and fleet
 
@@ -217,7 +218,7 @@ Explicit stop may observationally reverify transport cleanup only when `cleanup.
   A row's summary never repeats the state Activity draws beside it: it is why a member's call or a run failed, or what the run is doing.
 - Launch leases are published as provider count metadata and await leases as exact-target row metadata, without synthetic selectable rows or moving run ownership.
   Launch counts describe requested work in unsettled start calls, including the interval before run rows exist.
-- `ui/run-activity-detail.ts` writes a run's detail pane beneath the state, profile, elapsed time and breadcrumb Activity already shows, technical facts last, and `ui/activity-revision.ts` stamps item revisions.
+- `ui/run-activity-detail.ts` writes a run's detail pane beneath the state, profile, elapsed time and breadcrumb Activity already shows, leading its outcome with any workspace outcome and putting technical facts last, and `ui/activity-revision.ts` stamps item revisions.
   Each item's revision hashes its published fields, plus assignment and question identity for runs, so unrelated progress never makes an action stale.
 - Credentials are redacted before summaries or selected details leave the producer, and selected-item details use the same checked capability and stay bounded.
 - Actions recheck cancellation, the session token, item revision, and current capabilities before entering the authoritative service runner with the host's abort signal.

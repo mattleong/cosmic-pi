@@ -18,6 +18,7 @@ import {
   isOutcomeUncertain,
 } from "../run/errors.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
+import type { WriterWorkspaceMode } from "../config/schema.ts";
 import { type SubagentEffort, type SubagentHost, type SubagentRuntime } from "../domain/routing.ts";
 import type { RuntimeApiKey, StartSubagentRequest, SubagentParentContext } from "../run/model.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
@@ -48,6 +49,7 @@ export interface SubagentProfileStartSpec {
   readonly name?: string | undefined;
   readonly profile?: string | undefined;
   readonly writes?: ReadonlyArray<string> | undefined;
+  readonly isolation?: WriterWorkspaceMode | undefined;
 }
 
 export interface SubagentSessionEnvironment {
@@ -337,9 +339,11 @@ const resolvePlannedStart = (
     const activeTools =
       attempt.runtime === "pi" ? yield* piRootActiveToolSnapshot(pi.getActiveTools()) : [];
     const name = input.rawInput.name?.trim();
+    const isolation = attempt.writeIntent === "writer" ? input.rawInput.isolation : undefined;
     const request: StartSubagentRequest = {
       ...(name && { name }),
       ...(normalizedClaims && { writes: normalizedClaims.claims }),
+      ...(isolation && { writerWorkspaceModeOverride: isolation }),
       host: attempt.host,
       runtime: attempt.runtime,
       closeOnReport: attempt.closeOnReport,

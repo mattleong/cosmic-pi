@@ -83,6 +83,49 @@ describe("subagent host notifier", () => {
     expect(sendMessage).toHaveBeenCalledTimes(3);
   });
 
+  it("tells the parent how a worktree writer's workspace ended, even when the report is clipped", () => {
+    const { notify, content } = notifier();
+    const proposal = { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 } as const;
+
+    notify({
+      type: "completed",
+      runs: [
+        completion("agent-1", "writer", { workspaceOutcome: proposal }),
+        completion("agent-2", "idle-writer", { workspaceOutcome: { status: "auto-discarded" } }),
+        completion("agent-3", "reader"),
+      ],
+    });
+    const sections = content().split("## ").slice(1);
+    expect(sections.map((section) => section.includes("subagent_workspace"))).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    const quiet = notifier();
+    quiet.notify({
+      type: "completed",
+      runs: [
+        completion("agent-2", "idle-writer", { workspaceOutcome: { status: "auto-discarded" } }),
+      ],
+    });
+    const plain = notifier();
+    plain.notify({ type: "completed", runs: [completion("agent-2", "idle-writer")] });
+    expect(quiet.content()).not.toBe(plain.content());
+
+    const clipped = notifier();
+    clipped.notify({
+      type: "completed",
+      runs: [
+        completion("agent-1", "writer", {
+          finalText: "x".repeat(40 * 1024),
+          workspaceOutcome: proposal,
+        }),
+      ],
+    });
+    expect(clipped.content().length).toBeLessThanOrEqual(32 * 1024);
+    expect(clipped.content()).toContain("subagent_workspace");
+  });
+
   it("does not retain raw outcome secrets in custom-message metadata", () => {
     const { sendMessage, notify, content } = notifier();
 

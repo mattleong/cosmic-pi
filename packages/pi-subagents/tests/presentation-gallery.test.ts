@@ -799,6 +799,84 @@ const leftoverWorkspace: SubagentServiceDoubleInput = {
       leaseReleaseUnconfirmed: true,
     }),
 };
+const appliedWorkspace = {
+  revisionId: "rev-1",
+  preparationId: "prep-2",
+  preparedCwd: "/project/.pi-subagents/prepared/prep-2",
+  changedPaths: ["db/0007.sql", "src/db/schema.ts"],
+  changedPathCount: 2,
+  workerRoot: "/agent/git-workspaces/ws-1/worker",
+  uncapturedPaths: [],
+  treeRemovalFailed: false,
+  remainingBackupPaths: [],
+  leaseReleaseUnconfirmed: false,
+  integrated: true,
+} as const;
+const verifiedApply: SubagentServiceDoubleInput = {
+  workspaceApply: () =>
+    Effect.succeed({
+      ...appliedWorkspace,
+      reviewed: true,
+      verification: {
+        status: "passed",
+        command: ["pnpm", "test"],
+        outputTail: " Test Files  48 passed (48)\n      Tests  412 passed (412)",
+      },
+    }),
+};
+const unverifiedApply: SubagentServiceDoubleInput = {
+  workspaceApply: () =>
+    Effect.succeed({
+      ...appliedWorkspace,
+      reviewed: false,
+      verification: { status: "not-configured" },
+    }),
+};
+const failedApply: SubagentServiceDoubleInput = {
+  workspaceApply: () =>
+    Effect.succeed({
+      revisionId: "rev-1",
+      preparationId: "prep-2",
+      preparedCwd: "/project/.pi-subagents/prepared/prep-2",
+      changedPaths: ["db/0007.sql", "src/db/schema.ts"],
+      changedPathCount: 2,
+      reviewed: false,
+      integrated: false,
+      verification: {
+        status: "failed",
+        command: ["pnpm", "test"],
+        outputTail:
+          " FAIL  tests/db/migrate.test.ts > applies 0007\nAssertionError: expected column rotated_at to exist\n Test Files  1 failed | 47 passed (48)",
+        message: "Verification command pnpm test exited with code 1.",
+      },
+      nextSteps:
+        "Nothing was applied. Inspect the prepared tree, then revise or discard the workspace, or review every page, prepare again, and integrate that new preparation.",
+    }),
+};
+const nestedWorkspaces: SubagentServiceDoubleInput = {
+  workspaceList: () =>
+    Effect.succeed({
+      records: [
+        workspaceRecord,
+        {
+          ...workspaceRecord,
+          status: "active",
+          handle: {
+            ...workspaceRecord.handle,
+            workspaceId: "ws-2",
+            sourceCwd: "/project/.pi-subagents/worktrees/ws-1",
+            sourceRoot: "/project/.pi-subagents/worktrees/ws-1",
+            cwd: "/project/.pi-subagents/worktrees/ws-2",
+            sourceWorkspaceId: "ws-1",
+            checkoutRoot: "/project",
+          },
+        },
+      ],
+      unavailable: [
+        { workspaceId: "ws-8", status: "unavailable", reason: "source-workspace-unavailable" },
+      ],
+    }),
+};
 const staleWorkspace: SubagentServiceDoubleInput = {
   workspacePrepare: () =>
     Effect.fail(
@@ -853,6 +931,67 @@ const workspaceScenarios = Effect.all([
       },
     },
     { service: leftoverWorkspace },
+  ),
+  scenario(
+    "integrate keeping the working copy for child workspaces",
+    {
+      tool: "subagent_workspace",
+      args: {
+        action: "integrate",
+        workspaceId: "ws-1",
+        revisionId: "rev-1",
+        preparationId: "prep-1",
+      },
+    },
+    {
+      service: {
+        workspaceIntegrate: () =>
+          Effect.succeed({
+            workerRoot: "/agent/git-workspaces/ws-1/worker",
+            uncapturedPaths: [],
+            treeRemovalFailed: false,
+            remainingBackupPaths: [],
+            leaseReleaseUnconfirmed: false,
+            retainedForChildren: ["ws-2"],
+          }),
+      },
+    },
+  ),
+  scenario(
+    "apply a reviewed proposal that passes verification",
+    { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
+    { service: verifiedApply },
+  ),
+  scenario(
+    "apply an unreviewed proposal without verification",
+    { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
+    { service: unverifiedApply },
+  ),
+  scenario(
+    "apply blocked by failed verification",
+    { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
+    { service: failedApply },
+  ),
+  scenario(
+    "apply refused while child workspaces are unresolved",
+    { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
+    {
+      service: {
+        workspaceApply: () =>
+          Effect.fail(
+            new InvalidSubagentRequestError({
+              code: "workspace_children_unresolved",
+              message:
+                "Child workspaces created from this workspace are still unresolved. Apply, integrate, or discard ws-2 first.",
+            }),
+          ),
+      },
+    },
+  ),
+  scenario(
+    "list nested workspaces",
+    { tool: "subagent_workspace", args: { action: "list" } },
+    { service: nestedWorkspaces },
   ),
   scenario(
     "request a revision",
@@ -1069,6 +1208,26 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
       }),
     },
   },
+  awaited("writer finished with a proposal", [
+    view({
+      state: "completed",
+      writeIntent: "writer",
+      writerWorkspaceMode: "worktree",
+      workspaceId: "ws-1",
+      workspaceOutcome: { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 },
+      finalText: "Implemented.",
+    }),
+  ]),
+  awaited("writer changed nothing, so its workspace was discarded", [
+    view({
+      state: "completed",
+      writeIntent: "writer",
+      writerWorkspaceMode: "worktree",
+      workspaceId: "ws-1",
+      workspaceOutcome: { status: "auto-discarded" },
+      finalText: "No changes were needed; the timeout is already configured.",
+    }),
+  ]),
   awaited("writer changes ready for review", [
     view({
       state: "completed",
@@ -1190,6 +1349,19 @@ const completion = (
   ...overrides,
 });
 
+const worktreeProposal = view({
+  id: "agent-10",
+  name: "refresh-fix",
+  profile: "worker",
+  writeIntent: "writer",
+  writerWorkspaceMode: "worktree",
+  workspaceId: "ws-1",
+  state: "completed",
+  finalText: "Fixed the refresh timeout; changes are ready for parent review.",
+  usage: usage(105_000, 0.82),
+  ...timing(5, 1),
+});
+
 const completedReports = notified("one worker reports", {
   type: "completed",
   runs: [completion(docsSweep)],
@@ -1210,6 +1382,27 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
       completion(docsSweep, { warning: "README.md is generated; edit docs/readme.hbs instead" }),
       completion({ ...authReview, finalText: "The refresh flow is safe." }),
       completion(migrationReview),
+    ],
+  }),
+  ...notified("worktree writers finish with a proposal and with no changes", {
+    type: "completed",
+    runs: [
+      completion(worktreeProposal, {
+        workspaceOutcome: { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 },
+      }),
+      completion(
+        { ...worktreeProposal, id: "agent-11", name: "lint-check", finalText: "Nothing to fix." },
+        { workspaceOutcome: { status: "auto-discarded" } },
+      ),
+    ],
+  }),
+  ...notified("worktree writer changed nothing", {
+    type: "completed",
+    runs: [
+      completion(
+        { ...worktreeProposal, id: "agent-11", name: "lint-check", finalText: "Nothing to fix." },
+        { workspaceOutcome: { status: "auto-discarded" } },
+      ),
     ],
   }),
   ...notified("worker needs a reply", {
@@ -1271,19 +1464,6 @@ interface ActivityScenario {
   readonly details: ReadonlyArray<string>;
 }
 
-const worktreeProposal = view({
-  id: "agent-10",
-  name: "refresh-fix",
-  profile: "worker",
-  writeIntent: "writer",
-  writerWorkspaceMode: "worktree",
-  workspaceId: "ws-1",
-  state: "completed",
-  finalText: "Fixed the refresh timeout; changes are ready for parent review.",
-  usage: usage(105_000, 0.82),
-  ...timing(5, 1),
-});
-
 const activityScenarios: ReadonlyArray<ActivityScenario> = [
   {
     title: "active agents with descendants and completed reports",
@@ -1304,6 +1484,23 @@ const activityScenarios: ReadonlyArray<ActivityScenario> = [
     title: "a completed worktree writer proposal",
     runs: [worktreeProposal],
     details: [worktreeProposal.id],
+  },
+  {
+    title: "worktree writers with a proposal and an automatic discard",
+    runs: [
+      {
+        ...worktreeProposal,
+        workspaceOutcome: { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 },
+      },
+      {
+        ...worktreeProposal,
+        id: "agent-11",
+        name: "lint-check",
+        finalText: "Nothing to fix.",
+        workspaceOutcome: { status: "auto-discarded" },
+      },
+    ],
+    details: [worktreeProposal.id, "agent-11"],
   },
   {
     title: "a running child's messages and tool output",

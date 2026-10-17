@@ -186,6 +186,19 @@ const projectWorkspaceFields = (value: {
   }),
 });
 
+const projectWorkspaceOutcome = (
+  outcome: SubagentRunView["workspaceOutcome"],
+): SubagentRunCard["workspaceOutcome"] => {
+  if (outcome?.status !== "proposal") return outcome && { status: outcome.status };
+  return {
+    status: "proposal",
+    changedFileCount: nonNegativeInteger(outcome.changedFileCount),
+    ...(outcome.uncapturedFileCount !== undefined && {
+      uncapturedFileCount: nonNegativeInteger(outcome.uncapturedFileCount),
+    }),
+  };
+};
+
 // Keep complete bounded cleanup evidence at every density; it gates safe recovery.
 export const projectRunCleanup = (
   cleanup: SubagentRunView["cleanup"],
@@ -222,8 +235,10 @@ const projectWriteCardFields = (
   const violationLimit =
     density === "minimal" && !run.writeViolationOffender ? 0 : limits.writeViolations;
   const cleanup = projectRunCleanup(run.cleanup);
+  const workspaceOutcome = projectWorkspaceOutcome(run.workspaceOutcome);
   return {
     ...(cleanup !== undefined && { cleanup }),
+    ...(workspaceOutcome !== undefined && { workspaceOutcome }),
     ...(run.writerCleanupQuarantined !== undefined && {
       writerCleanupQuarantined: run.writerCleanupQuarantined,
     }),

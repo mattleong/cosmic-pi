@@ -1,7 +1,11 @@
 import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
 import { countLabel, formatCost, formatTokens, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { SubagentRunView } from "../run/model.ts";
-import { cleanupEvidenceText, cleanupRecoveryText } from "../tools/format.ts";
+import {
+  cleanupEvidenceText,
+  cleanupRecoveryText,
+  workspaceOutcomeLabel,
+} from "../tools/format.ts";
 
 const RECENT_EVENTS = 12;
 
@@ -11,8 +15,14 @@ const bounded = (text: string, maximumLength: number): string =>
 const section = (title: string, body: string, maximumLength: number): string =>
   body.trim() ? `${title}:\n${bounded(body, maximumLength)}` : "";
 
+const workspaceOutcome = (run: SubagentRunView): string => {
+  const label = run.workspaceOutcome ? workspaceOutcomeLabel(run.workspaceOutcome) : "";
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+};
+
 const outcome = (run: SubagentRunView): string =>
   [
+    workspaceOutcome(run),
     bounded(
       [
         run.error && `Error: ${run.error}`,

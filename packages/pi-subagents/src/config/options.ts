@@ -15,6 +15,7 @@ import {
   type DelegationMode,
   type WriterWorkspaceMode,
   type WorkspaceSetup,
+  type WorkspaceVerify,
   type DecodedSubagentConfig,
   type SubagentNestingPolicy,
 } from "./schema.ts";
@@ -37,6 +38,8 @@ export interface ResolvedSubagentConfig {
   readonly delegation: DelegationMode;
   /** Only a trusted project document can declare a setup command. */
   readonly workspaceSetup?: WorkspaceSetup | undefined;
+  /** Only a trusted project document can declare a verification command. */
+  readonly workspaceVerify?: WorkspaceVerify | undefined;
   readonly sessionSpendLimit?: number | undefined;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
@@ -203,6 +206,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     writerWorkspaceMode: policy.writerWorkspaceMode,
     delegation: policy.delegation,
     ...(project?.file.workspaceSetup && { workspaceSetup: project.file.workspaceSetup }),
+    ...(project?.file.workspaceVerify && { workspaceVerify: project.file.workspaceVerify }),
     ...((project?.file.sessionSpendLimit ?? input.global.file.sessionSpendLimit) !== undefined && {
       sessionSpendLimit: project?.file.sessionSpendLimit ?? input.global.file.sessionSpendLimit,
     }),

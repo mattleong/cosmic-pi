@@ -22,6 +22,7 @@ import {
   isTerminalRunState,
   hasUnresolvedSteeringDelivery,
   type SubagentRunView,
+  type SubagentWorkspaceOutcome,
 } from "../run/model.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentRunObservation } from "../run/service.ts";
@@ -71,6 +72,15 @@ const safeMissingClaimPaths = (run: AttentionRun): ReadonlyArray<string> =>
     const claim = grantableClaimPath(path);
     return claim && !writeClaimContains(run.writeClaims ?? [], claim) ? [claim] : [];
   });
+
+/** The short human outcome of a finished worktree writer's workspace. */
+export const workspaceOutcomeLabel = (outcome: SubagentWorkspaceOutcome): string => {
+  if (outcome.status === "auto-discarded") return "workspace discarded automatically: no changes";
+  const uncaptured = outcome.uncapturedFileCount
+    ? ` (+${outcome.uncapturedFileCount} uncaptured)`
+    : "";
+  return `proposal: ${countLabel(outcome.changedFileCount, "changed file")}${uncaptured}; apply or review`;
+};
 
 export const OUTSIDE_WORKSPACE_RESUME_GUIDANCE =
   "Writes outside the workspace aren't allowed; system temporary directories such as /tmp are fine. Continue only within your claims.";
@@ -312,8 +322,9 @@ const formatRunHeader = (run: SubagentRunView, route: string): string => {
   const native = run.nativeActivity
     ? ` · native=${run.nativeActivity.active}/${run.nativeActivity.total}`
     : "";
+  const outcome = run.workspaceOutcome ? ` (${workspaceOutcomeLabel(run.workspaceOutcome)})` : "";
   const workspace = run.writerWorkspaceMode
-    ? ` · workspace=${run.writerWorkspaceMode}${run.workspaceId ? `:${sanitizeTerminalLine(run.workspaceId)}` : ""}`
+    ? ` · workspace=${run.writerWorkspaceMode}${run.workspaceId ? `:${sanitizeTerminalLine(run.workspaceId)}` : ""}${outcome}`
     : "";
   const steering = run.steeringDelivery ? ` · steeringDelivery=${run.steeringDelivery}` : "";
   return `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}${workspace}${steering}`;
@@ -379,6 +390,17 @@ const selectionStatusFields = (run: SubagentRunView): ReadonlyArray<string | und
   optionalStatusField("Route warning", run.selection.warning),
 ];
 
+const workspaceStatusField = (run: SubagentRunView): string | undefined => {
+  if (run.workspaceOutcome?.status === "auto-discarded")
+    return statusField("Workspace", workspaceOutcomeLabel(run.workspaceOutcome));
+  if (!run.workspaceId) return undefined;
+  const id = run.workspaceId;
+  return statusField(
+    "Proposal",
+    `${run.workspaceOutcome ? `${workspaceOutcomeLabel(run.workspaceOutcome)}. ` : ""}After process cleanup, apply small or trusted changes with subagent_workspace action=apply workspaceId=${id}; it verifies when configured and reports whether the diff was reviewed. For risky changes, review every immutable diff page, prepare combined changes, run relevant tests in the prepared cwd, then integrate the exact revisionId and preparationId. A report does not approve integration.`,
+  );
+};
+
 const writeStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
   const audit = run.writeAudit;
   return [
@@ -388,12 +410,7 @@ const writeStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefin
     optionalStatusField("Workspace ID", run.workspaceId),
     statusField("Cwd", run.cwd),
     optionalStatusField("Source cwd", run.sourceCwd),
-    run.workspaceId
-      ? statusField(
-          "Proposal",
-          `Use subagent_workspace review with workspaceId=${run.workspaceId} after process cleanup. Inspect ALL immutable diff pages, prepare combined changes, run relevant tests in the prepared cwd, then integrate the exact revisionId and preparationId. A report does not approve integration.`,
-        )
-      : undefined,
+    workspaceStatusField(run),
     run.writeIntent === "writer"
       ? statusField("Writes", (run.writeClaims?.join(", ") ?? "") || "exclusive whole cwd")
       : undefined,

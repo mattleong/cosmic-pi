@@ -172,6 +172,9 @@ export const runSubagentDoctor = (
       config.workspaceSetup
         ? check("Worktree setup", "ok", describeWorkspaceSetup(config.workspaceSetup))
         : check("Worktree setup", "ok", "none; isolated writers start without dependencies"),
+      config.workspaceVerify
+        ? check("Worktree verification", "ok", describeWorkspaceSetup(config.workspaceVerify))
+        : check("Worktree verification", "ok", "none; isolated changes apply without a check"),
     );
     checks.push(yield* gitCheck);
     if (input.activityViewAvailable !== undefined)

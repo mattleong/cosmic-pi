@@ -135,6 +135,19 @@ export interface SubagentCleanup {
   readonly diagnostic?: SubagentCleanupDiagnostic | undefined;
 }
 
+/**
+ * What became of a completed worktree writer's workspace once its cleanup was confirmed. Absent
+ * while unknown, including when inspection failed or a run still used the tree.
+ */
+export type SubagentWorkspaceOutcome =
+  | { readonly status: "auto-discarded" }
+  | {
+      readonly status: "proposal";
+      readonly changedFileCount: number;
+      /** Writer-created files the proposal cannot carry, such as `.env`; gitignored files don't count. */
+      readonly uncapturedFileCount?: number | undefined;
+    };
+
 export interface SubagentRunView {
   readonly cleanup?: SubagentCleanup | undefined;
   readonly writerCleanupQuarantined?: boolean | undefined;
@@ -157,6 +170,7 @@ export interface SubagentRunView {
   readonly cwd: string;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly workspaceId?: string | undefined;
+  readonly workspaceOutcome?: SubagentWorkspaceOutcome | undefined;
   readonly sourceCwd?: string | undefined;
   readonly state: SubagentRunState;
   readonly context: SubagentContextMode;

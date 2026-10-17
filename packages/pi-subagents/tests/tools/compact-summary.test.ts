@@ -156,6 +156,34 @@ const awaitReceipt = (
   };
 };
 
+const worktreeWriter = (workspaceOutcome?: SubagentRunView["workspaceOutcome"]) =>
+  view({
+    state: "completed",
+    finalText: "Done",
+    writeIntent: "writer",
+    writerWorkspaceMode: "worktree",
+    workspaceId: "ws-1",
+    ...(workspaceOutcome && { workspaceOutcome }),
+  });
+const statusSummary = (run: SubagentRunView) =>
+  summarize("status", statusOf(run), "settled", { runIds: [run.id] });
+
+describe("worktree writer workspace outcomes", () => {
+  it("presents both outcomes as information, and only a proposal as changes to review", () => {
+    const discarded = statusSummary(worktreeWriter({ status: "auto-discarded" }));
+    const proposal = statusSummary(worktreeWriter({ status: "proposal", changedFileCount: 2 }));
+    const plain = statusSummary(view({ state: "completed", finalText: "Done" }));
+    for (const summary of [discarded, proposal]) {
+      expect(summary?.outcome).toBe("success");
+      expect(summary?.issues?.every((issue) => issue.severity === "info")).toBe(true);
+    }
+    expect(discarded?.counters).toEqual(plain?.counters);
+    expect(proposal?.counters).not.toEqual(plain?.counters);
+    expect(issueDetails(proposal?.issues)).toContain("ws-1");
+    expect(messages(discarded?.issues)).not.toBe(messages(proposal?.issues));
+  });
+});
+
 describe("subagent compact semantic policy", () => {
   it("treats pending and unresolved steering as delivery uncertainty, not worker failure", () => {
     for (const steeringDelivery of ["pending", "unresolved"] as const) {
@@ -254,6 +282,20 @@ describe("subagent compact semantic policy", () => {
         writeIntent: "writer",
         writerWorkspaceMode: "worktree",
       },
+      ...(
+        [
+          { status: "auto-discarded" },
+          { status: "proposal", changedFileCount: 1 },
+          { status: "proposal", changedFileCount: 4, uncapturedFileCount: 2 },
+        ] as const
+      ).map((workspaceOutcome) => ({
+        state: "completed" as const,
+        finalText: "Done",
+        writeIntent: "writer" as const,
+        writerWorkspaceMode: "worktree" as const,
+        workspaceId: "ws-7f3a",
+        workspaceOutcome,
+      })),
     ];
     const issues = runs.flatMap((overrides) => {
       const run = view({ id, ...overrides });
@@ -293,7 +335,7 @@ describe("subagent compact semantic policy", () => {
     expect(issues.length).toBeGreaterThan(runs.length);
     for (const issue of issues)
       expect(
-        issueMessageStyleProblems(issue.message, { forbidden: [id], maxLength: 160 }),
+        issueMessageStyleProblems(issue.message, { forbidden: [id, "ws-7f3a"], maxLength: 160 }),
         issue.message,
       ).toEqual([]);
   });
