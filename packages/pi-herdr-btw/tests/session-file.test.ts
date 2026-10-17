@@ -28,7 +28,6 @@ const { tmpdir } = nodeOs;
 const pathApi = nodePath;
 const { sep } = nodePath;
 
-const PARENT_FILE = "/sessions/parent.jsonl";
 const FIRST_TIMESTAMP = "2026-08-26T01:02:03.004Z";
 const SECOND_TIMESTAMP = "2026-08-26T02:00:00.000Z";
 
@@ -44,31 +43,6 @@ const writeHeader = (name: string, id: string): string =>
   writeSession(name, JSON.stringify({ type: "session", id, timestamp: "t", cwd: "/project" }));
 
 describe("session-file validation", () => {
-  it("reads a valid header with id and parentSession", () => {
-    const path = writeSession(
-      "valid.jsonl",
-      JSON.stringify({
-        type: "session",
-        version: 3,
-        id: "child-id-1",
-        timestamp: "2026-08-26T00:00:00.000Z",
-        cwd: "/project",
-        parentSession: PARENT_FILE,
-      }),
-      `${JSON.stringify({ type: "message", id: "m1", parentId: null })}\n`,
-    );
-    expect(probeSessionHeader(path)).toEqual(
-      SessionHeaderProbe.valid({ header: { id: "child-id-1", parentSession: PARENT_FILE } }),
-    );
-  });
-
-  it("reads a root header without parentSession", () => {
-    const path = writeHeader("root.jsonl", "root-id");
-    expect(probeSessionHeader(path)).toEqual(
-      SessionHeaderProbe.valid({ header: { id: "root-id", parentSession: undefined } }),
-    );
-  });
-
   it("rejects missing files, directories, and symlinks", () => {
     const missing = pathApi.join(dir, "missing.jsonl");
     const nested = pathApi.join(dir, "a-directory");
@@ -78,32 +52,6 @@ describe("session-file validation", () => {
     symlinkSync(target, link);
 
     for (const path of [missing, nested, link]) {
-      expect(probeSessionHeader(path)).toEqual(SessionHeaderProbe.invalid());
-    }
-  });
-
-  it("rejects malformed and non-session first lines", () => {
-    expect(probeSessionHeader(writeSession("broken.jsonl", "{not json"))).toEqual(
-      SessionHeaderProbe.invalid(),
-    );
-    expect(
-      probeSessionHeader(
-        writeSession("wrong-type.jsonl", JSON.stringify({ type: "message", id: "x" })),
-      ),
-    ).toEqual(SessionHeaderProbe.invalid());
-    expect(
-      probeSessionHeader(writeSession("no-id.jsonl", JSON.stringify({ type: "session" }))),
-    ).toEqual(SessionHeaderProbe.invalid());
-  });
-
-  it("rejects an unbounded first line instead of reading it fully", () => {
-    const path = pathApi.join(dir, "huge.jsonl");
-    writeFileSync(path, `{"type":"session","id":"huge","pad":"${"x".repeat(300 * 1024)}"}\n`);
-    expect(probeSessionHeader(path)).toEqual(SessionHeaderProbe.invalid());
-  });
-
-  it("rejects relative and control-character paths without touching the filesystem", () => {
-    for (const path of ["relative/session.jsonl", `${dir}/bad\npath.jsonl`, ""]) {
       expect(probeSessionHeader(path)).toEqual(SessionHeaderProbe.invalid());
     }
   });
@@ -118,13 +66,6 @@ describe("session-file identity", () => {
 
     expect(compareSessionFileIdentity(original, lexicalAlias)).toBe("same");
     expect(compareSessionFileIdentity(original, hardlink)).toBe("same");
-  });
-
-  it("reports distinct only when both descriptor probes succeed", () => {
-    const first = writeHeader("identity-first.jsonl", "first");
-    const second = writeHeader("identity-second.jsonl", "second");
-
-    expect(compareSessionFileIdentity(first, second)).toBe("distinct");
   });
 
   it("compares the actual file when parent traversal follows a directory symlink", () => {

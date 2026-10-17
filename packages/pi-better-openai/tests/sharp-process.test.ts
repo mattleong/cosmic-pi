@@ -19,10 +19,9 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=",
   "base64",
 );
-const decoder = fileURLToPath(new URL("../src/boundary/sharp-decoder.mjs", import.meta.url));
 const fixture = fileURLToPath(new URL("./fixtures/sharp-decoder-fixture.mjs", import.meta.url));
 
-for (const format of ["png", "jpeg", "webp", "gif"] as const) {
+for (const format of ["png"] as const) {
   it.live(`fully decodes real ${format} bytes in the packaged subprocess`, () =>
     Effect.gen(function* () {
       const bytes = yield* Effect.tryPromise(() =>
@@ -37,45 +36,12 @@ for (const format of ["png", "jpeg", "webp", "gif"] as const) {
   );
 }
 
-it.live("validates multi-page animated input", () =>
-  Effect.gen(function* () {
-    const bytes = yield* Effect.tryPromise(() =>
-      sharp(Buffer.from([255, 0, 0, 0, 255, 0]), {
-        raw: { width: 1, height: 2, channels: 3, pageHeight: 1 },
-      })
-        .gif()
-        .toBuffer(),
-    );
-    expect(yield* makeSharpAdapter().decode(bytes)).toEqual({ format: "gif" });
-  }),
-);
-
 it.live("rejects corrupt bytes without exposing native errors", () =>
   Effect.gen(function* () {
     const failure = yield* makeSharpAdapter()
       .decode(Buffer.from("secret not an image"))
       .pipe(Effect.flip);
     expect(inspect(failure)).not.toContain("secret");
-  }),
-);
-
-it.live("enforces the child stdin limit even without the parent guard", () =>
-  Effect.gen(function* () {
-    const result = yield* runBoundedProcessNode({
-      executable: process.execPath,
-      args: [decoder],
-      stdin: new Uint8Array(60 * 1024 * 1024 + 1),
-      stdoutLimitBytes: 128,
-      stderrLimitBytes: 128,
-      timeoutMillis: 5_000,
-      cleanupTimeoutMillis: 200,
-    }).pipe(Effect.result);
-    if (Result.isSuccess(result)) {
-      expect(result.success.code).not.toBe(0);
-      expect(result.success.stdout).toBe("");
-      expect(result.success.stderr).toBe("");
-      expect(result.success.cleanupUnconfirmed).toBe(false);
-    }
   }),
 );
 

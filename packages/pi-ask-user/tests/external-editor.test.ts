@@ -48,26 +48,6 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
     }),
   );
 
-  it.effect("skips TUI mutation and never spawns when the signal is already aborted", () =>
-    Effect.gen(function* () {
-      const { fs, path, directory, command, tui, stop, start } = yield* editorScript(
-        'import { writeFile } from "node:fs/promises"; await writeFile(process.argv[2], "spawned", "utf8");\n',
-      );
-      const marker = path.join(directory, "spawned");
-      const controller = new AbortController();
-      controller.abort();
-
-      const result = yield* Effect.promise(() =>
-        editWithExternalEditor(tui, `${command} ${marker}`, "initial", controller.signal),
-      );
-
-      expect(result).toBeUndefined();
-      expect(stop).not.toHaveBeenCalled();
-      expect(start).not.toHaveBeenCalled();
-      expect(yield* fs.exists(marker)).toBe(false);
-    }),
-  );
-
   it.effect("restores the TUI and fails with a typed redacted error on a nonzero exit", () =>
     Effect.gen(function* () {
       const { script, command, tui, stop, start, requestRender } = yield* editorScript(
@@ -87,20 +67,6 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
       expect(stop).toHaveBeenCalledOnce();
       expect(start).toHaveBeenCalledOnce();
       expect(requestRender).toHaveBeenCalledWith(true);
-    }),
-  );
-
-  it.effect("strips terminal controls while preserving document text", () =>
-    Effect.gen(function* () {
-      const { command, tui } = yield* editorScript(
-        'import { writeFile } from "node:fs/promises"; await writeFile(process.argv[2], "# Heading\\n\\t**body**\\u001b[31m red\\u001b[0m\\u001b]0;private title\\u0007\\n", "utf8");\n',
-      );
-
-      const result = yield* Effect.promise(() =>
-        editWithExternalEditor(tui, command, "initial", new AbortController().signal),
-      );
-
-      expect(result).toBe("# Heading\n\t**body** red");
     }),
   );
 

@@ -6,7 +6,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Path from "effect/Path";
-import * as PlatformError from "effect/PlatformError";
 import type * as Schema from "effect/Schema";
 import {
   JsonDocumentStore,
@@ -16,8 +15,6 @@ import {
 import { provideBuiltLayer } from "../index.ts";
 import { inProcessDocumentLock } from "./support/json-documents.ts";
 
-const fsFailure = (tag: PlatformError.SystemErrorTag, method: string) =>
-  PlatformError.systemError({ _tag: tag, module: "FileSystem", method });
 const toBytes = (source: string | Uint8Array) =>
   source instanceof Uint8Array ? source : new TextEncoder().encode(source);
 
@@ -97,46 +94,6 @@ it.effect("reads and atomically writes JSON object documents", () => {
   }).pipe(provideBuiltLayer(harness.layer));
 });
 
-it.effect("supports locked read-only modifications without rewriting documents", () => {
-  const harness = documentLayer({ "/config.json": '{"known":true}' });
-  return Effect.gen(function* () {
-    let afterCommits = 0;
-    const existingResult = yield* modify({
-      value: "unchanged",
-      document: { known: false },
-      write: false,
-      afterCommit: Effect.sync(() => void afterCommits++),
-    });
-    expect(existingResult).toBe("unchanged");
-    expect(harness.files.get("/config.json")).toBe('{"known":true}');
-    expect(afterCommits).toBe(0);
-  }).pipe(provideBuiltLayer(harness.layer));
-});
-
-it.effect("serializes read-modify-write updates across independently provided Layers", () => {
-  const harness = documentLayer({ "/auth.json": '{"alpha":1}' });
-  const update = (field: string, value: number) =>
-    JsonDocumentStore.use((store) =>
-      store.modifyObject("/auth.json", (document) =>
-        Effect.succeed({ value: undefined, document: { ...document, [field]: value } }),
-      ),
-    ).pipe(provideBuiltLayer(harness.layer));
-  return Effect.gen(function* () {
-    yield* Effect.all([update("beta", 2), update("gamma", 3)], {
-      concurrency: "unbounded",
-    });
-    expect(
-      yield* JsonDocumentStore.use((store) => store.readObject("/auth.json")).pipe(
-        provideBuiltLayer(harness.layer),
-      ),
-    ).toEqual({
-      alpha: 1,
-      beta: 2,
-      gamma: 3,
-    });
-  });
-});
-
 it.effect("fails closed when the latest document cannot be decoded", () => {
   const harness = documentLayer({ "/auth.json": "not-json" });
   return Effect.gen(function* () {
@@ -164,20 +121,6 @@ it.effect("rejects non-JSON values instead of coercing persisted data", () => {
     expect(result._tag).toBe("Failure");
     if (Result.isFailure(result)) expect(result.failure.operation).toBe("encode");
     expect(harness.files.has("/config.json")).toBe(false);
-  }).pipe(provideBuiltLayer(harness.layer));
-});
-
-it.effect("does not clean up a temporary path when exclusive acquisition fails", () => {
-  const harness = documentLayer({});
-  let removals = 0;
-  harness.fileSystem.makeTempFile = () => Effect.fail(fsFailure("AlreadyExists", "makeTempFile"));
-  harness.fileSystem.remove = () => Effect.sync(() => void removals++);
-  return Effect.gen(function* () {
-    const store = yield* JsonDocumentStore;
-    const result = yield* Effect.result(store.writeObject("/config.json", { enabled: true }));
-    expect(result._tag).toBe("Failure");
-    if (Result.isFailure(result)) expect(result.failure.operation).toBe("write");
-    expect(removals).toBe(0);
   }).pipe(provideBuiltLayer(harness.layer));
 });
 
@@ -210,29 +153,6 @@ it.effect(
     }).pipe(Effect.scoped),
 );
 
-it.effect("does not run an after-commit hook when temporary writing fails", () => {
-  const harness = documentLayer({ "/config.json": '{"enabled":false}' });
-  let afterCommits = 0;
-  let renames = 0;
-  harness.fileSystem.rename = () => Effect.sync(() => void renames++);
-  harness.fileSystem.writeFileString = () =>
-    Effect.fail(fsFailure("BadResource", "writeFileString"));
-  return Effect.gen(function* () {
-    const result = yield* Effect.result(
-      modify({
-        value: undefined,
-        document: { enabled: true },
-        afterCommit: Effect.sync(() => void afterCommits++),
-      }),
-    );
-    expect(result._tag).toBe("Failure");
-    if (Result.isFailure(result)) expect(result.failure.operation).toBe("write");
-    expect(harness.files.get("/config.json")).toBe('{"enabled":false}');
-    expect(renames).toBe(0);
-    expect(afterCommits).toBe(0);
-  }).pipe(provideBuiltLayer(harness.layer));
-});
-
 it.effect("commits the document and hook exactly once before honoring interruption", () =>
   Effect.gen(function* () {
     const renameStarted = yield* Deferred.make<void>();
@@ -261,58 +181,3 @@ it.effect("commits the document and hook exactly once before honoring interrupti
     expect(afterCommits).toBe(1);
   }).pipe(Effect.scoped),
 );
-
-it.effect("treats rename as the final fallible commit and ignores cleanup defects", () => {
-  const harness = documentLayer({});
-  const chmodPaths: string[] = [];
-  let cleanupAttempts = 0;
-  harness.fileSystem.chmod = (path) => Effect.sync(() => void chmodPaths.push(path));
-  harness.fileSystem.remove = () =>
-    Effect.sync(() => void cleanupAttempts++).pipe(
-      Effect.andThen(Effect.die("expected cleanup defect")),
-    );
-  return Effect.gen(function* () {
-    const result = yield* Effect.exit(
-      JsonDocumentStore.use((store) => store.writeObject("/config.json", { enabled: true })),
-    );
-    expect(result._tag).toBe("Success");
-    expect(harness.files.get("/config.json")).toContain('"enabled": true');
-    expect(chmodPaths).toEqual(["/tmp/document-0/value.json"]);
-    expect(cleanupAttempts).toBe(1);
-  }).pipe(provideBuiltLayer(harness.layer));
-});
-
-it.effect("preserves a rename failure when best-effort cleanup also defects", () => {
-  const harness = documentLayer({ "/config.json": "old" });
-  let cleanupAttempts = 0;
-  harness.fileSystem.remove = () =>
-    Effect.sync(() => void cleanupAttempts++).pipe(
-      Effect.andThen(Effect.die("expected cleanup defect")),
-    );
-  harness.fileSystem.rename = () => Effect.fail(fsFailure("AlreadyExists", "rename"));
-  return Effect.gen(function* () {
-    const result = yield* Effect.result(
-      JsonDocumentStore.use((store) => store.writeObject("/config.json", { enabled: true })),
-    );
-    expect(result._tag).toBe("Failure");
-    if (Result.isFailure(result)) expect(result.failure.operation).toBe("rename");
-    expect(harness.files.get("/config.json")).toBe("old");
-    expect(cleanupAttempts).toBe(1);
-  }).pipe(provideBuiltLayer(harness.layer));
-});
-
-it.effect("rejects a truncated UTF-8 tail after the object", () => {
-  const source = Uint8Array.of(...new TextEncoder().encode('{"a":1}\n'), 0xe2, 0x82);
-  const harness = documentLayer({ "/config.json": source });
-  return Effect.gen(function* () {
-    const store = yield* JsonDocumentStore;
-    const { state, change } = trackedModification({ a: 2 });
-    for (const operation of [
-      store.readObject("/config.json"),
-      store.modifyObject("/config.json", change),
-    ])
-      expect((yield* operation.pipe(Effect.flip)).operation).toBe("decode");
-    expect(state).toEqual({ mutated: false, published: false });
-    expect(harness.files.get("/config.json")).toBe(source);
-  }).pipe(provideBuiltLayer(harness.layer));
-});

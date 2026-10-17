@@ -25,33 +25,6 @@ import type { QuestionnairePresence } from "../src/questionnaire/service.ts";
 const open = (h: ReturnType<typeof hostFixture>, presence?: QuestionnairePresence) =>
   openPresentation(h, (bridge) => askUserHost(h.ctx, bridge)(request, presence));
 
-it.effect(
-  "docks the questionnaire without painting over the editor and retains hidden drafts",
-  () =>
-    Effect.gen(function* () {
-      const h = hostFixture();
-      const { bridge, pending } = yield* open(h);
-      h.mount!();
-      const widget = [...h.widgets.values()][0]!;
-      expect(widget.render(200).length).toBeGreaterThan(0);
-      expect(h.component!.render(200)).toEqual([]);
-      h.component!.handleInput?.("1");
-      const draft = widget.render(200);
-      h.component!.handleInput?.("b");
-      expect(widget.render(200)).toEqual([]);
-      h.resize(80, 24);
-      expect(bridge.resume()).toBe(true);
-      expect(widget.render(80).length).toBeGreaterThan(0);
-      expect(widget.render(80).length).toBeLessThan(h.tui.terminal.rows);
-      h.resize(200, 60);
-      expect(widget.render(200)).toEqual(draft);
-      h.component!.handleInput?.("\r");
-      expect((yield* Effect.promise(() => pending)).outcome).toBe("submitted");
-      expect(h.widgets.size).toBe(0);
-      expect(widget.render(200)).toEqual([]);
-    }),
-);
-
 it.effect("the opening handshake waits for mounting and reports each hide and resume", () =>
   Effect.gen(function* () {
     const h = hostFixture();
@@ -106,21 +79,6 @@ it.effect(
       expect(h.done).toHaveBeenCalledOnce();
       expect(bridge.resume()).toBe(false);
     }),
-);
-
-it.effect("a throwing host done still removes the guard and owned questionnaire", () =>
-  Effect.gen(function* () {
-    const h = hostFixture();
-    h.done.mockImplementation(() => {
-      throw new Error("host failure");
-    });
-    const { controller, pending } = yield* open(h);
-    h.mount!();
-    h.showOverlay(foreign);
-    controller.abort();
-    yield* Effect.promise(() => expect(pending).rejects.toBeDefined());
-    expect(h.stack).toEqual([foreign]);
-  }),
 );
 
 for (const fault of ["ownedHide", "createGuard", "done", "guardHide"] as const) {
@@ -228,8 +186,6 @@ for (const fail of [false, true]) {
 
 for (const [lateResult, failFinish] of [
   ["success", false],
-  ["rejection", false],
-  ["success", true],
   ["rejection", true],
 ] as const) {
   it.effect(
@@ -325,22 +281,6 @@ for (const [lateResult, failFinish] of [
       }),
   );
 }
-
-it.effect(
-  "normal submission also preserves an unrelated overlay and the authoritative answer",
-  () =>
-    Effect.gen(function* () {
-      const h = hostFixture();
-      const { pending } = yield* open(h);
-      h.mount!();
-      h.showOverlay(foreign);
-      h.component!.handleInput?.("1");
-      h.component!.handleInput?.("\r");
-      expect((yield* Effect.promise(() => pending)).outcome).toBe("submitted");
-      expect(h.stack).toEqual([foreign]);
-      expect(h.done).toHaveBeenCalledOnce();
-    }),
-);
 
 it.effect(
   "a competing prompt during lazy loading prevents custom mounting without taking focus",

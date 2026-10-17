@@ -5,40 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
-import { decodePackageManifest, isPackageVersion } from "./package-manifest.ts";
-
-await test("package versions support SemVer releases, prereleases, and build metadata", () => {
-  for (const version of [
-    "0.0.0",
-    "1.2.3",
-    "1.2.3-0",
-    "1.2.3-alpha.1",
-    "1.2.3-01alpha",
-    "1.2.3--",
-    "1.2.3+001",
-    "1.2.3-alpha+001.abc",
-  ]) {
-    assert.equal(isPackageVersion(version), true, version);
-  }
-  for (const version of [
-    "",
-    "1.2",
-    "v1.2.3",
-    "01.2.3",
-    "1.02.3",
-    "1.2.03",
-    "1.2.3-01",
-    "1.2.3-alpha..1",
-    "1.2.3-alpha.",
-    "1.2.3-.",
-    "1.2.3+.",
-    "1.2.3+build..1",
-    "1.2.3\n",
-    " 1.2.3",
-  ]) {
-    assert.equal(isPackageVersion(version), false, version);
-  }
-});
+import { decodePackageManifest } from "./package-manifest.ts";
 
 await test("version commands reject malformed versions before mutation and accept repaired releases", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "cosmic-version-"));

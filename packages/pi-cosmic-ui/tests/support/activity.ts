@@ -1,7 +1,5 @@
 import { plainTheme } from "pi-cosmic-core/testing";
 import { ActivityComponent, type ActivityComponentOptions } from "../../src/activity/component.ts";
-import { groupedDetail } from "../../src/activity/grouped-detail.ts";
-import { groupedActivityTree, type GroupedActivityRow } from "../../src/activity/grouped-tree.ts";
 import type { ActivityRow } from "../../src/activity/model.ts";
 import { activityKey, type ActivityItem } from "../../src/activity/protocol.ts";
 import {
@@ -43,21 +41,6 @@ export const memberRow = (
   status: ActivityItem["status"] = "running",
   overrides: Partial<ActivityRow> = {},
 ): ActivityRow => activityRow(id, status, parent.id, overrides);
-
-export const groupedDetailOf = (
-  rows: readonly ActivityRow[],
-  pick: (entry: GroupedActivityRow) => boolean,
-  loaded?: string,
-) =>
-  groupedDetail({
-    selected: groupedActivityTree(rows).find(pick),
-    theme: plainTheme,
-    focused: true,
-    now: 1000,
-    loaded,
-    actionPage: 0,
-    technical: true,
-  });
 
 export const mountActivity = (
   snapshot: () => readonly ActivityRow[],

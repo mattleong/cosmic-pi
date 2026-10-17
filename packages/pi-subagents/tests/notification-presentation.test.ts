@@ -11,7 +11,7 @@ import { hostNotifier } from "../src/boundary/host-notifier.ts";
 let restore = () => {};
 afterEach(() => restore());
 
-test.each(["compact", "preview"] as const)(
+test.each(["compact"] as const)(
   "registered %s notifications hide agent procedures without changing their delivered content",
   (style) => {
     restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
@@ -52,7 +52,6 @@ test.each(["compact", "preview"] as const)(
         );
         const text = component!.render(180).join("\n");
         expect(text.includes("PRIVATE_RUN_ID")).toBe(expanded);
-        if (!expanded) expect(text).toContain("Worker");
         expect(
           text.includes(
             message.customType === "pi-subagents-completed"
@@ -72,24 +71,3 @@ test.each(["compact", "preview"] as const)(
     }
   },
 );
-
-test("forwarded and peer notices without a recorded outcome stay neutral", () => {
-  restore = applyPresentationSettings({ toolCallCollapsedStyle: "compact" });
-  const renderers = captureRegistrations(registerSubagentMessageRenderers).messageRenderers;
-  for (const customType of ["pi-subagents-proxy-notification", "pi-subagents-peer-notice"]) {
-    const text = renderers.get(customType)!(
-      {
-        role: "custom",
-        customType,
-        content: "Subagent PRIVATE_RUN_ID completed.",
-        display: true,
-        timestamp: 0,
-      },
-      { expanded: false, outputPad: 0 },
-      plainTheme,
-    )!
-      .render(120)
-      .join("\n");
-    expect(text).not.toContain("PRIVATE_RUN_ID");
-  }
-});

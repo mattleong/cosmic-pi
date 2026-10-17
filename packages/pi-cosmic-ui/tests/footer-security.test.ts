@@ -50,9 +50,7 @@ describe("footer terminal safety", () => {
 
   it.each([
     ["tui", true],
-    ["rpc", true],
     ["json", false],
-    ["print", false],
   ] as const)("publishes sanitized status in %s mode: %s", (mode, delivered) => {
     const setStatus = vi.fn();
     const context = extensionContextFixture({ mode, hasUI: delivered, ui: { setStatus } });

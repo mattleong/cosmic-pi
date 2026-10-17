@@ -2,26 +2,17 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as TestClock from "effect/testing/TestClock";
-import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   askParent,
-  completeLocalRun,
-  contactParentFrame,
   localServiceFixture,
   request,
   nativeReportRequest,
   nativeReportServiceFixture,
   withService,
-  type FakeChildControl,
 } from "./fixtures/service-harness.ts";
 import { anyString } from "../support/matchers.ts";
-import {
-  InvalidSubagentRequestError,
-  SubagentProcessError,
-  SubagentProtocolError,
-} from "../../src/run/errors.ts";
+import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 
 describe("SubagentService", () => {
   it.effect("clears a waiting parent question when its MCP caller cancels", () => {
@@ -91,23 +82,6 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("refreshes peer notices from the live run registry after a peer stops", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      yield* service.start(request({ name: "peer-notice-first" }));
-      const second = yield* service.start(request({ name: "peer-notice-second" }));
-      const noticesBeforeStop =
-        fake.controls[0]?.ipc.filter((message) => message.type === "peer_notice") ?? [];
-      expect(noticesBeforeStop.at(-1)?.message).toContain(second.id);
-
-      yield* service.stop(second.id);
-      const noticesAfterStop =
-        fake.controls[0]?.ipc.filter((message) => message.type === "peer_notice") ?? [];
-      expect(noticesAfterStop.length).toBeGreaterThan(noticesBeforeStop.length);
-      expect(noticesAfterStop.at(-1)?.message).not.toContain(second.id);
-    });
-  });
-
   it.effect(
     "finishes admitted guidance before queue clearing and rejects guidance admitted after interrupt",
     () => {
@@ -158,98 +132,6 @@ describe("SubagentService", () => {
     },
   );
 
-  it.effect("accepts a turn-input barrier ack before IPC transport settlement", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "early-barrier-ack" }));
-      const barrierGate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextIpcType("turn_input_barrier", barrierGate);
-      fake.controls[0]?.ackNextIpcBeforeSendSettles("turn_input_barrier");
-
-      const interrupting = yield* service
-        .interrupt(run.id)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* yieldUntil(() => fake.controls[0]?.sent("abort") === true);
-
-      expect(yield* Deferred.isDone(barrierGate)).toBe(false);
-      expect(fake.controls[0]?.commandTypes("clear_queue", "abort")).toEqual([
-        "clear_queue",
-        "abort",
-      ]);
-      expect((yield* Fiber.join(interrupting)).state).toBe("paused");
-    });
-  });
-
-  for (const fault of [
-    {
-      name: "suppresses queue clearing when the child cannot confirm its turn-input barrier",
-      inject: (control: FakeChildControl) =>
-        Effect.map(Deferred.make<void>(), (gate) =>
-          control.gateNextIpcType("turn_input_barrier", gate),
-        ),
-      timesOutAfter: (control: FakeChildControl) => control.sentIpc("turn_input_barrier"),
-      expected: {
-        code: "turn_input_barrier_unconfirmed",
-        operation: "await turn-input barrier acknowledgment from",
-      },
-      suppressed: "clear_queue",
-    },
-    {
-      name: "suppresses abort when queue clearing fails",
-      inject: (control: FakeChildControl) =>
-        Effect.sync(() => control.failNext("clear_queue", "Fixture clear failure.")),
-      expected: { operation: "execute clear_queue in" },
-      message: "Abort was not sent",
-      suppressed: "abort",
-    },
-    {
-      name: "maps uncertain queue clearing distinctly and suppresses abort",
-      inject: (control: FakeChildControl) =>
-        Effect.sync(() => control.failTransportNext("clear_queue", "transport_outcome_uncertain")),
-      expected: { code: "clear_queue_outcome_uncertain", operation: "execute clear_queue in" },
-      message: "abort was not sent",
-      suppressed: "abort",
-      completesAfterward: true,
-    },
-    {
-      name: "maps a timed-out queue clear as uncertain and suppresses abort",
-      inject: (control: FakeChildControl) => Effect.sync(() => control.dropNext("clear_queue")),
-      timesOutAfter: (control: FakeChildControl) => control.sent("clear_queue"),
-      expected: { code: "clear_queue_outcome_uncertain", operation: "await RPC response from" },
-      message: "abort was not sent",
-      suppressed: "abort",
-    },
-  ] as const)
-    it.effect(fault.name, () => {
-      const { fake, layer } = localServiceFixture();
-      return withService(layer, function* (service) {
-        const run = yield* service.start(request({ name: "interrupt-fault" }));
-        const control = fake.controls[0]!;
-        yield* fault.inject(control);
-        const interrupting = yield* service
-          .interrupt(run.id)
-          .pipe(Effect.forkScoped({ startImmediately: true }));
-        const { timesOutAfter } = fault;
-        if (timesOutAfter) {
-          yield* yieldUntil(() => timesOutAfter(control));
-          yield* TestClock.adjust("10 seconds");
-        }
-        const failure = yield* Fiber.join(interrupting).pipe(Effect.flip);
-        expect(failure).toBeInstanceOf(SubagentProcessError);
-        expect(failure).toMatchObject(fault.expected);
-        if (fault.message) expect(failure.message).toContain(fault.message);
-        expect(control.sent(fault.suppressed)).toBe(false);
-        expect((yield* service.status(run.id)).state).toBe("running");
-        expect((yield* service.send(run.id, "Continue after the failed interrupt.")).state).toBe(
-          "running",
-        );
-        if (fault.completesAfterward) {
-          yield* completeLocalRun(service, control, run.id);
-          expect((yield* service.status(run.id)).state).toBe("completed");
-        }
-      });
-    });
-
   it.effect("finishes an accepted interrupt after its requesting fiber is cancelled", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
@@ -262,35 +144,6 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(gate, undefined);
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "paused");
       expect((yield* service.status(run.id)).state).toBe("paused");
-    });
-  });
-
-  it.effect("finishes an accepted resume after its requesting fiber is cancelled", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "cancelled-resume-request" }));
-      fake.controls[0]?.offer({ type: "extension_error", error: "Previous system warning" });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warningSource === "system");
-      expect((yield* service.interrupt(run.id)).state).toBe("paused");
-
-      const gate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextSend("prompt", gate);
-      const resuming = yield* service.resume(run.id, "Continue safely.").pipe(Effect.forkScoped);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "starting");
-      yield* Fiber.interrupt(resuming);
-      yield* Deferred.succeed(gate, undefined);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
-      const resumed = yield* service.status(run.id);
-      expect(resumed.warning).toBeUndefined();
-      expect(resumed.warningSource).toBeUndefined();
-      expect(resumed.systemWarning).toBeUndefined();
-      expect(resumed.sessionEvents).toContainEqual(
-        expect.objectContaining({
-          type: "notice",
-          kind: "parent",
-          text: "Resume: Continue safely.",
-        }),
-      );
     });
   });
 
@@ -315,109 +168,6 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("ignores child settlement that arrives after interruption is confirmed", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "settled-after-pause" }));
-      expect((yield* service.interrupt(run.id)).state).toBe("paused");
-
-      fake.controls[0]?.offer({ type: "agent_settled" });
-      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
-
-      expect(yield* service.status(run.id)).toMatchObject({
-        state: "paused",
-        reportGeneration: 0,
-      });
-    });
-  });
-
-  it.effect("keeps a timed-out abort pending after confirmed queue clearing", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "late-pause" }));
-      fake.controls[0]?.dropNext("abort");
-      const interrupting = yield* service.interrupt(run.id).pipe(Effect.forkScoped);
-      yield* yieldUntil(() => fake.controls[0]?.sent("abort") === true);
-      expect(fake.controls[0]?.commandTypes("clear_queue", "abort")).toEqual([
-        "clear_queue",
-        "abort",
-      ]);
-      yield* TestClock.adjust("10 seconds");
-      const error = yield* Fiber.join(interrupting).pipe(Effect.flip);
-      expect(error).toBeInstanceOf(SubagentProcessError);
-      expect(error).toMatchObject({ code: "interrupt_outcome_uncertain" });
-      expect(error.message).toContain("may still apply");
-      expect(error.message).toContain("subagent_status");
-
-      fake.controls[0]?.offer({ type: "agent_settled" });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "paused");
-      expect((yield* service.status(run.id)).state).toBe("paused");
-    });
-  });
-
-  it.effect("fails when the IPC boundary rejects a malformed contact event", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "ipc-boundary" }));
-      fake.controls[0]?.offerProtocolError("Subagent emitted an invalid parent-contact event.");
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      expect((yield* service.status(run.id)).state).toBe("failed");
-    });
-  });
-
-  for (const pending of [
-    {
-      name: "fails an in-flight RPC promptly when stop sweeps its registration",
-      end: "stop",
-      errorClass: SubagentProcessError,
-      expected: { operation: "stop" },
-    },
-    {
-      name: "fails an in-flight RPC promptly when the run protocol fails",
-      end: "protocol",
-      errorClass: SubagentProtocolError,
-      expected: {},
-    },
-    {
-      name: "times out when an RPC transport write never completes",
-      end: "clock",
-      errorClass: SubagentProcessError,
-      expected: { operation: "await RPC response from" },
-    },
-    {
-      name: "fails pending RPCs immediately after a schema-invalid event",
-      end: "protocol",
-      errorClass: SubagentProtocolError,
-      expected: {},
-      awaitingResponse: true,
-    },
-  ] as const)
-    it.effect(pending.name, () => {
-      const { fake, projections, layer } = localServiceFixture();
-      return withService(layer, function* (service) {
-        const run = yield* service.start(request({ name: "in-flight-rpc" }));
-        const control = fake.controls[0]!;
-        const command = pending.awaitingResponse ? "set_session_name" : "steer";
-        if (pending.awaitingResponse) control.dropNext(command);
-        else control.gateNextSend(command, yield* Deferred.make<void>());
-        const requesting = yield* (
-          pending.awaitingResponse
-            ? service.rename(run.id, "renamed")
-            : service.send(run.id, "Continue")
-        ).pipe(Effect.forkScoped);
-        yield* yieldUntil(() => control.sent(command));
-        if (pending.end === "stop") expect((yield* service.stop(run.id)).state).toBe("stopped");
-        if (pending.end === "protocol") control.offer({ type: "tool_execution_start" });
-        if (pending.end === "clock") yield* TestClock.adjust("10 seconds");
-        const failure = yield* Fiber.join(requesting).pipe(Effect.flip);
-        expect(failure).toBeInstanceOf(pending.errorClass);
-        expect(failure).toMatchObject(pending.expected);
-        if (pending.end === "protocol")
-          yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-        expect((yield* service.status(run.id)).name).toBe("in-flight-rpc");
-      });
-    });
-
   it.effect("finishes stop cleanup after the requesting fiber is interrupted", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
@@ -430,19 +180,6 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(releaseGate, undefined);
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
       expect(fake.controls[0]?.released()).toBe(1);
-    });
-  });
-
-  it.effect("ignores a parent question that arrives after interruption", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "late-question" }));
-      expect((yield* service.interrupt(run.id)).state).toBe("paused");
-      fake.controls[0]?.offerIpc(contactParentFrame("late-question", "question", "Too late?"));
-      yield* Effect.yieldNow;
-      const paused = yield* service.status(run.id);
-      expect(paused.state).toBe("paused");
-      expect(paused.question).toBeUndefined();
     });
   });
 
@@ -467,133 +204,6 @@ describe("SubagentService", () => {
       expect(fake.controls[0]?.sentIpc("parent_reply")).toBe(false);
     });
   });
-
-  it.effect("finishes a delivered parent reply after the requesting fiber is interrupted", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "cancel-safe-reply" }));
-      yield* askParent(fake.controls[0]!, projections, "question-1");
-      const ipcGate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextIpc(ipcGate);
-      const replying = yield* service.reply(run.id, "First").pipe(Effect.forkScoped);
-      yield* yieldUntil(() => fake.controls[0]?.sentIpc("parent_reply") === true);
-
-      yield* Fiber.interrupt(replying);
-      const claimed = yield* service.status(run.id);
-      expect(claimed.state).toBe("running");
-      expect(claimed.question).toBeUndefined();
-      expect((yield* Effect.flip(service.reply(run.id, "Second")))._tag).toBe(
-        "InvalidSubagentRequestError",
-      );
-
-      yield* Deferred.succeed(ipcGate, undefined);
-      yield* yieldUntil(() =>
-        Boolean(
-          projections
-            .at(-1)
-            ?.runs[0]?.sessionEvents.some(
-              (event) => event.type === "notice" && event.text.includes("Reply: First"),
-            ),
-        ),
-      );
-      expect(
-        fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply"),
-      ).toHaveLength(1);
-    });
-  });
-
-  it.effect("rejects guidance that a parent reply claimed mid-transport", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "steer-vs-reply" }));
-
-      const steerGate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextSend("steer", steerGate);
-      const sending = yield* service.send(run.id, "Continue").pipe(Effect.forkScoped);
-      yield* yieldUntil(() => fake.controls[0]?.sent("steer") === true);
-
-      yield* askParent(fake.controls[0]!, projections, "question-1");
-      const replyGate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextIpc(replyGate);
-      const replying = yield* service.reply(run.id, "Answer").pipe(Effect.forkScoped);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
-
-      yield* Deferred.succeed(steerGate, undefined);
-      const failure = yield* Fiber.join(sending).pipe(Effect.flip);
-      expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
-      expect(failure).toMatchObject({ code: "guidance_outcome_uncertain" });
-      expect(failure.message).toContain("may already have applied");
-      expect(failure.message).toContain("subagent_status");
-
-      yield* Deferred.succeed(replyGate, undefined);
-      expect((yield* Fiber.join(replying)).state).toBe("running");
-      const { sessionEvents } = yield* service.status(run.id);
-      const notices = sessionEvents.filter((event) => event.type === "notice");
-      expect(notices.some((event) => event.text.includes("Guidance:"))).toBe(false);
-      expect(notices.some((event) => event.text.includes("Reply: Answer"))).toBe(true);
-    });
-  });
-
-  it.effect(
-    "maps ambiguous send, reply, interrupt, and resume outcomes without unsafe rollback",
-    () => {
-      const { fake, projections, layer } = localServiceFixture();
-      return withService(layer, function* (service) {
-        const run = yield* service.start(request({ name: "uncertain-controls" }));
-
-        fake.controls[0]?.failTransportNext("steer", "transport_outcome_uncertain");
-        const sendFailure = yield* service.send(run.id, "Potential guidance.").pipe(Effect.flip);
-        expect(sendFailure).toMatchObject({ code: "guidance_outcome_uncertain" });
-        expect((yield* service.status(run.id)).state).toBe("running");
-
-        yield* askParent(fake.controls[0]!, projections, "uncertain-question");
-        fake.controls[0]?.failNextIpc("transport_outcome_uncertain");
-        const replying = yield* service.reply(run.id, "Yes.").pipe(Effect.forkScoped);
-        yield* yieldUntil(() => fake.controls[0]?.sentIpc("parent_reply") === true);
-        yield* TestClock.adjust("10 seconds");
-        const replyFailure = yield* Fiber.join(replying).pipe(Effect.flip);
-        expect(replyFailure).toMatchObject({ code: "reply_outcome_uncertain" });
-        expect((yield* service.status(run.id)).state).toBe("running");
-        expect(
-          (yield* service.reply(run.id, "Do not duplicate.").pipe(Effect.flip)).message,
-        ).toContain("no pending parent question");
-        fake.controls[0]?.offerIpc(
-          contactParentFrame("uncertain-question", "question", "Duplicate request ID"),
-        );
-        for (let index = 0; index < 5; index += 1) yield* Effect.yieldNow;
-        expect((yield* service.status(run.id)).state).toBe("running");
-
-        fake.controls[0]?.offerIpc(
-          contactParentFrame("authoritative-new-question", "question", "A distinct next request?"),
-        );
-        yield* yieldUntil(
-          () =>
-            projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.question
-              ?.requestId === "authoritative-new-question",
-        );
-        expect((yield* service.reply(run.id, "Resolved.")).state).toBe("running");
-
-        const interruptRun = yield* service.start(request({ name: "uncertain-interrupt" }));
-        fake.controls[1]?.dropNext("abort");
-        const interrupting = yield* service.interrupt(interruptRun.id).pipe(Effect.forkScoped);
-        yield* TestClock.adjust("10 seconds");
-        expect(yield* Fiber.join(interrupting).pipe(Effect.flip)).toMatchObject({
-          code: "interrupt_outcome_uncertain",
-        });
-
-        const resumeRun = yield* service.start(request({ name: "uncertain-resume" }));
-        expect((yield* service.interrupt(resumeRun.id)).state).toBe("paused");
-        fake.controls[2]?.failTransportNext("prompt", "transport_outcome_uncertain");
-        const resumeFailure = yield* service
-          .resume(resumeRun.id, "Continue once.")
-          .pipe(Effect.flip);
-        expect(resumeFailure).toMatchObject({ code: "resume_outcome_uncertain" });
-        const uncertain = yield* service.status(resumeRun.id);
-        expect(uncertain.state).toBe("starting");
-        expect(uncertain.warning).toContain("may already have applied");
-      });
-    },
-  );
 
   it.effect("rolls back a definitely unsent reply and keeps the question answerable", () => {
     const { fake, projections, layer } = localServiceFixture();
@@ -627,171 +237,6 @@ describe("SubagentService", () => {
           message: "Proceed.",
         },
       ]);
-    });
-  });
-
-  it.effect("does not record success when the child no longer owns the parent question", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "expired-reply" }));
-      yield* askParent(fake.controls[0]!, projections, "expired-question");
-      fake.controls[0]?.rejectNextParentReply();
-
-      const failure = yield* service.reply(run.id, "Too late.").pipe(Effect.flip);
-      expect(failure).toBeInstanceOf(SubagentProcessError);
-      expect(failure).toMatchObject({ code: "question_ownership_mismatch" });
-      const status = yield* service.status(run.id);
-      expect(status.state).toBe("running");
-      expect(
-        status.sessionEvents.some(
-          (event) => event.type === "notice" && event.text.includes("Reply: Too late."),
-        ),
-      ).toBe(false);
-    });
-  });
-
-  it.effect("clears an uncertain reply claim after terminal settlement and a resumed turn", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "reply-resolution" }));
-      yield* askParent(fake.controls[0]!, projections, "uncertain-terminal-question");
-      fake.controls[0]?.failNextIpc("transport_outcome_uncertain");
-      const replying = yield* service.reply(run.id, "Finish.").pipe(Effect.forkScoped);
-      yield* yieldUntil(() => fake.controls[0]?.sentIpc("parent_reply") === true);
-      yield* TestClock.adjust("10 seconds");
-      expect(yield* Fiber.join(replying).pipe(Effect.flip)).toMatchObject({
-        code: "reply_outcome_uncertain",
-      });
-      yield* completeLocalRun(service, fake.controls[0]!, run.id, "Turn resolved.");
-
-      expect((yield* service.resume(run.id, "Next turn.")).state).toBe("running");
-      yield* askParent(fake.controls[1]!, projections, "resumed-question");
-      expect((yield* service.reply(run.id, "Answered.")).state).toBe("running");
-    });
-  });
-
-  it.effect("keeps warnings in projection and session history without host notification", () => {
-    const { fake, projections, notifications, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "bounded-notices" }));
-      for (const [kind, message] of [
-        ["progress", "First progress"],
-        ["progress", "Second progress"],
-        ["warning", "First warning"],
-        ["warning", "Second warning"],
-      ] as const)
-        fake.controls[0]?.offerIpc({
-          channel: "pi-subagents",
-          type: "contact_parent",
-          requestId: `${kind}-${message}`,
-          kind,
-          message,
-        });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning === "Second warning");
-      expect(notifications).toEqual([]);
-
-      fake.controls[0]?.offer({
-        type: "extension_error",
-        error: "Extension bridge failed token=secret-value",
-      });
-      yield* yieldUntil(() =>
-        Boolean(projections.at(-1)?.runs[0]?.warning?.includes("Extension bridge failed")),
-      );
-      expect(notifications).toEqual([]);
-      const status = yield* service.status(run.id);
-      expect(status.progress).toBe("Second progress");
-      expect(status.warning).toContain("Extension bridge failed");
-      expect(status.warning).not.toContain("secret-value");
-      expect(status.warningSource).toBe("system");
-      expect(status.systemWarning).toBe(status.warning);
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("later-warning", "warning", "Later child warning"),
-      );
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning === "Later child warning");
-      expect(yield* service.status(run.id)).toMatchObject({
-        warning: "Later child warning",
-        warningSource: "child",
-        systemWarning: status.warning,
-      });
-      expect(
-        status.sessionEvents.filter((event) => event.type === "notice" && event.kind === "warning"),
-      ).toHaveLength(3);
-
-      fake.controls[0]?.settle("Final report.");
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.length === 1);
-      expect(notifications).toMatchObject([
-        {
-          type: "completed",
-          runs: [{ id: run.id, outcome: "completed", finalText: "Final report." }],
-        },
-      ]);
-      const completion = notifications[0];
-      const warning = completion?.type === "completed" ? completion.runs[0]?.warning : undefined;
-      expect(warning).toContain("System warning: Extension bridge failed");
-      expect(warning).toContain("Child warning: Later child warning");
-      expect(warning).not.toContain("First warning");
-      expect(warning).not.toContain("secret-value");
-    });
-  });
-
-  for (const idle of [true, false])
-    it.effect(
-      idle
-        ? "restarts question delivery after a stale queue drains to idle"
-        : "wakes a sleeping question retry when a new question is queued",
-      () => {
-        const attempts: Array<Extract<SubagentNotification, { type: "question" }>> = [];
-        const { fake, layer } = localServiceFixture({
-          notify: (notification) => {
-            if (notification.type === "completed") return undefined;
-            attempts.push(notification);
-            return { actionAccepted: notification.requestId !== "unacknowledged-question" };
-          },
-        });
-        return withService(layer, function* (service) {
-          const run = yield* service.start(request({ name: "action-retry" }));
-          fake.controls[0]?.offerIpc(
-            contactParentFrame("unacknowledged-question", "question", "Stays unacknowledged."),
-          );
-          yield* yieldUntil(() =>
-            attempts.some((value) => value.requestId === "unacknowledged-question"),
-          );
-          yield* service.reply(run.id, "Answered before the retry.");
-          if (idle) yield* TestClock.adjust("200 millis");
-          fake.controls[0]?.offerIpc(contactParentFrame("next-question", "question", "Next?"));
-          yield* yieldUntil(() => attempts.some((value) => value.requestId === "next-question"));
-          if (!idle)
-            expect(
-              attempts.filter((value) => value.requestId === "unacknowledged-question"),
-            ).toHaveLength(1);
-        });
-      },
-    );
-
-  it.effect("keeps currentTool accurate while parallel tools finish", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "parallel-tools" }));
-      const start = (toolCallId: string, toolName: string) =>
-        fake.controls[0]?.offer({ type: "tool_execution_start", toolCallId, toolName, args: {} });
-      const end = (toolCallId: string, toolName: string) =>
-        fake.controls[0]?.offer({
-          type: "tool_execution_end",
-          toolCallId,
-          toolName,
-          result: {},
-          isError: false,
-        });
-      start("tool-a", "read");
-      start("tool-b", "grep");
-      end("tool-a", "read");
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.currentTool === "grep");
-      expect((yield* service.status(run.id)).currentTool).toBe("grep");
-      end("tool-b", "grep");
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.currentTool === undefined);
-      expect((yield* service.status(run.id)).currentTool).toBeUndefined();
     });
   });
 

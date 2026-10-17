@@ -2,7 +2,6 @@ import type {
   EventBus,
   ExtensionAPI,
   ExtensionContext,
-  ExtensionEvent,
   ExtensionUIContext,
   SourceInfo,
 } from "@earendil-works/pi-coding-agent";
@@ -94,13 +93,8 @@ export const extensionHarness = (
       tools: host.registrations,
       notify,
       setStatus,
-      setFooter,
       getFlag,
-      eventsEmit,
-      eventsOn,
       emit: (name: DefaultedEventName, useCtx: ExtensionContext = ctx) =>
         Effect.promise(() => host.emit(name, useCtx)),
-      emitEvent: (event: ExtensionEvent, useCtx: ExtensionContext = ctx) =>
-        Effect.promise(() => host.emit(event.type, useCtx, event)),
     };
   });

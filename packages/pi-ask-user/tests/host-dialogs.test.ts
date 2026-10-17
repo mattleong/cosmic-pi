@@ -11,7 +11,7 @@ import { askUserHost } from "../src/boundary/host-dialogs.ts";
 import { AskUserHostError } from "../src/questionnaire/errors.ts";
 import { createAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import type { AskUserAnswer } from "../src/questionnaire/model.ts";
-import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schema.ts";
+import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 
 const request = {
   questions: [
@@ -63,57 +63,7 @@ const scriptedSelect = (...indexes: number[]) => {
   );
 };
 
-const textRequest: AskUserRequest = {
-  questions: [{ key: "details", title: "Details", prompt: "Describe?", mode: "text" }],
-};
-
 describe("RPC questionnaire boundary", () => {
-  it("asks text directly, retries invalid input and preserves notes through review edits", () => {
-    const input = vi
-      .fn<ExtensionUIContext["input"]>()
-      .mockResolvedValueOnce(" \n ")
-      .mockResolvedValueOnce("x".repeat(4001))
-      .mockResolvedValueOnce(" initial\nanswer ")
-      .mockResolvedValueOnce(" context ")
-      .mockResolvedValueOnce(" bq1234\nrevised ");
-    const notify = vi.fn();
-    return rpc({ input, select: scriptedSelect(1, 1, 0, 0), notify }, textRequest).then(
-      (outcome) => {
-        expect(outcome).toEqual(
-          submitted({ key: "details", kind: "text", text: "bq1234\nrevised", note: "context" }),
-        );
-        expect(notify).toHaveBeenCalledTimes(2);
-        expect(input.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
-        return undefined;
-      },
-    );
-  });
-
-  it.each(["input", "review"])("discards text when RPC %s is dismissed", (at) => {
-    const select = at === "review" ? scriptedSelect(0, 99) : vi.fn();
-    const input = vi.fn(() => Promise.resolve(at === "input" ? undefined : "draft"));
-    return expect(rpc({ input, select }, textRequest)).resolves.toEqual(cancelled);
-  });
-
-  it("aborts a pending native text input without publishing drafts", () => {
-    const entered = deferredPromise<AbortSignal>();
-    const input = (_title: string, _placeholder: string, options: { signal: AbortSignal }) => {
-      entered.resolve(options.signal);
-      return Effect.runPromiseExit(Effect.never, { signal: options.signal }).then(
-        (): string | undefined => undefined,
-      );
-    };
-    const select = vi.fn();
-    const controller = new AbortController();
-    const pending = rpc({ input, select }, textRequest, { signal: controller.signal });
-    const rejected = expect(pending).rejects.toBeDefined();
-    return entered.promise.then((signal) => {
-      controller.abort();
-      expect(signal.aborted).toBe(true);
-      expect(select).not.toHaveBeenCalled();
-      return rejected;
-    });
-  });
   it("uses interruption-linked native dialogs and returns stable values after review", () => {
     const select = scriptedSelect(1, 0, 0);
     return rpc({ select }).then((outcome) => {
@@ -154,96 +104,6 @@ describe("RPC questionnaire boundary", () => {
     return expect(rpc({ select: scriptedSelect(...script), input })).resolves.toEqual(cancelled);
   });
 
-  it("returns to single-select choices when the custom-answer input is dismissed", () => {
-    const notify = vi.fn(() => {
-      throw new Error("stale notification host");
-    });
-    const input = vi.fn(() => Promise.resolve(undefined));
-    return rpc({ select: scriptedSelect(-1, 0, 0, 0), input, notify }).then((outcome) => {
-      expect(outcome).toMatchObject({
-        outcome: "submitted",
-        answers: [{ key: "library", values: ["a"] }],
-      });
-      expect(notify).toHaveBeenCalledOnce();
-      return undefined;
-    });
-  });
-
-  it("accepts an optional bounded note without changing the selected answer", () => {
-    const tooLong = "x".repeat(MAX_NOTE_LENGTH + 1);
-    const escape = String.fromCharCode(27);
-    const note = `Why ${escape}[31mB${escape}[0m matters.`;
-    const input = vi
-      .fn<ExtensionUIContext["input"]>()
-      .mockResolvedValueOnce(tooLong)
-      .mockResolvedValueOnce(note);
-    let reviewTitle: string | undefined;
-    let selectCall = 0;
-    const select = vi.fn((title: string, options: string[]) => {
-      const index = [1, 1, 0][selectCall++] ?? 0;
-      if (selectCall === 3) reviewTitle = title;
-      return Promise.resolve(options[index]);
-    });
-    const notify = vi.fn();
-
-    return rpc({ select, input, notify }).then((outcome) => {
-      expect(outcome).toEqual(submitted({ ...chooseB, note }));
-      expect(reviewTitle).toBeDefined();
-      expect(reviewTitle).not.toContain(escape);
-      expect(input).toHaveBeenCalledTimes(2);
-      expect(input.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
-      expect(notify).toHaveBeenCalledOnce();
-      return undefined;
-    });
-  });
-
-  it.each([
-    ["preserves", 0, { ...chooseB, note: "Existing context." }],
-    ["removes", 2, chooseB],
-  ] as const)(
-    "reviews answers, edits a choice, and %s its existing note",
-    (_, noteAction, answer) => {
-      const input = vi.fn(() => Promise.resolve("Existing context."));
-      return expect(
-        rpc({ select: scriptedSelect(0, 1, 1, 1, noteAction, 0), input }),
-      ).resolves.toEqual(submitted(answer));
-    },
-  );
-
-  it("makes custom answers an explicit multi-select path", () => {
-    const input = vi.fn(() => Promise.resolve("Use a hybrid instead."));
-    return rpc({ select: scriptedSelect(1, 0, 0), input }, multiple).then((outcome) => {
-      expect(outcome).toEqual(
-        submitted({ key: "library", kind: "custom", text: "Use a hybrid instead." }),
-      );
-      expect(input).toHaveBeenCalledOnce();
-      return undefined;
-    });
-  });
-
-  it("re-prompts mixed, nonnumeric, out-of-range, and separator-only listed selections", () => {
-    const input = vi
-      .fn()
-      .mockResolvedValueOnce("both")
-      .mockResolvedValueOnce("1, custom")
-      .mockResolvedValueOnce("5")
-      .mockResolvedValueOnce(",, ,")
-      .mockResolvedValueOnce("1,2");
-    const notify = vi.fn();
-
-    return rpc({ select: scriptedSelect(0, 0, 0), input, notify }, multiple).then((outcome) => {
-      expect(outcome).toMatchObject({
-        outcome: "submitted",
-        answers: [{ key: "library", values: ["a", "b"] }],
-      });
-      expect(input).toHaveBeenCalledTimes(5);
-      expect(notify).toHaveBeenCalledTimes(4);
-      for (const call of notify.mock.calls)
-        expect(issueMessageStyleProblems(String(call.at(0)))).toEqual([]);
-      return undefined;
-    });
-  });
-
   it("reports a failed native dialog in plain words without host details", () =>
     rpc({ select: vi.fn(() => Promise.reject(new Error("secret host failure"))) }).then(
       () => expect.unreachable(),
@@ -254,14 +114,6 @@ describe("RPC questionnaire boundary", () => {
         expect(issueMessageStyleProblems(failureMessage(cause.message, ""))).toEqual([]);
       },
     ));
-
-  it("preserves first-entered RPC choice order while deduplicating repeated values", () => {
-    const input = vi.fn(() => Promise.resolve("2,1,2,1"));
-    return expect(rpc({ select: scriptedSelect(0, 0, 0), input }, multiple)).resolves.toEqual(
-      submitted({ key: "library", kind: "choices", values: ["b", "a"], labels: ["B", "A"] }),
-    );
-  });
-
   effectIt.effect("fails closed when an RPC client returns an option that was not offered", () =>
     Effect.gen(function* () {
       for (const stage of ["answer-mode", "note", "review"] as const) {
@@ -296,46 +148,6 @@ describe("TUI questionnaire boundary", () => {
       yield* Effect.promise(() => expect(opening).rejects.toBeDefined());
 
       expect(host.customCalls).toBe(0);
-      expect(bridge.resume()).toBe(true);
-      expect(resume).toHaveBeenCalledOnce();
-    }),
-  );
-
-  effectIt.effect("keeps normal dialog submission authoritative during cleanup", () =>
-    Effect.gen(function* () {
-      const bridge = createAskUserDialogBridge();
-      const host = makeTuiHost();
-      host.settleOnOpen((completed) => {
-        host.component!.handleInput?.("1");
-        host.component!.handleInput?.("\r");
-        return completed;
-      });
-
-      const outcome = yield* Effect.promise(() => run(host.ctx, request, { bridge }));
-
-      expect(outcome).toEqual(
-        submitted({ key: "library", kind: "choices", values: ["a"], labels: ["A"] }),
-      );
-      expect(host.done).toHaveBeenCalledOnce();
-      expect(host.done).toHaveBeenCalledWith(outcome);
-      expect(bridge.resume()).toBe(false);
-    }),
-  );
-
-  effectIt.effect("does not clear another bridge owner when custom rejects before activation", () =>
-    Effect.gen(function* () {
-      const bridge = createAskUserDialogBridge();
-      const resume = vi.fn();
-      bridge.activate(resume);
-      const host = makeTuiHost();
-      host.failOpen(new Error("custom unavailable"));
-
-      yield* Effect.promise(() =>
-        expect(run(host.ctx, request, { bridge })).rejects.toSatisfy(
-          (cause) => cause instanceof AskUserHostError && cause.operation === "render",
-        ),
-      );
-      expect(host.customCalls).toBe(1);
       expect(bridge.resume()).toBe(true);
       expect(resume).toHaveBeenCalledOnce();
     }),

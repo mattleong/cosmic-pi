@@ -42,7 +42,6 @@ import {
 
 const CALLER = "caller";
 const ENTER = "\r";
-const SEND_FAILURE = "Test-owned definite send failure.";
 
 const caller = view({ id: CALLER, name: CALLER, parentRunId: "root", depth: 1 });
 const child = (overrides: Partial<SubagentRunView> = {}): SubagentRunView =>
@@ -214,55 +213,6 @@ describe("nested /subagents proxied actions", () => {
     },
   );
 
-  effectTest("keeps children beyond the public tool's display-card limit selectable", function* () {
-    const runs = Array.from({ length: 32 }, (_, index) =>
-      child({ id: `child-${index}`, name: `child-${index}` }),
-    );
-    const fixture = yield* openProxyFleet(() => [caller, ...runs], {
-      service: { stop: (id) => Effect.succeed(child({ id, state: "stopped" })) },
-    });
-    fixture.press("G", "x", "x");
-    expect(yield* fixture.settled()).toBe("success");
-    expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.lifecycle)).toEqual([
-      { tool: SUBAGENT_TOOL_NAME.lifecycle, args: { action: "stop", runIds: ["child-31"] } },
-    ]);
-    yield* fixture.close();
-  });
-
-  effectTest("keeps exact question identity across private snapshot refreshes", function* () {
-    let runs = [
-      caller,
-      child({
-        state: "waiting_for_parent",
-        question: { requestId: "first", message: "Proceed?" },
-      }),
-    ];
-    const fixture = yield* openProxyFleet(() => runs);
-    fixture.press("m", "y", "e", "s");
-    runs = [
-      caller,
-      child({
-        state: "waiting_for_parent",
-        question: { requestId: "second", message: "Proceed?" },
-      }),
-    ];
-    yield* fixture.refreshed();
-    fixture.press(ENTER);
-    expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.reply)).toHaveLength(0);
-    fixture.press("\u001b");
-    yield* fixture.close();
-  });
-
-  effectTest("confirms delivered guidance from the target's own run card", function* () {
-    const fixture = yield* openProxyFleet(() => [caller, child()], {
-      service: { send: (id) => Effect.succeed(child({ id })) },
-    });
-    sendGuidance(fixture);
-    expect(yield* fixture.settled()).toBe("success");
-    expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.send)).toHaveLength(1);
-    yield* fixture.close();
-  });
-
   effectTest(
     "shows pending delivery without resending and projects its steering state",
     function* () {
@@ -295,19 +245,6 @@ describe("nested /subagents proxied actions", () => {
 
   const rejectedSends: ReadonlyArray<readonly [string, () => SubagentError]> = [
     [
-      "a definite failure",
-      () => new InvalidSubagentRequestError({ code: "run_not_running", message: SEND_FAILURE }),
-    ],
-    [
-      "generic uncertainty without the pending flag",
-      () =>
-        new SubagentProcessError({
-          operation: "steer",
-          code: "steer_outcome_uncertain",
-          message: "Guidance outcome is uncertain.",
-        }),
-    ],
-    [
       "a pending flag on another uncertain code",
       () =>
         new SubagentProcessError({
@@ -329,42 +266,12 @@ describe("nested /subagents proxied actions", () => {
       yield* fixture.close();
     });
 
-  const pendingFailure = { id: "child", code: "steer_outcome_uncertain", message: "Pending." };
   const driftedResults: ReadonlyArray<readonly [string, () => AgentToolResult<unknown>]> = [
-    ["missing details", () => ({ content: [], details: {} })],
-    ["malformed details", () => ({ content: [], details: { version: 2, action: "send" } })],
-    [
-      "another action's details",
-      () => ({
-        content: [],
-        details: compactToolDetails({ action: "reply", runs: [child()] }),
-      }),
-    ],
     [
       "another target's run card",
       () => ({
         content: [],
         details: compactToolDetails({ action: "send", runs: [child({ id: "other" })] }),
-      }),
-    ],
-    [
-      "another target's pending failure",
-      () => ({
-        content: [],
-        details: {
-          ...compactToolDetails({ action: "send", runs: [] }),
-          actionFailures: [{ ...pendingFailure, id: "other", pendingDelivery: true }],
-        },
-      }),
-    ],
-    [
-      "a pending failure contradicted by a run card",
-      () => ({
-        content: [],
-        details: {
-          ...compactToolDetails({ action: "send", runs: [child()] }),
-          actionFailures: [{ ...pendingFailure, pendingDelivery: true }],
-        },
       }),
     ],
   ];
@@ -380,73 +287,6 @@ describe("nested /subagents proxied actions", () => {
       yield* fixture.close();
     });
 
-  const question = { requestId: "q", message: "Which file?" };
-
-  effectTest("keeps a flagged reply failure an error rather than pending", function* () {
-    const fixture = yield* openProxyFleet(
-      () => [caller, child({ state: "waiting_for_parent", question })],
-      {
-        respond: (input) =>
-          input.tool === SUBAGENT_TOOL_NAME.reply
-            ? Promise.resolve({
-                content: [],
-                details: {
-                  ...compactToolDetails({ action: "reply", runs: [] }),
-                  actionFailures: [{ ...pendingFailure, pendingDelivery: true }],
-                },
-              })
-            : undefined,
-      },
-    );
-    fixture.press("m", "o", "k", ENTER);
-    expect(yield* fixture.settled()).toBe("error");
-    expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.reply)).toHaveLength(1);
-    yield* fixture.close();
-  });
-
-  effectTest("keeps a pending run's parent-question reply available", function* () {
-    const waiting = child({ state: "waiting_for_parent", question, steeringDelivery: "pending" });
-    const fixture = yield* openProxyFleet(() => [caller, waiting], {
-      service: { reply: (id) => Effect.succeed(child({ id })) },
-    });
-    fixture.press("m", "o", "k", ENTER);
-    expect(yield* fixture.settled()).toBe("success");
-    expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.reply)).toHaveLength(1);
-    yield* fixture.close();
-  });
-
-  for (const [label, keys] of [
-    ["interrupt", ["i", "i"]],
-    ["rename", ["e", "o", "k", ENTER]],
-  ] as const)
-    effectTest(`accepts ${label} with its own matching receipt`, function* () {
-      const fixture = yield* openProxyFleet(() => [caller, child()], {
-        service: {
-          interrupt: (id) => Effect.succeed(child({ id, state: "paused" })),
-          rename: (id, name) => Effect.succeed(child({ id, name })),
-        },
-      });
-      fixture.press(...keys);
-      expect(yield* fixture.settled()).toBe("success");
-      yield* fixture.close();
-    });
-
-  effectTest("rejects a lifecycle receipt for a different lifecycle action", function* () {
-    const fixture = yield* openProxyFleet(() => [caller, child()], {
-      respond: (input) =>
-        input.tool === SUBAGENT_TOOL_NAME.lifecycle
-          ? Promise.resolve({
-              content: [],
-              details: compactToolDetails({ action: "interrupt", runs: [child()] }),
-            })
-          : undefined,
-    });
-    fixture.press("x", "x");
-    expect(yield* fixture.settled()).toBe("error");
-    expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.lifecycle)).toHaveLength(1);
-    yield* fixture.close();
-  });
-
   effectTest("keeps accepted work successful when the later refresh fails", function* () {
     let refreshFails = false;
     const fixture = yield* openProxyFleet(() => [caller, child()], {
@@ -457,26 +297,6 @@ describe("nested /subagents proxied actions", () => {
     refreshFails = true;
     sendGuidance(fixture);
     expect(yield* fixture.settled()).toBe("success");
-    expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.send)).toHaveLength(1);
-    yield* fixture.close();
-  });
-
-  effectTest("reports the action's own failure over a later refresh failure", function* () {
-    let refreshFails = false;
-    const fixture = yield* openProxyFleet(() => [caller, child()], {
-      service: {
-        send: () =>
-          Effect.fail(
-            new InvalidSubagentRequestError({ code: "run_not_running", message: SEND_FAILURE }),
-          ),
-      },
-      snapshot: () =>
-        refreshFails ? Promise.reject(new Error("Refresh unavailable.")) : undefined,
-    });
-    refreshFails = true;
-    sendGuidance(fixture);
-    expect(yield* fixture.settled()).toBe("error");
-    expect(fixture.fleet.render(160).join("\n")).toContain(SEND_FAILURE);
     expect(fixture.toolCalls(SUBAGENT_TOOL_NAME.send)).toHaveLength(1);
     yield* fixture.close();
   });

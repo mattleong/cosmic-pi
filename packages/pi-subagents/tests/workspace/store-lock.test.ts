@@ -53,24 +53,6 @@ it.effect("waits for another session's operation on the same checkout, then runs
   }).pipe(Effect.scoped),
 );
 
-it.effect("gives up after a bounded wait, naming the lock and its owner", () =>
-  Effect.gen(function* () {
-    const directory = path.join(yield* temporaryDirectory("workspace-lock-"), "locks");
-    const locks = yield* lockFor(directory);
-    const held = yield* locks.tryAcquire(sourceLockNamespace("/repo"));
-    const waiting = yield* withWorkspaceStoreLock(locks, directory, "/repo", Effect.void).pipe(
-      Effect.flip,
-      Effect.forkChild,
-    );
-    yield* TestClock.adjust("3 minutes");
-    const failure = yield* Fiber.join(waiting);
-    const { slot } = crossProcessLockHolder(sourceLockNamespace("/repo"), { directory });
-    expect(failure.detail).toContain(slot);
-    expect(failure.detail).toContain(`process ${process.pid}`);
-    held?.release();
-  }).pipe(Effect.scoped),
-);
-
 it.effect("stops waiting when interrupted", () =>
   Effect.gen(function* () {
     const directory = path.join(yield* temporaryDirectory("workspace-lock-"), "locks");

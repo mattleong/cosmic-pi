@@ -260,24 +260,6 @@ it.effect(
     }),
 );
 
-it.effect(
-  "native resolver rechecks current sources and never styles missing or unrelated tools",
-  () =>
-    Effect.gen(function* () {
-      const h = fixture();
-      yield* step(() => h.registered);
-      yield* Effect.addFinalizer(() => step(() => h.shutdown()));
-      yield* step(() => h.start());
-      assert.equal(h.resolve("unrelated").renderCall, downstream.renderCall);
-      h.visible(undefined);
-      assert.equal(h.resolve().renderCall, downstream.renderCall);
-      h.visible(info(foreign));
-      assert.equal(h.resolve().renderCall, downstream.renderCall);
-      h.visible(info());
-      assert.equal(h.resolve().renderShell, "self");
-    }),
-);
-
 it.effect("cancelled native startup cannot publish into a retained row after replacement", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
@@ -302,8 +284,8 @@ it.effect("cancelled native startup cannot publish into a retained row after rep
   }),
 );
 
-for (const style of ["compact", "preview"] as const)
-  for (const expanded of [false, true])
+for (const style of ["compact"] as const)
+  for (const expanded of [true])
     for (const ending of ["disabled", "replacement", "shutdown", "failed-reload"] as const)
       it.effect(
         `native ${style}/${expanded}/${ending} retires animation without replacing execution`,

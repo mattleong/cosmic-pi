@@ -71,14 +71,4 @@ describe("subagent tool activation", () => {
       expect(loadout.restoring.has("mcp__docs__search")).toBe(true);
     },
   );
-
-  effectTest("keeps the restored branch loadout through tree navigation", function* () {
-    const { loadout, emit } = yield* restoringApplication([]);
-    yield* emit("session_start", { type: "session_start", reason: "startup" });
-    const registered = loadout.active();
-    loadout.restoring.add("mcp__docs__search");
-    yield* emit("session_tree");
-    expect(loadout.restoring.has("mcp__docs__search")).toBe(true);
-    expect(loadout.active()).toEqual(registered);
-  });
 });

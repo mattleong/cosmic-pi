@@ -40,7 +40,7 @@ type CapturedToolResult = Omit<Awaited<ReturnType<NativeExecute>>, "content"> & 
   readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
 };
 
-export type CapturedTool = Omit<RegisteredTool, "execute"> & {
+type CapturedTool = Omit<RegisteredTool, "execute"> & {
   readonly execute: (
     id: Parameters<NativeExecute>[0],
     params: Parameters<NativeExecute>[1],

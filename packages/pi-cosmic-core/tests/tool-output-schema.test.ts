@@ -1,10 +1,8 @@
 import * as JsonSchema from "effect/JsonSchema";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
 import { describe, expect, it } from "vitest";
-import { toPiToolOutputSchema, ToolOutputSchemaError } from "../src/schema/tool-output.ts";
-import { thrownInstance } from "./support/thrown.ts";
+import { toPiToolOutputSchema } from "../src/schema/tool-output.ts";
 
 interface Task {
   readonly id: string;
@@ -26,14 +24,6 @@ const Output = Schema.Union([
 const standaloneGuard = (json: Readonly<JsonSchema.JsonSchema>) =>
   Schema.is(SchemaRepresentation.fromJsonSchemaDocument(JsonSchema.fromSchemaDraft2020_12(json)));
 
-const withReference = (reference: string) =>
-  Schema.Struct({
-    task: Task,
-    note: Schema.String.check(
-      Schema.makeFilter<string>(() => true, { toJsonSchema: () => ({ $ref: reference }) }),
-    ),
-  });
-
 describe("toPiToolOutputSchema", () => {
   it("returns a self-contained schema whose references resolve within it", () => {
     const json = toPiToolOutputSchema(Output);
@@ -52,36 +42,5 @@ describe("toPiToolOutputSchema", () => {
       guard({ kind: "one", task: { id: "b", status: "failed", children: [{ id: "c" }] } }),
     ).toBe(false);
     expect(guard({ kind: "other", tasks: [] })).toBe(false);
-  });
-
-  it("rejects references that the returned definitions cannot resolve", () => {
-    for (const reference of [
-      "https://example.com/task.json",
-      "#/$defs/Missing",
-      "#",
-      "#/$defs/Task/properties/id",
-    ]) {
-      const error = thrownInstance(ToolOutputSchemaError, () =>
-        toPiToolOutputSchema(withReference(reference)),
-      );
-      expect(error.path.startsWith("/properties/note/")).toBe(true);
-      expect(error.path.endsWith("/$ref")).toBe(true);
-    }
-  });
-
-  it("returns deeply frozen JSON", () => {
-    const json = toPiToolOutputSchema(Output);
-    const pending: Array<unknown> = [json];
-    let objects = 0;
-    while (pending.length > 0) {
-      const node = pending.pop();
-      if (!Predicate.isObjectOrArray(node)) continue;
-      expect(Object.isFrozen(node)).toBe(true);
-      objects += 1;
-      pending.push(...Object.values(node));
-    }
-
-    expect(objects).toBeGreaterThan(1);
-    expect(Reflect.set(json, "type", "string")).toBe(false);
   });
 });

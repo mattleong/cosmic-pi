@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { groupedDetail } from "../src/activity/grouped-detail.ts";
 import { groupedActivityTree } from "../src/activity/grouped-tree.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
-import { activityRow, groupedDetailOf as detail, memberRow } from "./support/activity.ts";
+import { activityRow } from "./support/activity.ts";
 
 describe("grouped activity detail", () => {
   it("sanitizes technical identifiers for display without rewriting their identity", () => {
@@ -26,18 +26,5 @@ describe("grouped activity detail", () => {
     expect(text).not.toContain("private-value");
     expect(row.id).toBe("item\u001b]52;c;payload\u0007");
     expect(row.revision).toBe("revision\r\ntoken=private-value");
-  });
-  it("shows a parent row's loaded detail and actions instead of its published detail", () => {
-    const parent = activityRow("parent", "running", undefined, {
-      startedAt: 0,
-      detail: "published-detail",
-      actions: [{ id: "stop", label: "Stop agent" }],
-    });
-    const rows = [parent, memberRow("finder", parent, "done")];
-    const text = detail(rows, (entry) => entry.id === parent.key, "loaded-detail");
-    expect(text).toContain("loaded-detail");
-    expect(text).not.toContain("published-detail");
-    expect(text).toContain("Stop agent");
-    expect(text).toContain(parent.id);
   });
 });

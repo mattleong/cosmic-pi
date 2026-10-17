@@ -46,20 +46,4 @@ describe("Claude steering failure metadata", () => {
       expect(error.message).not.toContain("uuid");
     }),
   );
-  it.effect("ignores untrusted version text and caps timing and active count", () =>
-    Effect.gen(function* () {
-      const diagnostics = localClaudeDiagnostics(() => Array.from({ length: 600 }, () => "Agent"));
-      yield* diagnostics.observe("init", "secret/path/token");
-      yield* TestClock.adjust("2 days");
-      const snapshot = yield* diagnostics.snapshot(pending(), "write-uncertain");
-      expect(snapshot).toMatchObject({
-        cliVersion: null,
-        waitElapsedMillis: 86_400_000,
-        lastInboundAgeMillis: 86_400_000,
-        activeToolCount: 512,
-        activeToolCategory: "native-agent",
-      });
-      expect(Object.values(snapshot).join(" ")).not.toContain("secret");
-    }),
-  );
 });

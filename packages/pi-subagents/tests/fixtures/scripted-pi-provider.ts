@@ -14,7 +14,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 
-export const SCRIPTED_PROVIDER = "pi-subagents-scripted";
+const SCRIPTED_PROVIDER = "pi-subagents-scripted";
 export const SCRIPTED_MODEL = `${SCRIPTED_PROVIDER}/child`;
 export const SCRIPTED_OBSERVATIONS_FILE = "scripted-observations.jsonl";
 export const SCRIPT = {

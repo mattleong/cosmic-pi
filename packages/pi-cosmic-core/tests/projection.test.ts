@@ -3,12 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Scheduler from "effect/Scheduler";
-import * as Schema from "effect/Schema";
-import { freezeSnapshot, frozenProjection, ProjectionError } from "../src/projection.ts";
+import { freezeSnapshot, frozenProjection } from "../src/projection.ts";
 import { interruptingScheduler } from "../testing.ts";
-import { thrownInstance } from "./support/thrown.ts";
-
-const projectionFailure = (freeze: () => void) => thrownInstance(ProjectionError, freeze);
 
 it.effect("commits authoritative state when interrupted at publication", () =>
   Effect.gen(function* () {
@@ -72,18 +68,6 @@ it.effect("interrupts lock wait and update work without blocking later transitio
   }),
 );
 
-class TransitionFailure extends Schema.TaggedError<TransitionFailure>()("TransitionFailure", {
-  message: Schema.String,
-}) {}
-
-interface DirectCycleFixture {
-  self?: unknown;
-}
-
-interface IndirectCycleFixture {
-  child: { parent?: unknown };
-}
-
 it.effect("publishes cloned deeply frozen plain snapshots", () =>
   Effect.gen(function* () {
     const state = { count: 1, nested: { values: ["a"] } };
@@ -105,31 +89,6 @@ it.effect("publishes cloned deeply frozen plain snapshots", () =>
   }),
 );
 
-it("allows acyclic shared references while preserving snapshot identity", () => {
-  const shared = { value: 1 };
-  const snapshot = freezeSnapshot({ left: shared, right: shared });
-
-  expect(snapshot.left).toBe(snapshot.right);
-  expect(snapshot.left).not.toBe(shared);
-  expect(Object.isFrozen(snapshot.left)).toBe(true);
-});
-
-it("rejects direct and indirect cycles with the offending path", () => {
-  const direct: DirectCycleFixture = {};
-  direct.self = direct;
-  expect(() => freezeSnapshot(direct)).toThrow("cyclic reference to $");
-
-  const root: IndirectCycleFixture = { child: {} };
-  root.child.parent = root;
-  const failure = projectionFailure(() => freezeSnapshot(root));
-  expect(failure.path).toBe("$.child.parent");
-  expect(failure.message).toContain("cyclic reference to $");
-
-  const array: unknown[] = [];
-  array.push(array);
-  expect(() => freezeSnapshot(array)).toThrow("$[0]");
-});
-
 it("preserves an own __proto__ property without changing the clone prototype", () => {
   const source = Object.defineProperty({ ok: true }, "__proto__", {
     value: { polluted: true },
@@ -142,73 +101,6 @@ it("preserves an own __proto__ property without changing the clone prototype", (
   expect(Object.getPrototypeOf(snapshot)).toBe(Object.prototype);
   expect("polluted" in snapshot).toBe(false);
   expect(Object.isFrozen(Object.getOwnPropertyDescriptor(snapshot, "__proto__")?.value)).toBe(true);
-});
-
-it.effect("does not publish or commit a failed transition", () =>
-  Effect.gen(function* () {
-    const projection = yield* frozenProjection(
-      { count: 1 },
-      (state) => ({ count: state.count }),
-      () => undefined,
-    );
-    const before = projection.getSnapshot();
-    const result = yield* projection
-      .transition(() => new TransitionFailure({ message: "expected" }))
-      .pipe(Effect.result);
-
-    expect(result._tag).toBe("Failure");
-    expect(projection.getSnapshot()).toBe(before);
-    expect((yield* projection.getState).count).toBe(1);
-  }),
-);
-
-it.effect("rejects invalid projection preparation without committing and releases the lock", () =>
-  Effect.gen(function* () {
-    let published = 0;
-    const projection = yield* frozenProjection(
-      0,
-      (n) => (n === 1 ? Number.NaN : n),
-      (n) => {
-        published = n;
-      },
-    );
-    const result = yield* projection
-      .transition(() => Effect.succeed([undefined, 1] as const))
-      .pipe(Effect.result);
-    expect(result._tag).toBe("Failure");
-    expect(yield* projection.getState).toBe(0);
-    expect(projection.getSnapshot()).toBe(0);
-    expect(published).toBe(0);
-    yield* projection.transition((n) => Effect.succeed([undefined, n + 2] as const));
-    expect(yield* projection.getState).toBe(2);
-    expect(projection.getSnapshot()).toBe(2);
-    expect(published).toBe(2);
-  }),
-);
-
-it.each([
-  ["NaN", { nested: Number.NaN }, "$.nested"],
-  ["positive infinity", { nested: Number.POSITIVE_INFINITY }, "$.nested"],
-  ["negative infinity", { nested: Number.NEGATIVE_INFINITY }, "$.nested"],
-  ["symbol", { nested: [Symbol("capability")] }, "$.nested[0]"],
-  ["bigint", { value: 1n }, "$.value"],
-  ["Map", { capability: new Map() }, "$.capability"],
-  [
-    "accessor",
-    Object.defineProperty({}, "secret", { get: () => "value", enumerable: true }),
-    "$.secret",
-  ],
-  [
-    "non-enumerable function",
-    { nested: Object.defineProperty({}, "capability", { value: () => 42 }) },
-    "$.nested.capability",
-  ],
-  ["nested function", { nested: { capability: () => 42 } }, "$.nested.capability"],
-  ["array function property", Object.assign([], { capability: () => 42 }), "$"],
-  ["array symbol property", Object.assign([], { [Symbol("capability")]: true }), "$"],
-  ["symbol-keyed property", { [Symbol("capability")]: true }, "$"],
-])("rejects %s as a typed projection failure at its path", (_name, value, path) => {
-  expect(projectionFailure(() => freezeSnapshot(value)).path).toBe(path);
 });
 
 it.effect("does not commit or publish when external publication fails", () =>

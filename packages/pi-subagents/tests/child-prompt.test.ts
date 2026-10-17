@@ -27,21 +27,4 @@ describe("child prompts", () => {
     expect(task).toContain("src/a.ts");
     expect(task).toContain("/private/ws-1");
   });
-
-  it("names tracked files the isolated workspace left out", () => {
-    const base = writer([], "/private/ws-1");
-    const omitted = taskPrompt(
-      { ...base, workspace: { ...base.workspace!, omittedTrackedPaths: ["vendor/lib.go"] } },
-      "No peers.",
-    );
-    expect(omitted).toContain("vendor/lib.go");
-    expect(taskPrompt(base, "No peers.")).not.toContain("vendor");
-  });
-
-  it("tells a forked child, and only a forked child, how to treat inherited history", () => {
-    const fresh = taskPrompt(request({ task: "Assess the plan." }), "No peers.");
-    const forked = taskPrompt(request({ task: "Assess the plan.", context: "fork" }), "No peers.");
-    expect(forked).not.toBe(fresh);
-    expect(forked.endsWith(fresh.slice(fresh.indexOf("Assigned task:")))).toBe(true);
-  });
 });

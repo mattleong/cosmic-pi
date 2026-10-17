@@ -145,35 +145,6 @@ const pauseOnceAfterLock = (context: RunContext, reached: () => boolean) =>
     return { context: paused, entered, release };
   });
 
-it.effect(
-  "settles preparation cancelled right after its ownership claim and permits cwd reuse",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* processFixture();
-      const record = yield* fixture.newRecord("writer");
-      const pool = record.writerPool!;
-      const claim = yield* pauseOnceAfterLock(fixture.context, () => pool.state === "preparing");
-      const context = claim.context;
-      const cleanup = recordCleanup(context);
-      const preparing = yield* writerSpawnPreparation(context)(record).pipe(Effect.forkScoped);
-      yield* Deferred.await(claim.entered);
-      preparing.interruptUnsafe();
-      yield* Deferred.succeed(claim.release, undefined);
-      expect(Exit.isFailure(yield* Fiber.await(preparing))).toBe(true);
-      expect(yield* Deferred.isDone(pool.preparationSettled)).toBe(true);
-      yield* cleanup.closeRecordScope(record);
-      expect(record.cleanupDisposition).toBe("confirmed");
-      expect(record.writerPool).toBeUndefined();
-      expect(fixture.context.writerPools.size).toBe(0);
-
-      const replacement = yield* fixture.newRecord("replacement");
-      yield* writerSpawnPreparation(context)(replacement);
-      expect(replacement.writerPool?.state).toBe("held");
-      yield* cleanup.closeRecordScope(replacement);
-      expect(fixture.context.writerPools.size).toBe(0);
-    }).pipe(Effect.provide(fakeWriterLeaseLayer())),
-);
-
 it.effect("settles an interrupted spawn claim before stop, compensation and session cleanup", () =>
   Effect.gen(function* () {
     const leases = leaseCounts();

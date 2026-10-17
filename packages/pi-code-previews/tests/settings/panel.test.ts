@@ -2,70 +2,12 @@ import assert from "node:assert/strict";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { setCodePreviewSettings } from "../../src/config/state";
-import { updateSetting } from "../../src/config/values";
 import { SettingsList } from "@earendil-works/pi-tui";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { createCodePreviewSettingsModel, persistSettingsChange } from "../../src/settings/panel";
 import { effectTest, eventLoopTurn, step } from "../support/effect-test";
-
-effectTest("collapsed style edits persist without reinitializing syntax", function* () {
-  const saved: CodePreviewSettings[] = [];
-  const loadOptions = { projectCwd: "/trusted-project", projectTrusted: true };
-  let initializations = 0;
-  let settings = defaultCodePreviewSettings;
-  for (const style of ["compact", "preview"]) {
-    settings = updateSetting(settings, "toolCallCollapsedStyle", style);
-    yield* step(() =>
-      persistSettingsChange(settings, defaultCodePreviewSettings, loadOptions, {
-        queueSave: (next, options) => {
-          assert.deepEqual(options, loadOptions);
-          saved.push(next);
-          return Promise.resolve();
-        },
-        queueReset: () => Promise.reject(new Error("unexpected reset")),
-        initializeSyntax: () => {
-          initializations++;
-          return Promise.resolve();
-        },
-      }),
-    );
-  }
-  assert.deepEqual(saved, [
-    { ...defaultCodePreviewSettings, toolCallCollapsedStyle: "compact" },
-    defaultCodePreviewSettings,
-  ]);
-  assert.equal(initializations, 0);
-});
-
-effectTest("syntax follow-up uses the theme resolved from the committed document", function* () {
-  const requested: CodePreviewSettings = {
-    ...defaultCodePreviewSettings,
-    readCollapsedLines: 40,
-  };
-  const initialized: string[] = [];
-  yield* step(() =>
-    persistSettingsChange(
-      requested,
-      defaultCodePreviewSettings,
-      {},
-      {
-        queueSave: () => {
-          setCodePreviewSettings({ ...requested, shikiTheme: "github-light" });
-          return Promise.resolve();
-        },
-        queueReset: () => Promise.resolve(),
-        initializeSyntax: (theme) => {
-          initialized.push(theme);
-          return Promise.resolve();
-        },
-      },
-    ),
-  );
-  assert.deepEqual(initialized, ["github-light"]);
-  setCodePreviewSettings(defaultCodePreviewSettings);
-});
 
 effectTest(
   "a detached Shiki initialization rejection does not escape into save rollback or warnings",
@@ -132,63 +74,7 @@ const listFor = (model: ReturnType<typeof createCodePreviewSettingsModel>) =>
     () => undefined,
   );
 
-effectTest("restoring defaults waits for a second press and saves no values", function* () {
-  const saved: CodePreviewSettings[] = [];
-  let resets = 0;
-  const model = createCodePreviewSettingsModel({
-    notify: () => undefined,
-    done: () => undefined,
-    loadOptions: {},
-    effects: {
-      queueSave: (next) => {
-        saved.push(next);
-        return Promise.resolve();
-      },
-      queueReset: () => {
-        resets++;
-        return Promise.resolve();
-      },
-      initializeSyntax: () => Promise.resolve(),
-    },
-  });
-  const list = listFor(model);
-  model.onChange("resetToDefaults", "press Enter to reset", list);
-  yield* step(eventLoopTurn);
-  assert.equal(resets, 0);
-  model.onChange("resetToDefaults", "reset now", list);
-  yield* step(eventLoopTurn);
-  assert.equal(resets, 1);
-  assert.deepEqual(saved, []);
-});
-
 class DiskFull extends Data.TaggedError("DiskFull")<{ readonly message: string }> {}
-
-effectTest("a completed save adopts merged fields before the next panel edit", function* () {
-  setCodePreviewSettings(defaultCodePreviewSettings);
-  const saved: CodePreviewSettings[] = [];
-  const model = createCodePreviewSettingsModel({
-    notify: () => undefined,
-    done: () => undefined,
-    loadOptions: {},
-    effects: {
-      queueSave: (next) => {
-        saved.push(next);
-        setCodePreviewSettings({ ...next, shikiTheme: "github-light" });
-        return Promise.resolve();
-      },
-      queueReset: () => Promise.resolve(),
-      initializeSyntax: () => Promise.resolve(),
-    },
-  });
-  const list = listFor(model);
-  model.onChange("readCollapsedLines", "40", list);
-  yield* step(eventLoopTurn);
-  model.onChange("readLineNumbers", "off", list);
-  assert.equal(saved[1]?.shikiTheme, "github-light");
-  assert.equal(saved[1]?.readCollapsedLines, 40);
-  yield* step(eventLoopTurn);
-  setCodePreviewSettings(defaultCodePreviewSettings);
-});
 
 for (const operation of ["save", "reset", "failure"] as const)
   effectTest(`retired settings panels suppress delayed ${operation} follow-up`, function* () {

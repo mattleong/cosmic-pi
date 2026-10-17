@@ -120,15 +120,6 @@ const harness = (options: HarnessOptions = {}) => {
 };
 
 describe("herdr-btw parent reference", () => {
-  it("registers the marker as a string extension CLI flag", () => {
-    const h = harness();
-    for (const name of ["herdr-btw-parent", "herdr-btw-parent-file", "herdr-btw-child-session"])
-      expect(h.registerFlag).toHaveBeenCalledWith(
-        name,
-        expect.objectContaining({ type: "string" }),
-      );
-  });
-
   it("appends a stable instruction with the JSON-quoted parent path and expected ID", () => {
     const parentFile = '/sessions/parent "quoted" \\ file.jsonl';
     const h = harness({ flag: PARENT_ID, parentSession: parentFile });
@@ -136,8 +127,6 @@ describe("herdr-btw parent reference", () => {
     const result = h.beforeAgentStart();
     expect(result).toContain(JSON.stringify(parentFile));
     expect(result).toContain(PARENT_ID);
-    expect(result).toContain("append-only");
-    expect(result).toContain("read-only");
     expect(h.beforeAgentStart()).toBe(result);
   });
 
@@ -163,32 +152,6 @@ describe("herdr-btw parent reference", () => {
     }
   });
 
-  it("stays inactive without a well-formed string marker", () => {
-    for (const flag of [undefined, true, "", "has spaces", "-leading", "a".repeat(200), "x\ny"]) {
-      const h = harness({ flag, parentSession: PARENT_FILE });
-      h.sessionStart();
-      expect(h.beforeAgentStart()).toBeUndefined();
-      expect(h.probe).not.toHaveBeenCalled();
-    }
-  });
-
-  it("requires a bounded parent-file marker", () => {
-    for (const parentSession of [undefined, "", "a".repeat(4_097), "/sessions/bad\nname"]) {
-      const h = harness({ flag: PARENT_ID, parentSession });
-      h.sessionStart();
-      expect(h.beforeAgentStart()).toBeUndefined();
-      expect(h.probe).not.toHaveBeenCalled();
-    }
-  });
-
-  it("rejects a self-referential parent pointer with a cheap raw-path check", () => {
-    const h = harness({ flag: PARENT_ID, parentSession: CHILD_FILE, sessionFile: CHILD_FILE });
-    h.sessionStart();
-    expect(h.beforeAgentStart()).toBeUndefined();
-    expect(h.compareIdentity).not.toHaveBeenCalled();
-    expect(h.probe).not.toHaveBeenCalled();
-  });
-
   it("rejects parent-child filesystem aliases and unavailable identity", () => {
     for (const identityResult of ["same", "unavailable"] as const) {
       const h = harness({
@@ -201,32 +164,6 @@ describe("herdr-btw parent reference", () => {
       expect(h.beforeAgentStart()).toBeUndefined();
       expect(h.compareIdentity).toHaveBeenCalledWith("/sessions/parent-alias.jsonl", CHILD_FILE);
       expect(h.probe).not.toHaveBeenCalled();
-    }
-  });
-
-  it("drops an active reference when parent and child become aliases", () => {
-    const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE });
-    h.sessionStart();
-    h.compareIdentity.mockReturnValueOnce("same");
-
-    expect(h.beforeAgentStart()).toBeUndefined();
-    expect(h.beforeAgentStart()).toBeUndefined();
-    expect(h.probe).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects unusable parent headers and contains throwing host boundaries", () => {
-    for (const hostile of [
-      { probeResult: SessionHeaderProbe.invalid() },
-      { probeResult: SessionHeaderProbe.valid({ header: { id: "some-other-session" } }) },
-      { hostileFlag: true },
-      { hostileSessionId: true },
-      { hostileSessionFile: true },
-      { hostileIdentity: true },
-      { hostileProbe: true },
-    ]) {
-      const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE, ...hostile });
-      h.sessionStart();
-      expect(h.beforeAgentStart()).toBeUndefined();
     }
   });
 

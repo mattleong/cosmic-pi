@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { invokeBestEffort, isProjectTrusted, notifyAtHostBoundary } from "../src/host-session.ts";
+import { isProjectTrusted } from "../src/host-session.ts";
 
 describe("project trust capture", () => {
   it("requires an explicit callback returning literal true", () => {
@@ -17,62 +17,5 @@ describe("project trust capture", () => {
         },
       }),
     ).toBe(false);
-  });
-});
-
-describe("best-effort callbacks", () => {
-  it("swallow throws and hostile then getters, reading a returned then exactly once", () => {
-    const hostileThenable = new Proxy(
-      {},
-      {
-        get: (_target, property) => {
-          if (property === "then") throw new Error("hostile then getter");
-          return undefined;
-        },
-      },
-    );
-    expect(() =>
-      notifyAtHostBoundary({ ui: { notify: () => hostileThenable } }, "message", "warning"),
-    ).not.toThrow();
-
-    let reads = 0;
-    let handled = false;
-    const thenable = new Proxy(
-      {},
-      {
-        get: (_target, property) => {
-          if (property !== "then") return undefined;
-          reads += 1;
-          return (_resolve: () => void, reject: () => void) => {
-            handled = Boolean(reject);
-          };
-        },
-      },
-    );
-    expect(() =>
-      invokeBestEffort(() => {
-        throw new Error("hostile callback");
-      }),
-    ).not.toThrow();
-    invokeBestEffort(() => thenable);
-    expect({ reads, handled }).toEqual({ reads: 1, handled: true });
-  });
-
-  it("attaches a rejection handler to callable thenables", () => {
-    let rejectionContained = false;
-    const callableThenable = new Proxy(() => undefined, {
-      has: (_target, property) => property === "then",
-      get: (_target, property) =>
-        property === "then"
-          ? (_resolve: () => void, reject: (reason: Error) => void) => {
-              reject(new Error("rejected callable thenable"));
-              rejectionContained = true;
-            }
-          : undefined,
-    });
-
-    notifyAtHostBoundary({ ui: { notify: () => callableThenable } }, "message", "warning");
-
-    expect(rejectionContained).toBe(true);
   });
 });

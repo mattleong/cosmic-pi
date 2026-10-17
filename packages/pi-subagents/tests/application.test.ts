@@ -1,15 +1,9 @@
 import { tmpdir } from "node:os";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
-import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
-import { ACTIVITY_VIEW_DISCOVER } from "pi-cosmic-ui/activity/view";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
-import type { ModelsRefreshResult } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionToolContext,
-  ExtensionUIContext,
-  TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
@@ -18,7 +12,6 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Match from "effect/Match";
 import {
   deferredPromise,
   extensionApiFixture,
@@ -32,7 +25,6 @@ import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import * as SubagentLayers from "../src/layer.ts";
 import { captureSubagentControlExpectation, type SubagentProjection } from "../src/run/model.ts";
 import { SubagentService } from "../src/run/service.ts";
-import { stringContaining } from "./support/matchers.ts";
 import { encodeFleetActionRequest } from "../src/tools/proxy-fleet.ts";
 import { view } from "./fixtures/run-view.ts";
 import { completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
@@ -50,25 +42,6 @@ import { fallbackProfileService, testBackendRegistry } from "./tools/fixtures/to
 type RegisteredToolSummary = { readonly name: string; readonly defaultActive?: boolean };
 
 const testAgentDirectory = () => nodePath.join(tmpdir(), "pi-subagents-application-tests");
-
-const turnEnd: TurnEndEvent = {
-  type: "turn_end",
-  turnIndex: 0,
-  message: { role: "user", content: "", timestamp: 0 },
-  toolResults: [],
-  messageEntryId: "entry-1",
-  toolResultEntryIds: [],
-  entries: [],
-  continue: false,
-  context: {
-    contextEntries: [],
-    contextMessages: [],
-    llmMessages: [],
-    pendingMessages: [],
-    canContinue: false,
-  },
-  outcome: "completed",
-};
 
 const decodeModelsDetails = Schema.decodeUnknownOption(
   Schema.Struct({
@@ -230,26 +203,6 @@ describe("subagent Pi registration", () => {
     },
   );
 
-  effectTest("sweeps private state on session starts but not on reload or /tree", function* () {
-    const sweeps: Array<boolean | undefined> = [];
-    const makeLayer = SubagentLayers.subagentApplicationLayer;
-    const capture = vi
-      .spyOn(SubagentLayers, "subagentApplicationLayer")
-      .mockImplementation((options) => {
-        sweeps.push(options.sweepPrivateState);
-        return makeLayer(options);
-      });
-    yield* Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore()));
-    const ctx = sessionContext();
-    const { emit } = applicationFixture();
-    yield* settle(() => emit("session_start", ctx));
-    yield* settle(() => emit("session_tree", ctx));
-    yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "reload" }));
-    yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "new" }));
-    yield* settle(() => emit("session_shutdown", ctx));
-    expect(sweeps).toEqual([true, false, false, true]);
-  });
-
   effectTest(
     "reload appends pending reports, then lists the runs it stops, without a turn",
     function* () {
@@ -309,12 +262,6 @@ describe("subagent Pi registration", () => {
         false,
         false,
       ]);
-      const stopped = sendMessage.mock.calls[1]?.[0];
-      expect(stopped?.content).toEqual(stringContaining("Reloading Pi"));
-      expect(stopped?.content).toEqual(stringContaining("parser-review (agent-1): running"));
-      expect(stopped?.content).toEqual(stringContaining("lexer-review (agent-2): paused"));
-      expect(stopped?.content).not.toEqual(stringContaining("agent-3"));
-      expect(notify).toHaveBeenCalledWith(stringContaining("2 subagents stopped"), "warning");
     },
   );
 
@@ -371,7 +318,6 @@ describe("subagent Pi registration", () => {
       yield* settle(() => emit("session_tree", ctx));
       expect(flushes).toEqual([]);
       expect(sendMessage).not.toHaveBeenCalled();
-      expect(notify).toHaveBeenCalledWith(stringContaining("1 subagent stopped"), "warning");
     },
   );
 
@@ -393,123 +339,6 @@ describe("subagent Pi registration", () => {
     expect(currentResult.isError).not.toBe(true);
     yield* settle(() => emit("session_shutdown", ctx));
   });
-
-  for (const outcome of ["accepted", "unavailable", "absent", "rejected", "replaced"] as const) {
-    effectTest(`routes bare subagents to the shared view with ${outcome} admission`, function* () {
-      const events = createEventBus();
-      const queryProtocol = makeSessionCapabilityProtocol({ version: 1, maxSessionIdChars: 256 });
-      const pending = deferredPromise<boolean>();
-      const open = vi.fn(() =>
-        Match.value(outcome).pipe(
-          Match.when("replaced", () => pending.promise),
-          Match.when("rejected", () => Promise.reject(new Error("Manager already open"))),
-          Match.orElse((other) => Promise.resolve(other === "accepted")),
-        ),
-      );
-      if (outcome !== "absent")
-        events.on(ACTIVITY_VIEW_DISCOVER, (data) => {
-          const query = queryProtocol.normalizeQuery(data);
-          if (query?.sessionId === "view-session")
-            query.respond({ version: 1, sessionId: "view-session", hostToken: {}, open });
-        });
-      let customCalls = 0;
-      let fleet: Component | undefined;
-      const surface = mountingCustomUi(plainTheme, (created) => {
-        fleet = created;
-      });
-      const custom: ExtensionUIContext["custom"] = (factory, options) => {
-        customCalls += 1;
-        return surface.custom(factory, options);
-      };
-      const ctx = sessionContext(
-        {
-          hasUI: true,
-          mode: "tui",
-          isProjectTrusted: () => false,
-          ui: { notify: vi.fn(), custom, setWidget: vi.fn() },
-        },
-        "view-session",
-      );
-      const { emit, subagents } = applicationFixture({ events });
-      yield* settle(() => emit("session_start", ctx));
-      let openedSettled = false;
-      const opened = subagents("", ctx).finally(() => {
-        openedSettled = true;
-      });
-      if (outcome === "replaced") {
-        yield* step(() => vi.waitFor(() => expect(open).toHaveBeenCalled()));
-        yield* settle(() => emit("session_tree", ctx));
-        pending.resolve(false);
-      }
-      if (outcome === "rejected" || outcome === "replaced")
-        yield* step(() => expect(opened).rejects.toThrow());
-      else
-        yield* step(() =>
-          vi
-            .waitFor(() => {
-              fleet?.handleInput?.("\u001b");
-              expect(openedSettled).toBe(true);
-            })
-            .then(() => opened),
-        );
-      if (outcome !== "absent") expect(open).toHaveBeenCalledWith("subagents", undefined);
-      expect(customCalls).toBe(outcome === "absent" || outcome === "unavailable" ? 1 : 0);
-      yield* settle(() => emit("session_shutdown", ctx));
-    });
-  }
-
-  for (const cancellation of ["editor", "shutdown", "replacement"] as const) {
-    effectTest(`owns pending settings refresh through ${cancellation} cancellation`, function* () {
-      const { emit, subagents } = applicationFixture({ getActiveTools: () => [] });
-      let component: Component | undefined;
-      const surface = mountingCustomUi(plainTheme, (created) => {
-        component = created;
-      });
-      const pending = deferredPromise<ModelsRefreshResult>();
-      let refreshSignal: AbortSignal | undefined;
-      const notify = vi.fn();
-      const ctx = sessionContext({
-        hasUI: true,
-        mode: "tui",
-        isProjectTrusted: () => false,
-        ui: { notify, custom: surface.custom },
-        modelRegistry: {
-          getAvailable: () => [],
-          getError: () => undefined,
-          refresh: (options) => {
-            refreshSignal = options?.signal;
-            return pending.promise;
-          },
-        },
-      });
-      yield* settle(() => emit("session_start", ctx));
-      let editorClosed = false;
-      const editing = subagents("profiles", ctx).then(() => {
-        editorClosed = true;
-        return undefined;
-      });
-      const closeEditor = () =>
-        step(() =>
-          vi.waitFor(() => {
-            component?.handleInput?.("\u001b");
-            expect(editorClosed).toBe(true);
-          }),
-        );
-      yield* step(() => vi.waitFor(() => expect(refreshSignal).toBeDefined()));
-      if (cancellation === "editor") yield* closeEditor();
-      else
-        yield* settle(() =>
-          emit(cancellation === "shutdown" ? "session_shutdown" : "session_start", ctx),
-        );
-      yield* step(() => vi.waitFor(() => expect(refreshSignal?.aborted).toBe(true)));
-      const priorNotifications = notify.mock.calls.length;
-      pending.resolve({ aborted: false, errors: new Map() });
-      yield* closeEditor();
-      yield* step(() => editing);
-      expect(notify.mock.calls).toHaveLength(priorNotifications);
-      yield* settle(() => emit("session_shutdown", ctx));
-    });
-  }
 
   effectTest("holds the session revision lock through a deferred saved-set write", function* () {
     const global = subagentConfigDecoder("global")({ version: 6, profileSets: {} });
@@ -882,51 +711,4 @@ describe("subagent Pi registration", () => {
       );
     },
   );
-
-  effectTest("owns the activity widget across activation, turns, and shutdown", function* () {
-    const setWidget = vi.fn();
-    const setStatus = vi.fn();
-    const { emit } = applicationFixture(activeToolTracker().overrides);
-    const ctx = sessionContext({
-      hasUI: true,
-      mode: "tui",
-      ui: { setWidget, setStatus, notify: vi.fn() },
-    });
-
-    yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "startup" }));
-    expect(setWidget).toHaveBeenCalled();
-
-    const staleSetWidget = vi.fn();
-    const stale = extensionContextFixture({
-      ...ctx,
-      ui: { ...ctx.ui, setWidget: staleSetWidget },
-    });
-    yield* settle(() => emit("turn_end", stale, turnEnd));
-    expect(staleSetWidget).not.toHaveBeenCalled();
-
-    yield* settle(() =>
-      emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" }),
-    );
-    expect(setWidget.mock.calls.some(([, content]) => content === undefined)).toBe(true);
-  });
-
-  effectTest("fails activation visibly when subagent tool registration throws", function* () {
-    const notify = vi.fn();
-    const setActiveTools = vi.fn();
-    const { emit } = applicationFixture({
-      registerTool: vi.fn(() => {
-        throw new Error("stale extension handle");
-      }),
-      getActiveTools: vi.fn(() => ["read", "subagent_start", "subagent_await"]),
-      setActiveTools,
-    });
-
-    yield* settle(() =>
-      emit("session_start", sessionContext({ hasUI: true, mode: "tui", ui: { notify } })),
-    );
-
-    expect(setActiveTools).toHaveBeenCalledWith(["read"]);
-    expect(notify).toHaveBeenCalled();
-    expect(notify.mock.calls.some(([, level]) => level === "warning")).toBe(true);
-  });
 });

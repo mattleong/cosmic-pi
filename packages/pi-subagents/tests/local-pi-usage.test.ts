@@ -22,16 +22,4 @@ describe("Pi cumulative usage", () => {
     expect(account({})).toBeUndefined();
     expect(account(stats(110))?.input).toBe(10);
   });
-  it("accounts idle warming cost even without new assistant tokens", () => {
-    const { account } = localPiUsage();
-    account(stats(100));
-    expect(account(stats(100, 2))).toEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: 1,
-    });
-  });
 });

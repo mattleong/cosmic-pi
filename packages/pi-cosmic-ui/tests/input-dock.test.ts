@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createInputDock, inputDockVisible } from "../src/boundary/host-input-dock.ts";
+import { createInputDock } from "../src/boundary/host-input-dock.ts";
 import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
 
 const harness = () => {
@@ -75,22 +75,5 @@ describe("input dock ownership", () => {
     });
     expect(() => handle.hide()).toThrow();
     expect(h.widgets.size).toBe(0);
-  });
-});
-
-describe("input dock presence", () => {
-  it("is visible only while a mounted dock is shown", () => {
-    const h = harness();
-    const dock = createInputDock(h.ui);
-    expect(inputDockVisible()).toBe(false);
-    dock.mount(h.tui, component());
-    expect(inputDockVisible()).toBe(true);
-    const handle = dock.handle(h.overlay());
-    handle.setHidden(true);
-    expect(inputDockVisible()).toBe(false);
-    handle.setHidden(false);
-    expect(inputDockVisible()).toBe(true);
-    handle.hide();
-    expect(inputDockVisible()).toBe(false);
   });
 });

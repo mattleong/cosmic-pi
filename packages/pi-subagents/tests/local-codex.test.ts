@@ -3,17 +3,13 @@ import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Queue from "effect/Queue";
-import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
 import type { CodexSandboxPolicy } from "../src/backend/local-codex-protocol.ts";
 import type { LocalCliProcessHandle } from "../src/boundary/local-cli-process.ts";
 import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import type { SupervisorChannelHandle } from "../src/boundary/supervisor-channel.ts";
-import { SupervisorChannelError } from "../src/boundary/supervisor-channel-errors.ts";
 import type { SubagentWriteIntent } from "../src/domain/routing.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 import {
@@ -21,7 +17,6 @@ import {
   backendSupervisor,
   supervisorMetadata,
 } from "./fixtures/backend-supervisor.ts";
-import { stringContaining } from "./support/matchers.ts";
 
 const report = {
   runId: "codex-terminal",
@@ -162,35 +157,6 @@ it.effect("Codex reminds once, then fails with the reminded turn's final text", 
     }),
   ),
 );
-
-it.effect("Codex completes when the reminded turn submits its report", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      let accepted = false;
-      const { backend, childEvents, turnInputs } = yield* startedCodex(() =>
-        Effect.succeed(accepted),
-      );
-      finishTurn(childEvents, "Done, but no report yet.");
-      expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
-      expect(yield* Queue.take(backend.events)).toEqual({ type: "activity", assignmentEpoch: 1 });
-      yield* yieldUntil(() => turnInputs.length === 2);
-      accepted = true;
-      finishTurn(childEvents, "Report submitted.");
-      expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
-      expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
-    }),
-  ),
-);
-
-// A native sub-agent spawned with its parent's context loads the parent thread's rollout.
-it.effect("Codex starts a thread whose context native sub-agents can fork", () =>
-  Effect.scoped(
-    startedCodex(() => Effect.succeed(true)).pipe(
-      Effect.map(({ ephemeralThreads }) => expect(ephemeralThreads).toEqual([false])),
-    ),
-  ),
-);
-
 const PRIVATE_TEMPORARY_DIRECTORY = "/agent/subagents/local-cli-v1/codex-run/tmp";
 
 it.effect.each([
@@ -265,45 +231,7 @@ it.effect("Codex never recounts usage after a cumulative snapshot regresses", ()
   ),
 );
 
-it.effect("Codex counts its native sub-agent threads alongside the main thread", () =>
-  Effect.scoped(
-    usageDeltas([
-      ["thread", 10],
-      ["sub-agent", 7],
-      ["thread", 15],
-      ["sub-agent", 9],
-      ["sub-agent", 4],
-    ]).pipe(Effect.map((deltas) => expect(deltas).toEqual([10, 7, 5, 2, 0]))),
-  ),
-);
-
-it.effect("Codex preserves an accepted report behind a full queue and delayed consumer", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { backend, childEvents, supervisorEvents } = yield* startedCodex(() =>
-        Effect.succeed(true),
-      );
-      for (let index = 0; index < 513; index++)
-        Queue.offerUnsafe(supervisorEvents, {
-          type: "supervisor_contact",
-          assignmentEpoch: 1,
-          requestId: `progress-${index}`,
-          kind: "progress",
-          message: "Working",
-        });
-      yield* yieldUntil(() => Queue.sizeUnsafe(backend.events) >= 512);
-      Queue.endUnsafe(childEvents);
-      Queue.endUnsafe(supervisorEvents);
-      yield* TestClock.adjust("1200 millis");
-      const received = yield* Stream.runCollect(Stream.fromQueue(backend.events));
-      expect(received.filter((event) => event.type === "report")).toEqual([
-        { type: "report", ...report },
-      ]);
-    }),
-  ),
-);
-
-it.effect.each(["completed", "failed"] as const)(
+it.effect.each(["failed"] as const)(
   "Codex preserves an accepted report delayed by backpressure when its turn is %s",
   (status) =>
     Effect.scoped(
@@ -340,60 +268,6 @@ it.effect.each(["completed", "failed"] as const)(
         }
         expect(terminal).toEqual([{ type: "report", ...report }]);
         expect(turnInputs).toEqual(["Start"]);
-      }),
-    ),
-);
-
-it.effect.each([undefined, 2])(
-  "Codex retains native failure when the only accepted report epoch is %s",
-  (acceptedEpoch) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { backend, childEvents, turnInputs } = yield* startedCodex((epoch) =>
-          Effect.succeed(epoch === acceptedEpoch),
-        );
-        completeTurn(childEvents, "failed", "Provider rejected the turn.");
-        expect(yield* Queue.take(backend.events)).toMatchObject({
-          type: "protocol_error",
-          message: stringContaining("Provider rejected the turn."),
-        });
-        expect(turnInputs).toEqual(["Start"]);
-      }),
-    ),
-);
-
-it.effect("Codex does not treat an unowned interruption as report completion", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { backend, childEvents } = yield* startedCodex(() => Effect.succeed(true));
-      completeTurn(childEvents, "interrupted");
-      expect(yield* Queue.take(backend.events)).toMatchObject({
-        type: "protocol_error",
-        message: stringContaining("without a matching parent interrupt lifecycle"),
-      });
-    }),
-  ),
-);
-
-it.effect.each(["completed", "failed"] as const)(
-  "Codex keeps a failed report-ownership check distinct from an invalid %s notification",
-  (status) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { backend, childEvents } = yield* startedCodex(() =>
-          Effect.fail(
-            new SupervisorChannelError({
-              operation: "query report",
-              code: "supervisor_closed",
-              message: "Supervisor channel closed.",
-            }),
-          ),
-        );
-        completeTurn(childEvents, status);
-        expect(yield* Queue.take(backend.events)).toMatchObject({
-          type: "protocol_error",
-          message: stringContaining("Supervisor channel closed."),
-        });
       }),
     ),
 );

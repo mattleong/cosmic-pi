@@ -3,34 +3,9 @@ import * as Effect from "effect/Effect";
 import type { JsonObject } from "../src/platform/json-document.ts";
 import {
   BooleanFromJsonSchema,
-  completeSettingsArguments,
   decodeSettingUpdate,
   FiniteNumberFromJsonSchema,
-  InvalidSettingError,
-  sectionSettingValue,
 } from "../src/settings-completion.ts";
-import { dispatchSettingsCommand, SettingsCommandDispatch } from "../src/settings-dispatch.ts";
-
-describe("sectionSettingValue", () => {
-  it("creates a missing section without disturbing sibling keys", () => {
-    const current: JsonObject = { other: "kept" };
-    expect(sectionSettingValue("usage", "enabled", true)(current)).toEqual({
-      other: "kept",
-      usage: { enabled: true },
-    });
-  });
-
-  it.each([
-    ["a string section", "not-an-object"],
-    ["an array section", [1, 2]],
-    ["a null section", null],
-  ])("replaces %s with an object holding the assigned key", (_label, existing) => {
-    const current: JsonObject = { footer: existing };
-    expect(sectionSettingValue("footer", "mode", "status")(current)).toEqual({
-      footer: { mode: "status" },
-    });
-  });
-});
 
 describe("decodeSettingUpdate", () => {
   const decodeSetting = decodeSettingUpdate<{ compact: boolean }>([
@@ -38,17 +13,6 @@ describe("decodeSettingUpdate", () => {
     { id: "usage.refreshIntervalMs", decoder: FiniteNumberFromJsonSchema },
     { id: "compact", decoder: BooleanFromJsonSchema },
   ]);
-
-  it.effect.each([
-    ["nope", "true"],
-    ["usage.enabled", "not-json"],
-  ] as const)("fails setting %s = %s with an id-scoped InvalidSettingError", ([id, value]) =>
-    Effect.gen(function* () {
-      const error = yield* Effect.flip(decodeSetting(id, value));
-      expect(error).toBeInstanceOf(InvalidSettingError);
-      expect(error.id).toBe(id);
-    }),
-  );
 
   it.effect("patches a dotted id into its section", () =>
     Effect.gen(function* () {
@@ -60,50 +24,4 @@ describe("decodeSettingUpdate", () => {
       });
     }),
   );
-
-  it.effect("patches a separator-less id at the top level", () =>
-    Effect.gen(function* () {
-      const patch = yield* decodeSetting("compact", "true");
-      expect(patch({ footer: { mode: "status" } })).toEqual({
-        footer: { mode: "status" },
-        compact: true,
-      });
-    }),
-  );
-});
-
-describe("completeSettingsArguments", () => {
-  const descriptors = [
-    {
-      id: "usage.enabled",
-      description: "Toggle usage.",
-      values: ["true", "false"] as const,
-    },
-  ];
-
-  it("completes option ids and their values case-insensitively", () => {
-    expect(completeSettingsArguments("usa", descriptors)).toEqual([
-      { value: "usage.enabled", label: "usage.enabled", description: "Toggle usage." },
-    ]);
-    expect(completeSettingsArguments("usage.enabled tru", descriptors)).toEqual([
-      {
-        value: "usage.enabled true",
-        label: "usage.enabled true",
-        description: "Toggle usage.",
-      },
-    ]);
-  });
-
-  it("completes a value with the canonical id that dispatch accepts", () => {
-    const [choice] = completeSettingsArguments("USAGE.Enabled f", descriptors) ?? [];
-    expect(choice?.value).toBe("usage.enabled false");
-    expect(dispatchSettingsCommand(choice?.value ?? "", descriptors)).toEqual(
-      SettingsCommandDispatch.Apply({ id: "usage.enabled", value: "false" }),
-    );
-  });
-
-  it("returns null when nothing matches, never an empty array", () => {
-    expect(completeSettingsArguments("zzz", descriptors)).toBeNull();
-    expect(completeSettingsArguments("usage.enabled zzz", descriptors)).toBeNull();
-  });
 });

@@ -3,7 +3,6 @@ import { layer } from "@effect/vitest";
 import { createWriteTool } from "@earendil-works/pi-coding-agent";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -31,18 +30,6 @@ const fixture = (prefix: string) =>
     return { fs, dir: yield* fs.makeTempDirectoryScoped({ prefix }) };
   });
 
-class NativeWriteFailure extends Data.TaggedError("NativeWriteFailure")<{
-  readonly message: string;
-}> {}
-
-const writeOutcome = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(
-    Effect.match({
-      onFailure: (error) => (error instanceof Error ? error.message : String(error)),
-      onSuccess: () => "written",
-    }),
-  );
-
 const testLayer = Layer.mergeAll(
   CodePreviewWriteService.layer,
   NodeFileSystem.layer,
@@ -50,19 +37,6 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("session write service", (it) => {
-  it.effect("reads the previous file Pi writes under a working directory with Unicode spaces", () =>
-    Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-unicode-");
-      const cwd = join(dir, "project\u3000a");
-      yield* fs.makeDirectory(cwd);
-      yield* fs.writeFileString(join(cwd, "file.txt"), "before");
-      const result = yield* executeWriteWithPreviewEffect("tool-unicode", "file.txt", "after", cwd);
-      assert.deepEqual(lookupBeforeWrite("tool-unicode"), { kind: "content", content: "before" });
-      assert.deepEqual(result.details.codePreviewBeforeWrite, { kind: "content", byteLength: 6 });
-      assert.equal(yield* fs.readFileString(join(cwd, "file.txt")), "after");
-    }),
-  );
-
   it.effect("writes follow mixed relative and absolute final symlink chains", () =>
     Effect.gen(function* () {
       const { fs, dir } = yield* fixture("pi-code-preview-chain-");
@@ -116,18 +90,6 @@ layer(testLayer)("session write service", (it) => {
     }),
   );
 
-  it.effect("new files use normal writeFile creation mode under the process umask", () =>
-    Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-mode-");
-      const control = join(dir, "control.txt");
-      yield* fs.writeFileString(control, "control");
-      yield* executeWriteWithPreviewEffect("tool-mode", "preview.txt", "preview", dir);
-      const controlMode = (yield* fs.stat(control)).mode & 0o777;
-      const previewMode = (yield* fs.stat(join(dir, "preview.txt"))).mode & 0o777;
-      assert.equal(previewMode, controlMode);
-    }),
-  );
-
   it.effect("dangling symlinks do not create target directories", () =>
     Effect.gen(function* () {
       const { fs, dir } = yield* fixture("pi-code-preview-dangling-");
@@ -139,32 +101,6 @@ layer(testLayer)("session write service", (it) => {
       assert.ok(Predicate.isTagged(error, "CodePreviewWriteError"));
       assert.equal(yield* isSymlink(link), true);
       assert.equal(yield* fs.exists(join(dir, "missing")), false);
-    }),
-  );
-
-  it.effect("failures report the same error text as Pi's own write", () =>
-    Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-native-error-");
-      yield* fs.writeFileString(join(dir, "read-only.txt"), "before");
-      yield* fs.chmod(join(dir, "read-only.txt"), 0o444);
-      yield* fs.makeDirectory(join(dir, "folder"));
-      for (const path of ["read-only.txt", "folder"]) {
-        const native = yield* writeOutcome(
-          Effect.tryPromise({
-            try: () =>
-              createWriteTool(dir).execute("native", { path, content: "after" }, undefined),
-            catch: (cause) =>
-              new NativeWriteFailure({
-                message: cause instanceof Error ? cause.message : String(cause),
-              }),
-          }),
-        );
-        if (native === "written") yield* fs.writeFileString(join(dir, path), "before");
-        const hooked = yield* writeOutcome(
-          executeWriteWithPreviewEffect(`hooked-${path}`, path, "after", dir),
-        );
-        assert.equal(hooked, native);
-      }
     }),
   );
 

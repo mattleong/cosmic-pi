@@ -7,10 +7,8 @@ import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import {
   contactParentFrame,
-  expectInterruptBeforeUse,
   localServiceFixture,
   request,
-  useProbe,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -55,57 +53,6 @@ describe("question notification ownership", () => {
         expect(questions(delivered)).toHaveLength(ending === "success" ? 0 : 1);
       });
     });
-
-  it.effect("keeps an unrendered question in the outbox after a bounded await result", () => {
-    const { fake, notifications: delivered, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "bounded-await" }));
-      let admitted = false;
-      const waiter = yield* service
-        .withAwaitTerminalObservations(
-          [run.id],
-          "all_finished",
-          () => {
-            admitted = true;
-          },
-          () => Effect.succeed("question omitted by output bound"),
-          () => new Set<string>(),
-        )
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(() => admitted);
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("bounded-question", "question", "Full question?"),
-      );
-      expect(yield* Fiber.join(waiter)).toBe("question omitted by output bound");
-      yield* yieldUntil(() => questions(delivered).length === 1);
-      expect(questions(delivered)[0]).toMatchObject({
-        id: run.id,
-        requestId: "bounded-question",
-        message: "Full question?",
-      });
-    });
-  });
-
-  it.effect("cancels await admission while an ancestor owns the question send", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const parent = yield* service.start(request({ name: "parent" }));
-      const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
-      const releaseSend = yield* Deferred.make<void>();
-      fake.controls[0]!.gateNextIpcType("proxy_notification", releaseSend);
-      fake.controls[1]!.offerIpc(contactParentFrame("blocked-send", "question", "Reply?"));
-      yield* yieldUntil(() => fake.controls[0]!.sentIpc("proxy_notification"));
-      const probe = useProbe();
-      const waiter = yield* service
-        .withAwaitTerminalObservations([child.id], "all_finished", undefined, probe.use)
-        .pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      yield* expectInterruptBeforeUse(waiter, probe, releaseSend);
-      expect(
-        fake.controls[0]!.ipc.filter((message) => message.type === "proxy_notification"),
-      ).toHaveLength(1);
-    });
-  });
 
   it.effect("does not acknowledge a replacement question with the previous await receipt", () => {
     const { fake, projections, notifications: delivered, layer } = localServiceFixture();

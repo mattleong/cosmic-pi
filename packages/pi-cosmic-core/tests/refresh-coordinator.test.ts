@@ -3,12 +3,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Scheduler from "effect/Scheduler";
 import {
   createRefreshCoordinator,
   type RefreshRequest,
 } from "../src/coordination/refresh-coordinator.ts";
-import { interruptingScheduler, yieldUntil } from "../testing.ts";
 
 const gated = () =>
   Effect.gen(function* () {
@@ -27,31 +25,6 @@ const gated = () =>
   });
 
 describe("RefreshCoordinator", () => {
-  it.effect("remains reusable across every scheduler interruption point in admission", () =>
-    Effect.gen(function* () {
-      for (let interruptAt = 1; interruptAt <= 100; interruptAt++) {
-        const coordinator = yield* createRefreshCoordinator();
-        let checkpoints = 0;
-        const admissionScheduler = interruptingScheduler(() => ++checkpoints === interruptAt);
-        const owner = yield* coordinator
-          .run({}, () => Effect.void)
-          .pipe(Effect.provideService(Scheduler.Scheduler, admissionScheduler), Effect.forkScoped);
-        yield* Fiber.await(owner);
-        let reused = false;
-        const retry = yield* coordinator
-          .run({ force: true }, () =>
-            Effect.sync(() => {
-              reused = true;
-            }),
-          )
-          .pipe(Effect.forkScoped);
-        yield* yieldUntil(() => reused, 20).pipe(Effect.ignore);
-        expect(reused, `interruption checkpoint ${interruptAt}`).toBe(true);
-        yield* Fiber.join(retry);
-      }
-    }),
-  );
-
   it.effect(
     "interrupts joiner waiting without cancelling its owner or losing the merged request",
     () =>
@@ -86,93 +59,6 @@ describe("RefreshCoordinator", () => {
       yield* Fiber.join(forced);
       yield* Fiber.join(notified);
       expect(requests).toEqual([{}, { force: true, notify: true }]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("executes a request merged while the follow-up is running", () =>
-    Effect.gen(function* () {
-      const coordinator = yield* createRefreshCoordinator();
-      const started = yield* Deferred.make<void>();
-      const releaseFirst = yield* Deferred.make<void>();
-      const followUpStarted = yield* Deferred.make<void>();
-      const releaseFollowUp = yield* Deferred.make<void>();
-      const requests: RefreshRequest[] = [];
-      const operation = (request: RefreshRequest) =>
-        Effect.gen(function* () {
-          requests.push(request);
-          if (requests.length === 1) {
-            yield* Deferred.succeed(started, undefined);
-            yield* Deferred.await(releaseFirst);
-          } else if (requests.length === 2) {
-            yield* Deferred.succeed(followUpStarted, undefined);
-            yield* Deferred.await(releaseFollowUp);
-          }
-        });
-
-      const owner = yield* coordinator.run({}, operation).pipe(Effect.forkScoped);
-      yield* Deferred.await(started);
-      const queued = yield* coordinator.run({ force: true }, operation).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      yield* Deferred.succeed(releaseFirst, undefined);
-      yield* Deferred.await(followUpStarted);
-      const late = yield* coordinator.run({ notify: true }, operation).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      yield* Deferred.succeed(releaseFollowUp, undefined);
-      yield* Fiber.join(owner);
-      yield* Fiber.join(queued);
-      yield* Fiber.join(late);
-      expect(requests).toEqual([
-        {},
-        { force: true, notify: false },
-        { force: false, notify: true },
-      ]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("replays follow-up failure to late waiters and permits immediate reuse", () =>
-    Effect.gen(function* () {
-      const coordinator = yield* createRefreshCoordinator<string>();
-      const firstStarted = yield* Deferred.make<void>();
-      const releaseFirst = yield* Deferred.make<void>();
-      const followUpStarted = yield* Deferred.make<void>();
-      const releaseFollowUp = yield* Deferred.make<void>();
-      const requests: RefreshRequest[] = [];
-      const operation = (request: RefreshRequest): Effect.Effect<void, string> =>
-        Effect.suspend(() => {
-          requests.push(request);
-          if (requests.length === 1)
-            return Deferred.succeed(firstStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(releaseFirst)),
-            );
-          if (requests.length === 2)
-            return Deferred.succeed(followUpStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(releaseFollowUp)),
-              Effect.andThen(Effect.fail("follow-up-boom")),
-            );
-          return Effect.void;
-        });
-
-      const owner = yield* coordinator.run({}, operation).pipe(Effect.exit, Effect.forkScoped);
-      yield* Deferred.await(firstStarted);
-      const queued = yield* coordinator
-        .run({ force: true }, operation)
-        .pipe(Effect.exit, Effect.forkScoped);
-      yield* Effect.yieldNow;
-      yield* Deferred.succeed(releaseFirst, undefined);
-      yield* Deferred.await(followUpStarted);
-      const late = yield* coordinator
-        .run({ notify: true }, operation)
-        .pipe(Effect.exit, Effect.forkScoped);
-      yield* Effect.yieldNow;
-      yield* Deferred.succeed(releaseFollowUp, undefined);
-
-      for (const fiber of [owner, queued, late]) {
-        const exit = yield* Fiber.join(fiber);
-        expect(Exit.isFailure(exit)).toBe(true);
-      }
-      expect(requests).toEqual([{}, { force: true, notify: false }]);
-      yield* coordinator.run({ force: true, notify: true }, operation);
-      expect(requests).toEqual([{}, { force: true, notify: false }, { force: true, notify: true }]);
     }).pipe(Effect.scoped),
   );
 

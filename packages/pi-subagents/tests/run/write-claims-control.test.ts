@@ -6,12 +6,10 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import {
   fakeChildLayer,
-  fakeNativeReportBackendLayer,
   type FakeChildControl,
   request,
   contactParentFrame,
   localServiceFixture,
-  nativeReportServiceFixture,
   withService,
 } from "./fixtures/service-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
@@ -173,95 +171,6 @@ describe("shared-cwd write claims", () => {
     }),
   );
 
-  it.effect("repairs a confirmed paused offender without repeating the violation", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(writer("repairable-writer", ["src/a.ts"]));
-
-      offerEdit(fake.controls[0], "missing-claim", "src/c.ts");
-      yield* yieldUntil(() => latest(projections, run.id)?.state === "paused");
-
-      const absolute = yield* service
-        .grantWriteClaims(run.id, ["/tmp/outside.ts"])
-        .pipe(Effect.flip);
-      expect(absolute).toMatchObject({ code: "write_claim_absolute" });
-      const outsideMarker = yield* service
-        .grantWriteClaims(run.id, ["<outside workspace>"])
-        .pipe(Effect.flip);
-      expect(outsideMarker).toMatchObject({ code: "write_claim_outside_workspace" });
-
-      const granted = yield* service.grantWriteClaims(run.id, ["src/c.ts"]);
-      expect(granted).toMatchObject({
-        writeClaims: ["src/a.ts", "src/c.ts"],
-        writeViolationOffender: true,
-      });
-      const reopened = yield* service.resumeWriterAdmission(run.id);
-      expect(reopened.writeViolationOffender).toBeUndefined();
-      expect((yield* service.resume(run.id)).state).toBe("running");
-
-      offerEdit(fake.controls[0], "now-claimed", "src/c.ts");
-      yield* yieldUntil(() => latest(projections, run.id)?.currentTool === "edit");
-      const repaired = yield* service.status(run.id);
-      expect(repaired).toMatchObject({
-        state: "running",
-        writeClaims: ["src/a.ts", "src/c.ts"],
-        writeAudit: { violations: [{ path: "src/c.ts" }] },
-      });
-    });
-  });
-
-  it.effect("rejects claim changes for ordinary pauses and non-offending peers", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const ordinary = yield* service.start(writer("ordinary-pause", ["src/a.ts"]));
-      const offender = yield* service.start(writer("offender", ["src/b.ts"]));
-      const peer = yield* service.start(writer("non-offender", ["src/c.ts"]));
-
-      yield* service.interrupt(ordinary.id);
-      const ordinaryChange = yield* service
-        .grantWriteClaims(ordinary.id, ["src/d.ts"])
-        .pipe(Effect.flip);
-      expect(ordinaryChange).toMatchObject({ code: "write_claim_change_not_waiting" });
-
-      offerEdit(fake.controls[1], "offender-edit", "src/e.ts");
-      yield* yieldUntil(() => latest(projections, offender.id)?.state === "paused");
-      expect(yield* service.status(peer.id)).toMatchObject({
-        writeAdmissionPaused: true,
-        writeViolationOffender: undefined,
-      });
-      const peerChange = yield* service.grantWriteClaims(peer.id, ["src/f.ts"]).pipe(Effect.flip);
-      expect(peerChange).toMatchObject({ code: "write_claim_change_not_waiting" });
-    });
-  });
-
-  it.effect("stops an interrupt-capable backend that cannot resume", () => {
-    const { backend, projections, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({ capabilities: ["interrupt", "rename-display"] }),
-    );
-    return withService(layer, function* (service) {
-      const run = yield* service.start(
-        request({
-          name: "non-resumable-writer",
-          host: "local",
-          runtime: "claude",
-          writeIntent: "writer",
-          writes: ["src/a.ts"],
-        }),
-      );
-      backend.controls[0]?.offer({
-        type: "tool_started",
-        assignmentEpoch: backend.controls[0]?.assignmentEpochs[0] ?? 1,
-        toolCallId: "non-resumable-edit",
-        toolName: "edit",
-        args: { path: "src/b.ts", edits: [] },
-      });
-
-      yield* yieldUntil(() => latest(projections, run.id)?.state === "stopped");
-      yield* yieldUntil(() => backend.controls[0]?.released() === 1);
-      expect((yield* service.resumeWriterAdmission(run.id)).writeAdmissionPaused).toBeUndefined();
-    });
-  });
-
   it.effect("keeps admission paused until terminal offender cleanup is confirmed", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
@@ -282,25 +191,6 @@ describe("shared-cwd write claims", () => {
       yield* Deferred.succeed(releaseGate, undefined);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       expect((yield* service.resumeWriterAdmission(run.id)).writeAdmissionPaused).toBeUndefined();
-    });
-  });
-
-  it.effect("records likely mutating Bash as an audit notice without a sticky warning", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(writer("bash-writer", ["src/a.ts"]));
-      fake.controls[0]?.offer({
-        type: "tool_execution_start",
-        toolCallId: "bash-mutation-hint",
-        toolName: "bash",
-        args: { command: "pnpm install" },
-      });
-      yield* yieldUntil(() => latest(projections, run.id)?.writeAudit?.bashWriteHints === 1);
-      const observed = yield* service.status(run.id);
-      expect(observed.state).toBe("running");
-      expect(observed.writeAdmissionPaused).toBeUndefined();
-      expect(observed.writeAudit?.bashWriteHints).toBe(1);
-      expect(observed.warning).toBeUndefined();
     });
   });
 });

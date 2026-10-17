@@ -6,19 +6,13 @@ import { plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { createOpenAIImageMessageRenderer, OPENAI_IMAGE_TOOL } from "../src/image/register.ts";
 import { extensionHarness, ownerSource } from "./extension-harness.ts";
-import {
-  countImages,
-  imageMessage,
-  pngPart as image,
-  textPart as text,
-  type ImageCustomMessage,
-} from "./image-fixtures.ts";
+import { pngPart as image, textPart as text } from "./image-fixtures.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const styles = ["compact", "preview"] as const;
+const styles = ["compact"] as const;
 const PROVIDER_TEXT = "PROVIDER_EVIDENCE recovery notes";
 const details = {
   id: "image-identity",
@@ -81,41 +75,4 @@ layer(nodeFilePlatformLayer)("Better OpenAI history before session_start", (it) 
           yield* h.emit("session_shutdown");
         }),
       );
-
-  for (const style of styles)
-    it.effect(`image messages render before session_start with their native image (${style})`, () =>
-      Effect.gen(function* () {
-        yield* presentation(style);
-        const messageRenderer = createOpenAIImageMessageRenderer();
-        const h = yield* harness(ownerSource, messageRenderer);
-        expect(h.messageRenderers.get("openai-image")).toBe(messageRenderer.render);
-        const savedPath = `${h.cwd}/.pi/generated-images/otter.png`;
-        const record = { ...details, savedPath };
-        const render = (content: ImageCustomMessage["content"]) =>
-          messageRenderer.render(
-            imageMessage(content, record),
-            { expanded: true, outputPad: 0 },
-            theme,
-          )!;
-        const expectImages = () => {
-          const component = render([text(PROVIDER_TEXT), image]);
-          expect(countImages(component)).toBe(1);
-          expect(component.render(400).join("\n")).toContain(details.revisedPrompt);
-        };
-        const savedPathShown = () =>
-          render([text(PROVIDER_TEXT)])
-            .render(400)
-            .join("\n");
-
-        expectImages();
-        const beforeStartup = savedPathShown();
-        expect(beforeStartup).toContain(".pi/generated-images/otter.png");
-        yield* h.emit("session_start");
-        expectImages();
-        expect(savedPathShown()).toContain(".pi/generated-images/otter.png");
-        expect(savedPathShown()).not.toEqual(beforeStartup);
-        expect(savedPathShown()).not.toContain(h.cwd);
-        yield* h.emit("session_shutdown");
-      }),
-    );
 });

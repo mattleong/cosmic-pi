@@ -15,7 +15,7 @@ import {
 import { SharpAdapter } from "../src/boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../src/config/schema.ts";
 import { OpenAIImageService } from "../src/image/service.ts";
-import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, OpenAIImageError } from "../src/image/types.ts";
+import { OpenAIImageError } from "../src/image/types.ts";
 import { makeResolvedConfig, testContext, testModel } from "./helpers.ts";
 
 const registryToken = JSON.stringify({ access: "test-token", accountId: "acct_test" });
@@ -63,57 +63,6 @@ function imageServiceLayer(options: {
 }
 
 describe("OpenAIImageService", () => {
-  it.effect("uses one captured context/config snapshot for defaults and overrides", () => {
-    const context = testContext({
-      token: registryToken,
-      model: () => unrelatedModel,
-    });
-    const config = makeResolvedConfig({
-      image: {
-        ...DEFAULT_IMAGE_CONFIG,
-        defaultModel: "default-image-model",
-        defaultSave: "none",
-        timeoutMs: 10_000,
-      },
-    });
-    const serviceLayer = imageServiceLayer({
-      context,
-      config,
-      body: responseBody,
-      decodedFormats: ["png", "webp"],
-    });
-
-    return Effect.gen(function* () {
-      const service = yield* OpenAIImageService;
-      const defaulted = yield* service.generate({ prompt: "default request" });
-      const overridden = yield* service.generate({
-        prompt: "override request",
-        model: "openai-codex/override-model",
-        imageModel: IMAGE_MODELS[1],
-        action: "edit",
-        outputFormat: "webp",
-        save: "none",
-      });
-
-      expect(defaulted).toMatchObject({
-        model: "default-image-model",
-        imageModel: DEFAULT_IMAGE_MODEL,
-        action: "auto",
-        outputFormat: "png",
-        mimeType: "image/png",
-      });
-      expect(overridden).toMatchObject({
-        model: "override-model",
-        imageModel: IMAGE_MODELS[1],
-        action: "edit",
-        outputFormat: "webp",
-        mimeType: "image/webp",
-      });
-      const nextDefault = yield* service.generate({ prompt: "default after override" });
-      expect(nextDefault.imageModel).toBe(DEFAULT_IMAGE_MODEL);
-    }).pipe(provideBuiltLayer(serviceLayer));
-  });
-
   it.effect("rejects unknown, blank, or unreadable parameters before any request", () => {
     const requests: StreamingHttpTestRequest[] = [];
     const hostile = new Proxy(

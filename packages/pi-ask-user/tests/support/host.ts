@@ -57,7 +57,6 @@ export const makeTuiHost = (gate?: ReturnType<typeof createAskUserPromptGate>) =
   const start = vi.fn();
   let component: Component | undefined;
   let settleOpen: SettleOpen | undefined;
-  let openFailure: Error | undefined;
   const tui = tuiFixture({
     terminal: host.terminal,
     requestRender,
@@ -72,7 +71,6 @@ export const makeTuiHost = (gate?: ReturnType<typeof createAskUserPromptGate>) =
     factory: CustomFactory<Outcome>,
     options?: CustomOptions,
   ): Promise<Outcome> {
-    if (openFailure) return Promise.reject(openFailure);
     gate?.started();
     const completed = host.ctx.ui
       .custom<Outcome>(
@@ -114,7 +112,6 @@ export const makeTuiHost = (gate?: ReturnType<typeof createAskUserPromptGate>) =
     ui,
     tui,
     tuiControls: { requestRender, stop, start },
-    resize: host.resize,
     widgets: host.widgets,
     get stack() {
       return host.overlays;
@@ -122,9 +119,6 @@ export const makeTuiHost = (gate?: ReturnType<typeof createAskUserPromptGate>) =
     showOverlay: (item: Component) => host.showUnrelated(item),
     settleOnOpen: (settle: SettleOpen) => {
       settleOpen = settle;
-    },
-    failOpen: (error: Error) => {
-      openFailure = error;
     },
     done,
     ownedHide,

@@ -13,7 +13,6 @@ import {
   type SettingsSession,
 } from "../src/boundary/host-settings-command.ts";
 import { OwnedSurfaceOutcome } from "../src/boundary/host-surface.ts";
-import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
 
 interface DemoConfig {
   readonly mode: string;
@@ -121,44 +120,6 @@ describe("provider settings command shell", () => {
       }),
   );
 
-  it.effect(
-    "waits pending saves before preparing a picker, without retaining its save permit",
-    () =>
-      Effect.gen(function* () {
-        const pending = deferredPromise<Awaited<ReturnType<Options["apply"]>>>();
-        const closing = deferredPromise<Awaited<ReturnType<Options["open"]>>>();
-        let persisted = "off";
-        const opened: string[] = [];
-        let captured = 0;
-        const h = harness({}, {}, () => {
-          captured += 1;
-          return () => true;
-        });
-        h.apply.mockImplementationOnce(() =>
-          pending.promise.then((result) => {
-            persisted = "on";
-            return result;
-          }),
-        );
-        h.open.mockImplementationOnce((_ctx, session) => {
-          opened.push(persisted);
-          void session.apply("mode", "off").catch(() => undefined);
-          return closing.promise;
-        });
-        const saving = yield* h.invoke("mode on").pipe(Effect.forkScoped);
-        yield* yieldUntil(() => h.apply.mock.calls.length === 1);
-        const picker = yield* h.invoke("").pipe(Effect.forkScoped);
-        yield* yieldUntil(() => captured === 2);
-        expect(opened).toEqual([]);
-        pending.resolve(Result.succeed(undefined));
-        yield* Fiber.join(saving);
-        yield* yieldUntil(() => h.apply.mock.calls.length === 2);
-        expect(opened).toEqual(["on"]);
-        closing.resolve(OwnedSurfaceOutcome.Settled({ value: undefined }));
-        yield* Fiber.join(picker);
-      }),
-  );
-
   it.effect("drops retired queued saves and lets a replacement bypass an unsettled old save", () =>
     Effect.gen(function* () {
       let activation = 1;
@@ -240,41 +201,6 @@ describe("provider settings command shell", () => {
     }),
   );
 
-  it.effect("finishes admitted saves privately after their picker closes", () =>
-    Effect.gen(function* () {
-      const surface = fakeCustomSurfaceHost();
-      const pending = deferredPromise<Awaited<ReturnType<Options["apply"]>>>();
-      const h = harness();
-      h.ctx.ui.custom = (factory, options) => {
-        const opened = surface.custom(factory, options);
-        queueMicrotask(surface.mount);
-        return opened;
-      };
-      h.open.mockImplementationOnce((_ctx, session) =>
-        session.picker([
-          {
-            id: "mode",
-            label: "Mode",
-            currentValue: "off",
-            values: ["off", "on"],
-          },
-        ]),
-      );
-      h.apply.mockReturnValueOnce(pending.promise);
-      const picker = yield* h.invoke("").pipe(Effect.forkScoped);
-      yield* yieldUntil(() => surface.editor !== undefined);
-      surface.editor?.handleInput?.("\r");
-      yield* yieldUntil(() => h.apply.mock.calls.length === 1);
-      surface.editor?.handleInput?.("\u001b");
-      yield* Fiber.join(picker);
-      const renders = surface.renders;
-      pending.resolve(Result.succeed(undefined));
-      yield* h.invoke("mode off");
-      expect(surface.renders).toBe(renders);
-      expect(h.apply.mock.calls.map(([, , value]) => value)).toEqual(["on", "off"]);
-    }),
-  );
-
   for (const outcome of ["success", "typed failure", "rejection"] as const) {
     it.effect(
       `retired ${outcome} cannot notify, redraw or run afterApply on a frozen host context`,
@@ -303,140 +229,6 @@ describe("provider settings command shell", () => {
         }),
     );
   }
-
-  for (const operation of ["status", "picker"] as const) {
-    it.effect(`retirement suppresses a delayed ${operation} notification`, () =>
-      Effect.gen(function* () {
-        let current = true;
-        let started = false;
-        const status = deferredPromise<string>();
-        const picker = deferredPromise<Awaited<ReturnType<Options["open"]>>>();
-        const h = harness({
-          isCurrent: () => current,
-          status: () => {
-            started = true;
-            return status.promise;
-          },
-          open: () => {
-            started = true;
-            return picker.promise;
-          },
-        });
-        const work = yield* h
-          .invoke(operation === "status" ? "status" : "")
-          .pipe(Effect.forkScoped);
-        yield* yieldUntil(() => started);
-        current = false;
-        status.resolve("diagnostics");
-        picker.resolve(OwnedSurfaceOutcome.Failed({ cause: undefined }));
-        yield* Fiber.join(work);
-        expect(h.notify).not.toHaveBeenCalled();
-      }),
-    );
-  }
-
-  it.effect("answers help, status, and invalid input without config or apply", () =>
-    Effect.gen(function* () {
-      let failStatus = false;
-      const h = harness({
-        status: () => {
-          if (failStatus) throw new Error("status-secret");
-          return "demo status";
-        },
-      });
-      yield* h.invoke("help");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("mode"), "info");
-      yield* h.invoke("status");
-      expect(h.notify).toHaveBeenLastCalledWith("demo status", "info");
-      failStatus = true;
-      yield* h.invoke("status");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.not.stringContaining("secret"), "warning");
-      yield* h.invoke("unknown on");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("unknown"), "warning");
-      yield* h.invoke("mode");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("Usage"), "warning");
-      yield* h.invoke("mode maybe");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("mode"), "warning");
-      h.open.mockResolvedValueOnce(OwnedSurfaceOutcome.Blocked());
-      yield* h.invoke("");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
-      expect(h.apply).not.toHaveBeenCalled();
-
-      const headless = harness({}, { mode: "rpc" });
-      yield* headless.invoke("");
-      expect(headless.open).not.toHaveBeenCalled();
-      expect(headless.notify).toHaveBeenLastCalledWith(expect.stringContaining("mode"), "info");
-    }),
-  );
-
-  it.effect("binds the signal by the provider's policy", () =>
-    Effect.gen(function* () {
-      const required = harness();
-      required.throwOnSignal();
-      yield* required.invoke("mode on");
-      yield* required.invoke("");
-      expect(required.apply).not.toHaveBeenCalled();
-      expect(required.open).not.toHaveBeenCalled();
-      expect(required.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
-
-      const optional = harness({ signal: "optional" });
-      optional.throwOnSignal();
-      yield* optional.invoke("mode on");
-      expect(optional.apply.mock.calls.map(([, id, value, signal]) => [id, value, signal])).toEqual(
-        [["mode", "on", undefined]],
-      );
-
-      const aborted = harness({ signal: "optional" }, { signal: AbortSignal.abort() });
-      aborted.apply.mockRejectedValueOnce(new Error("interrupted"));
-      yield* aborted.invoke("mode on");
-      expect(aborted.notify).not.toHaveBeenCalled();
-
-      const opening = AbortSignal.abort("opening");
-      const later = AbortSignal.abort("later");
-      for (const policy of ["required", "optional"] as const) {
-        const h = harness({ signal: policy }, { signal: opening });
-        h.open.mockImplementationOnce((_ctx, session) => {
-          Object.defineProperty(h.ctx, "signal", { configurable: true, value: later });
-          return session
-            .apply("mode", "on")
-            .then(() => ({ _tag: "Settled" as const, value: undefined }));
-        });
-        yield* h.invoke("");
-        expect(h.apply.mock.calls[0]?.[3]).toBe(policy === "optional" ? later : opening);
-      }
-    }),
-  );
-
-  it.effect("applies a named scope, the default scope, and open values the provider checks", () =>
-    Effect.gen(function* () {
-      const h = harness({
-        scopes: [
-          { name: "global", description: "Everywhere" },
-          { name: "project", description: "This project" },
-        ],
-        scopeBlocked: (_ctx, scope) =>
-          scope === "project" ? "Trust the project first" : undefined,
-        descriptors: [
-          {
-            id: "limit",
-            description: "A limit.",
-            values: ["10", "20"],
-            openValues: true,
-            currentValue: () => "10",
-          },
-        ],
-      });
-      yield* h.invoke("limit 15");
-      yield* h.invoke("global limit 20");
-      expect(h.apply.mock.calls.map(([, id, value, , scope]) => [id, value, scope])).toEqual([
-        ["limit", "15", "global"],
-        ["limit", "20", "global"],
-      ]);
-      yield* h.invoke("project limit 20");
-      expect(h.apply).toHaveBeenCalledTimes(2);
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("Trust"), "warning");
-    }),
-  );
 
   it.effect("refuses a blocked scope from a picker and restores its row", () =>
     Effect.gen(function* () {

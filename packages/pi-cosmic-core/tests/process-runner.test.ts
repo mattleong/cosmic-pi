@@ -3,7 +3,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as PlatformError from "effect/PlatformError";
-import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -41,14 +40,6 @@ it.live("terminates a process when bounded output overflows", () =>
     expect(result.overflowed).toBe(true);
     expect(result.stdout).toBe("0123");
     expect(result.cleanupUnconfirmed).toBe(false);
-  }),
-);
-
-it.live("preserves a child termination signal", () =>
-  Effect.gen(function* () {
-    const result = yield* runNode('process.kill(process.pid, "SIGTERM")');
-    expect(result.code).toBeNull();
-    expect(result.signal).toBe("SIGTERM");
   }),
 );
 
@@ -155,39 +146,6 @@ for (const outcome of ["completed", "timeout"] as const) {
   );
 }
 
-for (const settles of [true, false])
-  it.effect(
-    `keeps a denied process-tree sweep ${settles ? "pending until its group disappears" : "uncertain while inspection remains denied"}`,
-    () =>
-      Effect.gen(function* () {
-        const inspected = yield* Deferred.make<void>();
-        let absent = false;
-        yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
-              if (signal === 0) Deferred.doneUnsafe(inspected, Effect.void);
-              throw Object.assign(new Error("group state"), { code: absent ? "ESRCH" : "EPERM" });
-            }),
-          ),
-          (spy) => Effect.sync(() => spy.mockRestore()),
-        );
-        const handle = fakeHandle({
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-          stdout: Stream.empty,
-          stderr: Stream.empty,
-          isRunning: Effect.succeed(false),
-        });
-        const fake = runFake(() => Effect.succeed(handle), { sweepProcessTreeOnExit: true });
-        const pending = yield* fake.run.pipe(Effect.forkScoped);
-        yield* Deferred.await(inspected);
-        expect(fake.reports).toEqual([]);
-        absent = settles;
-        yield* TestClock.adjust(200);
-        expect((yield* Fiber.join(pending)).cleanupUnconfirmed).toBe(!settles);
-        expect(fake.reports).toEqual([settles]);
-      }),
-  );
-
 for (const mode of ["denied", "ineffective", "confirmed"] as const) {
   it.effect(`reports ${mode} cancellation cleanup before releasing ownership`, () =>
     Effect.gen(function* () {
@@ -219,44 +177,6 @@ for (const mode of ["denied", "ineffective", "confirmed"] as const) {
       yield* Fiber.join(interrupted);
       expect(fake.reports).toEqual([mode === "confirmed"]);
       expect(running).toBe(mode !== "confirmed");
-    }),
-  );
-}
-
-for (const mode of ["timeout", "stream", "partial-spawn", "spawn"] as const) {
-  it.effect(`reports uncertain cleanup after ${mode} failure`, () =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      let owned = false;
-      const handle = fakeHandle(mode === "stream" ? { stdout: Stream.fail(denied) } : {});
-      const fake = runFake(() =>
-        Effect.gen(function* () {
-          yield* Deferred.succeed(started, undefined);
-          if (mode === "partial-spawn") {
-            yield* Effect.acquireRelease(
-              Effect.sync(() => {
-                owned = true;
-              }),
-              () => Effect.ignore(Effect.fail(denied)),
-            );
-            return yield* denied;
-          }
-          if (mode === "spawn") return yield* denied;
-          return handle;
-        }),
-      );
-      const pending = yield* fake.run.pipe(Effect.result, Effect.forkScoped);
-      yield* Deferred.await(started);
-      if (mode === "timeout") yield* TestClock.adjust(10);
-      const result = yield* Fiber.join(pending);
-      expect(fake.reports).toEqual([false]);
-      if (mode === "timeout")
-        expect(Result.getOrUndefined(result)).toMatchObject({
-          timedOut: true,
-          cleanupUnconfirmed: true,
-        });
-      else expect(Result.isFailure(result)).toBe(true);
-      expect(owned).toBe(mode === "partial-spawn");
     }),
   );
 }

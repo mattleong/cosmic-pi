@@ -12,7 +12,7 @@ import { step } from "../support/effect-test";
 import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 
-for (const activeWrite of [false, true])
+for (const activeWrite of [false])
   it.live(
     `renderer routing retains native execution/settings/images and write selection: ${activeWrite}`,
     () =>

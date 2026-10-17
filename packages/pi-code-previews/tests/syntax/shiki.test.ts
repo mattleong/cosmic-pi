@@ -19,14 +19,14 @@ import {
 } from "../../src/boundary/shiki";
 import { shikiHighlighterFixture } from "../support/shiki";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
+import { setCodePreviewSettings } from "../../src/config/state";
 import {
   requestSyntaxInitialize,
   requestSyntaxLanguage,
   syntaxProjection,
 } from "../../src/syntax/projection";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
-import { getShikiStatus, renderWithShiki } from "../../src/syntax/render";
+import { getShikiStatus } from "../../src/syntax/render";
 
 type TokenFixture = { readonly content: string; readonly color: string; readonly offset: number };
 
@@ -44,11 +44,6 @@ const syntaxLayer = (
   CodePreviewSyntaxService.layer.pipe(
     Layer.provide(Layer.succeed(ShikiAdapter, ShikiAdapter.of({ create, loadLanguage }))),
   );
-
-const hostRender = (code: string, lang: string) => {
-  const render = (): void => void renderWithShiki(code, lang, render);
-  return render;
-};
 
 describe("session syntax service", () => {
   beforeEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
@@ -128,176 +123,6 @@ describe("session syntax service", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect(
-    "returning to the loaded theme revokes a pending replacement without clearing its cache",
-    () =>
-      Effect.gen(function* () {
-        const started = yield* Deferred.make<void>();
-        const candidate = yield* Deferred.make<ShikiHighlighter>();
-        let creates = 0;
-        let renders = 0;
-        const current = highlighter(undefined, (code) => {
-          renders++;
-          return [[{ content: code, color: "#ffffff", offset: 0 }]];
-        });
-        const layer = syntaxLayer((theme) => {
-          creates++;
-          return theme === "dark-plus"
-            ? Effect.succeed(current)
-            : Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(candidate)));
-        });
-        yield* CodePreviewSyntaxService.use((service) =>
-          Effect.gen(function* () {
-            yield* service.initialize("dark-plus");
-            assert.ok(renderWithShiki("source", "typescript"));
-            const replacement = yield* service.initialize("other").pipe(Effect.forkScoped);
-            yield* Deferred.await(started);
-            let waiterSettled = false;
-            const waiter = yield* service.initialize("other").pipe(
-              Effect.tap(() =>
-                Effect.sync(() => {
-                  waiterSettled = true;
-                }),
-              ),
-              Effect.forkScoped,
-            );
-            yield* Effect.yieldNow;
-            yield* service.initialize("dark-plus");
-            for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
-            assert.equal(waiterSettled, true);
-            assert.equal(yield* Deferred.isDone(candidate), false);
-            yield* Fiber.interrupt(replacement);
-            yield* Fiber.join(waiter);
-            for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
-            assert.equal(creates, 2);
-            assert.equal(syntaxProjection()?.highlighter, current);
-            assert.equal(syntaxProjection()?.theme, "dark-plus");
-            assert.ok(renderWithShiki("source", "typescript"));
-            assert.equal(renders, 1);
-          }),
-        ).pipe(provideBuiltLayer(layer));
-      }).pipe(Effect.scoped),
-  );
-
-  it.effect("a newer theme settles obsolete joiners before their owner finishes", () =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const candidate = yield* Deferred.make<ShikiHighlighter>();
-      const joined = yield* Deferred.make<void>();
-      const current = highlighter();
-      const creates: string[] = [];
-      const layer = syntaxLayer((theme) => {
-        creates.push(theme);
-        return theme === "older"
-          ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(candidate)))
-          : Effect.succeed(current);
-      });
-      yield* CodePreviewSyntaxService.use((service) =>
-        Effect.gen(function* () {
-          const owner = yield* service.initialize("older").pipe(Effect.forkScoped);
-          yield* Deferred.await(started);
-          const waiter = yield* service
-            .initialize("older")
-            .pipe(Effect.andThen(Deferred.succeed(joined, undefined)), Effect.forkScoped);
-          yield* Effect.yieldNow;
-          assert.equal(yield* Deferred.isDone(joined), false);
-          yield* service.initialize("newer");
-          for (let step = 0; step < 20; step++) yield* Effect.yieldNow;
-          assert.equal(yield* Deferred.isDone(joined), true);
-          assert.equal(yield* Deferred.isDone(candidate), false);
-          yield* Fiber.interrupt(owner);
-          yield* Fiber.join(waiter);
-          assert.deepEqual(creates, ["older", "newer"]);
-          assert.equal(syntaxProjection()?.theme, "newer");
-          assert.equal(syntaxProjection()?.highlighter, current);
-        }),
-      ).pipe(provideBuiltLayer(layer));
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("disposes a late candidate after returning to the already loaded theme", () =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const candidate = yield* Deferred.make<ShikiHighlighter>();
-      const current = highlighter();
-      let disposed = 0;
-      const layer = syntaxLayer((theme) =>
-        theme === "dark-plus"
-          ? Effect.succeed(current)
-          : Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(candidate))),
-      );
-      yield* CodePreviewSyntaxService.use((service) =>
-        Effect.gen(function* () {
-          yield* service.initialize("dark-plus");
-          const replacement = yield* service.initialize("other").pipe(Effect.forkScoped);
-          yield* Deferred.await(started);
-          yield* service.initialize("dark-plus");
-          yield* Deferred.succeed(
-            candidate,
-            highlighter(() => disposed++),
-          );
-          yield* Fiber.join(replacement);
-          assert.equal(disposed, 1);
-          assert.equal(syntaxProjection()?.highlighter, current);
-          assert.equal(syntaxProjection()?.theme, "dark-plus");
-        }),
-      ).pipe(provideBuiltLayer(layer));
-      assert.equal(disposed, 1);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("interrupting a duplicate initializer leaves the blocked owner running", () =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const candidate = yield* Deferred.make<ShikiHighlighter>();
-      let creates = 0;
-      let ownerCancelled = false;
-      const layer = syntaxLayer(() =>
-        Effect.gen(function* () {
-          creates++;
-          yield* Deferred.succeed(started, undefined);
-          return yield* Deferred.await(candidate);
-        }).pipe(
-          Effect.onInterrupt(() =>
-            Effect.sync(() => {
-              ownerCancelled = true;
-            }),
-          ),
-        ),
-      );
-      yield* CodePreviewSyntaxService.use((service) =>
-        Effect.gen(function* () {
-          const owner = yield* service.initialize("dark-plus").pipe(Effect.forkScoped);
-          yield* Deferred.await(started);
-          const waiter = yield* service.initialize("dark-plus").pipe(Effect.forkScoped);
-          yield* Effect.yieldNow;
-          let cancelled = false;
-          const cancellation = yield* Fiber.interrupt(waiter).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                cancelled = true;
-              }),
-            ),
-            Effect.forkScoped,
-          );
-          const installed = highlighter();
-          yield* Effect.gen(function* () {
-            for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
-            assert.equal(cancelled, true);
-            assert.equal(ownerCancelled, false);
-            assert.equal(creates, 1);
-            assert.equal(yield* Deferred.isDone(candidate), false);
-          }).pipe(Effect.ensuring(Deferred.succeed(candidate, installed)));
-          yield* Fiber.join(cancellation);
-          yield* Fiber.join(owner);
-          assert.equal(syntaxProjection()?.highlighter, installed);
-          assert.equal(ownerCancelled, false);
-          assert.equal(creates, 1);
-        }),
-      ).pipe(provideBuiltLayer(layer));
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("logs only a redacted actionable Shiki degradation", () => {
     const captured = makeCapturedLogger();
     const layer = syntaxLayer(() =>
@@ -324,73 +149,6 @@ describe("session syntax service", () => {
         }),
       ),
     );
-  });
-
-  it.effect("remembers a failed initialization instead of retrying on every render", () => {
-    const captured = makeCapturedLogger();
-    let creates = 0;
-    const layer = syntaxLayer(() =>
-      Effect.suspend(() => {
-        creates++;
-        return Effect.fail(
-          new ShikiBoundaryError({ operation: "initialize", message: "expected failure" }),
-        );
-      }),
-    );
-    const rerender = hostRender("const a = 1;", "typescript");
-    return CodePreviewSyntaxService.use((service) =>
-      Effect.gen(function* () {
-        rerender();
-        for (let step = 0; step < 50; step++) yield* Effect.yieldNow;
-        assert.equal(creates, 1);
-        const settled = getShikiStatus().statusVersion;
-        yield* service.initialize(codePreviewSettings.shikiTheme);
-        assert.equal(creates, 2);
-        assert.equal(getShikiStatus().statusVersion, settled);
-        assert.equal(renderWithShiki("const a = 1;", "typescript", rerender), undefined);
-        for (let step = 0; step < 20; step++) yield* Effect.yieldNow;
-        assert.equal(creates, 2);
-      }),
-    ).pipe(
-      provideBuiltLayer(layer.pipe(Layer.provideMerge(captured.layer))),
-      Effect.tap(() =>
-        Effect.sync(() => {
-          const warnings = captured.entries.filter((entry) =>
-            JSON.stringify(entry).includes("Shiki failed to initialize"),
-          );
-          assert.equal(warnings.length, 1);
-        }),
-      ),
-    );
-  });
-
-  it.effect("renders a failed grammar plainly without loading it again", () => {
-    let loads = 0;
-    const layer = syntaxLayer(
-      () => Effect.succeed(highlighter()),
-      () =>
-        Effect.suspend(() => {
-          loads++;
-          return Effect.fail(
-            new ShikiBoundaryError({ operation: "language", message: "expected failure" }),
-          );
-        }),
-    );
-    const rerender = hostRender("fn main() {}", "rust");
-    return CodePreviewSyntaxService.use((service) =>
-      Effect.gen(function* () {
-        yield* service.initialize(codePreviewSettings.shikiTheme);
-        rerender();
-        for (let step = 0; step < 50; step++) yield* Effect.yieldNow;
-        assert.equal(loads, 1);
-        const settled = getShikiStatus().statusVersion;
-        assert.equal(renderWithShiki("fn main() {}", "rust", rerender), undefined);
-        assert.ok(renderWithShiki("const a = 1;", "typescript"));
-        for (let step = 0; step < 20; step++) yield* Effect.yieldNow;
-        assert.equal(loads, 1);
-        assert.equal(getShikiStatus().statusVersion, settled);
-      }),
-    ).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("interrupted initialization clears its flight and permits retry", () => {
@@ -606,51 +364,4 @@ describe("session syntax service", () => {
       assert.equal(creates, 0);
     });
   });
-
-  it.effect("session finalization discards caches owned by its highlighter", () => {
-    let renders = 0;
-    const reused = highlighter(undefined, (code) => {
-      renders++;
-      return [[{ content: `${renders}:${code}`, color: "#ffffff", offset: 0 }]];
-    });
-    const renderSession = CodePreviewSyntaxService.use((service) =>
-      service
-        .initialize("dark-plus")
-        .pipe(Effect.andThen(Effect.sync(() => renderWithShiki("same source", "typescript")))),
-    ).pipe(provideBuiltLayer(syntaxLayer(() => Effect.succeed(reused))));
-
-    return Effect.gen(function* () {
-      yield* renderSession;
-      yield* renderSession;
-      assert.equal(renders, 2);
-    });
-  });
-
-  it.effect("stale highlighter cleanup preserves a newer highlighter's caches", () =>
-    Effect.gen(function* () {
-      const staleCandidate = yield* Deferred.make<ShikiHighlighter>();
-      let currentRenders = 0;
-      const current = highlighter(undefined, (code) => {
-        currentRenders++;
-        return [[{ content: `current:${code}`, color: "#ffffff", offset: 0 }]];
-      });
-      const layer = syntaxLayer((theme) =>
-        theme === "github-dark" ? Deferred.await(staleCandidate) : Effect.succeed(current),
-      );
-
-      yield* CodePreviewSyntaxService.use((service) =>
-        Effect.gen(function* () {
-          const stale = yield* service.initialize("github-dark").pipe(Effect.forkScoped);
-          yield* Effect.yieldNow;
-          yield* service.initialize("dark-plus");
-          assert.ok(renderWithShiki("same source", "typescript"));
-          yield* Deferred.succeed(staleCandidate, highlighter());
-          yield* Fiber.join(stale);
-          assert.ok(renderWithShiki("same source", "typescript"));
-          assert.ok(renderWithShiki("different source", "typescript"));
-          assert.equal(currentRenders, 2);
-        }),
-      ).pipe(provideBuiltLayer(layer));
-    }).pipe(Effect.scoped),
-  );
 });

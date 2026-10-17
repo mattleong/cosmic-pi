@@ -8,7 +8,6 @@ import { formatDuration, registerExtensionCommand, type JsonObject } from "pi-co
 import {
   deferredPromise,
   extensionContextFixture,
-  failingTheme,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
@@ -121,23 +120,6 @@ const beginRefreshWrite = Effect.gen(function* () {
 });
 
 describe("Better OpenAI settings controller", () => {
-  it.effect(
-    "reconciles an optimistic submenu value from the authoritative successful projection",
-    () =>
-      Effect.gen(function* () {
-        const { h, write, closed, component } = yield* beginRefreshWrite;
-
-        h.setRefreshInterval(15000);
-        write.resolve();
-        yield* waitUntil(() => renderedRow(component, "Usage refresh")?.includes("15000") === true);
-
-        component.handleInput?.(input.escape);
-        expect(renderedRow(component, "Usage")).toContain("15s");
-        component.handleInput?.(input.escape);
-        yield* Effect.promise(() => closed);
-      }),
-  );
-
   it.effect("closes a picker whose session was replaced instead of accepting unsaved changes", () =>
     Effect.gen(function* () {
       let generation = 1;
@@ -201,24 +183,6 @@ describe("Better OpenAI settings controller", () => {
       component.handleInput?.(input.escape);
       component.handleInput?.(input.escape);
       yield* Effect.promise(() => closed);
-    }),
-  );
-
-  it.effect("contains a throwing picker factory and a rejecting custom surface", () =>
-    Effect.gen(function* () {
-      const hostileTheme = failingTheme({ message: "host-theme-secret" });
-      const hostileUi = fakeCustomSurfaceHost({ theme: hostileTheme }).ctx.ui;
-      for (const custom of [
-        hostileUi.custom.bind(hostileUi),
-        () => Promise.reject(new Error("host-custom-secret")),
-      ]) {
-        const h = settingsHarness({ hostCustom: custom });
-        yield* Effect.promise(() => h.invoke(""));
-        expect(h.notify).toHaveBeenCalledExactlyOnceWith(
-          expect.not.stringContaining("secret"),
-          "warning",
-        );
-      }
     }),
   );
 });

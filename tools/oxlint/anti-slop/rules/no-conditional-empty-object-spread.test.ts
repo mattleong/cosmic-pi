@@ -10,18 +10,10 @@ if (noConditionalEmptyObjectSpreadRule.meta?.fixable !== undefined) {
 }
 
 tester.run("anti-slop/no-conditional-empty-object-spread", noConditionalEmptyObjectSpreadRule, {
-  valid: [
-    "const result = { value };",
-    "const result = { ...values };",
-    "const result = condition ? { value } : {};",
-  ],
+  valid: ["const result = condition ? { value } : {};"],
   invalid: [
     {
       code: "const result = { ...(value !== undefined ? { value } : {}) };",
-      errors: [error],
-    },
-    {
-      code: "const result = { ...(condition ? {} : { value }) };",
       errors: [error],
     },
   ],

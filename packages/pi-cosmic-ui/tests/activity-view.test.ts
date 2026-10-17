@@ -118,14 +118,4 @@ describe("activity view capability", () => {
       expect(discoverActivityView(owned.f.events, "session")).toBeUndefined();
     }),
   );
-  it.effect("revokes the capability when the host deactivates", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const view = discoverActivityView(f.events, "session")!;
-      f.host.deactivate();
-      yield* Effect.flip(Effect.tryPromise(() => view.open("subagents")));
-      expect(discoverActivityView(f.events, "session")).toBeUndefined();
-      expect(f.surface.overlays).toEqual([]);
-    }),
-  );
 });

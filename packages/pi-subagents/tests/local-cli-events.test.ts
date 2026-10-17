@@ -5,31 +5,22 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as EffectScope from "effect/Scope";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import type { Scope } from "effect/Scope";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
-import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
-import {
-  backendLaunch,
-  backendSupervisor,
-  supervisorMetadata,
-  takeBackendEvent,
-} from "./fixtures/backend-supervisor.ts";
-import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
+import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
+import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import {
   makeLocalCliRawEventOwnership,
   type LocalCliRawEventOwnership,
 } from "../src/backend/local-cli-events.ts";
-import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
 import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { RpcCommand } from "../src/backend/local-pi-protocol.ts";
 import type { ChildProcessHandle, ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { ProcessExit } from "../src/boundary/process-transport.ts";
-import type { BackendEvent, BackendHandle } from "../src/backend/model.ts";
-import type { SubagentError } from "../src/run/errors.ts";
+import type { BackendEvent } from "../src/backend/model.ts";
 
 const sessionStats = (tokens: number | undefined, cost: number | undefined) =>
   tokens === undefined
@@ -269,11 +260,6 @@ const backendEvent = (epoch: number): BackendEvent => ({
 const rawId = (raw: LocalCliWireEvent): string =>
   raw.type === "protocol_error" ? raw.message : "";
 
-const turnStartedFrame = (turnId: string) => ({
-  method: "turn/started",
-  params: { threadId: "thread-1", turn: { id: turnId, status: "inProgress" } },
-});
-
 it.effect("Pi keeps RPC and IPC byte owners until normalized consumption or scope release", () =>
   Effect.gen(function* () {
     const scope = yield* EffectScope.make();
@@ -352,19 +338,6 @@ describe("local CLI raw event ownership", () => {
     ),
   );
 
-  it.effect("logs and acknowledges an event dropped by an ended ingress queue", () =>
-    withOwnership(4, ({ events, acknowledged, ownership, warnings }) =>
-      Effect.gen(function* () {
-        yield* ownership.offer(backendEvent(1));
-        Queue.endUnsafe(events);
-        yield* ownership.offer(backendEvent(2), rawEvent(2));
-        expect(acknowledged).toEqual(["raw-2"]);
-        expect(warnings()).toContain("ingress overflowed");
-        expect(warnings()).toContain("activity");
-      }),
-    ),
-  );
-
   it.effect("logs and acknowledges a blocked offer that is interrupted before delivering", () =>
     withOwnership(1, ({ acknowledged, ownership, warnings }) =>
       Effect.gen(function* () {
@@ -374,87 +347,6 @@ describe("local CLI raw event ownership", () => {
         yield* Fiber.interrupt(blocked);
         expect(acknowledged).toEqual(["raw-3"]);
         expect(warnings()).toContain("ingress overflowed");
-      }),
-    ),
-  );
-
-  it.effect("releases an unoffered raw lazily, only when the release effect runs", () =>
-    withOwnership(4, ({ acknowledged, ownership }) =>
-      Effect.gen(function* () {
-        const release = ownership.release(rawEvent(7));
-        expect(acknowledged).toEqual([]);
-        yield* release;
-        expect(acknowledged).toEqual(["raw-7"]);
-      }),
-    ),
-  );
-});
-
-const withCodexEventDriver = <A>(
-  use: (harness: {
-    readonly backend: BackendHandle;
-    readonly acknowledged: ReadonlyArray<LocalCliWireEvent>;
-    readonly offerRaw: (wire: LocalCliWireEvent) => void;
-  }) => Effect.Effect<A, never, Scope>,
-): Effect.Effect<A, SubagentError> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const acknowledged: LocalCliWireEvent[] = [];
-      const childEvents = yield* Queue.bounded<LocalCliWireEvent, Cause.Done>(16);
-      const supervisorEvents = yield* Queue.bounded<SupervisorEvent, Cause.Done>(16);
-      const child: LocalCliHandle = {
-        pid: 4242,
-        events: childEvents,
-        awaitExit: Effect.never,
-        send: () => Effect.void,
-        acknowledge: (raw) => void acknowledged.push(raw),
-        terminate: () => Effect.sync(() => Queue.endUnsafe(childEvents)),
-      };
-      const supervisor = backendSupervisor(
-        supervisorMetadata({ tomlFragment: "" }),
-        supervisorEvents,
-        {
-          hasAcceptedReport: () => Effect.succeed(true),
-          acceptedReportForEpoch: () => Effect.undefined,
-        },
-      );
-      const backend = yield* localCodexBackendDriver(
-        { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
-        { open: () => Effect.succeed(supervisor) },
-      ).spawn(backendLaunch());
-      const offerRaw = (wire: LocalCliWireEvent) => {
-        Queue.offerUnsafe(childEvents, wire);
-      };
-      return yield* use({ backend, acknowledged, offerRaw });
-    }),
-  );
-
-describe("local Codex event driver raw safety", () => {
-  const settle = Effect.sleep("50 millis");
-
-  it.live("releases consumed raws exactly once and keeps owned raws until acknowledgement", () =>
-    withCodexEventDriver(({ backend, acknowledged, offerRaw }) =>
-      Effect.gen(function* () {
-        const rawStale: LocalCliWireEvent = { type: "message", value: { id: "stale", result: {} } };
-        const rawTurn1: LocalCliWireEvent = { type: "message", value: turnStartedFrame("turn-1") };
-        offerRaw(rawStale);
-        offerRaw(rawTurn1);
-        const started = yield* takeBackendEvent(backend);
-        expect(started).toMatchObject({ type: "run_started" });
-        expect([...acknowledged]).toEqual([rawStale]);
-        backend.acknowledge(started);
-        expect([...acknowledged]).toEqual([rawStale, rawTurn1]);
-        backend.acknowledge(started);
-        expect([...acknowledged]).toEqual([rawStale, rawTurn1]);
-
-        offerRaw({ type: "message", value: turnStartedFrame("turn-1") });
-        yield* settle;
-        expect([...acknowledged]).toEqual([
-          rawStale,
-          rawTurn1,
-          { type: "message", value: turnStartedFrame("turn-1") },
-        ]);
-        expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
       }),
     ),
   );

@@ -85,9 +85,7 @@ const inertDriver: BackendDriver = {
   spawn: () => Effect.die("unused"),
 };
 
-export const launchFixture = (
-  overrides: Partial<BackendLaunchRequest> = {},
-): BackendLaunchRequest => ({
+const launchFixture: BackendLaunchRequest = {
   runId: "agent-1",
   name: "agent-1",
   cwd: "/project",
@@ -100,8 +98,7 @@ export const launchFixture = (
   projectTrusted: true,
   parentSessionId: "parent",
   systemPrompt: "",
-  ...overrides,
-});
+};
 
 export const backendHandleFixture = (overrides: Partial<BackendHandle> = {}) =>
   Effect.gen(function* () {
@@ -132,7 +129,7 @@ export const runRecordFixture = (overrides: Partial<RunRecord> = {}) =>
       view: view(),
       scope: yield* Scope.make(),
       driver: inertDriver,
-      launch: launchFixture(),
+      launch: launchFixture,
       activeTools: new Map(),
       nativeAgents: new Set(),
       cleanupSettlement: yield* Deferred.make<"confirmed" | "quarantined">(),

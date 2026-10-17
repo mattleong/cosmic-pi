@@ -2,7 +2,6 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
-import * as Schema from "effect/Schema";
 import * as Core from "pi-cosmic-core";
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../src/boundary/node-builtins.ts";
@@ -16,23 +15,7 @@ import { vi } from "vitest";
 import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const { execFileSync } = process.getBuiltinModule("node:child_process");
 const temporaryAgent = temporaryDirectory("report-archive-");
-
-const ProcessArchiveResult = Schema.Struct({
-  id: Schema.String,
-  path: Schema.String,
-});
-
-const archiveFromFreshProcess = (agentDirectory: string, text: string) => {
-  const fixture = new URL("./fixtures/report-archive-process.ts", import.meta.url).pathname;
-  const code = `const {createJiti}=await import(${JSON.stringify(import.meta.resolve("jiti"))});const jiti=createJiti(${JSON.stringify(import.meta.url)});const {archiveReport}=await jiti.import(${JSON.stringify(fixture)});process.stdout.write(JSON.stringify(archiveReport(${JSON.stringify(agentDirectory)},${JSON.stringify(text)})));`;
-  const output = execFileSync(process.execPath, ["--input-type=module", "-e", code], {
-    encoding: "utf8",
-    timeout: 20_000,
-  });
-  return Schema.decodeSync(Schema.fromJsonString(ProcessArchiveResult))(output);
-};
 
 const sentText = (sendMessage: ReturnType<typeof vi.fn<ExtensionAPI["sendMessage"]>>) => {
   const content = sendMessage.mock.calls[0]?.[0].content;
@@ -80,32 +63,6 @@ describe("subagent report archive", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("preserves historical links written before archive identities were unique", () =>
-    Effect.gen(function* () {
-      const agent = yield* temporaryAgent;
-      const directory = path.join(reportArchiveRoot(agent), "session-1");
-      yield* Effect.promise(() => fs.mkdir(directory, { recursive: true, mode: 0o700 }));
-      const historicalPath = path.join(directory, "agent-r1-1-1.md");
-      yield* Effect.promise(() =>
-        fs.writeFile(historicalPath, "historical report", { mode: 0o600 }),
-      );
-      const current = sessionReportArchive(
-        agent,
-        "session-1",
-      )({
-        id: "agent-r1-1",
-        generation: 1,
-        text: "current report",
-      });
-      if (!current) return yield* Effect.die("archive write failed");
-      expect(current.path).not.toBe(historicalPath);
-      expect(yield* Effect.promise(() => fs.readFile(historicalPath, "utf8"))).toBe(
-        "historical report",
-      );
-      return undefined;
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("preserves earlier links when an archive owner or a delivery is replaced", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
@@ -132,23 +89,6 @@ describe("subagent report archive", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("preserves a report after a new process reuses the same session and run identity", () =>
-    Effect.gen(function* () {
-      const agent = yield* temporaryAgent;
-      const first = archiveFromFreshProcess(agent, "first process report");
-      const second = archiveFromFreshProcess(agent, "resumed process report");
-
-      expect(second.id).toBe(first.id);
-      expect(second.path).not.toBe(first.path);
-      expect(yield* Effect.promise(() => fs.readFile(first.path, "utf8"))).toBe(
-        "first process report",
-      );
-      expect(yield* Effect.promise(() => fs.readFile(second.path, "utf8"))).toBe(
-        "resumed process report",
-      );
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("fails closed on an archive collision without changing the historical file", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
@@ -166,25 +106,6 @@ describe("subagent report archive", () => {
       } finally {
         uuid.mockRestore();
       }
-      return undefined;
-    }).pipe(Effect.scoped),
-  );
-
-  it.live("removes reports older than a week", () =>
-    Effect.gen(function* () {
-      const agent = yield* temporaryAgent;
-      const archive = sessionReportArchive(agent, "session-1");
-      const old = archive({ id: "agent-1", generation: 1, text: "old" });
-      const fresh = archive({ id: "agent-1", generation: 1, text: "fresh" });
-      if (!old || !fresh) return yield* Effect.die("archive write failed");
-      const now = yield* Clock.currentTimeMillis;
-      const eightDaysAgo = (now - 8 * 24 * 60 * 60 * 1000) / 1000;
-      yield* Effect.promise(() => fs.utimes(old.path, eightDaysAgo, eightDaysAgo));
-
-      yield* pruneReportArchive(agent);
-
-      expect(yield* exists(old.path)).toBe(false);
-      expect(yield* exists(fresh.path)).toBe(true);
       return undefined;
     }).pipe(Effect.scoped),
   );

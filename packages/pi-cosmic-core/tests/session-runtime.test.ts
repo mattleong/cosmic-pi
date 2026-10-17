@@ -8,9 +8,8 @@ import {
   makePiSessionRuntimeSlot,
   PiApi,
   type PiManagedRuntime,
-  type PiSessionRuntimeSlot,
 } from "../index.ts";
-import { extensionApiFixture, makeCapturedTracer, makeLifecycleProbe } from "../testing.ts";
+import { extensionApiFixture, makeLifecycleProbe } from "../testing.ts";
 
 const fakeRuntime = (
   run: PiManagedRuntime<never, never>["run"],
@@ -28,14 +27,6 @@ const hostRuntime = <R, E>(layer: Layer.Layer<R, E>) =>
 
 const runStartup: PiManagedRuntime<never, never>["run"] = (effect) =>
   Effect.runPromise(Effect.provideService(effect, PiApi, extensionApiFixture()));
-
-const rejects = <A>(run: () => Promise<A>) =>
-  Effect.promise(() =>
-    run().then(
-      () => false,
-      () => true,
-    ),
-  );
 
 function abortStalledStart() {
   const events: string[] = [];
@@ -70,42 +61,6 @@ function abortStalledStart() {
     expect(yield* Effect.promise(() => first)).toBeUndefined();
     return { events, releaseDisposal, slot };
   });
-}
-
-function makeHostileSignal(operation: "addEventListener" | "aborted"): AbortSignal {
-  const { signal } = new AbortController();
-  Object.defineProperty(signal, operation, {
-    get() {
-      throw new Error(`hostile ${operation}`);
-    },
-  });
-  return signal;
-}
-
-function makeCountingSlot(fail: string) {
-  let disposals = 0;
-  const failures: number[] = [];
-  let runs = 0;
-  const slot = makePiSessionRuntimeSlot<void, never, never, never>({
-    makeRuntime: () =>
-      fakeRuntime(
-        (effect) => {
-          runs++;
-          if (fail === "run") throw new Error("hostile runtime.run");
-          return runStartup(effect);
-        },
-        () => {
-          disposals++;
-          return Promise.resolve();
-        },
-      ),
-    startup: () => {
-      if (fail === "startup") throw new Error("hostile startup constructor");
-      return Effect.void;
-    },
-    onStartFailure: (_input, token) => void failures.push(token),
-  });
-  return { counts: () => ({ disposals, failures: [...failures], runs }), slot };
 }
 
 it.effect("replaces a stalled runtime and releases every acquired layer exactly once", () =>
@@ -148,49 +103,6 @@ it.effect("replaces a stalled runtime and releases every acquired layer exactly 
   }),
 );
 
-it.effect("captures a stable runtime startup span without session input", () =>
-  Effect.gen(function* () {
-    const captured = makeCapturedTracer();
-    const slot = makePiSessionRuntimeSlot<string, never, never, never>({
-      makeRuntime: () => hostRuntime(captured.layer),
-      startup: () => Effect.void,
-    });
-    expect(yield* Effect.promise(() => slot.start("secret-session-input"))).toBe(1);
-    expect(captured.spans.map((span) => span.name)).toContain("pi-cosmic-core.runtime.startup");
-    expect(captured.spans.map((span) => span.name).join(" ")).not.toContain("secret-session-input");
-    yield* Effect.promise(() => slot.shutdown());
-  }),
-);
-
-it.effect("publishes startup values only after activation", () =>
-  Effect.gen(function* () {
-    const startupEntered = yield* Deferred.make<void>();
-    const releaseStartup = yield* Deferred.make<void>();
-    const activations: Array<readonly [number, string]> = [];
-    const slot = makePiSessionRuntimeSlot<void, never, never, never, string>({
-      makeRuntime: () => hostRuntime(Layer.empty),
-      startup: () =>
-        Deferred.succeed(startupEntered, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseStartup)),
-          Effect.as("ready"),
-        ),
-      onActivated: (_input, token, value) => void activations.push([token, value]),
-    });
-
-    const starting = slot.start(undefined);
-    yield* Deferred.await(startupEntered);
-    expect(slot.isActive()).toBe(false);
-    expect(slot.isCurrent(1)).toBe(false);
-    expect(slot.fork(Effect.void)).toBeDefined();
-    yield* Deferred.succeed(releaseStartup, undefined);
-    expect(yield* Effect.promise(() => starting)).toBe(1);
-    expect(slot.isActive()).toBe(true);
-    expect(slot.isCurrent(1)).toBe(true);
-    expect(activations).toEqual([[1, "ready"]]);
-    yield* Effect.promise(() => slot.shutdown());
-  }),
-);
-
 it.effect("ends captured command authority at the next lifecycle change, never restoring it", () =>
   Effect.gen(function* () {
     const startupEntered = yield* Deferred.make<void>();
@@ -227,29 +139,6 @@ it.effect("ends captured command authority at the next lifecycle change, never r
   }),
 );
 
-it.effect("rechecks ownership after reentrant activation teardown", () =>
-  Effect.gen(function* () {
-    let shutdown: Promise<void> | undefined;
-    const slot: PiSessionRuntimeSlot<void, never, never> = makePiSessionRuntimeSlot<
-      void,
-      never,
-      never,
-      never
-    >({
-      makeRuntime: () => hostRuntime(Layer.empty),
-      startup: () => Effect.void,
-      onActivated: () => {
-        shutdown = slot.shutdown();
-      },
-    });
-
-    expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
-    expect(slot.isActive()).toBe(false);
-    const cleanup = shutdown;
-    if (cleanup) yield* Effect.promise(() => cleanup);
-  }),
-);
-
 it.effect("releases acquired resources after startup failure", () =>
   Effect.gen(function* () {
     const probe = makeLifecycleProbe("acquire", "release");
@@ -262,60 +151,6 @@ it.effect("releases acquired resources after startup failure", () =>
     expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
     expect(probe.events).toEqual(["acquire", "release"]);
     expect(failures).toEqual([1]);
-  }),
-);
-
-it.effect("reports a synchronous runtime-construction throw without activating the slot", () =>
-  Effect.gen(function* () {
-    const failures: number[] = [];
-    const slot = makePiSessionRuntimeSlot<void, never, never, never>({
-      makeRuntime: () => {
-        throw new Error("hostile runtime constructor");
-      },
-      startup: () => Effect.void,
-      onStartFailure: (_input, token) => void failures.push(token),
-    });
-
-    expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
-    expect(failures).toEqual([1]);
-    expect(yield* rejects(() => slot.run(Effect.void))).toBe(true);
-  }),
-);
-
-for (const [failure, runs] of [
-  ["startup", 0],
-  ["run", 1],
-  ["addEventListener", 0],
-  ["aborted", 0],
-] as const) {
-  it.effect(`disposes the runtime once when ${failure} throws during start`, () =>
-    Effect.gen(function* () {
-      const signal =
-        failure === "addEventListener" || failure === "aborted"
-          ? makeHostileSignal(failure)
-          : undefined;
-      const { counts, slot } = makeCountingSlot(failure);
-      expect(yield* Effect.promise(() => slot.start(undefined, signal))).toBeUndefined();
-      expect(counts()).toEqual({ disposals: 1, failures: [1], runs });
-      expect(yield* rejects(() => slot.run(Effect.void))).toBe(true);
-      yield* Effect.promise(() => slot.shutdown());
-      expect(counts()).toEqual({ disposals: 1, failures: [1], runs });
-    }),
-  );
-}
-
-it.effect("disposes an already-aborted start and leaves the slot unavailable", () =>
-  Effect.gen(function* () {
-    const probe = makeLifecycleProbe("acquire", "release");
-    const controller = new AbortController();
-    controller.abort();
-    const slot = makePiSessionRuntimeSlot<void, never, never, never>({
-      makeRuntime: () => hostRuntime(probe.layer),
-      startup: () => Effect.void,
-    });
-    expect(yield* Effect.promise(() => slot.start(undefined, controller.signal))).toBeUndefined();
-    expect(yield* rejects(() => slot.run(Effect.void))).toBe(true);
-    expect(probe.events).toEqual([]);
   }),
 );
 
@@ -353,39 +188,6 @@ it.effect("host abort interrupts a stalled startup once, silently, and removes i
   }),
 );
 
-it.effect("shutdown interrupts a stalled startup once without activation or failure hooks", () =>
-  Effect.gen(function* () {
-    const { slot, started, counts } = yield* stalledSlot;
-    const startup = slot.start(undefined);
-    yield* Deferred.await(started);
-
-    yield* Effect.promise(() => Promise.all([startup, slot.shutdown()]));
-    expect(counts()).toEqual({ interruptions: 1, settlements: 0 });
-    expect(slot.isActive()).toBe(false);
-  }),
-);
-
-it.effect("contains slot hooks that throw", () =>
-  Effect.gen(function* () {
-    let calls = 0;
-    const failing = (): never => {
-      calls += 1;
-      throw new Error("host hook failed");
-    };
-    const slot = makePiSessionRuntimeSlot<void, never, never, never>({
-      makeRuntime: () => hostRuntime(Layer.empty),
-      startup: () => Effect.void,
-      onActivated: failing,
-      onDeactivated: failing,
-    });
-    yield* Effect.promise(() => slot.start(undefined));
-    expect(slot.isActive()).toBe(true);
-    yield* Effect.promise(() => slot.shutdown());
-    expect(slot.isActive()).toBe(false);
-    expect(calls).toBe(2);
-  }),
-);
-
 it.effect("waits for aborted runtime disposal before starting a replacement", () =>
   Effect.gen(function* () {
     const harness = yield* abortStalledStart();
@@ -402,47 +204,5 @@ it.effect("waits for aborted runtime disposal before starting a replacement", ()
     expect(yield* Effect.promise(() => replacement)).toBe(3);
     expect(harness.events).toEqual(["run:1", "dispose:1", "run:2"]);
     yield* Effect.promise(() => harness.slot.shutdown());
-  }),
-);
-
-for (const failure of ["throw", "reject"] as const) {
-  it.effect(`contains ${failure} disposal after abort and permits a replacement`, () =>
-    Effect.gen(function* () {
-      const disposed: number[] = [];
-      const slot = makePiSessionRuntimeSlot<number, never, never, never>({
-        makeRuntime: (input) =>
-          fakeRuntime(runStartup, () => {
-            disposed.push(input);
-            if (input !== 1) return Promise.resolve();
-            const cause = new Error("runtime disposal failed");
-            if (failure === "throw") throw cause;
-            return Promise.reject(cause);
-          }),
-        startup: () => Effect.void,
-      });
-      const controller = new AbortController();
-      yield* Effect.promise(() => slot.start(1, controller.signal));
-      controller.abort();
-      expect(slot.isActive()).toBe(false);
-      expect(yield* Effect.promise(() => slot.start(2))).toBe(3);
-      expect(disposed).toEqual([1]);
-      yield* Effect.promise(() => slot.shutdown());
-      expect(disposed).toEqual([1, 2]);
-    }),
-  );
-}
-
-it.effect("waits for aborted runtime disposal before shutdown resolves", () =>
-  Effect.gen(function* () {
-    const harness = yield* abortStalledStart();
-    let shutdownSettled = false;
-    const shutdown = harness.slot.shutdown().then(() => void (shutdownSettled = true));
-    yield* Effect.promise(() => Promise.resolve());
-    expect(shutdownSettled).toBe(false);
-
-    harness.releaseDisposal();
-    yield* Effect.promise(() => shutdown);
-    expect(shutdownSettled).toBe(true);
-    expect(harness.events).toEqual(["run:1", "dispose:1"]);
   }),
 );

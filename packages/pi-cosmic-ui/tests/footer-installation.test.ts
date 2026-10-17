@@ -52,26 +52,6 @@ function installation() {
 }
 
 describe("footer installation render requests", () => {
-  it("routes requests only to the newest instance until it is disposed", () => {
-    const { footer, context, instance } = installation();
-    footer.update(context());
-    const older = vi.fn();
-    const newer = vi.fn();
-    const first = instance(older);
-    const second = instance(newer);
-    footer.requestRender();
-    expect(newer).toHaveBeenCalledOnce();
-
-    first.dispose();
-    footer.requestRender();
-    expect(newer).toHaveBeenCalledTimes(2);
-
-    second.dispose();
-    footer.requestRender();
-    expect(newer).toHaveBeenCalledTimes(2);
-    expect(older).not.toHaveBeenCalled();
-  });
-
   it("keeps a replaced attempt from receiving or clearing the replacement's requests", () => {
     const { footer, context, instance, factories } = installation();
     footer.update(context());

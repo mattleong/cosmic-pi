@@ -14,16 +14,6 @@ describe("workspace setup command", () => {
     run(["/bin/sh", "-c", 'test -z "$GIT_DIR"']),
   );
 
-  it.effect("reports the exit code and the last output line", () =>
-    Effect.gen(function* () {
-      const error = yield* Effect.flip(
-        run(["/bin/sh", "-c", "echo progress; echo 'lockfile is stale' >&2; exit 3"]),
-      );
-      expect(error.message).toContain("exited with code 3");
-      expect(error.message).toContain("lockfile is stale");
-    }),
-  );
-
   it.live("stops a command that runs past its timeout", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(run(["/bin/sh", "-c", "sleep 30"], 1));

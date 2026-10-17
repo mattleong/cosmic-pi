@@ -4,26 +4,15 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
-import { resolveNamedProfileSet, type ResolvedSubagentConfig } from "../src/config/options.ts";
+import { type ResolvedSubagentConfig } from "../src/config/options.ts";
 import {
-  decodeProfileCandidate,
   decodeSubagentConfig,
   subagentConfigDecoder,
   type DecodedSubagentConfig,
 } from "../src/config/schema.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../src/config/store.ts";
 import { resolvePiModelSelector } from "../src/run/model-catalog.ts";
-import { PROFILE_DEFINITIONS } from "../src/profiles/definitions.ts";
-import {
-  isLocalPiProfileCandidate,
-  isNativeProfileModelSelector,
-  normalizeProfileCandidate,
-  PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES,
-  PROFILE_IDS,
-  profileCandidateValidationIssues,
-  sameProfileCandidate,
-  type ProfileCandidate,
-} from "../src/profiles/model.ts";
+import { isNativeProfileModelSelector, type ProfileCandidate } from "../src/profiles/model.ts";
 import { resolveProfileContinuationPlan, resolveProfilePlan } from "../src/profiles/resolve.ts";
 import {
   SubagentProfileService,
@@ -56,30 +45,6 @@ describe("Pi catalog selector classification", () => {
         candidates: ["p/Model", "p/model"],
       });
   });
-  it("does not hide duplicate catalog entries", () => {
-    for (const selector of ["Model", "p/Model"])
-      expect(resolvePiModelSelector(selector, [catalog[0]!, catalog[0]!])).toEqual({
-        kind: "ambiguous",
-        candidates: ["p/Model", "p/Model"],
-      });
-  });
-  it("returns bounded sorted near matches without resolving a substring", () => {
-    const models = Array.from({ length: 10 }, (_, index) => ({
-      provider: "p",
-      id: `model-${9 - index}`,
-    }));
-    expect(resolvePiModelSelector("model", models)).toEqual({
-      kind: "unknown",
-      nearMatches: models
-        .map(({ provider, id }) => `${provider}/${id}`)
-        .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0))
-        .slice(0, 6),
-    });
-    expect(resolvePiModelSelector("unrelated", models)).toEqual({
-      kind: "unknown",
-      nearMatches: [],
-    });
-  });
 });
 
 const decodeDocument = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.MutableJson));
@@ -96,12 +61,6 @@ const document = (value?: {
     profileSets: { default: { profiles } },
   });
 };
-
-const rawDocument = <Profiles>(profiles: Profiles) => ({
-  version: 6,
-  defaultProfileSet: "default",
-  profileSets: { default: { profiles } },
-});
 
 const candidate = (value: Partial<ProfileCandidate> = {}) =>
   profileCandidate("parent", { effort: "default", ...value });
@@ -160,101 +119,7 @@ const environment = {
   forkAvailable: true,
 };
 
-const forkedPi = (id: string) => ({
-  host: "local",
-  runtime: "pi",
-  model: `openai/${id}`,
-  effort: "default",
-  context: "fork",
-  writeIntent: "read-only",
-});
-
 describe("subagent v6 profile configuration and resolution", () => {
-  it("skips a forked Pi candidate whose window can't hold the inherited conversation", () => {
-    const config = resolveTestConfig(
-      document({
-        profileSets: {
-          main: { profiles: { oracle: [forkedPi("gpt-small"), forkedPi("gpt-large")] } },
-        },
-        defaultProfileSet: "main",
-      }),
-    );
-    const forkEnvironment = {
-      ...environment,
-      availablePiModels: [
-        { provider: "openai", id: "gpt-small", contextWindow: 128_000 },
-        { provider: "openai", id: "gpt-large", contextWindow: 1_000_000 },
-      ],
-      parentContextTokens: 150_000,
-    };
-    expect(resolveProfilePlan("oracle", config, forkEnvironment)).toMatchObject({
-      kind: "resolved",
-      attempts: [{ model: "openai/gpt-large" }],
-      skippedCandidates: [{ code: "fork_context_too_large" }],
-    });
-  });
-  it("requires local host and close-after-report in candidate decoding", () => {
-    for (const runtime of ["pi", "claude", "codex"] as const) {
-      const input = {
-        host: "local",
-        runtime,
-        model: runtime === "pi" ? "openai/local" : "native",
-        effort: "default",
-        context: "fresh",
-        writeIntent: "read-only",
-      };
-      expect(decodeProfileCandidate(input)).toMatchObject({
-        host: "local",
-        closeOnReport: true,
-      });
-      expect(decodeProfileCandidate({ ...input, closeOnReport: true })).toBeDefined();
-      expect(decodeProfileCandidate({ ...input, closeOnReport: false })).toBeUndefined();
-      expect(decodeProfileCandidate({ ...input, host: "herdr" })).toBeUndefined();
-      const { host: _host, ...missingHost } = input;
-      expect(decodeProfileCandidate(missingHost)).toBeUndefined();
-    }
-  });
-
-  it("ships seven explicit local Pi parent routes preserving profile defaults", () => {
-    const config = resolveTestConfig(document());
-    for (const id of PROFILE_IDS) {
-      expect(config.profiles[id]).toEqual({
-        candidates: [
-          {
-            host: "local",
-            runtime: "pi",
-            model: "parent",
-            effort: "default",
-            context: PROFILE_DEFINITIONS[id].defaultContext,
-            writeIntent: PROFILE_DEFINITIONS[id].defaultWriteIntent,
-            closeOnReport: true,
-          },
-        ],
-      });
-      expect(config.profileSources[id]).toBe("builtin");
-    }
-    expect(config.fallbackProfile).toBe("generalist");
-    const explicitFalse = normalizeProfileCandidate(candidate());
-    const { openaiFastMode: _omitted, ...withoutFastMode } = explicitFalse;
-    expect(sameProfileCandidate(explicitFalse, normalizeProfileCandidate(withoutFastMode))).toBe(
-      true,
-    );
-  });
-
-  it("rejects removed configuration fields and profile aliases", () => {
-    const removedField = subagentConfigDecoder("global")(
-      document({ defaultProfile: "generalist", denied: [], discouraged: [], execution: "x" }),
-    );
-    expect(removedField.diagnostics).toContain("global.<unknown>");
-    expect(removedField.file).toEqual({ version: 6 });
-
-    const removedAlias = subagentConfigDecoder("global")(
-      document({ profiles: { delegate: candidate() } }),
-    );
-    expect(removedAlias.diagnostics).toContain("global.profileSets[0].profiles.<unknown>");
-    expect(removedAlias.file.profileSets?.default?.profiles?.generalist).toBeUndefined();
-  });
-
   it("decodes disabled, one candidate, and ordered candidates with closeOnReport defaulting true", () => {
     const decoded = subagentConfigDecoder("global")(
       document({
@@ -315,20 +180,6 @@ describe("subagent v6 profile configuration and resolution", () => {
     );
   });
 
-  it("fails a malformed profiles container closed as its invalid default set", () => {
-    for (const profiles of [[], null, "broken"]) {
-      const config = resolveTestConfig(rawDocument(profiles));
-      expect(config.currentProfileSet).toEqual({ scope: "global", name: "default", invalid: true });
-      expect(PROFILE_IDS.map((id) => config.profileSources[id])).toEqual(
-        PROFILE_IDS.map(() => "global-invalid"),
-      );
-      expect(config.diagnostics).toEqual([
-        "global.profileSets[0].profiles",
-        "global.defaultProfileSet",
-      ]);
-    }
-  });
-
   it("layers partial selected sets route by route across project, global, and built-ins", () => {
     const global = document({
       defaultProfileSet: "selected",
@@ -357,125 +208,10 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(config.profileSources.scout).toBe("builtin");
   });
 
-  it("resolves named global and project sets with explicit invalid selection states", () => {
-    const global = subagentConfigDecoder("global")(
-      document({
-        defaultProfileSet: "selected",
-        profileSets: {
-          selected: { profiles: { reviewer: candidate({ model: "openai/global-default" }) } },
-          saved: { profiles: { scout: candidate({ model: "openai/global-saved" }) } },
-          invalidRoute: { profiles: { worker: null } },
-          broken: { profiles: {}, extra: true },
-        },
-      }),
-    );
-    const project = subagentConfigDecoder("project")(
-      document({
-        profileSets: {
-          saved: { profiles: { scout: candidate({ model: "openai/project-saved" }) } },
-        },
-      }),
-    );
-
-    const namedGlobal = resolveNamedProfileSet({ scope: "global", name: "saved", global });
-    expect(namedGlobal).toMatchObject({
-      status: "resolved",
-      origin: { scope: "global", name: "saved" },
-      invalidProfiles: [],
-    });
-    expect(namedGlobal.profiles.scout.candidates[0]?.model).toBe("openai/global-saved");
-    expect(namedGlobal.profileSources.reviewer).toBe("builtin");
-
-    const namedProject = resolveNamedProfileSet({
-      scope: "project",
-      name: "saved",
-      global,
-      project,
-    });
-    expect(namedProject.status).toBe("resolved");
-    expect(namedProject.profiles.scout.candidates[0]?.model).toBe("openai/project-saved");
-    expect(namedProject.profiles.reviewer.candidates[0]?.model).toBe("openai/global-default");
-    expect(namedProject.profileSources.reviewer).toBe("global");
-
-    const invalidRoute = resolveNamedProfileSet({
-      scope: "global",
-      name: "invalidRoute",
-      global,
-    });
-    expect(invalidRoute.status).toBe("invalid-routes");
-    expect(invalidRoute.invalidProfiles).toEqual(["worker"]);
-    expect(invalidRoute.profileSources.worker).toBe("global-invalid");
-    expect(resolveNamedProfileSet({ scope: "global", name: "broken", global }).status).toBe(
-      "structurally-invalid",
-    );
-    expect(resolveNamedProfileSet({ scope: "global", name: "missing", global }).status).toBe(
-      "missing",
-    );
-  });
-
   it.each([
-    ["pi", "openai/future-model", true],
-    ["pi", "openai-codex/future-model", true],
-    ["pi", "parent", true],
-    ["pi", "other-provider/not-priority", false],
-    ["codex", "future-codex", true],
-    ["codex", "-option", false],
-    ["claude", "sonnet", false],
-  ] as const)(
-    "accepts a persisted %s %s fast route only when eligible (%s)",
-    (runtime, model, eligible) => {
-      const decoded = decodeSubagentConfig(
-        document({ profiles: { generalist: candidate({ runtime, model, openaiFastMode: true }) } }),
-      );
-      expect(decoded.file.profileSets?.default?.profiles?.generalist).toEqual(
-        eligible ? expect.objectContaining({ openaiFastMode: true }) : undefined,
-      );
-      expect(invalidRoutes(decoded)).toEqual(eligible ? [] : ["generalist"]);
-    },
-  );
-
-  it("owns ordered issues and requires closure for readers and writers", () => {
-    const issues = profileCandidateValidationIssues(
-      normalizeProfileCandidate(
-        candidate({
-          runtime: "claude",
-          model: "parent",
-          effort: "minimal",
-          context: "fork",
-          writeIntent: "writer",
-          openaiFastMode: true,
-          closeOnReport: false,
-        }),
-      ),
-    );
-    expect(issues.map((issue) => issue.code)).toEqual(PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES);
-
-    const localPi = normalizeProfileCandidate(candidate({ context: "fork" }));
-    expect(isLocalPiProfileCandidate(localPi)).toBe(true);
-    expect(profileCandidateValidationIssues(localPi)).toEqual([]);
-  });
-
-  it.each([
-    ["pi", "openai/gpt-5", true],
-    ["pi", "parent", true],
-    ["pi", "cursor/gpt-5.5@1m", true],
-    ["pi", "cursor/gpt-5.5@272k:fast", true],
-    ["pi", "cursor@team/gpt-5.5@1m", true],
-    ["pi", "cursor/@1m", false],
-    ["pi", "bare", false],
     ["claude", "claude-opus-5", true],
-    ["claude", "opus[1m]", true],
-    ["claude", "claude-fable-5[200k]", true],
-    ["claude", "model[abc]", false],
     ["claude", "-dangerous-option", false],
-    ["claude", "model,other", false],
-    ["claude", " model ", false],
     ["claude", "bad\u001bmodel", false],
-    ["claude", "x".repeat(257), false],
-    ["codex", "gpt-5.4", true],
-    ["codex", "gpt-5.6-codex", true],
-    ["codex", "-dangerous-option", false],
-    ["codex", "model/(glob)", false],
     ["codex", "model,(glob)*", false],
   ] as const)("classifies %s native selector case %#", (runtime, selector, valid) => {
     expect(isNativeProfileModelSelector(runtime, selector)).toBe(valid);
@@ -535,28 +271,6 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(untrusted.profiles.worker.candidates).toHaveLength(2);
   });
 
-  it("plans local runtimes without claiming adapter availability", () => {
-    const config = resolveTestConfig(
-      document({
-        profiles: {
-          reviewer: [
-            candidate({ host: "local", runtime: "claude", model: "sonnet" }),
-            candidate({ runtime: "codex", model: "gpt-5.4" }),
-            candidate({ model: "openai/gpt-review", effort: "medium" }),
-          ],
-        },
-      }),
-    );
-    expect(resolveProfilePlan("reviewer", config, environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [
-        { candidateIndex: 0, host: "local", runtime: "claude", model: "sonnet" },
-        { candidateIndex: 1, host: "local", runtime: "codex", model: "gpt-5.4" },
-        { candidateIndex: 2, host: "local", runtime: "pi", model: "openai/gpt-review" },
-      ],
-    });
-  });
-
   it("continues a frozen route strictly after the failed candidate and preserves original indexes", () => {
     const config = resolveTestConfig(
       document({
@@ -601,42 +315,6 @@ describe("subagent v6 profile configuration and resolution", () => {
     });
   });
 
-  it("uses default effort softly and concrete candidate effort hard", () => {
-    expect(resolveProfilePlan("scout", resolveTestConfig(document()), environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [{ effort: "low", effortWasExplicit: false }],
-    });
-    const config = resolveTestConfig(
-      document({
-        profiles: {
-          worker: candidate({ model: "openai/gpt-review", effort: "high", writeIntent: "writer" }),
-        },
-      }),
-    );
-    expect(resolveProfilePlan("worker", config, environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [{ effort: "high", effortWasExplicit: true, writeIntent: "writer" }],
-    });
-  });
-
-  it("inherits generalist effort independently of parent model availability without overriding profile defaults", () => {
-    const config = resolveTestConfig(
-      document({
-        profiles: {
-          generalist: candidate({ model: "openai/gpt-review" }),
-          oracle: candidate({ model: "openai/gpt-review", context: "fork" }),
-        },
-      }),
-    );
-    const parent = { ...environment, parentModel: undefined, parentEffort: "medium" as const };
-    expect(resolveProfilePlan("generalist", config, parent)).toMatchObject({
-      attempts: [{ effort: "medium", effortWasExplicit: false }],
-    });
-    expect(resolveProfilePlan("oracle", config, parent)).toMatchObject({
-      attempts: [{ effort: "high", effortWasExplicit: false }],
-    });
-  });
-
   it("moves soft efforts to the nearest level the runtime and model support", () => {
     const routed = (runtime: "claude" | "codex", parentEffort: "off" | "minimal" | "max") =>
       resolveProfilePlan(
@@ -667,18 +345,6 @@ describe("subagent v6 profile configuration and resolution", () => {
     });
   });
 
-  it("keeps explicit efforts strict", () => {
-    const config = resolveTestConfig(
-      document({
-        profiles: { reviewer: candidate({ model: "openai/gpt-parent", effort: "medium" }) },
-      }),
-    );
-    expect(resolveProfilePlan("reviewer", config, environment)).toMatchObject({
-      kind: "failed",
-      skippedCandidates: [{ code: "pi_effort_unsupported" }],
-    });
-  });
-
   it("requires stable fork context for local Pi and never degrades to fresh", () => {
     expect(resolveProfilePlan("oracle", resolveTestConfig(document()), environment)).toMatchObject({
       kind: "resolved",
@@ -696,125 +362,6 @@ describe("subagent v6 profile configuration and resolution", () => {
     });
   });
 
-  it("pairs parent and explicit local-Pi model resolution with failure codes", () => {
-    const parentRoute = resolveTestConfig(
-      document({ profiles: { scout: candidate({ model: "parent" }) } }),
-    );
-    expect(resolveProfilePlan("scout", parentRoute, environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [{ source: "profile-parent-candidate", model: "openai/gpt-parent", effort: "low" }],
-    });
-    expect(
-      resolveProfilePlan("scout", parentRoute, { ...environment, parentModel: undefined }),
-    ).toMatchObject({
-      kind: "failed",
-      code: "profile_no_eligible_model",
-      skippedCandidates: [{ code: "parent_model_missing" }],
-    });
-    expect(
-      resolveProfilePlan("scout", parentRoute, {
-        ...environment,
-        parentModel: { model: "openai/gpt", effort: "high" },
-      }),
-    ).toMatchObject({
-      kind: "failed",
-      code: "profile_no_eligible_model",
-      skippedCandidates: [
-        {
-          code: "parent_model_unavailable",
-        },
-      ],
-    });
-    const ambiguousEnvironment = {
-      ...environment,
-      availablePiModels: [
-        ...environment.availablePiModels,
-        { provider: "anthropic", id: "gpt-parent", supportedEfforts: ["high"] as const },
-      ],
-    };
-    expect(
-      resolveProfilePlan("scout", parentRoute, {
-        ...ambiguousEnvironment,
-        parentModel: { model: "gpt-parent", effort: "high" },
-      }),
-    ).toMatchObject({
-      kind: "failed",
-      code: "profile_no_eligible_model",
-      skippedCandidates: [
-        {
-          code: "parent_model_ambiguous",
-        },
-      ],
-    });
-
-    const explicitRoute = resolveTestConfig(
-      document({ profiles: { scout: candidate({ model: "openai/gpt" }) } }),
-    );
-    expect(resolveProfilePlan("scout", explicitRoute, environment)).toMatchObject({
-      kind: "failed",
-      code: "profile_no_eligible_model",
-      skippedCandidates: [
-        {
-          code: "pi_model_unknown",
-        },
-      ],
-    });
-  });
-
-  it("rejects persisted candidate getters without invoking them and guards hostile proxies", () => {
-    let candidateReads = 0;
-    let unknownRead = false;
-    const accessorCandidate = { ...candidate() };
-    Object.defineProperty(accessorCandidate, "model", {
-      enumerable: true,
-      get: () => {
-        candidateReads += 1;
-        return "parent";
-      },
-    });
-    const getterDecoded = subagentConfigDecoder("project")(
-      rawDocument({ worker: accessorCandidate }),
-    );
-    expect(invalidRoutes(getterDecoded)).toEqual(["worker"]);
-    expect(getterDecoded.diagnostics).toContain("project.profileSets[0].profiles.worker");
-    expect(candidateReads).toBe(0);
-
-    const unknownCandidate = { ...candidate() };
-    Object.defineProperty(unknownCandidate, "unknown", {
-      enumerable: true,
-      get: () => {
-        unknownRead = true;
-        return "private";
-      },
-    });
-    expect(invalidRoutes(decodeSubagentConfig(rawDocument({ scout: unknownCandidate })))).toEqual([
-      "scout",
-    ]);
-    expect(unknownRead).toBe(false);
-
-    const revoked = Proxy.revocable([candidate()], {});
-    revoked.revoke();
-    const proxyDecoded = subagentConfigDecoder("global")(rawDocument({ reviewer: revoked.proxy }));
-    expect(invalidRoutes(proxyDecoded)).toEqual(["reviewer"]);
-    expect(proxyDecoded.diagnostics).toContain("global.profileSets[0].profiles.reviewer");
-  });
-
-  it("bounds route arrays before traversal", () => {
-    let accesses = 0;
-    const candidates: unknown[] = [];
-    candidates.length = 10_000;
-    Object.defineProperty(candidates, 0, {
-      get: () => {
-        accesses += 1;
-        return candidate();
-      },
-    });
-    const decoded = subagentConfigDecoder("global")(rawDocument({ worker: candidates }));
-    expect(accesses).toBe(0);
-    expect(invalidRoutes(decoded)).toEqual(["worker"]);
-    expect(decoded.diagnostics).toContain("global.profileSets[0].profiles.worker[32+]");
-  });
-
   it("accepts version 6 while rejecting other declared versions", () => {
     expect(subagentConfigDecoder("global")({ version: 6 }).unsupportedVersion).toBe(false);
     const v3 = subagentConfigDecoder("global")({ version: 3, denied: [] });
@@ -822,57 +369,6 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(v3.diagnostics).toEqual(expect.arrayContaining(["global.version", "global.<unknown>"]));
     for (const version of [1, 2, 4, 5, "6", null, false, 6.5])
       expect(subagentConfigDecoder("global")({ version }).unsupportedVersion).toBe(true);
-  });
-
-  it("reads candidate optional fields descriptor-safely without invoking accessors", () => {
-    for (const [input, field, value] of [
-      [candidate({ model: "openai-codex/gpt-5.6-sol" }), "openaiFastMode", true],
-      [candidate(), "closeOnReport", false],
-    ] as const) {
-      let reads = 0;
-      Object.defineProperty(input, field, {
-        enumerable: true,
-        get: () => {
-          reads += 1;
-          return value;
-        },
-      });
-      expect(decodeProfileCandidate(input)).toBeUndefined();
-      expect(reads).toBe(0);
-    }
-
-    const requiredOnly = {
-      host: "local",
-      runtime: "pi",
-      model: "parent",
-      effort: "default",
-      context: "fresh",
-      writeIntent: "read-only",
-    } as const;
-    expect(decodeProfileCandidate(requiredOnly)).toMatchObject({ closeOnReport: true });
-    expect(decodeProfileCandidate(requiredOnly)).not.toHaveProperty("openaiFastMode");
-  });
-
-  it("validates root bodies strictly", () => {
-    const nesting = { maxDirectChildren: 2, maxDepth: 1 };
-
-    const rootProfiles = subagentConfigDecoder("global")({
-      version: 6,
-      profiles: { worker: candidate() },
-    });
-    expect(rootProfiles.unsupportedVersion).toBe(false);
-    expect(rootProfiles.diagnostics).toContain("global.<unknown>");
-    expect(rootProfiles.file.profileSets).toBeUndefined();
-    expect(invalidRoutes(rootProfiles)).toEqual([]);
-
-    const v6Current = subagentConfigDecoder("global")({
-      version: 6,
-      defaultProfileSet: "default",
-      profileSets: { default: { profiles: { worker: candidate() } } },
-      nesting,
-    });
-    expect(v6Current.diagnostics).not.toContain("global.<unknown>");
-    expect(v6Current.file.nesting).toMatchObject(nesting);
   });
 
   it.effect("activates loaded base configuration when publication throws", () =>

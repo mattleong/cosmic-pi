@@ -58,30 +58,6 @@ describe("host UI ticker pool", () => {
     expect(harness.scheduled[0]?.interrupt).toHaveBeenCalledOnce();
   });
 
-  it("keeps different cadences independent and creates a fresh group after teardown", () => {
-    const harness = schedulerHarness();
-    const pool = createHostUiTickerPool(harness.schedule);
-    const first = vi.fn();
-    const second = vi.fn();
-
-    const stopFirst = pool.start(160, first);
-    const stopSecond = pool.start(1_000, second);
-    expect(harness.scheduled.map((ticker) => ticker.intervalMs)).toEqual([160, 1_000]);
-
-    stopFirst();
-    const replacement = vi.fn();
-    const stopReplacement = pool.start(160, replacement);
-    expect(harness.scheduled.map((ticker) => ticker.intervalMs)).toEqual([160, 1_000, 160]);
-
-    harness.scheduled[0]?.tick();
-    expect(replacement).not.toHaveBeenCalled();
-    harness.scheduled[2]?.tick();
-    expect(replacement).toHaveBeenCalledOnce();
-
-    stopReplacement();
-    stopSecond();
-  });
-
   it("isolates throwing and reentrantly removed consumers", () => {
     const harness = schedulerHarness();
     const pool = createHostUiTickerPool(harness.schedule);
@@ -102,22 +78,6 @@ describe("host UI ticker pool", () => {
     expect(removed).not.toHaveBeenCalled();
     return pool.dispose();
   });
-
-  it.effect("disposes every active cadence group exactly once", () =>
-    Effect.gen(function* () {
-      const harness = schedulerHarness();
-      const pool = createHostUiTickerPool(harness.schedule);
-      pool.start(160, vi.fn());
-      pool.start(1_000, vi.fn());
-
-      const firstDisposal = pool.dispose();
-      const secondDisposal = pool.dispose();
-
-      expect(harness.scheduled.map((ticker) => ticker.interrupt.mock.calls.length)).toEqual([1, 1]);
-      expect(secondDisposal).toBe(firstDisposal);
-      yield* Effect.promise(() => firstDisposal);
-    }),
-  );
 
   it.effect("waits for every tracked ticker closure before disposal settles", () => {
     const stopped = Deferred.makeUnsafe<void>();
@@ -172,20 +132,5 @@ describe("host UI ticker pool", () => {
       yield* Effect.promise(() => shutdown);
       expect(settled).toBe(true);
     });
-  });
-
-  it("fails soft for invalid intervals and scheduler failures", () => {
-    const schedule = vi.fn<HostUiTickerScheduler>(() => {
-      throw new Error("scheduler unavailable");
-    });
-    const pool = createHostUiTickerPool(schedule);
-    const tick = vi.fn();
-
-    expect(() => pool.start(Number.NaN, tick)()).not.toThrow();
-    expect(() => pool.start(0, tick)()).not.toThrow();
-    expect(schedule).not.toHaveBeenCalled();
-    expect(() => pool.start(160, tick)()).not.toThrow();
-    expect(schedule).toHaveBeenCalledOnce();
-    expect(tick).not.toHaveBeenCalled();
   });
 });

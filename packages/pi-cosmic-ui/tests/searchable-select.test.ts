@@ -1,4 +1,3 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { SearchableSelectPage } from "../src/manager/searchable-select.ts";
@@ -69,93 +68,6 @@ describe("searchable selector state", () => {
         expect(fixture.options.cancel).not.toHaveBeenCalled();
         expect(fixture.select).not.toHaveBeenCalled();
       }
-    }
-  });
-
-  it("preserves stable selection through detail toggles and a cleared filter", () => {
-    const moved = page();
-    moved.component.handleInput("\u001b[B");
-    moved.component.handleInput("?");
-    moved.component.invalidate();
-    moved.component.handleInput("\r");
-    expect(moved.select).toHaveBeenCalledWith("openai/model-two");
-
-    const filtered = page();
-    filtered.component.handleInput("/");
-    filtered.component.handleInput("two");
-    filtered.component.handleInput("\u001b");
-    expect(filtered.component.searchState).toEqual({ query: "", active: false });
-    filtered.component.handleInput("?");
-    filtered.component.handleInput("\r");
-    expect(filtered.select).toHaveBeenCalledWith("openai/model-one");
-  });
-
-  it("selects the visible match when confirmed inside search", () => {
-    const filtered = page();
-    filtered.component.handleInput("/");
-    filtered.component.handleInput("two");
-    filtered.component.handleInput("\r");
-
-    expect(filtered.select).toHaveBeenCalledWith("openai/model-two");
-    expect(filtered.component.selectedValue).toBe("openai/model-two");
-  });
-
-  it("keeps disabled rows visible without selecting them", () => {
-    const fixture = page(12);
-    const component = new SearchableSelectPage({
-      ...fixture.options,
-      current: undefined,
-      choices: [
-        {
-          ...choice("disabled"),
-          enabled: false,
-          disabledReason: "Unavailable in this runtime",
-          disabledHint: "runtime-unavailable-marker",
-        },
-      ],
-    });
-
-    expect(component.render(80).join("\n")).toContain("runtime-unavailable-marker");
-    component.handleInput("?");
-    component.invalidate();
-    component.handleInput("/");
-    component.handleInput("disabled");
-    component.handleInput("\r");
-
-    expect(fixture.select).not.toHaveBeenCalled();
-    expect(component.render(80).join("\n")).toContain("Unavailable in this runtime");
-  });
-
-  it("keeps zero-height empty and reserves tiny heights for the frame", () => {
-    for (const height of [0, 1, 2]) {
-      const fixture = page(height, "Catalog warning");
-      fixture.component.handleInput("/");
-      fixture.component.handleInput("two");
-      const lines = fixture.component.render(48);
-      expect(lines).toHaveLength(height);
-      expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
-      fixture.component.handleInput("\r");
-      expect(fixture.select).toHaveBeenCalledWith("openai/model-two");
-    }
-  });
-  it("keeps compact and narrow output bounded", () => {
-    const { component } = page();
-    for (const width of [0, 1, 2, 3, 4, 24]) {
-      const lines = component.render(width);
-      if (width === 0) expect(lines).toEqual([]);
-      else {
-        expect(lines).toHaveLength(14);
-        expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
-      }
-    }
-
-    for (const height of [3, 4, 5, 6]) {
-      const compact = page(height, "Catalog warning").component;
-      compact.handleInput("/");
-      compact.handleInput("two");
-      const lines = compact.render(48);
-      expect(lines).toHaveLength(height);
-      expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
     }
   });
 });

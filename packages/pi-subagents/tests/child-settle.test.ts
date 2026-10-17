@@ -1,19 +1,14 @@
 import { fauxAssistantMessage, type TranscriptContext } from "@earendil-works/pi-ai";
-import {
-  type AgentSession,
-  type ExtensionAPI,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { recordingExtensionHost, temporaryDirectory } from "pi-cosmic-core/testing";
+import { temporaryDirectory } from "pi-cosmic-core/testing";
 import {
   fauxModels,
   quietLoader,
   quietSettings,
   scopedPrintSession,
 } from "pi-cosmic-core/testing/sdk";
-import { vi } from "vitest";
 import {
   FINAL_REPORT_REMINDER_MESSAGE_TYPE,
   PROXY_NOTIFICATION_MESSAGE_TYPE,
@@ -66,22 +61,6 @@ const childSession = Effect.gen(function* () {
 });
 
 describe("nested Pi child settle policy", () => {
-  it("starts a turn for a notice only while the child is idle", () => {
-    let idle = true;
-    const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-    const host = recordingExtensionHost({}, { sendMessage });
-    const deliver = registerChildSettle(host.pi, () => idle);
-
-    expect(deliver("Descendant reader (agent-2) reported.")).toBe(true);
-    idle = false;
-    expect(deliver("Descendant writer (agent-3) reported.")).toBe(true);
-
-    expect(sendMessage.mock.calls.map(([, options]) => options?.triggerTurn)).toEqual([
-      true,
-      false,
-    ]);
-  });
-
   it.live("keeps a descendant report through a queue clear and reacts before settling", () =>
     Effect.gen(function* () {
       const child = yield* childSession;

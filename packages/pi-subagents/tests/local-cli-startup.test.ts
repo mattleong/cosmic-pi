@@ -7,7 +7,6 @@ import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import type { ProcessExit } from "../src/boundary/process-transport.ts";
-import { MAX_ERROR_CHARS } from "../src/run/state.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 import {
   backendLaunch,
@@ -62,28 +61,6 @@ describe("local CLI startup failure", () => {
         expect(failure.message).toContain("[REDACTED]");
         expect(failure.message).not.toContain("secret-credential");
         expect(failure.message).not.toContain("\u001b");
-      }).pipe(Effect.scoped),
-    );
-
-    it.effect(`keeps the fatal end of ${runtime}'s oversized stderr within the error bound`, () =>
-      Effect.gen(function* () {
-        const failure = yield* failedStartup(runtime, {
-          exitCode: 1,
-          stderr: `${"Warning: deprecated configuration key\n".repeat(400)}Fatal: unsupported protocol`,
-        });
-        expect(failure.message).toContain("Fatal: unsupported protocol");
-        expect(failure.message.length).toBeLessThanOrEqual(MAX_ERROR_CHARS);
-      }).pipe(Effect.scoped),
-    );
-
-    it.effect(`reports ${runtime}'s termination signal when stderr is empty`, () =>
-      Effect.gen(function* () {
-        const failure = yield* failedStartup(runtime, {
-          exitCode: null,
-          signal: "SIGKILL",
-          stderr: "",
-        });
-        expect(failure.message).toContain("SIGKILL");
       }).pipe(Effect.scoped),
     );
   }

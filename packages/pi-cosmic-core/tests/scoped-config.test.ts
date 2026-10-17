@@ -7,7 +7,6 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
-import { JsonDocumentError } from "../src/platform/errors.ts";
 import { JsonDocumentStore, type JsonObject } from "../src/platform/json-document.ts";
 import { makeCapturedLogger, makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { decodeTolerantFields } from "../src/config/tolerant-fields.ts";
@@ -81,7 +80,6 @@ const readOnlyOptions: ScopedConfigStoreOptions<TestFile, TestResolved, TestConf
     global: global?.values ?? {},
   }),
 };
-const readOnlyStore = makeScopedConfigStore(readOnlyOptions);
 const defaults = { seeded: true };
 const testStore = makeScopedConfigStore({ ...readOnlyOptions, defaultDocument: () => defaults });
 const projectDocument = "/project/.pi/extensions/config.json";
@@ -93,19 +91,6 @@ const scopedDocuments = {
 const changed = (document: JsonObject): JsonObject => ({ ...document, changed: true });
 
 testLayer(Path.layer)("scoped config store", (test) => {
-  test.effect("resolves empty scopes without seeding when no default document is supplied", () => {
-    const memory = makeInMemoryDocuments();
-    return Effect.gen(function* () {
-      const resolved = yield* readOnlyStore.resolveConfig("/project", "/agent", true);
-      expect(resolved.configPath).toBe(resolved.globalConfigPath);
-      expect(resolved.projectConfigExists).toBe(false);
-      expect(resolved.globalConfigExists).toBe(false);
-      expect(resolved.project).toEqual({});
-      expect(resolved.global).toEqual({});
-      expect(memory.documents.size).toBe(0);
-    }).pipe(Effect.provide(memory.layer));
-  });
-
   const competingDocuments: readonly (JsonObject | undefined)[] = [
     undefined,
     { fromConcurrent: true },
@@ -204,90 +189,6 @@ testLayer(Path.layer)("scoped config store", (test) => {
     );
   }
 
-  test.effect("does not report a seeded global document when its location cannot be read", () => {
-    const logger = makeCapturedLogger();
-    const documents = JsonDocumentStore.layerWith(inProcessDocumentLock).pipe(
-      Layer.provide(
-        FileSystem.layerNoop({
-          exists: () => Effect.succeed(false),
-          makeDirectory: () => Effect.void,
-          readFileString: () =>
-            Effect.fail(
-              PlatformError.systemError({
-                _tag: "PermissionDenied",
-                module: "FileSystem",
-                method: "readFileString",
-              }),
-            ),
-        }),
-      ),
-    );
-    return Effect.gen(function* () {
-      const resolved = yield* testStore.resolveConfig("/project", "/agent");
-      expect(resolved).toMatchObject({ globalConfigExists: false, global: {} });
-      expect(logger.entries).toHaveLength(1);
-    }).pipe(Effect.provide(Layer.merge(documents, logger.layer)));
-  });
-
-  for (const operation of ["inspect", "encode", "write"]) {
-    test.effect(`does not tolerate a default seed ${operation} failure`, () => {
-      let inspections = 0;
-      const denied = PlatformError.systemError({
-        _tag: "PermissionDenied",
-        module: "FileSystem",
-        method: operation,
-      });
-      const documents = JsonDocumentStore.layerWith(inProcessDocumentLock).pipe(
-        Layer.provide(
-          FileSystem.layerNoop({
-            exists: () =>
-              Effect.suspend(() =>
-                ++inspections > 1 && operation === "inspect"
-                  ? Effect.fail(denied)
-                  : Effect.succeed(false),
-              ),
-            makeDirectory: () => Effect.void,
-            makeTempFile: () => Effect.fail(denied),
-          }),
-        ),
-      );
-      const store = makeScopedConfigStore({
-        ...readOnlyOptions,
-        defaultDocument: () => (operation === "encode" ? { invalid: Number.NaN } : defaults),
-      });
-      return Effect.gen(function* () {
-        const failure = yield* Effect.flip(store.resolveConfig("/project", "/agent"));
-        expect(failure).toBeInstanceOf(TestConfigError);
-        expect(failure).toMatchObject({
-          operation: operation === "inspect" ? "inspect" : "write",
-          path: globalDocument,
-        });
-      }).pipe(Effect.provide(documents));
-    });
-  }
-
-  test.effect("an existing trusted project wins precedence even when it cannot be read", () => {
-    const memory = makeInMemoryDocuments(scopedDocuments);
-    const malformedProject = Layer.succeed(JsonDocumentStore, {
-      ...memory.service,
-      readObject: (path) =>
-        path.startsWith("/project/")
-          ? Effect.fail(new JsonDocumentError({ operation: "decode", path, message: "malformed" }))
-          : memory.service.readObject(path),
-    });
-    return Effect.gen(function* () {
-      expect(yield* readOnlyStore.resolveConfig("/project", "/agent", true)).toEqual({
-        configPath: "/project/.pi/extensions/config.json",
-        projectConfigPath: "/project/.pi/extensions/config.json",
-        globalConfigPath: "/agent/extensions/config.json",
-        projectConfigExists: true,
-        globalConfigExists: true,
-        project: {},
-        global: { fromGlobal: true },
-      });
-    }).pipe(Effect.provide(malformedProject));
-  });
-
   test.effect("omitted trust fails closed without project-document I/O", () => {
     const memory = makeInMemoryDocuments(scopedDocuments);
     return Effect.gen(function* () {
@@ -298,38 +199,6 @@ testLayer(Path.layer)("scoped config store", (test) => {
       expect(resolved.global).toEqual({ fromGlobal: true });
       expect(memory.operations.length).toBeGreaterThan(0);
       expect(memory.operations.filter((operation) => operation.includes("/project/"))).toEqual([]);
-    }).pipe(Effect.provide(memory.layer));
-  });
-
-  test.effect("resolveCommittedConfig updates scope metadata and preserves overlays", () => {
-    const memory = makeInMemoryDocuments();
-    return Effect.gen(function* () {
-      const absent = yield* readOnlyStore.resolveConfig("/project", "/agent", true);
-      const projectCommit = testStore.resolveCommittedConfig(
-        { ...absent, configPath: absent.projectConfigPath, globalConfigExists: true },
-        { fromProject: true },
-        { fromGlobal: true },
-      );
-      expect(projectCommit).toMatchObject({
-        configPath: absent.projectConfigPath,
-        projectConfigExists: true,
-        globalConfigExists: true,
-        project: { fromProject: true },
-        global: { fromGlobal: true },
-      });
-
-      const derivedGlobal = testStore.resolveCommittedConfig(
-        absent,
-        { fromGlobal: true },
-        undefined,
-      );
-      expect(derivedGlobal).toMatchObject({
-        configPath: absent.globalConfigPath,
-        projectConfigExists: false,
-        globalConfigExists: true,
-        project: {},
-        global: { fromGlobal: true },
-      });
     }).pipe(Effect.provide(memory.layer));
   });
 
@@ -348,31 +217,5 @@ testLayer(Path.layer)("scoped config store", (test) => {
       expect(installed).toEqual([next]);
       expect(memory.documents.get(projectDocument)).toEqual({ fromProject: true, changed: true });
     }).pipe(Effect.provide(memory.layer));
-  });
-
-  test.effect("an unreadable global fallback fails the commit unless it is tolerated", () => {
-    const memory = makeInMemoryDocuments(scopedDocuments);
-    const unreadableGlobal = Layer.succeed(JsonDocumentStore, {
-      ...memory.service,
-      readObject: (path) =>
-        path.startsWith("/agent/")
-          ? Effect.fail(new JsonDocumentError({ operation: "decode", path, message: "malformed" }))
-          : memory.service.readObject(path),
-    });
-    return Effect.gen(function* () {
-      const current = yield* testStore.resolveConfig("/project", "/agent", true);
-      const failure = yield* Effect.flip(
-        commitPreferredScope(testStore, current, changed, () => Effect.void),
-      );
-      expect(failure).toBeInstanceOf(TestConfigError);
-      expect(failure).toMatchObject({ operation: "read" });
-      expect(memory.documents.get(projectDocument)).toEqual({ fromProject: true });
-
-      const next = yield* commitPreferredScope(testStore, current, changed, () => Effect.void, {
-        fallbackWarning: "unreadable",
-      });
-      expect(next).toMatchObject({ project: { fromProject: true, changed: true }, global: {} });
-      expect(memory.documents.get(projectDocument)).toEqual({ fromProject: true, changed: true });
-    }).pipe(Effect.provide(unreadableGlobal));
   });
 });

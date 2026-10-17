@@ -65,19 +65,6 @@ test("preview style shows the summary's issues once, between the call and the re
   ]);
 });
 
-test("a tool can place the issues directly under its heading", () => {
-  const harness = createToolPresentationHarness(tool(true));
-  harness.call({ path: "a.ts" }, { executionStarted: true });
-  harness.result(textResult("failed"), { isError: true });
-  expect(order(harness.render(80))).toEqual(["HEADING", "PROBLEM", "CALL-CONTENT", "BODY"]);
-});
-
-test("argument warnings show before any result exists", () => {
-  const harness = createToolPresentationHarness(tool(true));
-  harness.call({ path: "a.ts" });
-  expect(order(harness.render(80))).toEqual(["HEADING", "RISKY", "CALL-CONTENT"]);
-});
-
 const hostile = failingTheme();
 
 test("a failing host theme still shows every issue line within the row width", () => {

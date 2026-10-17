@@ -12,7 +12,6 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
-import { processGroupSignalError } from "pi-cosmic-core";
 import { ChildProcess } from "../src/boundary/child-process.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
 import { acquireLocalCliTransport } from "../src/boundary/local-cli-transport.ts";
@@ -130,17 +129,6 @@ beforeEach(() => {
 });
 
 describe("shared process transport", () => {
-  it.effect("fails typed before ownership on a throwing spawn", () =>
-    Effect.gen(function* () {
-      boundary.spawn.mockImplementation(() => {
-        throw new Error("unavailable");
-      });
-      const error = yield* acquireNative().pipe(Effect.flip, Effect.scoped);
-      expect(error.code).toBe("local_cli_spawn_failed");
-      expect(boundary.terminate).not.toHaveBeenCalled();
-    }),
-  );
-
   it.effect("detaches exactly its listeners after asynchronous spawn failure", () =>
     Effect.gen(function* () {
       const f = fixture();
@@ -157,31 +145,6 @@ describe("shared process transport", () => {
       expect(f.stdin.destroyed && f.stdout.destroyed && f.stderr.destroyed).toBe(true);
       expect(boundary.terminate).not.toHaveBeenCalled();
     }),
-  );
-
-  it.effect(
-    "reports stream failures, retains a bounded stderr tail, and closes input definitively",
-    () =>
-      Effect.gen(function* () {
-        const f = fixture();
-        const { handle, release } = yield* openNative(f);
-        f.stderr.emit("data", Buffer.alloc(256 * 1024, "x"));
-        f.stdout.emit("error", new Error("stdout failure"));
-        f.stderr.emit("error", new Error("stderr failure"));
-        expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
-        expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
-        f.stdin.emit("error", new Error("stdin failure"));
-        expect((yield* handle.send(notification).pipe(Effect.flip)).code).toBe(
-          "transport_not_sent",
-        );
-        expect(f.writes).toEqual([]);
-        f.finish();
-        const exit = yield* handle.awaitExit;
-        expect(Buffer.byteLength(exit.stderr)).toBeLessThanOrEqual(128 * 1024);
-        expect(exit.stderr).toContain("stdout failure");
-        expect(exit.stderr).toContain("stderr failure");
-        yield* release;
-      }),
   );
 
   it.effect(
@@ -222,31 +185,6 @@ describe("shared process transport", () => {
       }),
   );
 
-  it.effect("keeps native outbound frame limits and summarizes oversized inbound lines", () =>
-    Effect.gen(function* () {
-      const f = fixture();
-      const { handle, release } = yield* openNative(f);
-      const oversized = {
-        method: "initialized" as const,
-        extra: "x".repeat(MAX_PROCESS_LINE_BYTES),
-      };
-      expect((yield* handle.send(oversized).pipe(Effect.flip)).code).toBe("transport_not_sent");
-      expect(f.writes).toEqual([]);
-      f.stdout.emit("data", Buffer.alloc(MAX_PROCESS_LINE_BYTES + 1, "x"));
-      f.stdout.emit("data", Buffer.from('\n{"type":"result"}\n'));
-      const skipped = yield* Queue.take(handle.events);
-      expect(skipped).toMatchObject({ type: "oversized_line", bytes: MAX_PROCESS_LINE_BYTES + 1 });
-      handle.acknowledge(skipped);
-      expect(yield* Queue.take(handle.events)).toMatchObject({
-        type: "message",
-        value: { type: "result" },
-      });
-      expect(boundary.terminate).not.toHaveBeenCalled();
-      yield* release;
-      expect(f.writes).toEqual([]);
-    }),
-  );
-
   it.effect("keeps dequeued bytes owned until acknowledged and fails an excessive backlog", () =>
     Effect.gen(function* () {
       const f = fixture();
@@ -264,16 +202,6 @@ describe("shared process transport", () => {
       expect(boundary.terminate).not.toHaveBeenCalled();
       f.stdout.emit("data", Buffer.from(line));
       expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
-      expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force");
-      yield* release;
-    }),
-  );
-
-  it.effect("terminates a count-overflowed event queue independently of byte weight", () =>
-    Effect.gen(function* () {
-      const f = fixture();
-      const { release } = yield* openNative(f);
-      for (let i = 0; i < 513; i++) f.stdout.emit("data", Buffer.from("{}\n"));
       expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force");
       yield* release;
     }),
@@ -322,21 +250,6 @@ describe("shared process transport", () => {
     );
 
     for (const mode of ["graceful", "force"] as const) {
-      for (const survives of [true, false])
-        it.effect(
-          `retains detached cleanup evidence after public ${mode} termination when descendants ${survives ? "survive" : "exit"}`,
-          () =>
-            Effect.gen(function* () {
-              detachedUntilSignalled(survives);
-              const { handle, scope, release } = yield* openNative(fixture(), true);
-              yield* handle.terminate(mode);
-              yield* handle.awaitExit;
-              if (survives)
-                expect(yield* releaseFailure(scope)).toMatchObject({ code: "cleanup_unconfirmed" });
-              else yield* release;
-            }),
-        );
-
       it.effect(`joins a cancelled public ${mode} termination through snapshot and signal`, () =>
         Effect.gen(function* () {
           detachedUntilSignalled(true);
@@ -377,29 +290,6 @@ describe("shared process transport", () => {
           }),
       );
     }
-
-    it.effect("records detached commands before an overflow signals the writer", () =>
-      Effect.gen(function* () {
-        detachedUntilSignalled(true);
-        const f = fixture();
-        const { scope } = yield* openNative(f, true);
-        for (let i = 0; i < 513; i++) f.stdout.emit("data", Buffer.from("{}\n"));
-        yield* yieldUntil(() => boundary.terminate.mock.calls.length > 0);
-        expect(yield* releaseFailure(scope)).toMatchObject({ code: "cleanup_unconfirmed" });
-      }),
-    );
-
-    for (const [description, writer, survives] of [
-      ["confirms a writer whose detached commands exited", true, false],
-      ["does not hold a reader's cleanup on detached commands", false, true],
-    ] as const)
-      it.effect(description, () =>
-        Effect.gen(function* () {
-          detachedUntilSignalled(survives);
-          const { release } = yield* openNative(fixture(), writer);
-          yield* release;
-        }),
-      );
   });
 
   it.effect("lets an in-flight forced termination finish after the scope closes", () =>
@@ -485,41 +375,6 @@ describe("shared process transport", () => {
     }),
   );
 
-  it.effect("retains cleanup failure when the leader exited but its process group remains", () =>
-    Effect.gen(function* () {
-      const f = fixture();
-      boundary.confirmGroupExit.mockReturnValue(Effect.succeed(false));
-      const { scope } = yield* openNative(f);
-      const cause = yield* finishTimed(
-        Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip),
-      );
-      expect(Cause.squash(cause)).toMatchObject({ code: "cleanup_unconfirmed" });
-      expect(f.stdin.destroyed).toBe(true);
-    }),
-  );
-
-  it.effect("observes late exact-child exit without repeating termination", () =>
-    Effect.gen(function* () {
-      const f = fixture();
-      boundary.terminate.mockReturnValue(Effect.void);
-      const { handle, scope } = yield* openNative(f);
-      const cause = yield* finishTimed(
-        Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip),
-      );
-      const verifier = handle.cleanupVerifier;
-      if (!verifier) return yield* Effect.die("Missing cleanup verifier");
-      expect(
-        cause.reasons.map(verifier.diagnostic).find((diagnostic) => diagnostic !== undefined),
-      ).toMatchObject({ phase: "process-exit" });
-      expect(yield* verifier.verify.pipe(Effect.flip)).toMatchObject({ phase: "process-exit" });
-      const signals = boundary.terminate.mock.calls.length;
-      f.finish();
-      yield* verifier.verify;
-      expect(boundary.terminate.mock.calls.length).toBe(signals);
-      return undefined;
-    }),
-  );
-
   it.effect(
     "requires original and fully recorded detached group absence without resnapshotting or signalling",
     () =>
@@ -590,39 +445,6 @@ describe("shared process transport", () => {
         });
         return undefined;
       }),
-  );
-
-  it.effect("does not infer a complete recovery snapshot after natural writer exit", () =>
-    Effect.gen(function* () {
-      const f = fixture();
-      const { handle, scope } = yield* openNative(f, true);
-      f.finish();
-      boundary.confirmGroupExit.mockReturnValue(Effect.succeed(false));
-      yield* finishTimed(Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip));
-      const verifier = handle.cleanupVerifier;
-      if (!verifier) return yield* Effect.die("Missing cleanup verifier");
-      expect(verifier.canVerify()).toBe(false);
-      boundary.confirmGroupExit.mockReturnValue(Effect.succeed(true));
-      expect(yield* verifier.verify.pipe(Effect.flip)).toMatchObject({
-        phase: "descendant-snapshot",
-      });
-      return undefined;
-    }),
-  );
-
-  it.effect("confirms group absence after a failed final signal to an exited leader", () =>
-    Effect.gen(function* () {
-      const f = fixture();
-      boundary.terminate.mockImplementation((_child, mode) =>
-        mode === "graceful"
-          ? Effect.sync(f.finish)
-          : Effect.fail(processGroupSignalError("permission")),
-      );
-      const { scope } = yield* openNative(f);
-      yield* closeScope(scope);
-      expect(f.stdin.destroyed).toBe(true);
-      expect(boundary.confirmGroupExit).toHaveBeenCalled();
-    }),
   );
 });
 

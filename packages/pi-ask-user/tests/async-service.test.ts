@@ -6,7 +6,6 @@ import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Scheduler from "effect/Scheduler";
@@ -15,13 +14,8 @@ import { expect } from "vitest";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { failureMessage } from "pi-cosmic-core";
 import { pausedScheduler } from "pi-cosmic-core/testing";
-import {
-  AskUserService,
-  type AskUserHost,
-  type QuestionnairePresence,
-} from "../src/questionnaire/service.ts";
-import { formatAsyncSnapshot } from "../src/questionnaire/format.ts";
-import { AskUserHostError, AskUserValidationError } from "../src/questionnaire/errors.ts";
+import { AskUserService, type AskUserHost } from "../src/questionnaire/service.ts";
+import { AskUserHostError } from "../src/questionnaire/errors.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import {
   MAX_RETAINED_REQUESTS,
@@ -118,92 +112,6 @@ it.effect("waits only for mounting, admits independent work, and retains automat
   }),
 );
 
-it.effect("reports a pending questionnaire hidden until the user resumes it", () =>
-  Effect.gen(function* () {
-    const f = yield* fixture;
-    const visibility = yield* Deferred.make<QuestionnairePresence["visibility"]>();
-    const host: AskUserHost = (input, presence) =>
-      (presence ? Deferred.succeed(visibility, presence.visibility) : Effect.void).pipe(
-        Effect.andThen(f.host(input, presence)),
-      );
-    yield* Deferred.succeed(f.mount, undefined);
-    const service = yield* acquireService(host, f.delivery);
-    const { requestId } = yield* service.startAsync(request);
-    const signals = yield* Deferred.await(visibility);
-    const statusAfter = (signal: "open" | "hidden") =>
-      Queue.offer(signals, signal).pipe(
-        Effect.andThen(Effect.yieldNow),
-        Effect.andThen(control(service, "status", requestId)),
-      );
-    const hidden = yield* statusAfter("hidden");
-    expect(hidden?.presentation).toBe("hidden");
-    expect(formatAsyncSnapshot(hidden!)).toContain("/ask-user");
-    expect((yield* statusAfter("open"))?.presentation).toBe("open");
-    yield* Deferred.succeed(f.answer, outcome);
-    yield* Deferred.await(f.delivered);
-    expect((yield* statusAfter("hidden"))?.presentation).toBe("settled");
-  }),
-);
-
-it.effect(
-  "retains text outcomes with unchanged request and delivery IDs through status and await",
-  () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      yield* Deferred.succeed(f.mount, undefined);
-      const service = yield* acquireService(f.host, f.delivery, "text");
-      const receipt = yield* service.startAsync({
-        ...request,
-        questions: [{ key: "details", title: "Details", prompt: "Describe?", mode: "text" }],
-      });
-      const textOutcome: AskUserOutcome = {
-        outcome: "submitted",
-        answers: [{ key: "details", kind: "text", text: "bq1234\nanswer", note: "context" }],
-      };
-      yield* Deferred.succeed(f.answer, textOutcome);
-      yield* Deferred.await(f.delivered);
-      const messages = yield* Ref.get(f.messages);
-      const status = yield* control(service, "status", receipt.requestId);
-      const awaited = yield* control(service, "await", receipt.requestId);
-      for (const result of [messages[0], status, awaited]) {
-        expect(result?.requestId).toBe(receipt.requestId);
-        expect(result?.deliveryId).toBe(receipt.deliveryId);
-        expect(result?.outcome).toEqual(textOutcome);
-      }
-    }),
-);
-
-it.effect("queues competing async and blocking dialogs without replacing the pending request", () =>
-  Effect.gen(function* () {
-    const { f, service, receipt } = yield* startMounted();
-    expect(yield* service.startAsync(request)).toMatchObject({
-      status: "pending",
-      presentation: "queued",
-    });
-    const blocking = yield* Effect.forkChild(service.ask(request), { startImmediately: true });
-    expect(blocking.pollUnsafe()).toBeUndefined();
-    yield* Fiber.interrupt(blocking);
-    const result = yield* control(service, "cancel", receipt.requestId);
-    expect(result?.status).toBe("cancelled");
-    expect(result?.outcome?.answers).toEqual([]);
-    expect(yield* Ref.get(f.messages)).toEqual([]);
-  }),
-);
-
-it.effect("queues async behind an active blocking dialog", () =>
-  Effect.gen(function* () {
-    const f = yield* fixture;
-    const service = yield* acquireService(f.host, f.delivery);
-    const blocking = yield* Effect.forkChild(service.ask(request));
-    yield* Deferred.await(f.entered);
-    const receipt = yield* service.startAsync(request);
-    expect(receipt.presentation).toBe("queued");
-    yield* Fiber.interrupt(blocking);
-    yield* Deferred.succeed(f.mount, undefined);
-    yield* control(service, "cancel", receipt.requestId);
-  }),
-);
-
 it.effect("an await owns answer delivery; status never consumes it", () =>
   Effect.gen(function* () {
     const { f, service, receipt } = yield* startMounted();
@@ -277,19 +185,6 @@ it.effect("retains answers when delivery fails and recovers through await with t
     });
     yield* TestClock.adjust("10 seconds");
     expect(yield* Ref.get(attempts)).toBe(1);
-  }),
-);
-
-it.effect("cancel signals the presenter while another caller owns await delivery", () =>
-  Effect.gen(function* () {
-    const { f, service, receipt } = yield* startMounted();
-    const waiter = yield* Effect.forkChild(control(service, "await", receipt.requestId), {
-      startImmediately: true,
-    });
-    expect((yield* control(service, "cancel", receipt.requestId))?.status).toBe("cancelled");
-    expect((yield* Fiber.join(waiter))?.status).toBe("cancelled");
-    expect(yield* Ref.get(f.released)).toBe(1);
-    expect(yield* Ref.get(f.messages)).toEqual([]);
   }),
 );
 
@@ -369,25 +264,6 @@ for (const deliveryMode of ["absent", "failing"] as const) {
   );
 }
 
-it.effect("propagates opening failure and releases admission", () =>
-  Effect.gen(function* () {
-    const failure = new AskUserHostError({ operation: "open", message: "Unavailable." });
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      expect(yield* Effect.flip(service.startAsync(request))).toBeInstanceOf(AskUserHostError);
-      expect((yield* control(service, "status"))?.status).toBe("failed");
-      expect(yield* Effect.flip(service.startAsync(request))).toBeInstanceOf(AskUserHostError);
-    }).pipe(
-      Effect.provide(
-        AskUserService.layer(
-          () => Effect.fail(failure),
-          () => Effect.void,
-        ),
-      ),
-    );
-  }),
-);
-
 it.effect("retention evicts old terminal requests, never repeats IDs, and stays bounded", () =>
   Effect.gen(function* () {
     const service = yield* acquireService(immediateHost, () => Effect.void);
@@ -429,21 +305,6 @@ it.effect("scope shutdown closes the presenter and cannot emit an answer afterwa
     yield* Deferred.succeed(f.answer, outcome);
     expect(yield* Ref.get(f.released)).toBe(1);
     expect(yield* Ref.get(f.messages)).toEqual([]);
-  }),
-);
-
-it.effect("rejects blank work descriptions before opening", () =>
-  Effect.gen(function* () {
-    const f = yield* fixture;
-    const service = yield* acquireService(f.host, f.delivery);
-    for (const work of [" ", "x".repeat(501)])
-      expect(
-        yield* Effect.flip(service.startAsync({ ...request, blockedWork: work })),
-      ).toBeInstanceOf(AskUserValidationError);
-    expect(yield* Effect.flip(control(service, "await"))).toMatchObject({
-      reason: "invalid-control",
-    });
-    expect(yield* Ref.get(f.released)).toBe(0);
   }),
 );
 

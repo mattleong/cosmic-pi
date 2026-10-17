@@ -16,7 +16,7 @@ All above-editor widgets share Pi's shrinking layout slot. A questionnaire dock 
 
 ## Settings bridge
 
-[VimSettingsAdapter](../src/manager/settings-adapter.ts) deliberately accesses pi-tui's private `searchInput`, `setValue`, `applyFilter`, and `submenuComponent`. This keeps keyboard focus aligned with the child and clears a hidden search filter when leaving search without closing the settings surface. Keep this bridge narrow and inspect it directly on pi-tui upgrades. [Adapter tests](../tests/settings-adapter.test.ts) cover focus and filter behavior; the bridge is not evidence that those internals are a public Pi contract.
+[VimSettingsAdapter](../src/manager/settings-adapter.ts) deliberately accesses pi-tui's private `searchInput`, `setValue`, `applyFilter`, and `submenuComponent`. This keeps keyboard focus aligned with the child and clears a hidden search filter when leaving search without closing the settings surface. Keep this bridge narrow and inspect it directly on pi-tui upgrades. The bridge is not evidence that those internals are a public Pi contract.
 
 ## Pull-request footer links
 
@@ -26,7 +26,7 @@ The repository probe decodes `gh`'s PR number and actual URL together with Effec
 
 [application.ts](../src/application.ts) derives footer totals from complete validated `sessionManager.getEntries()` snapshots, including persisted auxiliary usage such as cache warming. Malformed reads preserve the last complete same-session totals; a replacement resets them. Message-end events never add charges. The host has no public extension `entry_appended` event, so an idle ticker also reconciles persisted usage. It neither republishes nor renders unchanged totals. [Extension tests](../tests/extension.test.ts) cover idle warming, duplicate events, failed reads, and replacement.
 
-Throughput starts at `context_with_system` and ends at assistant `message_end`. Provider hooks also run for cache warming, so using them would misattribute auxiliary calls to the main agent. Completed samples use validated final output and include initial latency and stream stalls; unfinished or invalid samples contribute neither tokens nor duration. Prompt waits affect the displayed work timer, not this measurement. See [working event tests](../tests/working-events.test.ts) and [throughput tests](../tests/throughput.test.ts).
+Throughput starts at `context_with_system` and ends at assistant `message_end`. Provider hooks also run for cache warming, so using them would misattribute auxiliary calls to the main agent. Completed samples use validated final output and include initial latency and stream stalls; unfinished or invalid samples contribute neither tokens nor duration. Prompt waits affect the displayed work timer, not this measurement. See [working event tests](../tests/working-events.test.ts).
 
 ## Prompt identity limit
 

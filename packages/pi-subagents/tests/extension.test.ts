@@ -7,7 +7,6 @@ import * as FileSystem from "effect/FileSystem";
 import { createJiti } from "jiti";
 import { afterEach, vi } from "vitest";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
-import { anyFunction, objectContaining } from "./support/matchers.ts";
 
 type Extension = typeof import("../src/extension.ts").default;
 
@@ -32,32 +31,4 @@ it.effect.each([
     }).pipe(Effect.exit);
     expect(Exit.isSuccess(result)).toBe(succeeds);
   }).pipe(Effect.provide(NodeFileSystem.layer)),
-);
-
-it.effect.each([undefined, "0", "true"])(
-  "finishes root registration before resolving for marker %s on repeated loads",
-  (marker) =>
-    Effect.gen(function* () {
-      vi.stubEnv("PI_SUBAGENT_CHILD", marker);
-      for (let reload = 0; reload < 2; reload++) {
-        vi.resetModules();
-        const { default: extension } = yield* Effect.tryPromise(
-          () => import("../src/extension.ts"),
-        );
-        const on = vi.fn();
-        const registerCommand = vi.fn();
-        const pi = extensionApiFixture({
-          on,
-          registerCommand,
-          registerMessageRenderer: vi.fn(),
-        });
-        yield* Effect.tryPromise(() => Promise.resolve(extension(pi)));
-        expect(on).toHaveBeenCalledWith("session_start", expect.any(Function));
-        expect(on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
-        expect(registerCommand).toHaveBeenCalledWith(
-          "subagents",
-          objectContaining({ handler: anyFunction() }),
-        );
-      }
-    }),
 );

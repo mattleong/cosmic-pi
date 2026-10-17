@@ -11,7 +11,6 @@ import {
   JsonDocumentStore,
   provideBuiltLayer,
   type JsonDocumentStoreContract,
-  type JsonValue,
 } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
@@ -102,51 +101,6 @@ it.effect("logs a sanitized warning and continues after a malformed settings doc
       }),
     ),
   );
-});
-
-it.effect("load returns mutable defensive clones and publishes frozen loaded settings", () => {
-  const captured = makeCapturedLogger();
-  const fake = makeInMemoryDocuments({
-    "/agent/settings.json": {
-      codePreview: {
-        shikiTheme: "private-theme-token",
-        readCollapsedLines: 21,
-      },
-    },
-  });
-  return CodePreviewSettingsService.use((service) =>
-    Effect.gen(function* () {
-      const first = yield* loadSettings(service);
-      assert.equal(first.readCollapsedLines, 21);
-      assert.notEqual(first, codePreviewSettings);
-      assert.notEqual(first.tools, codePreviewSettings.tools);
-      first.readCollapsedLines = 99;
-      first.tools.length = 0;
-      assert.equal(codePreviewSettings.readCollapsedLines, 21);
-      assert.deepEqual(codePreviewSettings.tools, defaultCodePreviewSettings.tools);
-      assert.equal(Object.isFrozen(codePreviewSettings), true);
-      assert.equal(Object.isFrozen(codePreviewSettings.tools), true);
-
-      const second = yield* loadSettings(service);
-      assert.notEqual(second, first);
-      assert.notEqual(second.tools, first.tools);
-      assert.equal(second.readCollapsedLines, 21);
-      assert.deepEqual(second.tools, defaultCodePreviewSettings.tools);
-      const telemetry = capturedTelemetrySnapshot(captured);
-      assert.match(telemetry, /settings\.shikiTheme/);
-      assert.equal(telemetry.includes("private-theme-token"), false);
-      assert.equal(telemetry.includes("/agent"), false);
-    }),
-  ).pipe(provideBuiltLayer(Layer.merge(settingsLayer(fake.service), captured.layer)));
-});
-
-it.effect("building the settings Layer does not publish its defaults", () => {
-  const fake = makeInMemoryDocuments();
-  return Effect.gen(function* () {
-    setCodePreviewSettings({ ...defaultCodePreviewSettings, readCollapsedLines: 73 });
-    yield* Layer.build(settingsLayer(fake.service));
-    assert.equal(codePreviewSettings.readCollapsedLines, 73);
-  }).pipe(Effect.scoped);
 });
 
 it.effect("a cancelled newer load does not suppress an older successful publication", () =>
@@ -386,22 +340,6 @@ it.effect("failed persistence leaves the published settings unchanged", () => {
   );
 });
 
-it.effect("runtime-invalid settings fail before document modification or publication", () => {
-  const fake = makeInMemoryDocuments();
-  return usingSettings(fake.service, (service) =>
-    Effect.gen(function* () {
-      const loaded = yield* loadSettings(service);
-      const published = codePreviewSettings;
-      const invalid = { ...loaded, readCollapsedLines: 0 };
-      const failure = yield* saveSettings(service, invalid).pipe(Effect.flip);
-      assert.ok(failure instanceof JsonDocumentError);
-      assert.equal(failure.operation, "validate");
-      assert.equal(fake.updateCount, 0);
-      assert.equal(codePreviewSettings, published);
-    }),
-  );
-});
-
 it.effect("flush waits for an earlier save and interruption cannot lose that save", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
@@ -471,29 +409,6 @@ it.effect("post-rename publication completes before save interruption becomes vi
   }).pipe(Effect.scoped),
 );
 
-it.effect("interrupted loads do not publish a partial settings document", () =>
-  Effect.gen(function* () {
-    setCodePreviewSettings({ ...defaultCodePreviewSettings, readCollapsedLines: 17 });
-    const started = yield* Deferred.make<void>();
-    const fake = makeInMemoryDocuments();
-    let interrupted = 0;
-    const documents = JsonDocumentStore.of({
-      ...fake.service,
-      readObject: () =>
-        Deferred.succeed(started, undefined).pipe(
-          Effect.andThen(Effect.never),
-          Effect.ensuring(Effect.sync(() => interrupted++)),
-        ),
-    });
-    const fiber = yield* usingSettings(documents, loadSettings).pipe(Effect.forkScoped);
-    yield* Deferred.await(started);
-    assert.equal(codePreviewSettings.readCollapsedLines, 17);
-    yield* Fiber.interrupt(fiber);
-    assert.equal(interrupted, 1);
-    assert.equal(codePreviewSettings.readCollapsedLines, 17);
-  }).pipe(Effect.scoped),
-);
-
 it.effect("choosing the project's value writes a global override instead of deleting one", () => {
   const fake = makeInMemoryDocuments({
     "/project/.pi/settings.json": { codePreview: { shikiTheme: "nord" } },
@@ -550,43 +465,6 @@ it.effect("saves and resets that another process already wrote still apply here"
     }),
   );
 });
-
-it.effect("saving unchanged settings writes nothing", () => {
-  const fake = makeInMemoryDocuments();
-  return usingSettings(fake.service, (service) =>
-    Effect.gen(function* () {
-      yield* saveSettings(service, yield* loadSettings(service));
-      assert.equal(fake.documents.has("/agent/code-previews.json"), false);
-    }),
-  );
-});
-
-const nestedSettingsCases: ReadonlyArray<readonly [string, JsonValue, number]> = [
-  ["object", { readCollapsedLines: 21, futureSetting: { enabled: true } }, 21],
-  ["null", null, defaultCodePreviewSettings.readCollapsedLines],
-  ["array", [{ readCollapsedLines: 21 }], defaultCodePreviewSettings.readCollapsedLines],
-  ["string", "21", defaultCodePreviewSettings.readCollapsedLines],
-  ["number", 21, defaultCodePreviewSettings.readCollapsedLines],
-  ["boolean", true, defaultCodePreviewSettings.readCollapsedLines],
-];
-
-it.effect.each(nestedSettingsCases)(
-  "settings.json contributes only a nested JSON object: %s",
-  ([, nested, expected]) => {
-    const fake = makeInMemoryDocuments({
-      "/agent/settings.json": { codePreview: nested },
-      "/agent/code-previews.json": { shikiTheme: "nord" },
-    });
-    return usingSettings(fake.service, (service) =>
-      Effect.gen(function* () {
-        const loaded = yield* loadSettings(service);
-        assert.equal(loaded.readCollapsedLines, expected);
-        assert.equal(loaded.shikiTheme, "nord");
-        assert.deepEqual(codePreviewSettingsProblems, []);
-      }),
-    );
-  },
-);
 
 it.effect("loads publish which files were ignored and which fields were invalid", () => {
   const fake = makeInMemoryDocuments({

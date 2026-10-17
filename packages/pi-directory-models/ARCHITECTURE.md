@@ -36,6 +36,5 @@ than breaking the session. Shutdown disposes the runtime, and inactive events do
 Interrupted persistence cannot report a late warning after its owning session retires.
 
 [Application tests](tests/application.test.ts) exercise restoration, concurrent replacement,
-failure recovery, alias identity, and persistence. [Host model tests](tests/host-model.test.ts)
-cover the external model boundary; [CLI tests](tests/host-cli.test.ts) cover explicit preference
-detection. User-facing behavior is in the [README](README.md).
+failure recovery, alias identity, and persistence. [CLI tests](tests/host-cli.test.ts) cover
+explicit preference detection. User-facing behavior is in the [README](README.md).

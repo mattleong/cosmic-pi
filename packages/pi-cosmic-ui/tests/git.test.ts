@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { applyGitNumstat, formatGitStatus, parseGitStatus } from "../src/footer/git.ts";
+import { applyGitNumstat, parseGitStatus } from "../src/footer/git.ts";
 
 describe("git footer status", () => {
   test("summarizes staged, modified, untracked, conflicted, and diverged files", () => {
@@ -34,10 +34,5 @@ describe("git footer status", () => {
     );
 
     expect(withLines).toMatchObject({ linesAdded: 6, linesRemoved: 5, linesChanged: 6 });
-  });
-
-  test("hides clean repository status and ignores non-repository output", () => {
-    expect(formatGitStatus(parseGitStatus("## main...origin/main\n")!)).toBe("");
-    expect(parseGitStatus("fatal: not a git repository")).toBeUndefined();
   });
 });

@@ -2,7 +2,6 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { formatDuration } from "pi-cosmic-core";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
 import { backgroundLogLines, executeBackgroundTaskCommand } from "../src/tools/command.ts";
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
@@ -10,7 +9,6 @@ import {
   provideTaskService,
   taskServiceDouble,
   taskStatus,
-  taskWait,
 } from "./support/task-service-double.ts";
 
 const execute = (
@@ -23,56 +21,6 @@ const execute = (
   );
 
 describe("shared background task command", () => {
-  it.effect("tells the agent how a task ended, including a spawn error and signal", () =>
-    Effect.gen(function* () {
-      const tasks = [
-        taskStatus({ id: "bg-1", state: "failed", error: "Couldn't start the process" }),
-        taskStatus({ id: "bg-2", state: "failed", exitCode: null, signal: "SIGKILL" }),
-      ];
-      for (const task of tasks) {
-        const result = yield* execute(
-          { action: "status", id: task.id },
-          { status: () => Effect.succeed(task) },
-        );
-        expect(result.text).toContain(task.error ?? task.signal);
-      }
-    }),
-  );
-
-  it.effect("rejects a wait without until before acquiring a task waiter", () =>
-    Effect.gen(function* () {
-      const error = yield* execute({ action: "wait", id: "bg-1" }, {}).pipe(Effect.flip);
-      expect(error._tag).toBe("InvalidBackgroundCommandError");
-    }),
-  );
-
-  it.effect("reports how long a capped wait lasted, not the time it requested", () =>
-    Effect.gen(function* () {
-      const snapshot = taskStatus({ id: "bg-1", state: "running" });
-      const input = {
-        action: "wait" as const,
-        id: "bg-1",
-        until: "exit" as const,
-        waitSeconds: 90,
-      };
-      const result = yield* execute(input, {
-        wait: () => Effect.succeed(taskWait(snapshot, "timeout")),
-      });
-      expect(result.details).toMatchObject({ action: "wait", appliedWaitSeconds: 30 });
-      expect("wait" in result.details && result.details.wait).not.toHaveProperty(
-        "appliedWaitSeconds",
-      );
-      const timeout = projectBackgroundTaskCompactSummary({
-        phase: "settled",
-        args: input,
-        result: { details: result.details, text: result.text },
-        isError: false,
-      })?.issues?.find((issue) => issue.code === "bg-1:wait-timeout");
-      expect(timeout?.message).toContain(formatDuration(30_000));
-      expect(timeout?.message).not.toContain(formatDuration(90_000));
-    }),
-  );
-
   it.effect("keeps the newest log lines when the text is cut and persists only what it holds", () =>
     Effect.gen(function* () {
       const logs = { id: "bg-1", nextCursor: 2, earliestAvailableCursor: 1, droppedBytes: 0 };

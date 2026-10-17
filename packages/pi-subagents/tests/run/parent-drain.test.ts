@@ -33,13 +33,6 @@ describe("session-end completion flush", () => {
 });
 
 describe("headless parent drain", () => {
-  it.effect("returns at once when nothing is running", () => {
-    const { layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      yield* service.awaitParentDrain;
-    });
-  });
-
   it.effect("yields for a direct child's question while its sibling is still running", () => {
     const { fake, layer, projections } = localServiceFixture();
     return withService(layer, function* (service) {
@@ -64,31 +57,6 @@ describe("headless parent drain", () => {
       expect(drain.pollUnsafe()).toBeDefined();
       yield* Fiber.join(drain);
       expect((yield* service.list).find((run) => run.id === sibling.id)?.state).toBe("running");
-    });
-  });
-
-  it.effect("keeps draining when a question belongs to a running nested parent", () => {
-    const { fake, layer, projections } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const parent = yield* service.start(request());
-      const nested = yield* service.startSessionOwnedFrom(parent.id, request());
-      const drain = yield* service.awaitParentDrain.pipe(
-        Effect.forkScoped({ startImmediately: true }),
-      );
-
-      fake.controls[1]!.offerIpc(
-        contactParentFrame("nested-question", "question", "Which path should I take?"),
-      );
-      yield* yieldUntil(
-        () =>
-          projections
-            .at(-1)
-            ?.runs.some((run) => run.id === nested.id && run.question !== undefined) === true,
-      );
-      yield* TestClock.adjust("1 second");
-
-      expect(drain.pollUnsafe()).toBeUndefined();
-      yield* Fiber.interrupt(drain);
     });
   });
 

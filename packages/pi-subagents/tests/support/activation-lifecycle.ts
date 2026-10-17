@@ -5,7 +5,7 @@ import { effectTest, step } from "./effect-test.ts";
 
 type LoadSettings = (cwd: string, projectTrusted: boolean, signal?: AbortSignal) => Promise<void>;
 
-export interface ActivationPath {
+interface ActivationPath {
   readonly start: () => PromiseLike<void>;
   readonly shutdown: () => PromiseLike<void>;
   readonly registeredToolCount: () => number;

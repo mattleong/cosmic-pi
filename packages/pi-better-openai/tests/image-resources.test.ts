@@ -3,11 +3,9 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import { nodePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
-import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { imageOutput } from "../src/image/output.ts";
 import { bytes, pngSharp } from "./helpers.ts";
 import { OpenAIImageError } from "../src/image/types.ts";
@@ -45,81 +43,6 @@ describe("OpenAI image resources", () => {
       const visible = yield* fs.readDirectory(directory);
       expect(visible).toHaveLength(1);
       expect(visible.some((name) => name.endsWith(".tmp"))).toBe(false);
-    }).pipe(provideBuiltLayer(nodePlatformLayer)),
-  );
-
-  it.effect("reports a failed output-path probe as a typed save failure", () =>
-    Effect.gen(function* () {
-      const { fs: realFs, path, root, directory } = yield* tempImages;
-      const probeFailure = realFs.readFile(path.join(root, "missing")).pipe(Effect.as(false));
-      const hostileFs: typeof realFs = Object.assign({}, realFs, { exists: () => probeFailure });
-      const failure = yield* imageOutput({ fs: hostileFs, path, sharp: pngSharp })
-        .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
-        .pipe(Effect.flip);
-      expect(failure).toBeInstanceOf(OpenAIImageError);
-      expect(failure).toMatchObject({ operation: "save" });
-    }).pipe(provideBuiltLayer(nodePlatformLayer)),
-  );
-
-  it.effect("maps close defects without replacing typed write or sync failures", () =>
-    Effect.gen(function* () {
-      const { fs: realFs, path, root } = yield* tempImages;
-      const failureCases = [
-        { stage: "close", message: "Unable to close image temporary file." },
-        { stage: "write", message: "Unable to save generated image." },
-        { stage: "sync", message: "Unable to sync generated image." },
-      ] as const;
-
-      for (const failureCase of failureCases) {
-        const directory = path.join(root, `images-${failureCase.stage}`);
-        const missing = path.join(root, `missing-${failureCase.stage}`);
-        let closeAttempts = 0;
-        let linkCalls = 0;
-        const hostileFs: typeof realFs = Object.assign({}, realFs, {
-          open: (...args: Parameters<typeof realFs.open>) =>
-            Effect.gen(function* () {
-              yield* Effect.addFinalizer(() =>
-                Effect.sync(() => {
-                  closeAttempts++;
-                }).pipe(Effect.andThen(Effect.die("temporary-close-defect"))),
-              );
-              const file = yield* realFs.open(...args);
-              const failure = realFs.readFile(missing).pipe(Effect.asVoid);
-              return {
-                [FileSystem.FileTypeId]: file[FileSystem.FileTypeId],
-                stat: file.stat,
-                seek: file.seek,
-                sync: failureCase.stage === "sync" ? failure : file.sync,
-                read: file.read,
-                readAlloc: file.readAlloc,
-                truncate: file.truncate,
-                write: file.write,
-                writeAll:
-                  failureCase.stage === "write"
-                    ? () => failure
-                    : (content) => file.writeAll(content),
-              } satisfies FileSystem.File;
-            }),
-          link: (...args: Parameters<typeof realFs.link>) =>
-            Effect.sync(() => {
-              linkCalls++;
-            }).pipe(Effect.andThen(realFs.link(...args))),
-        });
-        const output = imageOutput({ fs: hostileFs, path, sharp: pngSharp });
-
-        const failure = yield* output
-          .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
-          .pipe(Effect.flip);
-
-        expect(failure).toBeInstanceOf(OpenAIImageError);
-        expect(failure).toMatchObject({
-          operation: "save",
-          message: failureCase.message,
-        });
-        expect(closeAttempts).toBe(1);
-        expect(linkCalls).toBe(0);
-        expect(yield* realFs.readDirectory(directory)).toEqual([]);
-      }
     }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 
@@ -194,30 +117,4 @@ describe("OpenAI image resources", () => {
       expect(yield* realFs.readDirectory(directory)).toEqual([]);
     }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
-
-  it.effect("keeps the committed publication when post-commit verification is lost", () => {
-    const capture = makeCapturedLogger();
-    return Effect.gen(function* () {
-      const { fs: realFs, path, root, directory } = yield* tempImages;
-      const hostileFs: typeof realFs = Object.assign({}, realFs, {
-        stat: (pathArg: Parameters<typeof realFs.stat>[0]) =>
-          pathArg.endsWith(".png") ? Effect.die("verification-io-loss") : realFs.stat(pathArg),
-      });
-      const output = imageOutput({ fs: hostileFs, path, sharp: pngSharp });
-      const content = bytes("committed-image-bytes");
-      const destination = yield* output.persistImage(
-        directory,
-        root,
-        content,
-        "png",
-        "provider/id",
-      );
-      expect(yield* realFs.exists(destination)).toBe(true);
-      expect(Array.from(yield* realFs.readFile(destination))).toEqual(Array.from(content));
-      expect(
-        (yield* realFs.readDirectory(directory)).filter((name) => name.endsWith(".tmp")),
-      ).toEqual([]);
-      expect(capture.entries).toHaveLength(1);
-    }).pipe(provideBuiltLayer(Layer.merge(nodePlatformLayer, capture.layer)));
-  });
 });

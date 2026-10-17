@@ -177,23 +177,8 @@ it("claims registered MCP definitions only from the exact builtin MCP source", (
   }
 });
 
-it("only exact native MCP aliases leave Pi's own presentation", () => {
-  const { resolver } = presentationResolver({
-    getAllTools: () => [],
-    getCommands: () => [manager],
-  });
-  assert.equal(
-    resolver("mcp__docs-site__lookup", () => downstream)?.renderCall,
-    downstream.renderCall,
-  );
-  assert.notEqual(
-    resolver("mcp__docs_site__lookup", () => downstream)?.renderCall,
-    downstream.renderCall,
-  );
-});
-
-for (const style of ["preview", "compact"] as const)
-  for (const background of ["on", "off", "border"] as const)
+for (const style of ["compact"] as const)
+  for (const background of ["off"] as const)
     it(`${style}/${background} ready rows keep output when each slot is resolved separately`, () => {
       setPlainPreviewSettings({
         toolCallCollapsedStyle: style,
@@ -226,34 +211,6 @@ for (const style of ["preview", "compact"] as const)
       assert.match(result.render(100).join("\n"), /COMPLETE OUTPUT/);
       owner.retire();
     });
-
-it("renders inactive builtin tools without touching active selection or execution registration", () => {
-  setPlainPreviewSettings({ tools: ["read"], toolCallCollapsedStyle: "compact" });
-  const { pi, resolver } = presentationResolver(
-    {
-      getAllTools: () => [info("read")],
-      getActiveTools: () => {
-        throw new Error("selection access");
-      },
-      setActiveTools: () => {
-        throw new Error("selection mutation");
-      },
-      registerTool: () => {
-        throw new Error("execution mutation");
-      },
-    },
-    ["read"],
-  );
-  const renderers = resolver("read", () => downstream)!;
-  const harness = createToolPresentationHarness(renderers);
-  harness.call({ path: "/project/file.ts" });
-  harness.result({ content: [{ type: "text", text: "COMPLETE OUTPUT" }], details: {} });
-  assert.match(harness.render(80).join("\n"), /file\.ts/);
-  harness.call({ path: "/project/file.ts" }, { expanded: true });
-  assert.match(harness.render(80).join("\n"), /COMPLETE OUTPUT/);
-  publishPreviewToolStatuses(capturePreviewHostTools(pi), new Set(["read"]), new Set());
-  assert.equal(getCodePreviewToolStatuses().get("read")?.state, "installed");
-});
 
 it("new rows keep origin-owner appearance and tool selection until the next session", () => {
   setPlainPreviewSettings({

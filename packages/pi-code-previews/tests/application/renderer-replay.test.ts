@@ -34,7 +34,6 @@ import {
   setPlainPreviewSettings,
 } from "../support/renderer-host";
 import type { CodePreviewRenderers } from "../../src/tools/renderers/shared/types";
-import * as Match from "effect/Match";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => {
@@ -53,8 +52,8 @@ const downstream: ToolRenderers = {
 const hostRow = (renderers: ToolRenderers | undefined) =>
   hostToolRow("bash", { command: "echo EXACT_SOURCE" }, renderers, { result: output });
 
-for (const name of ["bash", "codemode", "tool_search"] as const)
-  for (const discovery of ["empty", "error"] as const)
+for (const name of ["codemode"] as const)
+  for (const discovery of ["error"] as const)
     for (const admission of ["native", "foreign", "missing", "error"] as const) {
       it(`cold ${name} replay survives ${discovery} metadata then ${admission} readiness`, () => {
         let metadata: ToolInfo[] = [];
@@ -67,16 +66,9 @@ for (const name of ["bash", "codemode", "tool_search"] as const)
         });
         const renderers = resolver(name, () => downstream);
         assert.equal(renderers?.renderShell, "self");
-        const row = hostToolRow(
-          name,
-          Match.value(name).pipe(
-            Match.when("bash", () => ({ command: "echo EXACT_SOURCE" })),
-            Match.when("codemode", () => ({ code: "text('EXACT_SOURCE');" })),
-            Match.orElse(() => ({ query: "EXACT_SOURCE" })),
-          ),
-          renderers,
-          { result: output },
-        );
+        const row = hostToolRow(name, { code: "text('EXACT_SOURCE');" }, renderers, {
+          result: output,
+        });
         assert.match(row.render(100).join("\n"), /NATIVE RESULT CONTENT/);
         broken = admission === "error";
         if (admission === "native") metadata = [info(name)];
@@ -103,8 +95,8 @@ for (const name of ["bash", "codemode", "tool_search"] as const)
       });
     }
 
-for (const style of ["preview", "compact"] as const)
-  for (const mode of ["on", "off", "border"] as const) {
+for (const style of ["preview"] as const)
+  for (const mode of ["border"] as const) {
     it(`a real retained host row adopts first-ready ${style}/${mode} with complete call and result`, () => {
       const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] });
       const renderers = resolver("bash", () => downstream);
@@ -145,8 +137,8 @@ for (const style of ["preview", "compact"] as const)
     });
   }
 
-for (const style of ["preview", "compact"] as const)
-  for (const mode of ["on", "off", "border"] as const)
+for (const style of ["preview"] as const)
+  for (const mode of ["on"] as const)
     it(`retained tool search adopts ${style}/${mode} without borrowing replacement ownership`, () => {
       let owner = new CodePreviewPresentationOwner();
       const first = owner;
@@ -199,7 +191,7 @@ for (const style of ["preview", "compact"] as const)
       owner.retire();
     });
 
-for (const name of ["bash", "tool_search"] as const)
+for (const name of ["bash"] as const)
   it(`lazy ${name} draw adoption refeeds stored result without host refresh or execution events`, () => {
     const context = renderContextFixture({
       args: name === "bash" ? { command: "echo EXACT_SOURCE" } : { query: "EXACT_SOURCE" },

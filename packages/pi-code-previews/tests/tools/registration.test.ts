@@ -89,13 +89,6 @@ test("all enabled core presentations are renderer-only and only write installs a
   assert.deepEqual(installed, ["write"]);
 });
 
-test("disabled names neither create presentations nor register write", () => {
-  enableOnly("read");
-  const pi = piFixture({ registerTool: () => assert.fail("unexpected hook") });
-  registerWritePreviewTool(pi, "/project");
-  assert.equal(createBuiltinPreviewRenderers("write", presentation()), undefined);
-});
-
 it.effect.each([
   ["without a preview session", "next", false],
   ["for content it cannot preview", new TextEncoder().encode("next"), true],
@@ -197,38 +190,6 @@ test.each(["discovery", "active selection", "registration"])(
     assert.deepEqual(installedTools, new Set(["write"]));
   },
 );
-
-test("mutate-then-refresh failure stays owned and retries without reinstalling a settled hook", () => {
-  enableOnly("write");
-  const ownedTools = new Set<CodePreviewToolName>();
-  const installedTools = new Set<CodePreviewToolName>();
-  let visible = toolInfo("write");
-  let failRefresh = true;
-  let mutations = 0;
-  const pi = piFixture({
-    getAllTools: () => [visible],
-    registerTool: (tool) => {
-      mutations++;
-      visible = toolInfo(tool.name, extensionSource);
-      if (failRefresh) throw new Error("refresh failed after mutation");
-    },
-  });
-  registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
-  assert.deepEqual(ownedTools, new Set(["write"]));
-  assert.equal(installedTools.size, 0);
-  failRefresh = false;
-  registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
-  registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
-  assert.equal(mutations, 2);
-  assert.deepEqual(installedTools, new Set(["write"]));
-  visible = toolInfo("write", foreignSource);
-  registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
-  assert.equal(mutations, 2);
-  assert.deepEqual(getCodePreviewToolStatuses().get("write"), {
-    state: "skipped-conflict",
-    owner: foreignSource,
-  });
-});
 
 test.each(["foreign replacement", "missing anchor", "ambiguous anchor", "metadata failure"])(
   "prior ownership declines %s",

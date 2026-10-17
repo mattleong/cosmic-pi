@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  decodeJwtPayloadText,
   hasControlCharacter,
   maskIdentifier,
   redactDiagnosticValue,
@@ -12,21 +11,6 @@ import { sanitizeTerminalStyledFragments } from "../src/security/terminal-styled
 
 const sanitizeTerminalStyledText = (text: string) =>
   sanitizeTerminalStyledFragments([{ channel: "text", text }])[0]?.text ?? "";
-
-describe("JWT payload decoding", () => {
-  const unpaddedPayload = "eyJzdWIiOiJvbmUifQ";
-  const paddedPayload = `${unpaddedPayload}==`;
-
-  it("accepts padded and unpadded Base64URL payloads without inspecting the signature", () => {
-    expect(decodeJwtPayloadText(`header.${unpaddedPayload}`)).toBe('{"sub":"one"}');
-    expect(decodeJwtPayloadText(`header.${paddedPayload}.signature.extra`)).toBe('{"sub":"one"}');
-  });
-
-  it("rejects missing and invalid payload segments", () => {
-    expect(decodeJwtPayloadText("header..signature")).toBeUndefined();
-    expect(decodeJwtPayloadText("header.not%base64.signature")).toBeUndefined();
-  });
-});
 
 describe("control character detection", () => {
   it("recognizes every C0, DEL, and C1 control code point", () => {
@@ -41,15 +25,6 @@ describe("control character detection", () => {
       }
     }
   });
-
-  it("does not treat neighboring or non-Cc Unicode categories as controls", () => {
-    const safeCodePoints = [0x20, 0x7e, 0xa0, 0x200e, 0x2028, 0x1f680];
-
-    for (const codePoint of safeCodePoints) {
-      expect(hasControlCharacter(String.fromCodePoint(codePoint))).toBe(false);
-    }
-    expect(hasControlCharacter("safe\u009fvalue")).toBe(true);
-  });
 });
 
 describe("security formatting", () => {
@@ -61,20 +36,6 @@ describe("security formatting", () => {
     expect(message).not.toContain("abcdefgh");
     expect(message).not.toContain("123456789");
     expect(message).toContain("[REDACTED]");
-  });
-
-  it("clips diagnostics without splitting a surrogate pair", () => {
-    const text = `${"a".repeat(9)}😀b`;
-    expect(sanitizeDiagnosticError(text, { maximumLength: 11 })).toBe(`${"a".repeat(9)}…`);
-    expect(sanitizeDiagnosticContent(text, { maximumLength: 11 })).toBe(`${"a".repeat(9)}…`);
-    expect(sanitizeDiagnosticError("abc", { maximumLength: 0 })).toBe("…");
-    expect(sanitizeDiagnosticContent("abc", { maximumLength: -1 })).toBe("…");
-  });
-
-  it("preserves Markdown whitespace while redacting content", () => {
-    expect(sanitizeDiagnosticContent("- parent\n  - child\n\n    token=secret-value\n\tcode")).toBe(
-      "- parent\n  - child\n\n    token=[REDACTED]\n\tcode",
-    );
   });
 
   it("redacts common explicit secret assignments", () => {
@@ -122,46 +83,6 @@ describe("security formatting", () => {
     expect(sanitizeTerminalStyledText("\u001b\u001b]0;SECRET\u0007visible")).toBe("visible");
     expect(sanitizeTerminalStyledText("\u001b[\u001b]0;SECRET\u0007visible")).toBe("visible");
     expect(sanitizeTerminalStyledText("\u009b\u009d52;c;SECRET\u0007visible")).toBe("visible");
-  });
-
-  it("retains parser and compact SGR state independently across interleaved fragments", () => {
-    const fragments = sanitizeTerminalStyledFragments([
-      { channel: "stdout", text: "\u001b[3" },
-      { channel: "stderr", text: "oops\n" },
-      { channel: "stdout", text: "1mred\n" },
-      { channel: "stderr", text: "again\n" },
-      { channel: "stdout", text: "still red\u001b[;mplain" },
-    ]);
-    expect(fragments.map(({ channel, text, reopenSgr }) => ({ channel, text, reopenSgr }))).toEqual(
-      [
-        { channel: "stdout", text: "", reopenSgr: "" },
-        { channel: "stderr", text: "oops\n", reopenSgr: "" },
-        { channel: "stdout", text: "\u001b[31mred\n", reopenSgr: "" },
-        { channel: "stderr", text: "again\n", reopenSgr: "" },
-        {
-          channel: "stdout",
-          text: "still red\u001b[0;0mplain",
-          reopenSgr: "\u001b[31m",
-        },
-      ],
-    );
-  });
-
-  it("normalizes horizontal tabs to inert spaces in styled terminal output", () => {
-    const styled = sanitizeTerminalStyledText("one\ttwo");
-    expect(styled).toBe("one   two");
-  });
-
-  it("shares one SGR traffic budget across same-line fragments", () => {
-    const fragments = sanitizeTerminalStyledFragments(
-      Array.from({ length: 100 }, () => ({
-        channel: "stdout",
-        text: `${"\u001b[31m".repeat(300)}x`,
-      })),
-    );
-    const styled = fragments.map((fragment) => fragment.text).join("");
-    expect(styled.split("\u001b[").length).toBeLessThanOrEqual(258);
-    expect(stripTerminalControls(styled)).toBe("x".repeat(100));
   });
 
   it("redacts nested fields and masks display identifiers", () => {

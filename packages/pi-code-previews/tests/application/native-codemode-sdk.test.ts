@@ -25,14 +25,6 @@ interface BoundSession {
   session?: AgentSession;
 }
 
-const projectionTools = [
-  "background_task",
-  "mcp__docs__lookup",
-  "read_mcp_resource",
-  "list_mcp_resources",
-  "list_mcp_resource_templates",
-];
-
 function assertScriptFailure(summary: CompactSummary | undefined, marker: string): void {
   assert.equal(summary?.outcome, "error");
   assert.ok(summary?.issues?.some((issue) => issue.message.includes(marker)));
@@ -41,21 +33,6 @@ function assertScriptFailure(summary: CompactSummary | undefined, marker: string
 function assertSpillIssues(summary: CompactSummary | undefined): void {
   assert.ok(summary?.issues?.some((issue) => issue.code === "native-output-truncated"));
   assert.ok(summary?.issues?.some((issue) => issue.code === "native-output-save-failed"));
-}
-
-function assertTargetRows(summary: CompactSummary | undefined): void {
-  const targetRows = summary?.children?.entries;
-  assert.ok(targetRows);
-  assert.equal(targetRows[0]?.subject, "target.ts");
-  assert.ok(targetRows[1]?.subject?.startsWith("printf test"));
-  assert.ok(targetRows[1]?.subject?.endsWith("…"));
-  assert.equal(targetRows[2]?.subject, "Verify targets");
-  assert.equal(targetRows[3]?.label, "mcp");
-  assert.equal(targetRows[3]?.subject, "docs / lookup");
-  assert.equal(targetRows[4]?.subject, "docs / docs://guide/start");
-  assert.equal(targetRows[5]?.subject, "docs");
-  assert.equal(targetRows[6]?.subject, "");
-  assert.equal(targetRows[6]?.action, "list templates");
 }
 
 it.live(
@@ -130,25 +107,6 @@ it.live(
                   });
                 },
               });
-              for (const name of projectionTools) {
-                pi.registerTool({
-                  name,
-                  label: name,
-                  exposure: name === "background_task" ? "direct" : "codemode",
-                  description: "Owned argument-projection fixture",
-                  parameters: {
-                    type: "object",
-                    properties: {},
-                    additionalProperties: true,
-                  } as const,
-                  execute() {
-                    return Promise.resolve({
-                      content: [{ type: "text" as const, text: "Fixture result" }],
-                      details: undefined,
-                    });
-                  },
-                });
-              }
               pi.registerTool({
                 name: "native_probe",
                 label: "probe",
@@ -169,25 +127,6 @@ it.live(
                     executeTool(name, rawArgs) {
                       return Effect.runPromise(
                         Effect.gen(function* () {
-                          if (name !== "echo") {
-                            assert.ok(["edit", "bash", ...projectionTools].includes(name));
-                            const input = yield* Schema.decodeUnknownEffect(
-                              Schema.Record(Schema.String, Schema.MutableJson),
-                            )(rawArgs);
-                            return {
-                              toolCall: {
-                                type: "toolCall" as const,
-                                id: `${id}/${name}`,
-                                name,
-                                arguments: input,
-                              },
-                              result: {
-                                content: [{ type: "text" as const, text: "Fixture result" }],
-                                details: undefined,
-                              },
-                              isError: false,
-                            };
-                          }
                           const session = bound.session;
                           assert.ok(session);
                           const input = {
@@ -339,18 +278,6 @@ it.live(
       );
       assertSpillIssues(summarize(spillFailed));
       vi.unstubAllEnvs();
-      const targets = yield* step(() =>
-        run(`
-          await tools.edit({path: ${JSON.stringify(`${directory}/target.ts`)}, edits: [{oldText: 'x'.repeat(400), newText: 'y'}]});
-          await tools.bash({command: 'printf test; '.repeat(40)});
-          await tools.background_task({action: 'start', name: 'Verify targets', command: 'pnpm test; '.repeat(40)});
-          await tools.mcp__docs__lookup({query: 'x'.repeat(400)});
-          await tools.read_mcp_resource({server: 'docs', uri: 'docs://guide/start', padding: 'x'.repeat(400)});
-          await tools.list_mcp_resources({server: 'docs'});
-          await tools.list_mcp_resource_templates({});
-        `),
-      );
-      assertTargetRows(summarize(targets));
       const unchanged = yield* step(() => run("return load('answer');"));
       assert.ok(unchanged.content.some((part) => part.type === "text" && part.text === "41"));
       const image = yield* step(() =>

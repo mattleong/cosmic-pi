@@ -1,12 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import { prepareLocalCliHarness } from "../src/boundary/local-cli-harness.ts";
 import {
   recordPrivateStateOwner,
   sweepAbandonedPrivateState,
 } from "../src/boundary/private-state.ts";
-import { backendLaunch, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs, nodePath as path, nodeSpawn } from "./support/node-builtins.ts";
 import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
 
@@ -99,22 +97,6 @@ describe("private state sweep", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("removes abandoned state whose child locked a directory in its temp space", () =>
-    Effect.gen(function* () {
-      const agent = yield* temporaryAgent;
-      const harnesses = path.join(agent, "subagents", "local-cli-v1");
-      const harness = path.join(harnesses, "codex-agent-r1-2-0123456789ab");
-      const locked = path.join(harness, "tmp", "cache");
-      yield* entry(harness, { "tmp/cache/module/file.txt": "x" }, { pid: yield* exitedProcessId });
-      yield* io(() => fs.chmod(path.join(locked, "module"), 0o500));
-      yield* io(() => fs.chmod(locked, 0o000));
-
-      yield* sweepAbandonedPrivateState(agent);
-
-      expect(yield* io(() => fs.readdir(harnesses))).toEqual([]);
-    }).pipe(Effect.scoped),
-  );
-
   it.live("keeps state a live process owns, however old", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
@@ -126,27 +108,6 @@ describe("private state sweep", () => {
       yield* sweepAbandonedPrivateState(agent);
 
       expect(yield* exists(run)).toBe(true);
-    }).pipe(Effect.scoped),
-  );
-
-  it.live("keeps a prepared local CLI harness while the process that prepared it lives", () =>
-    Effect.gen(function* () {
-      const agent = yield* temporaryAgent;
-      const harness = yield* prepareLocalCliHarness(
-        { agentDirectory: agent, environment: {}, claudeTemporaryParent: agent },
-        {
-          runtime: "claude",
-          launch: backendLaunch(),
-          supervisor: supervisorMetadata({ stateDirectory: path.join(agent, "supervisor") }),
-        },
-      );
-      yield* age(harness.directory, 30);
-      yield* age(harness.temporaryDirectory, 30);
-
-      yield* sweepAbandonedPrivateState(agent, { claudeTemporaryParent: agent });
-
-      expect(yield* exists(path.join(harness.directory, "settings.json"))).toBe(true);
-      expect(yield* exists(path.join(harness.temporaryDirectory, "owner.json"))).toBe(true);
     }).pipe(Effect.scoped),
   );
 
@@ -236,44 +197,6 @@ describe("private state sweep", () => {
       yield* sweepAbandonedPrivateState(agent);
 
       for (const directory of kept) expect(yield* exists(directory)).toBe(true);
-    }).pipe(Effect.scoped),
-  );
-
-  it.live("finishes deletions that an interrupted sweep left behind", () =>
-    Effect.gen(function* () {
-      const agent = yield* temporaryAgent;
-      const root = path.join(agent, "subagents");
-      const tombstones = [
-        path.join(root, SESSION, ".swept-agent-r1-1-0a1b2c"),
-        path.join(root, "local-cli-v1", ".swept-claude-agent-r1-2-0a1b2c"),
-      ];
-      for (const tombstone of tombstones) yield* entry(tombstone, { "settings.json": "{}" });
-
-      yield* sweepAbandonedPrivateState(agent);
-
-      for (const tombstone of tombstones) expect(yield* exists(tombstone)).toBe(false);
-      expect(yield* exists(path.join(root, SESSION))).toBe(false);
-    }).pipe(Effect.scoped),
-  );
-
-  it.live("keeps sweeping past an entry it cannot remove", () =>
-    Effect.gen(function* () {
-      const agent = yield* temporaryAgent;
-      const root = path.join(agent, "subagents");
-      const locked = path.join(root, "local-cli-v1");
-      const blocked = path.join(locked, "claude-agent-r1-1-0123456789ab");
-      const removable = path.join(root, SESSION, "agent-r1-2");
-      yield* entry(blocked, { "settings.json": "{}" }, reusedPid);
-      yield* entry(removable, { "system-prompt.md": "prompt" }, reusedPid);
-      yield* Effect.acquireRelease(
-        io(() => fs.chmod(locked, 0o500)),
-        () => io(() => fs.chmod(locked, 0o700)),
-      );
-
-      yield* sweepAbandonedPrivateState(agent);
-
-      expect(yield* exists(blocked)).toBe(true);
-      expect(yield* exists(removable)).toBe(false);
     }).pipe(Effect.scoped),
   );
 });

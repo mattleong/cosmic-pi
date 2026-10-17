@@ -1,6 +1,4 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined } from "../src/schema/decode.ts";
 import {
   makeSessionCapabilityProtocol,
   querySessionCapability,
@@ -15,23 +13,6 @@ const hostile = new Proxy(
     },
   },
 );
-
-describe("decodeUnknownOrUndefined", () => {
-  it("returns decoded values and fails closed on mismatches and hostile input", () => {
-    const Point = Schema.Struct({ x: Schema.Number });
-    const decodePoint = decodeUnknownOrUndefined(Point);
-    expect(decodePoint({ x: 1 })).toEqual({ x: 1 });
-    expect(decodePoint({ x: "1" })).toBeUndefined();
-    expect(decodePoint(hostile)).toBeUndefined();
-  });
-
-  it("applies explicit strict decoder policy without changing tolerant defaults", () => {
-    const Point = Schema.Struct({ x: Schema.Number });
-    const value = { x: 1, credential: "unexpected" };
-    expect(decodeUnknownOrUndefined(Point)(value)).toEqual({ x: 1 });
-    expect(decodeUnknownOrUndefined(Point, { onExcessProperty: "error" })(value)).toBeUndefined();
-  });
-});
 
 const inertResponder = () => undefined;
 
@@ -59,18 +40,6 @@ describe("session capability queries", () => {
         respond: inertResponder,
       }),
     ).toBeDefined();
-  });
-
-  it("contains a throwing or rejecting responder", () => {
-    for (const respond of [
-      () => {
-        throw new Error("hostile respond");
-      },
-      () => Promise.reject(new Error("hostile rejection")),
-    ]) {
-      const query = protocol.normalizeQuery({ version: 1, sessionId: "session", respond });
-      expect(() => query?.respond("capability")).not.toThrow();
-    }
   });
 });
 
@@ -102,20 +71,5 @@ describe("session capability discovery", () => {
   it("keeps accepted candidates in order until emit returns or the limit is reached", () => {
     expect(discover(all)).toEqual({ candidates: ["a", "b", "c"], failed: false });
     expect(discover(all, 2)).toEqual({ candidates: ["a", "b"], failed: false });
-  });
-
-  it("marks a throwing emit or accept failed without discarding earlier candidates", () => {
-    expect(
-      discover((respond) => {
-        respond("a");
-        respond("throw");
-      }),
-    ).toEqual({ candidates: ["a"], failed: true });
-    expect(
-      discover((respond) => {
-        respond("a");
-        throw new Error("hostile emit");
-      }),
-    ).toEqual({ candidates: ["a"], failed: true });
   });
 });

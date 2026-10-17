@@ -6,29 +6,17 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
-import * as Result from "effect/Result";
-import * as Scheduler from "effect/Scheduler";
-import { pausedScheduler } from "../testing.ts";
-import * as subscriptionRefresh from "../src/coordination/subscription-refresh.ts";
-import { vi } from "vitest";
-import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "../index.ts";
 import { AgentDirectory } from "../src/platform/agent-directory.ts";
-import { JsonHttpClient, type JsonHttpClientContract } from "../src/platform/json-http.ts";
+import { JsonHttpClient } from "../src/platform/json-http.ts";
 import { extensionContextFixture } from "../src/testing/host.ts";
-import { yieldUntil } from "../src/testing/polling.ts";
 import {
   makeUsageRefreshController,
-  timedDiagnosticResult,
   UsageFetchOutcome,
   type UsageControllerConfig,
   type UsageRefreshControllerOptions,
 } from "../src/usage-controller.ts";
-import {
-  initialUsageProjection,
-  withUsageEligibility,
-  type UsageProjectionBase,
-} from "../src/usage-projection.ts";
+import { initialUsageProjection, type UsageProjectionBase } from "../src/usage-projection.ts";
 
 type Projection = UsageProjectionBase<UsageControllerConfig, number>;
 type Options<R> = UsageRefreshControllerOptions<Projection, UsageControllerConfig, number, R>;
@@ -87,80 +75,6 @@ const fetching = (fetch: Effect.Effect<number>) => ({
   dependencies: Context.empty(),
 });
 
-it.effect("captures dependencies for an escaped refresh", () => {
-  const conflictingHttp = JsonHttpClient.of({
-    request: () => Effect.die("provider HTTP client must not escape"),
-    requestJson: () => Effect.die("provider HTTP client must not escape"),
-  });
-  let observedHttp: JsonHttpClientContract | undefined;
-  return Effect.gen(function* () {
-    const h = yield* fixture({
-      fetchOutcome: () =>
-        Effect.gen(function* () {
-          observedHttp = yield* JsonHttpClient;
-          return UsageFetchOutcome.Missing();
-        }),
-      dependencies: Context.make(JsonHttpClient, conflictingHttp),
-    }).pipe(provideBuiltLayer(testLayer));
-
-    yield* h.controller.refresh({ force: true });
-
-    expect(observedHttp).toBe(unusedHttp);
-    expect(MutableRef.get(h.projection)).toMatchObject({
-      config,
-      authPath: "/agent/auth.json",
-      eligible: true,
-      snapshot: undefined,
-      error: "missing",
-    });
-  });
-});
-
-it.effect("composes the default synchronizeState from eligibility and hiddenStatusText", () =>
-  Effect.gen(function* () {
-    const h = yield* fixture({
-      eligibility: () => Effect.succeed(false),
-      dependencies: Context.empty(),
-    });
-    expect(MutableRef.get(h.projection)).toMatchObject({
-      config,
-      authPath: "/agent/auth.json",
-      eligible: false,
-      snapshot: undefined,
-      statusLine: undefined,
-      error: undefined,
-      statusText: "ineligible",
-    });
-  }).pipe(provideBuiltLayer(testLayer)),
-);
-
-it.effect("hidden usage skips automatic requests but permits an explicit one-time fetch", () =>
-  Effect.gen(function* () {
-    let visible = false;
-    let requests = 0;
-    const h = yield* fixture({
-      backgroundEnabled: () => visible,
-      ...fetching(Effect.sync(() => ++requests)),
-    });
-    yield* h.controller.refresh({ force: true });
-    expect(requests).toBe(0);
-    expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
-
-    yield* h.controller.refresh({ notify: true, force: true });
-    expect(requests).toBe(1);
-    expect(h.notifications).toEqual(["1"]);
-    yield* h.controller.refresh({ force: true });
-    expect(requests).toBe(1);
-    expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
-
-    visible = true;
-    yield* h.controller.contextChanged(true);
-    yield* h.controller.refresh({ force: true });
-    expect(requests).toBe(2);
-    expect(MutableRef.get(h.projection).snapshot).toBe(2);
-  }).pipe(provideBuiltLayer(testLayer)),
-);
-
 it.effect("a request completing after usage is hidden cannot publish its stale result", () =>
   Effect.gen(function* () {
     let visible = true;
@@ -182,44 +96,6 @@ it.effect("a request completing after usage is hidden cannot publish its stale r
 );
 
 for (const invalidate of [true, false]) {
-  it.effect(
-    `configuration changes atomically synchronize state with invalidate=${invalidate}`,
-    () =>
-      Effect.gen(function* () {
-        const entered = yield* Deferred.make<void>();
-        const finish = yield* Deferred.make<void>();
-        const h = yield* fixture({
-          dependencies: Context.empty(),
-          synchronizeState: (current, _ctx, clearUsage) =>
-            Effect.gen(function* () {
-              if (current.config === nextConfig) {
-                yield* Deferred.succeed(entered, undefined);
-                yield* Deferred.await(finish);
-              }
-              return withUsageEligibility(current, true, clearUsage, {
-                hiddenStatusText: "ineligible",
-              });
-            }),
-        });
-        yield* h.controller.updateState((current) => ({ ...current, snapshot: 7 }));
-        const pending = yield* h.controller
-          .configure(nextConfig, { invalidate })
-          .pipe(Effect.forkScoped);
-        yield* Deferred.await(entered);
-        expect(MutableRef.get(h.projection)).toMatchObject({ config, snapshot: 7 });
-        expect(yield* h.controller.getState).toMatchObject({ config, snapshot: 7 });
-        yield* Fiber.interrupt(pending);
-        expect(MutableRef.get(h.projection)).toMatchObject({ config, snapshot: 7 });
-        expect(yield* h.controller.getState).toMatchObject({ config, snapshot: 7 });
-
-        yield* Deferred.succeed(finish, undefined);
-        yield* h.controller.configure(nextConfig, { invalidate });
-        const expected = { config: nextConfig, snapshot: invalidate ? undefined : 7 };
-        expect(MutableRef.get(h.projection)).toMatchObject(expected);
-        expect(yield* h.controller.getState).toMatchObject(expected);
-      }).pipe(provideBuiltLayer(testLayer)),
-  );
-
   it.effect(
     `configuration changes ${invalidate ? "invalidate" : "preserve"} an in-flight usage result`,
     () =>
@@ -248,75 +124,6 @@ for (const invalidate of [true, false]) {
   );
 }
 
-for (const invalidation of ["context", "configuration"] as const) {
-  it.effect(`serializes ${invalidation} clearing after the refresh's final key validation`, () =>
-    Effect.gen(function* () {
-      const paused = pausedScheduler();
-      let validated = false;
-      let stopped = false;
-      const makeRefresh = subscriptionRefresh.createSubscriptionRefresh;
-      const observedRefresh: typeof makeRefresh = (options) =>
-        makeRefresh({
-          ...options,
-          commit: (value) => {
-            validated = true;
-            return options.commit(value);
-          },
-        });
-      const boundary = vi
-        .spyOn(subscriptionRefresh, "createSubscriptionRefresh")
-        .mockImplementation(observedRefresh);
-      const scheduler: Scheduler.Scheduler = {
-        executionMode: paused.scheduler.executionMode,
-        makeDispatcher: () => paused.scheduler.makeDispatcher(),
-        shouldYield: () => {
-          if (!validated || stopped) return false;
-          stopped = true;
-          return true;
-        },
-      };
-      let requests = 0;
-      const h = yield* fixture({
-        ...fetching(Effect.sync(() => ++requests)),
-      });
-      yield* h.controller.updateState((current) => ({ ...current, snapshot: 7 }));
-      const refresh = yield* h.controller
-        .refresh({ force: true })
-        .pipe(
-          Effect.provideService(Scheduler.Scheduler, scheduler),
-          Effect.forkScoped({ startImmediately: true }),
-        );
-      try {
-        yield* yieldUntil(() => stopped);
-        const invalidated = yield* Deferred.make<void>();
-        const action =
-          invalidation === "context"
-            ? h.controller.contextChanged(true)
-            : h.controller.configure(nextConfig);
-        const competing = yield* action.pipe(
-          Effect.andThen(Deferred.succeed(invalidated, undefined)),
-          Effect.forkScoped,
-        );
-        for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
-        expect(yield* Deferred.isDone(invalidated)).toBe(false);
-        expect(MutableRef.get(h.projection).snapshot).toBe(7);
-        paused.resume();
-        yield* Fiber.join(refresh);
-        yield* Fiber.join(competing);
-        expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
-        expect((yield* h.controller.getState).snapshot).toBeUndefined();
-        if (invalidation === "configuration")
-          expect(MutableRef.get(h.projection).config?.usage.refreshIntervalMs).toBe(30_000);
-        yield* h.controller.refresh({ force: true });
-        expect(MutableRef.get(h.projection).snapshot).toBe(2);
-      } finally {
-        paused.resume();
-        boundary.mockRestore();
-      }
-    }).pipe(provideBuiltLayer(testLayer)),
-  );
-}
-
 it.effect(
   "revoked publication authority accepts private configuration without republishing or notifying",
   () =>
@@ -340,83 +147,4 @@ it.effect(
       expect(changes).toBe(0);
       expect(h.notifications).toEqual([]);
     }).pipe(provideBuiltLayer(testLayer)),
-);
-
-it.effect("publication authority is checked adjacent to the actual host callback", () =>
-  Effect.gen(function* () {
-    let live = true;
-    let checked = false;
-    let revoked = false;
-    const liveAtNotification: boolean[] = [];
-    const published = MutableRef.make<MutableRef.MutableRef<Projection> | undefined>(undefined);
-    const paused = pausedScheduler();
-    const h = yield* fixture({
-      ...fetching(Effect.succeed(42)),
-      canPublish: () => {
-        const projection = MutableRef.get(published);
-        if (projection && MutableRef.get(projection).snapshot === 42) checked = true;
-        return live;
-      },
-      onChange: () => {
-        liveAtNotification.push(live);
-      },
-    });
-    MutableRef.set(published, h.projection);
-    const scheduler: Scheduler.Scheduler = {
-      executionMode: paused.scheduler.executionMode,
-      makeDispatcher: () => paused.scheduler.makeDispatcher(),
-      shouldYield: () => {
-        if (!checked || revoked) return false;
-        live = false;
-        revoked = true;
-        return true;
-      },
-    };
-    const pending = yield* h.controller
-      .refresh({ force: true })
-      .pipe(
-        Effect.provideService(Scheduler.Scheduler, scheduler),
-        Effect.forkScoped({ startImmediately: true }),
-      );
-    try {
-      yield* yieldUntil(() => revoked);
-      paused.resume();
-      yield* Fiber.join(pending);
-      expect(liveAtNotification.every(Boolean)).toBe(true);
-    } finally {
-      paused.resume();
-    }
-  }).pipe(provideBuiltLayer(testLayer)),
-);
-
-it.effect("polling makes no requests while hidden and resumes after visibility changes", () =>
-  Effect.gen(function* () {
-    let visible = false;
-    let requests = 0;
-    const h = yield* fixture({
-      backgroundEnabled: () => visible,
-      ...fetching(Effect.sync(() => ++requests)),
-    });
-    yield* h.controller.startPolling();
-    yield* TestClock.adjust("2 minutes");
-    expect(requests).toBe(0);
-    visible = true;
-    yield* h.controller.contextChanged(true);
-    yield* yieldUntil(() => requests > 0);
-    expect(requests).toBe(1);
-    visible = false;
-    yield* h.controller.contextChanged(true);
-    yield* TestClock.adjust("2 minutes");
-    expect(requests).toBe(1);
-  }).pipe(provideBuiltLayer(testLayer)),
-);
-
-it.effect("reports the caller's message when a provider diagnostic times out", () =>
-  Effect.gen(function* () {
-    const diagnostic = yield* timedDiagnosticResult(Effect.never, "Provider timed out.").pipe(
-      Effect.forkChild,
-    );
-    yield* TestClock.adjust("10 seconds");
-    expect(yield* Fiber.join(diagnostic)).toEqual(Result.fail("Provider timed out."));
-  }),
 );

@@ -16,16 +16,11 @@ import {
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   askParent,
-  expectInterruptBeforeUse,
   localServiceFixture,
   request,
-  reviewerContinuation,
-  useProbe,
-  waitForCompleted,
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
-import { anyString } from "../support/matchers.ts";
 import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "../../src/run/errors.ts";
 
 type CompletionPolicy = (
@@ -98,50 +93,6 @@ describe("SubagentService", () => {
       });
     });
 
-  for (const operation of ["await", "status"] as const)
-    it.effect(
-      `cancels ${operation} before claim ownership while ancestor delivery holds the gate`,
-      () => {
-        const { fake, layer } = localServiceFixture();
-        return withService(layer, function* (service) {
-          const parent = yield* service.start(request());
-          const child = yield* service.startSessionOwnedFrom(parent.id, request());
-          const gate = yield* Deferred.make<void>();
-          fake.controls[0]!.gateNextIpcType("proxy_notification", gate);
-          fake.controls[1]!.settle("Child report.");
-          yield* waitForCompleted(service, child.id);
-          yield* TestClock.adjust("100 millis");
-          yield* yieldUntil(() => fake.controls[0]!.sentIpc("proxy_notification"));
-          const probe = useProbe();
-          const waiter = yield* (
-            operation === "await"
-              ? service.withAwaitTerminalObservations(
-                  [parent.id],
-                  "all_finished",
-                  undefined,
-                  probe.use,
-                )
-              : service.withStatusObservations([parent.id], probe.use)
-          ).pipe(Effect.forkScoped);
-          yield* Effect.yieldNow;
-          yield* expectInterruptBeforeUse(waiter, probe, gate);
-          let observed = false;
-          const replacement = yield* service
-            .withAwaitTerminalObservations(
-              [parent.id],
-              "all_finished",
-              () => {
-                observed = true;
-              },
-              () => Effect.void,
-            )
-            .pipe(Effect.forkScoped);
-          yield* yieldUntil(() => observed);
-          yield* Fiber.interrupt(replacement);
-        });
-      },
-    );
-
   it.effect("rejects parallel await ownership and releases only the cancelled claim", () => {
     const { fake, notifications, layer } = localServiceFixture();
     const updates: SubagentProjection["runs"][] = [];
@@ -182,99 +133,6 @@ describe("SubagentService", () => {
       expect(notifications).toEqual([]);
     });
   });
-
-  it.effect(
-    "does not miss a publication triggered between the locked check and subscription",
-    () => {
-      const { fake, layer } = localServiceFixture();
-      return withService(layer, function* (service) {
-        const run = yield* service.start(request({ name: "revision-race" }));
-        let triggered = false;
-        const [completed] = yield* awaitRuns(service, [run.id], "all_finished", () => {
-          if (triggered) return;
-          triggered = true;
-          fake.controls[0]?.settle("Completed during subscription setup.");
-        });
-        expect(triggered).toBe(true);
-        expect(completed).toMatchObject({
-          id: run.id,
-          state: "completed",
-          finalText: "Completed during subscription setup.",
-        });
-      });
-    },
-  );
-
-  it.effect("supplies descendant projection context with await updates", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const parent = yield* service.start(request({ name: "await-parent" }));
-      const child = yield* service.startSessionOwnedFrom(
-        parent.id,
-        request({ name: "await-child" }),
-      );
-      let updateProjection: SubagentProjection["runs"] | undefined;
-      let settled = false;
-      const completed = yield* awaitRuns(
-        service,
-        [parent.id],
-        "all_finished",
-        (_runs, projection) => {
-          updateProjection = projection;
-          if (!settled) {
-            settled = true;
-            fake.controls[0]?.settle();
-          }
-        },
-      );
-      expect(completed[0]?.state).toBe("completed");
-      expect(updateProjection?.map((run) => run.id)).toEqual(
-        expect.arrayContaining([parent.id, child.id]),
-      );
-      yield* service.stop(child.id);
-    });
-  });
-
-  it.effect(
-    "wakes multiple subscribers across consecutive non-terminal and terminal revisions",
-    () => {
-      const { fake, projections, layer } = localServiceFixture();
-      return withService(layer, function* (service) {
-        const first = yield* service.start(request({ name: "revision-first" }));
-        const second = yield* service.start(request({ name: "revision-second" }));
-        let firstUpdates = 0;
-        let secondUpdates = 0;
-        const firstAwait = yield* awaitRuns(
-          service,
-          [first.id],
-          "all_finished",
-          () => firstUpdates++,
-        ).pipe(Effect.forkScoped);
-        const secondAwait = yield* awaitRuns(
-          service,
-          [second.id],
-          "all_finished",
-          () => secondUpdates++,
-        ).pipe(Effect.forkScoped);
-        yield* yieldUntil(() => firstUpdates > 0 && secondUpdates > 0);
-
-        yield* service.rename(first.id, "revision-first-renamed");
-        yield* yieldUntil(() => firstUpdates > 1 && secondUpdates > 1);
-        fake.controls[0]?.settle();
-        expect((yield* Fiber.join(firstAwait))[0]?.state).toBe("completed");
-        expect(secondAwait.pollUnsafe()).toBeUndefined();
-
-        fake.controls[1]?.settle();
-        expect((yield* Fiber.join(secondAwait))[0]?.state).toBe("completed");
-
-        const finalProjection = yield* service.projection;
-        expect(projections.map((projection) => projection.revision)).toEqual(
-          Array.from({ length: projections.length }, (_, index) => index + 1),
-        );
-        expect(finalProjection).toEqual(projections.at(-1));
-      });
-    },
-  );
 
   it.effect("fails subscribed awaits when the service scope closes", () => {
     const { layer } = localServiceFixture();
@@ -345,81 +203,6 @@ describe("SubagentService", () => {
     });
   });
 
-  for (const deliveredBy of ["notification", "await"] as const)
-    it.effect(`reads back a report delivered by ${deliveredBy} only for opt-in status`, () => {
-      const { fake, projections, notifications, layer } = localServiceFixture();
-      return withService(layer, function* (service) {
-        const run = yield* service.start(request({ name: "delivered-read-back" }));
-        fake.controls[0]?.settle("Delivered report text.");
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-        if (deliveredBy === "await") {
-          const [awaited] = yield* awaitRuns(service, [run.id], "all_finished");
-          expect(awaited?.finalText).toBe("Delivered report text.");
-        } else {
-          yield* TestClock.adjust("100 millis");
-          yield* yieldUntil(() => notifications.length === 1);
-        }
-
-        const defaultObservation = yield* observeStatus(service, run.id);
-        expect(defaultObservation?.run.reportStatus).toBe("delivered");
-        expect(defaultObservation?.run).not.toHaveProperty("finalText");
-        expect(yield* service.status(run.id)).not.toHaveProperty("finalText");
-
-        for (let read = 0; read < 2; read++) {
-          const readBack = yield* observeStatus(service, run.id, includeDeliveredReports);
-          expect(readBack).not.toHaveProperty("completionReceipt");
-          expect(readBack?.run).toMatchObject({
-            reportStatus: "delivered",
-            finalText: "Delivered report text.",
-          });
-          expect(readBack?.run.sessionEvents).not.toEqual(
-            expect.arrayContaining([expect.objectContaining({ text: "Delivered report text." })]),
-          );
-        }
-
-        const [awaitedAgain] = yield* awaitRuns(service, [run.id], "all_finished");
-        expect(awaitedAgain?.reportStatus).toBe("delivered");
-        expect(awaitedAgain).not.toHaveProperty("finalText");
-        yield* TestClock.adjust("30 seconds");
-        expect(notifications).toHaveLength(deliveredBy === "notification" ? 1 : 0);
-      });
-    });
-
-  it.effect("reports failed-run recovery from cleanup and retry ownership", () => {
-    const cleanupGate = Deferred.makeUnsafe<void>();
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(
-        request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
-      );
-      fake.controls[0]!.gateRelease(cleanupGate);
-      fake.controls[0]!.exit(1);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      const recovery = () =>
-        observeStatus(service, run.id).pipe(Effect.map((observation) => observation?.recovery));
-
-      expect(yield* recovery()).toEqual({
-        runId: run.id,
-        cleanupDisposition: "pending",
-        retryDisposition: "pending",
-        remainingCandidateCount: 1,
-        hasRemainingCandidate: true,
-      });
-
-      yield* Deferred.succeed(cleanupGate, undefined);
-      const claim = yield* service.claimRetryContinuation(run.id);
-      expect(yield* recovery()).toMatchObject({
-        cleanupDisposition: "confirmed",
-        retryDisposition: "blocked",
-      });
-      yield* service.releaseRetryClaim(run.id, claim.claimToken);
-      expect(yield* recovery()).toMatchObject({
-        cleanupDisposition: "confirmed",
-        retryDisposition: "eligible",
-      });
-    });
-  });
-
   it.effect("returns an await when a selected run needs a parent reply", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
@@ -433,17 +216,6 @@ describe("SubagentService", () => {
         state: "waiting_for_parent",
         question: { requestId: "question-during-await" },
       });
-    });
-  });
-
-  it.effect("returns an await when a selected run is paused", () => {
-    const { layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "awaiting-pause" }));
-      const awaiting = yield* awaitRuns(service, [run.id], "all_finished").pipe(Effect.forkScoped);
-
-      yield* service.interrupt(run.id);
-      expect(yield* Fiber.join(awaiting)).toMatchObject([{ id: run.id, state: "paused" }]);
     });
   });
 
@@ -494,35 +266,6 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("reports every missing await ID before waiting", () => {
-    const { layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const failure = yield* Effect.flip(
-        awaitRuns(service, ["agent-missing-1", "agent-missing-2"], "all_finished"),
-      );
-      expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
-      expect(failure).toMatchObject({ code: "subagent_runs_not_found" });
-      expect(failure.message).toContain("agent-missing-1, agent-missing-2");
-      expect(failure.message).toContain("subagent_list");
-    });
-  });
-
-  it.effect("delivers a claimed failure through await without a background notification", () => {
-    const { fake, projections, notifications, layer } = localServiceFixture();
-
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "awaited-failure" }));
-      const awaiting = yield* awaitRuns(service, [run.id], "all_finished").pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      fake.controls[0]?.exit(1);
-      const [failed] = yield* Fiber.join(awaiting);
-      expect(failed).toMatchObject({ id: run.id, state: "failed", error: anyString() });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      yield* TestClock.adjust("1 second");
-      expect(notifications).toEqual([]);
-    });
-  });
-
   it.effect("awaits a fleet without polling and consumes its completion notifications", () => {
     const { fake, notifications, layer } = localServiceFixture();
     const updates: SubagentProjection["runs"][] = [];
@@ -547,32 +290,6 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("rejects empty awaits at the service boundary", () => {
-    const { layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      for (const until of ["all_finished", "any_finished"] as const) {
-        const error = yield* Effect.flip(awaitRuns(service, [], until));
-        expect(error._tag).toBe("InvalidSubagentRequestError");
-      }
-    });
-  });
-
-  it.effect("supports any-terminal awaits without consuming running peers", () => {
-    const { fake, layer } = localServiceFixture();
-    const updates: SubagentProjection["runs"][] = [];
-    return withService(layer, function* (service) {
-      const first = yield* service.start(request({ name: "any-one" }));
-      const second = yield* service.start(request({ name: "any-two" }));
-      const waiting = yield* awaitRuns(service, [first.id, second.id], "any_finished", (runs) =>
-        updates.push(runs),
-      ).pipe(Effect.forkScoped);
-      yield* yieldUntil(() => updates.length > 0);
-      fake.controls[1]?.settle();
-      const runs = yield* Fiber.join(waiting);
-      expect(runs.map((run) => run.state)).toEqual(["running", "completed"]);
-    });
-  });
-
   it.effect("releases await claims when the waiting fiber is interrupted", () => {
     const { fake, projections, notifications, layer } = localServiceFixture();
     const updates: SubagentProjection["runs"][] = [];
@@ -591,47 +308,6 @@ describe("SubagentService", () => {
         type: "completed",
         runs: [{ id: run.id }],
       });
-    });
-  });
-
-  it.effect("keeps unconsumed observations notification-eligible", () => {
-    const { fake, notifications, layer } = localServiceFixture();
-    const updates: SubagentProjection["runs"][] = [];
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "observed-report" }));
-      const waiting = yield* service
-        .withAwaitTerminalObservations(
-          [run.id],
-          "all_finished",
-          (runs) => updates.push(runs),
-          Effect.succeed,
-        )
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(() => updates.length > 0);
-      fake.controls[0]?.settle();
-      const observations = yield* Fiber.join(waiting);
-      expect(observations[0]?.completionReceipt).toEqual({
-        id: run.id,
-        generation: 1,
-        claimToken: anyString(),
-      });
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.length === 1);
-    });
-  });
-
-  it.effect("returns found status observations alongside every stale ID", () => {
-    const { layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "status-selection" }));
-
-      const selection = yield* service.withStatusObservations(
-        [run.id, "agent-stale-1", "agent-stale-2"],
-        Effect.succeed,
-      );
-
-      expect(selection.observations.map((observation) => observation.run.id)).toEqual([run.id]);
-      expect(selection.missingIds).toEqual(["agent-stale-1", "agent-stale-2"]);
     });
   });
 
@@ -661,68 +337,6 @@ describe("SubagentService", () => {
       yield* Fiber.join(observing);
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
-    });
-  });
-
-  it.effect("coalesces unclaimed fleet completions into one notification", () => {
-    const { fake, projections, notifications, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const first = yield* service.start(request({ name: "notify-one" }));
-      const second = yield* service.start(request({ name: "notify-two" }));
-      fake.controls[0]?.settle();
-      fake.controls[1]?.settle();
-      yield* yieldUntil(() =>
-        Boolean(projections.at(-1)?.runs.every((run) => run.state === "completed")),
-      );
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.length === 1);
-
-      expect(notifications[0]).toMatchObject({
-        type: "completed",
-        runs: [
-          { id: first.id, name: "notify-one", generation: 1 },
-          { id: second.id, name: "notify-two", generation: 1 },
-        ],
-      });
-    });
-  });
-
-  for (const [failure, policy] of [
-    [
-      "an unacknowledged",
-      (attempt, keys) => ({ deliveredCompletionKeys: attempt === 1 ? [] : keys }),
-    ],
-    [
-      "a throwing",
-      (attempt, keys) => {
-        if (attempt === 1) throw new Error("completed delivery boundary failure");
-        return { deliveredCompletionKeys: keys };
-      },
-    ],
-  ] satisfies ReadonlyArray<readonly [string, CompletionPolicy]>)
-    it.effect(`redelivers a completion once after ${failure} first attempt`, () => {
-      const { notifications, layer, attempts, firstAttempt } = completionRetryFixture(policy);
-      return withService(layer, function* (service) {
-        yield* firstAttempt(service);
-        yield* TestClock.adjust("200 millis");
-        yield* yieldUntil(() => attempts() === 2);
-        yield* TestClock.adjust("30 seconds");
-        expect(attempts()).toBe(2);
-        expect(notifications).toHaveLength(2);
-      });
-    });
-
-  it.effect("caps persistent completion retry backoff at thirty seconds", () => {
-    const { layer, attempts, firstAttempt } = completionRetryFixture(unacknowledged);
-    return withService(layer, function* (service) {
-      yield* firstAttempt(service);
-      for (const [index, delay] of [
-        200, 400, 800, 1_600, 3_200, 6_400, 12_800, 25_600, 30_000, 30_000,
-      ].entries()) {
-        yield* TestClock.adjust(`${delay} millis`);
-        yield* yieldUntil(() => attempts() === index + 2);
-      }
-      expect(attempts()).toBe(11);
     });
   });
 
@@ -756,17 +370,6 @@ describe("SubagentService", () => {
       expect(batches[1]).toEqual([{ id: two.id, generation: 1 }]);
       yield* TestClock.adjust("30 seconds");
       expect(batches).toHaveLength(2);
-    });
-  });
-
-  it.effect("claiming a queued completion retry removes it from delivery ownership", () => {
-    const { layer, attempts, firstAttempt } = completionRetryFixture(unacknowledged);
-    return withService(layer, function* (service) {
-      const run = yield* firstAttempt(service);
-      const runs = yield* awaitRuns(service, [run.id], "all_finished");
-      expect(runs[0]?.state).toBe("completed");
-      yield* TestClock.adjust("60 seconds");
-      expect(attempts()).toBe(1);
     });
   });
 

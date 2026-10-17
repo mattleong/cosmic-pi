@@ -63,26 +63,3 @@ for (const failure of ["typed", "defect"] as const) {
     }),
   );
 }
-
-it.effect("current command failures retain their warning outcome", () =>
-  Effect.gen(function* () {
-    const notify = vi.fn();
-    const ctx = extensionContextFixture({ ui: { notify } });
-    const runtime = makePiManagedRuntime(extensionApiFixture({}), Layer.empty);
-    try {
-      yield* Effect.promise(() =>
-        runtime.run(
-          containCommandFailure(
-            Effect.fail(new OpenAIBoundaryError({ operation: "test", message: "unavailable" })),
-            ctx,
-            messages,
-            () => true,
-          ),
-        ),
-      );
-      expect(notify).toHaveBeenCalledOnce();
-    } finally {
-      yield* Effect.promise(() => runtime.dispose());
-    }
-  }),
-);

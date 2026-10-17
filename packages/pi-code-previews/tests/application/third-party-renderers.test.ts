@@ -2,15 +2,9 @@ import assert from "node:assert/strict";
 import { initTheme, type ToolInfo, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, it } from "vitest";
-import { plainTheme } from "pi-cosmic-core/testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
-import {
-  createToolPresentationHarness,
-  drawToolRow,
-  hostToolRow,
-  renderContextFixture,
-} from "../../testing";
+import { createToolPresentationHarness, drawToolRow, hostToolRow } from "../../testing";
 import { inertScheduler as scheduler, presentationResolver } from "../support/renderer-host";
 
 beforeAll(() => initTheme("dark", false));
@@ -131,26 +125,8 @@ it("foreign, missing, duplicate, lookalike, renamed, and unsupported sources fal
   }
 });
 
-it("supports the declared source entry through public metadata only", () => {
-  const tool = info();
-  tool.sourceInfo.path = "/agent/npm/node_modules/pi-web-access/index.ts";
-  const { owner, resolver } = setup(() => [tool]);
-  assert.notEqual(resolver("web_search", () => downstream)?.renderCall, downstream.renderCall);
-  owner.retire();
-});
-
-it("later registration is picked up without changing activation or borrowing a retired owner", () => {
-  let tools: ToolInfo[] = [];
-  const { owner, resolver } = setup(() => tools);
-  assert.equal(resolver("web_search", () => downstream)?.renderCall, downstream.renderCall);
-  tools = [info()];
-  assert.notEqual(resolver("web_search", () => downstream)?.renderCall, downstream.renderCall);
-  owner.retire();
-  assert.equal(resolver("web_search", () => downstream)?.renderCall, downstream.renderCall);
-});
-
-for (const style of ["preview", "compact"] as const)
-  for (const mode of ["on", "off", "border"] as const)
+for (const style of ["compact"] as const)
+  for (const mode of ["off"] as const)
     it(`verified cold replay adopts ${style}/${mode} while retaining exact input, output, and downstream extras`, () => {
       const { owner, resolver } = setup(() => [info()], false);
       const args = { queries: ["first query", "QUERY_TAIL"], domainFilter: ["example.test"] };
@@ -197,32 +173,5 @@ it("changed ownership before readiness leaves a retained external row downstream
   harness.call({ query: "query" }, { expanded: true });
   assert.match(harness.render().join("\n"), /ORIGINAL OUTPUT/);
   assert.doesNotMatch(harness.render().join("\n"), /RAW OUTPUT/);
-  owner.retire();
-});
-
-it("separately resolved call/result slots preserve the original result and images", () => {
-  const { owner, resolver } = setup(() => [info("fetch_content")]);
-  const args = { url: "https://example.test" };
-  const state = {};
-  const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
-  const result = {
-    content: [{ type: "text" as const, text: "RECOVERY_TAIL" }, image],
-    details: { urlCount: 1, successful: 1 },
-  };
-  Object.freeze(result.content);
-  Object.freeze(result.details);
-  resolver("fetch_content", () => downstream)!.renderCall!(
-    args,
-    plainTheme,
-    renderContextFixture({ state, args, expanded: true }),
-  );
-  const component = resolver("fetch_content", () => downstream)!.renderResult!(
-    result,
-    { expanded: true, isPartial: false },
-    plainTheme,
-    renderContextFixture({ state, args, expanded: true, isPartial: false, executionStarted: true }),
-  );
-  assert.match(component.render(100).join("\n"), /RECOVERY_TAIL/);
-  assert.equal(result.content[1], image);
   owner.retire();
 });

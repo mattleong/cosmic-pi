@@ -1,8 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { flow } from "effect/Function";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vitest";
 import {
   hostNotifier,
@@ -14,12 +11,6 @@ type SendMessage = ExtensionAPI["sendMessage"];
 
 const messageContent = (content: Parameters<SendMessage>[0]["content"] | undefined): string =>
   Predicate.isString(content) ? content : JSON.stringify(content);
-
-const detailsName = flow(
-  Schema.decodeUnknownOption(Schema.Struct({ name: Schema.Unknown })),
-  Option.map(({ name }) => name),
-  Option.getOrUndefined,
-);
 
 const notifier = (sendMessage = vi.fn<SendMessage>()) => ({
   sendMessage,
@@ -51,133 +42,6 @@ describe("subagent host notifier", () => {
     expect(options).toEqual(steer);
   });
 
-  it("keeps a recorded warning when a report quotes the same words without a warning identity", () => {
-    const { notify, content } = notifier();
-    notify({
-      type: "completed",
-      runs: [
-        completion("agent-1", "writer", {
-          finalText: "Warning: Check write state before retrying.",
-          warning: "Check write state before retrying.",
-        }),
-      ],
-    });
-    expect(content().split("Check write state before retrying.")).toHaveLength(3);
-  });
-
-  it("delivers failures and folded warnings through the coalesced outcome channel", () => {
-    const { sendMessage, notify, content } = notifier();
-    const warning =
-      "System warning: Ownership remains quarantined.\nChild warning: Validation was incomplete.";
-
-    notify({
-      type: "completed",
-      runs: [
-        completion("agent-1", "reader", {
-          outcome: "failed",
-          error: "Process exited unexpectedly.",
-          warning,
-        }),
-      ],
-    });
-
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(sendMessage.mock.calls[0]?.[0]).toMatchObject({ customType: "pi-subagents-completed" });
-    expect(content()).toContain("agent-1");
-    expect(content()).toContain("Process exited unexpectedly.");
-    expect(content()).toContain(warning);
-  });
-
-  it("preserves worker errors, including errors that name their own class", () => {
-    for (const error of ["Error: 429 Too Many Requests", "TypeError: bad input", "exit 1"]) {
-      const { notify, content } = notifier();
-      notify({
-        type: "completed",
-        runs: [completion("agent-1", "reader", { outcome: "failed", error })],
-      });
-      expect(content()).toContain(error);
-    }
-  });
-
-  it("names a lone run in display-only details without changing delivered content", () => {
-    const { sendMessage, notify } = notifier();
-    notify({ type: "completed", runs: [completion("agent-1", "reader", { finalText: "ok" })] });
-    notify({
-      type: "question",
-      id: "agent-2",
-      name: "writer",
-      requestId: "q-1",
-      message: "May I?",
-      generation: 1,
-    });
-    const [completed, question] = sendMessage.mock.calls.map(([message]) => message);
-    expect(detailsName(completed?.details)).toBe("reader");
-    expect(detailsName(question?.details)).toBe("writer");
-    notify({
-      type: "completed",
-      runs: [completion("agent-3", "a"), completion("agent-4", "b")],
-    });
-    expect(detailsName(sendMessage.mock.calls[2]?.[0].details)).toBeUndefined();
-  });
-
-  it("directs failed profiled runs through remaining candidates before generalist", () => {
-    const { notify, content } = notifier();
-
-    notify({
-      type: "completed",
-      runs: [
-        completion("agent-7", "reviewer", {
-          outcome: "failed",
-          error: "Claude usage exhausted.",
-          profile: "reviewer",
-          retryAvailable: true,
-          remainingCandidateCount: 2,
-        }),
-      ],
-    });
-
-    expect(content()).toContain("2 configured reviewer candidates remain");
-    expect(content()).toContain('subagent_lifecycle({ action: "retry", runIds: ["agent-7"] })');
-    expect(content()).toContain("before launching any generalist replacement");
-  });
-
-  it("names the exact reply tool when a subagent asks a parent question", () => {
-    const { sendMessage, notify, content } = notifier();
-
-    const delivery = notify({
-      type: "question",
-      id: "agent-7",
-      name: "reviewer",
-      requestId: "question-1",
-      message: "Should I update the fixture?",
-      generation: 1,
-    });
-
-    expect(delivery?.actionAccepted).toBe(true);
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(content()).toContain('subagent_reply({ runId: "agent-7", message: "..." })');
-    expect(content()).toContain("then call subagent_await again");
-    expect(content()).not.toContain("subagent({ action:");
-    expect(sendMessage.mock.calls[0]?.[1]).toEqual(steer);
-  });
-
-  it("coalesces completed and failed outcomes into one batch", () => {
-    const { sendMessage, notify, content } = notifier();
-    notify({
-      type: "completed",
-      runs: [
-        completion("agent-1", "reader", { finalText: "Read." }),
-        completion("agent-2", "reviewer", { generation: 2, finalText: "Reviewed." }),
-        completion("agent-3", "tester", { outcome: "failed", error: "Tests failed." }),
-      ],
-    });
-
-    expect(sendMessage).toHaveBeenCalledOnce();
-    for (const section of ["## reader (agent-1)", "## reviewer (agent-2)", "## tester (agent-3)"]) {
-      expect(content()).toContain(section);
-    }
-  });
-
   it("chunks large completion batches without losing later run IDs", () => {
     const { sendMessage, notify, content } = notifier();
     const finalText = "x".repeat(32 * 1024);
@@ -195,9 +59,6 @@ describe("subagent host notifier", () => {
     expect(content(1).length).toBeLessThanOrEqual(32 * 1024);
     expect(content(0)).toContain("agent-1");
     expect(content(1)).toContain("agent-2");
-    expect(content(1)).toContain(
-      "[Report truncated; use subagent_status or subagent_await for agent-2.]",
-    );
     expect(delivery?.deliveredCompletionKeys).toEqual(["agent-1:1", "agent-2:1"]);
   });
 

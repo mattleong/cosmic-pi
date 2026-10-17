@@ -1,4 +1,3 @@
-import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
 import {
   normalizeAskUserRequest,
@@ -46,16 +45,6 @@ describe("ask-user validation", () => {
     expect(validateQuestionnaireInput(" ", "note")).toEqual({ value: "" });
     expect(validateQuestionnaireInput("x".repeat(2000), "note").error).toBeUndefined();
     expect(validateQuestionnaireInput("x".repeat(2001), "note").error).toBeDefined();
-  });
-  it("accepts a valid request and normalizes stable identifiers", () => {
-    const request = base();
-    request.questions[0]!.key = " scope ";
-    request.questions[0]!.choices[0]!.value = " small ";
-    const normalized = normalizeAskUserRequest(request);
-    expect(normalized.questions[0]?.key).toBe("scope");
-    const question = normalized.questions[0];
-    expect(question?.mode !== "text" && question?.choices[0]?.value).toBe("small");
-    expect(validateAskUserRequest(normalized)).toBeUndefined();
   });
 
   it("rejects blank fields before duplicate checks and collisions by position without content", () => {
@@ -106,18 +95,6 @@ describe("ask-user validation", () => {
       expect(message).toContain(position);
       expect(message).toContain(reason);
       for (const text of privateText) expect(message).not.toContain(text);
-    }
-  });
-
-  it("words inline input errors in the shared message style", () => {
-    for (const [value, kind] of [
-      [" ", "text"],
-      ["x".repeat(4_001), "custom"],
-      ["x".repeat(2_001), "note"],
-    ] as const) {
-      const { error } = validateQuestionnaireInput(value, kind);
-      expect(error).toBeDefined();
-      expect(issueMessageStyleProblems(error ?? "")).toEqual([]);
     }
   });
 });

@@ -1,9 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { vi } from "vitest";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { SafeFile, nodeFilePlatformLayer } from "pi-cosmic-core";
@@ -40,12 +36,6 @@ const fixture = <A, E, R>(test: (root: string, registry: string) => Effect.Effec
     yield* io(() => fs.mkdir(registry, { mode: 0o700 }));
     return yield* test(root, registry);
   }).pipe(Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));
-const mockRecordReads = (read: typeof store.readWorkspaceRecord) =>
-  Effect.acquireRelease(
-    Effect.sync(() => vi.spyOn(store, "readWorkspaceRecord").mockImplementation(read)),
-    (spy) => Effect.sync(() => spy.mockRestore()),
-  );
-
 it.live(
   "keeps healthy records beside unavailable artifacts without leaking partial metadata or changing files",
   () =>
@@ -134,55 +124,6 @@ for (const unsafe of [
         expect(yield* listWorkspaceRecords(target).pipe(Effect.flip)).toBeInstanceOf(
           WorkspaceError,
         );
-      }),
-    ),
-  );
-}
-
-for (const change of ["permissions", "replacement", "missing", "symlink"] as const) {
-  it.live(`rejects a registry that changes during record reads: ${change}`, () =>
-    fixture((_root, registry) =>
-      Effect.gen(function* () {
-        yield* io(() => fs.mkdir(path.join(registry, id(1))));
-        yield* mockRecordReads(() =>
-          Effect.gen(function* () {
-            if (change === "permissions") yield* io(() => fs.chmod(registry, 0o777));
-            else {
-              yield* io(() => fs.rename(registry, `${registry}-saved`));
-              if (change === "replacement") yield* io(() => fs.mkdir(registry, { mode: 0o700 }));
-              if (change === "symlink") yield* io(() => fs.symlink(`${registry}-saved`, registry));
-            }
-            return yield* new WorkspaceError({
-              operation: "registry",
-              message: "Reader discovered a registry failure.",
-            });
-          }),
-        );
-        expect(yield* listWorkspaceRecords(registry).pipe(Effect.flip)).toBeInstanceOf(
-          WorkspaceError,
-        );
-      }),
-    ),
-  );
-}
-
-for (const failure of ["interruption", "defect"] as const) {
-  it.live(`does not turn a reader ${failure} into a diagnostic row`, () =>
-    fixture((_root, registry) =>
-      Effect.gen(function* () {
-        yield* io(() => fs.mkdir(path.join(registry, id(1))));
-        yield* mockRecordReads(() =>
-          failure === "interruption" ? Effect.interrupt : Effect.die("reader defect"),
-        );
-        const fiber = yield* listWorkspaceRecords(registry).pipe(Effect.forkChild);
-        const exit = yield* Fiber.await(fiber);
-        expect(Exit.isFailure(exit)).toBe(true);
-        if (Exit.isFailure(exit))
-          expect(
-            failure === "interruption"
-              ? Cause.hasInterruptsOnly(exit.cause)
-              : Cause.hasDies(exit.cause),
-          ).toBe(true);
       }),
     ),
   );

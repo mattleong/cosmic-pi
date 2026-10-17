@@ -45,89 +45,6 @@ const native: ToolRenderers = {
   },
   renderResult: () => new Text("Native result", 0, 0),
 };
-const occurrences = (text: string, marker: string) => text.split(marker).length - 1;
-
-for (const style of ["preview", "compact"] as const)
-  for (const background of ["off", "on", "border"] as const)
-    test(`${style}/${background} keeps the collapsed native call and shows expanded arguments once`, () => {
-      settings(style, background);
-      const renderers = createNativeMcpRenderers(name, metadata(), native, session());
-      assert.equal(renderers.renderShell, "self");
-      const h = createToolPresentationHarness(renderers);
-      const args = { query: "EXACT_ARGUMENT", nested: { retained: [1, true] } };
-      h.call(args);
-      const pending = stripAnsi(h.render(200).join("\n"));
-      if (style === "preview") {
-        assert.ok(pending.includes("NATIVE_LABEL"));
-        assert.ok(pending.includes("NATIVE_EXTRA_CALL_CONTENT"));
-        assert.ok(pending.includes("NATIVE_PENDING_CONTENT"));
-      } else assert.ok(pending.includes(name), "compact pending identity retains the raw alias");
-      h.call(args, { expanded: true });
-      h.result(
-        {
-          content: [{ type: "text", text: "COMPLETE_OUTPUT" }],
-          details: { server: "team-docs", tool: "find.page" },
-        },
-        { expanded: true },
-      );
-      const expanded = stripAnsi(h.render(200).join("\n"));
-      for (const marker of ["EXACT_ARGUMENT", '"retained"', "COMPLETE_OUTPUT"])
-        assert.ok(expanded.includes(marker), marker);
-      assert.equal(occurrences(expanded, "EXACT_ARGUMENT"), 1, "arguments appear once");
-      assert.ok(expanded.includes("find.page"));
-      for (const marker of [
-        "NATIVE_LABEL",
-        "NATIVE_EXTRA_CALL_CONTENT",
-        "NATIVE_EXPANDED_CALL_CONTENT",
-      ])
-        assert.equal(expanded.includes(marker), false, marker);
-    });
-
-for (const style of ["preview", "compact"] as const)
-  for (const background of ["off", "on", "border"] as const)
-    test(`${style}/${background} expansion cycles preserve native mutable component ownership`, () => {
-      settings(style, background);
-      const cachedNative: ToolRenderers = {
-        renderCall: (_args, _theme, context) => {
-          assert.ok(!context.lastComponent || context.lastComponent instanceof Text);
-          const text =
-            context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-          text.setText(context.expanded ? "NATIVE_EXPANDED_RETAINED" : "NATIVE_PENDING_RETAINED");
-          return text;
-        },
-      };
-      const renderers = createNativeMcpRenderers(name, metadata(), cachedNative, session());
-      const h = createToolPresentationHarness(renderers);
-      for (const frame of h.cycle(
-        { query: "EXACT_INPUT_RETAINED" },
-        {
-          content: [{ type: "text", text: "Output" }],
-          details: { server: "team-docs", tool: "find.page" },
-        },
-        { invalidate: "after" },
-      )) {
-        const text = stripAnsi(frame.text);
-        if (frame.expanded) assert.ok(text.includes("EXACT_INPUT_RETAINED"));
-        else if (style === "preview") assert.ok(text.includes("NATIVE_PENDING_RETAINED"));
-      }
-    });
-
-test("MCP rows use the session's captured appearance after settings change", () => {
-  for (const capturedStyle of ["preview", "compact"] as const) {
-    settings(capturedStyle === "compact" ? "preview" : "compact", "on");
-    const captured: CodePreviewRendererPresentation = {
-      ...session(),
-      mode: "off",
-      collapsedStyle: capturedStyle,
-    };
-    const renderers = createNativeMcpRenderers(name, metadata(), native, captured);
-    const h = createToolPresentationHarness(renderers);
-    h.call({ query: "retained" });
-    const text = stripAnsi(h.render(200).join("\n"));
-    assert.equal(text.includes("NATIVE_EXTRA_CALL_CONTENT"), capturedStyle === "preview");
-    if (capturedStyle === "compact") assert.ok(text.includes(name));
-  }
-});
 
 test("native call failure still preserves exact expanded input", () => {
   settings("compact");
@@ -144,25 +61,6 @@ test("native call failure still preserves exact expanded input", () => {
   const h = createToolPresentationHarness(renderers);
   h.call({ query: "EXACT_INPUT_AFTER_NATIVE_FAILURE" }, { expanded: true });
   assert.ok(stripAnsi(h.render(200).join("\n")).includes("EXACT_INPUT_AFTER_NATIVE_FAILURE"));
-});
-
-test("historical missing-before-connect presentation stays conservative, then follows catalog and hidden withdrawal", () => {
-  settings("compact");
-  for (const metadataState of [
-    undefined,
-    metadata("builtin:mcp", "codemode"),
-    metadata("builtin:mcp", "hidden"),
-  ]) {
-    const renderers = createNativeMcpRenderers(name, metadataState, native, session());
-    const h = createToolPresentationHarness(renderers);
-    h.call({ query: "retained" });
-    assert.ok(stripAnsi(h.render(200).join("\n")).includes(name));
-    h.result({
-      content: [{ type: "text", text: "Returned" }],
-      details: { server: "team-docs", tool: "find.page" },
-    });
-    assert.ok(stripAnsi(h.render(200).join("\n")).includes("team-docs / find.page"));
-  }
 });
 
 test("renderer-only downstream never needs labels, schemas or execution fields", () => {

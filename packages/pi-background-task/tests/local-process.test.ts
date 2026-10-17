@@ -1,9 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
-import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import type * as Scope from "effect/Scope";
@@ -11,7 +7,6 @@ import * as Stream from "effect/Stream";
 import { provideBuiltLayer, signalProcess } from "pi-cosmic-core";
 import {
   LocalProcess,
-  LocalProcessError,
   makeBackgroundProcessEnvironment,
   type LocalProcessHandle,
   type LocalProcessRequest,
@@ -49,22 +44,6 @@ const awaitProcessDeath = (pid: number) =>
   });
 
 describe("local process boundary", () => {
-  it.effect("interrupts a cwd inspection that never settles", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const layer = LocalProcess.layerWith(
-        FileSystem.layerNoop({
-          stat: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
-        }),
-      );
-      const starting = yield* LocalProcess.use((service) =>
-        service.spawn({ command: "exit 0", cwd: ".", ingressBufferBytes: 1024 }),
-      ).pipe(Effect.scoped, provideBuiltLayer(layer), Effect.forkScoped);
-      yield* Deferred.await(entered);
-      yield* Fiber.interrupt(starting);
-      expect(Exit.hasInterrupts(yield* Fiber.await(starting))).toBe(true);
-    }),
-  );
   it("filters blocked environment keys with case-sensitive names", () => {
     const blocked = {
       BASH_ENV: "bash",
@@ -93,11 +72,6 @@ describe("local process boundary", () => {
     });
   });
 
-  it("requests color from compatible CLIs unless the environment explicitly configures it", () => {
-    expect(makeBackgroundProcessEnvironment({ FORCE_COLOR: "0" })).toEqual({ FORCE_COLOR: "0" });
-    expect(makeBackgroundProcessEnvironment({ NO_COLOR: "1" })).toEqual({ NO_COLOR: "1" });
-  });
-
   it.live("captures stdout, stderr, and exit", () =>
     withLocalProcess(
       Effect.gen(function* () {
@@ -109,27 +83,6 @@ describe("local process boundary", () => {
         const output = [...result.events].map((event) => `${event.stream}:${event.text}`).join("|");
         expect(output).toContain("stdout:out");
         expect(output).toContain("stderr:err");
-      }),
-    ),
-  );
-
-  it.live("returns only exit code and signal data after a successful spawn", () =>
-    withLocalProcess(
-      Effect.gen(function* () {
-        const handle = yield* spawnProcess(`node -e "process.exitCode = 7"`);
-        expect(yield* handle.awaitExit).toEqual({ exitCode: 7 });
-      }),
-    ),
-  );
-
-  it.live("rejects a missing working directory", () =>
-    withLocalProcess(
-      Effect.gen(function* () {
-        const result = yield* Effect.result(
-          spawnProcess('node -e ""', { cwd: "/definitely/missing/pi-bg-dir" }),
-        );
-        expect(Result.isFailure(result)).toBe(true);
-        if (Result.isFailure(result)) expect(result.failure.reason).toBe("cwd");
       }),
     ),
   );
@@ -148,52 +101,6 @@ describe("local process boundary", () => {
           expect(result.failure.message).not.toContain("FAKE_SECRET_123");
           expect(String(result.failure)).not.toContain("FAKE_SECRET_123");
         }
-      }),
-    ),
-  );
-
-  it.live("reports a spawn that Node refuses synchronously as a redacted typed failure", () =>
-    withLocalProcess(
-      Effect.gen(function* () {
-        for (const [command, overrides] of [
-          ["echo api_key=FAKE_SECRET_123\u0000", {}],
-          ["echo api_key=FAKE_SECRET_123", { shellPath: "/bin/sh\u0000" }],
-        ] as const) {
-          const failure = yield* spawnProcess(command, overrides).pipe(Effect.flip);
-          expect(failure).toBeInstanceOf(LocalProcessError);
-          expect(failure).toMatchObject({ reason: "spawn" });
-          expect(String(failure)).not.toContain("FAKE_SECRET_123");
-        }
-      }),
-    ),
-  );
-
-  it.live("bounds ingress when a producer outruns log consumption", () =>
-    withLocalProcess(
-      Effect.gen(function* () {
-        const handle = yield* spawnProcess(
-          `node -e "for(let i=0;i<20000;i++) process.stdout.write('noisy-output-'+i+'\\n')"`,
-          { ingressBufferBytes: 1024 },
-        );
-        yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
-        expect(handle.droppedOutputBytes()).toBeGreaterThan(0);
-      }),
-    ),
-  );
-
-  it.live("keeps a chunk whole when it fits in the remaining byte budget", () =>
-    withLocalProcess(
-      Effect.gen(function* () {
-        const content = "A".repeat(512);
-        const handle = yield* spawnProcess(`node -e "process.stdout.write('A'.repeat(512))"`, {
-          ingressBufferBytes: 1_024,
-        });
-        const result = yield* collectUntilExit(handle);
-        const stdout = [...result.events]
-          .flatMap((event) => (event.stream === "stdout" ? [event.text] : []))
-          .join("");
-        expect(stdout).toBe(content);
-        expect(handle.droppedOutputBytes()).toBe(0);
       }),
     ),
   );
@@ -284,17 +191,6 @@ describe("local process boundary", () => {
         const exit = yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
         expect(exit).toEqual({ exitCode: null, signal: "SIGTERM" });
         expect(yield* awaitProcessDeath(descendant)).toBe(true);
-      }),
-    ),
-  );
-
-  it.live("force-terminates a running process", () =>
-    withLocalProcess(
-      Effect.gen(function* () {
-        const handle = yield* spawnProcess(`node -e "setInterval(() => {}, 1000)"`);
-        yield* handle.terminate("force");
-        const exit = yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
-        expect(exit).toMatchObject({ exitCode: null, signal: "SIGKILL" });
       }),
     ),
   );

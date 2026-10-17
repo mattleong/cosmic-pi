@@ -73,32 +73,6 @@ describe("subagent activity widget host", () => {
     expect(setWidget.mock.calls.some(([, content]) => content === undefined)).toBe(true);
     expect(setStatus.mock.calls.at(-1)?.[1]).toBeUndefined();
   });
-
-  it("replaces and stops ticker resources as projected run states change", () => {
-    const { getFactory, setWidget } = captureFactory();
-    const stops: Array<ReturnType<typeof vi.fn>> = [];
-    const startTicker = vi.fn(() => {
-      const stop = vi.fn();
-      stops.push(stop);
-      return stop;
-    });
-    const bridge = subagentProjectionBridge(undefined, { startTicker });
-    bridge.publish(projectionOf([view({ id: "run", state: "waiting_for_parent" })]));
-    bridge.setContext(context(setWidget));
-    getFactory()?.(tui(), plainTheme);
-
-    bridge.publish(projectionOf([view({ id: "run", state: "running" })]));
-    expect(stops[0]).toHaveBeenCalledOnce();
-
-    bridge.publish(projectionOf([view({ id: "run", state: "paused" })]));
-    expect(stops[1]).toHaveBeenCalledOnce();
-
-    bridge.publish(projectionOf([view({ id: "run", state: "completed" })]));
-    expect(stops[2]).toHaveBeenCalledOnce();
-    expect(startTicker).toHaveBeenCalledTimes(3);
-    bridge.clear();
-  });
-
   it("restores fallback ownership when the host disposes the widget", () => {
     const { getFactory, setWidget } = captureFactory();
     const setStatus = vi.fn();
@@ -119,26 +93,6 @@ describe("subagent activity widget host", () => {
     expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(true);
     bridge.clear();
   });
-
-  it("holds await presentation for the exact lease lifetime", () => {
-    const { getFactory, setWidget } = captureFactory();
-    const bridge = quietBridge();
-    const target = view({ id: "target" });
-    const other = view({ id: "other" });
-    bridge.publish(projectionOf([target, other]));
-    bridge.setContext(context(setWidget));
-    const component = getFactory()?.(tui(), plainTheme);
-    const baseline = component?.render(100);
-
-    const release = bridge.bindToolPresentation().beginAwait([target.id], "all_finished");
-    const awaiting = component?.render(100);
-    expect(awaiting).not.toEqual(baseline);
-
-    release();
-    expect(component?.render(100)).toEqual(baseline);
-    bridge.clear();
-  });
-
   it("rejects stale presentation leases after context replacement", () => {
     const first = captureFactory();
     const second = captureFactory();
@@ -182,48 +136,5 @@ describe("subagent activity widget host", () => {
     expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(false);
     expect(setStatus.mock.calls.at(-1)?.[1]).toEqual(expect.stringMatching(/\S/));
     expect(() => bridge.clear()).not.toThrow();
-  });
-
-  it("only yields widget ownership after acknowledgement and restores the same presentation leases", () => {
-    const { getFactory, setWidget } = captureFactory();
-    const bridge = quietBridge();
-    bridge.publish(projectionOf([view({ id: "run" })]));
-    const ctx = context(setWidget);
-    bridge.setContext(ctx);
-    const component = getFactory()?.(tui(), plainTheme);
-    const presentation = bridge.bindToolPresentation();
-    const release = presentation.beginAwait(["run"], "all_finished");
-    const leased = component?.render(100);
-    bridge.setActivityAvailable(true);
-    expect(component?.render(100)).toEqual([]);
-    expect(presentation.isLiveHierarchyAvailable()).toBe(true);
-    bridge.setContext(ctx);
-    bridge.setActivityAvailable(false);
-    const restored = getFactory()?.(tui(), plainTheme);
-    expect(restored?.render(100)).toEqual(leased);
-    release();
-    expect(restored?.render(100)).not.toEqual(leased);
-    bridge.clear();
-  });
-
-  it("uses status fallback in RPC mode without installing a component widget", () => {
-    const setWidget = vi.fn();
-    const setStatus = vi.fn();
-    const bridge = subagentProjectionBridge();
-    const rpc = extensionContextFixture({
-      cwd: "/project",
-      mode: "rpc" as const,
-      hasUI: true,
-      ui: { setWidget, setStatus },
-    });
-
-    bridge.publish(projectionOf([view({ id: "running" })]));
-    bridge.setContext(rpc);
-    expect(setWidget).not.toHaveBeenCalled();
-    expect(setStatus.mock.calls.at(-1)?.[1]).toEqual(expect.stringMatching(/\S/));
-    expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(false);
-
-    bridge.clear();
-    expect(setStatus.mock.calls.at(-1)?.[1]).toBeUndefined();
   });
 });

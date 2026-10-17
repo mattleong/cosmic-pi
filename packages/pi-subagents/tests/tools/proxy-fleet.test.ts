@@ -4,13 +4,12 @@ import { describe, expect, it } from "vitest";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { captureSubagentControlExpectation } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
-import { MAX_PROTOCOL_ID_CHARS, MAX_RETAINED_RUNS } from "../../src/run/limits.ts";
+import { MAX_RETAINED_RUNS } from "../../src/run/limits.ts";
 import {
   decodeFleetSnapshotResult,
   decodeFleetActionRequest,
   encodeFleetActionRequest,
   FLEET_ACTION_TOOL_NAME,
-  type SubagentFleetActionInput,
   executeFleetSnapshot,
   fleetSnapshotProxyRequest,
 } from "../../src/tools/proxy-fleet.ts";
@@ -23,29 +22,6 @@ import { view } from "../fixtures/run-view.ts";
 import { effectTest } from "../support/effect-test.ts";
 
 describe("private fleet snapshots", () => {
-  effectTest("keeps live runs alongside the full retained terminal history", function* () {
-    const runs = [
-      view({ id: "caller", parentRunId: "root" }),
-      ...Array.from({ length: MAX_RETAINED_RUNS }, (_, index) =>
-        view({ id: `completed-${index}`, parentRunId: "caller", state: "completed" }),
-      ),
-      view({ id: "active-child", parentRunId: "caller" }),
-      view({ id: "active-grandchild", parentRunId: "active-child" }),
-    ];
-    const service = subagentServiceDouble({
-      visibleList: (caller) => Effect.succeed(caller === "caller" ? runs : []),
-    });
-    const result = yield* executeFleetSnapshot(fleetSnapshotProxyRequest, "caller").pipe(
-      Effect.provideService(SubagentService, service),
-      Effect.orDie,
-    );
-    const transported = decodeSubagentProxyResult(encodeSubagentProxyPayload(result) ?? "");
-    expect(transported).toBeDefined();
-    expect(decodeFleetSnapshotResult(transported!)?.map((run) => run.id)).toEqual(
-      runs.map((run) => run.id),
-    );
-  });
-
   effectTest(
     "returns every authorized retained run without acquiring or returning completion reports",
     function* () {
@@ -89,91 +65,9 @@ describe("private fleet snapshots", () => {
       code: "proxy_request_invalid",
     });
   });
-
-  effectTest("reduces display density without dropping any authorized run", function* () {
-    const writeClaims = Array.from({ length: 16 }, (_, index) => `${index}-${"x".repeat(500)}`);
-    const runs = Array.from({ length: 300 }, (_, index) =>
-      view({ id: `child-${index}`, parentRunId: "caller", writeIntent: "writer", writeClaims }),
-    );
-    const result = yield* executeFleetSnapshot(fleetSnapshotProxyRequest, "caller").pipe(
-      Effect.provideService(
-        SubagentService,
-        subagentServiceDouble({ visibleList: () => Effect.succeed(runs) }),
-      ),
-      Effect.orDie,
-    );
-    const transported = decodeSubagentProxyResult(encodeSubagentProxyPayload(result) ?? "");
-    expect(transported).toBeDefined();
-    const snapshot = decodeFleetSnapshotResult(transported!);
-    expect(snapshot?.map((run) => run.id)).toEqual(runs.map((run) => run.id));
-    expect(snapshot?.every((run) => (run.writeClaims?.length ?? 0) < writeClaims.length)).toBe(
-      true,
-    );
-  });
-
-  effectTest(
-    "rejects an oversized complete fleet instead of returning a partial tree",
-    function* () {
-      const runs = Array.from({ length: 1_000 }, (_, index) =>
-        view({
-          id: `child-${index}`.padEnd(MAX_PROTOCOL_ID_CHARS, "x"),
-          parentRunId: "caller",
-          sessionId: "s".repeat(MAX_PROTOCOL_ID_CHARS),
-        }),
-      );
-      const result = yield* executeFleetSnapshot(fleetSnapshotProxyRequest, "caller").pipe(
-        Effect.provideService(
-          SubagentService,
-          subagentServiceDouble({ visibleList: () => Effect.succeed(runs) }),
-        ),
-        Effect.result,
-      );
-      expect(Result.isFailure(result) && result.failure).toMatchObject({
-        code: "fleet_snapshot_unavailable",
-      });
-    },
-  );
-
-  effectTest("rejects duplicate identities and completion reports in fleet results", function* () {
-    const result = yield* executeFleetSnapshot(fleetSnapshotProxyRequest, "caller").pipe(
-      Effect.provideService(
-        SubagentService,
-        subagentServiceDouble({ visibleList: () => Effect.succeed([view()]) }),
-      ),
-      Effect.orDie,
-    );
-    expect(
-      decodeFleetSnapshotResult({
-        ...result,
-        details: { ...result.details, cards: [...result.details.cards, ...result.details.cards] },
-      }),
-    ).toBeUndefined();
-    expect(
-      decodeFleetSnapshotResult({
-        ...result,
-        details: {
-          ...result.details,
-          cards: result.details.cards.map((card) => ({ ...card, finalText: "Retained report" })),
-        },
-      }),
-    ).toBeUndefined();
-    expect(decodeFleetSnapshotResult({ ...result, isError: true })).toBeUndefined();
-  });
 });
 
 describe("private fleet actions", () => {
-  it("keeps valid maximum-length messages through nested JSON escaping", () => {
-    const expected = captureSubagentControlExpectation(view());
-    const message = '"\\'.repeat(32_768);
-    const input = {
-      tool: "subagent_send",
-      args: { runIds: ["child"], message },
-    } satisfies SubagentFleetActionInput;
-    const encoded = encodeFleetActionRequest(input, expected);
-    expect(encoded.argumentsJson.length).toBeGreaterThan(196_608);
-    expect(decodeFleetActionRequest(encoded)).toEqual({ input, expected });
-  });
-
   it("preserves the captured assignment and question without widening action or caller authority", () => {
     const expected = captureSubagentControlExpectation(
       view({

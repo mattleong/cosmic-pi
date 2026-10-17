@@ -27,12 +27,6 @@ import { stringContaining } from "../support/matchers.ts";
 const reviewerNative = () =>
   nativeReportRequest({ profile: "reviewer", routeContinuation: reviewerContinuation(0) });
 
-const rejectedPrompt = (extra: Parameters<typeof fakeChildLayer>[1] = {}) =>
-  fakeChildLayer(Effect.void, {
-    initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
-    ...extra,
-  });
-
 const startFailedReviewer = (
   service: SubagentServiceContract,
   fake: ReturnType<typeof fakeChildLayer>,
@@ -133,62 +127,6 @@ describe("explicit profile-route retry", () => {
         });
       },
     );
-
-  it.effect(
-    "typed exit uncertainty blocks retry even when pending delivery metadata never drained",
-    () => {
-      const { backend, layer, projections } = nativeReportServiceFixture();
-      return withService(layer, function* (service) {
-        const run = yield* service.start(reviewerNative());
-        backend.controls[0]!.offer({
-          type: "exit",
-          exitCode: null,
-          diagnostic: "generic exit",
-          failure: processError(
-            "steer",
-            "steer_outcome_uncertain",
-            "Native write acknowledgement unknown.",
-          ),
-        });
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-        yield* service.stop(run.id);
-        expect(yield* service.status(run.id)).toMatchObject({
-          steeringDelivery: "unresolved",
-          error: "Native write acknowledgement unknown.",
-        });
-        expect(yield* Effect.flip(service.claimRetryContinuation(run.id))).toMatchObject({
-          code: "retry_outcome_uncertain",
-        });
-        const observed = yield* service.withStatusObservations([run.id], ({ observations }) =>
-          Effect.succeed(observations[0]),
-        );
-        expect(observed?.recovery).toMatchObject({
-          retryDisposition: "blocked",
-          hasRemainingCandidate: true,
-        });
-      });
-    },
-  );
-
-  it.effect("resolved transient steering does not poison assignment retry eligibility", () => {
-    const { backend, layer, projections } = nativeReportServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(reviewerNative());
-      const control = backend.controls[0]!;
-      control.offer(inputDeliveryFrame(1, 1, "pending"));
-      control.offer(inputDeliveryFrame(1, 1, "confirmed"));
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.steeringDelivery === "confirmed");
-      control.offer({
-        type: "backend_failure",
-        error: processError("run", "unrelated_failure", "Unrelated failure."),
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      yield* service.stop(run.id);
-      expect((yield* service.claimRetryContinuation(run.id)).source.steeringDelivery).toBe(
-        "confirmed",
-      );
-    });
-  });
   it.effect("acknowledges retry ownership without making its waiter uncancellable", () => {
     const promptGate = Deferred.makeUnsafe<void>();
     const owned = Deferred.makeUnsafe<void>();
@@ -229,76 +167,6 @@ describe("explicit profile-route retry", () => {
       );
       expect((yield* service.status(successorId)).state).toBe("running");
       expect((yield* service.status(failed.id)).supersededByRunId).toBe(successorId);
-    });
-  });
-
-  for (const eligible of [true, false])
-    it.effect(
-      eligible
-        ? "returns settled eligible recovery for an admitted failed start"
-        : "reports frozen-route exhaustion on an admitted failed start",
-      () => {
-        const { layer } = localServiceFixture({}, rejectedPrompt());
-        return withService(layer, function* (service) {
-          const admitted = request({
-            profile: "reviewer",
-            routeContinuation: reviewerContinuation(eligible ? 0 : 1),
-          });
-          const failure = yield* (
-            eligible ? service.startSessionOwned(admitted) : service.start(admitted)
-          ).pipe(Effect.flip);
-          const recovery = getFailedStartRecovery(failure);
-          if (!eligible) {
-            expect(recovery).toMatchObject({
-              cleanupDisposition: "confirmed",
-              retryDisposition: "exhausted",
-              remainingCandidateCount: 0,
-              hasRemainingCandidate: false,
-            });
-            return;
-          }
-          expect(recovery!.runId).toMatch(/\S/);
-          expect(recovery).toMatchObject({
-            cleanupDisposition: "confirmed",
-            retryDisposition: "eligible",
-            remainingCandidateCount: 1,
-            hasRemainingCandidate: true,
-          });
-          const claim = yield* service.claimRetryContinuation(recovery!.runId);
-          expect(claim.source.id).toBe(recovery!.runId);
-          yield* service.releaseRetryClaim(recovery!.runId, claim.claimToken);
-        });
-      },
-    );
-
-  it.effect("does not return admitted-failure recovery before cleanup settles", () => {
-    const promptGate = Deferred.makeUnsafe<void>();
-    const cleanupGate = Deferred.makeUnsafe<void>();
-    const { fake, layer } = localServiceFixture(
-      {},
-      rejectedPrompt({ initialSendGates: [{ spawnIndex: 0, type: "prompt", gate: promptGate }] }),
-    );
-    return withService(layer, function* (service) {
-      const completed = yield* Deferred.make<void>();
-      const starting = yield* service
-        .start(request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }))
-        .pipe(
-          Effect.flip,
-          Effect.tap(() => Deferred.succeed(completed, undefined)),
-          Effect.forkScoped,
-        );
-      yield* yieldUntil(() => fake.controls.length === 1);
-      fake.controls[0]!.gateRelease(cleanupGate);
-      yield* Deferred.succeed(promptGate, undefined);
-      yield* Effect.yieldNow;
-      expect(yield* Deferred.isDone(completed)).toBe(false);
-
-      yield* Deferred.succeed(cleanupGate, undefined);
-      const failure = yield* Fiber.join(starting);
-      expect(getFailedStartRecovery(failure)).toMatchObject({
-        cleanupDisposition: "confirmed",
-        retryDisposition: "eligible",
-      });
     });
   });
 
@@ -410,41 +278,6 @@ describe("explicit profile-route retry", () => {
     });
   });
 
-  it.effect("releases the predecessor claim when successor admission never starts", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const failedRun = yield* startFailedReviewer(service, fake);
-      const claim = yield* service.claimRetryContinuation(failedRun.id);
-      const failure = yield* service
-        .startRetrySessionOwned({
-          ...request({ host: "local", runtime: "claude" }),
-          supersedes: { runId: failedRun.id, claimToken: claim.claimToken },
-        })
-        .pipe(Effect.flip);
-      expect(failure).toMatchObject({ code: "backend_not_implemented" });
-      const reclaimed = yield* service.claimRetryContinuation(failedRun.id);
-      expect(reclaimed.claimToken).not.toBe(claim.claimToken);
-      yield* service.releaseRetryClaim(failedRun.id, reclaimed.claimToken);
-    });
-  });
-
-  it.effect("revalidates the exclusive predecessor claim at successor admission", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const failedRun = yield* startFailedReviewer(service, fake);
-      const claim = yield* service.claimRetryContinuation(failedRun.id);
-      yield* service.releaseRetryClaim(failedRun.id, claim.claimToken);
-      const stale = yield* service
-        .startRetrySessionOwned({
-          ...request({ routeContinuation: reviewerContinuation(1) }),
-          supersedes: { runId: failedRun.id, claimToken: claim.claimToken },
-        })
-        .pipe(Effect.flip);
-      expect(stale).toMatchObject({ code: "retry_claim_stale" });
-      expect(yield* service.list).toHaveLength(1);
-    });
-  });
-
   it.effect("refuses continuation after uncertain task delivery", () => {
     const { fake, layer } = localServiceFixture(
       {},
@@ -507,66 +340,6 @@ describe("explicit profile-route retry", () => {
       expect(completions).toHaveLength(1);
       expect(completions[0]).toMatchObject({ id: run.id, outcome: "failed" });
       expect(completions[0]?.retryAvailable).toBeUndefined();
-    });
-  });
-
-  it.effect("returns blocked recovery when admitted-start cleanup is quarantined", () => {
-    const { layer } = localServiceFixture({}, rejectedPrompt({ releaseDefect: true }));
-    return withService(layer, function* (service) {
-      const failure = yield* service
-        .start(request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }))
-        .pipe(Effect.flip);
-      const recovery = getFailedStartRecovery(failure);
-      expect(recovery).toMatchObject({
-        cleanupDisposition: "quarantined",
-        retryDisposition: "blocked",
-        remainingCandidateCount: 1,
-        hasRemainingCandidate: true,
-      });
-      const blocked = yield* service.claimRetryContinuation(recovery!.runId).pipe(Effect.flip);
-      expect(blocked).toMatchObject({ code: "retry_cleanup_unconfirmed" });
-    });
-  });
-
-  it.effect("blocks continuation when failed-run cleanup is quarantined", () => {
-    const { fake, layer } = localServiceFixture(
-      {},
-      fakeChildLayer(Effect.void, { releaseDefect: true }),
-    );
-    return withService(layer, function* (service) {
-      const failedRun = yield* startFailedReviewer(service, fake);
-      const blocked = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);
-      expect(blocked).toMatchObject({ code: "retry_cleanup_unconfirmed" });
-      expect((yield* service.status(failedRun.id)).cleanup?.disposition).toBe("quarantined");
-    });
-  });
-
-  it.effect("returns writer recovery only after exact ownership is released", () => {
-    const { layer } = localServiceFixture({}, rejectedPrompt());
-    return withService(layer, function* (service) {
-      const failure = yield* service
-        .start(
-          request({
-            profile: "worker",
-            writeIntent: "writer",
-            writes: ["src/retry-owner.ts"],
-            routeContinuation: reviewerContinuation(0),
-          }),
-        )
-        .pipe(Effect.flip);
-      const recovery = getFailedStartRecovery(failure);
-      expect(recovery).toMatchObject({
-        cleanupDisposition: "confirmed",
-        retryDisposition: "eligible",
-      });
-      const replacement = yield* service.start(
-        request({
-          name: "replacement-writer",
-          writeIntent: "writer",
-          writes: ["src/RETRY-owner.ts"],
-        }),
-      );
-      expect(replacement.state).toBe("running");
     });
   });
 

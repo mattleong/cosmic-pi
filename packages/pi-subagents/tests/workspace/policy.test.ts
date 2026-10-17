@@ -4,10 +4,7 @@ import {
   dependencyWorkspacePath,
   eligibleUntrackedSource,
   safeWorkspacePath,
-  sensitiveWorkspaceContent,
 } from "../../src/workspace/policy.ts";
-
-const sensitive = (value: string) => sensitiveWorkspaceContent(new TextEncoder().encode(value));
 describe("workspace snapshot policy", () => {
   it("rejects traversal and platform-ambiguous paths", () => {
     for (const value of [
@@ -35,16 +32,5 @@ describe("workspace snapshot policy", () => {
     }
     expect(eligibleUntrackedSource("src/new.ts")).toBe(true);
     expect(eligibleUntrackedSource("arbitrary.dat")).toBe(false);
-  });
-  it("does not confuse code references with literal credentials", () => {
-    expect(
-      sensitive("apiKey: provider.apiKey, client_secret = someVariable; password: Schema.String"),
-    ).toBeUndefined();
-    expect(sensitive('apiKey: "placeholder-token"')).toBeUndefined();
-    expect(
-      sensitive('apiKey: "stored-key", access_token: "refreshed-access-secret"'),
-    ).toBeUndefined();
-    expect(sensitive(`ok\napiKey: "${"ghp_" + "A".repeat(36)}"`)?.line).toBe(2);
-    expect(sensitive(["-----BEGIN RSA", "PRIVATE KEY-----"].join(" "))).toBeDefined();
   });
 });

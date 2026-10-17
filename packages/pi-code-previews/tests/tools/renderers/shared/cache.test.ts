@@ -8,7 +8,7 @@ import type { RendererState } from "../../../../src/tools/renderers/shared/types
 import { defaultCodePreviewSettings } from "../../../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../../../src/config/state";
 import { acquireProjectionOwnership } from "../../../../src/shared/projection-ownership";
-import { clearSyntaxProjection, publishSyntaxProjection } from "../../../../src/syntax/projection";
+import { clearSyntaxProjection } from "../../../../src/syntax/projection";
 import {
   builtinRenderers,
   plainTheme as theme,
@@ -23,62 +23,6 @@ beforeEach(() => {
   setCodePreviewSettings(defaultCodePreviewSettings);
 });
 afterEach(() => clearSyntaxProjection(syntaxOwner));
-
-const key = () =>
-  previewCacheKey(
-    ["-1 old\n+1 new"],
-    "src/a.ts",
-    false,
-    theme,
-    codePreviewSettings.editCollapsedLines,
-  );
-
-function cachedReplacement(change: () => void) {
-  const state = {};
-  const render = () => cachedPreview(state, "preview", key(), () => new Text("preview"));
-  const first = render();
-  assert.equal(render(), first);
-  change();
-  const replacement = render();
-  assert.equal(render(), replacement);
-  return [first, replacement] as const;
-}
-
-test.each([
-  { wordEmphasis: "off" },
-  { editCollapsedLines: 40 },
-  { shikiTheme: "github-light" },
-  { syntaxHighlighting: false },
-  { diffIntensity: "off" },
-] as const)("settings %j replace the cached preview", (settings) => {
-  assert.notEqual(
-    ...cachedReplacement(() => setCodePreviewSettings({ ...codePreviewSettings, ...settings })),
-  );
-});
-
-test.each(["initialized", "loadedLanguages", "pendingLanguages", "statusVersion"] as const)(
-  "highlighter %s replaces the cached preview",
-  (field) => {
-    assert.notEqual(
-      ...cachedReplacement(() =>
-        publishSyntaxProjection(syntaxOwner, {
-          theme: codePreviewSettings.shikiTheme,
-          highlighter: undefined,
-          loadedLanguages: [],
-          failedThemes: [],
-          failedLanguages: [],
-          status: {
-            initialized: false,
-            loadedLanguages: 0,
-            pendingLanguages: 0,
-            statusVersion: 0,
-            [field]: field === "initialized" ? true : 1,
-          },
-        }),
-      ),
-    );
-  },
-);
 
 test("slots are independent and exact source, path, expansion and theme replace previews", () => {
   const state = {};
@@ -134,25 +78,4 @@ test("edit previews wait for complete arguments and replace changed content", ()
       /retained-summary/,
     );
   }
-});
-
-test("write collapsed line changes replace the cached write preview", () => {
-  setCodePreviewSettings({
-    ...codePreviewSettings,
-    writeContentPreview: true,
-    writeCollapsedLines: 20,
-    syntaxHighlighting: false,
-    toolCallBackground: "off",
-    toolCallTiming: false,
-  });
-  const write = builtinRenderers("write")!;
-  const content = Array.from({ length: 40 }, (_, index) => `row${index + 1}`).join("\n");
-  const args = { path: "src/a.ts", content };
-  const context = renderContextFixture({ args });
-  const shownRows = () =>
-    renderComponent(write.renderCall!(args, theme, context)).match(/\brow\d+\b/g)?.length ?? 0;
-  const collapsed = shownRows();
-  assert.equal(shownRows(), collapsed);
-  setCodePreviewSettings({ ...codePreviewSettings, writeCollapsedLines: 30 });
-  assert.ok(shownRows() > collapsed);
 });

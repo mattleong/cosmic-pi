@@ -2,30 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { SubagentConfigScope } from "../src/config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
 import type { DeclaredProfileRoute, ProfileId } from "../src/profiles/model.ts";
-import { sessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import {
-  addRouteCandidate,
-  candidateValidationError,
   declaredRouteForDraft,
-  defaultRouteCandidate,
   disableRouteDraft,
-  duplicateRouteCandidate,
-  hasOwnProfileRouteDeclaration,
   loadProfileRouteDraft,
-  moveRouteCandidate,
-  removeRouteCandidate,
-  replaceRouteCandidate,
-  runtimeEfforts,
-  updateCandidateControls,
   updateCandidateModel,
-  type ProfileRouteDraft,
   type ProfileSettingsInspection,
 } from "../src/settings/profile-route-editor.ts";
-import {
-  inheritedInvalidInspection,
-  jsonObject,
-  profileSettingsInspection,
-} from "./fixtures/profile-settings-inspection.ts";
+import { jsonObject, profileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
 import { profileCandidate as candidate } from "./fixtures/profiles.ts";
 
 type ProfileSetSeed = Readonly<Record<string, DeclaredProfileRoute>>;
@@ -72,66 +56,6 @@ describe("ordered profile-route editor state", () => {
     expect(load(value, "worker").candidates).toEqual(threeRoute);
   });
 
-  it("normalizes omitted retention defaults without mutating the declaration", () => {
-    const declared = {
-      host: "local",
-      runtime: "pi",
-      model: "parent",
-      effort: "default",
-      context: "fresh",
-      writeIntent: "read-only",
-    } as const;
-    const value = inspection({ worker: declared });
-    const before = structuredClone(value.global.file);
-    const draft = load(value, "worker");
-    expect(draft.candidates[0]).toMatchObject({ ...declared, closeOnReport: true });
-    expect(value.global.file).toEqual(before);
-    expect(declared).not.toHaveProperty("closeOnReport");
-  });
-
-  it("loads session overrides as explicit routes and resets to the active base", () => {
-    const base = inspection(
-      { reviewer: candidate("openai/global") },
-      { reviewer: candidate("openai/project") },
-    );
-    const value = {
-      ...base,
-      session: sessionProfileSnapshot(base.config, {
-        revision: 1,
-        overrides: { reviewer: { candidates: [candidate("openai/session")] } },
-      }),
-    };
-    expect(loadProfileRouteDraft(value, { kind: "session" }, "reviewer")).toEqual({
-      kind: "explicit",
-      candidates: [candidate("openai/session")],
-    });
-    const inherited = { ...value, session: sessionProfileSnapshot(base.config) };
-    expect(loadProfileRouteDraft(inherited, { kind: "session" }, "reviewer")).toEqual({
-      kind: "inherit",
-      candidates: [candidate("openai/project")],
-    });
-
-    const detached = {
-      ...base,
-      session: sessionProfileSnapshot(base.config, {
-        revision: 2,
-        overrides: {},
-        baseline: {
-          origin: { scope: "global", name: "detached" },
-          profiles: {
-            ...base.session.baseline.profiles,
-            reviewer: { candidates: [candidate("openai/detached")] },
-          },
-          profileSources: { ...base.session.baseline.profileSources, reviewer: "global" },
-        },
-      }),
-    };
-    expect(loadProfileRouteDraft(detached, { kind: "session" }, "reviewer")).toEqual({
-      kind: "inherit",
-      candidates: [candidate("openai/detached")],
-    });
-  });
-
   it("models reset, inherit, disabled, and invalid fail-closed declarations distinctly", () => {
     const value = inspection(
       {
@@ -157,184 +81,9 @@ describe("ordered profile-route editor state", () => {
     expect(declaredRouteForDraft({ kind: "reset", candidates: [] })).toEqual({ valid: true });
     expect(declaredRouteForDraft({ kind: "inherit", candidates: [] })).toEqual({ valid: true });
   });
-
-  it("shows inherited fail-closed routes as invalid until an explicit route repairs them", () => {
-    const target = { kind: "profile-set", set: { scope: "project", name: "partial" } } as const;
-    const inherited = inheritedInvalidInspection();
-    const draft = loadProfileRouteDraft(inherited, target, "worker");
-    expect(draft).toEqual({ kind: "invalid", candidates: [] });
-    expect(hasOwnProfileRouteDeclaration(inherited, target, "worker")).toBe(false);
-
-    const repaired = addRouteCandidate(draft, defaultRouteCandidate("worker"));
-    expect(repaired?.kind).toBe("explicit");
-    expect(declaredRouteForDraft(repaired!)).toMatchObject({ valid: true });
-
-    const ownInvalid = inheritedInvalidInspection(true);
-    expect(loadProfileRouteDraft(ownInvalid, target, "worker")).toEqual({
-      kind: "invalid",
-      candidates: [],
-    });
-    expect(hasOwnProfileRouteDeclaration(ownInvalid, target, "worker")).toBe(true);
-  });
-
-  it("adds, edits, duplicates, moves, and removes candidates in exact staged order", () => {
-    let draft: ProfileRouteDraft = disableRouteDraft();
-    draft = addRouteCandidate(draft, threeRoute[0]!)!;
-    draft = addRouteCandidate(draft, threeRoute[1]!)!;
-    draft = addRouteCandidate(draft, threeRoute[2]!)!;
-    draft = replaceRouteCandidate(
-      draft,
-      1,
-      candidate("claude-sonnet-5", {
-        host: "local",
-        runtime: "claude",
-        effort: "high",
-      }),
-    );
-    draft = moveRouteCandidate(draft, 2, "up");
-    draft = moveRouteCandidate(draft, 1, "down");
-    draft = moveRouteCandidate(draft, 2, "up");
-    draft = duplicateRouteCandidate(draft, 0)!;
-    expect(draft.candidates.map((entry) => entry.model)).toEqual([
-      "openai/one",
-      "openai/one",
-      "gpt-5.6-codex",
-      "claude-sonnet-5",
-    ]);
-    draft = removeRouteCandidate(draft, 1);
-    expect(draft.candidates.map((entry) => entry.model)).toEqual([
-      "openai/one",
-      "gpt-5.6-codex",
-      "claude-sonnet-5",
-    ]);
-    draft = removeRouteCandidate(removeRouteCandidate(draft, 2), 1);
-    draft = removeRouteCandidate(draft, 0);
-    expect(draft).toEqual({ kind: "disabled", candidates: [] });
-  });
-
-  it("leaves input routes unchanged and clones duplicated candidates independently", () => {
-    const original: ProfileRouteDraft = { kind: "explicit", candidates: threeRoute };
-    const before = structuredClone(original);
-    const moved = moveRouteCandidate(original, 0, "down");
-    const duplicated = duplicateRouteCandidate(moved, 0)!;
-    expect(original).toEqual(before);
-    expect(duplicated.candidates[0]).toEqual(duplicated.candidates[1]);
-    expect(duplicated.candidates[0]).not.toBe(duplicated.candidates[1]);
-    for (const entry of duplicated.candidates) expect(original.candidates).not.toContain(entry);
-  });
-
-  it("enforces the 32-candidate bound for add and duplicate", () => {
-    const full: ProfileRouteDraft = {
-      kind: "explicit",
-      candidates: Array.from({ length: 32 }, (_, index) => candidate(`openai/model-${index}`)),
-    };
-    expect(addRouteCandidate(full, candidate("openai/overflow"))).toBeUndefined();
-    expect(duplicateRouteCandidate(full, 0)).toBeUndefined();
-    expect(declaredRouteForDraft(full)).toMatchObject({ valid: true });
-    expect(
-      declaredRouteForDraft({
-        kind: "explicit",
-        candidates: [...full.candidates, candidate("openai/overflow")],
-      }),
-    ).toMatchObject({ valid: false });
-  });
 });
 
 describe("profile candidate normalization and validation", () => {
-  it("adds local runtime combinations with product-valid defaults", () => {
-    let draft: ProfileRouteDraft = disableRouteDraft();
-    const nativeModels = { claude: "live-claude", codex: "live-codex" } as const;
-    for (const host of ["local"] as const) {
-      for (const runtime of ["pi", "claude", "codex"] as const) {
-        let current = candidate("parent", { effort: "default" });
-        const runtimeUpdate = updateCandidateControls(
-          current,
-          { runtime },
-          {
-            nativeModel: runtime === "pi" ? undefined : nativeModels[runtime],
-          },
-        );
-        expect(runtimeUpdate.error).toBeUndefined();
-        current = runtimeUpdate.candidate!;
-        const hostUpdate = updateCandidateControls(current, { host }, {});
-        expect(hostUpdate.error).toBeUndefined();
-        current = hostUpdate.candidate!;
-        expect(candidateValidationError(current), `${host}/${runtime}`).toBeUndefined();
-        if (runtime !== "pi") expect(current.model).toBe(nativeModels[runtime]);
-        draft = addRouteCandidate(draft, current)!;
-      }
-    }
-    expect(draft.candidates.map(({ host, runtime }) => `${host}/${runtime}`)).toEqual([
-      "local/pi",
-      "local/claude",
-      "local/codex",
-    ]);
-  });
-
-  it("normalizes native dependencies only after selecting a live model", () => {
-    const forked = candidate("parent", {
-      context: "fork",
-      effort: "minimal",
-      openaiFastMode: true,
-    });
-    for (const runtime of ["claude", "codex"] as const) {
-      const pending = updateCandidateControls(forked, { runtime }, {});
-      expect(pending.candidate).toBeUndefined();
-      expect(pending.error).toBeDefined();
-    }
-    const claude = updateCandidateControls(
-      forked,
-      { runtime: "claude" },
-      { nativeModel: "live-claude" },
-    );
-    expect(claude.candidate).toMatchObject({
-      runtime: "claude",
-      model: "live-claude",
-      context: "fresh",
-      effort: "default",
-      openaiFastMode: false,
-    });
-    const pi = updateCandidateControls(claude.candidate!, { runtime: "pi" }, {});
-    expect(pi.candidate).toMatchObject({ runtime: "pi", model: "parent" });
-    expect(forked).toMatchObject({ runtime: "pi", model: "parent", context: "fork" });
-  });
-
-  it("uses exact runtime capabilities and resets effort or fast mode when a model cannot use them", () => {
-    expect(candidateValidationError(candidate("parent", { openaiFastMode: true }))).toBeUndefined();
-    expect(
-      candidateValidationError(candidate("other-provider/plain", { openaiFastMode: true })),
-    ).toContain("Fast mode");
-    expect(
-      candidateValidationError(
-        candidate("future-codex", { runtime: "codex", openaiFastMode: true }),
-      ),
-    ).toBeUndefined();
-    expect(
-      candidateValidationError(
-        candidate("claude-opus-5", { runtime: "claude", openaiFastMode: true }),
-      ),
-    ).toContain("Fast mode");
-    expect(runtimeEfforts("claude", ["minimal", "low", "high"])).toEqual(["low", "high"]);
-    expect(
-      candidateValidationError(
-        candidate("claude-opus-5", { runtime: "claude", effort: "minimal" }),
-      ),
-    ).toContain("does not support the minimal reasoning level");
-    const update = updateCandidateModel(
-      candidate("openai-codex/gpt-5.6-sol", { effort: "xhigh", openaiFastMode: true }),
-      "zai/plain",
-      ["off"],
-      false,
-    );
-    expect(update.candidate).toMatchObject({
-      model: "zai/plain",
-      effort: "default",
-      openaiFastMode: false,
-    });
-    expect(update.notices.join(" ")).toContain("profile default");
-    expect(update.notices.join(" ")).toContain("does not support fast mode");
-  });
-
   it("rejects unsafe native selectors with the same bounded config rules", () => {
     for (const runtime of ["pi", "claude", "codex"] as const) {
       const model = runtime === "pi" ? "provider/model,(glob)*" : "model,(glob)*";

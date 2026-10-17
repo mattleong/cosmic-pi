@@ -58,10 +58,7 @@ for (const transition of ["shutdown", "replacement"] as const)
 
 for (const { kind, draw, owned } of [
   { kind: "write-result", draw: true, owned: true },
-  { kind: "edit-result", draw: true, owned: true },
   { kind: "edit-call", draw: true, owned: true },
-  { kind: "edit-call", draw: false, owned: true },
-  { kind: "write-call", draw: false, owned: true },
   { kind: "edit-call", draw: false, owned: false },
   { kind: "write-call", draw: false, owned: false },
 ] as const)

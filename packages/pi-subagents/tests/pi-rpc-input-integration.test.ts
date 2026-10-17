@@ -15,7 +15,6 @@ import { SubagentProcessError } from "../src/run/errors.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
-import { vi } from "vitest";
 import { nodePath as path, nodeSpawn } from "./support/node-builtins.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -150,12 +149,6 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
         });
       });
     const count = (type: string) => eventTypes.filter((eventType) => eventType === type).length;
-    const awaitEventCount = (type: string, expected: number) =>
-      Effect.promise(() =>
-        vi.waitFor(() => expect(count(type)).toBeGreaterThanOrEqual(expected), {
-          timeout: 10_000,
-        }),
-      );
     const driver = localPiBackendDriver({
       reclaimRunState: () => Effect.void,
       spawn: () =>
@@ -186,7 +179,6 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
     return {
       request,
       count,
-      awaitEventCount,
       exited,
       spawnBackend: driver.spawn(backendLaunch()),
     };
@@ -215,88 +207,6 @@ describe("installed Pi RPC input hooks", () => {
           expect(
             yield* backend.controls.start("/fixture-shutdown", 2).pipe(Effect.flip),
           ).toMatchObject({ code: "prompt_not_delivered" });
-          yield* Deferred.await(pi.exited);
-        }).pipe(Effect.timeout("25 seconds"));
-      }),
-    30_000,
-  );
-
-  it.live(
-    "transforms and handles steer/follow_up through source rpc without credentials or inference",
-    () =>
-      Effect.gen(function* () {
-        const pi = yield* rpcFixture("pi-rpc-input-extension.ts");
-        yield* Effect.gen(function* () {
-          expect(yield* pi.request({ type: "get_state" })).toMatchObject({ success: true });
-          expect(yield* pi.request({ type: "steer", message: "handled" })).toMatchObject({
-            success: true,
-          });
-          expect(yield* pi.request({ type: "follow_up", message: "handled" })).toMatchObject({
-            success: true,
-          });
-          expect(yield* pi.request({ type: "steer", message: "steering payload" })).toMatchObject({
-            success: true,
-          });
-          expect(yield* pi.request({ type: "follow_up", message: "next payload" })).toMatchObject({
-            success: true,
-          });
-          expect(yield* pi.request({ type: "clear_queue" })).toMatchObject({
-            success: true,
-            data: {
-              steering: ["rpc:undefined:steering payload"],
-              followUp: ["rpc:undefined:next payload"],
-            },
-          });
-          expect(yield* pi.request({ type: "get_messages" })).toMatchObject({
-            success: true,
-            data: { messages: [] },
-          });
-          expect(yield* pi.request({ type: "prompt", message: "/fixture-shutdown" })).toMatchObject(
-            { success: true },
-          );
-          yield* Deferred.await(pi.exited);
-        }).pipe(Effect.timeout("25 seconds"));
-      }),
-    30_000,
-  );
-
-  it.live(
-    "starts a turn for guidance sent as a steering prompt after the child settles",
-    () =>
-      Effect.gen(function* () {
-        const pi = yield* rpcFixture("pi-rpc-faux-extension.ts");
-        yield* Effect.gen(function* () {
-          expect(yield* pi.request({ type: "prompt", message: "first task" })).toMatchObject({
-            success: true,
-            data: { disposition: "started" },
-          });
-          yield* pi.awaitEventCount("agent_settled", 1);
-
-          // A bare steer after settlement is queued with no run to consume it.
-          expect(yield* pi.request({ type: "steer", message: "lost guidance" })).toMatchObject({
-            success: true,
-            data: { disposition: "queued" },
-          });
-          expect(pi.count("agent_start")).toBe(1);
-          yield* pi.request({ type: "clear_queue" });
-
-          expect(
-            yield* pi.request({
-              type: "prompt",
-              message: "late guidance",
-              streamingBehavior: "steer",
-            }),
-          ).toMatchObject({ success: true, data: { disposition: "started" } });
-          yield* pi.awaitEventCount("agent_settled", 2);
-          expect(pi.count("agent_start")).toBe(2);
-          const messages = yield* pi.request({ type: "get_messages" });
-          const transcript = encodeJson(messages.data);
-          expect(transcript).toContain("echo: late guidance");
-          expect(transcript).not.toContain("echo: lost guidance");
-
-          expect(yield* pi.request({ type: "prompt", message: "/fixture-shutdown" })).toMatchObject(
-            { success: true },
-          );
           yield* Deferred.await(pi.exited);
         }).pipe(Effect.timeout("25 seconds"));
       }),

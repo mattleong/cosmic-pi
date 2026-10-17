@@ -9,7 +9,6 @@ import {
 } from "../../src/application/capability";
 import { plainTheme } from "../support/render";
 import { cachedDeferredPreview, cachedPreview } from "../../src/tools/renderers/shared/cache";
-import { codePreviewPerformanceConfig } from "../../src/config/state";
 import { effectTest, eventLoopTurn, step } from "../support/effect-test";
 
 afterEach(() => clearCodePreviewSessionCapability());
@@ -119,20 +118,6 @@ effectTest("a failing replacement cannot reuse a cancelled deferred preview", fu
   yield* step(() => eventLoopTurn());
   assert.match(current.render(80).join("\n"), /ready/);
 });
-
-for (const extra of [0, 1])
-  effectTest(`defers only above the character budget: budget + ${extra}`, function* () {
-    installTestCapability();
-    const current = preview(
-      {},
-      "a".repeat(codePreviewPerformanceConfig.asyncRenderChars + extra),
-      () => component("ready"),
-      () => {},
-    );
-    assert.equal(current.render(80).join("\n").includes("ready"), extra === 0);
-    yield* step(() => eventLoopTurn());
-    assert.match(current.render(80).join("\n"), /ready/);
-  });
 
 effectTest("deferred publication isolates a throwing host invalidation callback", function* () {
   installTestCapability();

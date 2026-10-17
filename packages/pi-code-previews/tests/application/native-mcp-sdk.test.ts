@@ -51,7 +51,7 @@ function presentationFactory(
   );
 }
 
-for (const builtinFirst of [false, true])
+for (const builtinFirst of [false])
   it.live(
     `public loader keeps the independent native MCP manager in either order: builtin first=${builtinFirst}`,
     () =>

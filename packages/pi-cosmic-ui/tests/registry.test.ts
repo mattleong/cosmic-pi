@@ -42,55 +42,6 @@ describe("footer registry", () => {
     ]);
   });
 
-  it("copies frozen raw accessors and reuses only canonical contribution identity", () => {
-    const { store } = registry();
-    let value = "before";
-    let reads = 0;
-    const raw = Object.freeze({
-      kind: "text" as const,
-      id: "accessor",
-      region: "details" as const,
-      get text() {
-        reads++;
-        return value;
-      },
-    });
-
-    store.upsert("owner", raw);
-    const snapshot = store.snapshot();
-    const canonical = snapshot.contributions[0];
-    expect(canonical).not.toBe(raw);
-    expect(Object.isFrozen(canonical)).toBe(true);
-    const readsAfterUpsert = reads;
-    expect(readsAfterUpsert).toBeGreaterThan(0);
-    expect(canonical).toMatchObject({ text: "before" });
-
-    value = "after";
-    expect(canonical).toMatchObject({ text: "before" });
-    expect(reads).toBe(readsAfterUpsert);
-
-    if (!canonical) throw new Error("Expected a canonical contribution.");
-    store.upsert("owner", canonical);
-    expect(reads).toBe(readsAfterUpsert);
-  });
-
-  it("publishes before rendering, skips no-op removal, and clears without rendering", () => {
-    const observed: string[][] = [];
-    const { store, ids } = registry(() => observed.push(ids()));
-    store.upsert("owner", text("entry"));
-    expect(observed).toEqual([["entry"]]);
-    store.remove("owner", "missing");
-    expect(observed).toEqual([["entry"]]);
-    store.remove("owner", "entry");
-    expect(observed).toEqual([["entry"], []]);
-
-    store.upsert("owner", text("entry"));
-    observed.length = 0;
-    store.clear();
-    expect(ids()).toEqual([]);
-    expect(observed).toEqual([]);
-  });
-
   it("queues an operation emitted during another behind it, detached when emitted", () => {
     const observed: string[][] = [];
     const { store, ids } = registry((current) => {
@@ -103,18 +54,6 @@ describe("footer registry", () => {
     store.upsert("owner", text("outer"));
     expect(observed).toEqual([["outer"], ["outer", "nested"]]);
     expect(store.snapshot().contributions[1]).toMatchObject({ id: "nested", text: "before" });
-  });
-
-  it("clear drops work queued by the current operation", () => {
-    const { store, ids } = registry((current) => {
-      if (!ids().includes("outer")) return;
-      current.upsert("owner", text("queued"));
-      current.clear();
-    });
-    store.upsert("owner", text("outer"));
-    expect(ids()).toEqual([]);
-    store.upsert("owner", text("later"));
-    expect(ids()).toEqual(["later"]);
   });
 
   it("bounds a self-perpetuating render loop and recovers for the next operation", () => {

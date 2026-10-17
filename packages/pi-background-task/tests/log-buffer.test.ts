@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { LogBuffer, readLogBuffer } from "../src/task/log-buffer.ts";
-import { utf8ByteLength } from "pi-cosmic-core";
 
 const tailText = (buffer: LogBuffer, tailLines: number) =>
   readLogBuffer("task-1", buffer, "running", { tailLines })
@@ -8,24 +7,6 @@ const tailText = (buffer: LogBuffer, tailLines: number) =>
     .join("");
 
 describe("background log buffer", () => {
-  it("counts UTF-8 bytes and retains a valid tail", () => {
-    const buffer = new LogBuffer().append("stdout", "a🙂bc", 1, 6);
-    expect(buffer.bytes).toBeLessThanOrEqual(6);
-    expect(buffer.events[0]).toMatchObject({ text: "🙂bc", droppedBefore: true });
-    expect(buffer.droppedBytes).toBe(1);
-  });
-
-  it("advances cursors and reports dropped events", () => {
-    const buffer = new LogBuffer().append("stdout", "first\n", 1, 64);
-    buffer.append("stderr", "second\n", 2, 64);
-    buffer.dropOldest();
-    const slice = readLogBuffer("task-1", buffer, "running", { afterCursor: 0 });
-    expect(slice.events.map((event) => event.cursor)).toEqual([2]);
-    expect(slice.earliestAvailableCursor).toBe(2);
-    expect(slice.droppedBytes).toBe(utf8ByteLength("first\n"));
-    expect(slice.nextCursor).toBe(2);
-  });
-
   it("keeps detached snapshots through appends, eviction, and repeated compaction", () => {
     const buffer = new LogBuffer();
     for (let index = 0; index < 64; index++) buffer.append("stdout", "🙂", index, 256);

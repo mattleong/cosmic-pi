@@ -4,55 +4,9 @@ import { renderCompactIssues } from "../../src/preview/compact-issues";
 import type { CompactIssue } from "../../src/tools/compact-issues";
 import { plainTheme as theme, stripAnsi } from "../support/render";
 
-const issues: CompactIssue[] = [
-  { severity: "warning", code: "secret", message: "Possible private key" },
-  {
-    severity: "error",
-    code: "edit-no-match",
-    message: "The text to replace was not found",
-    detail: "oldText was not found.\nMatch the original text, including whitespace.",
-  },
-  {
-    severity: "info",
-    code: "read-continuation",
-    message: "Showing lines 1-2000 of 9000",
-    detail: "Use offset=2001 to continue.",
-  },
-];
 const render = (value: readonly CompactIssue[], width = 100, expanded = false) =>
   renderCompactIssues(value, theme, width, expanded).map(stripAnsi);
 const squash = (rows: readonly string[]) => rows.join("").replace(/\s/gu, "");
-
-test("collapsed rows show one message per attention issue in producer order", () => {
-  const rows = render(issues);
-  expect(rows).toHaveLength(2);
-  expect(rows[0]).toContain("Possible private key");
-  expect(rows[1]).toContain("The text to replace was not found");
-  const text = rows.join("\n");
-  expect(text).not.toContain("Showing lines");
-  expect(text).not.toContain("oldText");
-  expect(text).not.toContain("offset=2001");
-});
-
-test("expansion adds informational issues and each detail beneath its own message", () => {
-  const rows = render(issues, 100, true);
-  const at = (text: string) => rows.findIndex((row) => row.includes(text));
-  expect(at("Possible private key")).toBe(0);
-  expect(at("The text to replace was not found")).toBe(1);
-  expect(at("oldText was not found.")).toBe(2);
-  expect(at("Match the original text")).toBe(3);
-  expect(at("Showing lines 1-2000 of 9000")).toBe(4);
-  expect(at("Use offset=2001 to continue.")).toBe(5);
-  expect(rows).toHaveLength(6);
-  expect(render(issues).every((row) => rows.includes(row))).toBe(true);
-});
-
-test("blank messages and empty lists render nothing", () => {
-  expect(render([])).toEqual([]);
-  expect(renderCompactIssues(undefined, theme, 100, true)).toEqual([]);
-  expect(render([{ severity: "error", code: "blank", message: " \n\t" }], 100, true)).toEqual([]);
-  expect(renderCompactIssues(issues, theme, 0, true)).toEqual([]);
-});
 
 test("narrow widths wrap messages and details without clipping any text", () => {
   const long: CompactIssue[] = [

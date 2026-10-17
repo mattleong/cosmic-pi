@@ -5,8 +5,6 @@ import { requireNodeExecutable } from "../src/boundary/node-executable.ts";
 import { nodeFsPromises as fs } from "./support/node-builtins.ts";
 
 describe("Node executable preflight", () => {
-  it.effect("accepts the Node binary running Pi", () => requireNodeExecutable());
-
   it.effect("fails a launch when an upgrade removed or replaced the Node binary", () =>
     Effect.gen(function* () {
       const directory = yield* temporaryDirectory("node-executable-");

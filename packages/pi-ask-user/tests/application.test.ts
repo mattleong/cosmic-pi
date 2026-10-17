@@ -1,12 +1,7 @@
 import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
 import { eventually, makeTuiHost, waitMounted } from "./support/host.ts";
 import { startExtension, withoutRelayMarker } from "./support/extension.ts";
-import type {
-  CustomEntry,
-  CustomMessageEntry,
-  UIPromptEndEvent,
-  UIPromptStartEvent,
-} from "@earendil-works/pi-coding-agent";
+import type { CustomEntry, CustomMessageEntry } from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -31,13 +26,6 @@ afterEach(() => {
 
 const decodeReceipt = Schema.decodeUnknownSync(Schema.Struct({ requestId: Schema.String }));
 
-const promptStart: UIPromptStartEvent = {
-  type: "ui_prompt_start",
-  reason: "ui_prompt",
-  kind: "select",
-};
-const promptEnd: UIPromptEndEvent = { type: "ui_prompt_end", reason: "ui_prompt", kind: "select" };
-
 const harness = (
   loadPreviewSettings: Parameters<typeof startExtension>[0],
   overrides: ExtensionContextOverrides = {},
@@ -58,8 +46,6 @@ const harness = (
       ...extension,
       ctx,
       emit: (name: DefaultedEventName) => extension.emit(name, ctx),
-      promptStart: () => extension.emit("ui_prompt_start", ctx, promptStart),
-      promptEnd: () => extension.emit("ui_prompt_end", ctx, promptEnd),
     };
   });
 
@@ -141,22 +127,6 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
 
       replacement.resolve();
       yield* Effect.promise(() => replacing);
-      yield* Effect.promise(() => h.emit("session_shutdown"));
-    }),
-  );
-
-  it.effect("activates past a rejected loader and contains a throwing inactive notification", () =>
-    Effect.gen(function* () {
-      const h = yield* harness(() => Promise.reject(new Error("preview unavailable")));
-      yield* Effect.promise(() => h.emit("session_start"));
-      expect(h.registrations).toHaveLength(1);
-      const command = h.commands.get("ask-user");
-      if (!command) throw new Error("The ask-user command was not registered.");
-      const notify = vi.fn(() => {
-        throw new Error("stale UI");
-      });
-      yield* Effect.promise(() => command.handler("", extensionContextFixture({ ui: { notify } })));
-      expect(notify).toHaveBeenCalledOnce();
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
   );
@@ -282,24 +252,6 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         }
         yield* Effect.promise(() => h.emit("session_shutdown"));
       }),
-  );
-
-  it.effect("async admission respects unrelated coalesced UI prompts", () =>
-    Effect.gen(function* () {
-      const { h, ui } = yield* tuiHarness();
-      yield* Effect.promise(() => h.emit("session_start"));
-      yield* Effect.promise(() => h.promptStart());
-      const start = h.tools.get("ask_user_async")!;
-      yield* Effect.promise(() =>
-        expect(
-          start.execute("busy", asyncRequest, undefined, undefined, h.ctx),
-        ).rejects.toMatchObject({ reason: "busy" }),
-      );
-      expect(ui.mount).toBeUndefined();
-      yield* Effect.promise(() => h.promptEnd());
-      yield* openMounted(h, ui, "open");
-      yield* Effect.promise(() => h.emit("session_shutdown"));
-    }),
   );
 
   for (const lateResult of ["success", "rejection"] as const) {

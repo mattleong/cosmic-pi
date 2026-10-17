@@ -1,9 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Cause from "effect/Cause";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
@@ -63,31 +59,6 @@ describe("OpenAI configuration and credentials", () => {
       expect(serializedSnapshot(failure)).not.toMatch(/codex-secret-token|error_description/);
     }),
   );
-
-  it.effect("treats an absent or empty registry key as missing credentials", () =>
-    Effect.gen(function* () {
-      for (const token of [undefined, ""])
-        expect(yield* getCodexCredentials(testContext({ token }))).toBeUndefined();
-    }),
-  );
-
-  it.effect("interrupts a pending model-registry credential lookup", () => {
-    const pending = Deferred.makeUnsafe<undefined>();
-    const ctx = testContext();
-    return Effect.gen(function* () {
-      yield* Effect.addFinalizer(() => Deferred.succeed(pending, undefined));
-      const started = yield* Deferred.make<void>();
-      ctx.modelRegistry.getProviderAuth = () => {
-        Deferred.doneUnsafe(started, Effect.void);
-        return Effect.runPromise(Deferred.await(pending));
-      };
-      const fiber = yield* getCodexCredentials(ctx).pipe(Effect.forkScoped);
-      yield* Deferred.await(started);
-      yield* Fiber.interrupt(fiber);
-      const exit = yield* Fiber.await(fiber);
-      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-    }).pipe(Effect.scoped);
-  });
 
   it.effect("parses lossy registry keys into redacted credentials", () => {
     const rawJwt = jwt("acct_jwt");

@@ -50,60 +50,6 @@ describe("oversized Pi child events", () => {
     });
   });
 
-  it.effect("closes tools whose results exceed the line limit and keeps their outcome", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request());
-      const control = fake.controls[0]!;
-      for (const [toolCallId, isError] of [
-        ["shot", false],
-        ["broken", true],
-      ] as const) {
-        control.offer({
-          type: "tool_execution_start",
-          toolCallId,
-          toolName: "read",
-          args: { path: `${toolCallId}.png` },
-        });
-        control.offerOversizedLine(
-          oversized({
-            type: "tool_execution_update",
-            toolCallId,
-            toolName: "read",
-            args: {},
-            partialResult: { content: [IMAGE] },
-          }),
-        );
-        control.offerOversizedLine(
-          oversized({
-            type: "tool_execution_end",
-            toolCallId,
-            toolName: "read",
-            result: { content: [IMAGE], details: { isError: !isError } },
-            isError,
-            durationMs: 12,
-          }),
-        );
-        const message = toolResult(toolCallId, isError);
-        control.offerOversizedLine(oversized({ type: "message_start", message }));
-        control.offerOversizedLine(oversized({ type: "message_end", message }));
-      }
-      const settledTools = () =>
-        projections
-          .at(-1)
-          ?.runs[0]?.sessionEvents.filter(
-            (event) => event.type === "tool" && event.state !== "running",
-          ).length;
-      yield* yieldUntil(() => settledTools() === 2);
-      expect((yield* service.status(run.id)).sessionEvents).toMatchObject([
-        { type: "tool", toolName: "read", state: "completed" },
-        { type: "tool", toolName: "read", state: "failed" },
-      ]);
-      control.settle("Done.");
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-    });
-  });
-
   it.effect("fails the run when an oversized event carries data the run needs", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {

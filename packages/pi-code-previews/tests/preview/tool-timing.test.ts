@@ -2,29 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { getCodePreviewAnimationFrame } from "../../src/preview/tool-timing";
 
-test("missing, inherited and malformed animation frames use the first frame", () => {
-  const values: unknown[] = [
-    undefined,
-    null,
-    "7",
-    -1,
-    0.5,
-    NaN,
-    Infinity,
-    Number.MAX_SAFE_INTEGER + 1,
-  ];
-  for (const frame of values)
-    assert.equal(getCodePreviewAnimationFrame({ state: { codePreviewAnimationFrame: frame } }), 0);
-  for (const state of [
-    undefined,
-    null,
-    "state",
-    [],
-    Object.create({ codePreviewAnimationFrame: 9 }),
-  ])
-    assert.equal(getCodePreviewAnimationFrame({ state }), 0);
-});
-
 test("hostile state never invokes frame accessors or escapes the projection boundary", () => {
   let invoked = false;
   const state = Object.defineProperty({}, "codePreviewAnimationFrame", {

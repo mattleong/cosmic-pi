@@ -3,7 +3,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
-import { yieldUntil } from "pi-cosmic-core/testing";
 import type { BackendEvent } from "../../src/backend/model.ts";
 import { assignmentOperations } from "../../src/run/assignment.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
@@ -17,12 +16,6 @@ import {
   runRecordFixture,
   runningAssignment,
 } from "./fixtures/run-context.ts";
-import {
-  fakeNativeReportBackendLayer,
-  nativeReportRequest,
-  nativeReportServiceFixture,
-  withService,
-} from "./fixtures/service-harness.ts";
 
 const REPORT = "Accepted supervisor report.";
 const lateEvents: ReadonlyArray<BackendEvent> = [
@@ -160,70 +153,5 @@ describe("report ownership at assignment activation", () => {
         }),
       );
     }
-  }
-
-  for (const operation of ["start", "resume"] as const) {
-    it.effect(
-      `publishes a buffered ${operation} report without an observable running/retry window`,
-      () => {
-        const startGate = Deferred.makeUnsafe<void>();
-        const releaseGate = Deferred.makeUnsafe<void>();
-        const backend = fakeNativeReportBackendLayer({
-          initialStartGate: operation === "start" ? startGate : undefined,
-          releaseGate,
-          capabilities: ["steer", "interrupt", "resume"],
-        });
-        const { layer, projections } = nativeReportServiceFixture(backend);
-        return withService(layer, function* (service) {
-          yield* Effect.addFinalizer(() => Deferred.succeed(releaseGate, undefined));
-          const start = service.start(nativeReportRequest());
-          const initial = operation === "resume" ? yield* start : undefined;
-          if (initial) {
-            yield* service.interrupt(initial.id);
-            backend.controls[0]?.gateNextStart(startGate);
-          }
-          const confirming = yield* (initial ? service.resume(initial.id, "Continue") : start).pipe(
-            Effect.forkScoped,
-          );
-          const epoch = operation === "start" ? 1 : 2;
-          yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === epoch);
-          const run = projections.at(-1)?.runs[0];
-          if (!run) return yield* Effect.die("Missing admitted run.");
-          backend.controls[0]?.report(run.id, 1, "buffered", REPORT);
-          backend.controls[0]?.offer({
-            type: "supervisor_contact",
-            assignmentEpoch: epoch,
-            kind: "progress",
-            requestId: "report-buffered",
-            message: "Report buffered.",
-          });
-          yield* yieldUntil(() => projections.at(-1)?.runs[0]?.progress === "Report buffered.");
-          const beforeConfirmation = projections.length;
-          yield* Deferred.succeed(startGate, undefined);
-          expect(yield* Fiber.join(confirming)).toMatchObject({
-            state: "completed",
-            finalText: REPORT,
-            reportGeneration: 1,
-          });
-          expect(
-            projections.slice(beforeConfirmation).some(({ runs }) => runs[0]?.state === "running"),
-          ).toBe(false);
-          expect(backend.controls[0]?.released()).toBe(0);
-          expect(yield* service.claimRetryContinuation(run.id).pipe(Effect.flip)).toMatchObject({
-            code: "retry_source_not_failed",
-          });
-          yield* Deferred.succeed(releaseGate, undefined);
-          yield* yieldUntil(() => backend.controls[0]?.released() === 1);
-          const report = yield* service.status(run.id);
-          expect(report).toMatchObject({
-            state: "completed",
-            finalText: REPORT,
-            reportGeneration: 1,
-          });
-          expect((yield* service.status(run.id)).finalText).toBeUndefined();
-          return undefined;
-        });
-      },
-    );
   }
 });

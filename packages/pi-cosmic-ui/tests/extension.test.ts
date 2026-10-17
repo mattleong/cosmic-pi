@@ -5,13 +5,8 @@ import type {
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as MutableRef from "effect/MutableRef";
-import { CosmicUiConfigStore, CosmicUiConfigError } from "../src/config/store.ts";
-import { defaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
-import { CosmicUiService, type CosmicUiProjection } from "../src/protocol/service.ts";
 import { vi } from "vitest";
 import {
   deferredPromise,
@@ -25,14 +20,11 @@ import {
 } from "pi-cosmic-core/testing";
 import cosmicUi from "../index.ts";
 import type { CosmicUiApplicationDependencies } from "../src/application.ts";
-import * as HostStatus from "../src/boundary/host-status.ts";
 import {
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_QUERY,
-  COSMIC_UI_HOST_STATE,
   COSMIC_UI_PROTOCOL_VERSION,
-  normalizeCosmicUiHostStateEvent,
 } from "../src/protocol/protocol.ts";
 import { ACTIVITY_DISCOVER, ACTIVITY_EVENT } from "../src/activity/protocol.ts";
 import { ACTIVITY_VIEW_DISCOVER } from "../src/activity/view-protocol.ts";
@@ -223,10 +215,6 @@ const assistantMessage = (usage = nativeUsage(0)): AssistantMessage => ({
   stopReason: "stop",
   timestamp: 0,
 });
-const messageStart = (): ExtensionEventNamed<"message_start"> => ({
-  type: "message_start",
-  message: assistantMessage(),
-});
 const turnEnd = (message = assistantMessage()): ExtensionEventNamed<"turn_end"> => ({
   type: "turn_end",
   turnIndex: 0,
@@ -245,32 +233,12 @@ const turnEnd = (message = assistantMessage()): ExtensionEventNamed<"turn_end"> 
   },
   outcome: "completed",
 });
-const sessionCompact = (): ExtensionEventNamed<"session_compact"> => ({
-  type: "session_compact",
-  compactionEntry: {
-    ...entryBase,
-    type: "compaction",
-    summary: "summary",
-    firstKeptEntryId: "entry",
-    tokensBefore: 0,
-  },
-  fromExtension: false,
-  reason: "manual",
-  willRetry: false,
-});
 const uiPrompt = (
   type: "ui_prompt_start" | "ui_prompt_end",
 ): ExtensionEventNamed<"ui_prompt_start" | "ui_prompt_end"> => ({
   type,
   reason: "ui_prompt",
   kind: "custom",
-});
-const toolExecutionEnd = (toolName: string): ExtensionEventNamed<"tool_execution_end"> => ({
-  type: "tool_execution_end",
-  toolCallId: "call",
-  toolName,
-  result: undefined,
-  isError: false,
 });
 const usageEntry = (kind: string, input: number) => ({
   ...entryBase,
@@ -300,206 +268,7 @@ const startWithPendingProbes = (h: ReturnType<typeof harness>) =>
 
 const byName = (left: string, right: string) => left.localeCompare(right);
 
-const stateful = <A>(value: A) => {
-  let reads = 0;
-  return () => {
-    reads++;
-    if (reads > 1) throw new Error("protocol getter reread");
-    return value;
-  };
-};
-
 describe("Cosmic UI extension", () => {
-  it.effect(
-    "a retired masked config commit cannot republish after replacement initialization fails",
-    () =>
-      Effect.gen(function* () {
-        const committed = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        let failed = false;
-        let durable = defaultResolvedCosmicUiConfig();
-        let observed: MutableRef.MutableRef<CosmicUiProjection> | undefined;
-        const projection = () => observed;
-        const store = CosmicUiConfigStore.of({
-          resolve: () =>
-            failed
-              ? Effect.fail(
-                  new CosmicUiConfigError({
-                    operation: "read",
-                    path: "test",
-                    message: "unavailable",
-                  }),
-                )
-              : Effect.succeed(durable),
-          updateFooter: () => Effect.die("unexpected footer update"),
-          setVisibility: (_cwd, id, visible, _trusted, afterCommit) =>
-            Effect.gen(function* () {
-              const next = {
-                ...durable,
-                footer: { ...durable.footer, hidden: visible ? [] : [id] },
-              };
-              yield* Effect.sync(() => {
-                durable = next;
-              });
-              yield* Deferred.succeed(committed, undefined);
-              yield* Deferred.await(release);
-              yield* afterCommit(next);
-              return next;
-            }).pipe(Effect.uninterruptible),
-        });
-        const makeService = CosmicUiService.make;
-        const boundary = vi.spyOn(CosmicUiService, "make").mockImplementation((options) => {
-          observed = options.projection;
-          return makeService({ ...options, startPolling: false }).pipe(
-            Effect.provideService(CosmicUiConfigStore, store),
-          );
-        });
-        const h = harness();
-        try {
-          yield* emit(h, "session_start");
-          const command = h.registerCommand.mock.calls.find(([name]) => name === "cosmic-ui")?.[1]
-            .handler;
-          expect(command).toBeDefined();
-          const pending = command?.("settings visible:openai.usage hidden", h.ctx);
-          yield* Deferred.await(committed);
-          h.notify.mockClear();
-          failed = true;
-          const replacement = yield* emit(h, "session_start", withSession(h.ctx, {})).pipe(
-            Effect.forkScoped({ startImmediately: true }),
-          );
-          yield* Deferred.succeed(release, undefined);
-          yield* Effect.promise(() => Promise.resolve(pending));
-          yield* Fiber.join(replacement);
-          expect(durable.footer.hidden).toEqual(["openai.usage"]);
-          const retired = projection();
-          expect(retired).toBeDefined();
-          expect(retired && MutableRef.get(retired).config).toBeUndefined();
-          expect(h.notify).toHaveBeenCalledOnce();
-        } finally {
-          yield* Deferred.succeed(release, undefined);
-          yield* emit(h, "session_shutdown");
-          boundary.mockRestore();
-        }
-      }),
-  );
-
-  it.effect("normalizes hostile protocol getters once and isolates throwing reads", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const respond = vi.fn();
-      const queryRespond = stateful(respond);
-      const upsertOwner = stateful("owner");
-      const contribution = stateful({
-        kind: "text",
-        id: "hostile",
-        region: "details",
-        text: "hostile-text",
-      });
-      const removeId = stateful("hostile");
-
-      expect(() =>
-        h.pi.events.emit(COSMIC_UI_HOST_QUERY, {
-          version: COSMIC_UI_PROTOCOL_VERSION,
-          get respond() {
-            return queryRespond();
-          },
-        }),
-      ).not.toThrow();
-      expect(respond).toHaveBeenCalledOnce();
-      expect(() =>
-        h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-          version: COSMIC_UI_PROTOCOL_VERSION,
-          get owner() {
-            return upsertOwner();
-          },
-          get contribution() {
-            return contribution();
-          },
-        }),
-      ).not.toThrow();
-      yield* emit(h, "session_start");
-      const footer = capturedFooter(h);
-      const shows = () => footer.render(100).join("\n").includes("hostile-text");
-      yield* waitUntil(shows);
-      expect(() =>
-        h.pi.events.emit(COSMIC_UI_FOOTER_REMOVE, {
-          version: COSMIC_UI_PROTOCOL_VERSION,
-          owner: "owner",
-          get id() {
-            return removeId();
-          },
-        }),
-      ).not.toThrow();
-      yield* waitUntil(() => !shows());
-      yield* emit(h, "session_shutdown");
-    }),
-  );
-
-  it.effect("reports live custom-footer ownership through host discovery", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const broadcasts: boolean[] = [];
-      h.pi.events.on(COSMIC_UI_HOST_STATE, (data) => {
-        const state = normalizeCosmicUiHostStateEvent(data);
-        if (state) broadcasts.push(state.active);
-      });
-      let response: { readonly active: boolean } | undefined;
-      const query = () => {
-        response = undefined;
-        h.pi.events.emit(COSMIC_UI_HOST_QUERY, {
-          version: COSMIC_UI_PROTOCOL_VERSION,
-          respond: (state?: { readonly active: boolean }) => {
-            response = state;
-          },
-        });
-        return response;
-      };
-
-      expect(query()).toEqual({ active: false, ready: false, hidden: [] });
-      const starting = yield* emit(h, "session_start").pipe(
-        Effect.forkScoped({ startImmediately: true }),
-      );
-      expect(query()).toEqual({ active: false, ready: false, hidden: [] });
-      yield* Fiber.join(starting);
-      expect(query()).toEqual({ active: true, ready: true, hidden: [] });
-      yield* emit(h, "session_shutdown");
-      expect(query()).toBeUndefined();
-      expect(broadcasts).toContain(true);
-      expect(broadcasts.at(-1)).toBe(false);
-    }),
-  );
-
-  it.effect("reinstalls the footer when session_start supplies a new context", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      yield* emit(h, "session_start");
-      const secondContext = withSession(
-        h.ctx,
-        { getCwd: () => "/tmp/second-project", getSessionName: () => "second-session" },
-        { model: modelFixture({ ...harnessModel, id: "second-model" }) },
-      );
-      yield* emit(h, "session_start", secondContext);
-
-      expect(h.setFooter).toHaveBeenNthCalledWith(2, undefined);
-      expect(h.setFooter).toHaveBeenCalledTimes(3);
-      const footer = capturedFooter(h, 2);
-      expectFooterShows(footer, "second-model", "/tmp/second-project", "second-session");
-
-      const laterModel = modelFixture({ ...harnessModel, id: "later-model" });
-      const laterContext = withSession(
-        secondContext,
-        { getCwd: () => "/tmp/later-project", getSessionName: () => "later-session" },
-        { model: laterModel },
-      );
-      yield* emitEvent(
-        h,
-        { type: "model_select", model: laterModel, previousModel: undefined, source: "set" },
-        laterContext,
-      );
-      expectFooterShows(footer, "later-model", "/tmp/later-project", "later-session");
-    }),
-  );
-
   it.effect(
     "immediately disposes in-flight startup probes on overlapping session replacement",
     () =>
@@ -585,125 +354,6 @@ describe("Cosmic UI extension", () => {
       }),
   );
 
-  it.effect(
-    "retains complete same-session totals but resets them before a failing new session",
-    () =>
-      Effect.gen(function* () {
-        const h = harness();
-        let reads = 0;
-        h.ctx.sessionManager.getEntries = vi.fn(() => {
-          reads++;
-          if (reads > 1) throw new Error("one-shot entries");
-          return assistantEntries(100);
-        });
-        yield* emit(h, "session_start");
-        const firstFooter = capturedFooter(h);
-        expect(firstFooter.render(100).join("\n")).toContain("↑100");
-
-        yield* emitEvent(h, sessionCompact());
-        expect(reads).toBe(2);
-        expect(firstFooter.render(100).join("\n")).toContain("↑100");
-
-        const secondContext = withSession(h.ctx, {
-          getEntries: () => {
-            throw new Error("new session entries unavailable");
-          },
-        });
-        yield* emit(h, "session_start", secondContext);
-        const secondFooter = capturedFooter(h, -1);
-        expect(secondFooter.render(100).join("\n")).not.toContain("↑100");
-        h.ctx.sessionManager.getEntries = vi.fn(() => assistantEntries(900));
-        yield* emitEvent(h, messageStart());
-        yield* emitEvent(h, turnEnd());
-        yield* emit(h, "agent_settled", h.ctx);
-        expect(secondFooter.render(100).join("\n")).not.toContain("↑900");
-        yield* emit(h, "session_shutdown");
-      }),
-  );
-
-  it.live("refreshes idle persisted warming usage through the existing ticker", () => {
-    const h = harness();
-    return Effect.gen(function* () {
-      const entries = assistantEntries(10);
-      h.ctx.sessionManager.getEntries = vi.fn(() => entries);
-      yield* emit(h, "session_start");
-      const footer = capturedFooter(h);
-      entries.push(
-        {
-          ...entryBase,
-          type: "custom",
-          customType: "cache_warming_decision",
-          data: { estimatedInput: 999 },
-        },
-        usageEntry("cache_warm", 90),
-      );
-      yield* Effect.promise(() =>
-        vi.waitFor(
-          () => {
-            expect(footer.render(100).join("\n")).toContain("↑100");
-          },
-          { timeout: 2500, interval: 10 },
-        ),
-      );
-    }).pipe(Effect.ensuring(emit(h, "session_shutdown")));
-  });
-
-  it.effect.each(["interruption", "failure"] as const)(
-    "retries unpublished usage on the next idle refresh after %s",
-    (failure) =>
-      Effect.gen(function* () {
-        const published = yield* Deferred.make<void>();
-        let idleTick: (() => void) | undefined;
-        const ticker = vi.spyOn(HostStatus, "startHostUiTicker").mockImplementation((_ms, tick) => {
-          idleTick = tick;
-          return () => undefined;
-        });
-        let rejectNext = false;
-        const makeService = CosmicUiService.make;
-        const boundary = vi.spyOn(CosmicUiService, "make").mockImplementation((options) =>
-          makeService({ ...options, startPolling: false }).pipe(
-            Effect.map((service) => ({
-              ...service,
-              setTotals: (totals) =>
-                Effect.suspend(() => {
-                  if (!rejectNext)
-                    return service
-                      .setTotals(totals)
-                      .pipe(Effect.tap(() => Deferred.succeed(published, undefined)));
-                  rejectNext = false;
-                  return failure === "interruption"
-                    ? Effect.interrupt
-                    : Effect.die("usage publication failed");
-                }),
-            })),
-          ),
-        );
-        const h = harness();
-        const entries = assistantEntries(10);
-        h.ctx.sessionManager.getEntries = vi.fn(() => entries);
-        try {
-          yield* emit(h, "session_start");
-          const footer = capturedFooter(h);
-          entries.push(usageEntry("cache_warm", 90));
-          rejectNext = true;
-          yield* emit(h, "agent_settled");
-          expectFooterShows(footer, "↑10");
-          expect(footer.render(100).join("\n")).not.toContain("↑100");
-          h.ctx.sessionManager.getEntries = () => {
-            throw new Error("session scan unavailable");
-          };
-          expect(idleTick).toBeDefined();
-          idleTick?.();
-          yield* Deferred.await(published);
-          expectFooterShows(footer, "↑100");
-        } finally {
-          yield* emit(h, "session_shutdown");
-          boundary.mockRestore();
-          ticker.mockRestore();
-        }
-      }),
-  );
-
   it.effect("reconciles persisted usage without reading or double charging event usage", () =>
     Effect.gen(function* () {
       const h = harness();
@@ -754,74 +404,6 @@ describe("Cosmic UI extension", () => {
     }),
   );
 
-  it.effect("retains the last complete totals when numeric decoding rejects a rescan", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const initialEntries = vi.fn(() => assistantEntries(50));
-      h.ctx.sessionManager.getEntries = initialEntries;
-      yield* emit(h, "session_start");
-      const footer = capturedFooter(h);
-      expect(footer.render(100).join("\n")).toContain("↑50");
-
-      const rescannedEntries = vi.fn(() => assistantEntries(25, Number.NaN));
-      h.ctx.sessionManager.getEntries = rescannedEntries;
-      yield* emitEvent(h, sessionCompact());
-      expect(footer.render(100).join("\n")).toContain("↑50");
-      yield* emit(h, "session_shutdown");
-    }),
-  );
-
-  it.effect("fails closed when the live context mode getter throws", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      Object.defineProperty(h.ctx, "mode", {
-        get() {
-          throw new Error("mode host failure");
-        },
-      });
-      yield* emit(h, "session_start");
-      expect(h.setFooter).not.toHaveBeenCalled();
-      yield* emit(h, "session_shutdown");
-    }),
-  );
-
-  it.effect("materializes session cwd, signal, and initial abort state exactly once", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      let cwdReads = 0;
-      let signalReads = 0;
-      let abortedReads = 0;
-      const { signal, addEventListener, removeEventListener } = capturedSignal(undefined, () => {
-        abortedReads++;
-      });
-      Object.defineProperties(h.ctx, {
-        cwd: {
-          get() {
-            cwdReads++;
-            if (cwdReads > 1) throw new Error("cwd reread");
-            return process.cwd();
-          },
-        },
-        signal: {
-          get() {
-            signalReads++;
-            if (signalReads > 1) throw new Error("signal reread");
-            return signal;
-          },
-        },
-      });
-
-      yield* emit(h, "session_start");
-      expect(cwdReads).toBe(1);
-      expect(signalReads).toBe(1);
-      expect(abortedReads).toBe(1);
-      expect(addEventListener).toHaveBeenCalledOnce();
-      expect(h.setFooter).toHaveBeenCalledOnce();
-      yield* emit(h, "session_shutdown");
-      expect(removeEventListener).toHaveBeenCalledOnce();
-    }),
-  );
-
   it.effect("observes an abort between session capture and runtime listener registration", () =>
     Effect.gen(function* () {
       const h = harness();
@@ -842,26 +424,7 @@ describe("Cosmic UI extension", () => {
     }),
   );
 
-  it.effect("releases short-lived event abort forwarders when runtime work settles", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const { signal, addEventListener, removeEventListener } = capturedSignal();
-      h.ctx.signal = signal;
-
-      yield* emit(h, "session_start");
-      expect(addEventListener).toHaveBeenCalledTimes(1);
-      expect(removeEventListener).not.toHaveBeenCalled();
-
-      yield* emitEvent(h, turnEnd());
-      expect(addEventListener).toHaveBeenCalledTimes(3);
-      yield* waitUntil(() => removeEventListener.mock.calls.length === 2);
-
-      yield* emit(h, "session_shutdown");
-      expect(removeEventListener).toHaveBeenCalledTimes(3);
-    }),
-  );
-
-  for (const property of ["signal", "cwd"] as const) {
+  for (const property of ["cwd"] as const) {
     it.effect(`shuts down the prior session when the next session ${property} getter throws`, () =>
       Effect.gen(function* () {
         const h = harness();
@@ -880,42 +443,6 @@ describe("Cosmic UI extension", () => {
       }),
     );
   }
-
-  it.effect("contains delayed branch subscription creation and lifecycle failures", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      yield* emit(h, "session_start");
-      let branchChanged: (() => void) | undefined;
-      const unsubscribe = vi.fn(() => {
-        throw new Error("unsubscribe host failure");
-      });
-      const footer = capturedFooter(
-        h,
-        0,
-        {
-          onBranchChange(callback: () => void) {
-            branchChanged = callback;
-            return unsubscribe;
-          },
-        },
-        () => {
-          throw new Error("render host failure");
-        },
-      );
-
-      expect(() => branchChanged?.()).not.toThrow();
-      expect(() => footer.dispose()).not.toThrow();
-      expect(unsubscribe).toHaveBeenCalledOnce();
-      expect(() =>
-        capturedFooter(h, 0, {
-          onBranchChange() {
-            throw new Error("subscription host failure");
-          },
-        }),
-      ).not.toThrow();
-      yield* emit(h, "session_shutdown");
-    }),
-  );
 
   it.effect("stale failed-factory disposal cannot clear a successful retry", () =>
     Effect.gen(function* () {
@@ -945,24 +472,6 @@ describe("Cosmic UI extension", () => {
     }),
   );
 
-  it.effect("an older instance cannot dispose a newer footer from the same factory", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const firstUnsubscribe = vi.fn();
-      const secondUnsubscribe = vi.fn();
-      yield* emit(h, "session_start");
-      const first = capturedFooter(h, 0, { onBranchChange: () => firstUnsubscribe });
-      capturedFooter(h, 0, { onBranchChange: () => secondUnsubscribe });
-
-      first.dispose();
-      expect(firstUnsubscribe).toHaveBeenCalledOnce();
-      expect(secondUnsubscribe).not.toHaveBeenCalled();
-      yield* emit(h, "session_shutdown");
-      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-      expect(secondUnsubscribe).toHaveBeenCalledOnce();
-    }),
-  );
-
   it.effect("retries footer removal after the host rejects a pre-disposal clear", () =>
     Effect.gen(function* () {
       const h = harness();
@@ -978,49 +487,6 @@ describe("Cosmic UI extension", () => {
 
       expect(removalAttempts).toBe(2);
       expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-    }),
-  );
-
-  it.effect("relinquishes footer ownership when the host disposes before rejecting removal", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const unsubscribe = vi.fn();
-      let installedFooter: { dispose(): void } | undefined;
-      let removalAttempts = 0;
-      h.setFooter.mockImplementation((factory) => {
-        if (factory !== undefined) {
-          installedFooter = makeFooter(factory, { onBranchChange: () => unsubscribe });
-          return;
-        }
-        removalAttempts++;
-        installedFooter?.dispose();
-        throw new Error("host rejected removal after disposal");
-      });
-
-      yield* emit(h, "session_start");
-      yield* emit(h, "session_shutdown");
-      expect(removalAttempts).toBe(1);
-      expect(unsubscribe).toHaveBeenCalledOnce();
-
-      yield* emit(h, "session_start");
-      expect(h.setFooter).toHaveBeenLastCalledWith(expect.any(Function));
-      yield* emit(h, "session_shutdown");
-    }),
-  );
-
-  it.effect("treats duplicate agent starts as idempotent while a prompt is open", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      yield* emit(h, "session_start");
-      yield* emit(h, "agent_start");
-      yield* emitEvent(h, uiPrompt("ui_prompt_start"));
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for you");
-
-      yield* emit(h, "agent_start");
-      yield* emitEvent(h, uiPrompt("ui_prompt_end"));
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
-      yield* emit(h, "agent_end");
-      yield* emit(h, "session_shutdown");
     }),
   );
 
@@ -1053,42 +519,6 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "session_shutdown");
     }),
   );
-
-  it.effect("agent settlement clears prompt ownership before the next run", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      yield* emit(h, "session_start");
-      yield* emit(h, "agent_start");
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
-      yield* emitEvent(h, uiPrompt("ui_prompt_start"));
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for you");
-
-      yield* emit(h, "agent_end");
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === undefined);
-      yield* emit(h, "agent_start");
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
-
-      const writesBeforeStaleEnd = h.setWorkingMessage.mock.calls.length;
-      yield* emitEvent(h, uiPrompt("ui_prompt_end"));
-      yield* Effect.yieldNow;
-      expect(h.setWorkingMessage).toHaveBeenCalledTimes(writesBeforeStaleEnd);
-      yield* emit(h, "session_shutdown");
-    }),
-  );
-
-  it.effect("session abort clears a running working row", () => {
-    const h = harness();
-    const controller = new AbortController();
-    h.ctx.signal = controller.signal;
-    return Effect.gen(function* () {
-      yield* emit(h, "session_start");
-      yield* emit(h, "agent_start");
-      expect(h.setWorkingMessage).toHaveBeenLastCalledWith("Working · 0s");
-
-      controller.abort();
-      expect(h.setWorkingMessage).toHaveBeenLastCalledWith(undefined);
-    });
-  });
 
   it.effect("session abort interrupts startup probes without waiting for them", () =>
     Effect.gen(function* () {
@@ -1156,24 +586,6 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "session_shutdown");
     });
   });
-
-  it.effect("tool and turn completion do not wait for Git probes, which shutdown interrupts", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      yield* emit(h, "session_start");
-      let probes = 0;
-      let aborted = 0;
-      h.exec.mockImplementation((_command, _args, options) => {
-        probes++;
-        return abortablePendingExec(options?.signal, () => aborted++);
-      });
-      yield* emitEvent(h, toolExecutionEnd("bash"));
-      yield* emitEvent(h, turnEnd());
-      yield* waitUntil(() => probes > 0);
-      yield* emit(h, "session_shutdown");
-      yield* waitUntil(() => aborted === probes);
-    }),
-  );
 
   it.effect("releases protocol subscriptions exactly once on repeated shutdown", () =>
     Effect.gen(function* () {

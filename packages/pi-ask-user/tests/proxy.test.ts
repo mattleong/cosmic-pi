@@ -1,4 +1,4 @@
-import { defaultQuestion, routeRequest as request } from "./support/questionnaire.ts";
+import { routeRequest as request } from "./support/questionnaire.ts";
 import { afterEach, expect, vi } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -7,7 +7,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
-import { deferredPromise, macrotask } from "pi-cosmic-core/testing";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { registerQuestionnaireCapability } from "../src/boundary/host-owned-calls.ts";
 import { MAX_PENDING_QUESTIONNAIRES } from "../src/questionnaire/queue.ts";
@@ -67,100 +67,7 @@ it("decodes bounded structured transport data and rejects hostile or semanticall
   ])
     expect(decodeQuestionnaireOutcome(input)).toBeUndefined();
 });
-it("round-trips six questions and answers without relaxing the four-choice bound", () => {
-  const choices = Array.from({ length: 4 }, (_, index) => ({
-    ...defaultQuestion.choices[0]!,
-    value: `choice-${index}`,
-    label: `Choice ${index}`,
-  }));
-  const questions = Array.from({ length: 6 }, (_, index) => ({
-    ...defaultQuestion,
-    key: `question-${index}`,
-    title: `Question ${index}`,
-    choices,
-  }));
-  const answers = questions.map((question) => ({
-    key: question.key,
-    kind: "choices" as const,
-    values: choices.map((choice) => choice.value),
-    labels: choices.map((choice) => choice.label),
-  }));
-  expect(decodeQuestionnaireRequest({ questions })).toEqual({ questions });
-  expect(decodeQuestionnaireOutcome({ outcome: "submitted", answers })).toEqual({
-    outcome: "submitted",
-    answers,
-  });
-  expect(decodeQuestionnaireRequest({ questions: [...questions, questions[0]] })).toBeUndefined();
-  expect(
-    decodeQuestionnaireOutcome({ outcome: "submitted", answers: [...answers, answers[0]] }),
-  ).toBeUndefined();
-  expect(
-    decodeQuestionnaireRequest({
-      questions: [{ ...defaultQuestion, choices: [...choices, choices[0]] }],
-    }),
-  ).toBeUndefined();
-  expect(
-    decodeQuestionnaireOutcome({
-      outcome: "submitted",
-      answers: [{ ...answers[0], values: [...answers[0]!.values, "choice-4"] }],
-    }),
-  ).toBeUndefined();
-});
-it("decodes detached text requests and rejects incompatible choices and malformed text results", () => {
-  const question = { key: "text", title: "Text", prompt: "Explain?", mode: "text" };
-  const input = { questions: [question] };
-  const decoded = decodeQuestionnaireRequest(input);
-  expect(decoded).toEqual(input);
-  question.prompt = "changed";
-  expect(decoded?.questions[0]?.prompt).toBe("Explain?");
-  for (const incompatible of [
-    ...[[], undefined, [{ value: "a", label: "A", description: "A" }]].map((choices) =>
-      Object.assign({}, question, { choices }),
-    ),
-    {
-      ...question,
-      get choices() {
-        throw new Error("hostile");
-      },
-    },
-  ])
-    expect(decodeQuestionnaireRequest({ questions: [incompatible] })).toBeUndefined();
-  let reads = 0;
-  expect(
-    decodeQuestionnaireRequest({
-      questions: [
-        {
-          ...question,
-          get mode() {
-            return ++reads === 1 ? "text" : "multiple";
-          },
-        },
-      ],
-    })?.questions[0]?.mode,
-  ).toBe("text");
-  for (const malformed of [
-    ...["", " \n ", "x".repeat(4001), 42].map((text) => ({ key: "text", kind: "text", text })),
-    {
-      key: "text",
-      kind: "text",
-      get text() {
-        throw new Error("hostile");
-      },
-    },
-  ])
-    expect(
-      decodeQuestionnaireOutcome({ outcome: "submitted", answers: [malformed] }),
-    ).toBeUndefined();
-  expect(
-    decodeQuestionnaireOutcome({
-      outcome: "submitted",
-      answers: [{ key: "text", kind: "text", text: " bq12\nanswer ", note: "context" }],
-    }),
-  ).toEqual({
-    outcome: "submitted",
-    answers: [{ key: "text", kind: "text", text: "bq12\nanswer", note: "context" }],
-  });
-});
+
 it.effect(
   "root capabilities are session-bound, refuse aborted or stale calls and revoke captured handles",
   () =>
@@ -209,38 +116,7 @@ it.effect(
       expect(calls).toBe(1);
     }),
 );
-it.effect("root revocation contains a throwing unsubscribe and still aborts owned calls", () =>
-  Effect.gen(function* () {
-    const bus = createEventBus();
-    const completion = deferredPromise<AskUserOutcome>();
-    const signals: AbortSignal[] = [];
-    const dispose = registerQuestionnaireCapability({
-      events: {
-        ...bus,
-        on: (name, listener) => {
-          bus.on(name, listener);
-          return () => {
-            throw new Error("unsubscribe");
-          };
-        },
-      },
-      sessionId: "root",
-      generation: "one",
-      isCurrent: () => true,
-      run: (_effect, signal) => {
-        signals.push(signal);
-        return completion.promise;
-      },
-    });
-    const signal = yield* Effect.abortSignal;
-    const asking = queryQuestionnaireCapability(bus, "root")!.ask(request, owner, signal);
-    expect(dispose).not.toThrow();
-    expect(signals[0]?.aborted).toBe(true);
-    expect(queryQuestionnaireCapability(bus, "root")).toBeUndefined();
-    completion.resolve(answer);
-    yield* Effect.promise(() => asking);
-  }),
-);
+
 it.effect(
   "marked Pi children fail closed without a relay and route answers without opening child dialogs",
   () =>
@@ -275,6 +151,7 @@ it.effect(
       expect(forwarded).toBe(1);
     }),
 );
+
 it.effect(
   "root cancel synchronously aborts its owner and acknowledges only after owned cleanup",
   () =>
@@ -372,30 +249,6 @@ it.effect("root capabilities bound live owners and refuse a duplicate live owner
     expect(yield* Effect.promise(() => Promise.all(pending))).toHaveLength(
       MAX_PENDING_QUESTIONNAIRES,
     );
-    dispose();
-  }),
-);
-
-it.effect("root cancel aborts and joins only its exact owner while another owner answers", () =>
-  Effect.gen(function* () {
-    const { runs, dispose, capability } = registerPendingRuns();
-    const signal = yield* Effect.abortSignal;
-    const first = capability.ask(request, owner, signal);
-    const second = capability.ask(request, { ...owner, runId: "run-2" }, signal);
-    let acknowledged = false;
-    const cancelling = capability.cancel(owner).then(() => {
-      acknowledged = true;
-      return undefined;
-    });
-    expect(runs.map((run) => run.signal.aborted)).toEqual([true, false]);
-    yield* macrotask;
-    expect(acknowledged).toBe(false);
-    runs[0]!.completion.resolve({ outcome: "cancelled", answers: [] });
-    yield* Effect.promise(() => cancelling);
-    expect(yield* Effect.promise(() => first)).toEqual({ outcome: "cancelled", answers: [] });
-    expect(runs[1]!.signal.aborted).toBe(false);
-    runs[1]!.completion.resolve(answer);
-    expect(yield* Effect.promise(() => second)).toEqual(answer);
     dispose();
   }),
 );

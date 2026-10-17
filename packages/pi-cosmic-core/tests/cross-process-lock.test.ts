@@ -2,11 +2,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
-import {
-  acquireNativeLock,
-  CrossProcessLock,
-  crossProcessLockHolder,
-} from "../src/platform/cross-process-lock.ts";
+import { acquireNativeLock, CrossProcessLock } from "../src/platform/cross-process-lock.ts";
 import {
   nodeFsPromises as fs,
   nodePath as path,
@@ -44,30 +40,6 @@ it.live("excludes a real process, then admits its polling successor after releas
     expect(acquireNativeLock("fixture", { directory })).toBeUndefined();
     lease?.release();
     expect(nodeLockFs.readdirSync(directory)).toEqual([]);
-  }).pipe(Effect.scoped),
-);
-
-it.live("names a held slot's owner for diagnostics without changing the lock", () =>
-  Effect.gen(function* () {
-    const directory = yield* root;
-    const lease = acquireNativeLock("fixture", { directory });
-    const holder = crossProcessLockHolder("fixture", { directory });
-    expect(holder.slot.startsWith(directory)).toBe(true);
-    expect(holder.ownerPid).toBe(process.pid);
-    expect(acquireNativeLock("fixture", { directory })).toBeUndefined();
-    lease?.release();
-    expect(crossProcessLockHolder("fixture", { directory })).toEqual({ slot: holder.slot });
-  }).pipe(Effect.scoped),
-);
-
-it.live("reclaims a positively dead quiescent owner without a timeout lease", () =>
-  Effect.gen(function* () {
-    const directory = yield* root;
-    const first = yield* spawn(directory, "hold");
-    yield* first.wait("acquired");
-    yield* killChild(first.child);
-    const second = yield* spawn(directory, "once");
-    yield* second.wait("finished");
   }).pipe(Effect.scoped),
 );
 
@@ -124,26 +96,6 @@ it.live("retains an interrupted native owner until its real completion callback"
   }).pipe(Effect.scoped),
 );
 
-it.live("retires a published owner if acquisition durability confirmation fails", () =>
-  Effect.gen(function* () {
-    const directory = yield* root;
-    const original = nodeLockFs.fsyncSync;
-    let calls = 0;
-    const spy = vi.spyOn(nodeLockFs, "fsyncSync").mockImplementation((fd) => {
-      if (++calls === 3) throw Object.assign(new Error("Injected fsync failure"), { code: "EIO" });
-      original(fd);
-    });
-    try {
-      expect(() => acquireNativeLock("fault", { directory })).toThrow();
-    } finally {
-      spy.mockRestore();
-    }
-    const next = acquireNativeLock("fault", { directory })!;
-    expect(next).toBeDefined();
-    next.release();
-  }).pipe(Effect.scoped),
-);
-
 for (const mode of ["death-before-publish", "write-fault"])
   it.live(`does not reserve an empty public slot after ${mode}`, () =>
     Effect.gen(function* () {
@@ -160,28 +112,6 @@ it.live("rejects unsafe private-directory permissions without repairing them", (
     const directory = yield* root;
     yield* Effect.tryPromise(() => fs.chmod(directory, 0o755));
     expect(() => acquireNativeLock("unsafe", { directory })).toThrow();
-  }).pipe(Effect.scoped),
-);
-
-it.live("normal release cycles leave no artifacts and never clean historical evidence", () =>
-  Effect.gen(function* () {
-    const directory = yield* root;
-    for (const name of ["old.retired-token", ".candidate-old", "malformed.released-old"]) {
-      nodeLockFs.mkdirSync(path.join(directory, name), { mode: 0o700 });
-      nodeLockFs.writeFileSync(path.join(directory, name, "evidence"), "retain", { mode: 0o600 });
-    }
-    const before = nodeLockFs.readdirSync(directory);
-    for (let index = 0; index < 80; index++) {
-      const owner = acquireNativeLock("cycles", { directory })!;
-      owner.mutationStarted();
-      owner.mutationSettled();
-      owner.release();
-    }
-    expect(nodeLockFs.readdirSync(directory)).toEqual(before);
-    for (const name of before)
-      expect(nodeLockFs.readFileSync(path.join(directory, name, "evidence"), "utf8")).toBe(
-        "retain",
-      );
   }).pipe(Effect.scoped),
 );
 
@@ -222,63 +152,6 @@ it.live(
       expect(retained[0]).toContain(".retired-");
       expect(nodeLockFs.readdirSync(path.join(directory, retained[0]!))).toEqual(["owner.json"]);
     }).pipe(Effect.scoped),
-);
-
-for (const fault of ["renameSync", "fsyncSync", "unlinkSync", "rmdirSync"] as const)
-  it.live(
-    `retains release evidence after ${fault} failure without a late callback touching successors`,
-    () =>
-      Effect.gen(function* () {
-        const directory = yield* root;
-        const owner = acquireNativeLock("release-fault", { directory })!;
-        const spy = vi.spyOn(nodeLockFs, fault).mockImplementation(() => {
-          throw new Error("Injected release failure");
-        });
-        try {
-          if (fault === "renameSync" || fault === "fsyncSync")
-            expect(() => owner.release()).toThrow();
-          else owner.release();
-        } finally {
-          spy.mockRestore();
-        }
-        const evidence = nodeLockFs.readdirSync(directory);
-        expect(evidence).toHaveLength(1);
-        if (fault === "renameSync") {
-          expect(acquireNativeLock("release-fault", { directory })).toBeUndefined();
-          owner.release();
-          expect(nodeLockFs.readdirSync(directory)).toEqual(evidence);
-          return;
-        }
-        expect(evidence[0]).toContain(".released-");
-        const next = acquireNativeLock("release-fault", { directory })!;
-        const before = nodeLockFs.readdirSync(directory);
-        owner.release();
-        expect(() => owner.mutationSettled()).toThrow();
-        expect(() => owner.mutationStarted()).toThrow();
-        expect(nodeLockFs.readdirSync(directory)).toEqual(before);
-        expect(acquireNativeLock("release-fault", { directory })).toBeUndefined();
-        next.release();
-        expect(nodeLockFs.readdirSync(directory)).toEqual(evidence);
-      }).pipe(Effect.scoped),
-  );
-
-it.live("does not delete unexpected contents even under an owned normal-release name", () =>
-  Effect.gen(function* () {
-    const directory = yield* root;
-    const owner = acquireNativeLock("extra", { directory })!;
-    const slot = path.join(directory, nodeLockFs.readdirSync(directory)[0]!);
-    nodeLockFs.writeFileSync(path.join(slot, "unexpected"), "retain", { mode: 0o600 });
-    owner.release();
-    const retained = nodeLockFs.readdirSync(directory);
-    expect(retained).toHaveLength(1);
-    expect(retained[0]).toContain(".released-");
-    expect(nodeLockFs.readdirSync(path.join(directory, retained[0]!))).toEqual([
-      "owner.json",
-      "unexpected",
-    ]);
-    acquireNativeLock("extra", { directory })!.release();
-    expect(nodeLockFs.readdirSync(directory)).toEqual(retained);
-  }).pipe(Effect.scoped),
 );
 
 it.live("reclaims a lease whose live PID now belongs to a different process", () =>

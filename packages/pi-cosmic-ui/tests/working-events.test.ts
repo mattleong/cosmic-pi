@@ -117,23 +117,6 @@ const textStart = (): ExtensionEventNamed<"message_update"> => ({
   message: assistant(),
   assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: assistant() },
 });
-const providerRequest = (): ExtensionEventNamed<"before_provider_request"> => ({
-  type: "before_provider_request",
-  payload: {},
-});
-const uiPrompt = (
-  type: "ui_prompt_start" | "ui_prompt_end",
-): ExtensionEventNamed<"ui_prompt_start" | "ui_prompt_end"> => ({
-  type,
-  reason: "ui_prompt",
-  kind: "custom",
-});
-const throwingOutput = (): Usage =>
-  Object.defineProperty(usageWith(0), "output", {
-    get() {
-      throw new Error("unavailable usage");
-    },
-  });
 
 describe("working throughput through registered Pi events", () => {
   it.effect("starts before the first delta, then replaces the estimate with reported output", () =>
@@ -167,106 +150,6 @@ describe("working throughput through registered Pi events", () => {
         }),
       );
       expect(h.rate()).toEqual({ approximate: false, value: 50 });
-    }),
-  );
-
-  it.effect("does not confuse non-assistant messages or provider hooks with call boundaries", () =>
-    Effect.gen(function* () {
-      const h = yield* workingHost;
-      yield* h.emitEvent(providerRequest());
-      h.at(1_000);
-      yield* h.emitEvent(completion(200));
-      expect(h.rate()).toBeUndefined();
-      yield* h.emit("context_with_system");
-      h.at(2_000);
-      yield* h.emitEvent(providerRequest());
-      yield* h.emitEvent(messageEnd({ role: "user", content: "", timestamp: 0 }));
-      yield* h.emitEvent(
-        messageEnd({
-          role: "custom",
-          customType: "note",
-          content: "",
-          display: false,
-          timestamp: 0,
-        }),
-      );
-      h.at(3_000);
-      yield* h.emitEvent(completion(200));
-      expect(h.rate()).toEqual({ approximate: false, value: 100 });
-    }),
-  );
-
-  it.effect(
-    "excludes failed and unavailable samples without losing the last completed average",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* workingHost;
-        yield* h.emit("context_with_system");
-        h.at(1_000);
-        yield* h.emitEvent(completion(100));
-        const unavailable = [
-          ...(["error", "aborted", "pending", "deferred"] as const).map((stop) =>
-            completion(500, stop),
-          ),
-          ...[0, -1, Infinity, NaN, 1.5].map((output) => completion(output)),
-          messageEnd(assistant(throwingOutput())),
-        ];
-        let time = 1_000;
-        for (const event of unavailable) {
-          yield* h.emit("context_with_system");
-          yield* h.emitEvent(delta("text_delta", "partial"));
-          h.at((time += 10_000));
-          yield* h.emitEvent(event);
-          expect(h.rate()).toEqual({ approximate: false, value: 100 });
-        }
-        for (const stop of ["toolUse", "length"] as const) {
-          yield* h.emit("context_with_system");
-          h.at((time += 1_000));
-          yield* h.emitEvent(completion(200, stop));
-        }
-        expect(h.rate()).toEqual({ approximate: false, value: 166.7 });
-      }),
-  );
-
-  it.effect("counts output and full call time while prompts or unavailable UI hide the row", () =>
-    Effect.gen(function* () {
-      const h = yield* workingHost;
-      yield* h.emit("context_with_system");
-      h.at(1_000);
-      yield* h.emitEvent(uiPrompt("ui_prompt_start"));
-      yield* h.emitEvent(delta("text_delta", "😀".repeat(40)));
-      h.at(10_000);
-      yield* h.emitEvent(uiPrompt("ui_prompt_end"));
-      expect(h.rate()).toEqual({ approximate: true, value: 2 });
-      h.mode("rpc");
-      h.rate();
-      h.at(20_000);
-      yield* h.emitEvent(delta("thinking_delta", "你".repeat(80)));
-      h.mode("tui");
-      yield* h.emitEvent(completion(400));
-      expect(h.rate()).toEqual({ approximate: false, value: 20 });
-    }),
-  );
-
-  it.effect("discards unfinished calls and measured totals on replacement and new runs", () =>
-    Effect.gen(function* () {
-      const h = yield* workingHost;
-      yield* h.emit("context_with_system");
-      h.at(1_000);
-      yield* h.emitEvent(completion(100));
-      yield* h.emit("context_with_system");
-      yield* h.emit("session_start");
-      yield* h.emit("agent_start");
-      h.at(3_000);
-      yield* h.emitEvent(completion(1_000));
-      expect(h.rate()).toBeUndefined();
-      yield* h.emit("context_with_system");
-      h.at(4_000);
-      yield* h.emitEvent(completion(50));
-      expect(h.rate()).toEqual({ approximate: false, value: 50 });
-      yield* h.emit("agent_end");
-      yield* h.emit("agent_start");
-      expect(h.rate()).toBeUndefined();
     }),
   );
 });

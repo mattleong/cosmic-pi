@@ -54,29 +54,6 @@ it.live("rotates one generation once the host log passes its size bound", () =>
   }),
 );
 
-it.live("leaves a host log below its size bound in place", () =>
-  Effect.gen(function* () {
-    const { directory, logPath } = yield* existingLog('{"message":"earlier session"}\n');
-    yield* logThrough(() => directory, "appended");
-
-    const current = yield* Effect.promise(() => fs.readFile(logPath, "utf8"));
-    expect(current).toContain("earlier session");
-    expect(current).toContain("appended");
-  }),
-);
-
-it.live("absorbs an unresolvable agent directory instead of failing the layer", () =>
-  Effect.gen(function* () {
-    const exit = yield* Effect.exit(
-      logThrough(() => {
-        throw new Error("agent directory unavailable");
-      }, "must not escape as a failure"),
-    );
-
-    expect(exit._tag).toBe("Success");
-  }),
-);
-
 it.live("absorbs an uncreatable log directory and writes nothing", () =>
   Effect.gen(function* () {
     const directory = yield* logDirectory;

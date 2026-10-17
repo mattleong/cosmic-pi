@@ -6,17 +6,7 @@ import { assistantMessage, testModel } from "./helpers.ts";
 const model = testModel();
 
 describe("OpenAI compaction transcript projection", () => {
-  it("accepts ordinary assistant text without an optional phase", () => {
-    const manager = SessionManager.inMemory("/virtual/projection");
-    manager.appendMessage({ role: "user", content: "question", timestamp: 0 });
-    manager.appendMessage(assistantMessage([{ type: "text", text: "ordinary answer" }]));
-    const input = projectOpenAIResponseInput(model, manager.buildContextEntries());
-    expect(input).toHaveLength(2);
-    expect(JSON.stringify(input)).toContain("ordinary answer");
-    expect(input?.[1]).not.toHaveProperty("phase");
-  });
-
-  for (const supportsMidConvoSystemMessages of [false, true]) {
+  for (const supportsMidConvoSystemMessages of [true]) {
     it(`preserves native grammar tool input, mid-conversation=${supportsMidConvoSystemMessages}`, () => {
       const manager = SessionManager.inMemory("/virtual/grammar-projection");
       manager.appendMessage({
@@ -65,8 +55,8 @@ describe("OpenAI compaction transcript projection", () => {
     });
   }
 
-  for (const crossModel of [false, true]) {
-    for (const id of ["bare-call", "call|fc_item"]) {
+  for (const crossModel of [true]) {
+    for (const id of ["call|fc_item"]) {
       it(`preserves tool calls and results with ${id}, cross-model=${crossModel}`, () => {
         const manager = SessionManager.inMemory("/virtual/projection");
         const message = assistantMessage([

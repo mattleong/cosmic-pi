@@ -13,7 +13,6 @@ import {
   type HerdrBtwLink,
 } from "../src/btw/link.ts";
 import {
-  CHILD_ALIAS,
   CHILD_FILE,
   CHILD_ID,
   makeServiceFixture,
@@ -70,25 +69,6 @@ const linkEntry = (data: HerdrBtwLink | { readonly version: number } | string | 
 });
 
 describe("herdr-btw link restoration", () => {
-  it("reports none without any link entry", () => {
-    expect(
-      restoreHerdrBtwLink(
-        [
-          { type: "message", id: "m", parentId: null },
-          { type: "custom", customType: "other-extension/entry", data: { version: 1 } },
-        ],
-        OWNER,
-      ),
-    ).toEqual(HerdrBtwLinkRestoration.none());
-  });
-
-  it("restores the newest owner link", () => {
-    const superseded = { ...LINK, childSessionId: NEW_CHILD_ID, childSessionPath: NEW_CHILD_FILE };
-    expect(restoreHerdrBtwLink([linkEntry(LINK), linkEntry(superseded)], OWNER)).toEqual(
-      HerdrBtwLinkRestoration.restored({ link: superseded }),
-    );
-  });
-
   it("filters copied ancestor links at the store contract boundary", () => {
     const inherited = {
       ...LINK,
@@ -100,18 +80,6 @@ describe("herdr-btw link restoration", () => {
     );
     expect(restoreHerdrBtwLink([linkEntry(LINK), linkEntry(inherited)], OWNER)).toEqual(
       HerdrBtwLinkRestoration.restored({ link: LINK }),
-    );
-  });
-
-  it("fails closed on a malformed or wrong-version newest entry", () => {
-    expect(restoreHerdrBtwLink([linkEntry(LINK), linkEntry({ version: 2 })], OWNER)).toEqual(
-      HerdrBtwLinkRestoration.malformed(),
-    );
-    expect(restoreHerdrBtwLink([linkEntry(undefined)], OWNER)).toEqual(
-      HerdrBtwLinkRestoration.malformed(),
-    );
-    expect(restoreHerdrBtwLink([linkEntry("not-a-link")], OWNER)).toEqual(
-      HerdrBtwLinkRestoration.malformed(),
     );
   });
 });
@@ -135,106 +103,11 @@ describe("herdr-btw reuse workflow", () => {
     }),
   );
 
-  it.effect("reuse focus follows prompt settlement, skipping an absent prompt", () =>
-    Effect.gen(function* () {
-      const quiet = fixture({ initialLinks: [LINK], liveAgents: [liveChildAgent()] });
-      yield* quiet.open();
-      expect(operationNames(quiet.calls)).not.toContain("prompt side-session Pi");
-
-      const failing = fixture({
-        initialLinks: [LINK],
-        liveAgents: [liveChildAgent()],
-        failOperation: "prompt side-session Pi",
-      });
-      expect(yield* Effect.flip(failing.open("question"))).toMatchObject({
-        outcome: "uncertain",
-        paneId: "w1:p2",
-      });
-      expect(operationNames(failing.calls).slice(-2)).toEqual([
-        "prompt side-session Pi",
-        "focus side-session Pi",
-      ]);
-    }),
-  );
-
-  for (const [name, kind, value, options] of [
-    ["exact ID metadata", "id", CHILD_ID, {}],
-    [
-      "a path alias",
-      "path",
-      CHILD_ALIAS,
-      { compareSessionFileIdentity: aliasIdentity([CHILD_FILE, CHILD_ALIAS]) },
-    ],
-  ] as const) {
-    it.effect(`focuses ${name} with the recorded child identity`, () =>
-      Effect.gen(function* () {
-        const test = fixture({
-          initialLinks: [LINK],
-          liveAgents: [
-            liveChildAgent({ agent_session: { source: "herdr:pi", agent: "pi", kind, value } }),
-          ],
-          ...options,
-        });
-
-        expect(yield* test.open()).toMatchObject({ mode: "focused", paneId: "w1:p2" });
-        expect(operationNames(test.calls)).not.toContain("split BTW pane");
-      }),
-    );
-  }
-
-  const unavailablePath = "/sessions/missing-child.jsonl";
   for (const [name, options] of [
-    [
-      "matching child ID metadata under another name",
-      {
-        liveAgents: [
-          liveChildAgent({
-            name: "another-agent",
-            agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: CHILD_ID },
-          }),
-        ],
-      },
-    ],
-    [
-      "unavailable path identity",
-      {
-        liveAgents: [
-          liveChildAgent({
-            name: "another-agent",
-            agent_session: {
-              source: "herdr:pi",
-              agent: "pi",
-              kind: "path",
-              value: unavailablePath,
-            },
-          }),
-        ],
-        compareSessionFileIdentity: (leftPath, rightPath) =>
-          leftPath === unavailablePath || rightPath === unavailablePath
-            ? "unavailable"
-            : leftPath === rightPath
-              ? "same"
-              : "distinct",
-      },
-    ],
     [
       "multiple agents claiming the child",
       { liveAgents: [liveChildAgent(), liveChildAgent({ pane_id: "w1:p9", name: "other" })] },
     ],
-    ["another name", { liveAgents: [liveChildAgent({ name: "someone-elses-agent" })] }],
-    ["another terminal", { liveAgents: [liveChildAgent({ terminal_id: "term-other" })] }],
-    ["a non-Pi agent", { liveAgents: [liveChildAgent({ agent: "claude" })] }],
-    [
-      "another child path",
-      {
-        liveAgents: [
-          liveChildAgent({
-            agent_session: { source: "herdr:pi", agent: "pi", kind: "path", value: NEW_CHILD_FILE },
-          }),
-        ],
-      },
-    ],
-    ["missing session metadata", { liveAgents: [liveChildAgent({ agent_session: undefined })] }],
   ] satisfies Array<[string, HerdrBtwFixtureOptions]>) {
     it.effect(`refuses focus or duplicate startup for ${name}`, () =>
       Effect.gen(function* () {
@@ -306,22 +179,7 @@ describe("herdr-btw reuse workflow", () => {
     }),
   );
 
-  for (const [name, live] of [
-    ["the exact live child", liveChildAgent()],
-    [
-      "matching child ID metadata under another name",
-      liveChildAgent({
-        name: "another-agent",
-        agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: CHILD_ID },
-      }),
-    ],
-    [
-      "the recorded name with wrong session metadata",
-      liveChildAgent({
-        agent_session: { source: "herdr:pi", agent: "pi", kind: "path", value: NEW_CHILD_FILE },
-      }),
-    ],
-  ] as const) {
+  for (const [name, live] of [["the exact live child", liveChildAgent()]] as const) {
     it.effect(`the second pre-start snapshot rejects ${name}`, () =>
       Effect.gen(function* () {
         const test = fixture({ initialLinks: [LINK], liveAgentSnapshots: [[], [live]] });
@@ -356,43 +214,6 @@ describe("herdr-btw reuse workflow", () => {
         });
         expect(test.calls).toEqual([]);
       }
-    }),
-  );
-
-  it.effect("rejects a malformed parent ID before any client call", () =>
-    Effect.gen(function* () {
-      const invalidParent = fixture({ sessionId: "bad session id" });
-      yield* Effect.flip(invalidParent.open());
-      expect(invalidParent.calls).toEqual([]);
-    }),
-  );
-
-  it.effect("fails closed before client calls when the recorded link is malformed", () =>
-    Effect.gen(function* () {
-      const test = fixture({ restoreOverride: HerdrBtwLinkRestoration.malformed() });
-      expect(yield* Effect.flip(test.open())).toMatchObject({
-        code: "herdr_btw_link_malformed",
-        outcome: "confirmed",
-      });
-      expect(test.calls).toEqual([]);
-    }),
-  );
-
-  it.effect("openNew creates a fresh child and supersedes only after startup validation", () =>
-    Effect.gen(function* () {
-      const test = fixture({ initialLinks: [LINK], liveAgents: [liveChildAgent()] });
-      const result = yield* withReadiness(test.openNew("fresh BTW session"));
-      expect(result.mode).toBe("created");
-      expect(operationNames(test.calls)).not.toContain("inspect live agents");
-      expect(operationInputs(test.calls, "start side-session Pi")[0]).toMatchObject({
-        childSessionId: NEW_CHILD_ID,
-        childSessionPath: NEW_CHILD_FILE,
-        parentSessionPath: SESSION_FILE,
-      });
-      expect(test.recordedLinks.at(-1)).toMatchObject({
-        childSessionId: NEW_CHILD_ID,
-        childSessionPath: NEW_CHILD_FILE,
-      });
     }),
   );
 

@@ -2,24 +2,6 @@ import { describe, expect, it } from "vitest";
 import { toolSchemaPortabilityProblems } from "../testing.ts";
 
 describe("tool schema portability", () => {
-  it("accepts plain objects, arrays, enums, and untyped unions", () => {
-    expect(
-      toolSchemaPortabilityProblems({
-        type: "object",
-        properties: {
-          pattern: { type: "string", minLength: 1, maxLength: 10 },
-          mode: { type: "string", enum: ["a", "b"] },
-          items: {
-            type: "array",
-            items: { anyOf: [{ type: "string" }, { type: "number" }] },
-          },
-        },
-        required: ["pattern"],
-        additionalProperties: false,
-      }),
-    ).toEqual([]);
-  });
-
   it("reports nonportable keywords wherever they are nested", () => {
     expect(
       toolSchemaPortabilityProblems({

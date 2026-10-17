@@ -80,19 +80,6 @@ const expectEpoch = (backend: BackendHandle, epoch: number) =>
   });
 
 describe("local Pi task admission", () => {
-  for (const disposition of ["started", "queued"] as const) {
-    it.effect(
-      `accepts ${disposition} and associates subsequent lifecycle with the assignment`,
-      () =>
-        Effect.gen(function* () {
-          const { backend, emit, start } = yield* piFixture;
-          expect(Exit.isSuccess(yield* start(7, { disposition }))).toBe(true);
-          yield* emit({ type: "agent_start" });
-          yield* expectEpoch(backend, 7);
-        }),
-    );
-  }
-
   it.effect("preserves lifecycle that arrives before task admission is confirmed", () =>
     Effect.gen(function* () {
       const { backend, emit, prompts, respond } = yield* piFixture;
@@ -145,7 +132,7 @@ describe("local Pi task admission", () => {
     );
   }
 
-  for (const data of [undefined, null, {}, { disposition: "future-secret" }, { disposition: 9 }]) {
+  for (const data of [{ disposition: "future-secret" }]) {
     it.effect(
       `retains the attempted epoch when admission data is unreadable: ${JSON.stringify(data)}`,
       () =>

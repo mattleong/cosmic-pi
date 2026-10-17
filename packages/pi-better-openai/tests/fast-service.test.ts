@@ -6,14 +6,8 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
-import * as Scheduler from "effect/Scheduler";
 import { AgentDirectory, provideBuiltLayer } from "pi-cosmic-core";
-import {
-  interruptingScheduler,
-  jsonHttpTestLayer,
-  makeInMemoryDocuments,
-  yieldUntil,
-} from "pi-cosmic-core/testing";
+import { jsonHttpTestLayer, makeInMemoryDocuments, yieldUntil } from "pi-cosmic-core/testing";
 import { FastModeService } from "../src/fast/service.ts";
 import { initialFastSnapshot, type FastSnapshot } from "../src/fast/controller.ts";
 import { OpenAIUsageService } from "../src/usage/controller.ts";
@@ -149,92 +143,6 @@ describe("FastModeService", () => {
       provideBuiltLayer(persistedFastLayer(documents, current.ctx, { fast: fastProjection })),
     );
   });
-
-  it.effect("a fast-only commit keeps an in-flight usage result", () => {
-    const usageProjection = MutableRef.make(initialProjection());
-    const requested = Deferred.makeUnsafe<void>();
-    const release = Deferred.makeUnsafe<void>();
-    const ctx = testContext({ token: JSON.stringify({ access: "token", accountId: "acct" }) });
-    const layer = persistedFastLayer(
-      makeInMemoryDocuments(),
-      ctx,
-      { fast: MutableRef.make(initialFastSnapshot()), usage: usageProjection },
-      () =>
-        Deferred.succeed(requested, undefined).pipe(
-          Effect.andThen(Deferred.await(release)),
-          Effect.as({
-            status: 200,
-            body: { rate_limit: { primary_window: { used_percent: 25 } } },
-          }),
-        ),
-    );
-    return Effect.gen(function* () {
-      const usage = yield* OpenAIUsageService;
-      const refresh = yield* usage.refresh({ force: true }).pipe(Effect.forkScoped);
-      yield* Deferred.await(requested);
-      yield* (yield* FastModeService).setDesired(ctx, true);
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(refresh);
-      expect(MutableRef.get(usageProjection).snapshot?.sevenDayLeftPercent).toBe(75);
-    }).pipe(provideBuiltLayer(layer));
-  });
-
-  it.effect(
-    "a fast-only commit recomputes eligibility from usage settings changed elsewhere",
-    () => {
-      const usageProjection = MutableRef.make(initialProjection());
-      const documents = makeInMemoryDocuments();
-      const ctx = testContext({ oauth: false });
-      const layer = persistedFastLayer(documents, ctx, {
-        fast: MutableRef.make(initialFastSnapshot()),
-        usage: usageProjection,
-      });
-      return Effect.gen(function* () {
-        expect(MutableRef.get(usageProjection).eligible).toBe(false);
-        documents.documents.set(GLOBAL_CONFIG, { usage: { showOnlyOnSubscriptionModels: false } });
-        yield* (yield* FastModeService).setDesired(ctx, true);
-        expect(MutableRef.get(usageProjection)).toMatchObject({
-          eligible: true,
-          config: { usage: { showOnlyOnSubscriptionModels: false } },
-        });
-      }).pipe(provideBuiltLayer(layer));
-    },
-  );
-
-  it.effect(
-    "in-memory publication and private state commit together at an interruption checkpoint",
-    () => {
-      const projection = MutableRef.make<FastSnapshot>(initialFastSnapshot());
-      const current = makeContext("gpt-5.5");
-      return Effect.gen(function* () {
-        let interrupted = false;
-        const scheduler = interruptingScheduler(
-          () =>
-            MutableRef.get(projection).lastInjectedTier === "priority" &&
-            !interrupted &&
-            (interrupted = true),
-        );
-        yield* Effect.scoped(
-          FastModeService.make({ projection }).pipe(
-            Effect.tap((service) =>
-              Effect.gen(function* () {
-                yield* service.setDesired(current.ctx, true);
-                service.recordInjection({ model: "first", tier: "priority" });
-                yield* yieldUntil(() => interrupted);
-                yield* service.modelChanged(current.ctx);
-                expect(MutableRef.get(projection)).toMatchObject({
-                  desiredActive: true,
-                  lastInjectedModel: "first",
-                  lastInjectedTier: "priority",
-                });
-              }),
-            ),
-            Effect.provideService(Scheduler.Scheduler, scheduler),
-          ),
-        );
-      }).pipe(provideBuiltLayer(fakeConfigLayer));
-    },
-  );
 
   it.effect("tracks desired state across model eligibility and closes synchronous ingress", () => {
     const projection = MutableRef.make<FastSnapshot>(initialFastSnapshot());

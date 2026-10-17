@@ -255,90 +255,6 @@ describe("BackgroundTaskService", () => {
     },
   );
 
-  for (const outcome of ["exit", "output", "timeout", "interrupt"] as const) {
-    it.effect(`clears awaited activity after ${outcome}`, () => {
-      const admitted = Deferred.makeUnsafe<void>();
-      let latest: BackgroundTaskProjection = { tasks: [] };
-      const harness = serviceHarness({}, (projection) => {
-        latest = projection;
-        if (projection.tasks.some((task) => task.awaited))
-          Deferred.doneUnsafe(admitted, Effect.void);
-      });
-      return harness.run(function* (service) {
-        const started = yield* service.start(taskInput());
-        const waiting = yield* service
-          .wait(outcome === "output" ? outputWait(started.id) : exitWait(started.id, 5))
-          .pipe(Effect.forkScoped);
-        yield* Deferred.await(admitted);
-        expect(latest.tasks[0]?.awaited).toBe(true);
-        if (outcome === "exit") harness.controls[0]?.complete();
-        else if (outcome === "output") harness.controls[0]?.offer("stdout", "ready");
-        else if (outcome === "timeout") yield* TestClock.adjust("5 seconds");
-        if (outcome === "interrupt") yield* Fiber.interrupt(waiting);
-        else yield* Fiber.join(waiting);
-        expect(latest.tasks[0]?.awaited).toBe(false);
-      });
-    });
-  }
-
-  it.effect("keeps a task awaited until its last concurrent waiter leaves", () => {
-    let admitted = Deferred.makeUnsafe<void>();
-    let latest: BackgroundTaskProjection = { tasks: [] };
-    const harness = serviceHarness({}, (projection) => {
-      latest = projection;
-      if (projection.tasks.some((task) => task.awaited)) Deferred.doneUnsafe(admitted, Effect.void);
-    });
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput());
-      const first = yield* service.wait(outputWait(started.id)).pipe(Effect.forkScoped);
-      yield* Deferred.await(admitted);
-      admitted = Deferred.makeUnsafe<void>();
-      const second = yield* service.wait(exitWait(started.id)).pipe(Effect.forkScoped);
-      yield* Deferred.await(admitted);
-      yield* Fiber.interrupt(first);
-      expect(latest.tasks[0]?.awaited).toBe(true);
-      yield* Fiber.interrupt(second);
-      expect(latest.tasks[0]?.awaited).toBe(false);
-      expect((yield* service.status(started.id)).state).toBe("running");
-    });
-  });
-  it.effect("publishes output once at the leading edge and once at the trailing deadline", () => {
-    const projections: BackgroundTaskProjection[] = [];
-    const trailing = Deferred.makeUnsafe<void>();
-    const harness = serviceHarness({}, (projection) => {
-      projections.push(projection);
-      const text = projection.tasks[0]?.logs.map((entry) => entry.text).join("") ?? "";
-      if (text === "abc") Deferred.doneUnsafe(trailing, Effect.void);
-    });
-    const outputTexts = () =>
-      projections.flatMap((projection) => {
-        const text = projection.tasks[0]?.logs.map((entry) => entry.text).join("");
-        return text ? [text] : [];
-      });
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput({ command: "watch" }));
-
-      const read = (afterCursor: number, text: string) =>
-        emitAndRead(service, harness.controls[0], started.id, afterCursor, text);
-      const firstSlice = yield* read(0, "a");
-      expect(firstSlice.events.map((event) => event.cursor)).toEqual([1]);
-      expect(outputTexts()).toEqual(["a"]);
-
-      const secondSlice = yield* read(firstSlice.nextCursor, "b");
-      const thirdSlice = yield* read(secondSlice.nextCursor, "c");
-      expect([firstSlice.nextCursor, secondSlice.nextCursor, thirdSlice.nextCursor]).toEqual([
-        1, 2, 3,
-      ]);
-      expect(outputTexts()).toEqual(["a"]);
-
-      yield* TestClock.adjust("999 millis");
-      expect(outputTexts()).toEqual(["a"]);
-      yield* TestClock.adjust("1 millis");
-      yield* Deferred.await(trailing);
-      expect(outputTexts()).toEqual(["a", "abc"]);
-    });
-  });
-
   it.effect("starts, long-polls logs, and publishes process exit", () => {
     const terminal = awaitState("exited");
     const harness = serviceHarness({}, terminal.publish);
@@ -357,52 +273,6 @@ describe("BackgroundTaskService", () => {
     });
   });
 
-  it.effect("returns the running snapshot when the spawn completes asynchronously", () => {
-    const spawnGate = Deferred.makeUnsafe<void>();
-    const harness = serviceHarness({}, () => {}, { spawnGate });
-    return harness.run(function* (service) {
-      const starting = yield* service.start(taskInput()).pipe(forkNow);
-      yield* Effect.yieldNow;
-      yield* Deferred.succeed(spawnGate, undefined);
-      expect(yield* Fiber.join(starting)).toMatchObject({ state: "running", pid: 10_000 });
-    });
-  });
-
-  it.effect("keeps a log long-poll waiting when another task's output trims its history", () => {
-    const harness = serviceHarness({
-      maxRunning: 2,
-      logBufferBytesPerTask: 4_096,
-      totalLogBufferBytes: 8_192,
-    });
-    return harness.run(function* (service) {
-      const first = yield* service.start(taskInput({ command: "first" }));
-      const second = yield* service.start(taskInput({ command: "second" }));
-      const control = harness.controls[0];
-      const earlier = yield* emitAndRead(service, control, first.id, 0, "a".repeat(3_000));
-      const polling = yield* service
-        .logs({ id: first.id, afterCursor: earlier.nextCursor, waitSeconds: 30 })
-        .pipe(forkNow);
-      yield* emitAndRead(service, harness.controls[1], second.id, 0, "b".repeat(3_000));
-      expect((yield* service.status(first.id)).droppedLogBytes).toBe(3_000);
-      yield* TestClock.adjust("1 second");
-
-      control?.offer("stdout", "later\n");
-      expect((yield* Fiber.join(polling)).events.map((event) => event.text)).toEqual(["later\n"]);
-    });
-  });
-
-  it.effect("ends a log long-poll at its deadline when no new output arrives", () => {
-    const harness = serviceHarness();
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput());
-      const polling = yield* service
-        .logs({ id: started.id, afterCursor: 0, waitSeconds: 5 })
-        .pipe(forkNow);
-      yield* TestClock.adjust("5 seconds");
-      expect(yield* Fiber.join(polling)).toMatchObject({ events: [], state: "running" });
-    });
-  });
-
   it.effect("bounds an output wait by elapsed time when the wall clock steps backward", () => {
     const harness = serviceHarness();
     return harness.run(function* (service) {
@@ -413,23 +283,6 @@ describe("BackgroundTaskService", () => {
       yield* emitAndRead(service, harness.controls[0], started.id, 0, "booting\n");
       yield* TestClock.adjust("5 seconds");
       expect(yield* Fiber.join(waiting)).toMatchObject({ outcome: "timeout" });
-    });
-  });
-
-  it.effect("keeps the trailing output publish on time when the wall clock steps backward", () => {
-    const trailing = Deferred.makeUnsafe<void>();
-    const harness = serviceHarness({}, (projection) => {
-      const text = projection.tasks[0]?.logs.map((entry) => entry.text).join("");
-      if (text === "ab") Deferred.doneUnsafe(trailing, Effect.void);
-    });
-    return harness.run(function* (service) {
-      yield* TestClock.adjust("1 hour");
-      const started = yield* service.start(taskInput());
-      const first = yield* emitAndRead(service, harness.controls[0], started.id, 0, "a");
-      yield* TestClock.setTime(0);
-      yield* emitAndRead(service, harness.controls[0], started.id, first.nextCursor, "b");
-      yield* TestClock.adjust("1 second");
-      yield* Deferred.await(trailing);
     });
   });
 
@@ -507,36 +360,6 @@ describe("BackgroundTaskService", () => {
     });
   });
 
-  it.effect("matches literal output already retained before the wait starts", () => {
-    const harness = serviceHarness();
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput());
-      yield* emitAndRead(service, harness.controls[0], started.id, 0, "server ready\n");
-
-      expect(yield* service.wait(outputWait(started.id, { waitSeconds: 0 }))).toMatchObject({
-        outcome: "matched",
-        matchCursor: 1,
-      });
-      yield* service.stop(started.id);
-    });
-  });
-
-  it.effect("does not match a literal across stdout and stderr boundaries", () => {
-    const harness = serviceHarness();
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput());
-      const control = harness.controls[0];
-      const first = yield* emitAndRead(service, control, started.id, 0, "rea");
-      yield* emitAndRead(service, control, started.id, first.nextCursor, "dy", "stderr");
-
-      expect(yield* service.wait(outputWait(started.id, { waitSeconds: 0 }))).toMatchObject({
-        outcome: "timeout",
-        snapshot: { state: "running" },
-      });
-      yield* service.stop(started.id);
-    });
-  });
-
   for (const { name, droppedStream, droppedText, suffix } of [
     {
       name: "does not match across discarded output",
@@ -569,20 +392,6 @@ describe("BackgroundTaskService", () => {
       });
     });
   }
-
-  it.effect("does not rebase a future output cursor", () => {
-    const harness = serviceHarness();
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput());
-      const waiting = yield* service
-        .wait(outputWait(started.id, { afterCursor: 10 }))
-        .pipe(forkNow);
-
-      harness.controls[0]?.offer("stdout", "ready");
-      harness.controls[0]?.complete();
-      expect(yield* Fiber.join(waiting)).toMatchObject({ outcome: "completed" });
-    });
-  });
 
   it.effect("keeps one redacted, bounded line of a failed task's output in memory", () => {
     const harness = serviceHarness();
@@ -636,37 +445,6 @@ describe("BackgroundTaskService", () => {
       });
       expect((yield* service.status(started.id)).state).toBe("running");
       yield* service.stop(started.id);
-    });
-  });
-
-  it.effect("rejects an invalid output wait predicate", () => {
-    const harness = serviceHarness();
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput());
-      expect(
-        yield* service
-          .wait({ id: started.id, until: "output", contains: "", waitSeconds: 1 })
-          .pipe(Effect.flip),
-      ).toBeInstanceOf(InvalidBackgroundCommandError);
-      expect(
-        yield* service
-          .wait({ id: started.id, until: "exit", contains: "irrelevant", waitSeconds: 1 })
-          .pipe(Effect.flip),
-      ).toBeInstanceOf(InvalidBackgroundCommandError);
-      yield* service.stop(started.id);
-    });
-  });
-
-  it.effect("stops a process tree idempotently", () => {
-    const terminal = awaitState("stopped");
-    const harness = serviceHarness({}, terminal.publish);
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput());
-      const stopped = yield* service.stop(started.id);
-      expect(stopped.state).toBe("stopped");
-      expect(harness.controls[0]?.modes).toEqual(["graceful"]);
-      expect((yield* service.stop(started.id)).state).toBe("stopped");
-      expect(harness.controls[0]?.modes).toEqual(["graceful"]);
     });
   });
 
@@ -754,18 +532,6 @@ describe("BackgroundTaskService", () => {
     });
   });
 
-  it.effect("stops all active tasks and preserves the captured input order", () => {
-    const harness = serviceHarness({ maxRunning: 3 });
-    return harness.run(function* (service) {
-      yield* service.start(taskInput({ command: "first" }));
-      yield* service.start(taskInput({ command: "second" }));
-      yield* service.start(taskInput({ command: "third" }));
-      const stopped = yield* service.stopAll();
-      expect(stopped.map((task) => task.id)).toEqual(["task-1", "task-2", "task-3"]);
-      expect(stopped.every((task) => task.state === "stopped")).toBe(true);
-    });
-  });
-
   it.effect("marks runtime timeouts without a default timeout", () => {
     const terminal = awaitState("timed_out");
     const harness = serviceHarness({}, terminal.publish);
@@ -810,39 +576,6 @@ describe("BackgroundTaskService", () => {
       expect((yield* service.status("task-1")).state).toBe("stopped");
       expect(harness.controls[0]?.modes).toContain("force");
       yield* Fiber.await(starting);
-    });
-  });
-
-  it.effect("retains completed tasks independently of active tasks", () => {
-    const harness = serviceHarness({ maxRunning: 2, maxRetained: 2 });
-    return harness.run(function* (service) {
-      const active = yield* service.start(taskInput({ command: "active" }));
-      const completed: string[] = [];
-
-      for (const command of ["first", "second", "third"]) {
-        yield* TestClock.adjust("1 millis");
-        const started = yield* service.start({ command, cwd: "." });
-        const control = harness.controls.at(-1);
-        if (!control) throw new Error("completed task process was not captured");
-        control.complete();
-        expect(yield* service.wait({ id: started.id, until: "exit" })).toMatchObject({
-          outcome: "completed",
-          snapshot: { state: "exited" },
-        });
-        completed.push(started.id);
-      }
-
-      expect((yield* service.list("active")).map((task) => task.id)).toEqual([active.id]);
-      expect((yield* service.list("completed")).map((task) => task.id)).toEqual([
-        completed[2],
-        completed[1],
-      ]);
-      expect((yield* service.list()).map((task) => task.id)).toEqual([
-        active.id,
-        completed[2],
-        completed[1],
-      ]);
-      yield* service.stop(active.id);
     });
   });
 

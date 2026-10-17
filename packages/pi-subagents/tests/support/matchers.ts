@@ -5,11 +5,6 @@ export const anyString = () => {
   return matcher;
 };
 
-export const anyNumber = () => {
-  const matcher: unknown = expect.any(Number);
-  return matcher;
-};
-
 export const stringContaining = (expected: string) => {
   const matcher: unknown = expect.stringContaining(expected);
   return matcher;
@@ -27,10 +22,5 @@ export const stringMatching = (expected: RegExp) => {
 
 export const anything = () => {
   const matcher: unknown = expect.anything();
-  return matcher;
-};
-
-export const anyFunction = () => {
-  const matcher: unknown = expect.any(Function);
   return matcher;
 };

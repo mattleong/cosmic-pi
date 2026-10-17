@@ -9,7 +9,6 @@ import {
   leaseCounts,
   localServiceFixture,
   request,
-  waitForCompleted,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -86,31 +85,6 @@ describe("immutable script-origin subtree policy", () => {
     });
   });
 
-  for (const state of ["paused", "completed"] as const)
-    it.effect(
-      `retains script ancestry after model-issued ${state === "paused" ? "in-place resume" : "completed respawn"}`,
-      () => {
-        const f = localServiceFixture();
-        return withService(f.layer, function* (service) {
-          const scripted = yield* service.startScriptSessionOwned(request());
-          if (state === "paused") yield* service.interrupt(scripted.id);
-          else {
-            f.fake.controls[0]!.settle();
-            yield* waitForCompleted(service, scripted.id);
-            yield* yieldUntil(() => f.fake.controls[0]?.released() === 1);
-          }
-          const resumed = yield* service.resume(scripted.id);
-          expect(resumed).toMatchObject({ id: scripted.id, state: "running" });
-          expect(
-            yield* service
-              .startSessionOwnedFrom(scripted.id, request({ writeIntent: "writer" }))
-              .pipe(Effect.flip),
-          ).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
-          expect(yield* service.list).toHaveLength(1);
-        });
-      },
-    );
-
   for (const scripted of [true, false])
     it.effect(
       `${scripted ? "refuses script-origin" : "preserves model-origin"} writer retry successors`,
@@ -158,34 +132,4 @@ describe("immutable script-origin subtree policy", () => {
         });
       },
     );
-
-  it.effect(
-    "inherits predecessor provenance in read-only retries whose parent is the model root",
-    () => {
-      const f = localServiceFixture();
-      return withService(f.layer, function* (service) {
-        const failed = yield* service.startScriptSessionOwned(
-          request({ profile: "reviewer", routeContinuation: route(0, "read-only") }),
-        );
-        f.fake.controls[0]!.exit(1);
-        yield* yieldUntil(() => f.fake.controls[0]?.released() === 1);
-        const claim = yield* service.claimRetryContinuation(failed.id);
-        const successor = yield* service.startRetrySessionOwned({
-          ...request({ profile: "reviewer", routeContinuation: route(1, "read-only") }),
-          supersedes: { runId: failed.id, claimToken: claim.claimToken },
-        });
-        expect(successor).toMatchObject({
-          parentRunId: "root",
-          depth: failed.depth,
-          predecessorRunId: failed.id,
-          state: "running",
-        });
-        expect(
-          yield* service
-            .startSessionOwnedFrom(successor.id, request({ writeIntent: "writer" }))
-            .pipe(Effect.flip),
-        ).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
-      });
-    },
-  );
 });

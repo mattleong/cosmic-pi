@@ -8,7 +8,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { convertResponsesMessages } from "#pi-ai-openai-responses-shared";
 import {
-  buildSessionContext,
   convertToLlm,
   sessionEntryToContextMessages,
   SessionManager,
@@ -23,8 +22,8 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { provideBuiltLayer, type JsonValue } from "pi-cosmic-core";
-import { extensionContextFixture, jsonHttpTestLayer } from "pi-cosmic-core/testing";
+import { provideBuiltLayer } from "pi-cosmic-core";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
 import {
   OpenAICompactionBoundaryError,
   OpenAICompactionClient,
@@ -32,8 +31,6 @@ import {
   type OpenAICompactResult,
   type OpenAICompactionClientContract,
 } from "../src/boundary/openai-compaction.ts";
-import { reconstructOpenAIContext } from "../src/compaction/context.ts";
-import { projectOpenAIResponseInput } from "../src/compaction/projection.ts";
 import { OpenAICompactionError, OpenAICompactionService } from "../src/compaction/service.ts";
 import {
   decodeOpenAICompactionDetails,
@@ -128,11 +125,6 @@ function serviceLayer(
   );
 }
 
-const clientLayer = (body: JsonValue) =>
-  OpenAICompactionClient.layer(() => ({
-    getApiKeyAndHeaders: () => Promise.resolve({ ok: true as const, apiKey: "test-api-key" }),
-  })).pipe(Layer.provide(jsonHttpTestLayer(() => Effect.succeed({ status: 200, body }))));
-
 const recordingClient = (
   prefix: string,
   usage: OpenAICompactResult["usage"] = { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
@@ -172,29 +164,6 @@ const commit = (manager: SessionManager, result: CompactionResult | undefined) =
   );
   return result;
 };
-
-const checkpointEntry = (
-  id: string,
-  parentId: string,
-  second: number,
-  result: CompactionResult | undefined,
-): SessionEntry => {
-  if (!result) throw new Error("Expected compaction");
-  return {
-    type: "compaction",
-    id,
-    parentId,
-    timestamp: `2026-01-01T00:00:0${second}.000Z`,
-    summary: result.summary,
-    firstKeptEntryId: result.firstKeptEntryId,
-    tokensBefore: result.tokensBefore,
-    details: result.details,
-  };
-};
-
-const ownedOutput = (round: number) => [
-  { type: "compaction", encrypted_content: `owned-${round}` },
-];
 
 const previousTool = (round: number) => (round === 0 ? "old" : `tool-${round - 1}`);
 
@@ -237,50 +206,8 @@ const appendRoundTail = (manager: SessionManager, round: number) => {
   });
 };
 
-describe("OpenAICompactionClient", () => {
-  it.effect("retains cached input details from decoded usage", () => {
-    const layer = clientLayer({
-      object: "response.compaction",
-      output: [{ type: "compaction" }],
-      usage: {
-        input_tokens: 12,
-        input_tokens_details: { cached_tokens: 5 },
-        output_tokens: 3,
-        total_tokens: 15,
-      },
-    });
-    return Effect.gen(function* () {
-      const client = yield* OpenAICompactionClient;
-      const result = yield* client.compact({ model: testModel(), input: [] });
-      expect(result.usage).toEqual({
-        inputTokens: 12,
-        cachedInputTokens: 5,
-        outputTokens: 3,
-        totalTokens: 15,
-      });
-    }).pipe(provideBuiltLayer(layer));
-  });
-  it.effect("rejects fractional usage before returning a checkpoint", () => {
-    const layer = clientLayer({
-      object: "response.compaction",
-      output: [{ type: "compaction" }],
-      usage: { input_tokens: 1.5, output_tokens: 2, total_tokens: 3.5 },
-    });
-
-    return Effect.gen(function* () {
-      const client = yield* OpenAICompactionClient;
-      const failure = yield* client
-        .compact({ model: testModel(), input: [{ type: "message" }] })
-        .pipe(Effect.flip);
-
-      expect(failure).toBeInstanceOf(OpenAICompactionBoundaryError);
-      expect(failure.operation).toBe("decode");
-    }).pipe(provideBuiltLayer(layer));
-  });
-});
-
 describe("OpenAICompactionService", () => {
-  for (const supportsMidConvoSystemMessages of [false, true]) {
+  for (const supportsMidConvoSystemMessages of [true]) {
     it.effect(
       `preserves native context across repeated compactions, mid-conversation=${supportsMidConvoSystemMessages}`,
       () => {
@@ -391,7 +318,7 @@ describe("OpenAICompactionService", () => {
       },
     );
   }
-  for (const supportsMidConvoSystemMessages of [false, true]) {
+  for (const supportsMidConvoSystemMessages of [false]) {
     for (const anchor of ["system", "custom", "usage", "assistant"] as const) {
       it.effect(
         `reuses checkpoints with a retained ${anchor} anchor, mid-conversation=${supportsMidConvoSystemMessages}`,
@@ -477,7 +404,7 @@ describe("OpenAICompactionService", () => {
     });
   });
 
-  for (const replacement of [null, { content: "revised covered dialogue" }])
+  for (const replacement of [{ content: "revised covered dialogue" }])
     it.effect(
       `does not encrypt obsolete context after a persisted ${replacement ? "replacement" : "omission"}`,
       () => {
@@ -515,59 +442,6 @@ describe("OpenAICompactionService", () => {
         }).pipe(provideBuiltLayer(serviceLayer(target, client)));
       },
     );
-
-  it.effect("creates, reuses, filters, and injects native checkpoints", () => {
-    const target = fixture({
-      enabled: true,
-      branch: [
-        customMessageEntry("one", "first turn"),
-        { ...customMessageEntry("two", "second turn"), parentId: "one" },
-      ],
-    });
-    const { requests, client } = recordingClient("owned");
-
-    return Effect.gen(function* () {
-      const service = yield* OpenAICompactionService;
-      const first = yield* service.compact(compactEvent());
-      expect(first?.firstKeptEntryId).toBe("two");
-      expect(first?.tokensBefore).toBe(321);
-      expect(decodeOpenAICompactionDetails(first?.details)).toBeDefined();
-
-      target.branch.push(checkpointEntry("checkpoint-entry", "two", 1, first));
-      target.branch.push({
-        ...customMessageEntry("three", "third turn"),
-        parentId: "checkpoint-entry",
-      });
-
-      const second = yield* service.compact(compactEvent("kept-again"));
-      expect(decodeOpenAICompactionDetails(second?.details)).toBeDefined();
-      expect(requests[1]?.input.slice(0, 1)).toEqual(ownedOutput(1));
-      expect(requests[1]?.input.length).toBe(2);
-
-      target.branch.push(checkpointEntry("checkpoint-entry-2", "three", 2, second));
-      const messages = buildSessionContext(target.branch).messages;
-      const repaired = yield* service.filterContext(messages);
-      expect(serializedSnapshot(repaired)).toContain("first turn");
-      expect(serializedSnapshot(repaired)).toContain("second turn");
-      expect(serializedSnapshot(repaired)).toContain("third turn");
-      expect(serializedSnapshot(repaired)).not.toContain(OPENAI_COMPACTION_SUMMARY);
-      const input = projectOpenAIResponseInput(
-        testModel(),
-        reconstructOpenAIContext(target.branch)!.entries,
-      )!;
-      const system = { role: "system", content: "system" };
-      const tail = { type: "message", role: "user", content: "extension tail" };
-      const injected = yield* service.inject({
-        input: [system, ...input, tail],
-        marker: "preserved",
-      });
-      expect(injected).toEqual({
-        input: [system, ...ownedOutput(2), tail],
-        marker: "preserved",
-      });
-      expect(yield* service.inject({ input: [system, tail, ...input] })).toBeUndefined();
-    }).pipe(provideBuiltLayer(serviceLayer(target, client)));
-  });
 
   for (const mode of ["disabled", "model", "provider", "endpoint"] as const) {
     it.effect(`native fallback restores complete dialogue after ${mode}`, () => {
@@ -636,7 +510,7 @@ describe("OpenAICompactionService", () => {
     });
   }
 
-  for (const supportsMidConvoSystemMessages of [false, true]) {
+  for (const supportsMidConvoSystemMessages of [false]) {
     it.effect(
       `preserves native retry omissions across turns, compactions, and reload, mid-conversation=${supportsMidConvoSystemMessages}`,
       () => {

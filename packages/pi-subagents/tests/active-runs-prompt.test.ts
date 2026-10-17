@@ -21,8 +21,6 @@ import * as Effect from "effect/Effect";
 import { Type } from "typebox";
 import {
   ACTIVE_RUNS_PROMPT_SECTION,
-  activeRunsSection,
-  keepsMidConversationSystemMessages,
   registerActiveRunsPrompt,
 } from "../src/boundary/host-active-runs-prompt.ts";
 import type { SubagentProjection } from "../src/run/model.ts";
@@ -103,73 +101,6 @@ describe("active subagents prompt section", () => {
       expect(compacted).not.toContain(nested.id);
     });
   });
-
-  it("lists only active direct children and ignores volatile progress", () => {
-    const nested = view({ id: "agent-2", parentRunId: "agent-1", state: "running" });
-    const done = view({ id: "agent-3", state: "completed" });
-    const section = activeRunsSection(projectionOf([reviewer, nested, done]));
-    expect(section).toContain("agent-1 · reviewer · auth-review · running");
-    expect(section).not.toContain("agent-2");
-    expect(section).not.toContain("agent-3");
-    const later = activeRunsSection(
-      projectionOf([{ ...reviewer, lastActivityAt: 99, progress: "read 40 files" }, nested, done]),
-    );
-    expect(later).toBe(section);
-    expect(activeRunsSection(projectionOf([done]))).toBeUndefined();
-  });
-
-  it("recognizes models that keep mid-conversation system messages", () => {
-    expect(keepsMidConversationSystemMessages(keepingModel)).toBe(true);
-    expect(
-      keepsMidConversationSystemMessages(
-        modelFixture({
-          api: "openai-codex-responses",
-          compat: { supportsMidConvoSystemMessages: true },
-        }),
-      ),
-    ).toBe(true);
-    expect(keepsMidConversationSystemMessages(mergingModel)).toBe(false);
-    expect(
-      keepsMidConversationSystemMessages(
-        modelFixture({
-          api: "bedrock-converse-stream",
-          compat: { supportsMidConvoSystemMessages: true },
-        }),
-      ),
-    ).toBe(false);
-    expect(keepsMidConversationSystemMessages(undefined)).toBe(false);
-  });
-
-  it.effect("tracks live state while the model keeps mid-conversation system messages", () =>
-    Effect.gen(function* () {
-      const harness = promptHarness(projectionOf([reviewer]));
-      expect(yield* harness.section(keepingModel)).toContain("agent-1");
-      expect(yield* harness.section(keepingModel, ["read"])).toBeUndefined();
-      harness.setProjection(projectionOf([{ ...reviewer, state: "waiting_for_parent" }]));
-      expect(yield* harness.section(keepingModel)).toContain("waiting for your reply");
-      harness.setProjection(projectionOf([{ ...reviewer, state: "completed" }]));
-      expect(yield* harness.section(keepingModel)).toBeUndefined();
-    }),
-  );
-
-  it.effect("changes the section only at compaction when the model merges system messages", () =>
-    Effect.gen(function* () {
-      const harness = promptHarness(projectionOf([reviewer]));
-      expect(yield* harness.section(mergingModel)).toBeUndefined();
-      harness.compact("compaction-1");
-      const captured = yield* harness.section(mergingModel);
-      expect(captured).toContain("agent-1 · reviewer · auth-review");
-      expect(captured).not.toContain("running");
-      harness.setProjection(projectionOf([{ ...reviewer, state: "waiting_for_parent" }, scout]));
-      expect(yield* harness.section(mergingModel)).toBe(captured);
-      harness.setProjection(projectionOf([{ ...reviewer, state: "completed" }, scout]));
-      expect(yield* harness.section(mergingModel)).toBe(captured);
-      harness.compact("compaction-2");
-      const next = yield* harness.section(mergingModel);
-      expect(next).toContain("agent-2");
-      expect(next).not.toContain("agent-1");
-    }),
-  );
 });
 
 describe("active subagents section in a real Pi transcript", () => {

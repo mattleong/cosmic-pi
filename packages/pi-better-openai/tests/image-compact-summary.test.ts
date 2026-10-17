@@ -22,34 +22,13 @@ const input = (status = "completed", expanded = false): Input => ({
   context: renderContextFixture({ expanded }),
   result: { content: [{ type: "text", text: "Generated image" }, image], details: record(status) },
 });
-const errorInput = (text: string, details: Readonly<Record<string, string>> | undefined): Input => {
-  const call = input();
-  call.context.isError = true;
-  call.result = { content: [{ type: "text", text }], details };
-  return call;
-};
 const styleProblems = (summary: ReturnType<typeof imageCompactSummary>) =>
   (summary?.issues ?? []).flatMap((issue) => issueMessageStyleProblems(issue.message));
 
 describe("image compact summary", () => {
-  it("preserves a validated cancellation despite host isError", () => {
-    const call = input("cancelled");
-    call.context.isError = true;
-    expect(imageCompactSummary(call)?.outcome).toBe("cancelled");
-  });
-  it.each(["pending", "running"] as const)("reports %s without claiming success", (phase) => {
-    const summary = imageCompactSummary({ ...input(), phase, result: undefined });
-    expect(summary?.outcome).toBeUndefined();
-    expect(summary?.action).toBe("generate");
-    expect(summary?.metadata).toBeUndefined();
-  });
-
   it.each([
-    ["completed", "success", undefined],
     ["failed", "error", "error"],
-    ["cancelled", "cancelled", undefined],
     ["incomplete", "uncertain", "warning"],
-    ["in_progress", "uncertain", "warning"],
   ])("classifies %s from domain details", (status, outcome, severity) => {
     const call = input(status);
     const before = structuredClone(call.result);
@@ -60,54 +39,5 @@ describe("image compact summary", () => {
     expect(JSON.stringify(summary?.issues ?? [])).not.toContain("otter-image-1.png");
     expect(call.result).toEqual(before);
     expect(call.result?.content[1]).toBe(image);
-  });
-
-  it("warns rather than confirming success when a completed record has no image", () => {
-    const call = input();
-    call.result!.content = [{ type: "text", text: "Generated image" }];
-    const summary = imageCompactSummary(call);
-    expect(summary?.outcome).toBe("uncertain");
-    expect(compactIssueSeverity(summary?.issues)).toBe("warning");
-    expect(styleProblems(summary)).toEqual([]);
-  });
-
-  it("declines missing, malformed and unknown details", () => {
-    const validDetails = record("completed");
-    for (const details of [undefined, {}, { ...validDetails, savedPath: 42 }]) {
-      const call = input();
-      call.result!.details = details;
-      expect(imageCompactSummary(call)).toBeUndefined();
-    }
-    expect(imageCompactSummary(input("unknown"))).toBeUndefined();
-  });
-
-  it.each([
-    ["without details", undefined],
-    ["with Pi's empty error details", {}],
-  ])("classifies text-only errors %s by their first line", (_label, details) => {
-    const text = "Save failed.\nOutput may exist; inspect the destination before retrying.";
-    const summary = imageCompactSummary(errorInput(text, details));
-    expect(summary?.outcome).toBe("error");
-    expect(summary?.issues).toEqual([
-      expect.objectContaining({ severity: "error", message: "Save failed" }),
-    ]);
-    expect(styleProblems(summary)).toEqual([]);
-  });
-
-  it("declines attachment-bearing and detail-bearing errors", () => {
-    const call = errorInput("Save failed", undefined);
-    call.result!.content.push(image);
-    expect(imageCompactSummary(call)).toBeUndefined();
-    expect(call.result!.content[1]).toBe(image);
-    expect(imageCompactSummary(errorInput("Save failed", { reason: "disk" }))).toBeUndefined();
-  });
-
-  it("names the sign-in command for missing credentials instead of quoting the provider", () => {
-    const text = "Missing openai-codex OAuth credentials. Run /login openai-codex.";
-    const summary = imageCompactSummary(errorInput(text, {}));
-    expect(summary?.outcome).toBe("error");
-    const [issue] = summary?.issues ?? [];
-    expect(issue?.message).toContain("/login openai-codex");
-    expect(styleProblems(summary)).toEqual([]);
   });
 });

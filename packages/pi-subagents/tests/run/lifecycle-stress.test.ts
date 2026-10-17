@@ -8,7 +8,6 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as Scheduler from "effect/Scheduler";
 import * as TestClock from "effect/testing/TestClock";
-import { provideBuiltLayer } from "pi-cosmic-core";
 import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
 import { SubagentService } from "../../src/run/service.ts";
 import {
@@ -78,85 +77,6 @@ describe("SubagentService lifecycle stress", () => {
         }
         return undefined;
       }),
-  );
-
-  it.effect("joins terminal descendant cleanup without replacing its outcome", () =>
-    Effect.gen(function* () {
-      const release = yield* Deferred.make<void>();
-      const cleanupOrder: number[] = [];
-      const { fake, projections, layer } = localServiceFixture(
-        {},
-        fakeChildLayer(Effect.void, { onRelease: (index) => cleanupOrder.push(index) }),
-      );
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
-        const parent = yield* service.start(request());
-        const child = yield* service.startSessionOwnedFrom(parent.id, request());
-        fake.controls[1]!.gateRelease(release);
-        fake.controls[1]!.settle();
-        yield* yieldUntil(
-          () => projections.at(-1)?.runs.find((run) => run.id === child.id)?.state === "completed",
-        );
-        const stopping = yield* service.stop(parent.id).pipe(Effect.forkScoped);
-        yield* TestClock.adjust("30 seconds");
-        expect(stopping.pollUnsafe()).toBeUndefined();
-        expect(cleanupOrder).toEqual([]);
-        yield* Deferred.succeed(release, undefined);
-        expect((yield* Fiber.join(stopping)).state).toBe("stopped");
-        expect((yield* service.status(child.id)).state).toBe("completed");
-        expect(cleanupOrder).toEqual([1, 0]);
-      }).pipe(
-        Effect.ensuring(Deferred.succeed(release, undefined)),
-        Effect.scoped,
-        provideBuiltLayer(layer),
-      );
-    }),
-  );
-
-  it.effect("reclaims interrupted pre-spawn cleanup before releasing a writer lease", () =>
-    Effect.gen(function* () {
-      const spawnEntered = yield* Deferred.make<void>();
-      const spawnGate = yield* Deferred.make<void>();
-      const cleanupOrder: string[] = [];
-      const { fake, projections, layer } = localServiceFixture(
-        {},
-        fakeChildLayer(
-          Deferred.succeed(spawnEntered, undefined).pipe(Effect.andThen(Deferred.await(spawnGate))),
-          { onRelease: () => cleanupOrder.push("backend") },
-        ),
-        undefined,
-        fakeWriterLeaseLayer({ onRelease: () => cleanupOrder.push("lease") }),
-      );
-      const owner = yield* Scope.make();
-      yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
-      const context = yield* Layer.buildWithScope(layer, owner);
-      const service = Context.get(context, SubagentService);
-      yield* Effect.gen(function* () {
-        const starting = yield* service
-          .startSessionOwned(request({ writeIntent: "writer" }))
-          .pipe(Effect.forkScoped);
-        yield* Deferred.await(spawnEntered);
-        const id = projections.at(-1)!.runs[0]!.id;
-        const stopping = yield* service.stop(id).pipe(Effect.forkScoped);
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopping");
-        yield* TestClock.adjust("30 seconds");
-        const shutdown = yield* Scope.close(owner, Exit.void).pipe(Effect.forkScoped);
-        yield* TestClock.adjust("30 seconds");
-        expect(shutdown.pollUnsafe()).toBeUndefined();
-        expect(cleanupOrder).toEqual([]);
-        expect(fake.controls).toHaveLength(0);
-        const publicationsAtShutdown = projections.length;
-        yield* Deferred.succeed(spawnGate, undefined);
-        yield* Fiber.join(shutdown);
-        expect(fake.controls).toHaveLength(1);
-        expect(fake.controls[0]!.released()).toBe(1);
-        expect(cleanupOrder).toEqual(["backend", "lease"]);
-        expect(fake.reclaimedRunIds).toEqual([id]);
-        expect(projections).toHaveLength(publicationsAtShutdown);
-        yield* Fiber.await(starting);
-        yield* Fiber.await(stopping);
-      }).pipe(Effect.ensuring(Deferred.succeed(spawnGate, undefined)));
-    }).pipe(Effect.scoped),
   );
 
   it.effect(

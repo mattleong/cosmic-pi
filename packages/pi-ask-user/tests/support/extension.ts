@@ -5,8 +5,6 @@ import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { afterEach, beforeEach, vi } from "vitest";
 import { askUserWithDependencies } from "../../src/application.ts";
 
-export type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
-
 export const withoutRelayMarker = () => {
   beforeEach(() => {
     vi.stubEnv("PI_SUBAGENT_CHILD", undefined);

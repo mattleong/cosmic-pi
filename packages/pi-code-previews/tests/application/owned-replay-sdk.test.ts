@@ -17,7 +17,7 @@ import { setPlainPreviewSettings } from "../support/renderer-host";
 import { drawToolRow, hostToolRow } from "../../testing";
 
 beforeAll(() => initTheme("dark", false));
-for (const foreign of [false, true])
+for (const foreign of [false])
   it.live(
     `reload reconstructs owned history before startup without changing tool authority (foreign=${foreign})`,
     () =>

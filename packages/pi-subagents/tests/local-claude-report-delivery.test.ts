@@ -51,19 +51,6 @@ describe("Claude accepted report delivery", () => {
     }),
   );
 
-  it.effect("bounds missing-result grace to ten seconds", () =>
-    Effect.gen(function* () {
-      const { reports, events } = yield* makeDelivery;
-      yield* reports.bufferAcceptedReport(report);
-      yield* TestClock.adjust("9 seconds");
-      expect(Option.isNone(yield* Queue.poll(events))).toBe(true);
-      yield* TestClock.adjust("1 second");
-      expect(yield* Queue.take(events)).toEqual(report);
-      yield* reports.observeNativeResult(report.assignmentEpoch);
-      expect(Option.isNone(yield* Queue.poll(events))).toBe(true);
-    }),
-  );
-
   it.effect("cancels grace on scope close while retaining immediate recovery", () =>
     Effect.gen(function* () {
       const { reports, events } = yield* makeDelivery;

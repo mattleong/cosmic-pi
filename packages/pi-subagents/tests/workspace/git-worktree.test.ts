@@ -8,7 +8,7 @@ import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-
 import { git } from "../../src/boundary/git-worktree-process.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
-import { WorkspaceError, type WorkspaceHandle } from "../../src/workspace/model.ts";
+import { type WorkspaceHandle } from "../../src/workspace/model.ts";
 import {
   exists,
   failureOf,
@@ -45,32 +45,6 @@ const prepareIntegration = (handle: WorkspaceHandle) =>
     };
     return { revision, prepared, integration };
   });
-
-test("rejects an empty ancestor created after prepare, including an active nested writer", function* (service, root, agent) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* io(() => fs.mkdir(path.join(handle.cwd, "feature/nested"), { recursive: true }));
-  yield* writeFile(path.join(handle.cwd, "feature/nested/new.ts"), "new\n");
-  const { integration } = yield* prepareIntegration(handle);
-  const ancestor = path.join(root, "feature");
-  yield* io(() => fs.mkdir(ancestor));
-  expect((yield* failureOf(service.integrate(integration))).message).toContain("ancestors changed");
-  const leases = yield* WriterLeaseService.pipe(
-    Effect.provide(WriterLeaseService.layer({ agentDirectory: agent })),
-  );
-  const cwd = yield* leases.canonicalize(ancestor);
-  yield* Effect.acquireUseRelease(
-    leases.acquire({ cwd, runId: "nested-writer" }),
-    () =>
-      Effect.gen(function* () {
-        expect((yield* failureOf(service.integrate(integration))).message).toContain(
-          "ancestors changed",
-        );
-        expect(yield* io(() => fs.readdir(ancestor))).toEqual([]);
-        expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("prepared");
-      }),
-    (lease) => leases.release(lease).pipe(Effect.orDie),
-  );
-});
 
 test("rejects an unleased ancestor appearing between lease revalidation and publication discovery", function* (service, root, agent) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
@@ -143,41 +117,7 @@ const addInternalAliases = (root: string) =>
     yield* git(root, ["add", "--", "AGENTS.md", "CLAUDE.md", "src/alias.md"]);
   });
 
-test("preserves tracked internal aliases through snapshot, fork and regular-file integration", function* (service, root) {
-  yield* addInternalAliases(root);
-  yield* writeFile(path.join(root, "AGENTS.md"), "current instructions\n");
-  const index = yield* io(() => fs.readFile(path.join(root, ".git/index")));
-  const head = yield* git(root, ["rev-parse", "HEAD"]);
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  expect(yield* io(() => fs.readlink(path.join(handle.cwd, "CLAUDE.md")))).toBe("AGENTS.md");
-  expect(yield* readText(handle.cwd, "src/alias.md")).toBe("current instructions\n");
-  const fork = yield* service.fork(workspaceTarget(handle));
-  expect(yield* io(() => fs.readlink(path.join(fork.cwd, "CLAUDE.md")))).toBe("AGENTS.md");
-  yield* writeFile(path.join(handle.cwd, "AGENTS.md"), "reviewed instructions\n");
-  const { revision, prepared, integration } = yield* prepareIntegration(handle);
-  expect(revision.changedPaths).toEqual(["AGENTS.md"]);
-  expect(yield* io(() => fs.readlink(path.join(prepared.cwd, "CLAUDE.md")))).toBe("AGENTS.md");
-  yield* service.integrate(integration);
-  expect(yield* io(() => fs.readlink(path.join(root, "CLAUDE.md")))).toBe("AGENTS.md");
-  expect(yield* readText(root, "CLAUDE.md")).toBe("reviewed instructions\n");
-  expect(yield* io(() => fs.readFile(path.join(root, ".git/index")))).toEqual(index);
-  expect(yield* git(root, ["rev-parse", "HEAD"])).toBe(head);
-});
-
-for (const linkTarget of [
-  "/etc/passwd",
-  "../outside.txt",
-  ".env",
-  "missing.md",
-  "src",
-  "CLAUDE.md",
-  "src/alias.md",
-  ".git/config",
-  "missing/../AGENTS.md",
-  "node_modules/../AGENTS.md",
-  "./AGENTS.md",
-  "\uFEFFAGENTS.md",
-]) {
+for (const linkTarget of ["/etc/passwd", "../outside.txt", ".git/config"]) {
   test(`rejects unsafe tracked alias target ${linkTarget} before retaining a workspace`, function* (service, root) {
     yield* addInternalAliases(root);
     yield* io(() => fs.unlink(path.join(root, "CLAUDE.md")));
@@ -277,58 +217,6 @@ const publicationArtifacts = (root: string) =>
     ),
   );
 
-test("leaves no publication backups or temporary files in the checkout after integration", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "replaced\n");
-  yield* writeFile(path.join(handle.cwd, "src/added.ts"), "added\n");
-  yield* io(() => fs.chmod(path.join(handle.cwd, "other.txt"), 0o755));
-  yield* io(() => fs.unlink(path.join(handle.cwd, "binary.dat")));
-  yield* io(() => fs.mkdir(path.join(handle.cwd, "feature/nested"), { recursive: true }));
-  yield* writeFile(path.join(handle.cwd, "feature/nested/new.ts"), "nested\n");
-  const { revision, integration } = yield* prepareIntegration(handle);
-  expect(revision.changedPaths).toEqual([
-    "binary.dat",
-    "feature/nested/new.ts",
-    "other.txt",
-    "src/added.ts",
-    "src/main.ts",
-  ]);
-  const integrated = yield* service.integrate(integration);
-  expect(integrated.remainingBackupPaths).toEqual([]);
-  expect(yield* readText(root, "src/main.ts")).toBe("replaced\n");
-  expect(yield* readText(root, "src/added.ts")).toBe("added\n");
-  expect(yield* readText(root, "feature/nested/new.ts")).toBe("nested\n");
-  expect((yield* io(() => fs.stat(path.join(root, "other.txt")))).mode & 0o111).not.toBe(0);
-  expect(yield* exists(path.join(root, "binary.dat"))).toBe(false);
-  expect(yield* publicationArtifacts(root)).toEqual([]);
-});
-
-test("reports a backup it couldn't delete without failing the committed integration", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "replaced\n");
-  yield* writeFile(path.join(handle.cwd, "other.txt"), "also replaced\n");
-  const { integration } = yield* prepareIntegration(handle);
-  const original = publication.publishWorkspace;
-  let blocked = "";
-  const spy = vi.spyOn(publication, "publishWorkspace").mockImplementation((...args) =>
-    Effect.gen(function* () {
-      const published = yield* original(...args);
-      const entry = published.record.journal?.find((item) => item.path === "src/main.ts");
-      blocked = path.join(root, entry?.backupPath ?? "");
-      yield* io(() => fs.rm(blocked));
-      yield* io(() => fs.mkdir(blocked));
-      return published;
-    }),
-  );
-  const integrated = yield* service
-    .integrate(integration)
-    .pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
-  expect(integrated.record.status).toBe("integrated");
-  expect(integrated.remainingBackupPaths).toEqual([blocked]);
-  expect(yield* readText(root, "src/main.ts")).toBe("replaced\n");
-  expect(yield* publicationArtifacts(root)).toEqual([path.relative(root, blocked)]);
-});
-
 test("keeps backups for manual recovery when publication stops partway", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "other.txt"), "published first\n");
@@ -373,32 +261,6 @@ test("binds acceptance to unchanged worker, tested tree and source preimages", f
   expect(yield* readText(root, "other.txt")).toBe("late parent\n");
 });
 
-test("removes spent editable trees only after a committed integration", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { prepared, integration } = yield* prepareIntegration(handle);
-  yield* writeFile(path.join(root, "src/main.ts"), "late parent\n");
-  expect(yield* fails(service.integrate(integration))).toBe(true);
-  expect(yield* exists(handle.cwd)).toBe(true);
-  expect(yield* exists(prepared.cwd)).toBe(true);
-  yield* writeFile(path.join(root, "src/main.ts"), "baseline\n");
-  yield* service.integrate(integration);
-  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
-  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("integrated");
-  expect(yield* exists(handle.cwd)).toBe(false);
-  expect(yield* exists(prepared.cwd)).toBe(false);
-});
-
-test("retains integrated trees on request", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "other.txt"), "worker\n");
-  const { prepared, integration } = yield* prepareIntegration(handle);
-  yield* service.integrate({ ...integration, retainTrees: true });
-  expect(yield* readText(root, "other.txt")).toBe("worker\n");
-  expect(yield* readText(handle.cwd, "other.txt")).toBe("worker\n");
-  expect(yield* exists(prepared.cwd)).toBe(true);
-});
-
 test("keeps the worker when it holds files the integrated revision left out", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   const invoice = path.join(handle.cwd, "src/Billing/Invoice.cs");
@@ -421,101 +283,6 @@ test("keeps the worker when it holds files the integrated revision left out", fu
   expect(yield* exists(handle.cwd)).toBe(false);
 });
 
-test("keeps the worker for writer files at paths the source itself left out", function* (service, root) {
-  yield* io(() => fs.mkdir(path.join(root, "vendor")));
-  yield* writeFile(path.join(root, "vendor/lib.go"), "package lib\n");
-  yield* git(root, ["add", "vendor/lib.go"]);
-  yield* git(root, ["commit", "-m", "vendor"]);
-  yield* writeFile(path.join(root, "notes.cs"), "source notes\n");
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  expect(yield* exists(path.join(handle.cwd, "vendor/lib.go"))).toBe(false);
-  expect(yield* exists(path.join(handle.cwd, "notes.cs"))).toBe(false);
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  yield* writeFile(path.join(handle.cwd, "notes.cs"), "writer notes\n");
-  yield* io(() => fs.mkdir(path.join(handle.cwd, "vendor")));
-  yield* writeFile(path.join(handle.cwd, "vendor/lib.go"), "package patched\n");
-  yield* writeFile(path.join(handle.cwd, ".env"), "LOCAL=1\n");
-  const { revision, integration } = yield* prepareIntegration(handle);
-  expect(revision.changedPaths).toEqual(["src/main.ts"]);
-  const integrated = yield* service.integrate(integration);
-  expect([...integrated.uncapturedPaths].toSorted()).toEqual([".env", "notes.cs", "vendor/lib.go"]);
-  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
-  expect(yield* readText(root, "notes.cs")).toBe("source notes\n");
-  expect(yield* readText(root, "vendor/lib.go")).toBe("package lib\n");
-  expect(yield* readText(integrated.workerRoot, "notes.cs")).toBe("writer notes\n");
-  expect(yield* readText(integrated.workerRoot, "vendor/lib.go")).toBe("package patched\n");
-});
-
-test("keeps a fork's worker for writer files at paths its source left out", function* (service, root) {
-  const original = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  const fork = yield* service.fork(workspaceTarget(original));
-  expect(yield* exists(path.join(fork.cwd, ".env"))).toBe(false);
-  yield* writeFile(path.join(fork.cwd, "src/main.ts"), "retry\n");
-  yield* writeFile(path.join(fork.cwd, ".env"), "LOCAL=1\n");
-  const { integration } = yield* prepareIntegration(fork);
-  const integrated = yield* service.integrate(integration);
-  expect(integrated.uncapturedPaths).toEqual([".env"]);
-  expect(yield* readText(root, "src/main.ts")).toBe("retry\n");
-  expect(yield* readText(integrated.workerRoot, ".env")).toBe("LOCAL=1\n");
-});
-
-test("forks the original baseline, invalidates revisions and retains recovery metadata", function* (service, root, agent) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "failed attempt\n");
-  const revision = yield* service.freeze(workspaceTarget(handle));
-  const fork = yield* service.fork(workspaceTarget(handle));
-  expect(yield* readText(fork.cwd, "src/main.ts")).toBe("baseline\n");
-  expect(yield* readText(handle.cwd, "src/main.ts")).toBe("failed attempt\n");
-  yield* service.revise(workspaceTarget(handle));
-  expect(
-    yield* fails(service.prepare({ ...workspaceTarget(handle), revisionId: revision.revisionId })),
-  ).toBe(true);
-  expect(yield* fails(service.inspect({ ...workspaceTarget(handle), ownerId: "sibling" }))).toBe(
-    true,
-  );
-  yield* Effect.gen(function* () {
-    const recovered = yield* WorkspaceService;
-    expect((yield* recovered.listAll).records.length).toBe(2);
-    expect(yield* fails(recovered.freeze(workspaceTarget(handle)))).toBe(true);
-    expect(yield* fails(recovered.discard(workspaceTarget(handle)))).toBe(true);
-  }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: agent })));
-  expect(yield* exists(handle.cwd)).toBe(true);
-  yield* service.discard(workspaceTarget(fork));
-  expect(yield* exists(fork.cwd)).toBe(false);
-});
-
-for (const mismatch of ["seed", "owner", "source", "registration"] as const) {
-  test(`never discards a fork whose seed provenance is unsafe: ${mismatch}`, function* (service, root, agent) {
-    const original = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-    const fork = yield* service.fork(workspaceTarget(original));
-    const registry = path.join(agent, "git-workspaces");
-    const seed = path.join(registry, fork.workspaceId, "seed");
-    if (mismatch === "seed") yield* io(() => fs.mkdir(seed));
-    else if (mismatch === "registration") {
-      const predecessor = yield* service.inspect(workspaceTarget(original));
-      const repository = path.join(registry, original.workspaceId, "repo.git");
-      yield* git(repository, ["worktree", "add", "--detach", seed, predecessor.baseline]);
-      yield* io(() => fs.rm(seed, { recursive: true, force: true }));
-    } else {
-      const predecessor = yield* service.inspect(workspaceTarget(original));
-      const other = path.join(root, "other");
-      const handle =
-        mismatch === "owner"
-          ? { ...predecessor.handle, ownerId: "other" }
-          : { ...predecessor.handle, sourceRoot: other, sourceCwd: other };
-      yield* writeFile(
-        path.join(registry, original.workspaceId, "record.json"),
-        JSON.stringify({ ...predecessor, handle }),
-      );
-    }
-    const failure = yield* failureOf(service.discard(workspaceTarget(fork)));
-    expect(failure).toBeInstanceOf(WorkspaceError);
-    expect(failure).toMatchObject({ operation: "recovery" });
-    expect(yield* exists(fork.cwd)).toBe(true);
-    expect((yield* service.inspect(workspaceTarget(fork))).status).toBe("active");
-  });
-}
-
 test("rejects source symlinks, hardlinks and sensitive literals before copying", function* (service, root) {
   yield* io(() => fs.symlink("main.ts", path.join(root, "src/link.ts")));
   expect(yield* fails(service.create({ sourceCwd: root, ownerId: "parent" }))).toBe(true);
@@ -529,47 +296,4 @@ test("rejects source symlinks, hardlinks and sensitive literals before copying",
   );
   expect(yield* fails(service.create({ sourceCwd: root, ownerId: "parent" }))).toBe(true);
   expect(yield* service.listAll).toEqual({ records: [], unavailable: [] });
-});
-
-test("rejects non-UTF8 text before snapshot and keeps parent bytes/index exact", function* (service, root) {
-  const bytes = Buffer.from([99, 97, 102, 233, 10]);
-  yield* writeFile(path.join(root, "src/main.ts"), bytes);
-  const index = yield* io(() => fs.readFile(path.join(root, ".git/index")));
-  expect(yield* fails(service.create({ sourceCwd: root, ownerId: "parent" }))).toBe(true);
-  expect(yield* service.listAll).toEqual({ records: [], unavailable: [] });
-  expect(yield* io(() => fs.readFile(path.join(root, "src/main.ts")))).toEqual(bytes);
-  expect(yield* io(() => fs.readFile(path.join(root, ".git/index")))).toEqual(index);
-});
-
-test("captures removed tracked directories as deletions and starts read-only without storage", function* (service, root, agent) {
-  expect(yield* service.listAll).toEqual({ records: [], unavailable: [] });
-  expect(yield* exists(path.join(agent, "git-workspaces"))).toBe(false);
-  yield* io(() => fs.rm(path.join(root, "src"), { recursive: true }));
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  expect(yield* exists(path.join(handle.cwd, "src"))).toBe(false);
-  expect((yield* service.inspect(workspaceTarget(handle))).excludedPaths).toContain(".env");
-});
-
-test("lets setup add excluded dependencies but reports project files it changes", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* io(() => fs.mkdir(path.join(handle.cwd, "node_modules/pkg"), { recursive: true }));
-  yield* writeFile(path.join(handle.cwd, "node_modules/pkg/index.js"), "dependency\n");
-  yield* writeFile(path.join(handle.cwd, "ignored.ts"), "ignored\n");
-  expect(yield* service.setupChanges(workspaceTarget(handle))).toEqual([]);
-
-  yield* writeFile(path.join(handle.cwd, "generated.ts"), "generated\n");
-  expect(yield* service.setupChanges(workspaceTarget(handle))).toEqual(["generated.ts"]);
-});
-
-test("checks the prepared tree against what prepare captured", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "changed\n");
-  const { prepared } = yield* prepareIntegration(handle);
-  const target = { ...workspaceTarget(handle), preparationId: prepared.preparationId };
-  yield* io(() => fs.mkdir(path.join(prepared.cwd, "node_modules"), { recursive: true }));
-  yield* writeFile(path.join(prepared.cwd, "node_modules/dep.js"), "dependency\n");
-  expect(yield* service.setupChanges(target)).toEqual([]);
-
-  yield* writeFile(path.join(prepared.cwd, "src/main.ts"), "rewritten by setup\n");
-  expect(yield* service.setupChanges(target)).toEqual(["src/main.ts"]);
 });

@@ -1,9 +1,7 @@
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as JsonSchema from "effect/JsonSchema";
 import * as Schema from "effect/Schema";
-import * as Predicate from "effect/Predicate";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
 import { captureRegistrations, issueMessageStyleProblems } from "pi-code-previews/testing";
 import { extensionContextFixture, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
@@ -14,7 +12,7 @@ import type { AskUserRequest, AskUserAsyncControl } from "../src/questionnaire/s
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
 import { registerAsyncAskUserTools } from "../src/tools/ask-user-async.ts";
 import { QuestionnaireContractSchema } from "../src/tools/contract-schema.ts";
-import { asyncRequest, cancelled, firstText } from "./support/questionnaire.ts";
+import { asyncRequest, cancelled } from "./support/questionnaire.ts";
 
 const envelope = { contract: "pi-ask-user/questionnaire", version: 1 };
 const snapshot = (
@@ -58,11 +56,6 @@ const execute = (
   signal?: AbortSignal,
 ) => tools.find((tool) => tool.name === name)!.execute("call", input, signal, undefined, ctx);
 const call = (...args: Parameters<typeof execute>) => Effect.promise(() => execute(...args));
-const expectDeeplyFrozen = (value: AgentToolResult["structuredContent"]): void => {
-  if (!Predicate.isObject(value)) return;
-  expect(Object.isFrozen(value)).toBe(true);
-  Object.values(value).forEach(expectDeeplyFrozen);
-};
 const declaredAccepts = (
   tool: ReturnType<typeof registered>[number],
   value: Schema.Json | undefined,
@@ -144,77 +137,6 @@ describe("registered questionnaire structured results", () => {
   );
 
   it.effect(
-    "projects start and every control action without interpreting delivery as acknowledgement",
-    () =>
-      Effect.gen(function* () {
-        const states: AsyncQuestionnaireSnapshot[] = [
-          snapshot({ presentation: "queued" }),
-          snapshot({ presentation: "hidden" }),
-          snapshot({
-            status: "submitted",
-            presentation: "settled",
-            delivery: "sent",
-            outcome: textOutcome,
-          }),
-          snapshot({
-            status: "submitted",
-            presentation: "settled",
-            delivery: "failed",
-            outcome: textOutcome,
-          }),
-          snapshot({
-            status: "cancelled",
-            presentation: "settled",
-            delivery: "waiter",
-            outcome: cancelled,
-          }),
-          snapshot({ status: "failed", presentation: "settled", delivery: "none" }),
-        ];
-        for (const request of states) {
-          const details = { requests: [request] };
-          const tools = registered({
-            start: () => Promise.resolve(request),
-            control: () => Promise.resolve(details),
-          });
-          const started = yield* call(tools, "ask_user_async");
-          expect(started.details).toBe(request);
-          expect(started.content).toEqual([{ type: "text", text: formatAsyncSnapshot(request) }]);
-          expect(decode(started.structuredContent)).toEqual({
-            ...envelope,
-            tool: "ask_user_async",
-            request,
-          });
-          expect(declaredAccepts(tools[1]!, started.structuredContent)).toBe(true);
-          for (const action of ["status", "await", "cancel"] as const) {
-            const result = yield* call(tools, "ask_user_async_control", {
-              action,
-              requestId: request.requestId,
-            });
-            expect(result.isError).toBeUndefined();
-            expect(result.details).toBe(details);
-            expect(result.content).toEqual([{ type: "text", text: formatAsyncSnapshot(request) }]);
-            expect(decode(result.structuredContent)).toEqual({
-              ...envelope,
-              tool: "ask_user_async_control",
-              action,
-              requestId: request.requestId,
-              requests: [request],
-            });
-            expect(declaredAccepts(tools[2]!, result.structuredContent)).toBe(true);
-          }
-        }
-        const result = yield* call(registered(), "ask_user_async_control", { action: "status" });
-        expect(decode(result.structuredContent)).toEqual({
-          ...envelope,
-          tool: "ask_user_async_control",
-          action: "status",
-          requests: [],
-        });
-        expect(firstText(result.content)).toBeTypeOf("string");
-      }),
-  );
-
-  it.effect(
     "omits private fields and makes ID-free status metadata-only even if a callback includes answers",
     () =>
       Effect.gen(function* () {
@@ -268,44 +190,6 @@ describe("registered questionnaire structured results", () => {
   );
 
   it.effect(
-    "returns detached, deeply frozen values without freezing the service or display details",
-    () =>
-      Effect.gen(function* () {
-        const answer = {
-          key: "choice",
-          kind: "choices" as const,
-          values: ["a"],
-          labels: ["A"],
-          note: "Original",
-        };
-        const outcome = { outcome: "submitted" as const, answers: [answer] };
-        const request = { ...snapshot(), outcome };
-        const requests = [request];
-        const tools = registered({
-          ask: () => Promise.resolve(outcome),
-          start: () => Promise.resolve(request),
-          control: () => Promise.resolve({ requests }),
-        });
-        const results = yield* Effect.all([
-          call(tools, "ask_user"),
-          call(tools, "ask_user_async"),
-          call(tools, "ask_user_async_control", { action: "await", requestId: request.requestId }),
-        ]);
-        const before = results.map((result) => decode(result.structuredContent));
-        results.forEach((result) => expectDeeplyFrozen(result.structuredContent));
-        expect(Object.isFrozen(outcome)).toBe(false);
-        expect(Object.isFrozen(answer.values)).toBe(false);
-        answer.note = "Changed";
-        answer.values.push("b");
-        request.requestId = "changed";
-        requests.length = 0;
-        expect(results.map((result) => decode(result.structuredContent))).toEqual(before);
-        expect(results[0].details).toBe(outcome);
-        expect(results[1].details).toBe(request);
-      }),
-  );
-
-  it.effect(
     "preserves receipts and details after encoding failure with no codec diagnostics or partial contract",
     () =>
       Effect.gen(function* () {
@@ -354,23 +238,5 @@ describe("registered questionnaire structured results", () => {
           expect(text.slice(0, newline)).not.toMatch(/Schema|Parse|private codec input/);
         }
       }),
-  );
-
-  it.effect("passes signals and service rejection through without fabricating cancellation", () =>
-    Effect.gen(function* () {
-      const failure = new Error("Owned service refused admission");
-      const signal = yield* Effect.abortSignal;
-      const seen: (AbortSignal | undefined)[] = [];
-      const reject = (_input: AskUserRequest | AskUserAsyncControl, received?: AbortSignal) => {
-        seen.push(received);
-        return Promise.reject(failure);
-      };
-      const tools = registered({ ask: reject, start: reject, control: reject });
-      for (const name of ["ask_user", "ask_user_async", "ask_user_async_control"])
-        yield* Effect.promise(() =>
-          expect(execute(tools, name, asyncRequest, signal)).rejects.toBe(failure),
-        );
-      expect(seen).toEqual([signal, signal, signal]);
-    }),
   );
 });

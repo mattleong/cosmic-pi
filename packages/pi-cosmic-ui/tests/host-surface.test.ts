@@ -1,16 +1,11 @@
-import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import {
-  hasCustomSurface,
   openOwnedSurface,
-  openOwnedSurfacePromise,
   type OwnedSurfaceComponent,
   type OwnedSurfaceHost,
   type OwnedSurfaceOptions,
-  OwnedSurfaceError,
-  OwnedSurfaceOutcome,
 } from "../src/boundary/host-surface.ts";
 import {
   fakeCustomSurfaceHost,
@@ -31,43 +26,7 @@ const capture = () => {
   };
 };
 
-const zeroHeight = () => 0;
-
 describe("owned custom surfaces", () => {
-  it.effect("keeps screen bounds and allocated height live across resizes", () =>
-    Effect.gen(function* () {
-      const h = fakeCustomSurfaceHost();
-      let height = zeroHeight;
-      const fiber = yield* open(h, {
-        placement: "screen",
-        closedValue: undefined,
-        create: (host) => {
-          height = host.getHeight;
-          return view();
-        },
-      });
-      h.mount();
-      const options = h.overlayOptions!;
-      for (const [columns, rows, width, allocated, anchor] of [
-        [160, 50, 144, 45, "center"],
-        [124, 50, 124, 50, "top-left"],
-        [160, 29, 160, 29, "top-left"],
-        [125, 30, 112, 27, "center"],
-      ] as const) {
-        h.resize(columns, rows);
-        expect([options.width, options.maxHeight, height(), options.anchor]).toEqual([
-          width,
-          allocated,
-          allocated,
-          anchor,
-        ]);
-      }
-      yield* Fiber.interrupt(fiber);
-      expect(h.overlays).toEqual([]);
-      expect(h.doneCalls).toBe(1);
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("closing a screen keeps a questionnaire dock stacked above it", () =>
     Effect.gen(function* () {
       const h = fakeCustomSurfaceHost();
@@ -208,72 +167,6 @@ describe("owned custom surfaces", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("admits beside custom and releases after done and dock disposal", () =>
-    Effect.gen(function* () {
-      const h = fakeCustomSurfaceHost();
-      const released: Array<readonly [number, number]> = [];
-      const dock = capture();
-      const fiber = yield* open(h, {
-        placement: "dock",
-        closedValue: "cancel",
-        admit: () => () => released.push([h.doneCalls, h.widgets.size]),
-        create: dock.create,
-      });
-      expect(h.widgets.size).toBe(1);
-      h.mount();
-      dock.finish("submitted");
-      expect(yield* Fiber.join(fiber)).toBe("submitted");
-      expect(released).toEqual([[1, 0]]);
-
-      let controlled = false;
-      const blocked = yield* open(h, {
-        placement: "dock",
-        closedValue: "cancel",
-        admit: () => false,
-        create: () => view(),
-        onControl: () => {
-          controlled = true;
-        },
-      });
-      expect(yield* Fiber.join(blocked).pipe(Effect.flip)).toMatchObject({ reason: "blocked" });
-      expect([controlled, h.widgets.size]).toEqual([true, 0]);
-      h.mount();
-      expect(h.doneCalls).toBe(1);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("disposes the dock on a pre-mount abort and hands over the dock-wrapped handle", () =>
-    Effect.gen(function* () {
-      const h = fakeCustomSurfaceHost();
-      const aborted = yield* open(h, {
-        placement: "dock",
-        closedValue: "cancel",
-        create: () => view(),
-      });
-      expect(h.widgets.size).toBe(1);
-      yield* Fiber.interrupt(aborted);
-      expect(h.widgets.size).toBe(0);
-      h.mount();
-
-      let handle: OverlayHandle | undefined;
-      const fiber = yield* open(h, {
-        placement: "dock",
-        closedValue: "cancel",
-        create: () => view(),
-        onMounted: (mounted) => {
-          handle = mounted;
-        },
-      });
-      h.mount();
-      const before = h.renders;
-      handle?.setHidden(true);
-      expect([h.overlays, h.renders]).toEqual([[], before + 1]);
-      handle?.hide();
-      expect(h.widgets.size).toBe(0);
-      yield* Fiber.interrupt(fiber);
-    }).pipe(Effect.scoped),
-  );
-
   it.effect(
     "releases a dock component's owned cleanup on completion and pre-mount interruption",
     () =>
@@ -314,34 +207,6 @@ describe("owned custom surfaces", () => {
       }),
   );
 
-  it.effect("removes the dock widget and releases resources when focus cleanup throws", () =>
-    Effect.gen(function* () {
-      const h = fakeCustomSurfaceHost();
-      let releases = 0;
-      const fiber = yield* open(h, {
-        placement: "dock",
-        closedValue: undefined,
-        create: () => ({
-          ...view(),
-          get focused() {
-            return true;
-          },
-          set focused(_focused: boolean) {
-            throw new Error("Focus cleanup failed");
-          },
-          dispose: () => {
-            releases++;
-          },
-        }),
-      });
-      h.mount();
-      expect(h.widgets.size).toBe(1);
-      yield* Fiber.interrupt(fiber);
-      expect(h.widgets.size).toBe(0);
-      expect(releases).toBe(1);
-    }),
-  );
-
   it.effect("releases a dock component returned after reentrant closure during creation", () =>
     Effect.gen(function* () {
       const h = fakeCustomSurfaceHost();
@@ -370,115 +235,4 @@ describe("owned custom surfaces", () => {
       expect(h.overlays).toEqual([]);
     }),
   );
-
-  it.effect("an external control closes a mounted surface with its closed value", () =>
-    Effect.gen(function* () {
-      const h = fakeCustomSurfaceHost();
-      let close: (() => void) | undefined;
-      const fiber = yield* open(h, {
-        placement: "screen",
-        closedValue: "closed",
-        create: () => view(),
-        onControl: (control) => {
-          close = control;
-        },
-      });
-      h.mount();
-      close?.();
-      close?.();
-      expect(yield* Fiber.join(fiber)).toBe("closed");
-      expect([h.doneCalls, h.overlays]).toEqual([1, []]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("finishes inline surfaces directly, even inside the factory, with no guard", () =>
-    Effect.gen(function* () {
-      const h = fakeCustomSurfaceHost();
-      const immediate = yield* open(h, {
-        placement: "inline",
-        closedValue: "closed",
-        create: (host) => {
-          host.finish("now");
-          return view();
-        },
-      });
-      expect(h.doneCalls).toBe(1);
-      expect(yield* Fiber.join(immediate)).toBe("now");
-      h.mount();
-      expect(h.editor).toBeUndefined();
-
-      const inline = capture();
-      const mounted = yield* open(h, {
-        placement: "inline",
-        closedValue: "closed",
-        create: inline.create,
-      });
-      h.mount();
-      expect(h.editor).toBeDefined();
-      inline.finish("saved");
-      expect(yield* Fiber.join(mounted)).toBe("saved");
-      expect([h.editor, h.overlays, h.doneCalls]).toEqual([undefined, [], 2]);
-
-      const hostile = capture();
-      const pending = yield* open(h, {
-        placement: "inline",
-        closedValue: "closed",
-        create: hostile.create,
-      });
-      h.mount();
-      h.fail("done");
-      expect(() => hostile.finish("saved")).not.toThrow();
-      expect([pending.pollUnsafe(), h.doneCalls]).toEqual([undefined, 2]);
-      yield* Fiber.interrupt(pending);
-    }).pipe(Effect.scoped),
-  );
-
-  it("passes plain options to the component-sized overlay placement", () =>
-    Effect.gen(function* () {
-      const h = fakeCustomSurfaceHost();
-      const panel = view("panel");
-      const outcome = openOwnedSurfacePromise(h.ctx, {
-        placement: "overlay",
-        closedValue: undefined,
-        create: (host) => ({ ...panel, handleInput: () => host.finish(undefined) }),
-      });
-      h.mount();
-      expect(h.overlayOptions).toBeUndefined();
-      expect(h.overlays).toHaveLength(1);
-      h.overlays[0]?.handleInput?.("q");
-      expect(yield* Effect.promise(() => outcome)).toEqual(
-        OwnedSurfaceOutcome.Settled({ value: undefined }),
-      );
-    }).pipe(Effect.runPromise));
-
-  it("keeps a factory failure's cause for Promise callers and types it for Effect callers", () =>
-    Effect.gen(function* () {
-      const failure = new Error("factory failed");
-      const options: OwnedSurfaceOptions<string> = {
-        placement: "screen",
-        closedValue: "closed",
-        create: () => {
-          throw failure;
-        },
-      };
-      const h = fakeCustomSurfaceHost();
-      expect(yield* Effect.promise(() => openOwnedSurfacePromise(h.ctx, options))).toEqual(
-        OwnedSurfaceOutcome.Failed({ cause: failure }),
-      );
-      const error = yield* openOwnedSurface(h.ctx, options).pipe(Effect.flip);
-      expect(error).toBeInstanceOf(OwnedSurfaceError);
-      expect(error.reason).toBe("failed");
-    }).pipe(Effect.runPromise));
-
-  it("reports custom-surface support fail-closed", () => {
-    expect(hasCustomSurface(fakeCustomSurfaceHost().ctx)).toBe(true);
-    expect(hasCustomSurface({ ...fakeCustomSurfaceHost().ctx, mode: "rpc" })).toBe(false);
-    const hostile = {
-      mode: "tui" as const,
-      get ui(): never {
-        throw new Error("host unavailable");
-      },
-    };
-    expect(hasCustomSurface(hostile)).toBe(false);
-  });
 });

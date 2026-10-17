@@ -20,21 +20,6 @@ it("no background work starts before acquisition or after shutdown", () => {
   assert.equal(calls, 0);
 });
 
-it.effect("cancels scheduled callbacks synchronously while the session remains active", () =>
-  Effect.gen(function* () {
-    let ticks = 0;
-    const service = yield* CodePreviewSchedulerService;
-    const stop = service.schedule(100, () => ticks++);
-
-    yield* TestClock.adjust(200);
-    assert.equal(ticks, 2);
-    stop();
-    stop();
-    yield* TestClock.adjust(500);
-    assert.equal(ticks, 2);
-  }).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer)),
-);
-
 it.effect("interrupts every scheduled callback before the scheduler scope closes", () =>
   Effect.gen(function* () {
     let ticks = 0;

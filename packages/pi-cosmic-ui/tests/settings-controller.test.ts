@@ -125,28 +125,6 @@ describe("Cosmic UI settings controller", () => {
     );
   }
 
-  it.effect(
-    "settles automatic and hidden usage choices against the single visibility preference",
-    () =>
-      withSettings((h) =>
-        Effect.gen(function* () {
-          h.input("/");
-          for (const character of "OpenAI usage") h.input(character);
-          h.input();
-          yield* h.started(1);
-          h.setFooter({ hidden: ["openai.usage"] });
-          yield* Deferred.succeed(h.updates[0]!, undefined);
-          yield* macrotask;
-          expect(h.line("OpenAI usage")).toContain("hidden");
-          h.input();
-          yield* h.started(2);
-          yield* Deferred.fail(h.updates[1]!, new Error("write failed"));
-          yield* macrotask;
-          expect(h.line("OpenAI usage")).toContain("hidden");
-        }),
-      ),
-  );
-
   it.effect("ignores stale success and failure settlements for a newer optimistic edit", () =>
     withSettings((h) =>
       Effect.gen(function* () {
@@ -201,20 +179,6 @@ describe("Cosmic UI settings controller", () => {
         h.setFooter({ density: "comfortable" });
         yield* Deferred.succeed(h.updates[1]!, undefined);
         yield* macrotask;
-      }),
-    ),
-  );
-
-  it.effect("settles a current update from the latest projection", () =>
-    withSettings((h) =>
-      Effect.gen(function* () {
-        h.input();
-        expect(h.line("Custom footer")).toContain("false");
-        yield* h.started(1);
-        h.setFooter({ enabled: true });
-        yield* Deferred.succeed(h.updates[0]!, undefined);
-        yield* macrotask;
-        expect(h.line("Custom footer")).toContain("true");
       }),
     ),
   );

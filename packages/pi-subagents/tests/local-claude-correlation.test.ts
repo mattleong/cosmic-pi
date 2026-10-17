@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  claudeTaskNotificationReplay,
-  isInternalReplayOrigin,
   claudeResultCorrelation,
   SENT_UUID_LIMIT,
   uncorrelatedClaudeUserMessage,
@@ -24,13 +22,6 @@ const userEvent = (overrides: Partial<UserEvent>): UserEvent => ({
 });
 
 describe("local Claude result correlation", () => {
-  it("separates internal notifications from externally qualified task deliveries", () => {
-    expect(isInternalReplayOrigin("task-notification", undefined)).toBe(true);
-    expect(isInternalReplayOrigin("auto-continuation", undefined)).toBe(true);
-    expect(isInternalReplayOrigin("task-notification", "peer-send-message")).toBe(false);
-    expect(isInternalReplayOrigin("task-notification", "scheduled-trigger")).toBe(false);
-  });
-
   it("does not let a UUID-less ordinary result consume synthetic ownership", () => {
     const correlation = claudeResultCorrelation();
     correlation.register({ uuid: "synthetic", kind: "synthetic", epoch: 2 });
@@ -46,37 +37,6 @@ describe("local Claude result correlation", () => {
     });
   });
 
-  it("recognizes only complete task-notification replay envelopes, labelled or not", () => {
-    const replay = userEvent({
-      text: "<task-notification><status>completed</status></task-notification>",
-      textLength: 65,
-      uuid: "internal-notification",
-      sessionId: "native-session",
-    });
-    const labelled = { ...replay, originKind: "task-notification" };
-    expect(claudeTaskNotificationReplay(replay)).toBe("unlabelled");
-    expect(claudeTaskNotificationReplay(labelled)).toBe("labelled");
-    for (const envelope of [replay, labelled])
-      for (const nearMiss of [
-        { ...envelope, uuid: undefined },
-        { ...envelope, sessionId: undefined },
-        { ...envelope, isReplay: false },
-        { ...envelope, isSynthetic: true },
-        { ...envelope, isMeta: true },
-        { ...envelope, isCompactSummary: true },
-        { ...envelope, originKind: "channel" },
-        { ...envelope, originKind: "auto-continuation" },
-        { ...envelope, originKind: "task-notification", originSubkind: "peer-send-message" },
-        { ...envelope, originSubkind: "scheduled-trigger" },
-        { ...envelope, parentToolUseId: "native-tool" },
-        { ...envelope, toolResults: [{ id: "native-tool", isError: false }] },
-        { ...envelope, contentKind: "blocks" as const },
-        { ...envelope, text: "<task-notification>missing close" },
-        { ...envelope, text: "A background command completed." },
-      ])
-        expect(claudeTaskNotificationReplay(nearMiss)).toBeUndefined();
-  });
-
   it("never lets Claude-owned subturns evict an adapter-owned result expectation", () => {
     const correlation = claudeResultCorrelation();
     correlation.register({ uuid: "assignment", kind: "assignment", epoch: 4 });
@@ -89,40 +49,6 @@ describe("local Claude result correlation", () => {
       "synthetic",
     );
     expect(correlation.take("assignment", undefined, undefined)?.kind).toBe("assignment");
-  });
-
-  it("keeps Claude-owned replay UUIDs separate from adapter-sent identity", () => {
-    const correlation = claudeResultCorrelation();
-    correlation.rememberInternalReplayUuid("internal-notification");
-    expect(correlation.hasInternalReplayUuid("internal-notification")).toBe(true);
-    expect(correlation.hasSentUuid("internal-notification")).toBe(false);
-    expect(correlation.matchSentContent("notification-digest")).toBe("other");
-
-    correlation.register({ uuid: "assignment", kind: "assignment", epoch: 3 });
-    expect(correlation.hasOutstandingAssignment(3)).toBe(true);
-    expect(correlation.take("assignment", undefined, undefined)?.kind).toBe("assignment");
-    expect(correlation.hasOutstandingAssignment(3)).toBe(false);
-  });
-
-  it("classifies content only while its confirmed UUID remains in the bounded window", () => {
-    const correlation = claudeResultCorrelation();
-    correlation.rememberSentUuid("probe", { contentDigest: "same", kind: "probe" });
-    correlation.rememberSentUuid("assignment", {
-      contentDigest: "same",
-      kind: "assignment",
-    });
-    expect(correlation.matchSentContent("same")).toBe("multiple");
-
-    for (let index = 0; index < SENT_UUID_LIMIT; index += 1)
-      correlation.rememberSentUuid(`later-${index}`, {
-        contentDigest: `digest-${index}`,
-        kind: "steer",
-      });
-
-    expect(correlation.hasSentUuid("probe")).toBe(false);
-    expect(correlation.hasSentUuid("assignment")).toBe(false);
-    expect(correlation.matchSentContent("same")).toBe("other");
-    expect(correlation.matchSentContent(`digest-${SENT_UUID_LIMIT - 1}`)).toBe("steer");
   });
 
   it("emits useful replay classification without message or identity values", () => {

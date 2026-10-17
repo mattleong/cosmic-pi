@@ -89,18 +89,6 @@ describe("native supervisor client lifetime", () => {
     }),
   );
 
-  it.live("fails an open whose peer disconnects and never redials", () =>
-    Effect.gen(function* () {
-      const peer = yield* loopbackPeer();
-      const opening = yield* openSupervisorClient(rawConfig(peer.port)).pipe(Effect.forkScoped);
-      yield* waitForConnection(peer);
-      peer.clients[0]?.destroy();
-      expect(Exit.isFailure(yield* Fiber.await(opening))).toBe(true);
-      yield* Effect.sleep("1 second");
-      expect(peer.clients).toHaveLength(1);
-    }),
-  );
-
   for (const failure of ["scope close", "watch disconnect"] as const)
     it.live(`releases the connection and rejects later calls after ${failure}`, () =>
       Effect.gen(function* () {

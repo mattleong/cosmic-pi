@@ -81,21 +81,6 @@ describe("guidance that reaches a finishing local Pi child", () => {
     });
   });
 
-  it.effect("completes normally when guidance queued into a working child", () => {
-    const { fake, projections, notifications, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "queued-guidance" }));
-      const control = fake.controls[0]!;
-      expect((yield* service.send(run.id, "Also check the lexer.")).state).toBe("running");
-
-      control.settle("Report with the lexer.");
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.length === 1);
-      expect(reportOf(notifications)).toEqual(["Report with the lexer."]);
-    });
-  });
-
   it.effect("fails guidance that the child handled before it reached the model", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {

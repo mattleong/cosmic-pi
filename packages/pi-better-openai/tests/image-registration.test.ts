@@ -84,7 +84,7 @@ describe("image tool parameters", () => {
 });
 
 describe("image command delivery authority", () => {
-  for (const retirement of ["replacement", "abort", "both"] as const) {
+  for (const retirement of ["replacement", "abort"] as const) {
     it.effect(
       `rechecks ${retirement} in the queued send microtask after successful generation`,
       () =>

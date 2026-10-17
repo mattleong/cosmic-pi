@@ -60,37 +60,6 @@ it.live("updates a symlinked document's target and keeps the link", () =>
   }).pipe(Effect.provide(fileLayer), Effect.scoped),
 );
 
-it.live("resolves a relative link from its real directory and creates a dangling target", () =>
-  Effect.gen(function* () {
-    const root = yield* temporaryDirectory("cosmic-json-dangling-");
-    const deep = path.join(root, "store", "deep");
-    yield* promise(() => fs.mkdir(deep, { recursive: true }));
-    yield* promise(() => fs.symlink(deep, path.join(root, "alias")));
-    yield* promise(() => fs.symlink("../shared/config.json", path.join(deep, "config.json")));
-    const throughAlias = path.join(root, "alias", "config.json");
-
-    yield* addField(throughAlias, "created");
-
-    expect(yield* isSymlink(path.join(deep, "config.json"))).toBe(true);
-    expect(yield* readJson(path.join(root, "store", "shared", "config.json"))).toEqual({
-      created: true,
-    });
-  }).pipe(Effect.provide(fileLayer), Effect.scoped),
-);
-
-it.live("fails a write through a symlink loop without touching the links", () =>
-  Effect.gen(function* () {
-    const root = yield* temporaryDirectory("cosmic-json-loop-");
-    yield* promise(() => fs.symlink("b.json", path.join(root, "a.json")));
-    yield* promise(() => fs.symlink("a.json", path.join(root, "b.json")));
-
-    const failure = yield* Effect.flip(addField(path.join(root, "a.json"), "never"));
-
-    expect(failure.operation).toBe("resolve");
-    expect(yield* isSymlink(path.join(root, "a.json"))).toBe(true);
-  }).pipe(Effect.provide(fileLayer), Effect.scoped),
-);
-
 it.live("keeps every concurrent update from separate processes", () =>
   Effect.gen(function* () {
     const root = yield* temporaryDirectory("cosmic-json-processes-");

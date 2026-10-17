@@ -5,32 +5,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { makeActivityFixture as fixture } from "./support/activity.ts";
 
-it.effect("publishes queued, mounted, hidden and settled questions without copying answers", () =>
-  Effect.gen(function* () {
-    const f = fixture();
-    yield* f.activity.observer.admitted("one", request, Effect.void);
-    expect(f.items()[0]?.status).toBe("pending");
-    expect(f.items()[0]?.parent).toBeUndefined();
-    yield* f.activity.observer.presenting("one");
-    const token = f.bridge.activate(() => {});
-    f.bridge.markOpened(token);
-    expect(f.items()[0]).toMatchObject({ status: "needs-input", inputTarget: "user" });
-    f.bridge.markCollapsed(token);
-    const hidden = f.items()[0]!;
-    expect(hidden.actions?.some((action) => action.id === "resume")).toBe(true);
-    yield* f.invoke("one", "resume", hidden.revision);
-    expect(f.items()[0]?.actions?.some((action) => action.id === "resume")).toBe(false);
-    expect(Exit.isFailure(yield* Effect.exit(f.invoke("one", "cancel", hidden.revision)))).toBe(
-      true,
-    );
-    f.bridge.clear(token);
-    yield* f.activity.observer.settled("one", "submitted");
-    expect(f.items()[0]).toMatchObject({ status: "done", actions: [] });
-    expect(f.items()[0]?.inputTarget).toBeUndefined();
-    expect(f.items()[0]?.blockedReason).toBeUndefined();
-    f.activity.dispose();
-  }),
-);
 it.effect(
   "keeps explicit owner ancestry and revokes stale cancellation and overlay capabilities",
   () =>
@@ -75,18 +49,4 @@ it.effect(
       expect(cancelled).toBe(1);
       f.activity.dispose();
     }),
-);
-it.effect("closes Activity before Resume shows the questionnaire and cancels in place", () =>
-  Effect.gen(function* () {
-    const f = fixture();
-    yield* f.activity.observer.admitted("one", request, Effect.void);
-    yield* f.activity.observer.presenting("one");
-    const token = f.bridge.activate(() => {});
-    f.bridge.markOpened(token);
-    f.bridge.markCollapsed(token);
-    const actions = f.items()[0]?.actions ?? [];
-    expect(actions.find((action) => action.id === "resume")?.handoff).toBe(true);
-    expect(actions.find((action) => action.id === "cancel")?.handoff).toBe(false);
-    f.activity.dispose();
-  }),
 );

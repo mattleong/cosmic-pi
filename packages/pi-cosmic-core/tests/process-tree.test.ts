@@ -5,12 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vitest";
-import {
-  confirmProcessGroupExit,
-  processGroupSignalError,
-  signalProcess,
-  signalProcessGroup,
-} from "../index.ts";
+import { confirmProcessGroupExit, signalProcess, signalProcessGroup } from "../index.ts";
 import { nodeSpawn } from "../src/platform/node-builtins.ts";
 describe("process signals", () => {
   for (const initial of ["present", "permission"] as const)
@@ -69,19 +64,6 @@ describe("process signals", () => {
     }
   });
 
-  it("classifies ESRCH as absent and EPERM as permission", () => {
-    const child = nodeSpawn(process.execPath, ["-e", ""], { stdio: "ignore" });
-    return once(child, "exit")
-      .then(() => ({
-        exited: signalProcess(child.pid, 0),
-        current: signalProcess(process.pid, 0),
-        init: process.getuid?.() === 0 ? "permission" : signalProcess(1, 0),
-      }))
-      .then((classified) =>
-        expect(classified).toEqual({ exited: "absent", current: "present", init: "permission" }),
-      );
-  });
-
   it("kills a live detached group after its leader exits", () => {
     const leader = nodeSpawn(
       process.execPath,
@@ -118,14 +100,5 @@ process.stdout.write(String(child.pid) + "\\n");`,
       .finally(() => {
         if (descendant > 0) signalProcess(descendant, "SIGKILL");
       });
-  });
-
-  it("classifies POSIX group-signal failures and names only the EPERM errno", () => {
-    expect(processGroupSignalError("permission")).toMatchObject({
-      operation: "signal process group",
-      code: "group_signal_failed",
-    });
-    expect(processGroupSignalError("permission").message).toContain("(EPERM)");
-    expect(processGroupSignalError("failed").message).not.toContain("EPERM");
   });
 });

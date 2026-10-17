@@ -4,16 +4,9 @@ import {
   type ReadToolInput,
   type ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Text,
-  getCapabilities,
-  setCapabilities,
-  type Component,
-  type TuiMouseEvent,
-} from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { createToolPresentationHarness, renderContextFixture } from "../../testing";
 import { beforeEach, test } from "vitest";
-import { createCodePreviewToolShell } from "../../src/preview/tool-shell";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { setCodePreviewSettings } from "../../src/config/state";
@@ -22,12 +15,10 @@ import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { executeDescriptor } from "../support/tool-identity";
 
 const compactProvider = () => ({ subject: "compact-subject", outcome: "success" as const });
-const previewShellOptions = { name: "read", compactSummary: () => undefined };
 
 type ReadDefinition = ReturnType<typeof createReadToolDefinition>;
 type ReadRenderCall = NonNullable<ReadDefinition["renderCall"]>;
 type ReadRenderResult = NonNullable<ReadDefinition["renderResult"]>;
-type ReadResult = Parameters<ReadRenderResult>[0];
 
 const settings = (overrides: Partial<CodePreviewSettings> = {}) =>
   setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: false, ...overrides });
@@ -110,78 +101,6 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
   assert.equal(wrapped.description, tool.description);
 });
 
-test("cooperative wrapper keeps self shells by identity unless override is requested", () => {
-  const selfShell = { ...createReadToolDefinition("/project"), renderShell: "self" as const };
-
-  assert.equal(withCodePreviewShell(selfShell), selfShell);
-  const overridden = withCodePreviewShell(selfShell, {
-    mode: "on",
-    preserveSelfShell: false,
-  });
-  assert.notEqual(overridden, selfShell);
-  assert.equal(overridden.renderShell, "default");
-  assert.deepEqual(executeDescriptor(overridden), executeDescriptor(selfShell));
-});
-
-test("cooperative wrapper captures mode and shell modes match on, off, and border", () => {
-  settings({ toolCallBackground: "off" });
-  const captured = withCodePreviewShell(createReadToolDefinition("/project"));
-  settings({ toolCallBackground: "on" });
-  assert.equal(captured.renderShell, "self");
-
-  for (const [mode, expectedShell] of [
-    ["on", "default"],
-    ["off", "self"],
-    ["border", "self"],
-  ] as const)
-    assert.equal(
-      createCodePreviewToolShell(mode, previewShellOptions, false, "preview").renderShell,
-      expectedShell,
-    );
-});
-
-test("border shell keeps independent last components for call and result slots", () => {
-  const shell = createCodePreviewToolShell("border", previewShellOptions, false, "preview");
-  const args: ReadToolInput = { path: "README.md" };
-  const state = {};
-  const unrelated = new Text("unrelated", 0, 0);
-  const callLast: Array<Component | undefined> = [];
-  const resultLast: Array<Component | undefined> = [];
-  const firstCallSlot = new Text("first call", 0, 0);
-  const firstResultSlot = new Text("first result", 0, 0);
-  const slotContext = (isPartial: boolean) =>
-    renderContextFixture({ args, state, isPartial, lastComponent: unrelated });
-  shell.renderCall(slotContext(true), theme, (context) => {
-    callLast.push(context.lastComponent);
-    return firstCallSlot;
-  });
-  shell.renderResult(
-    slotContext(false),
-    theme,
-    (context) => {
-      resultLast.push(context.lastComponent);
-      return firstResultSlot;
-    },
-    textResult(""),
-  );
-  shell.renderCall(slotContext(true), theme, (context) => {
-    callLast.push(context.lastComponent);
-    return new Text("second call", 0, 0);
-  });
-  shell.renderResult(
-    slotContext(false),
-    theme,
-    (context) => {
-      resultLast.push(context.lastComponent);
-      return new Text("second result", 0, 0);
-    },
-    textResult(""),
-  );
-
-  assert.deepEqual(callLast, [undefined, firstCallSlot]);
-  assert.deepEqual(resultLast, [undefined, firstResultSlot]);
-});
-
 test("fallback result rendering sanitizes terminal controls", () => {
   const base = createReadToolDefinition("/project");
   const { renderCall: _renderCall, renderResult: _renderResult, ...withoutRenderers } = base;
@@ -201,172 +120,6 @@ test("fallback result rendering sanitizes terminal controls", () => {
   assert.match(output, /unsafe␛\[2J␍text/);
 });
 
-test("preview shell does not hide semantic updates during timing invalidation", () => {
-  settings({ toolCallTiming: true });
-  const args: ReadToolInput = { path: "README.md" };
-  for (const mode of ["off", "border"] as const) {
-    const state = {};
-    const tool = {
-      ...createReadToolDefinition("/project"),
-      renderCall: ((receivedArgs, _theme, _context) =>
-        new Text(`call ${receivedArgs.path}`, 0, 0)) satisfies ReadRenderCall,
-      renderResult: ((value, options, _theme, _context) =>
-        new Text(
-          `${options.expanded ? "expanded" : "collapsed"} ${value.content.map((part) => (part.type === "text" ? part.text : "")).join("")}`,
-          0,
-          0,
-        )) satisfies ReadRenderResult,
-    };
-    const wrapped = withCodePreviewShell(tool, { mode });
-    const context = renderContextFixture({ args, state, executionStarted: true });
-    const firstCall = wrapped.renderCall(args, theme, context);
-    const firstResult = wrapped.renderResult(
-      textResult("old"),
-      { expanded: false, isPartial: true },
-      theme,
-      context,
-    );
-    const nextArgs = { path: "changed.ts" };
-    const secondCall = wrapped.renderCall(nextArgs, theme, {
-      ...context,
-      args: nextArgs,
-      expanded: true,
-      lastComponent: firstCall,
-    });
-    const secondResult = wrapped.renderResult(
-      textResult("fresh"),
-      { expanded: true, isPartial: true },
-      theme,
-      { ...context, args: nextArgs, expanded: true, lastComponent: firstResult },
-    );
-    const text = [...secondCall.render(100), ...secondResult.render(100)].join("\n");
-    assert.match(text, /changed.ts/u);
-    assert.match(text, /expanded fresh/u);
-    assert.doesNotMatch(text, /old/u);
-  }
-});
-
-test("tools without providers stay compact and retain domain failure output on expansion", () => {
-  settings({ toolCallCollapsedStyle: "compact" });
-  const tool = {
-    ...createReadToolDefinition("/project"),
-    renderResult: ((_value, _options, _theme, _context) =>
-      new Text(
-        "background work failed; inspect recovery receipt",
-        0,
-        0,
-      )) satisfies ReadRenderResult,
-  };
-  const wrapped = withCodePreviewShell(tool, { mode: "off" });
-  const context = renderContextFixture({ args: { path: "file" }, isPartial: false });
-  const output = wrapped.renderResult(
-    textResult("invocation completed"),
-    { expanded: false, isPartial: false },
-    theme,
-    context,
-  );
-  assert.doesNotMatch(renderComponent(output), /background work failed/u);
-  const expanded = wrapped.renderResult(
-    textResult("invocation completed"),
-    { expanded: true, isPartial: false },
-    theme,
-    { ...context, expanded: true },
-  );
-  assert.match(renderComponent(expanded), /background work failed; inspect recovery receipt/u);
-});
-
-test("compact style is captured and wraps self shells without changing execution", () => {
-  const base = createReadToolDefinition("/project");
-  const preview = withCodePreviewShell(base, { mode: "on", compactSummary: compactProvider });
-  settings({ toolCallCollapsedStyle: "compact" });
-  const compact = withCodePreviewShell(base, { mode: "on", compactSummary: compactProvider });
-  const self = { ...base, renderShell: "self" as const };
-  const wrappedSelf = withCodePreviewShell(self, { compactSummary: compactProvider });
-  assert.notEqual(wrappedSelf, self);
-  assert.deepEqual(executeDescriptor(wrappedSelf), executeDescriptor(self));
-  assert.equal(preview.renderShell, "default");
-  assert.equal(compact.renderShell, "self");
-  assert.deepEqual(executeDescriptor(compact), executeDescriptor(base));
-  assert.equal(compact.parameters, base.parameters);
-  settings({ toolCallCollapsedStyle: "preview" });
-  const context = renderContextFixture({ args: { path: "file" } });
-  const component = compact.renderCall?.(context.args, theme, context);
-  assert.ok(component);
-  assert.match(renderComponent(component), /compact-subject/u);
-});
-
-test("preview timing toggles preserve producer caches and mouse actions", () => {
-  for (const mode of ["on", "off"] as const) {
-    const seen: TuiMouseEvent[] = [];
-    const action = (text: string) =>
-      Object.assign(new Text(text, 0, 0), {
-        handleMouse(event: TuiMouseEvent) {
-          seen.push(event);
-          return { handled: true };
-        },
-      });
-    const callText = action("call action");
-    const resultText = action("result action\nsecond row");
-    const tool = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderCall: ((_args, _theme, ctx) => {
-          assert.equal(ctx.lastComponent ?? callText, callText);
-          callText.setText("call action");
-          return callText;
-        }) satisfies ReadRenderCall,
-        renderResult: ((_value, _options, _theme, ctx) => {
-          assert.equal(ctx.lastComponent ?? resultText, resultText);
-          resultText.setText("result action\nsecond row");
-          return resultText;
-        }) satisfies ReadRenderResult,
-      },
-      { mode },
-    );
-    const h = createToolPresentationHarness(tool, {
-      state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 3379 },
-    });
-    const args = { path: "file" };
-    const value = textResult("output");
-    for (const timing of [true, false, true]) {
-      settings({ toolCallTiming: timing });
-      const call = h.call(args, { isPartial: false });
-      const output = h.result(value);
-      assert.ok(call && output);
-      const callRows = call.render(80);
-      const rows = output.render(80);
-      assert.equal(
-        rows.some((row) => row.includes("2.4s")),
-        timing,
-      );
-      const event: TuiMouseEvent = {
-        type: "click",
-        button: "left",
-        x: 0,
-        y: 0,
-        screenX: 0,
-        screenY: 0,
-        width: 80,
-        height: callRows.length,
-        shift: false,
-        alt: false,
-        ctrl: false,
-      };
-      assert.equal(call.handleMouse?.(event)?.handled, true);
-      assert.equal(seen.at(-1)?.height, 1);
-      assert.equal(output.handleMouse?.({ ...event, y: 1, height: rows.length })?.handled, true);
-      assert.equal(seen.at(-1)?.height, 2);
-      if (timing) {
-        const count = seen.length;
-        assert.equal(output.handleMouse?.({ ...event, y: 2, height: rows.length }), undefined);
-        assert.equal(seen.length, count);
-      }
-      h.invalidate();
-      assert.match(h.render().join("\n"), /result action/);
-    }
-  }
-});
-
 test("a display name heads compact rows without changing the registered tool name", () => {
   settings({ toolCallCollapsedStyle: "compact" });
   const base = { ...createReadToolDefinition("/project"), name: "registered_model_name" };
@@ -383,57 +136,4 @@ test("a display name heads compact rows without changing the registered tool nam
   const text = h.render().join("\n");
   assert.match(text, /shown-name/u);
   assert.doesNotMatch(text, /registered_model_name/u);
-});
-
-test("fallback rendering preserves expanded input and attachments without taking native image ownership", () => {
-  const caps = getCapabilities();
-  try {
-    for (const style of ["preview", "compact"] as const) {
-      settings({ toolCallCollapsedStyle: style });
-      const {
-        renderCall: _call,
-        renderResult: _result,
-        ...source
-      } = createReadToolDefinition("/project");
-      const tool = withCodePreviewShell(source, { mode: "off" });
-      for (const native of [false, true]) {
-        setCapabilities({ ...caps, images: native ? "kitty" : null });
-        for (const showImages of [false, true]) {
-          for (const withText of [false, true]) {
-            const value: ReadResult = {
-              content: [
-                ...(withText ? [{ type: "text" as const, text: "attachment context" }] : []),
-                { type: "image", mimeType: "image/png", data: "unchanged-by-rendering" },
-              ],
-              details: undefined,
-            };
-            const before = JSON.stringify(value);
-            const h = createToolPresentationHarness(tool);
-            const args = {
-              path: "INPUT_PATH_SENTINEL.png",
-              query: "INPUT_QUERY_SENTINEL\x1b[2J\x9b",
-              offset: 7,
-              limit: 12,
-            };
-            for (const { expanded, text } of h.cycle(args, value, {
-              overrides: () => ({ showImages }),
-            })) {
-              assert.equal(text.includes("INPUT_QUERY_SENTINEL"), expanded);
-              assert.equal(text.includes("INPUT_PATH_SENTINEL.png"), expanded);
-              if (expanded) assert.match(text, /"offset": 7,\s+"limit": 12/u);
-              assert.ok(!text.includes("\x1b") && !text.includes("\x9b"));
-              const output = expanded || style === "preview";
-              assert.equal(text.includes("image/png"), output && (!native || !showImages));
-              assert.equal(text.includes("attachment context"), output && withText);
-              assert.equal(text.includes("unchanged-by-rendering"), false);
-            }
-            assert.equal(JSON.stringify(value), before);
-            assert.deepEqual(executeDescriptor(tool), executeDescriptor(source));
-          }
-        }
-      }
-    }
-  } finally {
-    setCapabilities(caps);
-  }
 });

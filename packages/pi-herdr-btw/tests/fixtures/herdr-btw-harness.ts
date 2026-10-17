@@ -31,7 +31,7 @@ type HerdrBtwCallInput =
   | { readonly paneId: string }
   | { readonly agentName: string; readonly prompt?: string };
 
-export interface HerdrBtwClientCall {
+interface HerdrBtwClientCall {
   readonly operation: string;
   readonly input?: HerdrBtwCallInput;
 }
@@ -71,7 +71,6 @@ export const SESSION_FILE = "/sessions/parent.jsonl";
 export const SESSION_ID = "019fd4cd-4c88-7564-8b67-3b917b42df51";
 export const CHILD_ID = "0198aaaa-7564-4c88-8b67-child0btw001";
 export const CHILD_FILE = "/sessions/child.jsonl";
-export const CHILD_ALIAS = "/sessions/aliases/../child.jsonl";
 export const CWD = "/project";
 
 export const aliasIdentity =
@@ -88,7 +87,6 @@ export const aliasIdentity =
 
 export interface HerdrBtwFixtureOptions {
   readonly initialLinks?: ReadonlyArray<HerdrBtwLink>;
-  readonly restoreOverride?: HerdrBtwLinkRestoration;
   readonly recordResult?: HerdrBtwLinkRecordResult;
   readonly liveAgents?: ReadonlyArray<HerdrPane>;
   readonly liveAgentSnapshots?: ReadonlyArray<ReadonlyArray<HerdrPane>>;
@@ -102,16 +100,7 @@ export interface HerdrBtwFixtureOptions {
   readonly createdChildId?: string;
   readonly createdChildFile?: string;
   readonly startedSession?: string;
-  readonly startedSessionKind?: "id" | "path";
-  readonly startedIdentityAvailable?: boolean;
-  readonly startedTerminalId?: string;
-  readonly width?: number;
   readonly protocol?: number;
-  readonly integrationCurrent?: boolean;
-  readonly layoutWorkspaceId?: string;
-  readonly splitTabId?: string;
-  readonly shellReadyAfter?: number;
-  readonly shellReadiness?: ReadonlyArray<boolean>;
 }
 
 export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
@@ -132,7 +121,6 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
   const createdChildId = options.createdChildId ?? CHILD_ID;
   const createdChildFile = options.createdChildFile ?? CHILD_FILE;
   let snapshotReads = 0;
-  let shellInspections = 0;
   let startedAgentName: string | undefined;
   const parentPane = {
     pane_id: "w1:p1",
@@ -144,31 +132,23 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
     pane_id: "w1:p2",
     terminal_id: "term-btw",
     workspace_id: "w1",
-    tab_id: options.splitTabId ?? "w1:t1",
+    tab_id: "w1:t1",
   };
-  const startedAgentSnapshot = (agentName: string) => {
-    const agent = {
-      ...btwPane,
-      terminal_id: options.startedTerminalId ?? btwPane.terminal_id,
+  const startedAgentSnapshot = (agentName: string) => ({
+    ...btwPane,
+    agent: "pi",
+    name: agentName,
+    agent_session: {
+      source: "herdr:pi",
       agent: "pi",
-      name: agentName,
-    };
-    if (options.startedIdentityAvailable === false) return agent;
-    return {
-      ...agent,
-      agent_session: {
-        source: "herdr:pi",
-        agent: "pi",
-        kind: options.startedSessionKind ?? "path",
-        value: options.startedSession ?? createdChildFile,
-      },
-    };
-  };
+      kind: "path" as const,
+      value: options.startedSession ?? createdChildFile,
+    },
+  });
 
   const client = HerdrClient.of({
     inspectProtocol: () => run("inspect protocol", undefined, () => options.protocol ?? 20),
-    inspectPiIntegration: () =>
-      run("inspect Pi integration", undefined, () => options.integrationCurrent ?? true),
+    inspectPiIntegration: () => run("inspect Pi integration", undefined, () => true),
     inspectLiveAgents: () =>
       run("inspect live agents", undefined, () => {
         const index = snapshotReads++;
@@ -182,26 +162,18 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
     resolveCallingPane: () => run("resolve calling pane", undefined, () => parentPane),
     inspectPaneLayout: (paneId) =>
       run("inspect calling pane layout", { paneId }, () => ({
-        workspace_id: options.layoutWorkspaceId ?? "w1",
+        workspace_id: "w1",
         tab_id: "w1:t1",
-        area: { width: options.width ?? 160, height: 40 },
+        area: { width: 160, height: 40 },
       })),
     splitPane: (input) => run("split BTW pane", input, () => btwPane),
     inspectPaneProcessInfo: (paneId) =>
-      run("inspect BTW pane shell", { paneId }, () => {
-        shellInspections += 1;
-        const ready =
-          options.shellReadiness?.[shellInspections - 1] ??
-          shellInspections >= (options.shellReadyAfter ?? 1);
-        return ready
-          ? {
-              pane_id: btwPane.pane_id,
-              shell_pid: 4242,
-              foreground_process_group_id: 4242,
-              foreground_processes: [{ pid: 4242, name: "zsh" }],
-            }
-          : { pane_id: btwPane.pane_id };
-      }),
+      run("inspect BTW pane shell", { paneId }, () => ({
+        pane_id: btwPane.pane_id,
+        shell_pid: 4242,
+        foreground_process_group_id: 4242,
+        foreground_processes: [{ pid: 4242, name: "zsh" }],
+      })),
     startSideSessionPi: (input) =>
       runEffect("start side-session Pi", input, () => {
         const started = Effect.sync(() => {
@@ -235,7 +207,6 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
   const linkStore: HerdrBtwLinkStoreContract = {
     restore: () => {
       restoreCount += 1;
-      if (options.restoreOverride) return options.restoreOverride;
       const link = recordedLinks.at(-1);
       return link === undefined
         ? HerdrBtwLinkRestoration.none()

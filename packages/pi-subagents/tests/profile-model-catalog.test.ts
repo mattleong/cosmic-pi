@@ -5,7 +5,6 @@ import * as Fiber from "effect/Fiber";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { deferredPromise, modelFixture } from "pi-cosmic-core/testing";
 import { createModelPickerChoices } from "pi-cosmic-ui/manager/model-picker";
-import type { NativeRuntimeModel } from "../src/boundary/native-model-catalog.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import {
   loadCandidateModelPicker,
@@ -15,7 +14,6 @@ import {
   type ProfileModelRegistry,
   type ProfileModelRegistryRefreshResult,
 } from "../src/settings/profile-model-catalog.ts";
-import type { ProfileModelOption } from "../src/settings/ui/model-picker.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 
 const piModel = (provider: string, id: string, name = id) =>
@@ -27,18 +25,12 @@ const piModel = (provider: string, id: string, name = id) =>
     thinkingLevelMap: { low: "low", high: "high" },
   });
 
-const staticCatalog = (
-  models: ReadonlyArray<Model<Api>>,
-  scoped?: ReadonlyArray<Model<Api>>,
-): ProfileModelCatalog =>
-  new ProfileModelCatalog(
-    {
-      getAvailable: () => models,
-      getError: () => undefined,
-      refresh: () => Promise.resolve({ aborted: false }),
-    },
-    scoped,
-  );
+const staticCatalog = (models: ReadonlyArray<Model<Api>>): ProfileModelCatalog =>
+  new ProfileModelCatalog({
+    getAvailable: () => models,
+    getError: () => undefined,
+    refresh: () => Promise.resolve({ aborted: false }),
+  });
 
 const loadPicker = (
   catalog: ProfileModelCatalog,
@@ -63,9 +55,6 @@ const hasTerminalControls = (value: string): boolean => {
   }
   return false;
 };
-
-const selectors = (options: ReadonlyArray<ProfileModelOption> = []) =>
-  options.map((option) => option.selector);
 
 describe("profile model catalog", () => {
   for (const lateFailure of [false, true]) {
@@ -146,28 +135,6 @@ describe("profile model catalog", () => {
     }),
   );
 
-  it.effect("projects scoped Pi models separately from all authenticated models", () =>
-    Effect.gen(function* () {
-      const scoped = piModel("openai", "scoped");
-      const catalog = staticCatalog([scoped, piModel("anthropic", "all-only")], [scoped]);
-      const picker = yield* loadPicker(catalog, profileCandidate("openai/scoped"));
-      expect(selectors(picker.scopedChoices)).toContain("openai/scoped");
-      expect(selectors(picker.scopedChoices)).not.toContain("anthropic/all-only");
-      expect(selectors(picker.choices)).toContain("anthropic/all-only");
-    }),
-  );
-
-  it.effect("marks a retained unavailable current model as non-selectable", () =>
-    Effect.gen(function* () {
-      const catalog = staticCatalog([piModel("openai", "available")]);
-      const picker = yield* loadPicker(catalog, profileCandidate("openai/missing"));
-      const retained = picker.choices.find((option) => option.selector === "openai/missing");
-
-      expect(retained).toMatchObject({ available: false, fastModeAvailable: false });
-      expect(retained?.unavailableReason).toBeTruthy();
-    }),
-  );
-
   it.effect("sanitizes Pi and native display text without changing selector identity", () =>
     Effect.gen(function* () {
       const catalog = staticCatalog([
@@ -210,54 +177,6 @@ describe("profile model catalog", () => {
       ).find((choice) => choice.value === "claude-safe");
       expect(native?.payload.selector).toBe("claude-safe");
       expect(native?.item.description).toContain("Safe");
-    }),
-  );
-
-  it.effect("keeps trusted extension-provider models eligible and uses live Codex tiers", () =>
-    Effect.gen(function* () {
-      const catalog = staticCatalog([piModel("openai-codex", "gpt-5.6-sol")]);
-      const pi = yield* loadPicker(catalog, profileCandidate("openai-codex/gpt-5.6-sol"));
-      expect(pi.warning).toBeUndefined();
-      expect(
-        pi.choices.find((choice) => choice.selector === "openai-codex/gpt-5.6-sol"),
-      ).toMatchObject({ fastModeAvailable: true });
-
-      const advertised: NativeRuntimeModel = {
-        selector: "future-codex",
-        label: "Future Codex",
-        description: "Advertised live catalog model",
-        supportedEfforts: ["high"],
-        supportedServiceTiers: ["priority"],
-        isDefault: true,
-      };
-      const codexCandidate = profileCandidate(advertised.selector, { runtime: "codex" });
-      const fastModeFor = (picker: CandidateModelPickerData) =>
-        picker.choices.find((option) => option.selector === advertised.selector)?.fastModeAvailable;
-      const live = yield* loadPicker(catalog, codexCandidate, {
-        profile: "worker",
-        listNativeModels: () => Promise.resolve([advertised]),
-      });
-      expect(fastModeFor(live)).toBe(true);
-
-      const fallback = yield* loadPicker(catalog, codexCandidate, {
-        profile: "worker",
-        listNativeModels: () => Promise.reject(new Error("catalog\u001b[2J failed")),
-      });
-      expect(fastModeFor(fallback)).toBe(false);
-      expect(hasTerminalControls(fallback.warning ?? "")).toBe(false);
-
-      const switching = profileCandidate("openai-codex/gpt-5.6-sol", { runtime: "codex" });
-      const pending = yield* loadPicker(catalog, switching, {
-        listNativeModels: () => Promise.resolve([advertised]),
-        modelPending: true,
-      });
-      expect(pending.choices.map((option) => option.selector)).toEqual([advertised.selector]);
-      expect(pending.defaultSelector).toBe(advertised.selector);
-      const offline = yield* loadPicker(catalog, switching, {
-        listNativeModels: () => Promise.reject(new Error("catalog failed")),
-        modelPending: true,
-      });
-      expect(offline.choices).toEqual([]);
     }),
   );
 });

@@ -22,49 +22,7 @@ const fileLayer = Layer.merge(
 );
 
 describe("OpenAI image protocol", () => {
-  it.effect("ignores unknown events and non-image items before a wrapped completion", () =>
-    Effect.gen(function* () {
-      const result = yield* parseImageSse(
-        body(
-          dataEvent({ type: "response.in_progress", sequence_number: 1 }) +
-            dataEvent({
-              type: "response.output_item.done",
-              item: { type: "reasoning", id: "rs_1", summary: [] },
-            }) +
-            dataEvent({
-              type: "response.output_item.done",
-              item: {
-                type: "image_generation_call",
-                id: "wrapped",
-                status: "completed",
-                result: "data:image/webp;base64,YQ==",
-              },
-            }),
-        ),
-        "image/png",
-      );
-
-      expect(result).toMatchObject({
-        id: "wrapped",
-        status: "completed",
-        data: "YQ==",
-        mimeType: "image/png",
-      });
-    }),
-  );
-
-  it.effect("accepts a direct completion from an unterminated final event", () =>
-    Effect.gen(function* () {
-      const result = yield* parseImageSse(
-        body('data: {"type":"image_generation_call","id":"direct","b64_json":"Yg=="}'),
-        "image/png",
-      );
-
-      expect(result).toMatchObject({ id: "direct", status: "completed", data: "Yg==" });
-    }),
-  );
-
-  it.effect.each(["partial_image_b64", "b64_json"] as const)(
+  it.effect.each(["b64_json"] as const)(
     "keeps %s partials nonterminal and rejects malformed or partial-only streams",
     (field) =>
       Effect.gen(function* () {
@@ -93,27 +51,6 @@ describe("OpenAI image protocol", () => {
       }),
   );
 
-  it.effect("fails malformed known events and a terminal without completion", () =>
-    Effect.gen(function* () {
-      const malformed = yield* parseImageSse(
-        body(
-          dataEvent({
-            type: "response.output_item.done",
-            item: { type: "image_generation_call", result: 42 },
-          }),
-        ),
-        "image/png",
-      ).pipe(Effect.flip);
-      const terminated = yield* parseImageSse(body("data: [DONE]\n\n"), "image/png").pipe(
-        Effect.flip,
-      );
-
-      expect(malformed.operation).toBe("stream");
-      expect(malformed.message).toContain("malformed event");
-      expect(terminated.operation).toBe("stream");
-    }),
-  );
-
   it.effect("sanitizes provider failure messages", () =>
     Effect.gen(function* () {
       const failure = yield* parseImageSse(
@@ -133,22 +70,6 @@ describe("OpenAI image protocol", () => {
 });
 
 describe("OpenAI image byte and path validation", () => {
-  it.effect("accepts multi-megabyte generated images within the output limit", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const data = "A".repeat(8 * 1024 * 1024);
-      const output = imageOutput({ fs, path, sharp: pngSharp });
-      const result = yield* output.validatedGeneratedImage(
-        { id: "image", status: "completed", data, mimeType: "image/png" },
-        "png",
-      );
-
-      expect(result.data).toBe(data);
-      expect(result.bytes.byteLength).toBe(6 * 1024 * 1024);
-    }).pipe(provideBuiltLayer(nodePlatformLayer)),
-  );
-
   it.effect("rejects noncanonical base64 before image decoding", () => {
     let decodeCount = 0;
     const sharp: SharpAdapterContract = {

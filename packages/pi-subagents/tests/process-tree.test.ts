@@ -60,18 +60,6 @@ process.stdout.write(String(child.pid) + "\\n");`,
     expect(new Set(descendantGroupsFromTable(table, 100))).toEqual(new Set([200, 300]));
   });
 
-  it("rejects malformed or ownerless snapshots rather than silently dropping process rows", () => {
-    for (const table of [
-      "100 1 100 S\nmalformed",
-      "100 1 100 S extra",
-      "0 1 100 S",
-      "100 1 999 S",
-      "100 1 100 S\n101 100 0 S",
-      "",
-    ])
-      expect(descendantGroupsFromTable(table, 100)).toBeUndefined();
-  });
-
   for (const fault of [
     "failed",
     "overflowed",

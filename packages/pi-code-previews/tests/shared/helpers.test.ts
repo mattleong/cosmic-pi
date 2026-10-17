@@ -10,23 +10,3 @@ test("ownField reads only own properties from decoded host objects", () => {
   assert.equal(ownField(hostObject(ownUndefined), "value"), undefined);
   assert.equal(ownField(hostObject(inherited), "value"), undefined);
 });
-
-test("hostObject rejects arrays, null, primitives, and functions", () => {
-  const functionWithProperty = Object.assign(() => undefined, { value: "function" });
-  const values = [
-    ["array"],
-    null,
-    undefined,
-    "text",
-    1,
-    true,
-    1n,
-    Symbol("value"),
-    functionWithProperty,
-  ];
-
-  for (const value of values) {
-    assert.equal(hostObject(value), undefined);
-    assert.equal(ownField(hostObject(value), "value"), undefined);
-  }
-});

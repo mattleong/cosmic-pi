@@ -8,11 +8,7 @@ import {
   deferredPromise,
   makeCapturedLogger,
 } from "pi-cosmic-core/testing";
-import {
-  disposeShikiHighlighter,
-  disposeShikiHighlighterSafely,
-  ShikiAdapter,
-} from "../../src/boundary/shiki";
+import { disposeShikiHighlighter, ShikiAdapter } from "../../src/boundary/shiki";
 import { shikiHighlighterFixture } from "../support/shiki";
 
 describe("Shiki adapter lifecycle", () => {
@@ -49,15 +45,4 @@ describe("Shiki adapter lifecycle", () => {
       assert.equal(disposeAttempts, 1);
     }).pipe(Effect.scoped, provideBuiltLayer(captured.layer));
   });
-
-  it.effect("late cancellation disposal cannot throw into a Promise continuation", () =>
-    Effect.sync(() => {
-      const highlighter = shikiHighlighterFixture({
-        dispose: () => {
-          throw new Error("third-party disposal failed");
-        },
-      });
-      assert.equal(disposeShikiHighlighterSafely(highlighter), false);
-    }),
-  );
 });

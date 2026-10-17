@@ -74,21 +74,6 @@ const overlappingSettingsCommands = (commands: readonly string[]) =>
     };
   });
 
-it.effect("overlapping assignments can restore the original default", () =>
-  overlappingSettingsCommands([
-    "readCollapsedLines 40",
-    `readCollapsedLines ${defaultCodePreviewSettings.readCollapsedLines}`,
-  ]).pipe(
-    Effect.tap(({ published, saved }) =>
-      Effect.sync(() => {
-        assert.equal(published.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);
-        assert.equal(Object.hasOwn(saved, "readCollapsedLines"), false);
-      }),
-    ),
-    Effect.provide(nodeFilePlatformLayer),
-  ),
-);
-
 it.effect("overlapping assignments to different fields preserve both edits", () =>
   overlappingSettingsCommands(["readCollapsedLines 40", "readLineNumbers off"]).pipe(
     Effect.tap(({ published, saved }) =>

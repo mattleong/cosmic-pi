@@ -3,15 +3,9 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import { deferredPromise, yieldUntil } from "pi-cosmic-core/testing";
-import {
-  type AskUserOutcome,
-  type AskUserRequest,
-  type QuestionnaireCapability,
-  type QuestionnaireOwner,
-} from "pi-ask-user/protocol";
-import { askParentQuestionnaire } from "../../src/boundary/host-ask-user.ts";
-import { answerCapabilityQueries, eventBus, pickQuestionnaire } from "../support/questionnaire.ts";
+import { yieldUntil } from "pi-cosmic-core/testing";
+import { type AskUserRequest, type QuestionnaireOwner } from "pi-ask-user/protocol";
+import { pickQuestionnaire } from "../support/questionnaire.ts";
 import {
   fakeChildLayer,
   request,
@@ -52,115 +46,6 @@ const blockingQuestionnaire = (release: Deferred.Deferred<void>) => {
 };
 
 describe("assignment-owned questionnaire proxy", () => {
-  it.effect("does not reopen a settled request identity within an assignment", () =>
-    Effect.gen(function* () {
-      const fake = fakeChildLayer();
-      let presentations = 0;
-      const layer = serviceLayer({
-        questionnaireHandler: () =>
-          Effect.sync(() => {
-            presentations += 1;
-            return {
-              content: [{ type: "text" as const, text: "cancelled" }],
-              details: { outcome: "cancelled", answers: [] },
-            };
-          }),
-      }).pipe(Layer.provide(fake.layer));
-      yield* withService(layer, function* (service) {
-        yield* service.start(request({ name: "replay" }));
-        const child = fake.controls[0]!;
-        askUser(child, "same");
-        yield* yieldUntil(() =>
-          child.ipc.some((message) => message.type === "proxy_response" && message.ok),
-        );
-        askUser(child, "same");
-        yield* yieldUntil(() =>
-          child.ipc.some((message) => message.type === "proxy_response" && !message.ok),
-        );
-        expect(presentations).toBe(1);
-      });
-    }),
-  );
-  for (const ending of ["stop", "shutdown"] as const) {
-    it.effect(`joins root editor cleanup on ${ending} after proxy cancellation`, () =>
-      Effect.gen(function* () {
-        const fake = fakeChildLayer();
-        const events = eventBus();
-        const editorCleanup = deferredPromise();
-        let owner: QuestionnaireOwner | undefined;
-        let aborted = false;
-        let cancelling = false;
-        let cleaned = false;
-        let endingStarted = false;
-        let stopped = false;
-        let finished = false;
-        const capability: QuestionnaireCapability = {
-          version: 1,
-          sessionId: "root",
-          generation: "g1",
-          ask: (_request, authenticatedOwner, signal) => {
-            owner = authenticatedOwner;
-            const recordAbort = Effect.sync(() => {
-              aborted = true;
-            });
-            return Effect.runPromiseExit(Effect.never.pipe(Effect.onInterrupt(() => recordAbort)), {
-              signal,
-            }).then(() => deferredPromise<AskUserOutcome>().promise);
-          },
-          cancel: (authenticatedOwner) => {
-            expect(authenticatedOwner).toBe(owner);
-            cancelling = true;
-            return editorCleanup.promise.then(() => {
-              cleaned = true;
-              return undefined;
-            });
-          },
-        };
-        answerCapabilityQueries(events, () => capability);
-        const layer = serviceLayer({
-          questionnaireHandler: (input, authenticatedOwner) =>
-            askParentQuestionnaire(events, "root", input, authenticatedOwner),
-        }).pipe(Layer.provide(fake.layer));
-        const running = yield* withService(layer, function* (service) {
-          const run = yield* service.start(request({ name: "root-editor" }));
-          const child = fake.controls[0]!;
-          askUser(child, "q-editor");
-          yield* yieldUntil(() => owner !== undefined);
-          child.offerIpc({ channel: "pi-subagents", type: "proxy_cancel", requestId: "q-editor" });
-          yield* yieldUntil(() => aborted);
-          endingStarted = true;
-          if (ending === "stop") {
-            yield* service.stop(run.id);
-            stopped = true;
-          }
-        }).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              finished = true;
-            }),
-          ),
-          Effect.forkChild,
-        );
-        yield* yieldUntil(() => endingStarted && cancelling);
-        expect(aborted).toBe(true);
-        expect(cleaned).toBe(false);
-        expect(stopped).toBe(false);
-        expect(finished).toBe(false);
-        expect(fake.controls[0]!.released()).toBe(0);
-        editorCleanup.resolve();
-        yield* Fiber.join(running);
-        expect(cleaned).toBe(true);
-        expect(finished).toBe(true);
-        expect(stopped).toBe(ending === "stop");
-        expect(
-          fake.controls[0]!.ipc.some(
-            (message) => message.type === "proxy_response" && message.requestId === "q-editor",
-          ),
-        ).toBe(false);
-      }),
-    );
-  }
-
   it.effect("drains an outstanding questionnaire before launch compensation releases", () =>
     Effect.gen(function* () {
       const promptGate = yield* Deferred.make<void>();

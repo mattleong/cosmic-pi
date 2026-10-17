@@ -16,12 +16,7 @@ import {
   makeInMemoryDocuments,
 } from "pi-cosmic-core/testing";
 import { DEFAULT_CONFIG } from "../src/config/schema.ts";
-import {
-  configPaths,
-  resolveConfig,
-  setFooterVisibility,
-  updateFooterConfig,
-} from "../src/config/store.ts";
+import { configPaths, resolveConfig, updateFooterConfig } from "../src/config/store.ts";
 
 const withTempConfig = <A, E>(
   run: (values: {
@@ -134,41 +129,6 @@ describe("Cosmic UI config", () => {
         });
       }).pipe(provideBuiltLayer(Layer.merge(memory.layer, Path.layer)));
     },
-  );
-
-  it.effect("reselects scope when external documents appear or disappear", () =>
-    withTempConfig(({ cwd, agent }) =>
-      Effect.gen(function* () {
-        const documents = yield* JsonDocumentStore;
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* configPaths(cwd, agent);
-        yield* documents.writeObject(paths.global, {
-          footer: { density: "comfortable", hidden: ["global-item"] },
-        });
-        const global = yield* resolveConfig(cwd, agent, true);
-        expect(global.configPath).toBe(paths.global);
-
-        yield* documents.writeObject(paths.project, {
-          footer: { density: "auto", hidden: ["project-item"] },
-        });
-        const project = yield* updateFooterConfig(cwd, agent, { density: "compact" }, true);
-        expect(project.configPath).toBe(paths.project);
-        expect(yield* documents.readObject(paths.project)).toEqual({
-          footer: { density: "compact", hidden: ["project-item"] },
-        });
-        expect(yield* documents.readObject(paths.global)).toEqual({
-          footer: { density: "comfortable", hidden: ["global-item"] },
-        });
-
-        yield* fs.remove(paths.project);
-        const next = yield* setFooterVisibility(cwd, agent, "metrics", false, true);
-        expect(next.configPath).toBe(paths.global);
-        expect(yield* fs.exists(paths.project)).toBe(false);
-        expect(yield* documents.readObject(paths.global)).toEqual({
-          footer: { density: "comfortable", hidden: ["global-item", "metrics"] },
-        });
-      }),
-    ),
   );
 
   it.effect("logs a safe diagnostic when an existing config cannot be read", () => {

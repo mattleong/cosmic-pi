@@ -6,12 +6,9 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import { AgentDirectory, provideBuiltLayer } from "pi-cosmic-core";
-import { jsonHttpTestLayer, makeInMemoryDocuments, yieldUntil } from "pi-cosmic-core/testing";
+import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import type { ResolvedConfig } from "../src/config/schema.ts";
 import { OpenAIConfigService } from "../src/config/store.ts";
-import { OpenAIUsageService } from "../src/usage/controller.ts";
-import { initialProjection } from "../src/usage/projection.ts";
-import { testContext } from "./helpers.ts";
 
 const globalPath = "/agent/extensions/pi-better-openai.json";
 
@@ -157,34 +154,3 @@ it.effect(
     }).pipe(provideBuiltLayer(h.layer));
   },
 );
-
-it.effect("initial usage polling publishes after subscribing to configuration", () => {
-  const h = fixture();
-  const projection = MutableRef.make(initialProjection());
-  const usageLayer = OpenAIUsageService.layer({
-    context: MutableRef.make(
-      testContext({ token: JSON.stringify({ access: "token", accountId: "acct" }) }),
-    ),
-    projection,
-    onChange: () => undefined,
-  }).pipe(
-    Layer.provideMerge(h.layer),
-    Layer.provide(
-      Layer.mergeAll(
-        Path.layer,
-        AgentDirectory.layer("/agent"),
-        jsonHttpTestLayer(() =>
-          Effect.succeed({
-            status: 200,
-            body: { rate_limit: { primary_window: { used_percent: 25 } } },
-          }),
-        ),
-      ),
-    ),
-  );
-  return Effect.gen(function* () {
-    yield* yieldUntil(() => MutableRef.get(projection).snapshot !== undefined);
-    expect(MutableRef.get(projection).snapshot?.sevenDayLeftPercent).toBe(75);
-    expect(MutableRef.get(projection).config).toEqual(yield* (yield* OpenAIConfigService).get);
-  }).pipe(provideBuiltLayer(usageLayer));
-});

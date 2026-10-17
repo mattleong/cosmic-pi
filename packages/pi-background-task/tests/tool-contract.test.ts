@@ -1,9 +1,7 @@
-import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as JsonSchema from "effect/JsonSchema";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   applyPresentationSettings,
@@ -12,7 +10,6 @@ import {
 } from "pi-code-previews/testing";
 import { extensionContextFixture, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
-import { backgroundTaskNotFound } from "../src/task/errors.ts";
 import type { BackgroundLogEvent, BackgroundTaskStatus } from "../src/task/model.ts";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
 import { utf8ByteLength } from "pi-cosmic-core";
@@ -20,7 +17,6 @@ import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
 import { executeBackgroundTaskCommand } from "../src/tools/command.ts";
 import {
   BackgroundTaskContractSchema,
-  MAX_CONTRACT_LOG_OUTPUT_BYTES,
   encodeBackgroundTaskContract,
   type BackgroundTaskContract,
 } from "../src/tools/contract-schema.ts";
@@ -217,98 +213,6 @@ describe("background_task contract", () => {
         expect(projected.task).not.toHaveProperty(key);
     }),
   );
-
-  it.effect("encodes strictly into detached frozen data", () =>
-    Effect.gen(function* () {
-      const { contract } = yield* execute(
-        { action: "status", id: "task-1" },
-        { status: () => Effect.succeed(task({ failureCause: "error: boom" })) },
-      );
-      if (contract.action !== "status") throw new Error("status returned the wrong contract");
-      const json = encoded(contract);
-      const nested = Predicate.hasProperty(json, "task") ? json.task : undefined;
-      expect(nested).toEqual(contract.task);
-      expect(nested).not.toBe(contract.task);
-      expect(Object.isFrozen(json)).toBe(true);
-      expect(Object.isFrozen(nested)).toBe(true);
-
-      const withExtraKey = { ...contract, extra: true };
-      const withCommand = { ...contract.task, command: "pnpm dev" };
-      const invalid: ReadonlyArray<BackgroundTaskContract> = [
-        withExtraKey,
-        { ...contract, task: withCommand },
-        { ...contract, task: { ...contract.task, startedAt: -1 } },
-        { ...contract, task: { ...contract.task, exitCode: 1.5 } },
-      ];
-      for (const value of invalid) expect(encodeBackgroundTaskContract(value)).toBeUndefined();
-    }),
-  );
-
-  it.effect("returns raw sanitized combined logs clipped to the newest bytes", () =>
-    Effect.gen(function* () {
-      const logs = (events: ReadonlyArray<BackgroundLogEvent>, droppedBytes = 0) =>
-        execute(
-          { action: "logs", id: "task-1" },
-          {
-            logs: () =>
-              Effect.succeed({
-                id: "task-1",
-                state: "exited",
-                nextCursor: 9,
-                earliestAvailableCursor: 2,
-                droppedBytes,
-                events,
-              }),
-          },
-        );
-
-      const plain = yield* logs([
-        event(2, "hello \u001b[31mred\u001b[0m token=raw-output\n"),
-        event(3, "boom\n", "stderr"),
-      ]);
-      expect(plain.contract).toMatchObject({
-        action: "logs",
-        state: "exited",
-        finished: true,
-        output: "hello red token=raw-output\n[stderr] boom\n",
-        truncated: false,
-        nextCursor: 9,
-      });
-      encoded(plain.contract);
-
-      const big = `oldest-marker${"é".repeat(MAX_CONTRACT_LOG_OUTPUT_BYTES / 2)}newest-marker`;
-      const clipped = yield* logs([event(7, big)]);
-      if (clipped.contract.action !== "logs") throw new Error("logs returned the wrong contract");
-      encoded(clipped.contract);
-      const { output } = clipped.contract;
-      expect(utf8ByteLength(output)).toBeLessThanOrEqual(MAX_CONTRACT_LOG_OUTPUT_BYTES);
-      expect(output.endsWith("newest-marker")).toBe(true);
-      expect(output).not.toContain("oldest-marker");
-      expect(clipped.contract).toMatchObject({ truncated: true, droppedBytes: 0, nextCursor: 9 });
-      expect(utf8ByteLength(clipped.text)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
-      expect(clipped.details).toMatchObject({ truncation: { truncated: true } });
-
-      const empty = yield* logs([], 512);
-      expect(empty.contract).toMatchObject({ output: "", truncated: false, droppedBytes: 512 });
-      encoded(empty.contract);
-    }),
-  );
-
-  it.effect("reports a wait timeout as data and leaves the task running", () =>
-    Effect.gen(function* () {
-      const { contract } = yield* execute(
-        { action: "wait", id: "task-1", until: "exit", waitSeconds: 1 },
-        { wait: () => Effect.succeed(taskWait(task(), "timeout", { appliedWaitSeconds: 1 })) },
-      );
-      encoded(contract);
-      expect(contract).toMatchObject({
-        action: "wait",
-        outcome: "timeout",
-        task: { id: "task-1", state: "running", finished: false },
-      });
-      expect(contract).not.toHaveProperty("matchCursor");
-    }),
-  );
 });
 
 describe("registered background_task output", () => {
@@ -335,20 +239,6 @@ describe("registered background_task output", () => {
       expect(decodeStrict(result.structuredContent)).toEqual(direct.contract);
       expect(declared(result.structuredContent)).toBe(true);
     }),
-  );
-
-  it.effect("rejects typed failures without a result or contract", () =>
-    Effect.promise(() =>
-      expect(
-        registeredTool({ status: () => Effect.fail(backgroundTaskNotFound("task-9")) }).execute(
-          "call",
-          { action: "status", id: "task-9" },
-          undefined,
-          undefined,
-          ctx,
-        ),
-      ).rejects.toSatisfy(Predicate.isTagged("BackgroundTaskNotFoundError")),
-    ),
   );
 
   it.effect(

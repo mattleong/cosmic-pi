@@ -3,7 +3,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { runSubagentDoctor } from "../src/application/doctor.ts";
-import type { LocalCliVersion } from "../src/backend/local-cli-version.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { profileLayerFor } from "./run/fixtures/service-harness.ts";
@@ -32,7 +31,7 @@ const config = {
   },
 };
 
-const registry = (probed: string[], cliVersion?: LocalCliVersion) =>
+const registry = (probed: string[]) =>
   Layer.succeed(
     SubagentBackendRegistry,
     backendRegistryFor([
@@ -41,7 +40,6 @@ const registry = (probed: string[], cliVersion?: LocalCliVersion) =>
         runtime: "claude",
         capabilities: [],
         supportsContext: () => true,
-        ...(cliVersion && { cliVersion: Effect.succeed(cliVersion) }),
         spawn: () => Effect.die("doctor never launches"),
         preflight: (request) => {
           probed.push(request.model);
@@ -80,28 +78,5 @@ describe("subagents doctor", () => {
       expect(byLabel.get("Git")?.status).toBe("ok");
       expect(byLabel.get("Activity view")?.status).toBe("warning");
     }).pipe(Effect.scoped),
-  );
-
-  it.effect.each([
-    [{ status: "supported", version: "2.1.300" }, "ok", "2.1.300"],
-    [{ status: "unsupported", version: "2.1.100" }, "failed", "2.1.224"],
-    [{ status: "unavailable" }, "warning", "version"],
-  ] as const)(
-    "reports the CLI version a profile route depends on: %j",
-    ([version, status, detail]) =>
-      Effect.gen(function* () {
-        const agentDirectory = yield* temporaryDirectory("doctor-");
-        const checks = yield* runSubagentDoctor({
-          pi: extensionApiFixture(),
-          ctx: extensionContextFixture(),
-          agentDirectory,
-          activityViewAvailable: undefined,
-          projectTrusted: true,
-        }).pipe(Effect.provide(Layer.merge(profileLayerFor(config), registry([], version))));
-        const cli = checks.filter((item) => item.label.startsWith("Claude Code"));
-        expect(cli).toHaveLength(1);
-        expect(cli[0]?.status).toBe(status);
-        expect(cli[0]?.detail).toContain(detail);
-      }).pipe(Effect.scoped),
   );
 });

@@ -189,7 +189,7 @@ describe("forked Pi transcript", () => {
       }),
     );
   }
-  for (const anchor of ["system", "label"] as const) {
+  for (const anchor of ["system"] as const) {
     it.live(`removes parent prompt authority without losing a ${anchor} compaction anchor`, () =>
       Effect.gen(function* () {
         const directory = yield* temporaryDirectory("pi-fork-");

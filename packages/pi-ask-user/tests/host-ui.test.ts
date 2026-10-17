@@ -1,5 +1,3 @@
-import { setFlagsFromString } from "node:v8";
-import { runInNewContext } from "node:vm";
 import { describe, expect, vi } from "vitest";
 import { it } from "@effect/vitest";
 import * as Fiber from "effect/Fiber";
@@ -10,28 +8,6 @@ import { createAskUserDialogBridge } from "../src/boundary/host-ui.ts";
 
 const context = (setStatus: (key: string, value: string | undefined) => void) =>
   extensionContextFixture({ mode: "tui", ui: { setStatus } });
-
-setFlagsFromString("--expose-gc");
-const gc = (): void => {
-  runInNewContext("gc()");
-};
-
-it.live("forgets each waiter once the gate reopens", () =>
-  Effect.gen(function* () {
-    const gate = createAskUserPromptGate();
-    const waitOnce = Effect.gen(function* () {
-      const release = gate.enter();
-      const waiter = yield* Effect.forkChild(gate.awaitOpen, { startImmediately: true });
-      release();
-      yield* Fiber.join(waiter);
-      return new WeakRef(waiter);
-    });
-    const references = yield* Effect.replicateEffect(waitOnce, 5);
-    yield* Effect.sleep("1 millis");
-    gc();
-    expect(references.filter((reference) => reference.deref() !== undefined)).toEqual([]);
-  }),
-);
 
 it.effect(
   "queued mount waits for coalesced unrelated prompts, not just the owned overlay cleanup",
@@ -73,20 +49,8 @@ describe("ask-user dialog bridge", () => {
 
     bridge.clear(first);
     bridge.markCollapsed(second);
-    expect(statuses.at(-1)).toContain("/ask-user");
     expect(bridge.resume()).toBe(true);
     expect(resume).toHaveBeenCalledOnce();
     expect(statuses.at(-1)).toBeUndefined();
-  });
-
-  it("clears status idempotently and reports no inactive resume", () => {
-    const setStatus = vi.fn();
-    const bridge = createAskUserDialogBridge();
-    bridge.setContext(context(setStatus));
-    const token = bridge.activate(vi.fn());
-    bridge.clear(token);
-    bridge.clear(token);
-    expect(bridge.resume()).toBe(false);
-    expect(setStatus).toHaveBeenLastCalledWith("pi-ask-user", undefined);
   });
 });

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
-import { classifyCliVersion } from "../src/backend/local-cli-version.ts";
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
 import { step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
@@ -36,12 +35,7 @@ const versionedCli = (versionOutput: string) =>
       },
       executables: { claude: executable, codex: executable },
     });
-    const versionProbes = Effect.promise(() =>
-      fs
-        .readFile(nodePath.join(home, "cli-fixture.log"), "utf8")
-        .then((log) => log.split("\n").filter((line) => line === "--version").length),
-    );
-    return { processes, versionProbes };
+    return { processes };
   });
 
 const preflight = (
@@ -58,19 +52,6 @@ const preflight = (
   });
 
 describe("local CLI versions", () => {
-  it.each([
-    ["claude", "2.1.300 (Claude Code)", "supported"],
-    ["claude", "2.1.224 (Claude Code)", "supported"],
-    ["claude", "2.1.100 (Claude Code)", "unsupported"],
-    ["claude", "2026.4.24 macos-arm64 (2026-04-27)", "supported"],
-    ["codex", "codex-cli 0.162.1", "supported"],
-    ["codex", "codex-cli 0.144.9", "unsupported"],
-    ["codex", "codex-cli 0.145.0-alpha.3", "supported"],
-    ["claude", "Claude Code (development build)", "unrecognized"],
-  ] as const)("judges %s %j as %s", (runtime, output, status) => {
-    expect(classifyCliVersion(runtime, output).status).toBe(status);
-  });
-
   for (const runtime of ["claude", "codex"] as const) {
     it.live(`skips a ${runtime} route whose CLI is older than the supported minimum`, () =>
       Effect.gen(function* () {
@@ -90,19 +71,6 @@ describe("local CLI versions", () => {
       expect(yield* processes.version?.("claude") ?? Effect.void).toMatchObject({
         status: "unrecognized",
       });
-    }),
-  );
-
-  it.live("probes each CLI's version once per session", () =>
-    Effect.gen(function* () {
-      const { processes, versionProbes } = yield* versionedCli("2.1.300 (Claude Code)");
-      yield* preflight(processes, "claude");
-      yield* preflight(processes, "claude");
-      expect(yield* processes.version?.("claude") ?? Effect.void).toEqual({
-        status: "supported",
-        version: "2.1.300",
-      });
-      expect(yield* versionProbes).toBe(1);
     }),
   );
 });

@@ -1,4 +1,3 @@
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { AskUserAnswer, AskUserOutcome } from "../../src/questionnaire/model.ts";
 import type {
   AskUserAsyncRequest,
@@ -17,7 +16,7 @@ export const defaultQuestion: AskUserChoiceQuestion = {
   ],
 };
 
-export const ordinalChoices = [
+const ordinalChoices = [
   { value: "a", label: "A", description: "First" },
   { value: "b", label: "B", description: "Second" },
 ];
@@ -47,11 +46,6 @@ export const submitted = (...answers: AskUserAnswer[]): AskUserOutcome => ({
 
 export const cancelled: AskUserOutcome = { outcome: "cancelled", answers: [] };
 
-export const firstText = (content: AgentToolResult["content"]) => {
-  const [first] = content;
-  return first?.type === "text" ? first.text : undefined;
-};
-
 export const noExecution = () => {
   throw new Error("Rendering must not execute");
 };
@@ -62,11 +56,6 @@ export const hostile = <Target extends object>(target: Target, key: string): Tar
       throw new Error("hostile");
     },
   });
-
-export const malformedNoteAnswers = () => [
-  { key: "route", kind: "custom", text: "Scenic", note: 123 },
-  hostile({ key: "route", kind: "custom", text: "Scenic" }, "note"),
-];
 
 export const hostileContent = (text: string) => [
   { type: "text", text: `${text}\u001b[31m fallback` },

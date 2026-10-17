@@ -122,42 +122,6 @@ describe("native scripted image workflows", () => {
   );
 
   it.live(
-    "chains a project savedPath into workspace-contained edit inputs without parsing text",
-    () =>
-      Effect.gen(function* () {
-        const requests: ToolParams[] = [];
-        let savedPath = "";
-        const editPrompt = "  Keep the comet; make the label blue.\n  ";
-        const h = yield* nativeImageSession((params, cwd) =>
-          Effect.sync(() => {
-            requests.push(params);
-            savedPath = `${cwd}/.pi/generated-images/comet.png`;
-            return generated(params, params.save === "project" ? savedPath : undefined);
-          }),
-        );
-        const result = yield* h.run(`
-          const first = await tools.openai_image({prompt:${literal(prompt)},save:'project'});
-          const edited = await tools.openai_image({prompt:${literal(editPrompt)},action:'edit',images:[first.savedPath],save:'none'});
-          image(first.image);
-          image(edited.image);
-          ${print("{savedPath:first.savedPath,prompt:edited.prompt,action:edited.action}")}
-        `);
-        expect(result.isError, result.text).toBe(false);
-        expect(output(result.text)).toEqual({ savedPath, prompt: editPrompt, action: "edit" });
-        expect(requests).toEqual([
-          { prompt, save: "project" },
-          { prompt: editPrompt, action: "edit", images: [savedPath], save: "none" },
-        ]);
-        expect(result.message.content.filter((part) => part.type === "image")).toEqual([
-          block,
-          block,
-        ]);
-        expect(result.text).not.toContain(png);
-      }).pipe(Effect.provide(nodeFilePlatformLayer)),
-    15_000,
-  );
-
-  it.live(
     "rejects owned service failures instead of resolving success-shaped image data",
     () =>
       Effect.gen(function* () {

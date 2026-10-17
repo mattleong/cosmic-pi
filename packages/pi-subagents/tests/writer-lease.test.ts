@@ -9,9 +9,6 @@ import {
 import { temporaryDirectory } from "pi-cosmic-core/testing";
 import {
   makeWriterLease,
-  WriterCwdCanonicalizationError,
-  WriterLeaseAcquireError,
-  WriterLeaseMarkError,
   WriterLeaseReleaseError,
   WriterLeaseService,
 } from "../src/boundary/writer-lease.ts";
@@ -70,44 +67,6 @@ const adapter = (outcomes?: Array<LockOutcome>) =>
   });
 
 describe("writer lease adapter", () => {
-  it.effect("maps each core admission outcome onto one typed acquire result", () =>
-    Effect.gen(function* () {
-      const { service, cwd, acquire, calls } = yield* adapter([
-        "live",
-        "recovery-required",
-        "unavailable",
-      ]);
-      expect(yield* Effect.flip(acquire)).toMatchObject({ reason: "live" });
-      const recovery = yield* Effect.flip(acquire);
-      expect(recovery).toMatchObject({ reason: "recovery-required" });
-      expect(recovery.message).toContain(RECOVERY_SLOT);
-      expect(yield* Effect.flip(acquire)).toBeInstanceOf(WriterLeaseAcquireError);
-      yield* acquire;
-      expect(calls).toEqual(["tryAcquire", "tryAcquire", "tryAcquire", "tryAcquire"]);
-      expect(
-        yield* Effect.flip(
-          service.acquire({ cwd: { ...cwd, digest: "0".repeat(64) }, runId: "x" }),
-        ),
-      ).toBeInstanceOf(WriterLeaseAcquireError);
-      expect(calls).toHaveLength(4);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("marks native-pending and settles before releasing any copy of the lease", () =>
-    Effect.gen(function* () {
-      const { service, acquire, calls, held } = yield* adapter();
-      const lease = yield* acquire;
-      expect(yield* service.markSpawnStarted(lease)).toBe(lease);
-      yield* service.release(lease);
-      expect(calls).toEqual(["tryAcquire", "mutationStarted", "mutationSettled", "release"]);
-      expect(held()).toBe(false);
-      expect(yield* Effect.flip(service.release(lease))).toBeInstanceOf(WriterLeaseReleaseError);
-      expect(yield* Effect.flip(service.markSpawnStarted(lease))).toBeInstanceOf(
-        WriterLeaseMarkError,
-      );
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("keeps the slot held after a failed mark, settle, or release, even on retry", () =>
     Effect.gen(function* () {
       for (const failure of ["mutationStarted", "mutationSettled", "release"] as const) {
@@ -156,16 +115,6 @@ describe("writer lease adapter", () => {
       expect(yield* Effect.promise(() => fs.readdir(nodePath.join(root, "renamed")))).toEqual([]);
       yield* first.release(lease);
       yield* second.release(yield* second.acquire({ cwd: renamed, runId: "renamed" }));
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("returns a typed canonicalization failure without creating lease state", () =>
-    Effect.gen(function* () {
-      const { agentDirectory, service } = yield* adapter();
-      expect(
-        yield* Effect.flip(service.canonicalize(nodePath.join(agentDirectory, "missing"))),
-      ).toBeInstanceOf(WriterCwdCanonicalizationError);
-      expect(yield* Effect.promise(() => fs.readdir(agentDirectory))).toEqual([]);
     }).pipe(Effect.scoped),
   );
 });

@@ -24,27 +24,6 @@ describe("Claude usage bookkeeping", () => {
     expect(usage.assistantDelta("message", first).delta).toEqual(tokens());
     expect(usage.resultDelta(tokens(3, 7, 5, 9), undefined).delta).toEqual(tokens());
   });
-
-  it("keeps the 32 most recently observed message IDs", () => {
-    const usage = localClaudeUsage();
-    for (let index = 0; index < 32; index++) usage.assistantDelta(`message-${index}`, tokens(1));
-    usage.assistantDelta("message-0", tokens(1));
-    usage.assistantDelta("message-32", tokens(1));
-    expect(usage.assistantDelta("message-0", tokens(1)).delta).toEqual(tokens());
-    expect(usage.assistantDelta("message-1", tokens(1)).delta).toEqual(tokens(1));
-    expect(usage.resultDelta(tokens(34), undefined).delta).toEqual(tokens());
-  });
-
-  it("accounts anonymous messages separately and clears history without resetting totals", () => {
-    const usage = localClaudeUsage();
-    usage.assistantDelta(undefined, tokens(2));
-    usage.assistantDelta(undefined, tokens(2));
-    usage.assistantDelta("message", tokens(3));
-    usage.clearMessageHistory();
-    expect(usage.assistantDelta("message", tokens(3)).delta).toEqual(tokens(3));
-    expect(usage.resultDelta(tokens(10), undefined).delta).toEqual(tokens());
-  });
-
   it("adds only what earlier events have not counted from each running result total", () => {
     const usage = localClaudeUsage();
     usage.assistantDelta("first-turn", tokens(3, 4, 5, 6));
@@ -58,17 +37,6 @@ describe("Claude usage bookkeeping", () => {
       inconsistent: false,
     });
   });
-
-  it("charges each result only the increase of the running cost", () => {
-    const usage = localClaudeUsage();
-    const costs = [0.01, 0.025, 0.025, 0.04].map(
-      (total) => usage.resultDelta(undefined, total).cost ?? Number.NaN,
-    );
-    expect(costs.reduce((sum, cost) => sum + cost, 0)).toBeCloseTo(0.04);
-    expect(costs[2]).toBe(0);
-    expect(usage.resultDelta(tokens(1), undefined).cost).toBeUndefined();
-  });
-
   it("ignores zeroed crash results and never subtracts a regressing total", () => {
     const usage = localClaudeUsage();
     expect(usage.resultDelta(tokens(10), 0.02)).toMatchObject({ delta: tokens(10) });

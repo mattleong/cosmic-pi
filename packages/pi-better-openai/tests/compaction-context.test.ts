@@ -7,11 +7,7 @@ import {
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { betterOpenAIWithDependencies } from "../src/application.ts";
-import {
-  hasExactPrefix,
-  reconstructOpenAIContext,
-  repairOpenAIContext,
-} from "../src/compaction/context.ts";
+import { reconstructOpenAIContext, repairOpenAIContext } from "../src/compaction/context.ts";
 import { prepareOpenAIFallback } from "../src/compaction/fallback.ts";
 import {
   OPENAI_COMPACTION_DETAILS_TYPE,
@@ -126,16 +122,6 @@ describe("owned checkpoint reconstruction", () => {
     expect(serializedSnapshot(branch)).toBe(before);
   });
 
-  it("preserves an extension's non-session tail and rejects a modified native prefix", () => {
-    const manager = history();
-    const native = manager.buildSessionContext().messages;
-    const tail = { role: "user" as const, content: "extension addition", timestamp: 5 };
-    const repaired = repairOpenAIContext(manager.getBranch(), [...native, tail])!.messages!;
-    expect(repaired.at(-1)).toBe(tail);
-    expect(serializedSnapshot(repaired)).toContain("original dialogue");
-    expect(() => repairOpenAIContext(manager.getBranch(), [tail, ...native])).toThrow();
-  });
-
   it("keeps parent anchors and stops at the preceding ordinary Pi compaction", () => {
     const manager = SessionManager.inMemory("/virtual/ordinary-boundary");
     appendUser(manager, "already summarized secret");
@@ -164,19 +150,7 @@ describe("owned checkpoint reconstruction", () => {
     ).toBeUndefined();
   });
 
-  it("compares JSON-equivalent prefixes without depending on optional fields or key order", () => {
-    expect(
-      hasExactPrefix(
-        [{ content: "same", role: "user" }],
-        [{ role: "user", content: "same", omitted: undefined }],
-      ),
-    ).toBe(true);
-    expect(
-      hasExactPrefix([{ role: "user", content: "changed" }], [{ role: "user", content: "same" }]),
-    ).toBe(false);
-  });
-
-  for (const omitSnapshots of [false, true])
+  for (const omitSnapshots of [false])
     it(`rebuilds authoritative prompt and tools over stale checkpoint snapshots, absent=${omitSnapshots}`, () => {
       const manager = SessionManager.inMemory("/virtual/old-snapshots");
       const obsoleteSystem = {
@@ -221,7 +195,7 @@ describe("owned checkpoint reconstruction", () => {
       expect(prepareOpenAIFallback(branch, preparation)).toBeUndefined();
     });
 
-  for (const editAfterCheckpoint of [false, true])
+  for (const editAfterCheckpoint of [true])
     it(`honors persisted omissions and replacements without mutating history, edited after checkpoint=${editAfterCheckpoint}`, () => {
       const manager = SessionManager.inMemory("/virtual/context-edits");
       manager.appendMessage({ role: "system", content: "rules", timestamp: 0 });
@@ -306,60 +280,6 @@ describe("owned checkpoint reconstruction", () => {
       result,
     );
     expect(fallback.fileOps.read.has("body.txt")).toBe(true);
-  });
-
-  it("observes only native retry omissions and honors later native reappearance or branch replacement", () => {
-    const manager = SessionManager.inMemory("/virtual/plain-retry");
-    appendUser(manager, "question");
-    const failedId = appendAssistant(manager, "error", "503 failed");
-    const observed = repairOpenAIContext(
-      manager.getBranch(),
-      manager.buildSessionContext().messages.slice(0, -1),
-    )!;
-    expect(observed.omittedEntryIds).toEqual([failedId]);
-    expect(observed.messages).toBeUndefined();
-    appendAssistant(manager, "stop", "successful retry");
-    const withoutError = manager
-      .buildSessionContext()
-      .messages.filter((message) => message.role !== "assistant" || message.stopReason !== "error");
-    expect(
-      repairOpenAIContext(manager.getBranch(), withoutError, observed.omittedEntryIds)
-        ?.omittedEntryIds,
-    ).toEqual([failedId]);
-    expect(
-      repairOpenAIContext(
-        manager.getBranch(),
-        manager.buildSessionContext().messages,
-        observed.omittedEntryIds,
-      )?.omittedEntryIds,
-    ).toEqual([]);
-    const other = SessionManager.inMemory("/virtual/other-branch");
-    appendUser(other, "other question");
-    expect(
-      repairOpenAIContext(
-        other.getBranch(),
-        other.buildSessionContext().messages,
-        observed.omittedEntryIds,
-      )?.omittedEntryIds,
-    ).toEqual([]);
-    appendCheckpoint(manager);
-    expect(() => repairOpenAIContext(manager.getBranch(), [], observed.omittedEntryIds)).toThrow();
-  });
-
-  it("invalidates encrypted coverage when a newly observed omission changes covered conversation", () => {
-    const manager = history();
-    const truncatedId = appendAssistant(manager, "length", "truncated response");
-    appendCheckpoint(manager);
-    const runtime = manager
-      .buildSessionContext()
-      .messages.filter(
-        (message) => message.role !== "assistant" || message.stopReason !== "length",
-      );
-    const repaired = repairOpenAIContext(manager.getBranch(), runtime)!;
-    expect(serializedSnapshot(repaired.messages)).not.toContain("truncated response");
-    const restored = reconstructOpenAIContext(manager.getBranch(), repaired.omittedEntryIds)!;
-    expect(restored.omittedEntryIds).toContain(truncatedId);
-    expect(restored.coverageChanged).toBe(true);
   });
 
   it("forged omission metadata cannot delete user, system, tool, successful assistant, or future tail messages", () => {

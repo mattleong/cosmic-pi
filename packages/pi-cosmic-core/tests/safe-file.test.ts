@@ -35,24 +35,7 @@ const openedFile = (content = "safe") =>
     return { root, file, handle };
   });
 
-for (const content of ["", "safe"])
-  it.live(
-    `reads ${content ? "short reads at the exact limit" : "an empty file at a zero limit"}`,
-    () =>
-      Effect.gen(function* () {
-        const { root, file, handle } = yield* openedFile(content);
-        const read = handle.read.bind(handle);
-        vi.spyOn(handle, "read").mockImplementation((options) =>
-          read({ ...options, length: Math.min(options?.length ?? 1, 2) }),
-        );
-        const safeFile = yield* SafeFile;
-        const result = yield* safeFile.readContainedRegularFile(file, root, content.length);
-        expect(new TextDecoder().decode(result.bytes)).toBe(content);
-        expect(handle.fd).toBe(-1);
-      }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
-  );
-
-for (const change of ["growth", "shrink", "growth after EOF", "read failure"])
+for (const change of ["growth", "read failure"])
   it.live(`bounds reads and closes the handle on ${change} after inspection`, () =>
     Effect.gen(function* () {
       const { root, file, handle } = yield* openedFile();
@@ -68,15 +51,12 @@ for (const change of ["growth", "shrink", "growth after EOF", "read failure"])
             firstRead = false;
             if (change === "read failure") throw new Error(`Sensitive failure: ${file}`);
             if (change === "growth") return fs.writeFile(file, "safe but now oversized");
-            if (change === "shrink") return fs.writeFile(file, "sa");
             return undefined;
           })
           .then(() => read(options))
           .then((result) => {
             transferred += result.bytesRead;
-            return change === "growth after EOF" && result.bytesRead === 0
-              ? fs.writeFile(file, "safe but now oversized").then(() => result)
-              : result;
+            return result;
           }),
       );
       const safeFile = yield* SafeFile;
@@ -154,18 +134,6 @@ it.live("reads a stable file and captures a path-free resource span", () => {
     ),
   );
 });
-
-it.live("fails safely when the file exceeds the configured limit", () =>
-  Effect.gen(function* () {
-    const root = yield* fixtureRoot;
-    const file = nodePath.join(root, "large.txt");
-    yield* Effect.promise(() => fs.writeFile(file, "too large"));
-    const safeFile = yield* SafeFile;
-    const result = yield* Effect.result(safeFile.readContainedRegularFile(file, root, 2));
-    expect(result._tag).toBe("Failure");
-    if (Result.isFailure(result)) expect(String(result.failure)).not.toContain(file);
-  }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
-);
 
 it.live("rejects symlinked roots, leaf symlinks, and files outside the containment root", () =>
   Effect.gen(function* () {

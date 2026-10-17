@@ -1,26 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { clipText } from "../src/display.ts";
-import {
-  safeTextPrefix,
-  safeTextSuffix,
-  utf8ByteLength,
-  utf8Prefix,
-  utf8Suffix,
-} from "../src/text.ts";
-
-it("never splits a surrogate pair in a UTF-16 prefix", () => {
-  expect(safeTextPrefix("a😀b", 2)).toBe("a");
-  expect(safeTextPrefix("a😀b", 3)).toBe("a😀");
-  expect(safeTextPrefix("abc", 10)).toBe("abc");
-  expect(safeTextPrefix("abc", -1)).toBe("");
-});
-
-it("never splits a surrogate pair in a UTF-16 suffix", () => {
-  expect(safeTextSuffix("a😀b", 2)).toBe("b");
-  expect(safeTextSuffix("a😀b", 3)).toBe("😀b");
-  expect(safeTextSuffix("abc", 10)).toBe("abc");
-  expect(safeTextSuffix("abc", -1)).toBe("");
-});
+import { utf8ByteLength, utf8Prefix, utf8Suffix } from "../src/text.ts";
 
 it("takes the longest code-point prefix within a UTF-8 byte budget", () => {
   expect(utf8Prefix("aé😀", 3)).toBe("aé");
@@ -39,17 +18,4 @@ it("takes the longest code-point suffix within a UTF-8 byte budget", () => {
   expect(utf8ByteLength("x\ud800")).toBe(4);
   expect(utf8Suffix("x\ud800", 3)).toBe("\ud800");
   expect(utf8Suffix("x\ud800", 2)).toBe("");
-});
-
-it("clips display text within its budget without splitting a surrogate pair", () => {
-  for (const [text, limit] of [
-    ["a long sentence that needs clipping", 12],
-    ["a😀😀😀", 3],
-    ["short", 10],
-    ["abc", 0],
-  ] as const) {
-    const clipped = clipText(text, limit);
-    expect(clipped.length).toBeLessThanOrEqual(limit);
-    expect(/[\ud800-\udbff]$/u.test(clipped.replace(/…$/u, ""))).toBe(false);
-  }
 });

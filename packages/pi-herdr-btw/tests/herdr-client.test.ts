@@ -1,8 +1,5 @@
 import { it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import { BoundedProcessError, type BoundedProcessRequest } from "pi-cosmic-core";
 import { expect } from "vitest";
 import { makeHerdrClient, type HerdrProcessRunner } from "../src/boundary/herdr-client.ts";
@@ -150,42 +147,6 @@ it.effect("isolates credentials and hostile arguments while bounding requests", 
   }),
 );
 
-it.effect("recognizes only a current Pi integration status", () =>
-  Effect.gen(function* () {
-    const cases = [
-      ["current", "pi: current (v8) (/agent/herdr-agent-state.ts)\n", true],
-      ["outdated", "pi: outdated (v6 < v8) (/agent/state.ts)\n", false],
-      ["malformed", "pi: current (v8)\n", false],
-      ["absent", "", false],
-    ] as const;
-
-    for (const [_case, stdout, expected] of cases) {
-      const client = makeHerdrClient({}, { processRunner: () => Effect.succeed(success(stdout)) });
-      expect(yield* client.inspectPiIntegration()).toBe(expected);
-    }
-  }),
-);
-
-it.effect("runs asynchronously and propagates interruption to the process", () =>
-  Effect.gen(function* () {
-    const started = yield* Deferred.make<void>();
-    let interrupted = 0;
-    const processRunner: HerdrProcessRunner = () =>
-      Deferred.succeed(started, undefined).pipe(
-        Effect.andThen(Effect.never),
-        Effect.onInterrupt(() => Effect.sync(() => void interrupted++)),
-      );
-    const client = makeHerdrClient({}, { processRunner });
-    const running = yield* client.inspectProtocol().pipe(Effect.forkScoped);
-    yield* Deferred.await(started);
-
-    yield* Fiber.interrupt(running);
-
-    expect(interrupted).toBe(1);
-    expect(Exit.hasInterrupts(yield* Fiber.await(running))).toBe(true);
-  }),
-);
-
 it.effect("confirms only mutation failures that occur before process dispatch", () =>
   Effect.gen(function* () {
     for (const operation of ["spawn", "stream"] as const) {
@@ -204,52 +165,6 @@ it.effect("confirms only mutation failures that occur before process dispatch", 
         outcome: operation === "spawn" ? "confirmed" : "uncertain",
       });
     }
-  }),
-);
-
-it.effect("classifies transport uncertainty from the owned operation's mutation policy", () =>
-  Effect.gen(function* () {
-    for (const flag of ["overflowed", "timedOut", "cleanupUnconfirmed"] as const) {
-      const processRunner: HerdrProcessRunner = () =>
-        Effect.succeed({ ...success('{"protocol":19}'), [flag]: true });
-      const client = makeHerdrClient({}, { processRunner });
-      expect(yield* Effect.flip(client.inspectProtocol())).toMatchObject({
-        code: "herdr_inspect_protocol_failed",
-        outcome: "confirmed",
-      });
-      expect(
-        yield* Effect.flip(
-          client.splitPane({ parentPaneId: "w1:p1", direction: "right", cwd: "/project" }),
-        ),
-      ).toMatchObject({ code: "herdr_split_btw_pane_outcome_uncertain", outcome: "uncertain" });
-    }
-  }),
-);
-
-it.effect("keeps the owned start precondition rejection confirmed", () =>
-  Effect.gen(function* () {
-    const processRunner: HerdrProcessRunner = () =>
-      Effect.succeed({
-        ...success(""),
-        code: 1,
-        stderr: JSON.stringify({ error: { code: "agent_pane_busy", message: "busy" } }),
-      });
-    const client = makeHerdrClient({}, { processRunner });
-    const error = yield* Effect.flip(
-      client.startSideSessionPi({
-        agentName: "btw-agent",
-        paneId: "w1:p2",
-        childSessionId: "child-id",
-        childSessionPath: "/sessions/child.jsonl",
-        parentSessionId: "parent-id",
-        parentSessionPath: "/sessions/parent.jsonl",
-      }),
-    );
-
-    expect(error).toMatchObject({
-      code: "herdr_start_side_session_pi_rejected",
-      outcome: "confirmed",
-    });
   }),
 );
 

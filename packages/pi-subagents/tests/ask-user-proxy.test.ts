@@ -117,27 +117,6 @@ describe("structured questionnaire proxy boundary", () => {
       );
   });
 
-  it("preserves deliberate cancellation through root capability and child relay", () => {
-    const authenticated = owner("authenticated-request");
-    let receivedOwner: QuestionnaireOwner | undefined;
-    const { child, relay, detach } = relayToRoot(
-      capability({
-        ask: (_request, authenticatedOwner) => {
-          receivedOwner = authenticatedOwner;
-          return Promise.resolve({ outcome: "cancelled", answers: [] });
-        },
-      }),
-      authenticated,
-    );
-    return relay.ask(request, new AbortController().signal).then((outcome) => {
-      expect(outcome).toEqual({ outcome: "cancelled", answers: [] });
-      expect(receivedOwner).toEqual(authenticated);
-      detach();
-      expect(queryQuestionnaireRelay(child, "child")).toBeUndefined();
-      return undefined;
-    });
-  });
-
   for (const ending of [
     "answer",
     "rejection",

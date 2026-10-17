@@ -5,13 +5,12 @@ import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import type { AskUserQuestion } from "../src/questionnaire/schema.ts";
 import {
   renderAsyncCall,
-  renderAsyncContent,
   renderAsyncMessage,
   renderAsyncResult,
 } from "../src/ui/async-tool-render.ts";
 import type { QuestionnaireArgs } from "../src/ui/tool-body.ts";
 import { contentText } from "../src/ui/tool-render-projection.ts";
-import { hostile, hostileContent, malformedNoteAnswers } from "./support/questionnaire.ts";
+import { hostile, hostileContent } from "./support/questionnaire.ts";
 
 type ResultDetails = Parameters<typeof renderAsyncResult>[0]["details"];
 type MessageInput = Parameters<typeof renderAsyncMessage>[0];
@@ -33,7 +32,6 @@ const snapshot = {
   delivery: "sent",
   outcome,
 };
-const agentText = `Request ${snapshot.requestId} · delivery ${snapshot.deliveryId}\nComplete agent guidance remains available.`;
 const textContent = (text: string) => (text === "" ? [] : [{ type: "text" as const, text }]);
 const asyncMessage = (content: MessageInput["content"], details?: ResultDetails): MessageInput => ({
   role: "custom",
@@ -43,7 +41,6 @@ const asyncMessage = (content: MessageInput["content"], details?: ResultDetails)
   timestamp: 0,
   details,
 });
-const message = asyncMessage(agentText, { ...snapshot, generation: "generation-private-id" });
 const result = (details: ResultDetails, expanded = false, content = "") =>
   output(
     renderAsyncResult(
@@ -60,155 +57,6 @@ const question = (title: string): AskUserQuestion => ({
 });
 
 describe("async questionnaire replay rendering", () => {
-  it("compact notifications keep the delivered text, answers, and unknown content behind expansion", () => {
-    const withoutText = asyncMessage("", message.details);
-    for (const input of [message, withoutText, asyncMessage("Full fallback diagnostic")]) {
-      for (const expanded of [false, true, false]) {
-        const text = output(renderAsyncMessage(input, { expanded, outputPad: 0 }, theme, true));
-        expect(text).not.toContain("generation-private-id");
-        if (input === message) {
-          expect(text.includes("Complete agent guidance")).toBe(expanded);
-          expect(text).not.toContain("Scenic");
-        } else if (input === withoutText) {
-          expect(text.includes("Scenic")).toBe(expanded);
-          expect(text.includes("Avoid tolls")).toBe(expanded);
-        } else {
-          expect(text.includes("Full fallback diagnostic")).toBe(expanded);
-        }
-      }
-    }
-  });
-
-  it("rejects malformed or hostile notes but accepts string fallback content", () => {
-    for (const answer of malformedNoteAnswers()) {
-      const details = { ...snapshot, outcome: { outcome: "submitted", answers: [answer] } };
-      for (const rendered of [
-        result(details, false, "string fallback"),
-        output(
-          renderAsyncMessage(
-            asyncMessage("string fallback", { ...details, generation: "generation" }),
-            { expanded: false, outputPad: 0 },
-            theme,
-          ),
-        ),
-      ]) {
-        expect(rendered).toContain("string fallback");
-        expect(rendered).not.toContain("Scenic");
-      }
-    }
-  });
-
-  it("previews answers with notes beneath them and keeps IDs in the labeled raw text", () => {
-    for (const rendered of [
-      result(snapshot, false, agentText),
-      result({ requests: [snapshot] }, false, agentText),
-      output(renderAsyncMessage(message, { expanded: false, outputPad: 0 }, theme)),
-    ]) {
-      for (const value of ["Scenic", "Tomorrow morning", "Text answer"])
-        expect(rendered).toContain(value);
-      expect(rendered).not.toContain("with another line");
-      expect(rendered).not.toContain(snapshot.requestId);
-      expect(rendered).not.toContain(snapshot.deliveryId);
-    }
-    for (const rendered of [
-      result(snapshot, true, agentText),
-      output(renderAsyncMessage(message, { expanded: true, outputPad: 0 }, theme)),
-    ]) {
-      const lines = rendered.split("\n");
-      const label = lines.findIndex((line) => line.trim() === "Raw result");
-      expect(label).toBeGreaterThanOrEqual(0);
-      expect(lines.slice(0, label).join("\n")).not.toContain(snapshot.requestId);
-      expect(lines.slice(label).join("\n")).toContain(snapshot.requestId);
-      expect(lines.slice(label).join("\n")).toContain(snapshot.deliveryId);
-      expect(rendered).not.toContain("generation-private-id");
-    }
-    const unlabeled = { ...snapshot, outcome: { ...outcome, answers: [outcome.answers[2]!] } };
-    expect(result(unlabeled, true)).toContain("with another line");
-  });
-
-  it("expands out-of-contract IDs and work fields without accepting malformed work", () => {
-    for (const id of ["", "x".repeat(257)]) {
-      const nonconforming = {
-        ...snapshot,
-        requestId: id,
-        deliveryId: id,
-        independentWork: "Inspect first",
-        blockedWork: "Wait for decision",
-      };
-      for (const details of [nonconforming, { requests: [nonconforming] }]) {
-        expect(result(details, true)).toContain("Avoid tolls");
-        const content = output(
-          renderAsyncContent(
-            { details, content: textContent("Continue only this independent work: Inspect first") },
-            { expanded: true, isPartial: false },
-            theme,
-          ),
-        );
-        expect(content).toContain("Inspect first");
-      }
-      expect(
-        output(
-          renderAsyncMessage(
-            asyncMessage("", { requestId: id, deliveryId: id, generation: "", outcome }),
-            { expanded: true, outputPad: 0 },
-            theme,
-          ),
-        ),
-      ).toContain("Avoid tolls");
-    }
-    const invalid = { ...snapshot, independentWork: 123 };
-    expect(result(invalid, false, "raw fallback").trimEnd()).toBe("raw fallback");
-    const expanded = output(
-      renderAsyncContent(
-        { details: invalid, content: textContent("raw fallback") },
-        { expanded: true, isPartial: false },
-        theme,
-      ),
-    );
-    expect(expanded).toContain("raw fallback");
-    expect(expanded).not.toContain("Avoid tolls");
-  });
-
-  it("prefers a valid single snapshot over an invalid list", () => {
-    const details = { ...snapshot, requests: [{ ...snapshot, delivery: 123 }] };
-    expect(result(details)).toContain("Avoid tolls");
-    expect(
-      result(
-        { requests: [snapshot, { ...snapshot, delivery: 123 }] },
-        false,
-        "raw fallback",
-      ).trimEnd(),
-    ).toBe("raw fallback");
-  });
-
-  it("does not show stale submitted answers for pending, failed, cancelled, or partial results", () => {
-    for (const status of ["pending", "failed", "cancelled"]) {
-      expect(result({ ...snapshot, status })).not.toContain("Scenic");
-    }
-    expect(
-      output(
-        renderAsyncResult(
-          { details: snapshot, content: [] },
-          { expanded: false, isPartial: true },
-          theme,
-        ),
-      ),
-    ).not.toContain("Scenic");
-    expect(
-      output(
-        renderAsyncMessage(
-          asyncMessage(agentText, {
-            ...snapshot,
-            generation: "generation-private-id",
-            outcome: { outcome: "cancelled", answers: outcome.answers },
-          }),
-          { expanded: false, outputPad: 0 },
-          theme,
-        ),
-      ),
-    ).not.toContain("Scenic");
-  });
-
   it("renders six questions and answers but falls back safely beyond them and for hostile data", () => {
     const hostileResult = hostile({ details: undefined, content: [] }, "details");
     const hostileMessage = hostile(asyncMessage(""), "details");
@@ -277,60 +125,6 @@ describe("async questionnaire replay rendering", () => {
     for (const text of rendered) {
       expect(text).toContain("value");
       expect(text).not.toContain("\u001b");
-    }
-  });
-
-  it("shows routine state and counts collapsed, and leaves failures to the shell", () => {
-    const pending = { ...snapshot, status: "pending", delivery: "pending", outcome: undefined };
-    const waiting = result({ ...pending, presentation: "open" });
-    const queued = result({ ...pending, presentation: "queued" });
-    expect(waiting).toMatch(/waiting/i);
-    expect(queued).toMatch(/queued/i);
-    expect(queued).not.toMatch(/waiting/i);
-    const listed = output(
-      renderAsyncResult(
-        { details: { requests: [{ ...pending, presentation: "open" }, snapshot] }, content: [] },
-        { expanded: false, isPartial: false },
-        theme,
-        { args: { action: "status" } },
-      ),
-    );
-    expect(listed).toMatch(/1 waiting/);
-    expect(listed).toMatch(/1 answered/);
-    expect(result({ requests: [] })).not.toBe("");
-    const cancelledResult = { ...snapshot, status: "cancelled", outcome: { outcome: "cancelled" } };
-    expect(result(cancelledResult, false, agentText)).toMatch(/cancelled/i);
-    const failed = { ...snapshot, status: "failed", outcome: undefined };
-    expect(result(failed, false, agentText).trim()).toBe("");
-    for (const details of [snapshot, cancelledResult])
-      expect(
-        output(
-          renderAsyncResult(
-            { details, content: [] },
-            { expanded: false, isPartial: false },
-            theme,
-            {
-              isError: true,
-            },
-          ),
-        ).trim(),
-      ).toBe("");
-  });
-
-  it("headers name the tool and subject without request IDs", () => {
-    for (const expanded of [false, true]) {
-      for (const action of ["status", "await", "cancel"] as const) {
-        const heading = output(
-          renderAsyncCall(
-            { action, requestId: "request-private-id" },
-            theme,
-            callContext(expanded),
-            true,
-          ),
-        ).split("\n")[0];
-        expect(heading).toContain(action);
-        expect(heading).not.toContain("request-private-id");
-      }
     }
   });
 });

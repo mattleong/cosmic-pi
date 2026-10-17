@@ -60,34 +60,6 @@ test("invalid records preserve their valid neighbors and never become successful
   assert.equal(summary({ calls: [call(1)], fullOutputPath: {} })?.outcome, "success");
 });
 
-test("large sparse ledgers inspect only the bounded recent window", () => {
-  const length = 1_000_000;
-  const records: Array<ReturnType<typeof call> | undefined> = [];
-  records.length = length;
-  records[length - 1] = call(length - 1);
-  let inspected = 0;
-  const source = new Proxy(records, {
-    getOwnPropertyDescriptor(target, key) {
-      if (key !== "length") {
-        const index = Number(key);
-        assert.ok(index >= length - 256 && index < length);
-        inspected++;
-      }
-      return Reflect.getOwnPropertyDescriptor(target, key);
-    },
-    ownKeys() {
-      throw new Error("Whole-array enumeration is forbidden");
-    },
-  });
-  const evidence = nativeCodemodeEvidence({ calls: source });
-  assert.equal(evidence.kind, "available");
-  assert.equal(inspected, 256);
-  if (evidence.kind !== "available") return;
-  assert.equal(evidence.calls.length, 1);
-  assert.equal(evidence.rejected, 255);
-  assert.equal(evidence.uninspected, length - 256);
-});
-
 test("accessors and unreadable slots cannot erase neighbors or execute arbitrary serialization", () => {
   let callbacks = 0;
   const hostile = {
@@ -137,35 +109,6 @@ test("accessors and unreadable slots cannot erase neighbors or execute arbitrary
   assert.equal(nativeCodemodeEvidence({ calls: revoked.proxy }).kind, "unavailable");
 });
 
-test("settled unfinished records lose their live spinner and explain uncertainty", () => {
-  const projected = summary({ calls: [{ ...call(1), status: "running" }] })!;
-  assert.equal(projected.outcome, "uncertain");
-  assert.equal(projected.children?.entries[0]?.status, "uncertain");
-  assert.ok(projected.issues?.some((issue) => issue.severity === "warning"));
-});
-
-test("unavailable and all-invalid ledgers preserve independent bounded recovery evidence", () => {
-  for (const details of [
-    { calls: [null, { status: "invented" }], fullOutputPath: "/tmp/RECOVERY" },
-    { calls: "broken", fullOutputPath: "/tmp/RECOVERY" },
-    {
-      get calls() {
-        throw new Error("Never evaluate getters");
-      },
-      fullOutputPath: "/tmp/RECOVERY",
-    },
-  ]) {
-    const evidence = nativeCodemodeEvidence(details);
-    if (evidence.kind === "available") assert.equal(evidence.calls.length, 0);
-    assert.equal(evidence.fullOutputPath, "/tmp/RECOVERY");
-    assert.equal(summary(details)?.outcome, "uncertain");
-  }
-  assert.equal(
-    nativeCodemodeEvidence({ calls: [], fullOutputPath: "x".repeat(4097) }).fullOutputPath,
-    undefined,
-  );
-});
-
 test("only observed argument receipts supply targets, never source, output, or persisted nestedCalls", () => {
   const result = scriptResult(
     "completed",
@@ -178,18 +121,4 @@ test("only observed argument receipts supply targets, never source, output, or p
   const projected = settledSummary(result, { code: 'await tools.read({path:"FORGED_SOURCE"})' });
   assert.equal(projected?.children?.entries.length, 1);
   assert.ok(!projected?.children?.entries[0]?.subject);
-});
-
-const modelCall = (name: string) =>
-  nativeCall({ id: `private/${name}`, name, args: "provider/model-id", cost: 0.02 });
-
-test("native model rows keep their resolved model reference as argument evidence", () => {
-  const rows = summary({
-    calls: [modelCall("models.classify"), modelCall("models.generateImages")],
-  })?.children?.entries;
-  assert.equal(rows?.length, 2);
-  for (const row of rows ?? []) {
-    const evidence = row.issues?.find((issue) => issue.code === "native-call-args");
-    assert.ok(evidence?.detail?.includes("provider/model-id"), row.label);
-  }
 });

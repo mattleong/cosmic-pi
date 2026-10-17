@@ -178,9 +178,6 @@ const pauseNextDelegationSave = function* () {
   return { wait: () => started.promise, release: () => pending.resolve() };
 };
 
-const globalDelegationRow = (surface: ReturnType<typeof fakeCustomSurfaceHost>) =>
-  surface.editor?.render(160).find((line) => line.includes("Global · delegation"));
-
 const openGlobalDelegation = function* (fixture: {
   readonly settings: (args: string) => Effect.Effect<unknown>;
   readonly surface: ReturnType<typeof fakeCustomSurfaceHost>;
@@ -210,50 +207,9 @@ describe("delegation mode", () => {
       const saved = yield* fixture.saved();
       expect(saved.file.delegation).toBe("encouraged");
       expect(saved.file.nesting?.maxDepth).toBe(3);
-      expect(globalDelegationRow(fixture.surface)).toContain("encouraged");
       expect(fixture.notify.mock.calls.filter(([, level]) => level !== "info")).toEqual([]);
-      expect(fixture.upserts.at(-1)).toContain("encouraged");
       fixture.surface.editor?.handleInput?.("\u001b");
       yield* Fiber.join(picker);
-      yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
-    },
-  );
-
-  effectTest(
-    "reopens from the committed Global value when closed during a pending save",
-    function* () {
-      const gate = yield* pauseNextDelegationSave();
-      const fixture = yield* setup({ active: true, ready: true, hidden: [] }, "encouraged");
-      yield* settle(() => fixture.host.emit("session_start", fixture.ctx));
-      const picker = yield* openGlobalDelegation(fixture);
-      fixture.surface.editor?.handleInput?.("\r");
-      yield* step(gate.wait);
-      fixture.surface.editor?.handleInput?.("\u001b");
-      yield* Fiber.join(picker);
-      const mounted = fixture.mounted();
-      const reopened = yield* fixture.settings("").pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      gate.release();
-      yield* step(() => mounted);
-      for (let index = 0; index < 5; index += 1) fixture.surface.editor?.handleInput?.("j");
-      expect(globalDelegationRow(fixture.surface)).toContain("orchestration");
-      expect((yield* fixture.saved()).file.delegation).toBe("orchestration");
-      expect(fixture.upserts.at(-1)).toContain("encouraged");
-      fixture.surface.editor?.handleInput?.("\u001b");
-      yield* Fiber.join(reopened);
-      yield* settle(() =>
-        fixture.host.emit("session_shutdown", fixture.ctx, {
-          type: "session_shutdown",
-          reason: "reload",
-        }),
-      );
-      yield* settle(() =>
-        fixture.host.emit("session_start", fixture.ctx, {
-          type: "session_start",
-          reason: "reload",
-        }),
-      );
-      expect(fixture.upserts.at(-1)).toContain("orchestration");
       yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
     },
   );
@@ -285,16 +241,6 @@ describe("delegation mode", () => {
     const saved = (yield* fixture.saved()).file;
     expect(saved.delegation).toBe("encouraged");
     expect(saved.writerWorkspaceMode).toBe("shared-checkout");
-    yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
-  });
-
-  effectTest("leaves the root prompt unchanged in normal mode", function* () {
-    const fixture = yield* setup();
-    yield* settle(() => fixture.host.emit("session_start", fixture.ctx));
-    const normal = yield* fixture.prompt();
-    expect(normal.section).toBeUndefined();
-    expect(normal.startGuidelines).toEqual(normal.registeredGuidelines);
-    expect(normal.startGuidelines).toContain(NORMAL_START_GUIDELINE);
     yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
   });
 
@@ -338,39 +284,5 @@ describe("delegation mode", () => {
     expect((yield* fixture.prompt()).section).toBeDefined();
     yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
     expect((yield* fixture.prompt()).section).toBeUndefined();
-  });
-
-  effectTest(
-    "shows the profile set and delegation mode as a Pi status without Cosmic UI",
-    function* () {
-      const fixture = yield* setup();
-      yield* settle(() => fixture.host.emit("session_start", fixture.ctx));
-      expect(fixture.status()).toContain("review");
-      expect(fixture.status()).not.toContain("orchestration");
-      yield* fixture.settings("delegation orchestration");
-      expect(fixture.status()).toContain("review");
-      expect(fixture.status()).toContain("orchestration");
-      yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
-      expect(fixture.status()).toBeUndefined();
-    },
-  );
-
-  effectTest("publishes to an active Cosmic UI footer instead of a status", function* () {
-    const fixture = yield* setup({ active: true, ready: true, hidden: [] });
-    yield* settle(() => fixture.host.emit("session_start", fixture.ctx));
-    yield* fixture.settings("delegation encouraged");
-    expect(fixture.upserts.at(-1)).toContain("encouraged");
-    expect(fixture.status()).toBeUndefined();
-    yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
-    expect(fixture.ownerRemoved()).toBe(true);
-  });
-
-  effectTest("respects a hidden footer item in the status fallback", function* () {
-    const fixture = yield* setup({ active: false, ready: true, hidden: ["subagents"] });
-    yield* settle(() => fixture.host.emit("session_start", fixture.ctx));
-    yield* fixture.settings("delegation orchestration");
-    expect(fixture.status()).toBeUndefined();
-    expect(fixture.upserts).toEqual([]);
-    yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
   });
 });

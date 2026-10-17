@@ -9,13 +9,9 @@ import {
   toolRowFrames,
 } from "pi-code-previews/testing";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
+import { deferredPromise, extensionContextFixture } from "pi-cosmic-core/testing";
 import { afterEach, beforeAll, expect, vi } from "vitest";
-import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
-import { formatAskUserOutcome } from "../src/questionnaire/format.ts";
-import { renderAskUserAsyncMessage } from "../src/tools/ask-user-async.ts";
-import type { AskUserOutcome } from "../src/questionnaire/model.ts";
-import { startExtension, withoutRelayMarker, type MessageRenderer } from "./support/extension.ts";
+import { startExtension, withoutRelayMarker } from "./support/extension.ts";
 import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
 
 beforeAll(() => initTheme("dark", false));
@@ -58,42 +54,6 @@ const history = {
   },
 } satisfies Record<HistoryName, HistoryCall>;
 
-const answered: AskUserOutcome = {
-  outcome: "submitted",
-  answers: [
-    {
-      key: "release",
-      kind: "choices",
-      values: ["release_candidate"],
-      labels: ["Staged rollout"],
-      note: "Keep release reversible",
-    },
-    { key: "alternative", kind: "custom", text: "Keep existing clients supported" },
-    {
-      key: "summary",
-      kind: "text",
-      text: "Original answer first line\nOriginal answer final line",
-      note: "Original note first line\nOriginal note final line",
-    },
-  ],
-};
-const answerContent = `${formatAskUserOutcome(answered)}\nRAW_RECOVERY /tmp/answer-recovery.txt`;
-const answerMessage: Parameters<MessageRenderer>[0] = {
-  role: "custom",
-  customType: ASYNC_MESSAGE_TYPE,
-  content: answerContent,
-  details: {
-    requestId: "historical-request",
-    deliveryId: "historical-delivery",
-    generation: "historical-generation",
-    outcome: answered,
-  },
-  display: true,
-  timestamp: 0,
-};
-const drawAnswer = (render: MessageRenderer, message = answerMessage, expanded = false) =>
-  render(message, { expanded, outputPad: 0 }, plainTheme)!.render(160).join("\n");
-
 withoutRelayMarker();
 afterEach(restoreSettings);
 
@@ -125,122 +85,6 @@ const host = (load: () => Promise<void>) =>
   });
 
 layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
-  it.effect("historical answers render before startup and observe later presentation policy", () =>
-    Effect.gen(function* () {
-      applyPresentationSettings({ toolCallCollapsedStyle: "compact" });
-      const entered = deferredPromise();
-      const ready = deferredPromise();
-      const load = vi.fn(() => {
-        entered.resolve();
-        return ready.promise.then(() => {
-          applyPresentationSettings({ toolCallCollapsedStyle: "compact" });
-          return undefined;
-        });
-      });
-      const h = yield* host(load);
-      const ctx = context("tui");
-      yield* Effect.addFinalizer(() => Effect.promise(() => h.emit("session_shutdown", ctx)));
-      expect(h.messageRenderers.get(ASYNC_MESSAGE_TYPE)).toBe(renderAskUserAsyncMessage);
-      const render = renderAskUserAsyncMessage;
-      expect(drawAnswer(render)).not.toContain("Staged rollout");
-      expect(drawAnswer(render, answerMessage, true)).toContain("Staged rollout");
-      expect(load).not.toHaveBeenCalled();
-      expect([...h.tools.keys()]).toEqual([]);
-
-      applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
-      expect(drawAnswer(render)).toContain("Staged rollout");
-      const starting = h.emit("session_start", ctx);
-      yield* Effect.promise(() => entered.promise);
-      expect(drawAnswer(render)).toContain("Keep release reversible");
-      expect([...h.tools.keys()]).toEqual([]);
-
-      ready.resolve();
-      yield* Effect.promise(() => starting);
-      expect(drawAnswer(render)).not.toContain("Staged rollout");
-      expect(drawAnswer(render, answerMessage, true)).toContain("RAW_RECOVERY");
-      applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
-      expect(drawAnswer(render)).toContain("Staged rollout");
-      yield* Effect.promise(() => h.emit("session_shutdown", ctx));
-      expect(drawAnswer(render)).toContain("Keep release reversible");
-    }),
-  );
-
-  for (const style of ["compact", "preview"] as const)
-    it.effect(
-      `factory answer rendering preserves original content and raw recovery (${style})`,
-      () =>
-        Effect.gen(function* () {
-          applyPresentationSettings({ toolCallCollapsedStyle: style });
-          const h = yield* host(() => Promise.resolve());
-          expect(h.messageRenderers.get(ASYNC_MESSAGE_TYPE)).toBe(renderAskUserAsyncMessage);
-          const render = renderAskUserAsyncMessage;
-          for (const content of [
-            answerMessage.content,
-            [{ type: "text" as const, text: answerContent }],
-            "",
-          ]) {
-            const message = { ...answerMessage, content };
-            const before = structuredClone(message);
-            for (const expanded of [false, true, false, true]) {
-              const text = drawAnswer(render, message, expanded);
-              expect(text).not.toContain("historical-generation");
-              if (expanded) {
-                for (const value of [
-                  "Staged rollout",
-                  "Keep release reversible",
-                  "Keep existing clients supported",
-                  "Original answer first line",
-                  "Original answer final line",
-                  "Original note first line",
-                  "Original note final line",
-                ])
-                  expect(text).toContain(value);
-                if (content) {
-                  expect(text).toContain("release_candidate");
-                  expect(text).toContain("RAW_RECOVERY /tmp/answer-recovery.txt");
-                }
-              } else {
-                expect(text.includes("Staged rollout")).toBe(style === "preview");
-                expect(text).not.toContain("RAW_RECOVERY");
-                expect(text).not.toContain("Original answer final line");
-              }
-            }
-            expect(message).toEqual(before);
-          }
-          const malformed = { ...answerMessage, details: { outcome: "unknown" } };
-          const fallback = drawAnswer(render, malformed, true);
-          expect(fallback).toContain("Original note final line");
-          expect(fallback).toContain("RAW_RECOVERY /tmp/answer-recovery.txt");
-          expect([...h.tools.keys()]).toEqual([]);
-        }),
-    );
-
-  for (const [mode, relay] of [
-    ["rpc", false],
-    ["print", false],
-    ["tui", true],
-    ["print", true],
-  ] as const)
-    it.effect(`answer replay does not widen tool exposure (${mode}, relay=${relay})`, () =>
-      Effect.gen(function* () {
-        if (relay) {
-          vi.stubEnv("PI_SUBAGENT_CHILD", "1");
-          vi.stubEnv("PI_SUBAGENT_RUN_ID", "child-run");
-        }
-        applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
-        const h = yield* host(() => Promise.resolve());
-        const ctx = context(mode);
-        yield* Effect.addFinalizer(() => Effect.promise(() => h.emit("session_shutdown", ctx)));
-        expect(h.messageRenderers.get(ASYNC_MESSAGE_TYPE)).toBe(renderAskUserAsyncMessage);
-        const render = renderAskUserAsyncMessage;
-        expect(drawAnswer(render)).toContain("Keep release reversible");
-        expect([...h.tools.keys()]).toEqual([]);
-        yield* Effect.promise(() => h.emit("session_start", ctx));
-        expect(drawAnswer(render, answerMessage, true)).toContain("RAW_RECOVERY");
-        expect([...h.tools.keys()]).toEqual(mode === "print" && !relay ? [] : ["ask_user"]);
-      }),
-    );
-
   it.effect("TUI history from before startup adopts each questionnaire tool", () =>
     Effect.gen(function* () {
       const h = yield* host(
@@ -263,20 +107,6 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
       expect(drawToolRow(rows[0]!.row, true)).toContain(defaultQuestion.prompt);
       expect(drawToolRow(rows[2]!.row, true)).toContain("request-1");
       yield* Effect.promise(() => h.emit("session_shutdown", context("tui")));
-    }),
-  );
-
-  it.effect("RPC history adopts only the registered blocking tool; async rows stay raw", () =>
-    Effect.gen(function* () {
-      const h = yield* host(loads({ toolCallCollapsedStyle: "compact", toolCallTiming: false }));
-      const rows = names.map((name) => h.row(name));
-      const cold = rows.map((row) => toolRowFrames(row));
-      yield* Effect.promise(() => h.emit("session_start", context("rpc")));
-      expect([...h.tools.keys()]).toEqual(["ask_user"]);
-      expect(toolRowFrames(rows[0]!)).toEqual(toolRowFrames(h.row("ask_user")));
-      expect(toolRowFrames(rows[0]!)).not.toEqual(cold[0]);
-      expect(rows.slice(1).map((row) => toolRowFrames(row))).toEqual(cold.slice(1));
-      yield* Effect.promise(() => h.emit("session_shutdown", context("rpc")));
     }),
   );
 

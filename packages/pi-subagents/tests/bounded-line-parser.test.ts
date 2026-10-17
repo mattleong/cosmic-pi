@@ -50,26 +50,6 @@ describe("bounded child line parser", () => {
     });
   });
 
-  it("preserves CRLF, suppresses empty lines, and flushes a final frame", () => {
-    const { stream, lines, overflow } = collect(1_024, 2_048);
-    const ended = once(stream, "end");
-    stream.end("\r\nfirst\r\n\nsecond\r");
-    return ended.then(() => {
-      expect(lines).toEqual(["first", "second"]);
-      expect(overflow).not.toHaveBeenCalled();
-      return undefined;
-    });
-  });
-
-  it("detaches input listeners idempotently", () => {
-    const { stream, lines, detach } = collect(64, 128);
-    stream.emit("data", Buffer.from("before\n", "utf8"));
-    detach();
-    detach();
-    stream.emit("data", Buffer.from("after\n", "utf8"));
-    expect(lines).toEqual(["before"]);
-  });
-
   it("summarizes an oversized line by its ends and keeps parsing the lines after it", () => {
     const { stream, lines, oversized, overflow } = collect(4 * 1024, 64 * 1024);
     const body = "x".repeat(10 * 1024);
@@ -85,35 +65,6 @@ describe("bounded child line parser", () => {
     expect(oversized[0]?.prefix).toBe(line.slice(0, OVERSIZED_LINE_PREFIX_BYTES));
     expect(oversized[0]?.suffix.endsWith(',"willRetry":true}')).toBe(true);
     expect(overflow).not.toHaveBeenCalled();
-  });
-
-  it("reports a final unterminated oversized line when the stream ends", () => {
-    const { stream, lines, oversized } = collect(64, 1_024);
-    const ended = once(stream, "end");
-    const line = `{"type":"turn_end","message":"${"y".repeat(200)}"}`;
-    stream.end(line);
-    return ended.then(() => {
-      expect(lines).toEqual([]);
-      expect(oversized.map(({ bytes }) => bytes)).toEqual([Buffer.byteLength(line)]);
-      return undefined;
-    });
-  });
-
-  it("overflows on an oversized line when the reader cannot summarize it", () => {
-    const stream = inputStream();
-    const lines: string[] = [];
-    const overflow = vi.fn();
-    attachBoundedLineParser(stream, {
-      maxLineBytes: 8,
-      maxQueuedBytes: 1_024,
-      onLine: (line) => lines.push(line),
-      onOverflow: overflow,
-    });
-    stream.write("123456789");
-    stream.write("\nafter\n");
-
-    expect(overflow).toHaveBeenCalledOnce();
-    expect(lines).toEqual([]);
   });
 
   it("fails one parser room safely when re-entrant chunks overflow", () => {

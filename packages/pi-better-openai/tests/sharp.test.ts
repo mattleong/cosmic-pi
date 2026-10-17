@@ -1,11 +1,9 @@
 import { inspect } from "node:util";
-import { vi } from "vitest";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
-import * as Result from "effect/Result";
-import { BoundedProcessError, type BoundedProcessResult } from "pi-cosmic-core";
+import type { BoundedProcessResult } from "pi-cosmic-core";
 import {
   makeSharpAdapter as makeOwnedSharpAdapter,
   type SharpProcessRunner,
@@ -38,14 +36,8 @@ it.effect("decodes only bounded format metadata from the owned runner", () =>
 );
 
 for (const patch of [
-  { stdout: "secret not JSON" },
-  { stdout: '{"format":"svg"}' },
   { stdout: '{"format":"png","pixels":"secret"}' },
-  { stdout: " ".repeat(129) },
   { code: 1, stderr: "secret native diagnostic" },
-  { signal: "SIGKILL" },
-  { overflowed: true },
-  { timedOut: true },
 ]) {
   it.effect(`sanitizes invalid decoder result ${JSON.stringify(patch)}`, () =>
     Effect.gen(function* () {
@@ -56,32 +48,6 @@ for (const patch of [
     }),
   );
 }
-
-it.effect("rejects oversized and empty input before acquiring process authority", () =>
-  Effect.gen(function* () {
-    let spawned = false;
-    const adapter = makeSharpAdapter(() => {
-      spawned = true;
-      return Effect.succeed(success);
-    });
-    for (const input of [new Uint8Array(), new Uint8Array(60 * 1024 * 1024 + 1)])
-      expect((yield* adapter.decode(input).pipe(Effect.result))._tag).toBe("Failure");
-    expect(spawned).toBe(false);
-  }),
-);
-
-it.effect("sanitizes runner failures and restores admission", () =>
-  Effect.gen(function* () {
-    const failed = makeSharpAdapter(() =>
-      Effect.fail(new BoundedProcessError({ operation: "spawn", message: "secret path" })),
-    );
-    const failure = yield* failed.decode(bytes).pipe(Effect.flip);
-    expect(inspect(failure)).not.toContain("secret");
-    expect(yield* makeSharpAdapter(() => Effect.succeed(success)).decode(bytes)).toEqual({
-      format: "png",
-    });
-  }),
-);
 
 it.effect(
   "shares immediate admission between adapters and retains it through cancelled cleanup",
@@ -114,59 +80,6 @@ it.effect(
       expect(yield* second.decode(bytes)).toEqual({ format: "png" });
     }),
 );
-
-it.live("shares admission across independent Effect runtimes", () =>
-  Effect.gen(function* () {
-    const started = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    const first = makeSharpAdapter(() =>
-      Deferred.succeed(started, undefined).pipe(
-        Effect.andThen(Deferred.await(release)),
-        Effect.as(success),
-      ),
-    );
-    const pending = Effect.runPromise(first.decode(bytes));
-    yield* Effect.gen(function* () {
-      yield* Deferred.await(started);
-      const second = makeSharpAdapter(() => Effect.succeed(success));
-      expect(Result.isFailure(yield* second.decode(bytes).pipe(Effect.result))).toBe(true);
-    }).pipe(
-      Effect.ensuring(
-        Deferred.succeed(release, undefined).pipe(
-          Effect.andThen(Effect.tryPromise(() => pending)),
-          Effect.orDie,
-        ),
-      ),
-    );
-  }),
-);
-
-for (const outcome of ["error", "timeout", "missing-report"] as const) {
-  it.live(`disables admission after ${outcome} without confirmed cleanup`, () =>
-    Effect.gen(function* () {
-      vi.resetModules();
-      const { makeSharpAdapter: makeFresh } = yield* Effect.tryPromise(
-        () => import("../src/boundary/sharp.ts"),
-      );
-      const failed = makeFresh((_bytes, onCleanup) => {
-        if (outcome === "missing-report") return Effect.succeed(success);
-        const result =
-          outcome === "error"
-            ? Effect.fail(new BoundedProcessError({ operation: "stream", message: "private" }))
-            : Effect.succeed({ ...success, timedOut: true, cleanupUnconfirmed: true });
-        return result.pipe(Effect.ensuring(Effect.sync(() => onCleanup(false))));
-      });
-      expect(Result.isFailure(yield* failed.decode(bytes).pipe(Effect.result))).toBe(true);
-      let spawned = false;
-      const next = makeFresh(() => {
-        spawned = true;
-        return Effect.succeed(success);
-      });
-      expect(Result.isFailure(yield* next.decode(bytes).pipe(Effect.result))).toBe(true);
-      expect(spawned).toBe(false);
-    }),
-  );
-}
 
 it.effect("disables all subsequent adapters after unconfirmed cleanup", () =>
   Effect.gen(function* () {

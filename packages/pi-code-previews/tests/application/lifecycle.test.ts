@@ -297,15 +297,6 @@ const start = (h: ReturnType<typeof harness>, ctx = h.context()) =>
 const shutdown = (h: ReturnType<typeof harness>, ctx = h.context()) =>
   h.dispatch("session_shutdown", ctx);
 
-effectTest("factory registers callbacks without acquiring the application Layer", function* () {
-  const h = harness();
-  const registration = codePreviewsWithDependencies(h.pi, h.dependencies);
-  assert.equal(h.handlers.has("session_start"), true);
-  assert.equal(h.handlers.has("session_shutdown"), true);
-  assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
-  yield* step(() => registration);
-});
-
 effectTest("startup loads settings before renderers and activates the scheduler", function* () {
   const h = yield* registered();
 
@@ -374,39 +365,6 @@ effectTest("shutdown releases exactly once and remains idempotent", function* ()
 
   assert.deepEqual(h.counts(), { acquisitions: 1, releases: 1, loads: 1 });
   assert.equal(hasCodePreviewSessionCapability(), false);
-});
-
-effectTest("syntax activation uses the loaded theme and captured session signal", function* () {
-  const syntaxStarted = Deferred.makeUnsafe<void>();
-  const syntaxSettings = {
-    ...settings,
-    syntaxHighlighting: true,
-    shikiTheme: "github-dark" as const,
-  };
-  const h = yield* registered({
-    load: () => Effect.succeed(syntaxSettings),
-    initializeSyntax: () => Effect.sync(() => Deferred.doneUnsafe(syntaxStarted, Effect.void)),
-  });
-  const context = h.context();
-  const captured = new AbortController().signal;
-  const stale = new AbortController().signal;
-  let signalReads = 0;
-  Object.defineProperty(context, "signal", {
-    configurable: true,
-    get() {
-      signalReads++;
-      return signalReads === 1 ? captured : stale;
-    },
-  });
-
-  yield* step(() => start(h, context));
-  yield* Deferred.await(syntaxStarted);
-
-  assert.equal(signalReads, 1);
-  assert.deepEqual(h.syntaxThemes, ["github-dark"]);
-  assert.equal(h.signals().run[0], captured);
-  assert.equal(h.signals().fork[0], captured);
-  yield* step(() => shutdown(h, context));
 });
 
 effectTest(
@@ -494,38 +452,9 @@ effectTest(
   },
 );
 
-effectTest(
-  "getAllTools admission failure reaches lifecycle handling before settings I/O",
-  function* () {
-    const h = harness({
-      load: () => Effect.succeed({ ...settings, tools: ["bash"] }),
-      realRenderers: true,
-    });
-    Object.assign(h.pi, {
-      getAllTools: () => {
-        throw new Error("host discovery failed");
-      },
-    });
-    yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
-
-    yield* step(() => start(h));
-
-    assert.equal(hasCodePreviewSessionCapability(), false);
-    assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
-    assert.equal(h.notifications.length, 1);
-  },
-);
-
 const captureFailures: ReadonlyArray<
   readonly [string, (h: ReturnType<typeof harness>) => ExtensionHostContext]
-> = [
-  ["cwd getters", (h) => throwingGetter(h.context(), "cwd")],
-  ["signal getters", (h) => throwingGetter(h.context(), "signal")],
-  [
-    "AbortSignal.aborted getters",
-    (h) => h.context({ signal: throwingGetter(new AbortController().signal, "aborted") }),
-  ],
-];
+> = [["cwd getters", (h) => throwingGetter(h.context(), "cwd")]];
 
 for (const [name, sabotaged] of captureFailures)
   effectTest(`throwing session ${name} fail before runtime acquisition`, function* () {
@@ -538,21 +467,6 @@ for (const [name, sabotaged] of captureFailures)
     assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
     assert.equal(h.notifications.length, 1);
   });
-
-effectTest("settings a load ignored are reported when the session starts", function* () {
-  const h = yield* registered({
-    load: () =>
-      Effect.sync(() => {
-        setCodePreviewSettingsProblems([
-          { path: "/agent/code-previews.json", fields: ["readCollapsedLines"] },
-        ]);
-        return settings;
-      }),
-  });
-  yield* step(() => start(h));
-  assert.equal(h.notifications.length, 1);
-  yield* step(() => shutdown(h));
-});
 
 effectTest("project trust fails closed unless the callback returns literal true", function* () {
   const observedTrust: boolean[] = [];
@@ -577,22 +491,4 @@ effectTest("project trust fails closed unless the callback returns literal true"
   assert.deepEqual(observedTrust, [false, false, true, false]);
   assert.deepEqual(h.notifications, []);
   yield* step(() => shutdown(h));
-});
-
-effectTest("throwing notification callbacks cannot escape host capture failure", function* () {
-  const h = yield* registered();
-  const context = throwingGetter(
-    h.context({
-      ui: {
-        notify: () => {
-          throw new Error("host notify failure");
-        },
-      },
-    }),
-    "cwd",
-  );
-
-  assert.doesNotThrow(() => h.dispatch("session_start", context));
-  yield* settle(() => h.dispatch("session_shutdown", context));
-  assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
 });

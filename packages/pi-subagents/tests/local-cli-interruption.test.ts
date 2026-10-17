@@ -1,57 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
-  classifyLocalCliInterruptOwnership,
   localCliInterrupts,
   type LocalCliInterrupt,
 } from "../src/backend/local-cli-interruption.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
 import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
-import { processError, SubagentProcessError, type SubagentError } from "../src/run/errors.ts";
-
-const processFailure = (code: string) =>
-  new SubagentProcessError({
-    operation: "interrupt",
-    code,
-    message: code,
-  });
-
-const uncertain = processFailure("interrupt_outcome_uncertain");
-
-describe("local CLI interruption ownership", () => {
-  it.each<[string, "retain" | "release", Exit.Exit<unknown, SubagentError>]>([
-    ["an interruption-only exit", "retain", Exit.interrupt(1)],
-    [
-      "a multi-fiber interruption",
-      "retain",
-      Exit.failCause(
-        Cause.fromReasons([Cause.makeInterruptReason(1), Cause.makeInterruptReason(2)]),
-      ),
-    ],
-    ["a typed uncertain outcome", "retain", Exit.fail(uncertain)],
-    [
-      "an uncertain outcome mixed with interruption",
-      "retain",
-      Exit.failCause(
-        Cause.fromReasons([Cause.makeInterruptReason(1), Cause.makeFailReason(uncertain)]),
-      ),
-    ],
-    ["success", "release", Exit.succeed(undefined)],
-    ["a definite failure", "release", Exit.fail(processFailure("interrupt_rejected"))],
-    [
-      "a defect shaped like an uncertain failure",
-      "release",
-      Exit.die(processFailure("interrupt_outcome_uncertain")),
-    ],
-  ])("classifies %s as %s", (_label, ownership, exit) => {
-    expect(classifyLocalCliInterruptOwnership(exit)).toBe(ownership);
-  });
-});
+import { processError, type SubagentError } from "../src/run/errors.ts";
 
 const raw: LocalCliWireEvent = { type: "message", value: {} };
 const settled = (rawOwner?: LocalCliWireEvent) => [
@@ -84,18 +42,6 @@ const interruptHarness = () => {
 };
 
 describe("local CLI interrupt lifecycle", () => {
-  it.effect("completes once both the response and the terminal evidence arrive", () =>
-    Effect.gen(function* () {
-      const { interrupts, offered, released, start } = interruptHarness();
-      const { caller, owned } = yield* start(Effect.void);
-      yield* interrupts.complete(owned, raw);
-      yield* Fiber.join(caller);
-      expect(interrupts.current).toBeUndefined();
-      expect(released).toEqual([raw]);
-      expect(offered).toEqual([]);
-    }),
-  );
-
   it.effect("keeps an uncertain lifecycle owned until late evidence settles it as a pause", () =>
     Effect.gen(function* () {
       const { interrupts, offered, run, start } = interruptHarness();

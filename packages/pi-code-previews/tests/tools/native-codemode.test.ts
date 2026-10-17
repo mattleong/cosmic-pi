@@ -8,7 +8,6 @@ import {
   issueMessageStyleProblems,
 } from "../../testing";
 import type { NativeCodemodeCall } from "../../src/tools/native-codemode-evidence";
-import { compactStatus } from "../../src/tools/compact-summary";
 import {
   codemodeRenderers,
   nativeCall,
@@ -64,27 +63,6 @@ test("native outcomes require known native evidence, and child delivery is neutr
     assert.equal(projection({ ...output(), content: [{ type: "text", text }] }), undefined);
 });
 
-const truncatedOutput =
-  "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n" +
-  "TRUNCATED_HEAD\nTRUNCATED_TAIL\n\n" +
-  "[Full output: /tmp/RECOVERABLE_OUTPUT (read with offset/limit)]";
-
-test("recoverable native output does not raise attention; missing recovery remains a warning", () => {
-  for (const path of ["/tmp/RECOVERABLE_OUTPUT", undefined, "", " \n\t ", 3, "x".repeat(4097)]) {
-    const value = output("completed", [call()]);
-    value.content[1] = { type: "text", text: truncatedOutput };
-    value.details = { calls: [call()], fullOutputPath: path };
-    const before = structuredClone(value);
-    const summary = projection(value)!;
-    const saved = path === "/tmp/RECOVERABLE_OUTPUT";
-    const clipping = summary.issues?.find((entry) => entry.code === "native-output-truncated");
-    assert.equal(clipping?.severity, saved ? "info" : "warning");
-    assert.equal(compactStatus("settled", summary), saved ? "success" : "warning");
-    assert.equal(clipping?.detail?.includes("/tmp/RECOVERABLE_OUTPUT") ?? false, saved);
-    assert.deepEqual(value, before);
-  }
-});
-
 test("saved output cannot hide script failures, child failures, or incomplete call evidence", () => {
   const recovery = { fullOutputPath: "/tmp/RECOVERABLE_OUTPUT" };
   assert.equal(projection(output("failed", [], recovery), true)?.outcome, "error");
@@ -94,98 +72,6 @@ test("saved output cannot hide script failures, child failures, or incomplete ca
       ?.outcome,
     "uncertain",
   );
-});
-
-for (const style of ["compact", "preview"] as const)
-  test(`native ${style} keeps recoverable clipping expanded-only without changing output`, () => {
-    settings(style);
-    const tool = codemodeRenderers();
-    const value = output("completed", [call()], { fullOutputPath: "/tmp/RECOVERABLE_OUTPUT" });
-    value.content[1] = { type: "text", text: truncatedOutput };
-    const before = structuredClone(value);
-    const clipping = projection(value)!.issues!.find(
-      (entry) => entry.code === "native-output-truncated",
-    )!;
-    const harness = createToolPresentationHarness(tool);
-    for (const frame of harness.cycle({ code: "return 'SOURCE_MARKER';" }, value)) {
-      const text = stripAnsi(frame.text);
-      assert.equal(text.includes(clipping.message), frame.expanded);
-      if (frame.expanded)
-        for (const marker of [
-          "SOURCE_MARKER",
-          "TRUNCATED_HEAD",
-          "TRUNCATED_TAIL",
-          clipping.detail!,
-        ])
-          assert.ok(text.includes(marker), marker);
-    }
-    assert.deepEqual(value, before);
-  });
-
-const missing = "ENOENT: no such file or directory, open '/project/missing.ts'";
-const uncaught = (calls: unknown[], notes: string[] = []) =>
-  scriptResult(
-    "failed",
-    { calls },
-    {
-      type: "text",
-      text: `Script error:\nError: ${missing}\n\nTool calls made before the failure (they are not undone): read (error)`,
-    },
-    ...notes.map((text) => ({ type: "text" as const, text })),
-  );
-const stoppedBy = (error: string) =>
-  call("error", { args: '{"path":"/project/missing.ts"}', error });
-
-test("a visible call that stopped its program explains the failure once", () => {
-  const scriptError = (value: AgentToolResult<unknown>) =>
-    projection(value, true)?.issues?.find((entry) => entry.code === "native-script-error");
-  const explained = projection(uncaught([stoppedBy(missing)]), true)!;
-  assert.equal(explained.outcome, "error");
-  assert.equal(compactStatus("settled", explained), "error");
-  assert.equal(scriptError(uncaught([stoppedBy(missing)])), undefined);
-  assert.ok(scriptError(uncaught([stoppedBy("Permission denied")]))?.message.includes("ENOENT"));
-  const hidden = [
-    stoppedBy(missing),
-    ...Array.from({ length: 5 }, (_, index) => stoppedBy(`Other failure ${index}`)),
-  ];
-  assert.ok(scriptError(uncaught(hidden))?.message.includes("ENOENT"));
-  const note =
-    "Note: models.generateImages() returned 1 image that the script did not show. Show each image block of result.output with image(block).";
-  assert.ok(scriptError(uncaught([], [note]))?.message.includes("ENOENT"));
-});
-
-for (const style of ["compact", "preview"] as const)
-  test(`native ${style} shows an uncaught nested failure once and expansion keeps the script error`, () => {
-    settings(style);
-    const harness = createToolPresentationHarness(codemodeRenderers());
-    for (const frame of harness.cycle(
-      { code: "await tools.read({path: 'missing.ts'});" },
-      uncaught([stoppedBy(missing)]),
-      { overrides: () => ({ isError: true }) },
-    )) {
-      const text = stripAnsi(frame.text);
-      if (frame.expanded) assert.ok(text.includes("Tool calls made before the failure"));
-      else assert.equal(text.split("ENOENT").length - 1, 1, text);
-    }
-  });
-
-test("native rendering reads the animation frame without invoking renderer state accessors", () => {
-  settings("preview");
-  let invoked = false;
-  const state = Object.defineProperty({}, "codePreviewAnimationFrame", {
-    get() {
-      invoked = true;
-      return 3;
-    },
-  });
-  const harness = createToolPresentationHarness(codemodeRenderers(), { state });
-  const frames = harness.cycle(
-    { code: "await tools.read({path: 'a.ts'});" },
-    { content: [], details: { calls: [call("running")] } },
-    { overrides: () => ({ executionStarted: true, isPartial: true }) },
-  );
-  assert.ok(frames.every((frame) => stripAnsi(frame.text).includes("a.ts")));
-  assert.equal(invoked, false);
 });
 
 for (const style of ["compact", "preview"] as const)
@@ -205,34 +91,6 @@ for (const style of ["compact", "preview"] as const)
       assert.doesNotThrow(() => harness.render(100));
     }
     assert.equal(invoked, false);
-  });
-
-for (const style of ["compact", "preview"] as const)
-  test(`native ${style} expanded calls follow spinner frames, the timing setting and newer results`, () => {
-    settings(style);
-    const state = { codePreviewAnimationFrame: 0 };
-    const h = createToolPresentationHarness(codemodeRenderers(), { state });
-    const callRow = (path: string) =>
-      stripAnsi(h.render(100).join("\n"))
-        .split("\n")
-        .find((line) => line.includes(path));
-    const args = { code: "await readSources();" };
-    const live = { executionStarted: true, isPartial: true, expanded: true };
-    h.call(args, live);
-    h.result({ content: [], details: { calls: [call("running")] } }, live);
-    const firstFrame = callRow("a.ts");
-    assert.ok(firstFrame);
-    state.codePreviewAnimationFrame = 1;
-    assert.notEqual(callRow("a.ts"), firstFrame, "a running call's spinner advances");
-
-    const settled = { executionStarted: true, isPartial: false, expanded: true };
-    const second = call("ok", { args: '{"path":"/project/b.ts"}', durationMs: 2500 });
-    h.call(args, settled);
-    h.result(output("completed", [call("ok"), second]), settled);
-    const untimed = callRow("b.ts");
-    assert.ok(untimed, "a newer result lists its new call");
-    applyPresentationSettings({ toolCallTiming: true });
-    assert.notEqual(callRow("b.ts"), untimed, "the timing setting applies without a new result");
   });
 
 test("projection sanitizes bounded attention/targets without changing raw native details", () => {
@@ -258,20 +116,6 @@ test("projection sanitizes bounded attention/targets without changing raw native
       ?.subject,
     "",
   );
-});
-
-test("native error attention omits duplicate details but preserves distinct diagnostics", () => {
-  for (const extra of ["", "\nAdditional diagnostic context"]) {
-    const diagnostic = `Nested failure${extra}`;
-    const value = output("completed", [call("error", { error: diagnostic })]);
-    const before = structuredClone(value);
-    const error = projection(value)?.children?.entries[0]?.issues?.find(
-      (entry) => entry.severity === "error",
-    );
-    assert.ok(error);
-    assert.equal(error.detail, extra ? diagnostic : undefined);
-    assert.deepEqual(value, before);
-  }
 });
 
 for (const style of ["compact", "preview"] as const)

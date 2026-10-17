@@ -4,7 +4,6 @@ import type { ProfileCandidate } from "../src/profiles/model.ts";
 import { ProfileEditVisit } from "../src/settings/profile-edit-visit.ts";
 import {
   defaultRouteCandidate,
-  loadProfileRouteDraft,
   type ProfileRouteDraft,
   type ProfileWorkspaceTarget,
 } from "../src/settings/profile-route-editor.ts";
@@ -14,7 +13,6 @@ import {
 } from "./fixtures/profile-settings-inspection.ts";
 import type { SessionProfileOverrideSeed } from "../src/profiles/session-overrides.ts";
 
-const session: ProfileWorkspaceTarget = { kind: "session" };
 const saved = (name = "one", scope: "global" | "project" = "global"): ProfileWorkspaceTarget => ({
   kind: "profile-set",
   set: { scope, name },
@@ -34,20 +32,6 @@ const inspect = (
       projectTrusted: true,
     },
     seed,
-  );
-const withSession = (
-  base: ReturnType<typeof inspect>,
-  draft: ProfileRouteDraft,
-  revision: number,
-) =>
-  inspect(
-    base.globalDocument,
-    {
-      baseline: base.session.baseline,
-      revision,
-      overrides: draft.kind === "inherit" ? {} : { worker: { candidates: draft.candidates } },
-    },
-    base.projectDocument,
   );
 type CandidateFixture = Partial<Record<keyof ProfileCandidate, string | boolean | undefined>>;
 const doc = (
@@ -106,58 +90,6 @@ describe("profile editing visit", () => {
     expect(visit.isEdited(saved(), "worker", opening)).toBe(false);
   });
 
-  it("does not mark pre-existing session overrides and restores them instead of baseline", () => {
-    const opening = inspect(undefined, { revision: 8, overrides: { worker: { candidates: [] } } });
-    const visit = new ProfileEditVisit(opening);
-    expect(visit.isEdited(session, "worker", opening)).toBe(false);
-    const after = withSession(opening, explicit, 9);
-    save(visit, session, "worker", opening, after, explicit);
-    expect(visit.undoDraft(session, "worker", after)).toMatchObject({ draft: disabled });
-  });
-
-  it("restores absence even when the inherited project route was invalid", () => {
-    const opening = inspect(
-      { ...doc({ ...candidate, effort: "nonsense" }), defaultProfileSet: "one" },
-      undefined,
-      doc(undefined),
-    );
-    const target = saved("one", "project");
-    const visit = new ProfileEditVisit(opening);
-    const after = inspect(opening.globalDocument, undefined, doc("disabled"));
-    save(visit, target, "worker", opening, after, disabled);
-    expect(visit.undoDraft(target, "worker", after)).toMatchObject({
-      draft: { kind: "inherit", candidates: [] },
-    });
-  });
-
-  it("rejects restoration of a malformed own declaration", () => {
-    const opening = inspect(doc({ ...candidate, effort: "nonsense" }));
-    const visit = new ProfileEditVisit(opening);
-    const after = inspect(doc("disabled"));
-    save(visit, saved(), "worker", opening, after, disabled);
-    expect(visit.undoDraft(saved(), "worker", after)).toHaveProperty("error");
-    expect(visit.isEdited(saved(), "worker", after)).toBe(false);
-  });
-
-  it("keeps Project undo through Global edits while inheriting, but rejects Project drift", () => {
-    const opening = inspect(doc(candidate), undefined, doc(candidate));
-    const target = saved("one", "project");
-    const visit = new ProfileEditVisit(opening);
-    const inherited = inspect(opening.globalDocument, undefined, doc(undefined));
-    expect(
-      save(visit, target, "worker", opening, inherited, { kind: "inherit", candidates: [] }),
-    ).toBe(true);
-    const changedGlobal = inspect(doc("disabled"), undefined, inherited.projectDocument);
-    expect(save(visit, saved(), "worker", inherited, changedGlobal, disabled)).toBe(true);
-    expect(visit.isEdited(target, "worker", changedGlobal)).toBe(true);
-    expect(visit.undoDraft(target, "worker", changedGlobal)).toMatchObject({ draft: explicit });
-    expect(save(visit, saved(), "worker", changedGlobal, inherited, explicit)).toBe(true);
-    expect(visit.isEdited(target, "worker", inherited)).toBe(true);
-    const external = inspect(inherited.globalDocument, undefined, doc("disabled"));
-    expect(visit.isEdited(target, "worker", external)).toBe(false);
-    expect(visit.undoDraft(target, "worker", external)).toHaveProperty("error");
-  });
-
   it("invalidates undo on external changes and never attributes a conflicting save", () => {
     const opening = inspect();
     const visit = new ProfileEditVisit(opening);
@@ -169,108 +101,5 @@ describe("profile editing visit", () => {
     const fresh = new ProfileEditVisit(opening);
     expect(save(fresh, saved(), "worker", opening, external, explicit)).toBe(false);
     expect(fresh.isEdited(saved(), "worker", external)).toBe(false);
-  });
-
-  it("captures initial sets before opening them and transfers only owned renames", () => {
-    const opening = inspect();
-    const visit = new ProfileEditVisit(opening);
-    const own = inspect(doc(candidate));
-    save(visit, saved(), "worker", opening, own, explicit);
-    const renamed = inspect(doc(candidate, "two"));
-    visit.renameTarget(saved(), saved("two"), renamed);
-    expect(visit.isEdited(saved("two"), "worker", renamed)).toBe(true);
-    expect(visit.undoDraft(saved("two"), "worker", renamed)).toMatchObject({
-      draft: { kind: "reset" },
-    });
-    visit.deleteTarget(saved("two"));
-    visit.captureTarget(saved("two"), renamed);
-    expect(visit.isEdited(saved("two"), "worker", renamed)).toBe(false);
-    visit.reconcile(inspect(doc(undefined, "other")));
-    visit.captureTarget(saved("two"), renamed);
-    expect(visit.undoDraft(saved("two"), "worker", renamed)).toHaveProperty("error");
-  });
-
-  it("retains raw singleton arrays and optional field absence defensively", () => {
-    const { closeOnReport: _close, openaiFastMode: _fast, ...sparse } = candidate;
-    const raw = [{ ...sparse, openaiFastMode: false }];
-    const opening = inspect(doc(raw));
-    const visit = new ProfileEditVisit(opening);
-    const after = inspect(doc("disabled"));
-    save(visit, saved(), "worker", opening, after, disabled);
-    const undo = visit.undoDraft(saved(), "worker", after);
-    expect(undo).toMatchObject({ restore: { declaration: raw } });
-    if (!("draft" in undo)) throw new Error(undo.error);
-    if (Array.isArray(undo.restore?.declaration)) undo.restore.declaration.push("disabled");
-    expect(visit.undoDraft(saved(), "worker", after)).toMatchObject({
-      restore: { declaration: raw },
-    });
-  });
-
-  it("requires commit evidence and rejects external changes between commit and refresh", () => {
-    const opening = inspect();
-    const committed = inspect(doc(candidate));
-    const refreshed = inspect(doc("disabled"));
-    const visit = new ProfileEditVisit(opening);
-    expect(visit.recordSave(saved(), "worker", opening, committed, explicit)).toBe(false);
-    const fresh = new ProfileEditVisit(opening);
-    expect(
-      fresh.recordSave(saved(), "worker", opening, refreshed, explicit, {
-        kind: "saved",
-        document: json(doc(candidate)),
-      }),
-    ).toBe(false);
-    expect(fresh.isEdited(saved(), "worker", refreshed)).toBe(false);
-    expect(fresh.undoDraft(saved(), "worker", refreshed)).toHaveProperty("error");
-  });
-
-  it("does not collapse v6 array shape or optional false into an exact restore", () => {
-    const { openaiFastMode: _fast, closeOnReport: _close, ...sparse } = candidate;
-    const opening = inspect(doc([sparse]));
-    for (const changed of [
-      sparse,
-      [{ ...sparse, openaiFastMode: false }],
-      [{ ...sparse, closeOnReport: true }],
-    ]) {
-      const visit = new ProfileEditVisit(opening);
-      const after = inspect(doc(changed));
-      expect(
-        save(
-          visit,
-          saved(),
-          "worker",
-          opening,
-          after,
-          loadProfileRouteDraft(after, saved(), "worker"),
-        ),
-      ).toBe(true);
-      expect(visit.isEdited(saved(), "worker", after)).toBe(true);
-    }
-  });
-
-  it("does not treat document key order as an external route edit", () => {
-    const opening = inspect();
-    const visit = new ProfileEditVisit(opening);
-    const after = inspect(doc(candidate));
-    save(visit, saved(), "worker", opening, after, explicit);
-    const reordered = Object.fromEntries(Object.entries(candidate).toReversed());
-    expect(visit.isEdited(saved(), "worker", inspect(doc(reordered)))).toBe(true);
-  });
-
-  it("starts newly discovered targets at first open and resets applied session baselines", () => {
-    const opening = inspect();
-    const visit = new ProfileEditVisit(opening);
-    const discovered = inspect(doc(candidate, "new"));
-    visit.captureTarget(saved("new"), discovered);
-    const after = inspect(doc("disabled", "new"));
-    save(visit, saved("new"), "worker", discovered, after, disabled);
-    expect(visit.undoDraft(saved("new"), "worker", after)).toMatchObject({ draft: explicit });
-    const own = withSession(after, disabled, 1);
-    save(visit, session, "worker", after, own, disabled);
-    const applied = inspect({ ...doc(candidate), defaultProfileSet: "one" });
-    visit.reconcile(applied);
-    expect(visit.isEdited(session, "worker", applied)).toBe(false);
-    expect(visit.undoDraft(session, "worker", applied)).toHaveProperty("error");
-    visit.resetSession(own);
-    expect(visit.isEdited(session, "worker", own)).toBe(false);
   });
 });

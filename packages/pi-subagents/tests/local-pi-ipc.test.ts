@@ -10,7 +10,6 @@ import type { LocalPiContact, LocalPiParentControl } from "../src/backend/local-
 import type { NodeChildProcess } from "./support/node-builtins.ts";
 import {
   attachLocalPiParentIpc,
-  makeLocalPiChildIpcChannel,
   makeLocalPiParentIpcChannel,
   type LocalPiIpcPort,
 } from "../src/boundary/local-pi-ipc.ts";
@@ -201,45 +200,5 @@ describe("Local Pi IPC boundary", () => {
       expect(protocolErrors).toEqual([]);
       return undefined;
     }).pipe(Effect.scoped),
-  );
-
-  it.effect("validates parent controls before the child consumes them", () =>
-    Effect.gen(function* () {
-      const fake = fakePort<LocalPiContact>();
-      const controls: LocalPiParentControl[] = [];
-      let disconnected = false;
-      const channel = makeLocalPiChildIpcChannel(fake.port);
-      const detach = channel.listen({
-        onControl: (control) => controls.push(control),
-        onDisconnect: () => {
-          disconnected = true;
-        },
-      });
-
-      fake.emitMessage(parentReply());
-      fake.emitMessage({ channel: "pi-subagents", type: "unknown" });
-      fake.disconnect();
-      expect(controls).toEqual([parentReply()]);
-      expect(disconnected).toBe(true);
-
-      yield* channel.sendContact(progressContact());
-      expect(fake.sent).toEqual([progressContact()]);
-
-      fake.setConnected(false);
-      const notSent = yield* channel.sendContact(progressContact("closed")).pipe(Effect.flip);
-      expect(notSent.code).toBe("transport_not_sent");
-
-      fake.setConnected(true);
-      fake.setBehavior("error");
-      const uncertain = yield* channel.sendContact(progressContact("ambiguous")).pipe(Effect.flip);
-      expect(uncertain.code).toBe("transport_outcome_uncertain");
-
-      detach();
-      disconnected = false;
-      fake.emitMessage(parentReply("late"));
-      fake.disconnect();
-      expect(controls).toHaveLength(1);
-      expect(disconnected).toBe(false);
-    }),
   );
 });

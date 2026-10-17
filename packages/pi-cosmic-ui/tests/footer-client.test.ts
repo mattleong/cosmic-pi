@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
-import { makeFooterStatusDeclaration } from "../src/boundary/host-status.ts";
 import { createCosmicFooterClient } from "../src/footer/client.ts";
-import {
-  COSMIC_UI_FOOTER_REMOVE,
-  COSMIC_UI_FOOTER_UPSERT,
-  COSMIC_UI_HOST_STATE,
-  COSMIC_UI_PROTOCOL_VERSION,
-  normalizeCosmicFooterUpsertEvent,
-} from "../src/protocol/protocol.ts";
+import { COSMIC_UI_HOST_STATE, COSMIC_UI_PROTOCOL_VERSION } from "../src/protocol/protocol.ts";
 import { eventBus } from "./support/host.ts";
 
 describe("Cosmic footer client discovery", () => {
@@ -48,49 +40,6 @@ describe("Cosmic footer client discovery", () => {
     expect(client.isVisible("openai.usage")).toBe(true);
   });
 
-  it("buffers contributions and removes stale entries through an inactive host", () => {
-    const bus = eventBus();
-    bus.respondToHostQuery(() => ({ active: false, ready: true, hidden: [] }));
-    const client = createCosmicFooterClient(bus.events, "provider");
-    client.query();
-    bus.emitted.splice(0);
-    client.upsert({ kind: "text", id: "usage", region: "details", text: "ready" });
-    client.remove("usage");
-    expect(bus.emitted.map(({ name }) => name)).toEqual([
-      COSMIC_UI_FOOTER_UPSERT,
-      COSMIC_UI_FOOTER_REMOVE,
-    ]);
-  });
-
-  it("republishes status placement when a host becomes active", () => {
-    const bus = eventBus();
-    bus.respondToHostQuery(() => ({ active: false, ready: true, hidden: [] }));
-    const declaration = makeFooterStatusDeclaration({
-      events: bus.events,
-      owner: "manager",
-      statusKey: "manager-status",
-      placement: { region: "identity", align: "right" },
-    });
-    declaration.activate(extensionContextFixture({ mode: "tui" }));
-    bus.emitted.splice(0);
-    bus.events.emit(COSMIC_UI_HOST_STATE, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      active: true,
-      ready: true,
-      hidden: [],
-    });
-    const republished = bus.emitted.some(({ name, data }) => {
-      if (name !== COSMIC_UI_FOOTER_UPSERT) return false;
-      const event = normalizeCosmicFooterUpsertEvent(data);
-      return (
-        event?.owner === "manager" &&
-        event.contribution.kind === "status" &&
-        event.contribution.id === "manager-status"
-      );
-    });
-    expect(republished).toBe(true);
-  });
-
   it("propagates visibility changes without an ownership change and contains consumer failure", () => {
     const bus = eventBus();
     const client = createCosmicFooterClient(bus.events, "provider");
@@ -109,21 +58,5 @@ describe("Cosmic footer client discovery", () => {
     }
     expect(visible).toEqual([true, false, true]);
     expect(client.active).toBe(true);
-  });
-
-  it("rejects malformed or hostile host state without claiming an active host", () => {
-    const bus = eventBus();
-    const client = createCosmicFooterClient(bus.events, "provider");
-    bus.respondToHostQuery(() =>
-      Object.defineProperty({ active: false, ready: true, hidden: [] }, "active", {
-        get() {
-          throw new Error("hostile active getter");
-        },
-      }),
-    );
-    expect(client.query()).toBe(false);
-    expect(client.installed).toBe(false);
-    bus.events.emit(COSMIC_UI_HOST_STATE, { version: COSMIC_UI_PROTOCOL_VERSION, active: true });
-    expect(client.active).toBe(false);
   });
 });

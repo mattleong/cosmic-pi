@@ -10,7 +10,7 @@ import {
 import { expect, vi } from "vitest";
 import { resolveSubagentConfig } from "../../src/config/options.ts";
 import { subagentConfigDecoder } from "../../src/config/schema.ts";
-import type { ProfileCandidate, ProfileId } from "../../src/profiles/model.ts";
+import type { ProfileCandidate } from "../../src/profiles/model.ts";
 import {
   sessionProfileSnapshot,
   type SessionProfileOverrideSeed,
@@ -69,24 +69,6 @@ export const profileSettingsInspection = (
 };
 
 export const INVALID_ROUTE = declaredCandidate("parent", { effort: "impossible" });
-
-export const inheritedInvalidInspection = (
-  ownInvalid = false,
-  profile: ProfileId = "worker",
-): ProfileSettingsInspection =>
-  profileSettingsInspection({
-    globalDocument: {
-      version: 6,
-      defaultProfileSet: "lower",
-      profileSets: { lower: { profiles: { [profile]: INVALID_ROUTE } } },
-    },
-    projectDocument: {
-      version: 6,
-      defaultProfileSet: "partial",
-      profileSets: { partial: { profiles: ownInvalid ? { [profile]: INVALID_ROUTE } : {} } },
-    },
-    projectTrusted: true,
-  });
 
 const unexpectedAction = () => Promise.reject(new Error("Unexpected action"));
 

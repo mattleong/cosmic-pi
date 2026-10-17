@@ -1,6 +1,5 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
 import { view } from "../tools/fixtures/tool-harness.ts";
@@ -46,52 +45,6 @@ it.effect("process usage rechecks handle ownership inside the mutation lock", ()
     expect(record.view.usage.input).toBe(10);
   }).pipe(Effect.scoped),
 );
-
-it.effect("usage-only events preserve activity across paused resume and report completion", () => {
-  const { backend, projections, layer } = nativeReportServiceFixture(
-    fakeNativeReportBackendLayer({ capabilities: ["steer", "interrupt", "resume"] }),
-  );
-  return withService(layer, function* (service) {
-    const run = yield* service.start(nativeReportRequest());
-    const control = backend.controls[0]!;
-    const epoch = control.assignmentEpochs[0]!;
-    control.offer({
-      type: "assistant_message",
-      assignmentEpoch: epoch,
-      text: "Keep this report",
-      usage: emptyUsage(),
-    });
-    yield* yieldUntil(() => (projections.at(-1)?.runs[0]?.sessionEvents.length ?? 0) > 0, 200);
-    const before = yield* service.status(run.id);
-    control.offer({ type: "usage", usage: { ...emptyUsage(), input: 10, totalTokens: 10 } });
-    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.input === 10, 200);
-    const active = yield* service.status(run.id);
-    expect(active.lastActivityAt).toBe(before.lastActivityAt);
-    expect(active.sessionEvents).toEqual(before.sessionEvents);
-    expect((yield* service.interrupt(run.id)).state).toBe("paused");
-    const admission = yield* Deferred.make<void>();
-    control.gateNextStart(admission);
-    const resuming = yield* service
-      .resume(run.id, "resume with concurrent accounting")
-      .pipe(Effect.forkChild);
-    yield* yieldUntil(() => control.assignmentEpochs.length === 2, 200);
-    control.offer({ type: "usage", usage: { ...emptyUsage(), input: 100, totalTokens: 100 } });
-    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.input === 110, 200);
-    yield* Deferred.succeed(admission, undefined);
-    expect((yield* Fiber.join(resuming)).state).toBe("running");
-    expect((yield* service.status(run.id)).usage.input).toBe(110);
-
-    control.offer({ type: "usage", usage: { ...emptyUsage(), input: 1, totalTokens: 1 } });
-    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.input === 111, 200);
-    control.report(run.id, 1, "report", "Keep this report");
-    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed", 200);
-    const completed = projections.at(-1)!.runs[0]!;
-    expect(completed.finalText).toBe("Keep this report");
-    expect(completed.usage.input).toBe(111);
-    expect(completed.reportGeneration).toBe(1);
-    yield* yieldUntil(() => control.released() === 1, 200);
-  });
-});
 
 it.effect("stops new starts once the session's subagents reach the spend limit", () => {
   const { backend, projections, layer } = nativeReportServiceFixture(

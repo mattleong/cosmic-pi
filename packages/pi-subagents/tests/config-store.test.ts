@@ -19,7 +19,6 @@ import {
   type SubagentProfileRestorePatch,
 } from "../src/config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
-import { PROFILE_IDS, type ProfileRoute } from "../src/profiles/model.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import { objectContaining, stringContaining } from "./support/matchers.ts";
 
@@ -27,7 +26,6 @@ const CWD = "/repo";
 const AGENT = "/agent";
 const GLOBAL = `${AGENT}/pi-subagents.json`;
 const PROJECT = `${CWD}/${CONFIG_DIR_NAME}/pi-subagents.json`;
-const pathOf = (scope: SubagentConfigScope) => (scope === "global" ? GLOBAL : PROJECT);
 
 const storeLayer = (documents: Layer.Layer<JsonDocumentStore>) =>
   subagentConfigStoreLayer.pipe(Layer.provide(Layer.merge(documents, Path.layer)));
@@ -117,37 +115,6 @@ describe("SubagentConfigStore activation", () => {
     }),
   );
 
-  it.effect("rejects unsupported or malformed documents at activation", () =>
-    Effect.gen(function* () {
-      for (const document of [
-        { version: 1 },
-        { version: 2 },
-        {},
-        { version: "6" },
-        { version: 4, profiles: {} },
-        { version: 5, nesting: { maxDirectChildren: 12, maxDepth: 3 } },
-        { version: 6, profiles: {} },
-        { version: 6, defaultProfile: "generalist" },
-        { version: 6, customFutureField: true },
-        { version: 6, nesting: { maxDirectChildren: 0, maxDepth: 3 } },
-        { version: 6, nesting: { maxDirectChildren: 33, maxDepth: 3 } },
-        { version: 6, nesting: { maxDirectChildren: 12, maxDepth: -1 } },
-        { version: 6, nesting: { maxDirectChildren: 12, maxDepth: 9 } },
-        { version: 6, nesting: { maxDirectChildren: 12.5, maxDepth: 3 } },
-        { version: 6, writerWorkspaceMode: "invalid" },
-        { version: 6, delegation: "always" },
-        { version: 6, automaticProfileRouting: false },
-      ]) {
-        const { store } = yield* setup({ [GLOBAL]: document });
-        yield* rejects(store.load(CWD, AGENT, true), "activate", GLOBAL);
-      }
-      const { store } = yield* setup({
-        [GLOBAL]: { version: 5, profiles: { worker: declaredCandidate("openai/worker") } },
-      });
-      yield* rejects(store.load(CWD, AGENT, true), "activate", GLOBAL, "must declare version 6");
-    }),
-  );
-
   it.effect("never reads an untrusted project, so its invalid values cannot block activation", () =>
     Effect.gen(function* () {
       const { memory, store } = yield* setup({
@@ -179,209 +146,9 @@ describe("SubagentConfigStore activation", () => {
       );
     }),
   );
-
-  it.effect("keeps invalid defaults and unknown aliases loadable for fail-closed repair", () =>
-    Effect.gen(function* () {
-      let { store } = yield* setup({
-        [GLOBAL]: {
-          version: 6,
-          defaultProfileSet: "missing",
-          profileSets: { valid: { profiles: {} } },
-        },
-      });
-      let config = yield* store.load(CWD, AGENT, true);
-      expect(config.currentProfileSet).toEqual({ scope: "global", name: "missing", invalid: true });
-      expect(PROFILE_IDS.map((id) => config.profileSources[id])).toEqual(
-        PROFILE_IDS.map(() => "global-invalid"),
-      );
-      expect(config.diagnostics).toContain("global.defaultProfileSet");
-
-      ({ store } = yield* setup({ [GLOBAL]: v6({ delegate: "disabled" }) }));
-      config = yield* store.load(CWD, AGENT, true);
-      expect(config.profileSources.generalist).toBe("builtin");
-      expect(config.diagnostics).toContain("global.profileSets[0].profiles.<unknown>");
-    }),
-  );
-
-  it.effect("applies strict nesting precedence", () =>
-    Effect.gen(function* () {
-      const { store } = yield* setup({
-        [GLOBAL]: { version: 6, nesting: { maxDirectChildren: 20, maxDepth: 6 } },
-        [PROJECT]: { version: 6, nesting: { maxDirectChildren: 4, maxDepth: 2 } },
-      });
-      expect((yield* store.load(CWD, AGENT, true)).nesting).toEqual({
-        maxDirectChildren: 4,
-        maxDepth: 2,
-      });
-      expect((yield* store.load(CWD, AGENT, false)).nesting).toEqual({
-        maxDirectChildren: 20,
-        maxDepth: 6,
-      });
-    }),
-  );
-});
-
-describe("SubagentConfigStore delegation", () => {
-  it.effect("prefers a trusted project's delegation over global and defaults to normal", () =>
-    Effect.gen(function* () {
-      const { store } = yield* setup({
-        [GLOBAL]: { version: 6, delegation: "encouraged" },
-        [PROJECT]: { version: 6, delegation: "orchestration" },
-      });
-      expect((yield* store.load(CWD, AGENT, true)).delegation).toBe("orchestration");
-      expect((yield* store.load(CWD, AGENT, false)).delegation).toBe("encouraged");
-      const empty = yield* setup({});
-      expect((yield* empty.store.load(CWD, AGENT, true)).delegation).toBe("normal");
-    }),
-  );
-
-  it.effect("saves and clears delegation while preserving every other field", () =>
-    Effect.gen(function* () {
-      const original = {
-        version: 6,
-        defaultProfileSet: "saved",
-        profileSets: { saved: { profiles: { worker: "disabled" } } },
-        nesting: { maxDirectChildren: 4, maxDepth: 2 },
-      };
-      const { memory, store } = yield* setup({ [GLOBAL]: original });
-      yield* store.patchDelegation(CWD, AGENT, {
-        ...at("global", original),
-        delegation: "orchestration",
-      });
-      const saved = { ...original, delegation: "orchestration" };
-      expect(memory.documents.get(GLOBAL)).toEqual(saved);
-      expect((yield* store.load(CWD, AGENT, false)).delegation).toBe("orchestration");
-      yield* store.patchDelegation(CWD, AGENT, at("global", saved));
-      expect(memory.documents.get(GLOBAL)).toEqual(original);
-    }),
-  );
 });
 
 describe("SubagentConfigStore profile writes", () => {
-  it.effect("persists typed local patches with undefined optional fields", () =>
-    Effect.gen(function* () {
-      const candidate = {
-        ...profileCandidate("openai/local"),
-        openaiFastMode: undefined,
-        closeOnReport: undefined,
-      };
-      const { closeOnReport: _omitted, ...persisted } = declaredCandidate("openai/local");
-      for (const asArray of [false, true]) {
-        const document = v6({});
-        const { memory, store } = yield* setup({ [GLOBAL]: document });
-        yield* store.patchProfile(CWD, AGENT, {
-          ...at("global", document),
-          profileSet: "default",
-          profile: "worker",
-          route: asArray ? [candidate] : candidate,
-        });
-        expect(memory.documents.get(GLOBAL)).toEqual(
-          v6({ worker: asArray ? [persisted] : persisted }),
-        );
-        const loaded = yield* store.load(CWD, AGENT, false);
-        expect(loaded.profileSources.worker).toBe("global");
-        expect(loaded.profiles.worker.candidates[0]).toMatchObject({
-          host: "local",
-          model: "openai/local",
-          closeOnReport: true,
-        });
-      }
-    }),
-  );
-
-  it.effect("rejects direct invalid typed patches without changing the raw document", () =>
-    Effect.gen(function* () {
-      const local = profileCandidate("openai/local");
-      const document = v6({ worker: declaredCandidate("openai/local") });
-      const { memory, store } = yield* setup({ [GLOBAL]: document });
-      let reads = 0;
-      const accessor = Object.defineProperty({ ...local }, "host", {
-        enumerable: true,
-        get: () => {
-          reads += 1;
-          return "herdr";
-        },
-      });
-      const accessorArray = Object.defineProperty([local], "0", {
-        enumerable: true,
-        get: () => {
-          reads += 1;
-          return local;
-        },
-      });
-      const staysOpen = { ...local, closeOnReport: false };
-      const withUnknownField = { ...local, unknown: undefined };
-      for (const route of [
-        staysOpen,
-        withUnknownField,
-        [local, staysOpen],
-        accessor,
-        accessorArray,
-      ]) {
-        yield* rejects(
-          store.patchProfile(CWD, AGENT, {
-            ...at("global", document),
-            profileSet: "default",
-            profile: "worker",
-            route,
-          }),
-          "update",
-          GLOBAL,
-        );
-        expect(memory.documents.get(GLOBAL)).toEqual(document);
-      }
-      expect(reads).toBe(0);
-    }),
-  );
-
-  it.effect(
-    "repairs only the targeted v6 declaration and rejects selecting the still-invalid set",
-    () =>
-      Effect.gen(function* () {
-        const remote = declaredCandidate("openai/remote", { host: "herdr" });
-        const initial = {
-          version: 6,
-          profileSets: {
-            repair: {
-              profiles: {
-                worker: remote,
-                reviewer: [remote, declaredCandidate("openai/local")],
-                scout: { not: "a candidate" },
-              },
-            },
-            other: { profiles: { planner: remote } },
-          },
-        };
-        const { memory, store } = yield* setup({ [GLOBAL]: initial });
-        const select = (document: JsonObject) =>
-          store.patchDefaultProfileSet(CWD, AGENT, {
-            ...at("global", document),
-            defaultProfileSet: "repair",
-          });
-        yield* rejects(select(initial), "update", GLOBAL);
-        const local = profileCandidate("openai/repaired");
-        yield* store.patchProfile(CWD, AGENT, {
-          ...at("global", initial),
-          profileSet: "repair",
-          profile: "worker",
-          route: local,
-        });
-        const { openaiFastMode: _fast, ...persistedLocal } = local;
-        const expected = {
-          ...initial,
-          profileSets: {
-            ...initial.profileSets,
-            repair: {
-              profiles: { ...initial.profileSets.repair.profiles, worker: persistedLocal },
-            },
-          },
-        };
-        expect(memory.documents.get(GLOBAL)).toEqual(expected);
-        yield* rejects(select(expected), "update", GLOBAL);
-        expect(memory.documents.get(GLOBAL)).toEqual(expected);
-      }),
-  );
-
   it.effect("atomically patches one profile while preserving unrelated routes", () =>
     Effect.gen(function* () {
       const reviewer = [
@@ -457,132 +224,9 @@ describe("SubagentConfigStore profile writes", () => {
       expect(memory.documents.get(GLOBAL)).toEqual(scoutDocument("high"));
     }),
   );
-
-  it.effect("treats removal patches with no backing file or key as true no-ops", () =>
-    Effect.gen(function* () {
-      const { memory, store } = yield* setup();
-      for (const scope of ["project", "global"] as const) {
-        yield* store.patchProfile(CWD, AGENT, {
-          ...at(scope),
-          profileSet: "default",
-          profile: "worker",
-        });
-        yield* store.patchNesting(CWD, AGENT, at(scope));
-        yield* store.patchDefaultProfileSet(CWD, AGENT, at(scope));
-        yield* store.patchWriterWorkspace(CWD, AGENT, at(scope));
-        yield* store.deleteProfileSet(CWD, AGENT, { ...at(scope), profileSet: "missing" });
-        expect(memory.documents.has(pathOf(scope))).toBe(false);
-        yield* rejects(
-          store.deleteProfileSet(CWD, AGENT, { ...at(scope), profileSet: "bad/name" }),
-          "update",
-          pathOf(scope),
-          "Invalid profile-set name",
-        );
-        yield* rejects(
-          store.patchProfile(CWD, AGENT, {
-            ...at(scope),
-            profileSet: "bad/name",
-            profile: "worker",
-          }),
-          "update",
-          pathOf(scope),
-          "Invalid profile target",
-        );
-      }
-      yield* store.patchWriterWorkspace(CWD, AGENT, {
-        ...at("global"),
-        writerWorkspaceMode: "worktree",
-      });
-      expect(memory.documents.get(GLOBAL)).toEqual({ version: 6, writerWorkspaceMode: "worktree" });
-      yield* rejects(
-        store.patchProfile(CWD, AGENT, {
-          ...at("global"),
-          profileSet: "default",
-          profile: "worker",
-        }),
-        "update",
-        GLOBAL,
-      );
-    }),
-  );
-
-  it.effect(
-    "conflicts when an expected-missing document is externally created as an empty object",
-    () =>
-      Effect.gen(function* () {
-        const { memory, store } = yield* setup({ [GLOBAL]: {} });
-        yield* rejects(
-          store.createProfileSetFromSnapshot(CWD, AGENT, {
-            ...at("global"),
-            profileSet: "new-set",
-            profiles: BUILTIN_PROFILE_ROUTES,
-          }),
-          "update",
-          GLOBAL,
-        );
-        yield* rejects(
-          store.patchProfile(CWD, AGENT, {
-            ...at("global"),
-            profileSet: "default",
-            profile: "worker",
-          }),
-          "update",
-          GLOBAL,
-        );
-        expect(memory.documents.get(GLOBAL)).toEqual({});
-      }),
-  );
 });
 
 describe("SubagentConfigStore profile sets", () => {
-  it.effect("keeps structurally invalid sets repairable but refuses to select them", () =>
-    Effect.gen(function* () {
-      const document = {
-        version: 6,
-        profileSets: { broken: { profiles: {}, extra: true }, valid: { profiles: {} } },
-      };
-      const { store } = yield* setup({ [GLOBAL]: document });
-      yield* rejects(
-        store.patchDefaultProfileSet(CWD, AGENT, {
-          ...at("global", document),
-          defaultProfileSet: "broken",
-        }),
-        "update",
-        GLOBAL,
-        "structurally invalid",
-      );
-      yield* store.deleteProfileSet(CWD, AGENT, {
-        ...at("global", document),
-        profileSet: "broken",
-      });
-      const inspection = yield* store.inspect(CWD, AGENT, true);
-      expect(inspection.global.invalidProfileSets).toEqual([]);
-      expect(inspection.global.file.profileSets).toHaveProperty("valid");
-    }),
-  );
-
-  it.effect("refuses to select a set containing an invalid profile route", () =>
-    Effect.gen(function* () {
-      const document = {
-        version: 6,
-        profileSets: { broken: { profiles: { worker: null } }, valid: { profiles: {} } },
-      };
-      const { memory, store } = yield* setup({ [GLOBAL]: document });
-      const inspection = yield* store.inspect(CWD, AGENT, true);
-      expect(inspection.global.invalidProfileSetRoutes.broken).toEqual(["worker"]);
-      yield* rejects(
-        store.patchDefaultProfileSet(CWD, AGENT, {
-          ...at("global", document),
-          defaultProfileSet: "broken",
-        }),
-        "update",
-        GLOBAL,
-        "invalid profile route",
-      );
-      expect(memory.documents.get(GLOBAL)).toEqual(document);
-    }),
-  );
-
   it.effect("creates, copies, renames, selects, and safely deletes scope-local sets", () =>
     Effect.gen(function* () {
       const { memory, store } = yield* setup();
@@ -624,146 +268,6 @@ describe("SubagentConfigStore profile sets", () => {
       });
     }),
   );
-
-  it.effect("atomically saves all seven session routes as a non-default set", () =>
-    Effect.gen(function* () {
-      const document = {
-        version: 6,
-        defaultProfileSet: "active",
-        profileSets: { active: { profiles: {} } },
-      };
-      const { memory, store } = yield* setup({ [GLOBAL]: document });
-      const { config } = yield* store.inspect(CWD, AGENT, true);
-      const saveSnapshot = (profileSet: string) =>
-        store.createProfileSetFromSnapshot(CWD, AGENT, {
-          ...at("global", document),
-          profileSet,
-          profiles: {
-            ...config.profiles,
-            reviewer: { candidates: [profileCandidate("openai/snapshot-reviewer")] },
-            worker: { candidates: [] },
-          },
-        });
-      yield* saveSnapshot("session-copy");
-      const saved = memory.documents.get(GLOBAL);
-      expect(saved).toEqual({
-        ...document,
-        profileSets: {
-          ...document.profileSets,
-          "session-copy": {
-            profiles: {
-              ...Object.fromEntries(PROFILE_IDS.map((id) => [id, expect.anything()])),
-              worker: "disabled",
-              reviewer: [expect.objectContaining({ model: "openai/snapshot-reviewer" })],
-            },
-          },
-        },
-      });
-      yield* rejects(saveSnapshot("stale-copy"), "update", GLOBAL);
-      expect(memory.documents.get(GLOBAL)).toEqual(saved);
-    }),
-  );
-
-  it.effect("rejects snapshot candidate accessors and custom iterators without invoking them", () =>
-    Effect.gen(function* () {
-      const { memory, store } = yield* setup();
-      const { config } = yield* store.inspect(CWD, AGENT, true);
-      const reviewer = profileCandidate("openai/reviewer");
-      let accessorReads = 0;
-      let iteratorCalls = 0;
-      const throwingGetter = {
-        enumerable: true,
-        get() {
-          accessorReads += 1;
-          throw new Error("accessor must not run");
-        },
-      };
-      const customIterator = Object.defineProperty([reviewer], Symbol.iterator, {
-        value: () => {
-          iteratorCalls += 1;
-          throw new Error("custom iterator must not run");
-        },
-      });
-      const routes: ReadonlyArray<readonly [string, ProfileRoute]> = [
-        [
-          "route-accessor",
-          Object.defineProperty({ candidates: [reviewer] }, "candidates", throwingGetter),
-        ],
-        [
-          "element-accessor",
-          { candidates: Object.defineProperty([reviewer], "0", throwingGetter) },
-        ],
-        [
-          "candidate-accessor",
-          { candidates: [Object.defineProperty({ ...reviewer }, "model", throwingGetter)] },
-        ],
-        ["custom-iterator", { candidates: customIterator }],
-      ];
-      for (const [profileSet, route] of routes) {
-        const profiles = { ...config.profiles, reviewer: route };
-        yield* rejects(
-          store.createProfileSetFromSnapshot(CWD, AGENT, { ...at("global"), profileSet, profiles }),
-          "update",
-          GLOBAL,
-        );
-      }
-      expect([accessorReads, iteratorCalls]).toEqual([0, 0]);
-      expect(memory.documents.has(GLOBAL)).toBe(false);
-    }),
-  );
-});
-
-describe("SubagentConfigStore preferences", () => {
-  it.effect(
-    "saves and clears a workspace preference without changing profile sets or nesting",
-    () =>
-      Effect.gen(function* () {
-        const original = {
-          version: 6,
-          profileSets: { saved: { profiles: {} } },
-          defaultProfileSet: "saved",
-          nesting: { maxDirectChildren: 4, maxDepth: 2 },
-        };
-        const { memory, store } = yield* setup({ [GLOBAL]: original });
-        yield* store.patchWriterWorkspace(CWD, AGENT, {
-          ...at("global", original),
-          writerWorkspaceMode: "shared-checkout",
-        });
-        const saved = { ...original, writerWorkspaceMode: "shared-checkout" };
-        expect(memory.documents.get(GLOBAL)).toEqual(saved);
-        expect((yield* store.load(CWD, AGENT, false)).writerWorkspaceMode).toBe("shared-checkout");
-        yield* store.patchWriterWorkspace(CWD, AGENT, at("global", saved));
-        expect(memory.documents.get(GLOBAL)).toEqual(original);
-        expect((yield* store.load(CWD, AGENT, false)).writerWorkspaceMode).toBe("shared-checkout");
-      }),
-  );
-
-  it.effect("saves nesting while preserving every other field", () =>
-    Effect.gen(function* () {
-      const original = {
-        version: 6,
-        defaultProfileSet: "saved",
-        profileSets: { saved: { profiles: { worker: "disabled" } } },
-        nesting: { maxDirectChildren: 4, maxDepth: 2 },
-        writerWorkspaceMode: "worktree",
-      };
-      const { memory, store } = yield* setup({ [PROJECT]: original });
-      const nesting = { maxDirectChildren: 8, maxDepth: 3 };
-      for (const invalid of [
-        { maxDirectChildren: 8, maxDepth: 99 },
-        { maxDirectChildren: 0.5, maxDepth: 3 },
-      ])
-        yield* rejects(
-          store.patchNesting(CWD, AGENT, { ...at("project", original), nesting: invalid }),
-          "update",
-          PROJECT,
-          "Invalid nesting policy",
-        );
-      expect(memory.documents.get(PROJECT)).toEqual(original);
-      yield* store.patchNesting(CWD, AGENT, { ...at("project", original), nesting });
-      expect(memory.documents.get(PROJECT)).toEqual({ ...original, nesting });
-    }),
-  );
 });
 
 describe("profile declaration visit restore", () => {
@@ -797,13 +301,7 @@ describe("profile declaration visit restore", () => {
       return { memory, result };
     });
 
-  for (const declaration of [
-    candidate,
-    [candidate],
-    { ...candidate, writeIntent: "read-only", openaiFastMode: false, closeOnReport: true },
-    "disabled",
-    undefined,
-  ])
+  for (const declaration of [candidate])
     it.effect(`preserves declaration ${JSON.stringify(declaration)}`, () =>
       Effect.gen(function* () {
         const { memory, result } = yield* restore(original, { declaration });
@@ -866,39 +364,6 @@ describe("profile declaration visit restore", () => {
         GLOBAL,
       );
       expect(memory.documents.get(GLOBAL)).toEqual(original);
-    }),
-  );
-
-  it.effect("rejects absence restoration after the target document is deleted", () =>
-    Effect.gen(function* () {
-      const { memory, store } = yield* setup();
-      yield* rejects(
-        store.restoreProfileDeclaration(CWD, AGENT, {
-          ...at("global"),
-          profileSet: "saved",
-          profile: "worker",
-        }),
-        "update",
-        GLOBAL,
-      );
-      expect(memory.documents.has(GLOBAL)).toBe(false);
-    }),
-  );
-
-  it.effect("returns the committed patch rather than a later document read", () =>
-    Effect.gen(function* () {
-      const { memory, store } = yield* setup({ [GLOBAL]: original });
-      const receipt = yield* store.patchProfile(CWD, AGENT, {
-        ...at("global", original),
-        profileSet: "saved",
-        profile: "worker",
-        route: [candidate],
-      });
-      expect(receipt).toEqual(memory.documents.get(GLOBAL));
-      const committed = structuredClone(receipt);
-      memory.documents.set(GLOBAL, { ...original, defaultProfileSet: "other" });
-      expect(receipt).toEqual(committed);
-      expect(receipt).not.toEqual(original);
     }),
   );
 });

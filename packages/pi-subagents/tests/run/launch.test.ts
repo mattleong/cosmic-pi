@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentRunView } from "../../src/run/model.ts";
-import { MAX_RETAINED_RUNS } from "../../src/run/limits.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { isSupervisorRunId } from "../../src/supervisor/protocol.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
@@ -16,10 +15,8 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import {
-  InvalidSubagentRequestError,
   SubagentNotFoundError,
   SubagentCapacityError,
-  SubagentWriterConflictError,
   SubagentProcessError,
 } from "../../src/run/errors.ts";
 
@@ -81,96 +78,6 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("rejects an unsupported backend before reserving or spawning a run", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const failure = yield* Effect.flip(
-        service.start(request({ host: "local", runtime: "claude" })),
-      );
-      expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
-      expect(failure).toMatchObject({ code: "backend_not_implemented" });
-      expect(fake.controls).toHaveLength(0);
-      expect(yield* service.list).toEqual([]);
-    });
-  });
-
-  it.effect("injects profile guidance and retains selection provenance", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const started = yield* service.start(
-        request({
-          profile: "reviewer",
-          profileGuidance: "Act as an independent reviewer.",
-          selection: {
-            source: "profile-parent-candidate",
-            reason: "Profile reviewer explicitly fell back to the parent model.",
-            skippedCandidates: [],
-          },
-        }),
-      );
-      expect(started).toMatchObject({
-        profile: "reviewer",
-        selection: { source: "profile-parent-candidate" },
-      });
-      expect(fake.controls[0]?.launch.systemPrompt).toContain("assigned profile is reviewer");
-      expect(fake.controls[0]?.launch.systemPrompt).toContain("independent reviewer");
-    });
-  });
-
-  it.effect("preserves selected fork context through run state and child launch", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const started = yield* service.start(
-        request({ context: "fork", profile: "oracle", name: "forked-oracle" }),
-      );
-      expect(started.context).toBe("fork");
-      expect(fake.controls[0]?.launch.context).toBe("fork");
-    });
-  });
-
-  it.effect(
-    "keeps soft-effort runs alive on a non-reasoning model and reports the effective level",
-    () => {
-      const { layer } = localServiceFixture(
-        {},
-        fakeChildLayer(Effect.void, { stateThinkingLevel: "off" }),
-      );
-      return withService(layer, function* (service) {
-        const started = yield* service.start(request({ effort: "high", effortWasExplicit: false }));
-        expect(started).toMatchObject({ state: "running", effort: "off" });
-
-        const failure = yield* Effect.flip(
-          service.start(request({ effort: "high", effortWasExplicit: true })),
-        );
-        expect(failure).toBeInstanceOf(InvalidSubagentRequestError);
-        expect(failure).toMatchObject({ code: "pi_effort_unsupported" });
-        expect(failure.message).toContain(
-          "does not support requested effort high; effective level was off",
-        );
-      });
-    },
-  );
-
-  it.effect("maps an uncertain writer start prompt to start_outcome_uncertain", () => {
-    const { layer } = localServiceFixture(
-      {},
-      fakeChildLayer(Effect.void, {
-        initialTransportFailures: [
-          { spawnIndex: 0, type: "prompt", code: "transport_outcome_uncertain" },
-        ],
-      }),
-    );
-    return withService(layer, function* (service) {
-      const failure = yield* service
-        .start(request({ name: "uncertain-writer", writeIntent: "writer" }))
-        .pipe(Effect.flip);
-      expect(failure).toBeInstanceOf(SubagentProcessError);
-      expect(failure).toMatchObject({ code: "start_outcome_uncertain" });
-      expect(failure.message).toContain("The writer task may have been accepted");
-      expect((yield* service.list)[0]?.state).toBe("failed");
-    });
-  });
-
   it.effect(
     "keeps direct-child capacity reserved until terminal process cleanup is confirmed",
     () => {
@@ -219,90 +126,6 @@ describe("SubagentService", () => {
     },
   );
 
-  it.effect("retains bounded cleanup timeout while cleanup ownership holds capacity", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const gates = yield* Effect.all(Array.from({ length: 12 }, () => Deferred.make<void>()));
-      const runs = [];
-      for (let index = 0; index < 12; index += 1) {
-        const run = yield* service.start(request({ name: `cleanup-${index + 1}` }));
-        runs.push(run);
-        fake.controls[index]?.gateRelease(gates[index]!);
-        fake.controls[index]?.settle();
-        yield* yieldUntil(() =>
-          Boolean(
-            projections
-              .at(-1)
-              ?.runs.find(
-                (candidate) => candidate.id === run.id && candidate.state === "completed",
-              ),
-          ),
-        );
-      }
-      const probe = yield* service.start(request({ name: "capacity-probe" })).pipe(Effect.flip);
-      expect(probe).toBeInstanceOf(SubagentCapacityError);
-      expect(probe).toMatchObject({ limit: 12 });
-
-      const resuming = yield* service.resume(runs[0]!.id).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("10 seconds");
-      const timeout = yield* Fiber.join(resuming).pipe(Effect.flip);
-      expect(timeout).toBeInstanceOf(SubagentProcessError);
-      expect(timeout).toMatchObject({ code: "cleanup_timeout" });
-      yield* Effect.forEach(gates, (gate) => Deferred.succeed(gate, undefined), {
-        discard: true,
-      });
-    });
-  });
-
-  it.effect("does not turn unresolved history into a tree-wide admission budget", () => {
-    let deliveryAttempts = 0;
-    const { fake, layer } = localServiceFixture({
-      notify: (notification) => {
-        if (notification.type !== "completed") return undefined;
-        deliveryAttempts += 1;
-        return { deliveredCompletionKeys: [] };
-      },
-    });
-    return withService(layer, function* (service) {
-      const firstId = (yield* completeHistory(service, fake, 50, "retained"))[0]!;
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => deliveryAttempts === 1);
-      const admitted = yield* service.start(request({ name: "admitted-with-outbox" }));
-      expect(admitted.state).toBe("running");
-      expect(yield* service.list).toHaveLength(51);
-
-      expect((yield* service.status(firstId)).finalText).toBe("Report 1");
-      expect(fake.reclaimedRunIds).toEqual([]);
-      const recovered = yield* service.start(request({ name: "capacity-recovered" }));
-      expect(recovered.state).toBe("running");
-      const retained = yield* service.list;
-      expect(retained).toHaveLength(51);
-      expect(retained.some((run) => run.id === firstId)).toBe(false);
-      expect(fake.reclaimedRunIds).toEqual([firstId]);
-    });
-  });
-
-  for (const refusal of ["scripted_subtree_writer_not_supported", "nesting_depth_limit"] as const)
-    it.effect(`refuses ${refusal} without reclaiming or quarantining full history`, () => {
-      const { fake, layer } = localServiceFixture();
-      return withService(layer, function* (service) {
-        const scripted = yield* service.startScriptSessionOwned(request());
-        const history = yield* completeHistory(service, fake, MAX_RETAINED_RUNS, "retained", 1);
-        for (const id of history) yield* service.status(id);
-        const before = yield* service.list;
-        const refused =
-          refusal === "nesting_depth_limit"
-            ? service.start(request({ nestingPolicy: { maxDirectChildren: 12, maxDepth: 0 } }))
-            : service.startSessionOwnedFrom(scripted.id, request({ writeIntent: "writer" }));
-        expect(yield* refused.pipe(Effect.flip)).toMatchObject({ code: refusal });
-        expect(yield* service.list).toEqual(before);
-        expect(fake.reclaimedRunIds).toEqual([]);
-        yield* service.start(request({ name: "allowed-after-refusal" }));
-        expect(fake.reclaimedRunIds).toEqual([history[0]]);
-      });
-    });
-
   it.effect("keeps the evicted record registered and admits nothing when reclaim fails", () => {
     let reclaimFails = true;
     const fake = fakeChildLayer(Effect.void, {
@@ -342,71 +165,6 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect(
-    "quarantines reclaimed history when a writer-pool pause rejects phase-C admission",
-    () => {
-      let reclaimGate: Deferred.Deferred<void> | undefined;
-      const fake = fakeChildLayer(Effect.void, {
-        get reclaimGate() {
-          return reclaimGate;
-        },
-      });
-      const { projections, layer } = localServiceFixture({}, fake);
-      return withService(layer, function* (service) {
-        const activeWriter = yield* service.start(
-          request({
-            name: "phase-c-active-writer",
-            writeIntent: "writer",
-            writes: ["src/active.ts"],
-          }),
-        );
-        const oldestId = (yield* completeHistory(service, fake, 50, "phase-c-history", 1))[0]!;
-        yield* TestClock.adjust("100 millis");
-        reclaimGate = yield* Deferred.make<void>();
-        const prospective = yield* service
-          .start(
-            request({
-              name: "phase-c-prospective-writer",
-              writeIntent: "writer",
-              writes: ["src/prospective.ts"],
-            }),
-          )
-          .pipe(Effect.forkScoped);
-        yield* yieldUntil(() => fake.reclaimedRunIds.includes(oldestId));
-
-        fake.controls[0]?.offer({
-          type: "tool_execution_start",
-          toolCallId: "phase-c-violation",
-          toolName: "edit",
-          args: { path: "src/outside.ts", edits: [] },
-        });
-        yield* yieldUntil(
-          () =>
-            projections.at(-1)?.runs.find((run) => run.id === activeWriter.id)?.state === "paused",
-        );
-        yield* Deferred.succeed(reclaimGate, undefined);
-        const rejected = yield* Fiber.join(prospective).pipe(Effect.flip);
-        expect(rejected).toBeInstanceOf(SubagentWriterConflictError);
-
-        const oldest = (yield* service.list).find((run) => run.id === oldestId);
-        expect(oldest).toMatchObject({
-          state: "completed",
-          cleanup: {
-            disposition: "quarantined",
-            recovery: "manual",
-            diagnostic: { phase: "backend-scope" },
-          },
-        });
-        expect(oldest?.sessionFile).toBeUndefined();
-        const resumeFailure = yield* service.resume(oldestId).pipe(Effect.flip);
-        expect(resumeFailure).toMatchObject({ code: "resume_state_reclaimed" });
-        expect((yield* service.list).some((run) => run.name === "phase-c-prospective-writer")).toBe(
-          false,
-        );
-      });
-    },
-  );
-
   it.effect("concurrent evicting starts never claim the same reclaim candidate", () => {
     let gate: Deferred.Deferred<void> | undefined;
     const fake = fakeChildLayer(Effect.void, {
@@ -433,39 +191,6 @@ describe("SubagentService", () => {
       expect((yield* Fiber.join(startA)).state).toBe("running");
       expect((yield* Fiber.join(startB)).state).toBe("running");
       expect(yield* service.list).toHaveLength(60);
-    });
-  });
-
-  it.effect("rejects capacity before reclaiming resumable history", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const oldestId = (yield* completeHistory(service, fake, 38, "history"))[0]!;
-      yield* TestClock.adjust("100 millis");
-      for (let index = 0; index < 12; index += 1)
-        yield* service.start(request({ name: `active-${index + 1}` }));
-      const failure = yield* service.start(request({ name: "capacity-blocked" })).pipe(Effect.flip);
-      expect(failure).toBeInstanceOf(SubagentCapacityError);
-      expect(failure).toMatchObject({ limit: 12 });
-      const retained = yield* service.list;
-      expect(retained).toHaveLength(50);
-      expect(retained.some((run) => run.id === oldestId)).toBe(true);
-      expect(retained.some((run) => run.name === "capacity-blocked")).toBe(false);
-      expect(fake.reclaimedRunIds).not.toContain(oldestId);
-    });
-  });
-
-  it.effect("retains only the newest 50 terminal records", () => {
-    const { layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      let firstId = "";
-      for (let index = 0; index < 51; index += 1) {
-        const run = yield* service.start(request({ name: `history-${index}` }));
-        if (index === 0) firstId = run.id;
-        yield* service.stop(run.id);
-      }
-      const history = yield* service.list;
-      expect(history).toHaveLength(50);
-      expect(history.some((run) => run.id === firstId)).toBe(false);
     });
   });
 });

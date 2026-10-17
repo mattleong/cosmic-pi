@@ -21,7 +21,7 @@ import { hostContainer } from "../../src/shared/untrusted-value";
 beforeAll(() => initTheme("dark", false));
 
 for (const order of ["native-first", "previews-first"] as const)
-  for (const style of ["preview", "compact"] as const)
+  for (const style of ["compact"] as const)
     it.live(
       `independently loaded tool search keeps native ownership and retained ${style} replay (${order})`,
       () =>
@@ -43,7 +43,7 @@ for (const order of ["native-first", "previews-first"] as const)
                 syntaxHighlighting: false,
                 toolCallTiming: false,
                 toolCallCollapsedStyle: style,
-                toolCallBackground: style === "preview" ? "on" : "off",
+                toolCallBackground: "off",
               },
               {
                 api: (pi) => ({

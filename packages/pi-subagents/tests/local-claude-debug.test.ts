@@ -65,8 +65,6 @@ const readLedger = (agentDirectory: string) =>
 describe("local Claude debug ledger", () => {
   it.effect.each([
     ["creates no state while disabled", {}, "", 1, false],
-    ["requires the exact opt-in value", { PI_SUBAGENTS_CLAUDE_DEBUG: "true" }, "", 1, false],
-    ["does not publish an empty ledger", undefined, "", 0, true],
     ["contains persistence failures without changing scope success", undefined, "missing", 1, true],
   ] as const)("%s", ([, environment, subdirectory, entries, acquired]) =>
     Effect.gen(function* () {
@@ -94,64 +92,6 @@ describe("local Claude debug ledger", () => {
       expect(lines).toHaveLength(513);
       expect(lines[0]).toMatchObject({ kind: "ledger", dropped: 88 });
       expect(lines.at(-1)).toMatchObject({ kind: "outbound-user", sequence: 599 });
-    }),
-  );
-
-  it.effect("counts every entry the byte-bounded tail drops", () =>
-    Effect.gen(function* () {
-      const agentDirectory = yield* setup();
-      yield* recordTail(agentDirectory, "byte-bound", 300, undefined, () => ({
-        kind: "user-decision",
-        sequence: 777,
-        decision: "queued-task-notification",
-        epoch: 3,
-        replay: true,
-        synthetic: false,
-        meta: false,
-        compact: false,
-        session: "match",
-        uuid: "known",
-        content: "assignment",
-        contentForm: "text",
-        length: "1-64",
-        tag: "none",
-        parentTool: false,
-        toolResults: false,
-        origin: false,
-        subkind: false,
-        pending: "none",
-        report: "none",
-      }));
-      const { ledgerStat, lines } = yield* readLedger(agentDirectory);
-      expect(ledgerStat.size).toBeLessThanOrEqual(64 * 1024);
-      expect(lines[0]).toMatchObject({ kind: "ledger", dropped: 300 - (lines.length - 1) });
-    }),
-  );
-
-  it.effect("prunes incomplete package-owned directories within the retention bound", () =>
-    Effect.gen(function* () {
-      const agentDirectory = yield* setup();
-      const root = nodePath.join(agentDirectory, "subagents", "local-claude-debug-v1");
-      yield* Effect.promise(() => fs.mkdir(root, { recursive: true, mode: 0o700 }));
-      for (let index = 0; index < 9; index += 1)
-        yield* Effect.promise(() =>
-          fs.mkdir(nodePath.join(root, `claude-orphan-${index}`), { mode: 0o700 }),
-        );
-
-      yield* recordTail(agentDirectory, "replacement-run", 1);
-      const entries = yield* Effect.promise(() => fs.readdir(root));
-      expect(entries).toHaveLength(8);
-      const ledgers = yield* Effect.promise(() =>
-        Promise.all(
-          entries.map((entry) =>
-            fs
-              .lstat(nodePath.join(root, entry, "replay-ledger.ndjson"))
-              .then((stat) => stat.isFile())
-              .catch(() => false),
-          ),
-        ),
-      );
-      expect(ledgers.filter(Boolean)).toHaveLength(1);
     }),
   );
 

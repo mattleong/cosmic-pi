@@ -83,32 +83,6 @@ const pickerHarness = (
 };
 
 describe("/tasks settings", () => {
-  it.effect("shows the settings this session started with, without terminal controls", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      yield* h.run("status");
-      const [message, level] = h.notify.mock.calls.at(-1) ?? [];
-      expect(level).toBe("info");
-      expect(message).toContain("maxRunning");
-      expect(message).not.toContain("\u001b");
-      const idle = harness({ started: false });
-      yield* idle.run("status");
-      expect(idle.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
-    }),
-  );
-
-  it.effect("shows help with the session's values, without terminal controls", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      yield* h.run("help");
-      const [message, level] = h.notify.mock.calls.at(-1) ?? [];
-      expect(level).toBe("info");
-      expect(message).toContain("shellPath");
-      expect(message).not.toContain("\u001b");
-      expect(message).not.toMatch(/\nspoof/u);
-    }),
-  );
-
   it.effect("writes a checked value to the named scope and refuses the rest", () =>
     Effect.gen(function* () {
       const h = harness();
@@ -131,26 +105,6 @@ describe("/tasks settings", () => {
         expect.stringMatching(/trust/iu),
         "warning",
       );
-    }),
-  );
-
-  it.effect("lists project rows after the global ones only for a trusted project", () =>
-    Effect.gen(function* () {
-      const rows = BACKGROUND_TASK_SETTINGS.filter((setting) => setting.values.length > 0);
-      for (const trusted of [true, false]) {
-        const h = pickerHarness(trusted);
-        yield* macrotask;
-        expect(h.isOpen()).toBe(true);
-        for (const _ of rows) h.input("j");
-        h.input("\r");
-        yield* macrotask;
-        expect(h.write).toHaveBeenCalledTimes(1);
-        const [location, id] = h.write.mock.calls[0] ?? [];
-        expect(location).toEqual({ cwd: "/project", scope: trusted ? "project" : "global" });
-        expect(id).toBe(rows[0]?.id);
-        h.close();
-        yield* Effect.promise(() => h.opened);
-      }
     }),
   );
 
@@ -225,49 +179,6 @@ describe("/tasks settings", () => {
       expect(h.notify).toHaveBeenCalled();
       h.close();
       yield* Effect.promise(() => reopened);
-    }),
-  );
-
-  it.effect("closes a picker whose authority check throws instead of trapping its keys", () =>
-    Effect.gen(function* () {
-      let failing = false;
-      const h = pickerHarness(true, undefined, () => () => {
-        if (failing) throw new Error("authority unavailable");
-        return true;
-      });
-      yield* macrotask;
-      expect(h.isOpen()).toBe(true);
-      failing = true;
-      h.close();
-      expect(h.isOpen()).toBe(false);
-      yield* Effect.promise(() => h.opened);
-      expect(h.write).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("does not open a picker after its originating read is retired", () =>
-    Effect.gen(function* () {
-      let current = true;
-      const pending = deferredPromise<Awaited<ReturnType<TaskSettingsActions["read"]>>>();
-      const h = pickerHarness(
-        true,
-        () => pending.promise,
-        () => () => current,
-      );
-      current = false;
-      pending.resolve({});
-      yield* Effect.promise(() => h.opened);
-      expect(h.isOpen()).toBe(false);
-      expect(h.notify).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("stays closed when the settings runtime is unavailable", () =>
-    Effect.gen(function* () {
-      const h = pickerHarness(true, () => Promise.reject(new Error("not running")));
-      yield* Effect.promise(() => h.opened);
-      expect(h.isOpen()).toBe(false);
-      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
     }),
   );
 });

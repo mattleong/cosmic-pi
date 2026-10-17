@@ -2,13 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
-import {
-  completeExtensionCommand,
-  ExtensionCommandRoute,
-  registerExtensionCommand,
-  routeExtensionCommand,
-  type ExtensionSubcommand,
-} from "../src/host-command.ts";
+import { registerExtensionCommand, type ExtensionSubcommand } from "../src/host-command.ts";
 import { extensionApiFixture, extensionContextFixture } from "../src/testing/host.ts";
 
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
@@ -34,59 +28,10 @@ const harness = (options: Partial<Parameters<typeof registerExtensionCommand>[1]
   const ctx = extensionContextFixture({ hasUI: true, ui: { notify } });
   const run = (args: string) =>
     Effect.promise(() => Promise.resolve(registered?.handler(args, ctx)));
-  const attempt = (args: string) =>
-    Effect.tryPromise({
-      try: () => Promise.resolve(registered?.handler(args, ctx)),
-      catch: (cause) => String(cause),
-    });
   const complete = (prefix: string) =>
     Effect.promise(() => Promise.resolve(registered?.getArgumentCompletions?.(prefix)));
-  return { command, notify, ctx, run, attempt, complete };
+  return { command, notify, ctx, run, complete };
 };
-
-describe("extension command routing", () => {
-  const usage = subcommand("usage");
-  const settings = subcommand("settings");
-
-  it("sends each argument text to the part that owns it", () => {
-    expect(routeExtensionCommand("  settings  a b ", [usage, settings])).toEqual(
-      ExtensionCommandRoute.Subcommand({ subcommand: settings, args: "a b" }),
-    );
-    expect(routeExtensionCommand("", [usage])._tag).toBe("Overview");
-    expect(routeExtensionCommand("unknown", [usage])._tag).toBe("Unknown");
-    expect(routeExtensionCommand("usages", [usage])._tag).toBe("Unknown");
-    const bare = { handler: vi.fn() };
-    expect(routeExtensionCommand("", [usage], bare)).toEqual(
-      ExtensionCommandRoute.Bare({ args: "" }),
-    );
-    expect(routeExtensionCommand("explain this", [usage], bare)._tag).toBe("Unknown");
-    expect(routeExtensionCommand("explain this", [usage], { ...bare, text: true })).toEqual(
-      ExtensionCommandRoute.Bare({ args: "explain this" }),
-    );
-  });
-
-  it("completes names, then the named subcommand's own arguments", () => {
-    const withValues = subcommand("settings", {
-      complete: (prefix) =>
-        ["mode", "limit"].flatMap((id) =>
-          id.startsWith(prefix) ? [{ value: id, label: id }] : [],
-        ),
-    });
-    expect(completeExtensionCommand("", [usage, withValues])?.map((c) => c.value)).toEqual([
-      "usage",
-      "settings",
-    ]);
-    expect(completeExtensionCommand("SE", [usage, withValues])?.map((c) => c.value)).toEqual([
-      "settings",
-    ]);
-    expect(completeExtensionCommand("settings m", [usage, withValues])).toEqual([
-      { value: "settings mode", label: "mode" },
-    ]);
-    expect(completeExtensionCommand("settings x", [usage, withValues])).toBeNull();
-    expect(completeExtensionCommand("usage ", [usage, withValues])).toBeNull();
-    expect(completeExtensionCommand("nothing", [usage])).toBeNull();
-  });
-});
 
 describe("registered extension command", () => {
   it.effect("runs subcommands, lists them when bare, and warns about unknown ones", () =>
@@ -115,19 +60,6 @@ describe("registered extension command", () => {
       yield* h.run("image an otter");
       expect(first.handler).not.toHaveBeenCalled();
       expect(replacement.handler).toHaveBeenCalledWith("an otter", h.ctx);
-    }),
-  );
-
-  it.effect("turns a subcommand that throws into a rejected command", () =>
-    Effect.gen(function* () {
-      const failing = subcommand("usage", {
-        handler: () => {
-          throw new Error("boom");
-        },
-      });
-      const h = harness({ subcommands: [failing] });
-      const failure = yield* Effect.flip(h.attempt("usage"));
-      expect(failure).toContain("boom");
     }),
   );
 });

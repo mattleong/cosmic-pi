@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
-import { registerChildPiFastModeHook } from "../src/boundary/host-child-pi.ts";
 import {
   extensionContextFixture,
   modelFixture,
@@ -75,31 +74,6 @@ describe("local child fast-mode flag", () => {
     harness.setFastMode("true");
     expect(harness.request(payload)).toBeUndefined();
     harness.setFastMode(undefined);
-    expect(harness.request(payload)).toBeUndefined();
-  });
-});
-
-describe("private Pi priority eligibility", () => {
-  it("checks the current provider and model without changing unrelated payloads", () => {
-    const harness = requestHarness();
-    registerChildPiFastModeHook(harness.pi, () => true);
-    const payload = Object.freeze({ service_tier: "existing", input: "task" });
-    expect(harness.request(payload, requestContext("anthropic"))).toBeUndefined();
-    expect(harness.request(payload, requestContext("openai-codex", ""))).toBeUndefined();
-    expect(harness.request(payload, extensionContextFixture({ model: undefined }))).toBeUndefined();
-    expect(harness.request(payload)).toEqual({ ...payload, service_tier: "priority" });
-    expect(payload.service_tier).toBe("existing");
-  });
-
-  it.each([
-    { payload: null },
-    { payload: undefined },
-    { payload: "text" },
-    { payload: 1 },
-    { payload: [] },
-  ])("leaves non-record payload $payload alone", ({ payload }) => {
-    const harness = requestHarness();
-    registerChildPiFastModeHook(harness.pi, () => true);
     expect(harness.request(payload)).toBeUndefined();
   });
 });

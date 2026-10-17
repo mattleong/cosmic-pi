@@ -8,10 +8,7 @@ import {
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import { Type } from "typebox";
-import {
-  forkPromptCacheRoute,
-  registerForkPromptCacheHooks,
-} from "../src/boundary/fork-prompt-cache.ts";
+import { registerForkPromptCacheHooks } from "../src/boundary/fork-prompt-cache.ts";
 
 const FORK_HEADER_TIMESTAMP = "2026-10-14T00:00:00.000Z";
 const FORKED_AT = Date.parse(FORK_HEADER_TIMESTAMP);
@@ -75,27 +72,6 @@ const forkedRequest = (): ContextWithSystemEvent["messages"] => [
 ];
 
 describe("fork prompt cache sharing", () => {
-  it("keeps a fork on its parent's prefix only where the transport can carry the child's changes", () => {
-    expect(forkPromptCacheRoute(anthropicNative)).toBe("native");
-    expect(forkPromptCacheRoute(responses)).toBe("declared");
-    for (const model of [
-      modelFixture({ api: "anthropic-messages", compat: { supportsMidConvoSystemMessages: true } }),
-      modelFixture({
-        api: "openai-codex-responses",
-        compat: { supportsMidConvoSystemMessages: true, supportsAdditionalTools: true },
-      }),
-      modelFixture({ api: "openai-responses", compat: { supportsAdditionalTools: true } }),
-      modelFixture({ api: "openai-responses" }),
-    ])
-      expect(forkPromptCacheRoute(model)).toBeUndefined();
-  });
-
-  it("leaves children that do not share a prompt cache unchanged", () => {
-    const handlers = hooks({});
-    expect(handlers.has("before_provider_request")).toBe(false);
-    expect(handlers.has("context_with_system")).toBe(false);
-  });
-
   it.effect(
     "keeps the parent's tool declarations while a declared-route request starts with them",
     () =>

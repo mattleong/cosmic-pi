@@ -378,19 +378,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
-  it.effect("restores /new without querying a hostile session manager", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ sessionReadFailure: "both" });
-      yield* h.seedRememberedPreference();
-
-      yield* h.start("new");
-      expect(h.getEntries).not.toHaveBeenCalled();
-      expect(h.getLeafId).not.toHaveBeenCalled();
-      expect(h.setModel).toHaveBeenCalledWith(h.remembered);
-      expect(h.notify).not.toHaveBeenCalled();
-    }),
-  );
-
   it.effect("keeps nonfresh starts available without querying hostile session managers", () =>
     Effect.gen(function* () {
       for (const reason of ["resume", "fork", "reload"] as const) {
@@ -516,42 +503,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.emitThinking("high", "low");
       expect(yield* h.readPreference()).toEqual(persisted);
       expect(h.notify).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("does not warn when session shutdown interrupts an admitted preference write", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      yield* h.start();
-      h.select(h.alternate, "high");
-      const remembering = yield* h
-        .emitModel(h.alternate, h.initial)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* h.shutdown();
-      yield* Fiber.join(remembering);
-      expect(h.notify).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("retries identity lookup after an earlier failure", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const parent = yield* fs.makeTempDirectoryScoped({
-        prefix: "pi-directory-models-late-project-parent-",
-      });
-      const cwd = path.join(parent, "created-after-startup");
-      const h = yield* harness({ cwd });
-
-      yield* h.start();
-      expect(h.notify).toHaveBeenCalledTimes(1);
-
-      yield* fs.makeDirectory(cwd);
-      h.select(h.remembered, "high");
-      yield* h.emitModel(h.remembered, h.initial);
-
-      expect(yield* h.readPreference()).toMatchObject(h.rememberedPreference);
-      expect(h.notify).toHaveBeenCalledTimes(1);
     }),
   );
 

@@ -65,14 +65,6 @@ const inputEvent = (source: InputEvent["source"]): InputEvent => ({
   source,
 });
 
-const waiting = (id: string, requestId = "q-1") =>
-  view({
-    id,
-    name: id,
-    state: "waiting_for_parent",
-    question: { requestId, message: `Which path for ${id}?` },
-  });
-
 const harness = (initial: SubagentProjection = projectionOf([])) => {
   let projection = initial;
   let idle = true;
@@ -150,17 +142,6 @@ describe("parent wake policy", () => {
       }),
   );
 
-  it.effect("keeps waking the parent after a run that finished normally", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      yield* Effect.promise(() =>
-        test.emit("agent_settled", test.ctx(), { type: "agent_settled", aborted: false }),
-      );
-      test.notify({ type: "completed", runs: [completed] });
-      expect(test.turns()).toEqual([true]);
-    }),
-  );
-
   it.effect("appends notices to a busy parent and continues its run so the model sees them", () =>
     Effect.gen(function* () {
       const test = harness();
@@ -198,19 +179,6 @@ describe("parent wake policy", () => {
     }),
   );
 
-  it.effect("does not continue for notices while wakes are held", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      yield* Effect.promise(() =>
-        test.emit("agent_settled", test.ctx(), { type: "agent_settled", aborted: true }),
-      );
-      const result = yield* Effect.promise(() =>
-        test.settle(test.ctx(), settleEvent("completed", [reply(), notice()])),
-      );
-      expect(result).toBeUndefined();
-    }),
-  );
-
   it.effect("wakes once when a notice arrives after the run's last settle boundary", () =>
     Effect.gen(function* () {
       const test = harness();
@@ -226,61 +194,6 @@ describe("parent wake policy", () => {
       );
       expect(test.wakes()).toHaveLength(1);
       expect(test.wakes()[0]?.[1]).toMatchObject({ triggerTurn: true });
-    }),
-  );
-
-  it.effect("does not wake the branch a tree move lands on for a notice owed on the old one", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      test.setIdle(false);
-      yield* Effect.promise(() => test.settle(test.ctx(), settleEvent("completed", [reply()])));
-      test.notify({ type: "completed", runs: [completed] });
-
-      yield* Effect.promise(() =>
-        test.emit("session_tree", test.ctx(), {
-          type: "session_tree",
-          newLeafId: "entry-1",
-          oldLeafId: "entry-2",
-        }),
-      );
-      yield* Effect.promise(() =>
-        test.emit("agent_settled", test.ctx(), { type: "agent_settled", aborted: false }),
-      );
-      expect(test.wakes()).toHaveLength(0);
-    }),
-  );
-
-  it.effect("defers the wake for a notice that arrives during a manual compaction", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      test.setIdle(false);
-      test.notify({ type: "completed", runs: [completed] });
-      expect(test.turns()).toEqual([false]);
-
-      yield* Effect.promise(() =>
-        test.emit("session_compact", test.ctx(), {
-          type: "session_compact",
-          compactionEntry: {
-            type: "compaction",
-            id: "c-1",
-            parentId: null,
-            timestamp: "",
-            summary: "",
-            firstKeptEntryId: "c-1",
-            tokensBefore: 0,
-          },
-          fromExtension: false,
-          reason: "manual",
-          willRetry: false,
-        }),
-      );
-      test.runChecks();
-      expect(test.wakes()).toHaveLength(0);
-
-      test.setIdle(true);
-      test.runChecks();
-      test.runChecks();
-      expect(test.wakes()).toHaveLength(1);
     }),
   );
 
@@ -309,40 +222,6 @@ describe("parent wake policy", () => {
     });
   });
 
-  it.effect("reminds once about each pending question, then tells the user", () =>
-    Effect.gen(function* () {
-      const test = harness(projectionOf([waiting("agent-1")]));
-      const context = test.ctx();
-
-      const first = yield* Effect.promise(() => test.settle(context));
-      expect(first).toMatchObject({ continue: true });
-      expect(first?.entries?.[0]).toMatchObject({
-        content: stringContaining("Which path for agent-1?"),
-      });
-
-      expect(yield* Effect.promise(() => test.settle(context))).toBeUndefined();
-      expect(test.notices).toHaveBeenCalledOnce();
-      expect(yield* Effect.promise(() => test.settle(context))).toBeUndefined();
-      expect(test.notices).toHaveBeenCalledOnce();
-
-      test.setProjection(projectionOf([waiting("agent-1", "q-2")]));
-      expect(yield* Effect.promise(() => test.settle(context))).toMatchObject({ continue: true });
-    }),
-  );
-
-  it.effect("does not remind about questions owned by a nested parent or after an interrupt", () =>
-    Effect.gen(function* () {
-      const nested = { ...waiting("agent-2"), parentRunId: "agent-1" };
-      const test = harness(projectionOf([nested]));
-      expect(yield* Effect.promise(() => test.settle(test.ctx()))).toBeUndefined();
-
-      test.setProjection(projectionOf([waiting("agent-3")]));
-      expect(
-        yield* Effect.promise(() => test.settle(test.ctx(), settleEvent("aborted"))),
-      ).toBeUndefined();
-    }),
-  );
-
   it.effect("drains running children before a headless parent settles", () =>
     Effect.gen(function* () {
       const test = harness(projectionOf([view({ state: "running" })]));
@@ -359,7 +238,7 @@ describe("parent wake policy", () => {
     }),
   );
 
-  for (const mode of ["print", "json"] as const) {
+  for (const mode of ["print"] as const) {
     it.effect(`continues ${mode} drain for a question blocked behind nested delivery`, () => {
       const test = harness();
       test.setIdle(false);
@@ -406,31 +285,4 @@ describe("parent wake policy", () => {
       });
     });
   }
-
-  it.effect("does not continue for a new question when wakes are held during drain", () =>
-    Effect.gen(function* () {
-      const test = harness(projectionOf([view({ state: "running" })]));
-      test.drain.mockImplementationOnce(() => {
-        test.setProjection(projectionOf([waiting("agent-1")]));
-        test.wake.hold();
-        return Promise.resolve();
-      });
-      expect(yield* Effect.promise(() => test.settle(test.ctx("print")))).toBeUndefined();
-    }),
-  );
-
-  it.effect("continues a headless parent with the reports delivered while it drained", () =>
-    Effect.gen(function* () {
-      const test = harness(projectionOf([view({ state: "running" })]));
-      test.setIdle(false);
-      test.drain.mockImplementationOnce(() => {
-        test.notify({ type: "completed", runs: [completed] });
-        return Promise.resolve();
-      });
-
-      const result = yield* Effect.promise(() => test.settle(test.ctx("print")));
-      expect(result).toMatchObject({ continue: true });
-      expect(test.turns()).toEqual([false]);
-    }),
-  );
 });

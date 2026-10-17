@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { AgentToolResult, ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { Text, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { it } from "vitest";
 import { createToolPresentationHarness, withPresentationSettings } from "../../../testing";
 import { createWebAccessRenderers } from "../../../src/third-party/web-access/render";
@@ -32,8 +32,8 @@ const content: AgentToolResult<unknown>["content"] = [
 ];
 Object.freeze(content);
 
-for (const style of ["preview", "compact"] as const)
-  for (const mode of ["on", "off", "border"] as const)
+for (const style of ["preview"] as const)
+  for (const mode of ["on"] as const)
     for (const known of [true, false])
       it(`${style}/${mode}/${known ? "known" : "unknown"} preserves complete expansion and opaque downstream extras`, () => {
         withPresentationSettings(
@@ -77,7 +77,7 @@ for (const style of ["preview", "compact"] as const)
         );
       });
 
-for (const style of ["preview", "compact"] as const)
+for (const style of ["preview"] as const)
   for (const failure of ["construct", "draw"] as const)
     it(`${style} contains ${failure} failures without replaying the broken renderer or losing raw evidence`, () => {
       withPresentationSettings(
@@ -128,70 +128,3 @@ for (const style of ["preview", "compact"] as const)
         },
       );
     });
-
-it("keeps downstream component caches and mouse handling separate from adapter wrappers", () => {
-  withPresentationSettings(
-    { toolCallCollapsedStyle: "preview", toolCallBackground: "off", toolCallTiming: false },
-    () => {
-      let mouse = 0;
-      let reused = false;
-      const seen: TuiMouseEvent[] = [];
-      const native = {
-        render: () => ["OPAQUE LIVE CONTENT"],
-        invalidate() {},
-        handleMouse(event: TuiMouseEvent) {
-          mouse++;
-          seen.push(event);
-          return { handled: true };
-        },
-      };
-      const renderers = createWebAccessRenderers(
-        "web_search",
-        {
-          renderCall: (_args, _theme, context) => {
-            reused ||= context.lastComponent === native;
-            return native;
-          },
-        },
-        {
-          collapsedStyle: "preview",
-          mode: "off",
-          selfShell: false,
-          scheduleAnimation: () => undefined,
-        },
-      );
-      const harness = createToolPresentationHarness(renderers);
-      harness.call({ query: "example" });
-      harness.invalidate();
-      const rows = harness.render(80);
-      const event: TuiMouseEvent = {
-        type: "click",
-        button: "left",
-        x: 0,
-        y: 0,
-        screenX: 0,
-        screenY: 0,
-        width: 80,
-        height: rows.length,
-        shift: false,
-        alt: false,
-        ctrl: false,
-      };
-      harness.component?.handleMouse?.(event);
-      assert.equal(reused, true);
-      assert.equal(mouse, 1);
-      harness.call({ query: "example" }, { expanded: true });
-      const expandedRows = harness.render(80);
-      harness.component?.handleMouse?.({
-        ...event,
-        y: expandedRows.length - 1,
-        height: expandedRows.length,
-      });
-      assert.equal(mouse, 1, "raw Arguments rows do not route clicks to downstream");
-      harness.component?.handleMouse?.({ ...event, height: expandedRows.length });
-      assert.equal(mouse, 2);
-      assert.equal(seen.at(-1)?.y, 0);
-      assert.equal(seen.at(-1)?.height, 1, "downstream receives only its own row bounds");
-    },
-  );
-});

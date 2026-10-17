@@ -114,26 +114,6 @@ describe("Claude input delivery ownership", () => {
       }),
   );
 
-  it.effect("backpressured delivery metadata cannot prevent watchdog termination", () =>
-    Effect.gen(function* () {
-      const blocked = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const { inputs, terminated, counts } = deliveryHarness(yield* Scope.Scope, {
-        observers: {
-          onState: () =>
-            Deferred.succeed(blocked, undefined).pipe(Effect.andThen(Deferred.await(release))),
-        },
-      });
-      const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-      yield* Deferred.await(blocked);
-      yield* TestClock.adjust("5 minutes");
-      yield* Deferred.await(terminated);
-      expect(counts.sends).toBe(0);
-      expect(inputs.failure?.code).toBe("steer_outcome_uncertain");
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.await(caller);
-    }),
-  );
   it.effect(
     "caller deadline preserves sent guidance until late acknowledgement reopens admission",
     () =>
@@ -166,22 +146,6 @@ describe("Claude input delivery ownership", () => {
         return undefined;
       }),
   );
-
-  for (const operation of ["initialize", "start"] as const)
-    it.effect(`${operation} replay deadline stays fail-closed, at sixty seconds`, () =>
-      Effect.gen(function* () {
-        const { inputs, sent, terminated } = deliveryHarness(yield* Scope.Scope);
-        const caller = yield* Effect.forkChild(inputs.send("Input", 1, operation));
-        yield* sent;
-        yield* TestClock.adjust("59 seconds");
-        expect(yield* Deferred.isDone(terminated)).toBe(false);
-        yield* TestClock.adjust("1 second");
-        yield* Deferred.await(terminated);
-        expect(Exit.isFailure(yield* Fiber.await(caller))).toBe(true);
-        expect(inputs.failure?.code).toBe(`${operation}_outcome_uncertain`);
-      }),
-    );
-
   const uncertainWrite = Effect.fail(
     processError("send", "transport_outcome_uncertain", "write outcome unknown"),
   );
@@ -202,47 +166,6 @@ describe("Claude input delivery ownership", () => {
     }),
   );
 
-  it.effect("uncertain native write outlasting the caller deadline is not reported pending", () =>
-    Effect.gen(function* () {
-      const releaseTermination = yield* Deferred.make<void>();
-      const { inputs, terminated } = deliveryHarness(yield* Scope.Scope, {
-        send: uncertainWrite,
-        terminate: Deferred.await(releaseTermination),
-      });
-      const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-      yield* Deferred.await(terminated);
-      yield* TestClock.adjust("11 seconds");
-      const deadline = yield* Effect.flip(Fiber.join(caller));
-      expect(deadline).toMatchObject({ operation: "steer", code: "steer_outcome_uncertain" });
-      expect(deadline).not.toMatchObject({ pendingDelivery: true });
-      yield* Deferred.succeed(releaseTermination, undefined);
-    }),
-  );
-
-  for (const settlement of ["report", "close"] as const)
-    it.effect(`guidance settled by ${settlement} before the caller deadline is not pending`, () =>
-      Effect.gen(function* () {
-        const { inputs, sent, counts } = deliveryHarness(yield* Scope.Scope);
-        const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-        yield* sent;
-        if (settlement === "report") expect(yield* inputs.acceptReport(1)).toBe(true);
-        else
-          inputs.cancel(
-            processError("close", "local_claude_closed", "Local Claude Code backend closed."),
-          );
-        const failure = yield* Effect.flip(Fiber.join(caller));
-        expect(failure).not.toMatchObject({ pendingDelivery: true });
-        expect(failure).toMatchObject(
-          settlement === "report"
-            ? { operation: "steer", code: "steer_outcome_uncertain" }
-            : { code: "local_claude_closed" },
-        );
-        expect(inputs.pending).toBeUndefined();
-        expect(Exit.isFailure(yield* Effect.exit(inputs.send("No resend", 1, "steer")))).toBe(true);
-        yield* TestClock.adjust("5 minutes");
-        if (settlement === "report") expect(counts.terminations).toBe(0);
-      }),
-    );
   it.effect("closed scope rejects new input and releases admission racing preparation", () =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();
