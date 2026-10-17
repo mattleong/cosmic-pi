@@ -138,9 +138,9 @@ export class WriterPoolEntry implements WriterPoolView {
     return true;
   }
 
-  pauseAdmissionLocked(runId: string, message: string): void {
+  pauseAdmissionLocked(offenderRunIds: Iterable<string>, message: string): void {
     this.#admissionPaused = true;
-    this.#violationRunIds.add(runId);
+    for (const runId of offenderRunIds) this.#violationRunIds.add(runId);
     this.#pauseReason = message;
   }
 

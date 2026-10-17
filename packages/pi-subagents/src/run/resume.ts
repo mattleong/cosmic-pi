@@ -406,9 +406,13 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                     ? Deferred.makeUnsafe<void>()
                     : undefined;
                   selected.pendingInitializationSettlement = undefined;
+                  // Writer admission is open here, so any remaining offender state is offender-only
+                  // containment that this parent-guided resume resolves.
+                  selected.writeViolationContainmentStarted = false;
                   beginNextAssignmentLocked(selected, attemptToken, now, {
                     question: undefined,
                     currentTool: undefined,
+                    writeViolationOffender: undefined,
                   });
                   invalidateWorkspace();
                   yield* publish;

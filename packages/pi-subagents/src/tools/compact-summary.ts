@@ -168,6 +168,7 @@ function awaitIssues(
       (card) =>
         card.question !== undefined ||
         card.writeAdmissionPaused === true ||
+        card.writeViolationOffender === true ||
         runCleanupAttention(card) !== undefined ||
         card.state === "paused" ||
         card.state === "waiting_for_parent",
@@ -283,6 +284,7 @@ function cardOutcome(
     cards.some(
       (card) =>
         card.writeAdmissionPaused === true ||
+        card.writeViolationOffender === true ||
         runCleanupAttention(card) !== undefined ||
         card.question !== undefined ||
         (card.state === "paused" && action !== "interrupt") ||

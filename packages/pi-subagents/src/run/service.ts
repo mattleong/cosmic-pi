@@ -80,6 +80,11 @@ export interface SubagentServiceOptions {
   readonly workspaceOwnerId?: string;
   readonly workspaceSourceCwd?: string;
   readonly publish?: (projection: SubagentProjection) => void;
+  /**
+   * Lexical system temporary roots where claimed writers' native writes are not claim
+   * violations. Omitted means none, so every outside-workspace write is a violation.
+   */
+  readonly temporaryRoots?: ReadonlyArray<string> | undefined;
   /** Subagent usage that earlier runtimes recorded in this session. */
   readonly restoredSessionUsage?: SubagentUsage | undefined;
   /** Records usage in the session once a run's assignment settles, and at shutdown. */
@@ -432,6 +437,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     queueQuestionLocked: delivery.queueActionNotificationLocked,
     onWriteClaimViolation: containWriteClaimViolation,
     onProxyEvent: handleProxyEvent,
+    temporaryRoots: options.temporaryRoots ?? [],
   });
 
   const initializeProcess = processInitializer({

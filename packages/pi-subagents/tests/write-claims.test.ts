@@ -13,14 +13,14 @@ describe("write claims", () => {
     },
   );
 
-  it.each(["  <Outside Workspace>  "])(
-    "rejects the reserved outside-workspace marker %s",
+  it.each(["  <Outside Workspace>  ", "<Temporary Directory>"])(
+    "rejects the reserved write-audit marker %s",
     (path) => {
       expect(normalizeWriteClaims([path])).toMatchObject({
         ok: false,
         code: "write_claim_outside_workspace",
       });
-      expect(writeClaimContains([path], "<outside workspace>")).toBe(false);
+      expect(writeClaimContains([path], path.trim().toLowerCase())).toBe(false);
     },
   );
 

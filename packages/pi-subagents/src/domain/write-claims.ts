@@ -1,6 +1,8 @@
 export const MAX_WRITE_CLAIMS = 64;
 export const MAX_WRITE_CLAIM_CHARS = 512;
 export const OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER = "<outside workspace>";
+/** Audit marker for native writes under a system temporary directory; never a violation. */
+export const TEMPORARY_DIRECTORY_WRITE_MARKER = "<temporary directory>";
 
 export interface WriteClaimConflict {
   readonly left: string;
@@ -12,7 +14,9 @@ export type WriteClaimNormalizationResult =
   | { readonly ok: false; readonly code: string; readonly message: string };
 
 const claimKey = (claim: string): string => claim.normalize("NFC").toLocaleLowerCase("en-US");
-const outsideWorkspaceMarkerKey = claimKey(OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER);
+const auditMarkerKeys: ReadonlySet<string> = new Set(
+  [OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER, TEMPORARY_DIRECTORY_WRITE_MARKER].map(claimKey),
+);
 
 const invalid = (code: string, message: string): WriteClaimNormalizationResult => ({
   ok: false,
@@ -40,10 +44,10 @@ export const normalizeWriteClaim = (input: string): WriteClaimNormalizationResul
       "write_claim_absolute",
       `Write claim "${value}" must be relative to the workspace.`,
     );
-  if (claimKey(value) === outsideWorkspaceMarkerKey)
+  if (auditMarkerKeys.has(claimKey(value)))
     return invalid(
       "write_claim_outside_workspace",
-      "The outside-workspace audit marker cannot become a file claim.",
+      `The ${value} write-audit marker cannot become a file claim.`,
     );
   if (value.split("/").some((segment) => segment === "" || segment === "." || segment === ".."))
     return invalid(

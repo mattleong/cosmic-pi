@@ -25,6 +25,11 @@ export const runCleanupAttention = (
       ? "pool-quarantined"
       : undefined;
 
+/** Outside-workspace containment of one writer, without a pool-wide admission pause. */
+export const isOffenderOnlyContainment = (
+  run: Pick<AttentionRun, "writeAdmissionPaused" | "writeViolationOffender">,
+): boolean => run.writeViolationOffender === true && run.writeAdmissionPaused !== true;
+
 export type RunAttention =
   | { readonly kind: "containment" }
   | { readonly kind: "admission-paused" }

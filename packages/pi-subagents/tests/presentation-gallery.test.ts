@@ -982,6 +982,21 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
   awaited("writer outside its claims", [containedWriter({ state: "running" })], {
     attentionRequired: true,
   }),
+  awaited(
+    "writer contained alone after an outside-workspace write",
+    [
+      containedWriter({
+        state: "paused",
+        writeAdmissionPaused: undefined,
+        writeAudit: {
+          observedFileWrites: ["src/a.ts", "<temporary directory>", "<outside workspace>"],
+          violations: [{ path: "<outside workspace>", toolName: "write", observedAt: 2 }],
+          bashWriteHints: 0,
+        },
+      }),
+    ],
+    { attentionRequired: true },
+  ),
   awaited("worker and system warnings", [
     view({
       state: "completed",

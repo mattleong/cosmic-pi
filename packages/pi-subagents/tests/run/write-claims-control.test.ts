@@ -14,6 +14,11 @@ import {
 } from "./fixtures/service-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
 import { SubagentWriterConflictError } from "../../src/run/errors.ts";
+import { isParentActionRequiredRun } from "../../src/run/model.ts";
+import {
+  OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
+  TEMPORARY_DIRECTORY_WRITE_MARKER,
+} from "../../src/domain/write-claims.ts";
 
 const writer = (name: string, writes: ReadonlyArray<string>) =>
   request({ name, writeIntent: "writer", writes: [...writes] });
@@ -131,6 +136,123 @@ describe("shared-cwd write claims", () => {
       ).toBe("running");
     });
   });
+
+  it.effect("audits temporary writes and contains outside-workspace writes per offender", () => {
+    const { fake, projections, layer } = localServiceFixture({ temporaryRoots: ["/tmp"] });
+    return withService(layer, function* (service) {
+      const offender = yield* service.start(writer("outside-writer", ["src/a.ts"]));
+      const peer = yield* service.start(writer("outside-peer", ["src/b.ts"]));
+
+      offerEdit(fake.controls[0], "temporary-scratch", "/tmp/scratch.py");
+      yield* yieldUntil(
+        () =>
+          latest(projections, offender.id)?.writeAudit?.observedFileWrites.includes(
+            TEMPORARY_DIRECTORY_WRITE_MARKER,
+          ) === true,
+      );
+      const scratched = yield* service.status(offender.id);
+      expect(scratched).toMatchObject({ state: "running", writeAudit: { violations: [] } });
+      expect(scratched.writeViolationOffender).toBeUndefined();
+      expect(scratched.writeAdmissionPaused).toBeUndefined();
+
+      offerEdit(fake.controls[0], "relative-escape", "../elsewhere/notes.md");
+      yield* yieldUntil(() => latest(projections, offender.id)?.state === "paused");
+      const contained = yield* service.status(offender.id);
+      expect(contained).toMatchObject({
+        writeViolationOffender: true,
+        writeAudit: { violations: [{ path: OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER }] },
+      });
+      expect(contained.writeAdmissionPaused).toBeUndefined();
+      const unpausedPeer = yield* service.status(peer.id);
+      expect(unpausedPeer.state).toBe("running");
+      expect(unpausedPeer.writeAdmissionPaused).toBeUndefined();
+      const admitted = yield* service.start(writer("admitted-beside-offender", ["src/c.ts"]));
+      expect(admitted.state).toBe("running");
+      expect(yield* service.resumeWriterAdmission(offender.id).pipe(Effect.flip)).toMatchObject({
+        code: "writer_admission_not_paused",
+      });
+
+      const resumed = yield* service.resume(offender.id, "Write only inside the workspace.");
+      expect(resumed.state).toBe("running");
+      expect(resumed.writeViolationOffender).toBeUndefined();
+      offerEdit(fake.controls[0], "second-outside-write", "/elsewhere/again.md");
+      yield* yieldUntil(() => {
+        const run = latest(projections, offender.id);
+        return run?.state === "paused" && run.writeViolationOffender === true;
+      });
+      expect((yield* service.status(offender.id)).writeAudit?.violations).toHaveLength(2);
+
+      const stopped = yield* service.stop(offender.id);
+      expect(stopped.state).toBe("stopped");
+      expect(stopped.writeViolationOffender).toBeUndefined();
+      expect(stopped.writeAudit?.violations).toHaveLength(2);
+      expect(isParentActionRequiredRun(stopped)).toBe(false);
+      expect((yield* service.status(peer.id)).writeAdmissionPaused).toBeUndefined();
+    });
+  });
+
+  it.effect(
+    "escalates offender-only containment when a pool-wide violation pauses admission",
+    () => {
+      const { fake, projections, layer } = localServiceFixture();
+      return withService(layer, function* (service) {
+        const outside = yield* service.start(writer("outside-offender", ["src/a.ts"]));
+        const peer = yield* service.start(writer("workspace-offender", ["src/b.ts"]));
+        const containment = (id: string) =>
+          service.status(id).pipe(
+            Effect.map(({ writeAdmissionPaused, writeViolationOffender }) => ({
+              writeAdmissionPaused,
+              writeViolationOffender,
+            })),
+          );
+
+        offerEdit(fake.controls[0], "outside-write", "/elsewhere/notes.md");
+        yield* yieldUntil(() => latest(projections, outside.id)?.state === "paused");
+        expect(yield* containment(outside.id)).toEqual({
+          writeAdmissionPaused: undefined,
+          writeViolationOffender: true,
+        });
+
+        // A dot-relative spelling is still a workspace path, so it pauses the whole pool.
+        offerEdit(fake.controls[1], "workspace-write", "./src/c.ts");
+        yield* yieldUntil(() => latest(projections, peer.id)?.state === "paused");
+        for (const id of [outside.id, peer.id])
+          expect(yield* containment(id)).toEqual({
+            writeAdmissionPaused: true,
+            writeViolationOffender: true,
+          });
+        expect(
+          yield* service.start(writer("blocked-writer", ["src/d.ts"])).pipe(Effect.flip),
+        ).toBeInstanceOf(SubagentWriterConflictError);
+
+        yield* service.resumeWriterAdmission(peer.id);
+        for (const id of [outside.id, peer.id])
+          expect(yield* containment(id)).toEqual({
+            writeAdmissionPaused: undefined,
+            writeViolationOffender: undefined,
+          });
+        expect((yield* service.resume(outside.id, "Write only inside the workspace.")).state).toBe(
+          "running",
+        );
+
+        fake.controls[0]?.offer({
+          type: "tool_execution_start",
+          toolCallId: "mixed-write",
+          toolName: "edit",
+          args: { path: "/elsewhere/again.md", changes: [{ path: "src/e.ts" }] },
+        });
+        yield* yieldUntil(() => latest(projections, outside.id)?.state === "paused");
+        expect(yield* containment(outside.id)).toEqual({
+          writeAdmissionPaused: true,
+          writeViolationOffender: true,
+        });
+        expect(yield* containment(peer.id)).toEqual({
+          writeAdmissionPaused: true,
+          writeViolationOffender: undefined,
+        });
+      });
+    },
+  );
 
   it.effect("stops a starting writer when a violating edit races task issue", () =>
     Effect.gen(function* () {

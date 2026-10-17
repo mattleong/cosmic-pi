@@ -96,7 +96,7 @@ These are additive optional fields in existing version-2 presentation cards and 
 
 Explicit stop may observationally reverify transport cleanup only when `cleanup.recovery` is `stop`, including terminal runs. The Activity and fleet actions expose this verification without restarting the task; stop retains its subtree semantics and stops any active descendants. A pending stop acknowledgement does not claim completion; an unconfirmed acknowledgement preserves diagnostics; a confirmed acknowledgement applies only to that run and retains any pool warning. Manual recovery covers unknown finalizers, incomplete descendant snapshots, and uncertain writer-lease failures: inspect independently without automatic retry, lease deletion, or resource reuse.
 
-`writeAdmissionPaused` and `writeViolationOffender` describe claim containment only. Cleanup quarantine never recommends `resume_admission`, changing claims, or stopping healthy pool peers. Claim and cleanup issues can coexist; both remain visible, and claim recovery waits for cleanup confirmation. Recover the quarantined member according to its own policy rather than stopping unrelated workers to clear pool admission.
+`writeAdmissionPaused` and `writeViolationOffender` describe claim containment only. An offender without `writeAdmissionPaused` is offender-only containment after an outside-workspace write: recovery is review, then lifecycle resume with guidance or stop, never `resume_admission` or stopping peers. Version-2 cards accept this combination additively; older cards always paired the two. Cleanup quarantine never recommends `resume_admission`, changing claims, or stopping healthy pool peers. Claim and cleanup issues can coexist; both remain visible, and claim recovery waits for cleanup confirmation. Recover the quarantined member according to its own policy rather than stopping unrelated workers to clear pool admission.
 
 - `session-owned.ts` owns the one claim-then-owner-scoped-commit mask shared by session-owned launch, retry, reply, interrupt, stop, and resume, so cancelling a waiter never abandons ownership while owner-scope closure still interrupts the commit.
 - Subtree stops join descendant cleanup, including already-stopping and terminal descendants, before closing ancestors.
@@ -224,7 +224,7 @@ Explicit stop may observationally reverify transport cleanup only when `cleanup.
   Destructive actions declare their confirmation scope, including descendant shutdown for stop.
   Replacement and shutdown revoke registration and callbacks.
 - Parent-contact questions explicitly target the parent, never the user.
-  Claim admission pauses override questions: peers wait for file access, active offenders show containment, and paused or terminal offenders require parent file-access review.
+  Claim admission pauses and offender-only containment override questions: peers wait for file access, active offenders show containment, and paused or terminal offenders require parent file-access review.
   The producer uses the authoritative parent-action predicate without treating an older question as claim recovery.
   Ordinary pauses and missing-question waits require parent review.
   These remain blocked rows, preserving unresolved recovery visibility and existing action safeguards.

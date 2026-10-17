@@ -39,7 +39,7 @@ const RUN_STATUS = {
 } satisfies Readonly<Record<SubagentRunState, ActivityItem["status"]>>;
 
 function activityAttention(run: SubagentRunView) {
-  if (run.writeAdmissionPaused) {
+  if (run.writeAdmissionPaused || run.writeViolationOffender) {
     const blockedReason = run.writeViolationOffender
       ? isParentActionRequiredRun({
           ...run,
@@ -69,7 +69,8 @@ const MESSAGE_ACTIONS = {
 } satisfies Readonly<Record<RunMessageMode, ReturnType<typeof handoff>>>;
 
 export function runActions(run: SubagentRunView, title: string) {
-  const mode = run.writeAdmissionPaused ? undefined : runMessageMode(run);
+  const mode =
+    run.writeAdmissionPaused || run.writeViolationOffender ? undefined : runMessageMode(run);
   return [
     ...(isActiveRunState(run.state) || canStopRun(run)
       ? [

@@ -26,28 +26,48 @@ const containmentActionLocked = (record: RunRecord) => {
     : undefined;
 };
 
+/**
+ * `pool` pauses admission for the whole cwd pool; `offender` contains only the writer, unless
+ * its pool is already paused.
+ */
+export type WriteClaimViolationScope = "pool" | "offender";
+
 export function writeClaimContainment(dependencies: RunWriteClaimContainmentDependencies) {
   const { ownerScope, withLock, records, publish, stop, interrupt } = dependencies;
-  return (record: RunRecord, message: string): Effect.Effect<void> =>
+  return (
+    record: RunRecord,
+    message: string,
+    scope: WriteClaimViolationScope,
+  ): Effect.Effect<void> =>
     Effect.uninterruptible(
       withLock(
         Effect.gen(function* () {
-          if (record.writeViolationContainmentStarted) return false;
           const pool = record.writerPool;
-          if (!pool) return false;
+          if (!pool) return undefined;
+          const poolWide = scope === "pool" || pool.admissionPaused;
+          const alreadyContained = record.writeViolationContainmentStarted;
+          // A later workspace violation escalates an offender-only containment already in progress.
+          if (alreadyContained && (!poolWide || pool.violationRunIds.has(record.view.id)))
+            return undefined;
           record.writeViolationContainmentStarted = true;
-          pool.pauseAdmissionLocked(record.view.id, message);
-          for (const memberId of pool.members.keys()) {
-            const member = records.get(memberId);
-            if (!member) continue;
-            member.view = {
-              ...member.view,
-              writeAdmissionPaused: true,
-              writeViolationOffender: pool.violationRunIds.has(memberId) ? true : undefined,
-            };
-          }
+          if (poolWide) {
+            // Offender-only offenders join the pool's offender set, so one recovery covers them.
+            const offenderIds = [...pool.members.keys()].filter(
+              (memberId) => records.get(memberId)?.view.writeViolationOffender === true,
+            );
+            pool.pauseAdmissionLocked([record.view.id, ...offenderIds], message);
+            for (const memberId of pool.members.keys()) {
+              const member = records.get(memberId);
+              if (!member) continue;
+              member.view = {
+                ...member.view,
+                writeAdmissionPaused: true,
+                writeViolationOffender: pool.violationRunIds.has(memberId) ? true : undefined,
+              };
+            }
+          } else record.view = { ...record.view, writeViolationOffender: true };
           yield* publish;
-          return containmentActionLocked(record);
+          return alreadyContained ? undefined : containmentActionLocked(record);
         }),
       ).pipe(
         Effect.flatMap((containmentAction) => {

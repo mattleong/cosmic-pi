@@ -191,9 +191,9 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
   return true;
 };
 
+// An offender without an admission pause is offender-only containment.
 const validRunCardRelationships = (card: SubagentRunCard): boolean =>
-  card.writeViolationOffender !== true ||
-  (card.writeIntent === "writer" && card.writeAdmissionPaused === true);
+  card.writeViolationOffender !== true || card.writeIntent === "writer";
 
 const validReportOmission = (details: {
   readonly reportsOnlyOmitted?: true;

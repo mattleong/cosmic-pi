@@ -122,7 +122,7 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
             "Your exact write claims are listed with your task.",
             request.workspace
               ? "Read repository files as needed, but modify only the claimed paths inside your isolated cwd."
-              : "Read any repository file, but modify only the claimed paths. Re-read a file immediately before editing because peers may change the checkout concurrently.",
+              : "Read any repository file, but modify only the claimed paths. Re-read a file immediately before editing because peers may change the checkout concurrently. Don't write outside the working directory, except for scratch files in the system temporary directory such as /tmp.",
             "Use Bash for targeted validation and ordinary work, but don't mutate files outside your claims. Don't run Git mutations, package installation, broad formatting, snapshot updates, or broad code generation unless every affected file is claimed.",
             "If you need another file, ask with contact_parent(kind=question), naming the exact workspace-relative paths, and wait. Only the parent's grant and reply expand your claims; peers can't transfer them.",
             "Report every changed file, validation command, and any possible out-of-claim side effect in the final report.",

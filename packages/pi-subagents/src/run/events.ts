@@ -10,16 +10,16 @@ import type { RunProxyExecution } from "./proxy-execution.ts";
 import type { RunSettlement } from "./settlement.ts";
 import {
   bashCommandMayMutate,
+  classifyObservedWrite,
   decodeToolArguments,
   MAX_OBSERVED_WRITE_PATHS,
   MAX_WRITE_CLAIM_VIOLATIONS,
+  observedWriteAuditPath,
   observeFileWrite,
-  workspaceRelativeObservedPath,
+  UNRESOLVED_OBSERVED_WRITE,
 } from "./claims-observation.ts";
-import {
-  OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
-  writeClaimContains,
-} from "../domain/write-claims.ts";
+import { writeClaimContains } from "../domain/write-claims.ts";
+import type { WriteClaimViolationScope } from "./write-claim-containment.ts";
 import {
   appendAssistantSessionEvent,
   appendNoticeSessionEvent,
@@ -41,8 +41,14 @@ const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 export interface RunEventDependencies {
   readonly settlement: RunSettlement;
   readonly queueQuestionLocked: RunNotificationDelivery["queueActionNotificationLocked"];
-  readonly onWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
+  readonly onWriteClaimViolation: (
+    record: RunRecord,
+    message: string,
+    scope: WriteClaimViolationScope,
+  ) => Effect.Effect<void>;
   readonly onProxyEvent: RunProxyExecution;
+  /** Lexical system temporary roots whose native writes are audited but never violations. */
+  readonly temporaryRoots: ReadonlyArray<string>;
 }
 
 type HandledBackendEvent = Exclude<
@@ -73,7 +79,8 @@ const isDelegatedEvent = (event: HandledBackendEvent): event is DelegatedBackend
   DELEGATED_EVENT_TYPES.some((type) => type === event.type);
 
 export function backendEventHandler(dependencies: RunEventDependencies) {
-  const { settlement, queueQuestionLocked, onWriteClaimViolation, onProxyEvent } = dependencies;
+  const { settlement, queueQuestionLocked, onWriteClaimViolation, onProxyEvent, temporaryRoots } =
+    dependencies;
 
   const mutateAt = (
     record: RunRecord,
@@ -159,28 +166,39 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     Effect.suspend(() => {
       const args = decodeToolArguments(event.args);
       const observed = observeFileWrite(event.toolName, args);
-      const observedPaths =
+      const observedWrites =
         observed === undefined
           ? []
           : observed.length === 0
-            ? [OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER]
-            : observed.map(
-                (path) =>
-                  workspaceRelativeObservedPath(record.view.cwd, path) ??
-                  OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
-              );
+            ? [UNRESOLVED_OBSERVED_WRITE]
+            : observed.map((path) => classifyObservedWrite(record.view.cwd, path, temporaryRoots));
+      const observedPaths = observedWrites.map(observedWriteAuditPath);
       const claims = record.view.writeClaims;
-      const violatingPaths =
+      const violatingWrites =
         claims === undefined
           ? []
-          : observedPaths.filter(
-              (path) =>
-                path === OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER || !writeClaimContains(claims, path),
+          : observedWrites.filter(
+              (write) =>
+                write.kind === "outside" ||
+                write.kind === "unresolved" ||
+                (write.kind === "workspace" && !writeClaimContains(claims, write.path)),
             );
+      const violatingPaths = violatingWrites.map(observedWriteAuditPath);
+      // Workspace and unresolved writes can collide with peers; definite outside writes can't.
+      const violationScope: WriteClaimViolationScope = violatingWrites.every(
+        (write) => write.kind === "outside",
+      )
+        ? "offender"
+        : "pool";
       const bashHint = bashCommandMayMutate(event.toolName, args);
+      // Offender scope may still escalate under the containment lock, so its wording stays neutral.
       const violationMessage =
         violatingPaths.length > 0
-          ? `Writer ${record.view.id} used ${event.toolName} outside its cooperative claims: ${violatingPaths.join(", ")}. Containment has started, and new writer admission is paused.`
+          ? `Writer ${record.view.id} used ${event.toolName} outside its cooperative claims: ${violatingPaths.join(", ")}. ${
+              violationScope === "pool"
+                ? "Containment has started, and new writer admission is paused."
+                : "Containment has started."
+            }`
           : undefined;
       return mutateAt(record, event.assignmentEpoch, (current, now) => {
         if (current.state === "paused") return undefined;
@@ -217,7 +235,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
       }).pipe(
         Effect.flatMap((updated) =>
           updated && violationMessage
-            ? onWriteClaimViolation(record, violationMessage)
+            ? onWriteClaimViolation(record, violationMessage, violationScope)
             : Effect.void,
         ),
       );

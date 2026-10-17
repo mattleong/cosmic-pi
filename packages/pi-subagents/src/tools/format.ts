@@ -1,5 +1,10 @@
 import { absurd } from "effect/Function";
-import { runAttention, runCleanupAttention, type AttentionRun } from "../run/attention.ts";
+import {
+  isOffenderOnlyContainment,
+  runAttention,
+  runCleanupAttention,
+  type AttentionRun,
+} from "../run/attention.ts";
 import {
   sanitizeTerminalLine,
   sanitizeDiagnosticContent,
@@ -7,7 +12,11 @@ import {
   synchronousNow,
   countLabel,
 } from "pi-cosmic-core";
-import { normalizeWriteClaim, writeClaimContains } from "../domain/write-claims.ts";
+import {
+  normalizeWriteClaim,
+  OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
+  writeClaimContains,
+} from "../domain/write-claims.ts";
 import {
   isParentActionRequiredRun,
   isTerminalRunState,
@@ -63,12 +72,59 @@ const safeMissingClaimPaths = (run: AttentionRun): ReadonlyArray<string> =>
     return claim && !writeClaimContains(run.writeClaims ?? [], claim) ? [claim] : [];
   });
 
+export const OUTSIDE_WORKSPACE_RESUME_GUIDANCE =
+  "Writes outside the workspace aren't allowed; system temporary directories such as /tmp are fine. Continue only within your claims.";
+
+const offenderOnlyContainmentRecovery = (run: AttentionRun): ReadonlyArray<string> => {
+  const id = JSON.stringify(run.id);
+  const header = `Containment for ${runTarget(run)} after a write outside the workspace. Its peers and writer admission are unaffected.`;
+  const resume = `subagent_lifecycle({ action: "resume", runIds: [${id}], message: ${JSON.stringify(OUTSIDE_WORKSPACE_RESUME_GUIDANCE)} })`;
+  const stop = `subagent_lifecycle({ action: "stop", runIds: [${id}] })`;
+  if (runCleanupAttention(run) !== undefined)
+    return [
+      header,
+      "Recovery waits until process cleanup is confirmed. Review the audit separately.",
+    ];
+  if (isTerminalRunState(run.state))
+    return [
+      header,
+      "The offender is terminal. Review its write audit; no claim recovery is needed.",
+    ];
+  if (!run.capabilities.includes("resume"))
+    return [
+      header,
+      "This backend cannot resume, so containment is stopping it.",
+      `1. Confirm it reaches terminal: subagent_status({ runIds: [${id}] }). If it is still active, check again; do not issue a duplicate stop.`,
+      "2. Review its write audit. If the work is still needed, launch a corrected replacement with exact workspace-relative claims and await its run ID.",
+    ];
+  if (run.state !== "paused")
+    return [
+      header,
+      `Containment is in progress while the offender is ${runStateLabel(run.state)}.`,
+      `1. Wait for containment to reach paused or terminal, then inspect it: subagent_status({ runIds: [${id}] }).`,
+      `2. If paused, review the audit, then resume it with guidance: ${resume}, and await it. Or stop it: ${stop}.`,
+      "3. If status is still active, check again. Do not issue a duplicate stop solely because the paused state has not published yet.",
+    ];
+  return [
+    header,
+    `1. Review the audit: subagent_status({ runIds: [${id}] }).`,
+    `2. Resume it with guidance: ${resume}. Or stop it: ${stop}.`,
+    `3. Await it again: subagent_await({ runIds: [${id}], until: "all_finished" }).`,
+  ];
+};
+
 const claimContainmentRecovery = (run: AttentionRun): ReadonlyArray<string> => {
+  if (isOffenderOnlyContainment(run)) return offenderOnlyContainmentRecovery(run);
   const id = JSON.stringify(run.id);
   const paths = claimViolationPaths(run);
   const audit = paths.map((path) => sanitizeTerminalLine(path)).join(", ");
   const safeMissing = safeMissingClaimPaths(run);
-  const hasUngrantablePath = paths.some((path) => grantableClaimPath(path) === undefined);
+  const ungrantablePaths = paths.filter((path) => grantableClaimPath(path) === undefined);
+  const hasUngrantablePath = ungrantablePaths.length > 0;
+  // Outside-workspace writes can't collide with peers, so guidance can still recover the run.
+  const resumableAudit = ungrantablePaths.every(
+    (path) => path === OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
+  );
   const canResume = run.state === "paused" && run.capabilities.includes("resume");
   const terminal = isTerminalRunState(run.state);
   const header = `Claim containment for ${runTarget(run)} after: ${audit || "an out-of-claim write"}.`;
@@ -86,7 +142,7 @@ const claimContainmentRecovery = (run: AttentionRun): ReadonlyArray<string> => {
       `3. If status is terminal, confirm process and writer cleanup before subagent_claims({ action: "resume_admission", runId: ${id} }), then launch and await a corrected replacement.`,
       "4. If status is still active, check again. Do not issue a duplicate stop solely because the paused state has not published yet.",
     ];
-  if (canResume && !hasUngrantablePath) {
+  if (canResume && resumableAudit) {
     const grantStep =
       safeMissing.length > 0
         ? `2. If the missing files are intended and conflict-free, grant them: subagent_claims({ action: "grant", runId: ${id}, paths: ${JSON.stringify(safeMissing)} }). Otherwise skip this step.`
@@ -96,7 +152,11 @@ const claimContainmentRecovery = (run: AttentionRun): ReadonlyArray<string> => {
       `1. Review the audit and shared tree: subagent_status({ runIds: [${id}] }).`,
       grantStep,
       `3. Reopen writer admission: subagent_claims({ action: "resume_admission", runId: ${id} }).`,
-      `4. Resume with the authoritative claims and guidance: subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Use the authoritative claims returned by subagent_claims. Continue only within them." }).`,
+      `4. Resume with the authoritative claims and guidance: subagent_lifecycle({ action: "resume", runIds: [${id}], message: ${JSON.stringify(
+        hasUngrantablePath
+          ? `${OUTSIDE_WORKSPACE_RESUME_GUIDANCE} Use the authoritative claims returned by subagent_claims.`
+          : "Use the authoritative claims returned by subagent_claims. Continue only within them.",
+      )} }).`,
       `5. Await this run again: subagent_await({ runIds: [${id}], until: "all_finished" }).`,
     ];
   }
