@@ -361,7 +361,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                   records,
                   nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
                   selected,
-                  workspaces.heldLaunchSlots(parentRunId),
+                  workspaces.heldLaunchSlots(),
                 );
               if (capacityFailure) return yield* capacityFailure;
               return undefined;
@@ -378,10 +378,13 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             const stateFailure = resumeStateError(selected);
             if (stateFailure) return yield* stateFailure;
             const needsRespawn = selected.process === undefined;
+            // Ownership first: a revision successor in this workspace would otherwise surface as a
+            // transient writer conflict.
+            const invalidateWorkspace = yield* workspaces.invalidateForResume(selected);
             if (selected.view.writeIntent === "writer")
               yield* writerFailureLocked(selected, needsRespawn);
             if (needsRespawn) yield* respawnFailureLocked(selected);
-            return { selected, needsRespawn };
+            return { selected, needsRespawn, invalidateWorkspace };
           });
           const prompt = message?.trim()
             ? yield* validateParentMessage(message, "Resume message is required.")
@@ -392,8 +395,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
               const now = yield* Clock.currentTimeMillis;
               const claimed = yield* withLock(
                 Effect.gen(function* () {
-                  const { selected, needsRespawn } = yield* admitLocked;
-                  const invalidateWorkspace = yield* workspaces.invalidateForResume(selected);
+                  const { selected, needsRespawn, invalidateWorkspace } = yield* admitLocked;
                   const attemptToken = allocateAssignmentAttemptToken();
                   selected.pauseRequested = false;
                   selected.pauseOutcome = undefined;

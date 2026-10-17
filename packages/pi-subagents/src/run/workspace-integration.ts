@@ -55,6 +55,7 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
             .pipe(Effect.mapError(mapWorkspaceError));
           if (
             binding.reopenPending ||
+            binding.testedPreparation !== preparationId ||
             !artifact.preparation ||
             artifact.preparation.preparationId !== preparationId ||
             artifact.preparation.revisionId !== revisionId

@@ -7,8 +7,10 @@ import {
   backupRemovalResultSchema,
   publicationInputLimit,
   publicationResultSchema,
+  directoryRemovalResultSchema,
   directoryResultSchema,
   type BackupRemovalWireRequest,
+  type DirectoryRemovalWireRequest,
   type DirectoryWireRequest,
   type PublicationWireRequest,
 } from "./git-worktree-publish-helper.ts";
@@ -17,12 +19,18 @@ interface AnchoredDirectory {
   readonly directory: string;
   readonly directoryDev: number;
   readonly directoryIno: number;
+  /** A private directory where the helper may cache its transpiled source between starts. */
+  readonly helperCache?: string | undefined;
 }
 export interface WorkspaceDirectoryRequest extends AnchoredDirectory {
   readonly name: string;
 }
 export interface WorkspaceBackupRemovalRequest extends AnchoredDirectory {
   readonly names: ReadonlyArray<string>;
+}
+export interface WorkspaceDirectoryRemovalRequest extends WorkspaceDirectoryRequest {
+  readonly targetDev: number;
+  readonly targetIno: number;
 }
 export interface WorkspacePublicationRequest extends WorkspaceDirectoryRequest {
   readonly backupName: string;
@@ -46,9 +54,17 @@ const decodeDirectoryResult = Schema.decodeUnknownEffect(
 const decodeBackupRemovalResult = Schema.decodeUnknownEffect(
   Schema.fromJsonString(backupRemovalResultSchema),
 );
+const decodeDirectoryRemovalResult = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(directoryRemovalResultSchema),
+);
 const launch = <A, E>(
   directory: string,
-  request: PublicationWireRequest | DirectoryWireRequest | BackupRemovalWireRequest,
+  helperCache: string | undefined,
+  request:
+    | PublicationWireRequest
+    | DirectoryWireRequest
+    | BackupRemovalWireRequest
+    | DirectoryRemovalWireRequest,
   decode: (stdout: string) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
@@ -57,7 +73,10 @@ const launch = <A, E>(
     if (stdin.length > publicationInputLimit) return yield* failure();
     const result = yield* runBoundedProcessNode({
       executable: process.execPath,
-      args: [fileURLToPath(new URL("./git-worktree-publish-helper.mjs", import.meta.url))],
+      args: [
+        fileURLToPath(new URL("./git-worktree-publish-helper.mjs", import.meta.url)),
+        ...(helperCache === undefined ? [] : [helperCache]),
+      ],
       cwd: directory,
       environment: { PATH: "/usr/bin:/bin" },
       stdin,
@@ -77,17 +96,39 @@ const base64 = (image?: { readonly bytes: Uint8Array; readonly mode: number }) =
   image && { bytes: Buffer.from(image.bytes).toString("base64"), mode: image.mode };
 
 export const publishWorkspaceFile = (request: WorkspacePublicationRequest) => {
-  const { directory, before, after, ...fields } = request;
+  const { directory, helperCache, before, after, ...fields } = request;
   return launch(
     directory,
+    helperCache,
     { ...fields, before: base64(before), after: base64(after) },
     decodePublicationResult,
   );
 };
 
-export const createWorkspaceDirectory = ({ directory, ...fields }: WorkspaceDirectoryRequest) =>
-  launch(directory, { ...fields, operation: "mkdir" }, decodeDirectoryResult);
+export const createWorkspaceDirectory = ({
+  directory,
+  helperCache,
+  ...fields
+}: WorkspaceDirectoryRequest) =>
+  launch(directory, helperCache, { ...fields, operation: "mkdir" }, decodeDirectoryResult);
 
 /** Deletes publication backups in one directory; the result names those still present. */
-export const removeWorkspaceBackups = ({ directory, ...fields }: WorkspaceBackupRemovalRequest) =>
-  launch(directory, { ...fields, operation: "remove-backups" }, decodeBackupRemovalResult);
+export const removeWorkspaceBackups = ({
+  directory,
+  helperCache,
+  ...fields
+}: WorkspaceBackupRemovalRequest) =>
+  launch(
+    directory,
+    helperCache,
+    { ...fields, operation: "remove-backups" },
+    decodeBackupRemovalResult,
+  );
+
+/** Removes `name` only while it is still the identified, empty directory. */
+export const removeEmptyWorkspaceDirectory = ({
+  directory,
+  helperCache,
+  ...fields
+}: WorkspaceDirectoryRemovalRequest) =>
+  launch(directory, helperCache, { ...fields, operation: "rmdir" }, decodeDirectoryRemovalResult);

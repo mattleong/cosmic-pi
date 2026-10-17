@@ -82,11 +82,13 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
     Layer.effect(
       WorkspaceService,
       Effect.gen(function* () {
-        const engine = yield* gitWorkspaceEngine(registry);
         const lock = yield* Semaphore.make(1);
+        const engine = yield* gitWorkspaceEngine(registry, lock.withPermits(1));
         const safe = yield* SafeFile;
+        const provided = <A, E>(effect: Effect.Effect<A, E, SafeFile>) =>
+          effect.pipe(Effect.provideService(SafeFile, safe));
         const run = <A, E>(effect: Effect.Effect<A, E, SafeFile>) =>
-          lock.withPermits(1)(effect.pipe(Effect.provideService(SafeFile, safe)));
+          lock.withPermits(1)(provided(effect));
         // Collection holds the service's permit, so the first operation sees its result.
         yield* lock.take(1);
         yield* engine.collectGarbage.pipe(
@@ -106,7 +108,8 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           fork: (input) => run(engine.fork(input)),
           discard: (input) => run(engine.discard(input)),
           discardOrphan: (input) => run(engine.discardOrphan(input)),
-          setup: (input) => run(engine.setup(input)),
+          // Setup takes the permit only around its record changes, never while its command runs.
+          setup: (input) => provided(engine.setup(input)),
           setupChanges: (input) => run(engine.setupChanges(input)),
           inspect: (input) => run(engine.inspect(input)),
           list: (input) => run(engine.list(input)),

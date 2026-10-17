@@ -34,14 +34,10 @@ interface HeldBinding {
   readonly heldLocked: () => Effect.Effect<void, SubagentError>;
 }
 
-const engineRevision = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
-  service.list({ ownerId: handle.ownerId }).pipe(
-    Effect.mapError(mapWorkspaceError),
-    Effect.map(
-      (entries) =>
-        entries.find((entry) => entry.handle.workspaceId === handle.workspaceId)?.revision,
-    ),
-  );
+const engineRecord = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
+  service
+    .inspect({ workspaceId: handle.workspaceId, ownerId: handle.ownerId })
+    .pipe(Effect.mapError(mapWorkspaceError));
 
 export function workspaceReviewOperations(context: WorkspaceControlContext) {
   const { records, withLock, state, requireBinding, requireEngine, operations, workspaceSetup } =
@@ -96,17 +92,26 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
         ownerId: binding.handle.ownerId,
         processCleanupConfirmed: true,
       };
+      if (binding.reopenPending) {
+        if (revisionId)
+          return yield* invalid(
+            "workspace_revision_stale",
+            "The immutable workspace revision no longer matches.",
+          );
+        yield* service.revise(target).pipe(Effect.mapError(mapWorkspaceError));
+        return yield* service.freeze(target).pipe(Effect.mapError(mapWorkspaceError));
+      }
+      const { status, revision } = yield* engineRecord(service, binding);
       if (revisionId) {
-        const revision = yield* engineRevision(service, binding);
-        if (binding.reopenPending || revision?.revisionId !== revisionId)
+        if (revision?.revisionId !== revisionId)
           return yield* invalid(
             "workspace_revision_stale",
             "The immutable workspace revision no longer matches.",
           );
         return revision;
       }
-      if (binding.reopenPending)
-        yield* service.revise(target).pipe(Effect.mapError(mapWorkspaceError));
+      // The engine freezes only active workspaces; a frozen or prepared one keeps its revision.
+      if (revision && (status === "frozen" || status === "prepared")) return revision;
       return yield* service.freeze(target).pipe(Effect.mapError(mapWorkspaceError));
     });
   const workspaceReview = (
@@ -168,9 +173,9 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
   ): Effect.Effect<WorkspacePreparation, SubagentError> =>
     Effect.gen(function* () {
       const service = yield* requireEngine;
-      return yield* operate(workspaceId, caller, ({ binding }) =>
+      return yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
         Effect.gen(function* () {
-          const revision = yield* engineRevision(service, binding);
+          const { revision } = yield* engineRecord(service, binding);
           if (
             binding.reviewedRevision !== revisionId ||
             revision?.revisionId !== revisionId ||
@@ -180,6 +185,12 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
               "workspace_review_incomplete",
               "Read every page of this exact immutable revision before preparing integration.",
             );
+          // The engine replaces any earlier preparation, which is no longer tested from here on.
+          yield* withLock(
+            Effect.sync(() => {
+              binding.testedPreparation = undefined;
+            }),
+          );
           const preparation = yield* service
             .prepare({ workspaceId, ownerId: binding.handle.ownerId, revisionId })
             .pipe(Effect.mapError(mapWorkspaceError));
@@ -193,6 +204,15 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
                 binding.setupCleanupPending = pending;
               },
             );
+          yield* withLock(
+            heldLocked().pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  binding.testedPreparation = preparation.preparationId;
+                }),
+              ),
+            ),
+          );
           return preparation;
         }),
       );

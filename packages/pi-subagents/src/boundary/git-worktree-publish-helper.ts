@@ -37,9 +37,20 @@ const backupRemovalRequestSchema = Schema.Struct({
 });
 export type BackupRemovalWireRequest = typeof backupRemovalRequestSchema.Type;
 export const backupRemovalResultSchema = Schema.Struct({ retained: Schema.Array(Schema.String) });
+const directoryRemovalRequestSchema = Schema.Struct({
+  operation: Schema.Literal("rmdir"),
+  directoryDev: Schema.Finite,
+  directoryIno: Schema.Finite,
+  name: Schema.String,
+  targetDev: Schema.Finite,
+  targetIno: Schema.Finite,
+});
+export type DirectoryRemovalWireRequest = typeof directoryRemovalRequestSchema.Type;
+export const directoryRemovalResultSchema = Schema.Struct({ removed: Schema.Boolean });
 const inputSchema = Schema.Union([
   directoryRequestSchema,
   backupRemovalRequestSchema,
+  directoryRemovalRequestSchema,
   publicationRequestSchema,
 ]);
 export const publicationResultSchema = Schema.Struct({
@@ -183,10 +194,16 @@ const discardTemporary = (r: PublicationWireRequest) => {
     fs.unlinkSync(r.temporaryName);
   } catch {}
 };
+// The exclusive link never clobbers a file that appeared meanwhile. Once both names hold the same
+// file, dropping the backup name leaves the original exactly as it was found, rather than
+// hard-linked to a backup that later captures refuse and in-place edits would change too.
 const restoreUnmatchedCapture = (r: PublicationWireRequest, stat: FileStat) => {
   if (stat.isFile() && !stat.isSymbolicLink()) {
     try {
       fs.linkSync(r.backupName, r.name);
+      const restored = fs.lstatSync(r.name);
+      const backup = fs.lstatSync(r.backupName);
+      if (restored.dev === backup.dev && restored.ino === backup.ino) fs.unlinkSync(r.backupName);
     } catch {}
   }
   discardTemporary(r);
@@ -306,9 +323,40 @@ const removeBackups = (r: BackupRemovalWireRequest) =>
     catch: () => new PublicationHelperError(),
   });
 
+// Non-recursive: a directory that isn't empty, or is no longer the one publication saw, stays.
+const removeDirectory = (r: DirectoryRemovalWireRequest) =>
+  Effect.try({
+    try: () => {
+      if (
+        !validLeaf(r.name) ||
+        !validAnchor(r) ||
+        !validAnchor({ directoryDev: r.targetDev, directoryIno: r.targetIno })
+      )
+        throw new Error("invalid input");
+      if (!anchorMatches(r)) return { removed: false };
+      const target = inspect(r.name);
+      if (
+        target === undefined ||
+        !target.isDirectory() ||
+        target.dev !== r.targetDev ||
+        target.ino !== r.targetIno
+      )
+        return { removed: false };
+      try {
+        fs.rmdirSync(r.name);
+      } catch {
+        return { removed: false };
+      }
+      syncDirectory();
+      return { removed: true };
+    },
+    catch: () => new PublicationHelperError(),
+  });
+
 const handleRequest = (request: typeof inputSchema.Type) => {
   if (!("operation" in request)) return executePublication(request);
-  return request.operation === "mkdir" ? createDirectory(request) : removeBackups(request);
+  if (request.operation === "mkdir") return createDirectory(request);
+  return request.operation === "rmdir" ? removeDirectory(request) : removeBackups(request);
 };
 
 export const publicationMain = () =>
@@ -341,7 +389,12 @@ export const publicationMain = () =>
       }).pipe(Effect.orElseSucceed(() => fallback));
       const encoded = yield* Schema.encodeEffect(
         Schema.fromJsonString(
-          Schema.Union([publicationResultSchema, directoryResultSchema, backupRemovalResultSchema]),
+          Schema.Union([
+            publicationResultSchema,
+            directoryResultSchema,
+            backupRemovalResultSchema,
+            directoryRemovalResultSchema,
+          ]),
         ),
       )(output);
       yield* Effect.try({

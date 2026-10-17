@@ -10,8 +10,6 @@ export const MINIMUM_GIT_VERSION = [2, 31] as const;
 export interface GitInstallation {
   readonly executable: string;
   readonly version: string;
-  /** Git-expanded global excludes path; relative paths stay relative to each repository. */
-  readonly excludesFile?: string;
 }
 
 const PREFERRED_GIT = "/usr/bin/git";
@@ -61,11 +59,17 @@ const userEnvironment = (environment: NodeJS.ProcessEnv) =>
     ),
   );
 
-const runGit = (executable: string, args: ReadonlyArray<string>, environment: NodeJS.ProcessEnv) =>
+const runGit = (
+  executable: string,
+  args: ReadonlyArray<string>,
+  environment: NodeJS.ProcessEnv,
+  cwd?: string,
+) =>
   runBoundedProcessNode({
     executable,
     args,
     environment: userEnvironment(environment),
+    ...(cwd !== undefined && { cwd }),
     stdoutLimitBytes: 8192,
     stderrLimitBytes: 8192,
     timeoutMillis: 10_000,
@@ -82,19 +86,32 @@ export const gitVersionSupported = (version: string): boolean => {
   return major > requiredMajor || (major === requiredMajor && minor >= requiredMinor);
 };
 
-// Git's own resolution: core.excludesFile from the user's global config, else
-// $XDG_CONFIG_HOME/git/ignore, else ~/.config/git/ignore.
-const userExcludesFile = (executable: string, environment: NodeJS.ProcessEnv) =>
+// Git's own resolution: core.excludesFile from the user's configuration (following include and
+// includeIf, and with `repository` the repository's own config, which outranks the global one),
+// else $XDG_CONFIG_HOME/git/ignore, else ~/.config/git/ignore.
+const userExcludesFile = (
+  executable: string,
+  environment: NodeJS.ProcessEnv,
+  repository?: string,
+) =>
   Effect.gen(function* () {
     const refusal = () =>
       unavailable(
-        "Git's global ignore configuration couldn't be preserved.",
-        "Check core.excludesFile in your global Git configuration, then retry. Isolated workspaces must retain your ignore rules before copying untracked files.",
+        "Git's ignore configuration couldn't be preserved.",
+        `Check core.excludesFile in your ${repository === undefined ? "global" : "global and repository"} Git configuration, then retry. Isolated workspaces must retain your ignore rules before copying untracked files.`,
       );
     const result = yield* runGit(
       executable,
-      ["config", "--global", "--path", "--get", "core.excludesFile"],
+      [
+        "config",
+        ...(repository === undefined ? ["--global"] : []),
+        "--includes",
+        "--path",
+        "--get",
+        "core.excludesFile",
+      ],
       environment,
+      repository,
     ).pipe(Effect.mapError(refusal));
     if (result.timedOut || result.overflowed || result.cleanupUnconfirmed) return yield* refusal();
     if (result.code === 0) {
@@ -128,8 +145,10 @@ export const resolveGitInstallation = (
         `Executable: ${executable}`,
       );
     const version = match.slice(1).filter(Boolean).join(".");
-    const excludesFile = yield* userExcludesFile(executable, environment);
-    return { executable, version, ...(excludesFile !== undefined && { excludesFile }) };
+    // Each capture resolves its repository's excludes file; checking the global configuration
+    // here reports a broken one before any workspace exists.
+    yield* userExcludesFile(executable, environment);
+    return { executable, version };
   });
 
 let resolved: GitInstallation | undefined;
@@ -146,6 +165,19 @@ export const gitInstallation: Effect.Effect<GitInstallation, WorkspaceError> = E
         ),
       ),
 );
+
+/**
+ * The excludes file Git applies in `repository` for this user: its own core.excludesFile
+ * outranks the global one, and includeIf conditions are evaluated against it.
+ */
+export const repositoryExcludesFile = (
+  repository: string,
+): Effect.Effect<string | undefined, WorkspaceError> =>
+  gitInstallation.pipe(
+    Effect.flatMap((installation) =>
+      userExcludesFile(installation.executable, process.env, repository),
+    ),
+  );
 
 export const supportedGitInstallation = gitInstallation.pipe(
   Effect.filterOrFail(

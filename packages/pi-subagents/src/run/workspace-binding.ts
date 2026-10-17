@@ -27,6 +27,8 @@ export interface WorkspaceBinding {
   reopenPending?: boolean | undefined;
   reviewedRevision?: string | undefined;
   reviewedThrough?: number | undefined;
+  /** The preparation whose setup succeeded; an engine-prepared tree without it is untested. */
+  testedPreparation?: string | undefined;
   finished?: boolean | undefined;
   integrated?: boolean | undefined;
   slot?: LaunchSlot | undefined;
@@ -111,6 +113,14 @@ export const workspaceFinishedError = () =>
     "workspace_finished",
     "This workspace was integrated or discarded and cannot take another assignment.",
   );
+
+/** Admission or resume makes the reviewed revision and its tested preparation stale. */
+export const reopenBindingLocked = (binding: WorkspaceBinding) => {
+  binding.reopenPending = true;
+  binding.reviewedRevision = undefined;
+  binding.reviewedThrough = undefined;
+  binding.testedPreparation = undefined;
+};
 
 export const workspaceBusyError = () =>
   invalid(

@@ -15,9 +15,17 @@ const CREDENTIAL_NAME =
   /^(?:\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.ssh|\.aws|\.azure|\.gnupg|\.kube|credentials?(?:\..*)?|secrets?(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?)$/iu;
 const CREDENTIAL_EXTENSION = /\.(?:pem|key|p12|pfx|jks|keystore)$/iu;
 
-/** Dependency, build, and Pi state directories never enter a snapshot, tracked or not. */
-export const dependencyWorkspacePath = (path: string): boolean =>
-  path.split("/").some((part) => DEPENDENCY_DIRECTORY.test(part));
+/**
+ * Dependency, build, and Pi state directories never enter a snapshot, tracked or not. Only
+ * directory names match, so a file such as `scripts/build` is source; set `mayBeDirectory` for
+ * an entry, such as a symlink, that can itself stand in for a directory.
+ */
+export const dependencyWorkspacePath = (path: string, mayBeDirectory = false): boolean => {
+  const parts = path.split("/");
+  return (mayBeDirectory ? parts : parts.slice(0, -1)).some((part) =>
+    DEPENDENCY_DIRECTORY.test(part),
+  );
+};
 
 /** Credential-shaped names; they exclude only files Git does not track. */
 export const credentialWorkspacePath = (path: string): boolean =>

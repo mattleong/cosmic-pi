@@ -1,7 +1,12 @@
 import * as Effect from "effect/Effect";
 import { dependencyWorkspacePath, safeWorkspacePath } from "../workspace/policy.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
-import { checkDirectory, workspaceIO, workspaceRefusal } from "./git-worktree-process.ts";
+import {
+  checkDirectory,
+  workspaceIO,
+  workspaceIOIfPresent,
+  workspaceRefusal,
+} from "./git-worktree-process.ts";
 
 interface LinkStat {
   isSymbolicLink(): boolean;
@@ -67,8 +72,16 @@ export const readWorkspaceSymlink = (
         "A symlink points outside the files the snapshot copies.",
         "links must use a canonical relative target naming a captured regular file in the repository",
       );
-    yield* checkDirectory(path.dirname(path.join(root, resolved)));
-    const destination = yield* workspaceIO("symlink", () => fs.lstat(path.join(root, resolved)));
+    yield* checkDirectory(path.dirname(path.join(root, resolved)), true);
+    const destination = yield* workspaceIOIfPresent("symlink", () =>
+      fs.lstat(path.join(root, resolved)),
+    );
+    if (!destination)
+      return yield* refuse(
+        "A symlink's target is missing.",
+        "tracked links must point to a regular file that exists in the checkout",
+        "Restore the link's target file or remove the link, or use the shared-checkout writer workspace.",
+      );
     if (!destination.isFile() || destination.nlink !== 1)
       return yield* refuse(
         "A symlink points at something other than a regular file.",

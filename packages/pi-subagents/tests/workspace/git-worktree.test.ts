@@ -239,9 +239,13 @@ test("keeps backups for manual recovery when publication stops partway", functio
   expect(record.publishedCount).toBe(1);
   expect(yield* readText(root, "other.txt")).toBe("published first\n");
   expect(yield* readText(root, "src/main.ts")).toBe("editor save\n");
-  const backups = (record.journal ?? []).map((entry) => entry.backupPath).toSorted();
+  // The conflicting file was put back as it was found, so only the published file's backup remains.
+  const backups = (record.journal ?? [])
+    .slice(0, record.publishedCount)
+    .map((entry) => entry.backupPath);
   expect(yield* publicationArtifacts(root)).toEqual(backups);
   expect(yield* readText(root, backups[0]!)).toBe("other\n");
+  expect((yield* io(() => fs.stat(path.join(root, "src/main.ts")))).nlink).toBe(1);
   expect(yield* fails(service.discard(workspaceTarget(handle)))).toBe(true);
 });
 

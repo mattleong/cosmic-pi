@@ -68,9 +68,6 @@ export const git = (
           "core.autocrlf=false",
           "-c",
           "core.attributesFile=/dev/null",
-          ...(installation.excludesFile === undefined
-            ? []
-            : ["-c", `core.excludesFile=${installation.excludesFile}`]),
           "-c",
           "diff.external=",
           "-c",
@@ -163,9 +160,15 @@ export const checkDirectory = (directory: string, allowMissing = false) =>
       );
       if (!stat) return absolute;
       if (!stat.isDirectory() || stat.isSymbolicLink())
-        return yield* workspaceFailure(
+        return yield* workspaceRefusal(
           "path",
           "Symlink or non-directory path component is unsupported.",
+          {
+            path: current,
+            rule: "every directory leading to a workspace file must be a real directory, never a symlink or file",
+            remedy:
+              "Replace the symlink or file with a real directory, or use the shared-checkout writer workspace.",
+          },
         );
     }
     return absolute;

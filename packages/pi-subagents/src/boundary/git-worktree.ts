@@ -25,11 +25,17 @@ import {
   oid,
   workspaceFailure,
   workspaceIO,
+  workspaceIOIfPresent,
   workspaceRefusal,
   writeWorkspaceFile,
 } from "./git-worktree-process.ts";
 import { supportedGitInstallation } from "./git-installation.ts";
-import { captureSnapshot, inspectSource, sourceIdentity } from "./git-worktree-snapshot.ts";
+import {
+  captureSnapshot,
+  inspectSource,
+  preserveIgnoreRules,
+  sourceIdentity,
+} from "./git-worktree-snapshot.ts";
 import {
   initializeWorkspaceStore,
   newWorkspaceId,
@@ -50,6 +56,7 @@ import {
 } from "./git-worktree-recovery.ts";
 import {
   publishWorkspace,
+  removeEmptiedDirectories,
   removePublicationBackups,
   requiredLeaseDirectories,
 } from "./git-worktree-integration.ts";
@@ -77,6 +84,34 @@ const settled = (target: WorkspaceSettledTarget) =>
   target.processCleanupConfirmed
     ? Effect.void
     : Effect.fail(workspaceFailure("cleanup", "Process cleanup must be independently confirmed."));
+
+// Generic failure messages say artifacts were kept; once create has removed them, say so instead.
+const removedCreateFailure = (error: WorkspaceError) =>
+  /\bretained\b/u.test(error.message)
+    ? new WorkspaceError({
+        operation: error.operation,
+        message: "Workspace creation failed; its partial workspace was removed.",
+        ...(error.detail !== undefined && { detail: error.detail }),
+      })
+    : error;
+
+const withoutSetupMarker = ({ setupCleanupPending: _pending, ...record }: WorkspaceRecord) =>
+  record;
+
+// A failed preparation setup leaves the reviewed revision frozen, with nothing to integrate.
+const withoutPreparation = ({
+  preparation: _preparation,
+  parentTree: _parentTree,
+  preparedTree: _preparedTree,
+  sourceHead: _sourceHead,
+  sourceIndex: _sourceIndex,
+  ...record
+}: WorkspaceRecord): WorkspaceRecord => ({ ...record, status: "frozen" });
+
+/** Serializes this process's workspace operations; setup releases it while its command runs. */
+export type WorkspaceOperationGate = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+) => Effect.Effect<A, E, R>;
 
 const revision = (record: WorkspaceRecord, id: string) => {
   const current = record.revision;
@@ -108,12 +143,17 @@ const neutralizeAttributes = (repository: string) =>
     );
   });
 
-/** The engine for `registry` (see workspaceRegistry); CrossProcessLock must use its lock directory. */
-export const gitWorkspaceEngine = (registry: string) =>
+/**
+ * The engine for `registry` (see workspaceRegistry); CrossProcessLock must use its lock directory.
+ * The caller serializes every operation with `gate` except setup, which takes it for each phase.
+ */
+export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGate) =>
   Effect.gen(function* () {
     const lockDirectory = workspaceLockDirectory(registry);
     const locks = yield* CrossProcessLock;
     const owned = new Set<string>();
+    // Workspaces whose setup command this engine is running outside the locks.
+    const settingUp = new Set<string>();
     // Held from this engine's first workspace until its scope closes, so another session can
     // prove this one ended before discarding a workspace it left behind.
     let presence: { readonly token: string; readonly lease: CrossProcessLease } | undefined;
@@ -167,6 +207,13 @@ export const gitWorkspaceEngine = (registry: string) =>
     const managedRecord = (workspaceId: string) =>
       Effect.gen(function* () {
         const record = yield* readWorkspaceRecord(registry, workspaceId);
+        if (record.setupCleanupPending !== undefined && settingUp.has(workspaceId))
+          return yield* new WorkspaceError({
+            operation: "setup",
+            message: "Workspace setup is still running.",
+            detail: `Setup tree: ${record.setupCleanupPending}\nTry again once setup finishes.`,
+            cleanupUnconfirmed: true,
+          });
         if (record.setupCleanupPending !== undefined)
           return yield* new WorkspaceError({
             operation: "setup",
@@ -176,7 +223,8 @@ export const gitWorkspaceEngine = (registry: string) =>
           });
         const relative = subdirectory(record);
         if (
-          relative.startsWith("..") ||
+          relative === ".." ||
+          relative.startsWith(`..${path.sep}`) ||
           path.isAbsolute(relative) ||
           record.handle.cwd !== path.join(worker(record), relative)
         )
@@ -199,6 +247,22 @@ export const gitWorkspaceEngine = (registry: string) =>
           );
         return record;
       });
+    // Best effort: a tree that can't be removed stays for integrate or discard to clean up.
+    const removePreparation = (record: WorkspaceRecord, preparationId: string) => {
+      const tree = path.join(directory(record), `prepare-${preparationId}`);
+      return Effect.gen(function* () {
+        if (!(yield* workspaceIOIfPresent("prepare", () => fs.lstat(tree)))) return;
+        yield* checkDirectory(tree);
+        yield* git(repository(record), ["worktree", "remove", "--force", tree]);
+      }).pipe(
+        Effect.catchTag("WorkspaceError", (error) =>
+          Effect.logWarning(`Failed preparation tree remains on disk: ${error.message}`).pipe(
+            Effect.annotateLogs({ workspaceId: record.handle.workspaceId, tree }),
+          ),
+        ),
+        Effect.uninterruptible,
+      );
+    };
     const lockedSource = <A, E, R>(sourceRoot: string, effect: Effect.Effect<A, E, R>) =>
       withWorkspaceStoreLock(locks, lockDirectory, sourceRoot, effect);
     // The source root never changes for a record, so reading it before the lock is safe; the
@@ -244,9 +308,20 @@ export const gitWorkspaceEngine = (registry: string) =>
           yield* syncWorkspaceDirectory(registry);
           yield* saveWorkspaceRecord(registry, record);
         }).pipe(Effect.uninterruptible);
+        // A fork keeps its seed and record for manual recovery (see removeWorkspaceTrees). Any
+        // other create that fails or is interrupted before it is acquired removes what it made,
+        // unless a Git process's cleanup is uncertain.
+        let handedOver = false;
+        const removeCreated = workspaceIO("create-cleanup", () =>
+          fs.rm(dir, { recursive: true, force: true }),
+        ).pipe(Effect.uninterruptible);
         return yield* Effect.gen(function* () {
           yield* git(dir, ["init", "--bare", "--template=", "--object-format=sha1", "repo.git"]);
           yield* neutralizeAttributes(repository(record));
+          yield* preserveIgnoreRules(
+            repository(record),
+            predecessor ? repository(predecessor) : source.sourceRoot,
+          );
           let snapshotRoot = source.sourceRoot;
           if (predecessor) {
             snapshotRoot = path.join(dir, "seed");
@@ -260,6 +335,22 @@ export const gitWorkspaceEngine = (registry: string) =>
           }
           const identity = predecessor ? undefined : yield* sourceIdentity(source.sourceRoot);
           const baseline = yield* capture(record, snapshotRoot, "baseline", true);
+          const within = `${source.subdirectory}${path.sep}`;
+          if (
+            !predecessor &&
+            source.subdirectory !== "" &&
+            !baseline.entries.some((entry) => entry.path.startsWith(within))
+          )
+            return yield* workspaceRefusal(
+              "create",
+              "The session directory has no files a workspace can capture.",
+              {
+                path: source.subdirectory,
+                rule: "the session directory must hold a captured source file; empty, ignored and dependency or build directories (node_modules, vendor, dist, build, coverage, .pi) are never copied",
+                remedy:
+                  "Start Pi in a directory with tracked or source files, such as the repository root, or use the shared-checkout writer mode.",
+              },
+            );
           const verified = yield* capture(record, snapshotRoot, "verify-baseline", true);
           if (verified.tree !== baseline.tree)
             return yield* workspaceFailure("create", "Source changed during snapshot acquisition.");
@@ -313,6 +404,7 @@ export const gitWorkspaceEngine = (registry: string) =>
             registry,
             { ...record, handle: ready, status: "active" },
             () => {
+              handedOver = true;
               owned.add(workspaceId);
               input.onAcquired?.(ready);
             },
@@ -322,9 +414,32 @@ export const gitWorkspaceEngine = (registry: string) =>
           Effect.catchIf(
             (error) => !error.cleanupUnconfirmed && !predecessor,
             (error) =>
-              workspaceIO("create-cleanup", () =>
-                fs.rm(dir, { recursive: true, force: true }),
-              ).pipe(Effect.andThen(Effect.fail(error))),
+              removeCreated.pipe(
+                Effect.matchEffect({
+                  onSuccess: () => Effect.fail(removedCreateFailure(error)),
+                  onFailure: () =>
+                    Effect.fail(
+                      new WorkspaceError({
+                        operation: error.operation,
+                        message: error.message,
+                        detail: [error.detail, `The partial workspace remains at ${dir}.`]
+                          .filter((line) => line !== undefined)
+                          .join("\n"),
+                      }),
+                    ),
+                }),
+              ),
+          ),
+          Effect.onInterrupt(() =>
+            handedOver || predecessor
+              ? Effect.void
+              : removeCreated.pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning(
+                      `Interrupted workspace creation left ${dir}: ${error.message}`,
+                    ),
+                  ),
+                ),
           ),
         );
       });
@@ -426,32 +541,52 @@ export const gitWorkspaceEngine = (registry: string) =>
       const preparationId = yield* newWorkspaceId;
       const preparedRoot = path.join(directory(record), `prepare-${preparationId}`);
       yield* git(repository(record), ["worktree", "add", "--detach", preparedRoot, parent.commit]);
-      if (reviewed.diff.length > 0) {
-        const stdin = new TextEncoder().encode(reviewed.diff);
-        yield* git(preparedRoot, ["apply", "--check", "--binary", "--whitespace=nowarn", "-"], {
-          stdin,
-        });
-        yield* git(preparedRoot, ["apply", "--binary", "--whitespace=nowarn", "-"], { stdin });
-      }
-      const combined = yield* capture(record, preparedRoot, `prepared-${preparationId}`);
-      const leaseDirectories = yield* requiredLeaseDirectories(record, reviewed.changedPaths);
-      const result = {
-        preparationId,
-        revisionId: target.revisionId,
-        cwd: path.join(preparedRoot, subdirectory(record)),
-        leaseDirectories,
-      };
-      yield* checkDirectory(result.cwd);
-      yield* saveWorkspaceRecord(registry, {
-        ...record,
-        status: "prepared",
-        preparation: result,
-        parentTree: parent.tree,
-        preparedTree: combined.tree,
-        sourceHead: identity.head,
-        sourceIndex: identity.index,
-      });
-      return result;
+      // A failed preparation never becomes integrable, so its copy of the source goes too; a
+      // Git process whose cleanup is uncertain keeps the tree for manual recovery.
+      let committed = false;
+      return yield* Effect.gen(function* () {
+        if (reviewed.diff.length > 0) {
+          const stdin = new TextEncoder().encode(reviewed.diff);
+          yield* git(preparedRoot, ["apply", "--check", "--binary", "--whitespace=nowarn", "-"], {
+            stdin,
+          });
+          yield* git(preparedRoot, ["apply", "--binary", "--whitespace=nowarn", "-"], { stdin });
+        }
+        const combined = yield* capture(record, preparedRoot, `prepared-${preparationId}`);
+        const leaseDirectories = yield* requiredLeaseDirectories(record, reviewed.changedPaths);
+        const result = {
+          preparationId,
+          revisionId: target.revisionId,
+          cwd: path.join(preparedRoot, subdirectory(record)),
+          leaseDirectories,
+        };
+        yield* checkDirectory(result.cwd);
+        yield* saveWorkspaceRecord(
+          registry,
+          {
+            ...record,
+            status: "prepared",
+            preparation: result,
+            parentTree: parent.tree,
+            preparedTree: combined.tree,
+            sourceHead: identity.head,
+            sourceIndex: identity.index,
+          },
+          () => {
+            committed = true;
+          },
+        );
+        return result;
+      }).pipe(
+        Effect.catchIf(
+          (error) => !error.cleanupUnconfirmed,
+          (error) =>
+            removePreparation(record, preparationId).pipe(Effect.andThen(Effect.fail(error))),
+        ),
+        Effect.onInterrupt(() =>
+          committed ? Effect.void : removePreparation(record, preparationId),
+        ),
+      );
     }, locked);
 
     const integrate = Effect.fn("GitWorkspaceEngine.integrate")(function* (
@@ -493,14 +628,32 @@ export const gitWorkspaceEngine = (registry: string) =>
         );
       const publication = yield* publishWorkspace(registry, record, before, prepared, preparation);
       const after = yield* sourceIdentity(record.handle.sourceRoot);
-      if (after.head !== identity.head || after.index !== identity.index)
-        return yield* workspaceFailure(
-          "integrate",
-          "Concurrent source branch/index mutation detected; inspect the retained publication journal.",
-        );
+      // Every file is already written, so the record stays mid-integration with its journal and
+      // every backup for the user to reconcile with whatever changed the branch or index.
+      if (after.head !== identity.head || after.index !== identity.index) {
+        const journal = publication.record.journal ?? [];
+        const backups = journal.flatMap((entry) => (entry.before ? [entry.backupPath] : []));
+        const changed = [
+          ...(after.head === identity.head ? [] : ["HEAD"]),
+          ...(after.index === identity.index ? [] : ["index"]),
+        ];
+        return yield* new WorkspaceError({
+          operation: "integrate",
+          message: `The source ${changed.join(" and ")} changed during publication; the workspace stays mid-integration.`,
+          detail: [
+            `Published: all ${journal.length} reviewed file changes in ${record.handle.sourceRoot}`,
+            `Journal: ${path.join(directory(record), "record.json")}`,
+            ...(backups.length > 0
+              ? [`Backups (relative to the source root): ${backups.join(", ")}`]
+              : []),
+            "Remedy: inspect the source branch and staged changes, compare the published files against the journal, then delete the backups manually.",
+          ].join("\n"),
+        });
+      }
       const integrated: WorkspaceRecord = { ...publication.record, status: "integrated" };
       yield* saveWorkspaceRecord(registry, integrated);
       const remainingBackupPaths = yield* removePublicationBackups(publication.backups);
+      yield* removeEmptiedDirectories(publication.emptiedDirectories);
       const uncapturedPaths = workerTree.excludedPaths;
       const treeRemovalFailed = target.retainTrees
         ? false
@@ -628,8 +781,16 @@ export const gitWorkspaceEngine = (registry: string) =>
           withFreeLock(locks, lockDirectory, sourceLockNamespace(sourceRoot), effect),
       });
     });
-    const setup = Effect.fn("GitWorkspaceEngine.setup")(function* (
-      target: WorkspaceSetupTarget & { readonly setup: WorkspaceSetup },
+    const setupTree = (record: WorkspaceRecord, preparation: string | undefined) =>
+      preparation === undefined
+        ? worker(record)
+        : path.join(directory(record), `prepare-${preparation}`);
+    // Persist before spawning. Interruption or a failed cleanup/record commit keeps this proof
+    // missing across runtime replacement; neither caller cleanup nor orphan discard can erase it,
+    // and every other operation refuses the record while it is set.
+    const beginSetup = Effect.fn("GitWorkspaceEngine.beginSetup")(function* (
+      target: WorkspaceSetupTarget,
+      began: () => void,
     ) {
       const record = yield* checked(target);
       const preparation = target.preparationId;
@@ -639,37 +800,78 @@ export const gitWorkspaceEngine = (registry: string) =>
           : record.status !== "prepared" || record.preparation?.preparationId !== preparation
       )
         return yield* workspaceFailure("setup", "The setup tree is stale or unavailable.");
-      const root =
-        preparation === undefined
-          ? worker(record)
-          : path.join(directory(record), `prepare-${preparation}`);
-      // Persist before spawning. Interruption or a failed cleanup/record commit keeps this proof
-      // missing across runtime replacement; neither caller cleanup nor orphan discard can erase it.
-      yield* Effect.uninterruptibleMask((restore) =>
-        saveWorkspaceRecord(registry, { ...record, setupCleanupPending: root }).pipe(
-          Effect.andThen(
-            restore(runWorkspaceSetup(target.setup, root)).pipe(
-              Effect.matchEffect({
-                onFailure: (error) => {
-                  const failure = new WorkspaceError({
-                    operation: "setup",
-                    message: error.message,
-                    cleanupUnconfirmed: error.cleanupUnconfirmed,
-                  });
-                  return error.cleanupUnconfirmed
-                    ? Effect.fail(failure)
-                    : saveWorkspaceRecord(registry, record).pipe(
-                        Effect.andThen(Effect.fail(failure)),
-                      );
-                },
-                onSuccess: () => saveWorkspaceRecord(registry, record),
-              }),
-            ),
-          ),
-        ),
-      );
+      const root = setupTree(record, preparation);
+      yield* saveWorkspaceRecord(registry, { ...record, setupCleanupPending: root }, began);
+      return root;
+    }, locked);
+    // Clears the marker only after confirmed process cleanup. A failed preparation setup also
+    // withdraws the preparation, so its untested tree can never be integrated.
+    const finishSetup = Effect.fn("GitWorkspaceEngine.finishSetup")(function* (
+      target: WorkspaceSetupTarget,
+      root: string,
+      failed: boolean,
+    ) {
+      const record = yield* readWorkspaceRecord(registry, target.workspaceId);
+      if (record.setupCleanupPending !== root || record.handle.ownerId !== target.ownerId)
+        return yield* workspaceFailure("setup", "The setup quarantine record changed.");
+      const cleared = withoutSetupMarker(record);
+      const preparation = target.preparationId;
+      if (!failed || preparation === undefined)
+        return yield* saveWorkspaceRecord(registry, cleared);
+      yield* saveWorkspaceRecord(registry, withoutPreparation(cleared));
+      yield* removePreparation(cleared, preparation);
       return undefined;
     }, locked);
+    const setup = (target: WorkspaceSetupTarget & { readonly setup: WorkspaceSetup }) => {
+      let began = false;
+      return Effect.gen(function* () {
+        const root = yield* gate(
+          beginSetup(target, () => {
+            began = true;
+            settingUp.add(target.workspaceId);
+          }),
+        );
+        // The command can run for up to an hour, so it holds neither this process's operation
+        // gate nor the checkout's store lock; the durable marker keeps every other operation away.
+        const failure = yield* runWorkspaceSetup(target.setup, root).pipe(
+          Effect.as(undefined),
+          Effect.catch((error) =>
+            error.cleanupUnconfirmed
+              ? Effect.fail(
+                  new WorkspaceError({
+                    operation: "setup",
+                    message: error.message,
+                    cleanupUnconfirmed: true,
+                  }),
+                )
+              : Effect.succeed(new WorkspaceError({ operation: "setup", message: error.message })),
+          ),
+        );
+        yield* gate(finishSetup(target, root, failure !== undefined)).pipe(
+          Effect.mapError(
+            (error) =>
+              new WorkspaceError({
+                operation: "setup",
+                message:
+                  "Workspace setup stopped, but its quarantine couldn't be cleared; the artifact stays quarantined.",
+                detail: [failure?.message, error.message, error.detail, `Setup tree: ${root}`]
+                  .filter((line) => line !== undefined)
+                  .join("\n"),
+                cleanupUnconfirmed: true,
+              }),
+          ),
+        );
+        if (failure) return yield* failure;
+        return undefined;
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (began) settingUp.delete(target.workspaceId);
+          }),
+        ),
+        Effect.withSpan("GitWorkspaceEngine.setup"),
+      );
+    };
     // A setup command may only add ignored or excluded files such as dependencies; anything else
     // would enter the worker's proposal or invalidate the prepared tree.
     const setupChanges = Effect.fn("GitWorkspaceEngine.setupChanges")(function* (

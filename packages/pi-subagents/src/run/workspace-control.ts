@@ -171,20 +171,30 @@ export function workspaceControl(dependencies: WorkspaceControlDependencies) {
         return undefined;
       }),
     );
-  const currentRecord = (record: WorkspaceRecord): WorkspaceRecord =>
-    state.bindings.get(record.handle.workspaceId)?.reopenPending &&
-    (record.status === "frozen" || record.status === "prepared")
-      ? {
-          version: record.version,
-          handle: record.handle,
-          status: "active",
-          baseline: record.baseline,
-          ...(record.predecessorWorkspaceId !== undefined && {
-            predecessorWorkspaceId: record.predecessorWorkspaceId,
-          }),
-          ...(record.excludedPaths !== undefined && { excludedPaths: record.excludedPaths }),
-        }
-      : record;
+  const currentRecord = (record: WorkspaceRecord): WorkspaceRecord => {
+    const binding = state.bindings.get(record.handle.workspaceId);
+    if (binding?.reopenPending && (record.status === "frozen" || record.status === "prepared"))
+      return {
+        version: record.version,
+        handle: record.handle,
+        status: "active",
+        baseline: record.baseline,
+        ...(record.predecessorWorkspaceId !== undefined && {
+          predecessorWorkspaceId: record.predecessorWorkspaceId,
+        }),
+        ...(record.excludedPaths !== undefined && { excludedPaths: record.excludedPaths }),
+      };
+    // A preparation whose setup failed or is still running cannot be integrated.
+    if (
+      binding &&
+      record.status === "prepared" &&
+      record.preparation?.preparationId !== binding.testedPreparation
+    ) {
+      const { preparation: _preparation, preparedTree: _preparedTree, ...frozen } = record;
+      return { ...frozen, status: "frozen" };
+    }
+    return record;
+  };
   const workspaceList: WorkspaceCoordinatorContract["workspaceList"] = (
     caller = SUBAGENT_ROOT_RUN_ID,
   ) =>

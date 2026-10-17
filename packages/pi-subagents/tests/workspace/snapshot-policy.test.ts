@@ -2,6 +2,7 @@ import { expect } from "vitest";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { git } from "../../src/boundary/git-worktree-process.ts";
 import {
+  exists,
   failureOf,
   io,
   readText,
@@ -106,3 +107,18 @@ attributed(
     expect(yield* readText(root, "src/id.ts")).toBe("// $Id$\nconst value = 2;\n");
   },
 );
+
+const named = workspaceTests([
+  ["scripts/build", "#!/bin/sh\necho build\n"],
+  ["build/output.js", "output\n"],
+  ["store/index.js", "store\n"],
+]);
+
+named("omits dependency directories, not files that share their names", function* (service, root) {
+  yield* io(() => fs.symlink("store", path.join(root, "node_modules")));
+  yield* git(root, ["add", "--", "node_modules"]);
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  expect(yield* readText(handle.cwd, "scripts/build")).toContain("echo build");
+  expect(handle.omittedTrackedPaths).toEqual(["build/output.js", "node_modules"]);
+  expect(yield* exists(path.join(handle.cwd, "node_modules"))).toBe(false);
+});

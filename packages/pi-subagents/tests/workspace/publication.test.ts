@@ -76,20 +76,46 @@ describe("anchored workspace publication", () => {
       expect(fs.statSync(nodePath.join(r.directory, r.backupName)).mode & 0o7777).toBe(0o600);
     }),
   );
-  it.effect(
-    "restores unexpected bytes exclusively and retains their backup for manual recovery",
-    () =>
-      Effect.gen(function* () {
-        const r = setup();
-        fs.writeFileSync(nodePath.join(r.directory, r.name), "editor");
-        expect(
-          (yield* publishWorkspaceFile({ ...r, before: image("before"), after: image("after") }))
-            .status,
-        ).toBe("conflict");
-        expect(fs.readFileSync(nodePath.join(r.directory, r.name), "utf8")).toBe("editor");
-        expect(fs.readFileSync(nodePath.join(r.directory, r.backupName), "utf8")).toBe("editor");
-        expect(fs.existsSync(nodePath.join(r.directory, r.temporaryName))).toBe(false);
-      }),
+  it.effect("restores unexpected bytes as the same unlinked file without keeping a backup", () =>
+    Effect.gen(function* () {
+      const r = setup();
+      const target = nodePath.join(r.directory, r.name);
+      fs.writeFileSync(target, "editor");
+      const original = fs.statSync(target).ino;
+      expect(
+        (yield* publishWorkspaceFile({ ...r, before: image("before"), after: image("after") }))
+          .status,
+      ).toBe("conflict");
+      expect(fs.readFileSync(target, "utf8")).toBe("editor");
+      expect(fs.statSync(target)).toMatchObject({ ino: original, nlink: 1 });
+      expect(fs.existsSync(nodePath.join(r.directory, r.backupName))).toBe(false);
+      expect(fs.existsSync(nodePath.join(r.directory, r.temporaryName))).toBe(false);
+      // A later publication can capture the restored file again.
+      fs.writeFileSync(target, "before");
+      expect(
+        (yield* publishWorkspaceFile({ ...r, before: image("before"), after: image("after") }))
+          .status,
+      ).toBe("success");
+      expect(fs.readFileSync(target, "utf8")).toBe("after");
+    }),
+  );
+  it.effect("never caches helper code in a directory other users can write", () =>
+    Effect.gen(function* () {
+      const r = setup();
+      const shared = nodePath.join(r.directory, "shared-cache");
+      fs.mkdirSync(shared);
+      fs.chmodSync(shared, 0o777);
+      fs.writeFileSync(nodePath.join(r.directory, r.name), "before");
+      expect(
+        (yield* publishWorkspaceFile({
+          ...r,
+          helperCache: shared,
+          before: image("before"),
+          after: image("after"),
+        })).status,
+      ).toBe("success");
+      expect(fs.readdirSync(shared)).toEqual([]);
+    }),
   );
   it("never overwrites an editor save after capture", () => {
     const r = setup();

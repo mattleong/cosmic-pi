@@ -1,8 +1,12 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { DEFAULT_SUBAGENT_NESTING_POLICY, type WriterWorkspaceMode } from "../config/schema.ts";
+import {
+  DEFAULT_MAX_ACTIVE_RUNS,
+  DEFAULT_SUBAGENT_NESTING_POLICY,
+  type WriterWorkspaceMode,
+} from "../config/schema.ts";
 import type { WorkspaceHandle } from "../workspace/model.ts";
-import { processCapacityError } from "./admission.ts";
+import { processCapacityError, treeCapacityError } from "./admission.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { SUBAGENT_ROOT_RUN_ID, type StartSubagentRequest, type SubagentRunView } from "./model.ts";
@@ -11,6 +15,7 @@ import { provisionWorkspaceTree } from "./workspace-setup.ts";
 import {
   type LaunchSlot,
   mapWorkspaceError,
+  reopenBindingLocked,
   type RevisionHold,
   type WorkspaceBinding,
   type WorkspaceControlContext,
@@ -47,6 +52,12 @@ const successorRequest = (binding: WorkspaceBinding, message: string): StartSuba
   supersedes: undefined,
 });
 
+const integrationQuarantinedError = () =>
+  invalid(
+    "workspace_integration_quarantined",
+    "Integration ownership is quarantined; writer admission is blocked.",
+  );
+
 const releaseRevisionLocked = ({ binding, revision }: Succession) => {
   if (binding.revision !== revision) return;
   binding.revision = undefined;
@@ -77,24 +88,45 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     binding.record = admitted;
     if (!binding.revision) return;
     binding.request = binding.revision.successor;
-    binding.reopenPending = true;
-    binding.reviewedRevision = undefined;
-    binding.reviewedThrough = undefined;
+    reopenBindingLocked(binding);
   };
-  const heldLaunchSlots = (caller: string, request?: StartSubagentRequest): number => {
+  /** Counts slots held by worktree launches still creating workspaces; omit caller for the tree. */
+  const heldLaunchSlots = (caller?: string, request?: StartSubagentRequest): number => {
     const own = request?.workspace
       ? state.bindings.get(request.workspace.workspaceId)?.slot
       : undefined;
-    return [...state.launchSlots].filter((slot) => slot.caller === caller && slot !== own).length;
+    return [...state.launchSlots].filter(
+      (slot) => slot !== own && (caller === undefined || slot.caller === caller),
+    ).length;
   };
   const worktreeCapacityLocked = (request: StartSubagentRequest, caller: string) =>
     Effect.gen(function* () {
-      const limit = (request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY).maxDirectChildren;
-      const capacityFailure = processCapacityError(records, caller, limit);
+      const nesting = request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
+      const direct = nesting.maxDirectChildren;
+      const tree = nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS;
+      const capacityFailure =
+        processCapacityError(records, caller, direct) ?? treeCapacityError(records, tree);
       if (capacityFailure) return yield* capacityFailure;
-      return processCapacityError(records, caller, limit, undefined, heldLaunchSlots(caller))
+      // Only launches still creating workspaces fill the limit, so wait for one to resolve.
+      return (processCapacityError(records, caller, direct, undefined, heldLaunchSlots(caller)) ??
+        treeCapacityError(records, tree, undefined, heldLaunchSlots()))
         ? state.slotReleased
         : undefined;
+    });
+  /** A route retry forks only from the failed writer that still owns an unfinished workspace. */
+  const holdForkSourceLocked = (predecessor: RunRecord, workspaceId: string, caller: string) =>
+    Effect.gen(function* () {
+      const current = state.bindings.get(workspaceId);
+      if (current?.finished) return yield* workspaceFinishedError();
+      if (current && current.record !== predecessor)
+        return yield* invalid(
+          "workspace_owner_unavailable",
+          "A revision successor now owns this workspace, so the failed writer's retry cannot fork from it.",
+        );
+      const binding = yield* requireBinding(workspaceId, caller);
+      const token = Symbol("workspace fork");
+      binding.busy = token;
+      return { binding, token };
     });
   const checkLaunchLocked = (
     request: StartSubagentRequest,
@@ -102,11 +134,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     Effect.gen(function* () {
       if (isClosed())
         return yield* invalid("workspace_runtime_closed", "The subagent session is closed.");
-      if (state.integrationQuarantined)
-        return yield* invalid(
-          "workspace_integration_quarantined",
-          "Integration ownership is quarantined; writer admission is blocked.",
-        );
+      if (state.integrationQuarantined) return yield* integrationQuarantinedError();
       const predecessor = request.supersedes ? records.get(request.supersedes.runId) : undefined;
       const mode =
         predecessor?.view.writerWorkspaceMode ?? request.writerWorkspaceModeOverride ?? state.mode;
@@ -195,15 +223,27 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
             ? records.get(request.supersedes.runId)
             : undefined;
           const prior = predecessor?.view.workspaceId
-            ? yield* withLock(requireBinding(predecessor.view.workspaceId, caller))
+            ? yield* withLock(
+                holdForkSourceLocked(predecessor, predecessor.view.workspaceId, caller),
+              )
             : undefined;
           const acquiring = prior
-            ? service.fork({
-                workspaceId: prior.handle.workspaceId,
-                ownerId: ownerFor(caller),
-                processCleanupConfirmed: true,
-                onAcquired,
-              })
+            ? service
+                .fork({
+                  workspaceId: prior.binding.handle.workspaceId,
+                  ownerId: ownerFor(caller),
+                  processCleanupConfirmed: true,
+                  onAcquired,
+                })
+                .pipe(
+                  Effect.ensuring(
+                    withLock(
+                      Effect.sync(() => {
+                        if (prior.binding.busy === prior.token) prior.binding.busy = undefined;
+                      }),
+                    ),
+                  ),
+                )
             : service.create({ sourceCwd: request.cwd, ownerId: ownerFor(caller), onAcquired });
           const handle = yield* restore(acquiring.pipe(Effect.mapError(mapWorkspaceError)));
           yield* withLock(Effect.sync(() => onAcquired(handle)));
@@ -280,17 +320,14 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
         );
       if (binding.busy !== undefined) return yield* workspaceBusyError();
       if (binding.finished) return yield* workspaceFinishedError();
+      if (state.integrationQuarantined) return yield* integrationQuarantinedError();
       if (binding.setupCleanupPending)
         return yield* invalid(
           "workspace_process_unsettled",
           "Workspace setup cleanup is unconfirmed; this artifact requires manual recovery.",
         );
       if (record.process !== undefined) return () => {};
-      return () => {
-        binding.reopenPending = true;
-        binding.reviewedRevision = undefined;
-        binding.reviewedThrough = undefined;
-      };
+      return () => reopenBindingLocked(binding);
     });
   const revise =
     (start: WorkspaceStart) =>

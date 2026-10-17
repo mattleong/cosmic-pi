@@ -1,8 +1,10 @@
 import * as Effect from "effect/Effect";
 import type { WorkspacePreparation, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
+import { nodeErrorCode } from "./harness-shared.ts";
 import {
   checkDirectory,
+  isSharedOrForeign,
   workspaceFailure,
   workspaceIO,
   workspaceIOIfPresent,
@@ -10,8 +12,10 @@ import {
 import {
   createWorkspaceDirectory,
   publishWorkspaceFile,
+  removeEmptyWorkspaceDirectory,
   removeWorkspaceBackups,
   type WorkspaceBackupRemovalRequest,
+  type WorkspaceDirectoryRemovalRequest,
 } from "./git-worktree-publish.ts";
 import {
   publicationBackupPrefix,
@@ -79,6 +83,51 @@ export const requiredLeaseDirectories = (
 
 type SnapshotEntries = ReadonlyMap<string, SnapshotEntry>;
 type DirectoryIdentity = Effect.Success<ReturnType<typeof directoryIdentity>>;
+
+// The helper starts once per file, directory and backup group. Its transpile cache lives in the
+// private registry rather than jiti's shared tmpdir default, and is only an optimization.
+const publicationHelperCache = (registry: string) =>
+  Effect.gen(function* () {
+    const cache = path.join(registry, "publication-cache");
+    yield* workspaceIO("integrate", () =>
+      fs.mkdir(cache, { mode: 0o700 }).catch((cause: unknown) => {
+        if (nodeErrorCode(cause) !== "EEXIST") throw cause;
+      }),
+    );
+    const stat = yield* workspaceIO("integrate", () => fs.lstat(cache));
+    return stat.isDirectory() && !isSharedOrForeign(stat) ? cache : undefined;
+  }).pipe(Effect.orElseSucceed(() => undefined));
+
+// Ancestors of deleted files, deepest first, that publication may remove once they are empty, as
+// `git apply` would. The source root and the session's cwd and its ancestors always stay.
+const emptiedDirectoryCandidates = (
+  record: WorkspaceRecord,
+  deleted: ReadonlyArray<string>,
+  directories: ReadonlyMap<string, DirectoryIdentity>,
+  helperCache: string | undefined,
+) => {
+  const { sourceRoot, sourceCwd } = record.handle;
+  const candidates = new Map<string, WorkspaceDirectoryRemovalRequest>();
+  for (const name of deleted)
+    for (let parent = path.dirname(name); parent !== "."; parent = path.dirname(parent)) {
+      const full = path.join(sourceRoot, parent);
+      if (full === sourceCwd || sourceCwd.startsWith(`${full}${path.sep}`)) break;
+      const target = directories.get(full);
+      const anchor = directories.get(path.dirname(full));
+      if (!target || !anchor) break;
+      candidates.set(full, {
+        directory: path.dirname(full),
+        ...anchor,
+        helperCache,
+        name: path.basename(full),
+        targetDev: target.directoryDev,
+        targetIno: target.directoryIno,
+      });
+    }
+  return [...candidates.entries()]
+    .toSorted(([left], [right]) => right.split(path.sep).length - left.split(path.sep).length)
+    .map(([, candidate]) => candidate);
+};
 
 const changedPaths = (previous: SnapshotEntries, next: SnapshotEntries) =>
   [...new Set([...previous.keys(), ...next.keys()])]
@@ -153,6 +202,7 @@ const createPlannedDirectories = (
   journal: WorkspaceRecord,
   root: string,
   directories: Map<string, DirectoryIdentity>,
+  helperCache: string | undefined,
 ) =>
   Effect.gen(function* () {
     let createdDirectoryCount = journal.createdDirectoryCount ?? 0;
@@ -165,6 +215,7 @@ const createPlannedDirectories = (
       const created = yield* createWorkspaceDirectory({
         directory: parent,
         ...identity,
+        helperCache,
         name: path.basename(target),
       });
       directories.set(target, created);
@@ -181,6 +232,7 @@ const publishEntries = (
   directories: ReadonlyMap<string, DirectoryIdentity>,
   previous: SnapshotEntries,
   next: SnapshotEntries,
+  helperCache: string | undefined,
 ) =>
   Effect.gen(function* () {
     let publishedCount = journal.publishedCount ?? 0;
@@ -195,6 +247,7 @@ const publishEntries = (
       const result = yield* publishWorkspaceFile({
         directory,
         ...identity,
+        helperCache,
         name: path.basename(entry.path),
         temporaryName: path.basename(entry.temporaryPath),
         backupName: path.basename(entry.backupPath),
@@ -212,6 +265,7 @@ const publishEntries = (
         backups.set(directory, {
           directory,
           ...identity,
+          helperCache,
           names: [...(backups.get(directory)?.names ?? []), path.basename(entry.backupPath)],
         });
       publishedCount += 1;
@@ -234,6 +288,27 @@ export const removePublicationBackups = (backups: ReadonlyArray<WorkspaceBackupR
     ),
   ).pipe(Effect.map((paths) => paths.flat()));
 
+/**
+ * Removes directories that deleting their last file left empty. Call it only once the integration
+ * has committed and its backups are gone; a directory that isn't empty or can't be removed stays.
+ */
+export const removeEmptiedDirectories = (
+  candidates: ReadonlyArray<WorkspaceDirectoryRemovalRequest>,
+) =>
+  Effect.forEach(
+    candidates,
+    (candidate) =>
+      workspaceIOIfPresent("integrate", () =>
+        fs.readdir(path.join(candidate.directory, candidate.name)),
+      ).pipe(
+        Effect.flatMap((names) =>
+          names?.length === 0 ? removeEmptyWorkspaceDirectory(candidate) : Effect.void,
+        ),
+        Effect.ignore,
+      ),
+    { discard: true },
+  );
+
 export const publishWorkspace = (
   registry: string,
   record: WorkspaceRecord,
@@ -255,6 +330,7 @@ export const publishWorkspace = (
         "Symlink changes cannot be published; source files were not modified.",
       );
     const root = record.handle.sourceRoot;
+    const helperCache = yield* publicationHelperCache(registry);
     const directories = new Map([[root, yield* directoryIdentity(root)]]);
     const missingDirectories = new Set<string>();
     for (const name of changed) {
@@ -283,6 +359,27 @@ export const publishWorkspace = (
       journal: entries,
     };
     yield* saveWorkspaceRecord(registry, journal);
-    const created = yield* createPlannedDirectories(registry, journal, root, directories);
-    return yield* publishEntries(registry, created, root, directories, previous, next);
+    const emptiedDirectories = emptiedDirectoryCandidates(
+      record,
+      changed.filter((name) => !next.has(name)),
+      directories,
+      helperCache,
+    );
+    const created = yield* createPlannedDirectories(
+      registry,
+      journal,
+      root,
+      directories,
+      helperCache,
+    );
+    const published = yield* publishEntries(
+      registry,
+      created,
+      root,
+      directories,
+      previous,
+      next,
+      helperCache,
+    );
+    return { ...published, emptiedDirectories };
   });

@@ -124,11 +124,85 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
         return yield* scriptedWriterAdmissionError();
       return undefined;
     });
+
+  const retryPredecessorLocked = (request: StartSubagentRequest) =>
+    Effect.gen(function* () {
+      const predecessor = request.supersedes ? records.get(request.supersedes.runId) : undefined;
+      if (
+        request.supersedes &&
+        (predecessor?.view.state !== "failed" ||
+          predecessor.retryClaim?.token !== request.supersedes.claimToken ||
+          predecessor.view.supersededByRunId !== undefined)
+      )
+        return yield* invalidRequest(
+          "retry_claim_stale",
+          `Failed predecessor ${request.supersedes.runId} no longer owns this next-candidate retry claim.`,
+        );
+      return predecessor;
+    });
+
+  const parentLocked = (request: StartSubagentRequest, predecessor: RunRecord | undefined) =>
+    Effect.gen(function* () {
+      const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+      const { maxDepth } = request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
+      const parent = parentRunId === SUBAGENT_ROOT_RUN_ID ? undefined : records.get(parentRunId);
+      if (parentRunId !== SUBAGENT_ROOT_RUN_ID && !parent)
+        return yield* invalidRequest(
+          "parent_run_not_found",
+          `Subagent parent ${parentRunId} is no longer registered.`,
+        );
+      if (parent && (parent.stoppedByParent || !isActiveRunState(parent.view.state)))
+        return yield* invalidRequest(
+          "parent_run_disconnected",
+          `Subagent parent ${parentRunId} is not connected and cannot spawn a child.`,
+        );
+      const parentDepth = parent?.view.depth ?? 0;
+      if (parentDepth >= maxDepth)
+        return yield* invalidRequest(
+          "nesting_depth_limit",
+          `Subagent nesting depth reached (${maxDepth}); ${parentRunId} cannot spawn another Pi run node.`,
+        );
+      if (
+        request.supersedes &&
+        predecessor &&
+        (predecessor.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) !== parentRunId
+      )
+        return yield* invalidRequest(
+          "retry_parent_mismatch",
+          "A retry successor must keep its predecessor's parent.",
+        );
+      return parent;
+    });
+
+  const spendLimitLocked = (spendLimit: number | undefined) =>
+    Effect.gen(function* () {
+      const spent = sessionUsageLocked(dependencies.sessionUsage, records).cost ?? 0;
+      if (spendLimit !== undefined && spent >= spendLimit)
+        return yield* new SubagentCapacityError({
+          limit: spendLimit,
+          code: "session_spend_limit",
+          message: `This session's subagents have spent $${spent.toFixed(2)} of its $${spendLimit.toFixed(2)} limit (sessionSpendLimit); no new runs start.`,
+        });
+      return undefined;
+    });
+
+  // Writers check what admission will refuse before canonicalizing a cwd or acquiring a
+  // workspace; admission repeats every check under the same lock.
   const validate = (request: StartSubagentRequest, scriptedRoot = false) =>
     validateStartRequest(request).pipe(
       Effect.tap(() =>
         request.writeIntent === "writer"
-          ? withLock(enforceScriptedAdmissionLocked(request, scriptedRoot))
+          ? dependencies.currentSpendLimit.pipe(
+              Effect.flatMap((spendLimit) =>
+                withLock(
+                  Effect.gen(function* () {
+                    yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
+                    yield* parentLocked(request, yield* retryPredecessorLocked(request));
+                    yield* spendLimitLocked(spendLimit);
+                  }),
+                ),
+              ),
+            )
           : Effect.void,
       ),
     );
@@ -186,56 +260,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             }),
           );
 
-        const retryPredecessorLocked = () =>
-          Effect.gen(function* () {
-            const predecessor = request.supersedes
-              ? records.get(request.supersedes.runId)
-              : undefined;
-            if (
-              request.supersedes &&
-              (predecessor?.view.state !== "failed" ||
-                predecessor.retryClaim?.token !== request.supersedes.claimToken ||
-                predecessor.view.supersededByRunId !== undefined)
-            )
-              return yield* invalidRequest(
-                "retry_claim_stale",
-                `Failed predecessor ${request.supersedes.runId} no longer owns this next-candidate retry claim.`,
-              );
-            return predecessor;
-          });
-
-        const parentLocked = (predecessor: RunRecord | undefined) =>
-          Effect.gen(function* () {
-            const parent =
-              parentRunId === SUBAGENT_ROOT_RUN_ID ? undefined : records.get(parentRunId);
-            if (parentRunId !== SUBAGENT_ROOT_RUN_ID && !parent)
-              return yield* invalidRequest(
-                "parent_run_not_found",
-                `Subagent parent ${parentRunId} is no longer registered.`,
-              );
-            if (parent && (parent.stoppedByParent || !isActiveRunState(parent.view.state)))
-              return yield* invalidRequest(
-                "parent_run_disconnected",
-                `Subagent parent ${parentRunId} is not connected and cannot spawn a child.`,
-              );
-            const parentDepth = parent?.view.depth ?? 0;
-            if (parentDepth >= nestingPolicy.maxDepth)
-              return yield* invalidRequest(
-                "nesting_depth_limit",
-                `Subagent nesting depth reached (${nestingPolicy.maxDepth}); ${parentRunId} cannot spawn another Pi run node.`,
-              );
-            if (
-              request.supersedes &&
-              predecessor &&
-              (predecessor.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) !== parentRunId
-            )
-              return yield* invalidRequest(
-                "retry_parent_mismatch",
-                "A retry successor must keep its predecessor's parent.",
-              );
-            return parent;
-          });
-
         const validateCapacityLocked = (
           ownReservation: RunRecord | undefined,
           predecessor: RunRecord | undefined,
@@ -253,16 +277,10 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               records,
               nestingPolicy.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
               ownReservation,
-              workspaces.heldLaunchSlots(parentRunId, request),
+              workspaces.heldLaunchSlots(undefined, request),
             );
             if (treeFailure) return yield* treeFailure;
-            const spent = sessionUsageLocked(dependencies.sessionUsage, records).cost ?? 0;
-            if (spendLimit !== undefined && spent >= spendLimit)
-              return yield* new SubagentCapacityError({
-                limit: spendLimit,
-                code: "session_spend_limit",
-                message: `This session's subagents have spent $${spent.toFixed(2)} of its $${spendLimit.toFixed(2)} limit (sessionSpendLimit); no new runs start.`,
-              });
+            yield* spendLimitLocked(spendLimit);
             if (!canonicalWriterCwd) return undefined;
             const writerFailure = writerConflictError(
               records,
@@ -279,8 +297,8 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
         const checkAdmissionLocked = (ownReservation?: RunRecord) =>
           Effect.gen(function* () {
             yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
-            const predecessor = yield* retryPredecessorLocked();
-            const parent = yield* parentLocked(predecessor);
+            const predecessor = yield* retryPredecessorLocked(request);
+            const parent = yield* parentLocked(request, predecessor);
             yield* validateCapacityLocked(ownReservation, predecessor);
             return { parent, predecessor };
           });
