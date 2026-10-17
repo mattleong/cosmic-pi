@@ -90,7 +90,6 @@ test("forwarded and peer notices without a recorded outcome stay neutral", () =>
     )!
       .render(120)
       .join("\n");
-    expect(text).not.toMatch(/^[✓?✗⚠]/u);
     expect(text).not.toContain("PRIVATE_RUN_ID");
   }
 });

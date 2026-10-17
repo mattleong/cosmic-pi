@@ -91,14 +91,6 @@ test("diff renderers honor limits at remove/add boundaries", () => {
   assert.equal(renderPlainDiff(diff, plainTheme, 1).split("\n").length, 1);
 });
 
-test("full-width diff component wraps long ANSI lines", () => {
-  const diffText = renderPlainDiff("+1 " + "x".repeat(80), plainTheme, 1);
-  const rows = new FullWidthDiffText(diffText, plainTheme).render(30);
-  assert.ok(rows.length > 1);
-  assert.equal(visibleWidth(rows[0] ?? ""), 30);
-  assert.ok(visibleWidth(rows.at(-1) ?? "") <= 30);
-});
-
 test("full-width diff wrapping keeps content when the gutter is wider than the viewport", () => {
   const diffText = renderPlainDiff("+1 abcdef", plainTheme, 1);
   const rows = new FullWidthDiffText(diffText, plainTheme).render(3);

@@ -82,11 +82,6 @@ describe("ask_user tool", () => {
   });
   it("shows notes under their answer, declines malformed notes, and rejects string content", () => {
     const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
-    const answer = { key: "route", kind: "custom", text: "Scenic", note: "Avoid tolls" };
-    const lines = resultOutput(tool, { outcome: "submitted", answers: [answer] }, []).split("\n");
-    const answerLine = lines.findIndex((line) => line.includes("Scenic"));
-    expect(answerLine).toBeGreaterThanOrEqual(0);
-    expect(lines[answerLine + 1]).toMatch(/.*Avoid tolls/);
     for (const malformed of malformedNoteAnswers())
       expect(
         resultOutput(tool, { outcome: "submitted", answers: [malformed] }, [

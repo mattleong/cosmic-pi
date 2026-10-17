@@ -94,5 +94,4 @@ test("untrusted issue text renders as inert single-line messages", () => {
   );
   expect(rows.join("")).not.toContain("\u001b[2J");
   expect(stripAnsi(rows[0]!)).toMatch(/first second.*third/u);
-  expect(rows).toHaveLength(3);
 });

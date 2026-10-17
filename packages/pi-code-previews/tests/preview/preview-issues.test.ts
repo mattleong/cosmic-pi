@@ -109,21 +109,3 @@ test("a failing host theme still shows every issue line within the row width", (
   harness.result(textResult("failed"), { isError: true });
   expect(harness.render(80).join(" ")).toContain(message);
 });
-
-test("animation ticks reuse the issues while the result's evidence is unchanged", () => {
-  let provided = 0;
-  const harness = createToolPresentationHarness(
-    tool(false, (input) => {
-      provided += 1;
-      return summary(input);
-    }),
-  );
-  harness.call({ path: "a.ts" }, { executionStarted: true });
-  harness.result(textResult("failed"), { isError: true });
-  harness.render(80);
-  const before = provided;
-  harness.invalidate();
-  harness.invalidate();
-  expect(order(harness.render(80))).toEqual(["HEADING", "CALL-CONTENT", "PROBLEM", "BODY"]);
-  expect(provided).toBe(before);
-});

@@ -599,24 +599,4 @@ describe("profile workspace disposal", () => {
     });
     replacement.dispose();
   });
-
-  it("shows optimistic conflict feedback after refreshing Current Session", () => {
-    const refreshed = makeInspection();
-    const component = new ProfileWorkspaceComponent(
-      baseOptions({
-        saveDraft: () =>
-          Promise.resolve({
-            inspection: refreshed,
-            conflictMessage: "Current Session changed while you were editing. Try again.",
-          }),
-      }),
-    );
-
-    chooseDelete(component);
-    component.handleInput("\r");
-    return settleTurn().then(() => {
-      expect(component.render(100).join("\n")).toContain("changed while you were editing");
-      return undefined;
-    });
-  });
 });

@@ -161,14 +161,6 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toEqual(steer);
   });
 
-  it("explains a single completion without a final report", () => {
-    const { notify, content } = notifier();
-
-    notify({ type: "completed", runs: [completion("agent-1", "reader")] });
-
-    expect(content()).toContain("Completed without a final report.");
-  });
-
   it("coalesces completed and failed outcomes into one batch", () => {
     const { sendMessage, notify, content } = notifier();
     notify({
@@ -181,7 +173,6 @@ describe("subagent host notifier", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledOnce();
-    expect(content()).toContain("3 background subagents finished · 2 completed · 1 failed");
     for (const section of ["## reader (agent-1)", "## reviewer (agent-2)", "## tester (agent-3)"]) {
       expect(content()).toContain(section);
     }

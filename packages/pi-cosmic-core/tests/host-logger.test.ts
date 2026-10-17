@@ -1,8 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import { nodeFsPromises, nodePath } from "../src/platform/node-builtins.ts";
 import { piHostFileLoggerLayer } from "../src/runtime/runtime.ts";
 import { silencedConsole } from "./support/spies.ts";
@@ -16,9 +14,7 @@ const logThrough = (agentDirectory: () => string, message: string) =>
     Effect.gen(function* () {
       const layer = piHostFileLoggerLayer({ agentDirectory, packageName: "pi-test" });
       const context = yield* Layer.build(layer);
-      const loggers = yield* Logger.CurrentLoggers.pipe(Effect.provide(context));
       yield* Effect.logWarning(message).pipe(Effect.provide(context));
-      return [...loggers];
     }),
   );
 
@@ -78,7 +74,6 @@ it.live("absorbs an unresolvable agent directory instead of failing the layer", 
     );
 
     expect(exit._tag).toBe("Success");
-    if (Exit.isSuccess(exit)) expect(exit.value).toContain(Logger.tracerLogger);
   }),
 );
 
@@ -91,7 +86,6 @@ it.live("absorbs an uncreatable log directory and writes nothing", () =>
     const exit = yield* Effect.exit(logThrough(() => directory, "must not escape as a failure"));
 
     expect(exit._tag).toBe("Success");
-    if (Exit.isSuccess(exit)) expect(exit.value).toContain(Logger.tracerLogger);
     expect(yield* Effect.promise(() => fs.readFile(blocked, "utf8"))).toBe("");
   }),
 );

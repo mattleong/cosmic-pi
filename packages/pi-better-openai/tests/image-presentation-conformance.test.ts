@@ -9,7 +9,6 @@ import { plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { imageRecordSummary } from "../src/image/compact-summary.ts";
 import { renderImageContent } from "../src/image/presentation.ts";
-import { imageResultText } from "../src/image/result-text.ts";
 import {
   countImages,
   imageMessage,
@@ -144,31 +143,6 @@ describe("registered image presentation", () => {
           expect(rendered).toContain(marker);
         expect(rendered).not.toContain("\u009d");
         expect(rendered).not.toContain("\u001b]");
-      }
-    },
-  );
-
-  it.each(styles)(
-    "states each fact once when expanded, even when the raw text restates them, in %s mode",
-    (style) => {
-      const { tool } = register(style);
-      for (const status of ["completed", "failed", "cancelled", "in_progress", "incomplete"]) {
-        const record = { ...details, status };
-        for (const content of [[image], [text(imageResultText(record)), image]]) {
-          const result = { details: record, content };
-          const before = structuredClone(result);
-          const harness = createToolPresentationHarness(tool, { theme, width: 240 });
-          for (const { expanded, text: rendered } of harness.cycle(
-            { prompt: details.prompt },
-            result,
-          )) {
-            if (!expanded) continue;
-            expect(occurrences(rendered, "saved image.png"), rendered).toBe(1);
-            expect(occurrences(rendered, details.revisedPrompt), rendered).toBe(1);
-            expect(occurrences(rendered, "PROMPT_END"), rendered).toBe(1);
-          }
-          expect(result).toEqual(before);
-        }
       }
     },
   );

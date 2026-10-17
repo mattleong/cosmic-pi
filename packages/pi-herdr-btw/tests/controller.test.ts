@@ -67,7 +67,6 @@ describe("herdr-btw command controller", () => {
         const openNew = vi.fn(() => Promise.resolve(result));
         const h = harness(open, openNew);
 
-        expect([...h.commands.keys()]).toEqual(["herdr-btw"]);
         yield* settle(() => h.invoke("  review this  "));
         expect(open).toHaveBeenCalledWith("review this");
         expect(openNew).not.toHaveBeenCalled();

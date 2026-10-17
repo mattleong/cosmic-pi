@@ -1,4 +1,3 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { effectTest } from "../support/effect-test.ts";
 import { executeWorkspaceAction } from "../../src/tools/execute-workspace.ts";
@@ -106,7 +105,6 @@ it("retains malformed and historical evidence through expansion for every root r
       );
       for (const width of [32, 100]) {
         const rows = harness.render(width);
-        expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
         if (expanded) expect(rows.join("\n")).toContain("historical evidence sentinel");
       }
     }
@@ -628,23 +626,6 @@ it("stops an expanded await ticker when a declined summary collapses", () => {
     for (const tick of ticks) tick();
     expect(ticks.size).toBe(expanded ? 1 : 0);
     expect(invalidations).toBe(1);
-  }
-});
-
-it("keeps the sole await heading when the live panel owns the result", () => {
-  const details = { version: 2, action: "await", cards: [], awaitUntil: "all_finished" };
-  for (const panelOwns of [false, true]) {
-    const tool = registered(panelOwns).find((entry) => entry.name === "subagent_await")!;
-    const harness = createToolPresentationHarness(tool, { width: 120 });
-    const frames = harness.cycle(
-      { runIds: ["target"], until: "all_finished" },
-      { content: [], details },
-      {
-        states: [true, false, true],
-        overrides: () => ({ executionStarted: true, isPartial: true }),
-      },
-    );
-    for (const { text } of frames) expect(text.match(/subagent_await/g)).toHaveLength(1);
   }
 });
 

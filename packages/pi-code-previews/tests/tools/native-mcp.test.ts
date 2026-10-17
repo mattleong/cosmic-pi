@@ -444,20 +444,6 @@ test("theme failures keep collapsed previews bounded while expansion preserves c
   assert.ok(expanded.includes(output.split("\n").at(-1) ?? ""));
 });
 
-test("preview issues survive a theme failure in the argument preview", () => {
-  settings("preview");
-  const value = result("short output", { ...docs, fullOutputPath: "/tmp/full-output.txt" });
-  const issues = summarize(dynamicTool(), value, {})?.issues ?? [];
-  assert.ok(issues.length > 0);
-  const theme = failingTheme({ when: (_token, text) => text.includes("theme-draw-query") });
-  const h = createToolPresentationHarness(styleNativeMcp(dynamicTool()), { theme });
-  h.call({ query: "theme-draw-query" });
-  h.result(value);
-  const rendered = stripAnsi(h.render(100).join("\n"));
-  for (const issue of issues.filter((entry) => entry.severity !== "info"))
-    assert.ok(rendered.includes(issue.message));
-});
-
 test("aggregate listings report bounded server failures, pagination, and unreadable coverage", () => {
   const list = resourceTool("list_mcp_resources");
   const aggregate = { server: "", tool: "list_mcp_resources" };

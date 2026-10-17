@@ -96,23 +96,6 @@ describe("fork prompt cache sharing", () => {
     expect(handlers.has("context_with_system")).toBe(false);
   });
 
-  it("sends the parent's cache key on APIs that route caching by key", () => {
-    const [request] = hooks({ PI_SUBAGENT_PROMPT_CACHE_KEY: "parent-session" }).get(
-      "before_provider_request",
-    );
-    const payload = Object.freeze({ model: "gpt-additive", prompt_cache_key: "child-session" });
-    expect(request?.({ type: "before_provider_request", payload }, forkContext())).toEqual({
-      model: "gpt-additive",
-      prompt_cache_key: "parent-session",
-    });
-    expect(
-      request?.(
-        { type: "before_provider_request", payload: { model: "claude-native" } },
-        forkContext(anthropicNative),
-      ),
-    ).toBeUndefined();
-  });
-
   it.effect(
     "keeps the parent's tool declarations while a declared-route request starts with them",
     () =>

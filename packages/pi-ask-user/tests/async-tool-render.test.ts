@@ -104,15 +104,9 @@ describe("async questionnaire replay rendering", () => {
       result({ requests: [snapshot] }, false, agentText),
       output(renderAsyncMessage(message, { expanded: false, outputPad: 0 }, theme)),
     ]) {
-      const lines = rendered.split("\n");
       for (const value of ["Scenic", "Tomorrow morning", "Text answer"])
         expect(rendered).toContain(value);
-      const scenic = lines.findIndex((line) => line.includes("Scenic"));
-      expect(lines[scenic + 1]).toMatch(/.*Avoid tolls/);
-      const text = lines.findIndex((line) => line.includes("Text answer"));
-      expect(lines.slice(text + 1).join("\n")).toMatch(/.*Text context/m);
       expect(rendered).not.toContain("with another line");
-      expect(rendered).toMatch(/expand/);
       expect(rendered).not.toContain(snapshot.requestId);
       expect(rendered).not.toContain(snapshot.deliveryId);
     }

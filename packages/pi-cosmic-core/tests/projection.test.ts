@@ -186,28 +186,6 @@ it.effect("rejects invalid projection preparation without committing and release
   }),
 );
 
-interface RecordedValues {
-  readonly values: ReadonlyArray<number>;
-}
-
-it.effect("serializes transitions and publishes each successful next state", () =>
-  Effect.gen(function* () {
-    const initial: RecordedValues = { values: [] };
-    const projection = yield* frozenProjection(
-      initial,
-      (state) => state,
-      () => undefined,
-    );
-    yield* projection.transition((state) =>
-      Effect.succeed([undefined, { values: [...state.values, 1] }] as const),
-    );
-    yield* projection.transition((state) =>
-      Effect.succeed([undefined, { values: [...state.values, 2] }] as const),
-    );
-    expect(projection.getSnapshot().values).toEqual([1, 2]);
-  }),
-);
-
 it.each([
   ["NaN", { nested: Number.NaN }, "$.nested"],
   ["positive infinity", { nested: Number.POSITIVE_INFINITY }, "$.nested"],

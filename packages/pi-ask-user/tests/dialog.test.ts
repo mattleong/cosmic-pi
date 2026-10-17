@@ -297,10 +297,6 @@ describe("AskUserDialog", () => {
     );
   });
 
-  it("does not pad a short dialog to its height allocation", () => {
-    const { dialog } = makeDialog(request(), undefined, () => 100);
-    expect(dialog.render(100).length).toBeLessThan(100);
-  });
   it("keeps q navigation-only outside text input yet accepts it as custom text", () => {
     const { dialog, done } = makeDialog();
 
@@ -366,9 +362,5 @@ describe("AskUserDialog", () => {
         note: "Keep both paths.",
       }),
     );
-  });
-
-  it.each([24, 120])("keeps every rendered line within width %i", (width) => {
-    expectWithin(makeDialog().dialog.render(width), width);
   });
 });

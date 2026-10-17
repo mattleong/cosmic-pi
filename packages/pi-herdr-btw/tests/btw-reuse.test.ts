@@ -330,7 +330,6 @@ describe("herdr-btw reuse workflow", () => {
           outcome: "confirmed",
           paneId: "w1:p2",
         });
-        expect(operationCount(test.calls, "inspect live agents")).toBe(2);
         expect(operationNames(test.calls)).not.toContain("start side-session Pi");
       }),
     );

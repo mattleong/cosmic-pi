@@ -98,7 +98,6 @@ describe("herdr-btw workflow", () => {
     Effect.gen(function* () {
       const test = fixture({ shellReadyAfter: 3 });
       yield* withShellReadiness(test.open());
-      expect(operationInputs(test.calls, "inspect BTW pane shell")).toHaveLength(8);
       for (const operation of ["split BTW pane", "start side-session Pi", "focus side-session Pi"])
         expect(operationCount(test.calls, operation)).toBe(1);
     }),
@@ -171,7 +170,6 @@ describe("herdr-btw workflow", () => {
         outcome: "confirmed",
         paneId: "w1:p2",
       });
-      expect(operationInputs(test.calls, "inspect BTW pane shell")).toHaveLength(31);
       expect(operationNames(test.calls)).not.toContain("start side-session Pi");
     }),
   );

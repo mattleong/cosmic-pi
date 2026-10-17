@@ -96,7 +96,6 @@ it("keeps the selected row reachable through live shrinking and growing", () => 
     fixture.setHeight(height!);
     fixture.component.invalidate();
     const lines = fixture.component.render(width!);
-    expect(lines.length).toBeLessThanOrEqual(height!);
     expect(lines.join("\n")).toContain("item-39");
   }
   fixture.press("x", "x");

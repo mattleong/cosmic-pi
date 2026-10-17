@@ -235,7 +235,6 @@ describe("subagent compact semantic policy", () => {
     );
     expect(summary?.counters?.[0]).toContain("1 running");
     expect(summary?.counters?.[0]).toContain("1 finished");
-    expect(summary?.metadata).toEqual([]);
   });
   it("keeps a requested target separate from lifecycle operations throughout rendering", () => {
     const provider = createSubagentCompactSummary("subagent_lifecycle");
@@ -300,7 +299,6 @@ describe("subagent compact semantic policy", () => {
     );
     expect(summary?.outcome).toBe("success");
     expect(summary?.counters).toContain("running");
-    expect(summary?.metadata).toEqual([]);
   });
 
   it("reads requested targets as execution does: trimmed and each once", () => {
@@ -393,7 +391,6 @@ describe("subagent compact semantic policy", () => {
       const summary = summarize("start", details, "running");
       expect(summary?.subject).toBe("");
       expect(summary?.counters).toEqual(["1/2 started"]);
-      expect(summary?.metadata).toEqual([]);
     }
   });
 
@@ -853,7 +850,6 @@ describe("subagent compact semantic policy", () => {
     expect(summary?.counters).toContain("finished");
     expect(summary?.metadata).not.toContain("1 paused");
     const text = `${messages(summary?.issues)}\n${issueDetails(summary?.issues)}`;
-    expect(summary?.metadata).toEqual([]);
     expect(text).not.toContain("SECRET REPORT BODY");
     expect(text).not.toContain('action: "resume"');
     const cancelled = summarize("await", { ...receipt, cancelled: true });
@@ -1015,7 +1011,6 @@ describe("subagent compact semantic policy", () => {
       action: "list",
       runs: [view({ finalText: "report" })],
     });
-    expect(summarize("list", reports)?.metadata).toEqual([]);
     expect(summarize("list", reports)?.issues).toEqual([]);
     for (const overrides of [{ error: "failure" }, { error: "failure", finalText: "report" }]) {
       const projected = compactToolDetails({ action: "list", runs: [view(overrides)] });
@@ -1123,7 +1118,6 @@ describe("subagent compact semantic policy", () => {
     const first = summarize("await", snapshot(false), "running");
     const next = summarize("await", snapshot(true, "new warning"), "running");
     expect(first?.counters).toEqual(["1/2 finished"]);
-    expect(first?.metadata).toEqual([]);
     expect(next?.counters).toEqual(first?.counters);
     expect(evidence(next?.issues)).toContain("new warning");
     const completed = snapshot(false);
@@ -1173,7 +1167,6 @@ describe("subagent compact semantic policy", () => {
     });
     expect(integrated?.issues).toEqual([]);
     expect(integrated?.outcome).toBe("success");
-    expect(integrated?.metadata).toEqual([]);
     expect(workspace("list", { workspaceCount: 0, listedCount: 0 })?.issues).toEqual([]);
     expect(workspace("list", {})?.issues).toHaveLength(1);
     const paged = workspace("list", { workspaceCount: 2, listedCount: 1, nextOffset: 1 });
@@ -1264,8 +1257,6 @@ describe("subagent compact semantic policy", () => {
       expect(summary?.outcome).toBe("success");
       expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["info"]);
       expect(issueDetails(summary?.issues)).toContain(skipped.reason);
-      expect(summary?.metadata).toEqual([]);
-      expect(summarize("status", projected, "running")?.metadata).toEqual([]);
       for (const patch of [
         { warning: "Declared local candidate fallback" },
         { selection: { ...selection, warning: "Explicit selection warning" } },

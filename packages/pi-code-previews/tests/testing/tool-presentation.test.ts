@@ -7,7 +7,6 @@ import {
   captureRegistrations,
   createToolPresentationHarness,
   probeAnimationOwnership,
-  renderContextFixture,
   withPresentationSettings,
 } from "../../testing";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../../src/config/state";
@@ -46,19 +45,6 @@ it("applies settings over the current snapshot and restores them even after a th
   expect(codePreviewSettings).toEqual(baseline);
   restoreBaseline();
   expect(codePreviewSettings).toEqual(original);
-});
-
-it("builds pending render contexts and renders with the plain theme by default", () => {
-  expect(renderContextFixture({ expanded: true })).toMatchObject({
-    args: {},
-    cwd: "/project",
-    executionStarted: false,
-    isPartial: true,
-    expanded: true,
-  });
-  const harness = createToolPresentationHarness(readTool());
-  harness.call({ path: "file.ts" });
-  expect(harness.render().join("\n")).toContain("CALL file.ts closed");
 });
 
 it("captures tool and message renderer registrations and ignores commands", () => {

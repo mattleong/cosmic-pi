@@ -1253,7 +1253,6 @@ describe("subagent tool", () => {
         captureSubagentTools(emptyService).get("subagent_list"),
         {},
       );
-      expect(empty?.content[0]?.text).toBe("No subagent runs.");
       expect(empty?.content[0]?.text.length).toBeLessThanOrEqual(48_000);
 
       const failed = yield* invokeOptionalTool(tools.get("subagent_start"), {

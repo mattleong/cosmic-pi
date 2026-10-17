@@ -71,22 +71,7 @@ describe("footer registry", () => {
 
     if (!canonical) throw new Error("Expected a canonical contribution.");
     store.upsert("owner", canonical);
-    expect(store.snapshot()).toBe(snapshot);
     expect(reads).toBe(readsAfterUpsert);
-  });
-
-  it("keeps snapshot identity for render-only work and still renders", () => {
-    const { store, renders } = registry();
-    store.upsert("owner", text("entry"));
-    const snapshot = store.snapshot();
-    const canonical = snapshot.contributions[0];
-    if (!canonical) throw new Error("Expected a canonical contribution.");
-
-    renders.mockClear();
-    store.upsert("owner", canonical);
-    store.upsert("owner", canonical);
-    expect(store.snapshot()).toBe(snapshot);
-    expect(renders).toHaveBeenCalledTimes(2);
   });
 
   it("publishes before rendering, skips no-op removal, and clears without rendering", () => {

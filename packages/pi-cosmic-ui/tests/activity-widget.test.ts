@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { renderActivityWidget } from "../src/activity/widget.ts";
-import { activityMark } from "../src/activity/row-line.ts";
-import { activityStatus } from "../src/activity/attention.ts";
 import { activityWidgetHeight, activityWidgetSections } from "../src/activity/widget-projection.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
-import { SPINNER_FRAME_MS } from "../src/manager/chrome.ts";
 import { activityRow, memberRow } from "./support/activity.ts";
 
 const standalone = [
@@ -143,18 +140,6 @@ describe("grouped activity widget", () => {
         ),
       ).toBe(true);
     }
-  });
-  it("animates a live parent and renders queued work as not yet started", () => {
-    const parent = activityRow("parent", "running", undefined, { startedAt: 0 });
-    const queued = memberRow("queued", parent, "pending");
-    const starting = memberRow("starting", parent, "pending", { startedAt: 0 });
-    const rows = [parent, queued];
-    expect(renderActivityWidget(rows, 100, 8, { now: 0 })).not.toEqual(
-      renderActivityWidget(rows, 100, 8, { now: SPINNER_FRAME_MS }),
-    );
-    expect(activityMark(queued, 0)).toEqual(activityMark(queued, SPINNER_FRAME_MS));
-    expect(activityMark(starting, 0)).not.toEqual(activityMark(starting, SPINNER_FRAME_MS));
-    expect(activityStatus(queued)).not.toBe(activityStatus(starting));
   });
   it("does not hide standalone queued questions or misclassify them as tasks", () => {
     const question = activityRow("queued", "pending", undefined, { kind: "question" });

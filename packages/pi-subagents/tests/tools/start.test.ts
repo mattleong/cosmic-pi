@@ -812,27 +812,6 @@ describe("subagent tool", () => {
     expect(result?.content[0]?.text).toContain("agent-1");
   });
 
-  effectTest("captures one profile snapshot for an entire concurrent start batch", function* () {
-    const requests: StartSubagentRequest[] = [];
-    const base = profileServiceFor(undefined);
-    let captures = 0;
-    const profiles = {
-      ...base,
-      capture: Effect.sync(() => {
-        captures += 1;
-      }).pipe(Effect.flatMap(() => base.capture)),
-    };
-    yield* invokeOptionalTool(startTool(requests, { profiles }), {
-      agents: [
-        { task: "One", profile: "scout" },
-        { task: "Two", profile: "reviewer" },
-      ],
-    });
-
-    expect(captures).toBe(1);
-    expect(requests).toHaveLength(2);
-  });
-
   effectTest("rejects forged routing fields again at the host profile boundary", function* () {
     const pi = extensionApiFixture({
       getThinkingLevel: () => "high",

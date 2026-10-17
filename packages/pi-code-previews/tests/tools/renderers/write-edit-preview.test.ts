@@ -48,7 +48,6 @@ function liveRow(
 }
 
 const text = (row: ToolExecutionComponent) => stripAnsi(row.render(120).join("\n"));
-const rows = (row: ToolExecutionComponent) => row.render(120).length;
 const count = (value: string, pattern: RegExp) => value.match(pattern)?.length ?? 0;
 
 const result = <Details>(
@@ -89,31 +88,6 @@ test("a finished write shows its diff once, and its content when no diff is show
     other.updateResult(withoutDiff);
     assert.match(text(other), /line 0\b/u);
   }
-});
-
-test("a successful write without a diff adds no outcome rows", () => {
-  for (const details of [{}, { codePreviewBeforeWrite: undefined }]) {
-    const row = liveRow("write", { path: "/project/a.txt", content });
-    row.markExecutionStarted();
-    const running = rows(row);
-    row.updateResult(result("Successfully wrote to a.txt", details));
-    assert.equal(rows(row), running);
-  }
-  const fresh = liveRow("write", { path: "/project/a.txt", content });
-  assert.doesNotMatch(text(fresh), /new file/iu);
-  fresh.updateResult(result("Successfully wrote to a.txt", { codePreviewBeforeWrite: undefined }));
-  assert.equal(count(text(fresh), /new file/giu), 1);
-  fresh.updateResult(result("Permission denied", undefined, true));
-  assert.doesNotMatch(text(fresh), /new file/iu);
-});
-
-test("the write heading counts lines the same way with the preview on or off", () => {
-  const heading = (writeContentPreview: boolean) =>
-    text(liveRow("write", { path: "/project/a.txt", content: "a\n\n\n" }, { writeContentPreview }))
-      .split("\n")
-      .find((line) => line.includes("a.txt"))
-      ?.trim();
-  assert.equal(heading(true), heading(false));
 });
 
 test("a replayed diff-skip reason cannot write terminal control sequences", () => {

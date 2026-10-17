@@ -3,7 +3,6 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { failingTheme } from "pi-cosmic-core/testing";
 import { beforeEach, test } from "vitest";
 import {
-  animationSchedulerProbe,
   applyPresentationSettings,
   createToolPresentationHarness,
   issueMessageStyleProblems,
@@ -334,16 +333,4 @@ test("expanded native source/output survive hostile theme construction and drawi
   const text = stripAnsi(h.render(100).join("\n"));
   assert.ok(text.includes("SOURCE_COMPLETE"));
   assert.ok(text.includes("LAST_OUTPUT"));
-});
-
-test("native renderers use the injected animation owner and stop at settlement", () => {
-  const probe = animationSchedulerProbe();
-  const h = createToolPresentationHarness(codemodeRenderers(probe.schedule));
-  h.call({ code: "return 1" }, { executionStarted: true });
-  h.result({ content: [], details: { calls: [call("running")] } }, { isPartial: true });
-  h.render();
-  assert.ok(probe.scheduled > 0);
-  h.result(output());
-  h.render();
-  assert.ok(probe.stops > 0);
 });

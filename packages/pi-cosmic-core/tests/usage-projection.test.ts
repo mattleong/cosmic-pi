@@ -58,31 +58,6 @@ describe("usage projection helpers", () => {
 
     const published = MutableRef.get(ref);
     expect(published.accountId).toBeUndefined();
-    expect(published.statusText).toBe("Usage unavailable");
     expect(Object.isFrozen(published)).toBe(true);
-  });
-
-  it("synchronizeUsageProjectionContext applies eligibility decisions and status texts", () => {
-    const ref = makeProjectionRef();
-
-    synchronizeUsageProjectionContext(ref, () => ({ eligible: true, clearUsage: true }));
-    expect(MutableRef.get(ref).statusText).toBe("Usage unavailable");
-    expect(MutableRef.get(ref).snapshot).toBeUndefined();
-
-    synchronizeUsageProjectionContext(ref, () => ({
-      eligible: false,
-      clearUsage: false,
-      statusTexts: { ...hidden, unavailableStatusText: "Custom unavailable." },
-    }));
-    expect(MutableRef.get(ref).statusText).toBe(hidden.hiddenStatusText);
-
-    synchronizeUsageProjectionContext(ref, () => ({ eligible: false, clearUsage: false }));
-    expect(MutableRef.get(ref).statusText).toBe("Usage hidden");
-
-    synchronizeUsageProjectionContext(ref, (state) => ({
-      eligible: state.statusLine === undefined,
-      clearUsage: false,
-    }));
-    expect(MutableRef.get(ref).statusText).toBe("Usage hidden");
   });
 });

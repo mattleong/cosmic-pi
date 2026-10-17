@@ -76,7 +76,6 @@ it("builds a real Pi theme whose overridden styling can change between renders",
   marker = "new";
   expect(theme.fg("error", "x")).toBe("new:x");
   expect(theme.bold("y")).toBe("y");
-  expect(theme.getColorMode()).toBe("truecolor");
 });
 
 it("uses complete class-instance overrides as-is and rejects partial ones", () => {

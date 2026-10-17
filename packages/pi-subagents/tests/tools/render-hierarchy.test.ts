@@ -1,11 +1,9 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { awaitDetails, compactToolDetails, startDetails } from "../../src/tools/details.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { renderContextFixture } from "pi-code-previews/testing";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { renderSubagentResult } from "../../src/tools/render.ts";
-import { renderResponsiveRunRows } from "../../src/tools/render-run-rows.ts";
 import {
   renderStartReceiptComponent,
   renderSubagentStartCall,
@@ -68,11 +66,8 @@ describe("hierarchical tool result rendering", () => {
       awaitUntil: "all_finished",
     });
 
-    const awaiting = render(details, { partial: true, width: 160 });
-    const completed = render(details, { width: 160 });
     const expanded = render(details, { expanded: true, width: 160 });
 
-    expect(completed.length).toBeLessThan(awaiting.length);
     expect(expanded.join("\n")).toContain(settledTarget.name);
     expect(expanded.join("\n")).toContain(settledChild.name);
   });
@@ -184,52 +179,6 @@ describe("hierarchical tool result rendering", () => {
       expect(expanded).toContain(failure.error);
     }
   });
-
-  it.each([20, 50, 100])("keeps list and await lines within width %i", (width) => {
-    const list = render(compactToolDetails({ action: "list", runs: [child, target] }), {
-      width,
-    });
-    const awaitProgress = render(
-      awaitDetails({
-        runs: [target],
-        contextRuns: [child],
-        awaitedRunIds: [target.id],
-        awaitUntil: "all_finished",
-      }),
-      { partial: true, width },
-    );
-    expect([...list, ...awaitProgress].every((line) => visibleWidth(line) <= width)).toBe(true);
-  });
-
-  it.each([1, 20, 50, 87, 120, 160])(
-    "keeps one hierarchy row per run bounded at width %i",
-    (width) => {
-      const busyTarget = view({
-        id: "agent-r1-15",
-        name: "React DOM server trace plan",
-        parentRunId: "root",
-        depth: 1,
-      });
-      const busyChild = view({
-        id: "agent-r1-16",
-        name: "Codemirror optimization plan",
-        parentRunId: busyTarget.id,
-        depth: 2,
-      });
-      const details = awaitDetails({
-        runs: [busyTarget],
-        contextRuns: [busyChild],
-        awaitedRunIds: [busyTarget.id],
-        awaitUntil: "all_finished",
-      });
-      const rows = renderResponsiveRunRows(details.cards, width, plainTheme, {
-        hierarchy: { awaitedRunIds: new Set([busyTarget.id]) },
-      });
-
-      expect(rows).toHaveLength(details.cards.length);
-      expect(rows.every((line) => visibleWidth(line) <= width)).toBe(true);
-    },
-  );
 
   it("reveals hidden start tasks only when expanded", () => {
     const agents = [

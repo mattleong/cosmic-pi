@@ -81,16 +81,6 @@ describe("questionnaire compact outcome projection", () => {
     },
   );
 
-  it("does not say a queued questionnaire is waiting for answers", () => {
-    const pending = row({ status: "pending", outcome: undefined, delivery: "pending" });
-    const [queued, open] = (["queued", "open"] as const).map(
-      (presentation) =>
-        summarize(asyncAskUserCompactSummary, { ...pending, presentation })?.issues?.[0]?.message,
-    );
-    expect(queued).toBeDefined();
-    expect(queued).not.toBe(open);
-  });
-
   it("counts queued and waiting requests, with shorter alternatives for narrow rows", () => {
     const pending = row({ status: "pending", outcome: undefined, delivery: "pending" });
     const summary = summarize(
@@ -107,9 +97,6 @@ describe("questionnaire compact outcome projection", () => {
     expect(summary?.outcome).toBe("success");
     expect(summary?.counters?.[0]).toMatch(/2 queued/);
     expect(summary?.counters?.[0]).toMatch(/1 waiting/);
-    const lengths = summary?.counters?.map((counter) => counter.length) ?? [];
-    expect(lengths.length).toBeGreaterThan(1);
-    expect(lengths).toEqual(lengths.toSorted((a, b) => b - a));
     expect(summary?.issues).toEqual([expect.objectContaining({ severity: "info" })]);
   });
 

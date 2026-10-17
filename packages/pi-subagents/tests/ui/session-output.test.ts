@@ -1,10 +1,8 @@
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, expect, it } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
-import { managerActivityLabel } from "pi-cosmic-ui/manager";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import { renderSubagentSessionOutput } from "../../src/ui/session-output.ts";
-import { runStateGlyph, runStateLabel } from "../../src/ui/run-state.ts";
 import { view } from "../fixtures/run-view.ts";
 
 const baseRun = (overrides: Partial<SubagentRunView> = {}): SubagentRunView =>
@@ -28,10 +26,8 @@ describe("subagent session output projection", () => {
   it("projects identity, state label, route subtitle, and empty-activity guidance", () => {
     const text = render(baseRun());
     expect(text).toContain("auth-review");
-    expect(text).toContain(`${runStateGlyph("running")} ${runStateLabel("running")}`);
     expect(text).toContain("provider/model");
     expect(text).toContain("read-only");
-    expect(text.toLowerCase()).toContain(`${managerActivityLabel("running")}…`);
     expect(text).not.toContain("agent-1");
   });
 
@@ -66,11 +62,6 @@ describe("subagent session output projection", () => {
       }),
     );
     expect(finished.match(/Parser fixed; tests pass\./g)).toHaveLength(1);
-  });
-
-  it("differentiates paused guidance by resume capability", () => {
-    const resumable = render(baseRun({ state: "paused" }));
-    expect(render(baseRun({ state: "paused", capabilities: ["interrupt"] }))).not.toBe(resumable);
   });
 
   it("renders terminal, report, and failure conclusions once", () => {

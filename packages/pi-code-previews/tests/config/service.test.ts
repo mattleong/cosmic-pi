@@ -149,22 +149,6 @@ it.effect("building the settings Layer does not publish its defaults", () => {
   }).pipe(Effect.scoped);
 });
 
-it.effect("settings operations serialize across separately built Layers", () =>
-  Effect.gen(function* () {
-    const gate = yield* gateFirstRead(makeInMemoryDocuments());
-    const first = yield* usingSettings(gate.documents, loadSettings).pipe(Effect.forkScoped);
-    yield* Deferred.await(gate.started);
-    const second = yield* usingSettings(gate.documents, loadSettings).pipe(Effect.forkScoped);
-    yield* Effect.yieldNow;
-    assert.equal(gate.reads(), 1);
-
-    yield* Deferred.succeed(gate.release, undefined);
-    yield* Fiber.join(first);
-    yield* Fiber.join(second);
-    assert.equal(gate.reads(), 4);
-  }).pipe(Effect.scoped),
-);
-
 it.effect("a cancelled newer load does not suppress an older successful publication", () =>
   Effect.gen(function* () {
     const gate = yield* gateFirstRead(

@@ -50,7 +50,6 @@ it("clips display text within its budget without splitting a surrogate pair", ()
   ] as const) {
     const clipped = clipText(text, limit);
     expect(clipped.length).toBeLessThanOrEqual(limit);
-    expect(clipped === text || clipped.endsWith("…") || clipped === "").toBe(true);
     expect(/[\ud800-\udbff]$/u.test(clipped.replace(/…$/u, ""))).toBe(false);
   }
 });

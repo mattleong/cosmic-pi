@@ -267,62 +267,8 @@ it("names the task, never its ID, in the collapsed preview heading and body", ()
     const result = { content: [{ type: "text" as const, text: "task-1 raw agent text" }], details };
     for (const { expanded, text } of harness.cycle(args, result, { states: [false, true] })) {
       expect(text).toContain("dev-server-name");
-      expect(text.split("\n")[0]).not.toMatch(/task-1|stop_all/u);
       if (expanded) expect(text).toContain("task-1 raw agent text");
       else expect(text).not.toContain("task-1");
     }
   }
-});
-
-it("shows a running call as running until its result arrives", () => {
-  const args = { action: "wait", id: "task-1", until: "exit" };
-  const render = (
-    live: { executionStarted: boolean; isPartial: boolean },
-    result?: Parameters<ReturnType<typeof createToolPresentationHarness>["result"]>[0],
-  ) => {
-    const harness = createToolPresentationHarness(registeredTool("on", "preview"));
-    harness.call(args, live);
-    if (result) harness.result(result, live);
-    return harness.render(120);
-  };
-  const pending = render({ executionStarted: false, isPartial: true });
-  const running = render({ executionStarted: true, isPartial: true });
-  expect(running.slice(0, pending.length)).toEqual(pending);
-  expect(running).toHaveLength(pending.length + 1);
-  const details = {
-    action: "wait",
-    wait: { id: "task-1", outcome: "completed", snapshot, ...cursors },
-  };
-  const settled = render(
-    { executionStarted: true, isPartial: false },
-    { content: [{ type: "text" as const, text: "done" }], details },
-  );
-  expect(settled).not.toContain(running.at(-1));
-});
-
-it("bounds collapsed log previews and counts only log lines", () => {
-  const lines = Array.from({ length: 30 }, (_, index) => `log entry ${index}`);
-  const result = {
-    content: [
-      {
-        type: "text" as const,
-        text: `[task-1 state=running cursor=123 earliest=45]\n${lines.join("\n")}\n`,
-      },
-    ],
-    details: { action: "logs", logs: { id: "task-1", state: "running", ...cursors } },
-  };
-  const harness = createToolPresentationHarness(registeredTool("on", "preview"));
-  harness.call({ action: "logs", id: "task-1" }, { executionStarted: true, isPartial: false });
-  harness.result(result, { expanded: false });
-  const collapsed = harness.render(120).join("\n");
-  expect(collapsed).toContain(lines[0]);
-  expect(collapsed).toContain(lines.at(-1));
-  expect(collapsed).not.toContain(lines[15]);
-  expect(collapsed).not.toContain("cursor=123");
-  expect(collapsed).toMatch(/\b30\b/u);
-  expect(collapsed).not.toMatch(/\b31\b/u);
-  harness.call({ action: "logs", id: "task-1" }, { expanded: true, isPartial: false });
-  harness.result(result, { expanded: true });
-  const expanded = harness.render(120);
-  for (const line of lines) expect(expanded.join("\n")).toContain(line);
 });

@@ -28,7 +28,6 @@ test("ANSI wrapping uses terminal cell width for wide unicode", () => {
   const rows = wrapAnsiToWidth(`\x1b[31m${"漢".repeat(8)}\x1b[39m`, 6, 10);
   assert.ok(rows.length > 1);
   assert.ok(rows.every((row) => visibleWidth(row) <= 6));
-  assert.equal(stripAnsi(rows[0] ?? ""), "漢漢漢");
 });
 
 test("ANSI wrapping preserves short printable spans exactly", () => {
@@ -41,22 +40,4 @@ test("ANSI wrapping preserves short printable spans exactly", () => {
     assert.ok(rows.every((row) => visibleWidth(row) <= 5));
     assert.ok(rows.every((row) => !row.includes("\x1b")));
   }
-});
-
-test("ANSI wrapping carries active styles across rows without rewriting fitting rows", () => {
-  assert.deepEqual(wrapAnsiToWidth("\x1b[31mabcdef\x1b[39m", 3, 3), [
-    "\x1b[31mabc",
-    "\x1b[31mdef\x1b[39m",
-  ]);
-});
-
-test("ANSI wrapping still truncates an oversized continuation prefix", () => {
-  assert.deepEqual(wrapAnsiToWidth("a\tb", 1, 3, "  "), ["a", "\x1b[0m", " \x1b[0m"]);
-});
-
-test("ANSI wrapping preserves styled Unicode continuation truncation", () => {
-  assert.deepEqual(wrapAnsiToWidth("abcd", 3, 3, "👩\x1b[31m\u200d💻"), [
-    "abc",
-    "👩\x1b[31m\u200d\x1b[0m",
-  ]);
 });

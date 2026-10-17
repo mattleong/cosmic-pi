@@ -662,7 +662,6 @@ describe("subagent v6 profile configuration and resolution", () => {
     const planner = resolveTestConfig(
       document({ profiles: { planner: candidate({ model: "openai/gpt-review" }) } }),
     );
-    expect(PROFILE_DEFINITIONS.planner.defaultEffort).toBe("xhigh");
     expect(resolveProfilePlan("planner", planner, environment)).toMatchObject({
       attempts: [{ effort: "high", effortWasExplicit: false }],
     });

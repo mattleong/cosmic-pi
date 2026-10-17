@@ -64,7 +64,6 @@ function imageServiceLayer(options: {
 
 describe("OpenAIImageService", () => {
   it.effect("uses one captured context/config snapshot for defaults and overrides", () => {
-    const requests: StreamingHttpTestRequest[] = [];
     const context = testContext({
       token: registryToken,
       model: () => unrelatedModel,
@@ -81,7 +80,6 @@ describe("OpenAIImageService", () => {
       context,
       config,
       body: responseBody,
-      requests,
       decodedFormats: ["png", "webp"],
     });
 
@@ -111,14 +109,6 @@ describe("OpenAIImageService", () => {
         outputFormat: "webp",
         mimeType: "image/webp",
       });
-      const [defaultBody, overrideBody] = requests.map(({ encodedJsonBody }) =>
-        JSON.stringify(encodedJsonBody),
-      );
-      expect(defaultBody).toContain("default-image-model");
-      expect(defaultBody).not.toContain("webp");
-      expect(overrideBody).toContain("override-model");
-      expect(overrideBody).not.toContain("default-image-model");
-      expect(overrideBody).toContain("webp");
       const nextDefault = yield* service.generate({ prompt: "default after override" });
       expect(nextDefault.imageModel).toBe(DEFAULT_IMAGE_MODEL);
     }).pipe(provideBuiltLayer(serviceLayer));

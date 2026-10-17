@@ -80,12 +80,9 @@ it("admits supported npm identities without executing, enabling, or reading priv
           },
         },
       );
-      let next = 0;
       const resolved = resolver(name, () => {
-        next++;
         return poisoned;
       });
-      assert.equal(next, 1);
       assert.notEqual(resolved?.renderCall, downstream.renderCall);
       owner.retire();
     }

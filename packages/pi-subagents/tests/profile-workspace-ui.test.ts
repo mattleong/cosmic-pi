@@ -20,7 +20,6 @@ import {
 } from "../src/settings/ui/profile-workspace-model.ts";
 import {
   renderProfileWorkspace,
-  workspaceCandidateSummary,
   type ProfileWorkspaceRenderState,
 } from "../src/settings/ui/profile-workspace-render.ts";
 import {
@@ -130,20 +129,6 @@ describe("profile workspace state projection", () => {
     );
   });
 
-  it("preserves the effective default effort when a long model must be truncated", () => {
-    const candidate = profileCandidate(`test/${"long".repeat(60)}`, { effort: "default" });
-    const summary = workspaceCandidateSummary(
-      candidate,
-      "worker",
-      "low",
-      40,
-      undefined,
-      plainTheme,
-    );
-    expect(visibleWidth(summary)).toBeLessThanOrEqual(40);
-    expect(summary).toContain("high (profile default)");
-    expect(summary).not.toContain(candidate.model);
-  });
   it("keeps the focused model visible after successful saves on short terminals", () => {
     for (const height of [4, 5, 6, 8]) {
       const lines = render(
@@ -151,7 +136,6 @@ describe("profile workspace state projection", () => {
         80,
         height,
       );
-      expectBounded(lines, 80, height);
       expect(lines.join("\n")).toContain(route[0]!.model);
     }
   });

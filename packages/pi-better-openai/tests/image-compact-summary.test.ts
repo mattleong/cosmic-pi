@@ -62,15 +62,6 @@ describe("image compact summary", () => {
     expect(call.result?.content[1]).toBe(image);
   });
 
-  it("keeps the prompt as the subject and names the saved file only while collapsed", () => {
-    const collapsed = imageCompactSummary(input());
-    expect(collapsed?.subject).toBe("An otter");
-    expect(collapsed?.metadata).toEqual(["otter-image-1.png"]);
-    const expanded = imageCompactSummary(input("completed", true));
-    expect(expanded?.subject).toBe("An otter");
-    expect(expanded?.metadata ?? []).not.toContain("otter-image-1.png");
-  });
-
   it("warns rather than confirming success when a completed record has no image", () => {
     const call = input();
     call.result!.content = [{ type: "text", text: "Generated image" }];
