@@ -42,9 +42,7 @@ A completed writer's report does not approve its changes, and nothing applies th
 
 ### Quick path
 
-For small or trusted changes, call `subagent_workspace` with `{"action":"apply","workspaceId":"..."}` after process cleanup. It freezes, prepares, runs the project's `workspaceVerify` when configured, and integrates as uncommitted edits in one call. The result says whether the diff was read and whether verification passed.
-
-Failed verification applies nothing, and that preparation can never be applied. Inspect its prepared tree, then revise, discard, or take the careful path.
+For small or trusted changes, call `subagent_workspace` with `{"action":"apply","workspaceId":"..."}` after process cleanup. It freezes, prepares, and integrates as uncommitted edits in one call, testing nothing. The result says whether the diff was read; run relevant tests in the parent checkout afterwards.
 
 To take only part of a proposal, pass `paths` (exact changed paths from the review summary). The remaining changes stay in the workspace as an unreviewed proposal.
 
@@ -55,19 +53,29 @@ For risky changes:
 1. Call `review` with the workspace ID after process cleanup. Keep the returned `revisionId` and read every page, passing it with each `nextOffset`. Each page holds up to 16,000 characters: first a summary (per-file line counts, binary, added, deleted, and mode markers, and credential files the worker left out), then the full diff.
 2. Call `prepare` with the workspace ID and reviewed `revisionId`. This creates a separate cwd combining the proposal with current parent edits.
 3. Run relevant tests in that cwd without editing it. Worker-only tests don't replace this pass.
-4. Call `apply` with `workspaceId`, `revisionId`, and `preparationId`. It integrates exactly that pair as uncommitted edits, without preparing or verifying again, and reports `parent-tested`. It never merges, stages, or commits.
+4. Call `apply` with `workspaceId`, `revisionId`, and `preparationId`. It integrates exactly that pair as uncommitted edits, without preparing again, and reports `parent-tested`. It never merges, stages, or commits.
 
 ### What a worktree writer shares
 
 A worktree writer's workspace is a locked, detached linked worktree of your repository under `<agent-dir>/subagent-worktrees/`, so `git worktree list` shows it and its commits live under `refs/pi/workspaces/`. Discard and integration remove both. The writer's prompt tells it to stay on the detached HEAD and not to create branches, use `git stash`, change Git config, or run `git worktree` commands, because each would reach your repository ([Writer guidance](local-backends.md#writer-guidance)).
 
-Ignored and untracked credential files stay in your checkout. When writers need some of them, such as `.env`, a trusted project's `.pi/pi-subagents.json` can name them with gitignore-syntax patterns; matching files are copied into each worker and test tree, but never into a proposal ([Included files](local-backends.md#included-files)). Run `/reload` after changing it.
+Ignored and untracked credential files stay in your checkout. When writers need some of them, such as `.env`, list them with gitignore-syntax patterns in a `.worktreeinclude` file at the checkout's top level; matching files are copied into each worker and test tree, but never into a proposal ([Included files](local-backends.md#included-files)).
+
+```gitignore
+# Local files isolated writers need
+.env
+.env.local
+config/*.local.json
+```
+
+Ignored dependencies are absent too. A `WorktreeCreate` hook in `pi-subagents.json` installs them in each new tree, and a `WorktreeRemove` hook cleans up before a tree goes ([Worktree hooks](local-backends.md#worktree-hooks)). Run `/reload` after changing hooks.
 
 ```json
 {
   "version": 6,
-  "workspaceSetup": { "command": ["pnpm", "install", "--offline", "--frozen-lockfile"] },
-  "workspaceInclude": [".env", ".env.local", "config/*.local.json"]
+  "hooks": {
+    "WorktreeCreate": [{ "command": ["pnpm", "install", "--offline", "--frozen-lockfile"] }]
+  }
 }
 ```
 

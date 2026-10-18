@@ -7,15 +7,10 @@ import { Check } from "typebox/value";
 import { invalidRequest } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
-import type { WorkspaceApplyResult } from "../run/workspace-apply.ts";
 import type { WorkspaceReviseOptions } from "../run/workspace-launch.ts";
 import type { WorkspaceIntegrationOutcome } from "../run/workspace-integration.ts";
 import { UnavailableWorkspaceArtifactSchema, WorkspaceRecordSchema } from "../workspace/model.ts";
-import {
-  MAX_WORKSPACE_VERIFICATION_TEXT_CHARS,
-  type WorkspaceToolDetails,
-  type WorkspaceWarning,
-} from "./details-schema.ts";
+import type { WorkspaceToolDetails, WorkspaceWarning } from "./details-schema.ts";
 import {
   WorkspaceParameters,
   workspaceOperationError,
@@ -297,52 +292,17 @@ const executeWorkspacePrepare = (
     );
   });
 
-const PASSED_TAIL_LINES = 8;
-const PASSED_TAIL_CHARS = 1_000;
-
-const verificationText = (text: string) =>
-  clipText(sanitizeTerminalLine(text), MAX_WORKSPACE_VERIFICATION_TEXT_CHARS);
-
-const lastLines = (text: string, lines: number, chars: number) =>
-  text.trimEnd().split("\n").slice(-lines).join("\n").slice(-chars);
-
-const outputSection = (heading: string, tail: string) =>
-  tail.trim() ? [heading, "BEGIN OUTPUT TAIL", tail, "END OUTPUT TAIL"] : [`${heading} (empty)`];
-
 const appliedReviewLine = (reviewed: boolean) =>
   reviewed
     ? "Reviewed: every diff page of this revision was read before apply."
     : "Unreviewed: apply ran without the diff being read. Inspect the changed files in the parent checkout if the change needs review.";
 
-const applyVerificationLines = (
-  verification: Extract<WorkspaceApplyResult, { readonly integrated: true }>["verification"],
-) => {
-  switch (verification.status) {
-    case "passed":
-      return {
-        status: [`Verified: ${sanitizeTerminalLine(verification.command.join(" "))} passed.`],
-        output: outputSection(
-          "Verification output tail:",
-          lastLines(verification.outputTail, PASSED_TAIL_LINES, PASSED_TAIL_CHARS),
-        ),
-      };
-    case "parent-tested":
-      return {
-        status: [
-          "Tested by you: apply integrated the preparation you tested in its combined cwd and ran no verification of its own.",
-        ],
-        output: [],
-      };
-    case "not-configured":
-      return {
-        status: [
-          "Not verified: no workspace verification command is configured, so the change wasn't tested. Run relevant tests in the parent checkout.",
-        ],
-        output: [],
-      };
-  }
-  return absurd<never>(verification);
-};
+const APPLY_TESTING_LINES = {
+  "parent-tested":
+    "Tested by you: apply integrated the preparation you tested in its combined cwd.",
+  untested:
+    "Untested: apply prepared and integrated in one call without running anything. Run relevant tests in the parent checkout.",
+} as const;
 
 const executeWorkspaceApply = (
   service: SubagentServiceContract,
@@ -366,12 +326,8 @@ const executeWorkspaceApply = (
       remainingCount === undefined
         ? []
         : [
-            `Partial apply: ${countLabel(remainingCount, "other changed file")} ${applied.integrated ? (remainingCount === 1 ? "stays" : "stay") : "would stay"} in workspace ${workspaceId} as an unreviewed proposal: ${listedPaths(applied.remainingPaths ?? [])}${remainingCount > (applied.remainingPaths ?? []).length ? ` (${remainingCount - (applied.remainingPaths ?? []).length} not listed)` : ""}. Apply, review, revise, or discard them later.`,
+            `Partial apply: ${countLabel(remainingCount, "other changed file")} ${remainingCount === 1 ? "stays" : "stay"} in workspace ${workspaceId} as an unreviewed proposal: ${listedPaths(applied.remainingPaths ?? [])}${remainingCount > (applied.remainingPaths ?? []).length ? ` (${remainingCount - (applied.remainingPaths ?? []).length} not listed)` : ""}. Apply, review, revise, or discard them later.`,
           ];
-    const command =
-      "command" in applied.verification
-        ? verificationText(applied.verification.command.join(" "))
-        : "";
     const metadata = {
       ...receipt,
       revisionId: applied.revisionId,
@@ -379,36 +335,16 @@ const executeWorkspaceApply = (
       changedPathCount: applied.changedPathCount,
       ...(remainingCount !== undefined && { remainingPathCount: remainingCount }),
       reviewed: applied.reviewed,
-      verification: applied.verification.status,
-      ...(command && { verificationCommand: command }),
+      testing: applied.testing,
       ...(applied.preparedCwd.length <= 1_024 && { preparedCwd: applied.preparedCwd }),
     };
-    if (!applied.integrated) {
-      const { verification } = applied;
-      const heading = `Verification failed for ${ids}. Nothing was applied; parent files are unchanged, and this preparation can't be applied.`;
-      const body = [
-        `Command: ${sanitizeTerminalLine(verification.command.join(" "))}`,
-        `Failure: ${sanitizeTerminalLine(verification.message)}`,
-        `Prepared tree (inspect it; don't edit it): ${applied.preparedCwd}`,
-        changed,
-        ...remaining,
-        ...outputSection("Verification output tail:", verification.outputTail),
-      ].join("\n");
-      const message = verificationText(verification.message);
-      return result([heading, body, `Next steps: ${applied.nextSteps}`].join("\n"), {
-        ...metadata,
-        ...(message && { verificationMessage: message }),
-        displayContent: { offset: heading.length + 1, length: body.length },
-      });
-    }
     const warnings = [...integrationWarnings(applied), ...leftOutWarnings(applied.leftOutPaths)];
-    const { status, output } = applyVerificationLines(applied.verification);
     const heading = [
       `Applied ${ids} as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.`,
       appliedReviewLine(applied.reviewed),
-      ...status,
+      APPLY_TESTING_LINES[applied.testing],
     ].join("\n");
-    const body = [changed, ...remaining, ...output].join("\n");
+    const body = [changed, ...remaining].join("\n");
     return result(
       [heading, body, ...warnings.map((warning) => `Warning: ${warning.detail}`)].join("\n"),
       {

@@ -19,6 +19,10 @@ const test = workspaceTests([
   ["src/main.ts", "baseline\n"],
 ]);
 
+/** Writes the checkout's `.worktreeinclude`. */
+const includeFile = (root: string, text: string) =>
+  writeFile(path.join(root, ".worktreeinclude"), text);
+
 const permissions = (...parts: ReadonlyArray<string>) =>
   io(() => fs.lstat(path.join(...parts))).pipe(Effect.map((stat) => stat.mode & 0o777));
 
@@ -39,7 +43,7 @@ const prepareAndIntegrate = (service: WorkspaceServiceContract, handle: Workspac
     return { revision, preparation };
   });
 
-describe("workspaceInclude", () => {
+describe(".worktreeinclude", () => {
   test("copies matching ignored files with their mode into the worker and test trees", function* (service, root) {
     yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
     yield* io(() => fs.chmod(path.join(root, ".env"), 0o640));
@@ -48,12 +52,9 @@ describe("workspaceInclude", () => {
     yield* io(() => fs.chmod(path.join(root, "config/db.local"), 0o750));
     // Ignored but unmatched, so it stays out like any ignored file.
     yield* writeFile(path.join(root, "other.local"), "other\n");
+    yield* includeFile(root, "# Local files writers need\n\n.env\n  \n# other.local\nconfig/   \n");
 
-    const handle = yield* service.create({
-      sourceCwd: root,
-      ownerId: "parent",
-      include: [".env", "config/"],
-    });
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     expect(yield* readText(handle.cwd, ".env")).toBe("TOKEN=parent\n");
     expect(yield* permissions(handle.cwd, ".env")).toBe(0o640);
     expect(yield* permissions(handle.cwd, "config/db.local")).toBe(0o750);
@@ -82,7 +83,8 @@ describe("workspaceInclude", () => {
 
   test("never captures an included file, even edited, un-ignored, or staged", function* (service, root) {
     yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
-    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent", include: [".env"] });
+    yield* includeFile(root, ".env\n");
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     const target = workspaceTarget(handle);
 
     yield* writeFile(path.join(handle.cwd, ".env"), "TOKEN=writer-secret\n");
@@ -106,11 +108,8 @@ describe("workspaceInclude", () => {
     yield* writeFile(path.join(root, "credentials.json"), '{"key":"secret"}\n');
     // Untracked and not ignored: the baseline already carries it.
     yield* writeFile(path.join(root, "notes.md"), "notes\n");
-    const handle = yield* service.create({
-      sourceCwd: root,
-      ownerId: "parent",
-      include: ["credentials.json", "notes.md", "src/main.ts"],
-    });
+    yield* includeFile(root, "credentials.json\nnotes.md\nsrc/main.ts\n");
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     expect(yield* readText(handle.cwd, "credentials.json")).toBe('{"key":"secret"}\n');
     expect((yield* service.inspect(workspaceTarget(handle))).includedPaths).toEqual([
       "credentials.json",
@@ -123,11 +122,8 @@ describe("workspaceInclude", () => {
   test("skips symlinks a pattern matches", function* (service, root) {
     yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
     yield* io(() => fs.symlink("/etc/hosts", path.join(root, "hosts.local")));
-    const handle = yield* service.create({
-      sourceCwd: root,
-      ownerId: "parent",
-      include: [".env", "*.local"],
-    });
+    yield* includeFile(root, ".env\n*.local\n");
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     expect(yield* exists(path.join(handle.cwd, ".env"))).toBe(true);
     expect(
       yield* io(() =>
@@ -144,9 +140,8 @@ describe("workspaceInclude", () => {
     yield* io(() => fs.mkdir(path.join(root, "many")));
     for (let index = 0; index <= 256; index += 1)
       yield* writeFile(path.join(root, "many", `${index}.local`), `${index}\n`);
-    const error = yield* failureOf(
-      service.create({ sourceCwd: root, ownerId: "parent", include: ["many/"] }),
-    );
+    yield* includeFile(root, "many/\n");
+    const error = yield* failureOf(service.create({ sourceCwd: root, ownerId: "parent" }));
     expect(error.operation).toBe("create");
     const left = yield* io(() => fs.readdir(path.join(agent, "subagent-worktrees")));
     expect(left.filter((name) => /^[a-f0-9-]{36}$/u.test(name))).toEqual([]);
@@ -156,9 +151,8 @@ describe("workspaceInclude", () => {
     const large = path.join(root, "large.local");
     yield* writeFile(large, "");
     yield* io(() => fs.truncate(large, 64 * 1024 * 1024 + 1));
-    const error = yield* failureOf(
-      service.create({ sourceCwd: root, ownerId: "parent", include: ["*.local"] }),
-    );
+    yield* includeFile(root, "*.local\n");
+    const error = yield* failureOf(service.create({ sourceCwd: root, ownerId: "parent" }));
     expect(error.operation).toBe("create");
   });
 
@@ -167,11 +161,8 @@ describe("workspaceInclude", () => {
     // keeps the parent's copy out of the nested baseline.
     yield* writeFile(path.join(root, "secrets.ts"), "export const key = 'parent';\n");
     yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
-    const parent = yield* service.create({
-      sourceCwd: root,
-      ownerId: "parent",
-      include: [".env", "secrets.ts"],
-    });
+    yield* includeFile(root, ".env\nsecrets.ts\n");
+    const parent = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     yield* writeFile(path.join(parent.cwd, "secrets.ts"), "export const key = 'worker';\n");
     yield* writeFile(path.join(parent.cwd, ".env"), "TOKEN=worker\n");
 
@@ -179,7 +170,6 @@ describe("workspaceInclude", () => {
       sourceCwd: parent.cwd,
       ownerId: "parent/child",
       sourceWorkspace: { workspaceId: parent.workspaceId, ownerId: parent.ownerId },
-      include: [".env", "secrets.ts"],
     });
     expect(yield* readText(child.cwd, ".env")).toBe("TOKEN=worker\n");
     expect(yield* readText(child.cwd, "secrets.ts")).toBe("export const key = 'worker';\n");
@@ -191,5 +181,22 @@ describe("workspaceInclude", () => {
     yield* writeFile(path.join(child.cwd, "src/main.ts"), "child edit\n");
     expect((yield* service.freeze(workspaceTarget(child))).changedPaths).toEqual(["src/main.ts"]);
     expect((yield* service.freeze(workspaceTarget(parent))).changedPaths).toEqual([]);
+  });
+
+  test("includes nothing without the file and refuses one it can't use", function* (service, root) {
+    yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
+    const plain = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+    expect(yield* exists(path.join(plain.cwd, ".env"))).toBe(false);
+    expect((yield* service.inspect(workspaceTarget(plain))).includedPaths).toBeUndefined();
+
+    yield* includeFile(root, Array.from({ length: 65 }, (_, index) => `file-${index}`).join("\n"));
+    expect(
+      (yield* failureOf(service.create({ sourceCwd: root, ownerId: "parent" }))).operation,
+    ).toBe("create");
+    yield* io(() => fs.rm(path.join(root, ".worktreeinclude")));
+    yield* io(() => fs.symlink(path.join(root, ".env"), path.join(root, ".worktreeinclude")));
+    expect(
+      (yield* failureOf(service.create({ sourceCwd: root, ownerId: "parent" }))).operation,
+    ).toBe("create");
   });
 });

@@ -26,7 +26,7 @@ import {
   workspaceBusyError,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
-import { provisionWorkspaceTree } from "./workspace-setup.ts";
+import { runWorktreeCreateHooks } from "./workspace-hooks.ts";
 
 /**
  * One page of a revision's review text: its summary followed by its patch. `text` is the page;
@@ -122,7 +122,7 @@ export const fullyReviewed = (knowledge: RevisionKnowledge | undefined, revision
   return review?.revisionId === revisionId && review.reviewedThrough === review.totalChars;
 };
 
-/** The engine replaces any earlier preparation, which is no longer tested from here on. */
+/** The engine replaces any earlier preparation, which is no longer integrable from here on. */
 const withoutPreparation = (knowledge: RevisionKnowledge): RevisionKnowledge =>
   knowledge.kind !== "prepared"
     ? knowledge
@@ -130,22 +130,21 @@ const withoutPreparation = (knowledge: RevisionKnowledge): RevisionKnowledge =>
       ? { kind: "frozen", review: knowledge.review }
       : { kind: "unreviewed" };
 
-/** Records a preparation's outcome; a failed verification is kept but never integrable. */
+/** Records a preparation whose WorktreeCreate hooks succeeded, which makes it integrable. */
 export const withPreparation =
-  (preparation: WorkspacePreparation, verification: "tested" | "failed") =>
+  (preparation: WorkspacePreparation) =>
   (knowledge: RevisionKnowledge): RevisionKnowledge => {
     const review = reviewProgress(knowledge);
     return {
       kind: "prepared",
       revisionId: preparation.revisionId,
       preparationId: preparation.preparationId,
-      verification,
       ...(review?.revisionId === preparation.revisionId && { review }),
     };
   };
 
 export function workspaceReviewOperations(context: WorkspaceControlContext) {
-  const { records, withLock, state, requireBinding, requireEngine, operations, workspaceSetup } =
+  const { records, withLock, state, requireBinding, requireEngine, operations, worktreeCreate } =
     context;
   const { requireChildrenResolved } = context;
   /**
@@ -247,15 +246,13 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
       return revision;
     });
   /**
-   * Prepares the revision, or only `paths` of it, and, when `provision` is set, runs the
-   * project's setup in its tree. The preparation is untested until the caller records it, after
-   * any verification it requires.
+   * Prepares the revision, or only `paths` of it. The preparation isn't integrable until its
+   * WorktreeCreate hooks succeed (`provisionHeld`) and the caller records it.
    */
   const prepareHeld = (
     service: WorkspaceServiceContract,
     { binding }: HeldBinding,
     revisionId: string,
-    provision: boolean,
     paths?: ReadonlyArray<string>,
   ): Effect.Effect<WorkspacePreparation, SubagentError> =>
     Effect.gen(function* () {
@@ -268,20 +265,22 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
           paths,
         })
         .pipe(Effect.mapError(mapWorkspaceError));
-      if (provision && workspaceSetup)
-        yield* provisionWorkspaceTree(service, workspaceSetup, binding.handle, preparation);
       return preparation;
     });
-  /** Records a held binding's preparation outcome under the run lock. */
-  const markPrepared = (
-    { binding, heldLocked }: HeldBinding,
+  /** Runs the WorktreeCreate hooks in a held binding's prepared tree. */
+  const provisionHeld = (
+    service: WorkspaceServiceContract,
+    { binding }: HeldBinding,
     preparation: WorkspacePreparation,
-    verification: "tested" | "failed",
-  ) =>
+  ): Effect.Effect<void, SubagentError> =>
+    runWorktreeCreateHooks(service, worktreeCreate, binding.handle, {
+      preparationId: preparation.preparationId,
+      runId: binding.record?.view.id,
+    });
+  /** Records a held binding's preparation under the run lock. */
+  const markPrepared = ({ binding, heldLocked }: HeldBinding, preparation: WorkspacePreparation) =>
     heldLocked().pipe(
-      Effect.andThen(
-        Effect.sync(() => updateKnowledge(binding, withPreparation(preparation, verification))),
-      ),
+      Effect.andThen(Effect.sync(() => updateKnowledge(binding, withPreparation(preparation)))),
     );
   /**
    * Like integration, destructive cleanup holds admission closed from the cwd check through
@@ -402,10 +401,10 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
               "workspace_review_incomplete",
               "Read every page of this exact immutable revision before preparing integration.",
             );
-          // The careful path leaves testing to the parent, so a configured verify does not run
-          // here; setup does, so the parent can test the prepared tree.
-          const preparation = yield* prepareHeld(service, held, revisionId, true);
-          yield* withLock(markPrepared(held, preparation, "tested"));
+          // The careful path leaves testing to the parent in the prepared tree.
+          const preparation = yield* prepareHeld(service, held, revisionId);
+          yield* provisionHeld(service, held, preparation);
+          yield* withLock(markPrepared(held, preparation));
           return { ...preparation, leftOutPaths: revision.uncapturedPaths ?? [] };
         }),
       );
@@ -430,6 +429,14 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
     workspacePrepare,
     workspaceDiscard,
     /** Phases a multi-step operation composes while it keeps one binding busy. */
-    held: { hold, operate, settledRevision, prepareHeld, markPrepared, discardLocked },
+    held: {
+      hold,
+      operate,
+      settledRevision,
+      prepareHeld,
+      provisionHeld,
+      markPrepared,
+      discardLocked,
+    },
   };
 }

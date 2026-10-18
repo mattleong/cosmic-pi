@@ -21,7 +21,7 @@ import {
   type SubagentRunView,
 } from "./model.ts";
 import { runSessionOwned } from "./session-owned.ts";
-import { provisionWorkspaceTree } from "./workspace-setup.ts";
+import { runWorktreeCreateHooks } from "./workspace-hooks.ts";
 import {
   bindingSlot,
   clearBindingSlot,
@@ -29,7 +29,7 @@ import {
   type LaunchSlot,
   mapWorkspaceError,
   reopenBindingLocked,
-  requireCommandSettled,
+  requireHooksSettled,
   type RevisionHold,
   runHoldsCwd,
   runsWithin,
@@ -169,7 +169,7 @@ const releaseRevisionLocked = ({ binding, revision }: Succession) => {
 export function workspaceLaunchOperations(context: WorkspaceControlContext) {
   const { records, withLock, isClosed, state, ownerFor, requireEngine, requireBinding } = context;
   const { engine } = context;
-  const { workspaceSetup, workspaceInclude, requireChildrenResolved } = context;
+  const { worktreeCreate, requireChildrenResolved } = context;
   const { operations, ownerScope } = context;
   const releaseSlotLocked = (slot: LaunchSlot | undefined) => {
     if (!slot || !state.launchSlots.delete(slot)) return;
@@ -276,7 +276,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           return binding.record === undefined;
         }),
       );
-      // The engine refuses a workspace whose setup cleanup is unconfirmed, which then stays.
+      // The engine refuses a workspace whose hook cleanup is unconfirmed, which then stays.
       if (!unadmitted) return;
       const service = yield* requireEngine;
       yield* service
@@ -354,14 +354,12 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
                 ownerId: ownerFor(caller),
                 sourceWorkspace,
                 launch: launchFacts(request),
-                include: workspaceInclude,
                 onAcquired,
               })
               .pipe(Effect.mapError(mapWorkspaceError)),
           );
           yield* withLock(Effect.sync(() => onAcquired(handle)));
-          if (workspaceSetup)
-            yield* restore(provisionWorkspaceTree(service, workspaceSetup, handle, {}));
+          yield* restore(runWorktreeCreateHooks(service, worktreeCreate, handle, {}));
           return handle;
         });
         return yield* Effect.gen(function* () {
@@ -396,9 +394,9 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       });
     });
   /**
-   * Rebuilds the held workspace's worker tree from current parent files and runs setup there like
-   * a new launch. Once the tree changed, no earlier review or preparation describes it, even if
-   * setup or the successor's admission then fails.
+   * Rebuilds the held workspace's worker tree from current parent files and runs the
+   * WorktreeCreate hooks there like a new launch. Once the tree changed, no earlier review or
+   * preparation describes it, even if the hooks or the successor's admission then fail.
    */
   const rebaseHeld = (held: Succession): Effect.Effect<WorkspaceRebase, SubagentError> =>
     Effect.gen(function* () {
@@ -432,8 +430,9 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
             binding.state = { ...current, knowledge: { kind: "unreviewed" } };
         }),
       );
-      if (workspaceSetup)
-        yield* provisionWorkspaceTree(service, workspaceSetup, binding.handle, {});
+      yield* runWorktreeCreateHooks(service, worktreeCreate, binding.handle, {
+        runId: binding.record?.view.id,
+      });
       return rebased;
     });
   const launchSuccessor = (
@@ -479,10 +478,10 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       if (phase === "busy") return yield* workspaceBusyError();
       if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
       if (state.integrationQuarantined) return yield* integrationQuarantinedError();
-      yield* requireCommandSettled(
+      yield* requireHooksSettled(
         engine,
         binding,
-        "Workspace setup or verification cleanup is unconfirmed; this artifact requires manual recovery.",
+        "Worktree hook cleanup is unconfirmed; this artifact requires manual recovery.",
       );
       if (record.process !== undefined) return () => {};
       return () => reopenBindingLocked(binding);

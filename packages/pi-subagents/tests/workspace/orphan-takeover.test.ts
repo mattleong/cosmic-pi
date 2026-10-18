@@ -62,6 +62,7 @@ const laterSession = (agent: string, source: string) =>
       writerLeases: leases,
       engine: successor.service,
       initialMode: "worktree",
+      worktreeCreate: [],
       ownerId: "new",
       sourceCwd: source,
       isClosed: () => false,

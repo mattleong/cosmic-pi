@@ -13,96 +13,55 @@ describe("writer workspace configuration", () => {
   });
 });
 
-describe("workspace setup configuration", () => {
-  const setup = { command: ["pnpm", "install", "--offline"], timeoutSeconds: 300 };
+describe("worktree hook configuration", () => {
+  const install = { command: ["pnpm", "install", "--offline"], timeout: 300 };
+  const prune = { command: ["./scripts/prune-cache"] };
+  const copy = { command: ["./scripts/copy-env"] };
 
-  it("takes a setup command only from a trusted project document", () => {
-    expect(resolve({ version: 6 }, { version: 6, workspaceSetup: setup }).workspaceSetup).toEqual(
-      setup,
-    );
-    expect(
-      resolve({ version: 6 }, { version: 6, workspaceSetup: setup }, false).workspaceSetup,
-    ).toBeUndefined();
+  it("runs global hooks before a trusted project's and ignores an untrusted project's", () => {
+    const global = { version: 6, hooks: { WorktreeCreate: [install] } };
+    const project = { version: 6, hooks: { WorktreeCreate: [copy], WorktreeRemove: [prune] } };
+    expect(resolve(global, project).hooks).toEqual({
+      WorktreeCreate: [
+        { ...install, scope: "global" },
+        { ...copy, scope: "project" },
+      ],
+      WorktreeRemove: [{ ...prune, scope: "project" }],
+    });
+    expect(resolve(global, project, false).hooks).toEqual({
+      WorktreeCreate: [{ ...install, scope: "global" }],
+      WorktreeRemove: [],
+    });
+    expect(resolve({ version: 6 }).hooks).toEqual({ WorktreeCreate: [], WorktreeRemove: [] });
   });
 
-  it("rejects a global setup command and malformed project commands", () => {
-    expect(
-      subagentConfigDecoder("global")({ version: 6, workspaceSetup: setup }).diagnostics,
-    ).toContain("global.workspaceSetup");
-    for (const workspaceSetup of [
-      { command: [] },
-      { command: "pnpm install" },
-      { command: ["pnpm"], timeoutSeconds: 0 },
-      { command: ["pnpm"], shell: true },
+  it("rejects unknown events, unknown keys, and malformed hooks in either scope", () => {
+    for (const scope of ["global", "project"])
+      for (const hooks of [
+        { PostToolUse: [install] },
+        { WorktreeCreate: install },
+        { WorktreeCreate: [{ command: [] }] },
+        { WorktreeCreate: [{ command: "pnpm install" }] },
+        { WorktreeCreate: [{ command: ["pnpm", " "] }] },
+        { WorktreeCreate: [{ command: ["pnpm"], timeout: 0 }] },
+        { WorktreeCreate: [{ command: ["pnpm"], timeout: 3_601 }] },
+        { WorktreeCreate: [{ command: ["pnpm"], timeout: 1.5 }] },
+        { WorktreeRemove: [{ command: ["pnpm"], shell: true }] },
+        { WorktreeCreate: Array.from({ length: 17 }, () => install) },
+      ])
+        expect(subagentConfigDecoder(scope)({ version: 6, hooks }).diagnostics).toContain(
+          `${scope}.hooks`,
+        );
+  });
+
+  it("rejects the removed workspace command and include fields", () => {
+    for (const removed of [
+      { workspaceSetup: { command: ["pnpm", "install"] } },
+      { workspaceVerify: { command: ["pnpm", "test"] } },
+      { workspaceInclude: [".env"] },
     ])
-      expect(
-        subagentConfigDecoder("project")({ version: 6, workspaceSetup }).diagnostics,
-      ).toContain("project.workspaceSetup");
-  });
-});
-
-describe("workspace verification configuration", () => {
-  const verify = { command: ["pnpm", "validate"], timeoutSeconds: 900 };
-
-  it("takes a verification command only from a trusted project document", () => {
-    const project = { version: 6, workspaceSetup: { command: ["pnpm", "install"] } };
-    expect(resolve({ version: 6 }, project).workspaceVerify).toBeUndefined();
-    expect(
-      resolve({ version: 6 }, { ...project, workspaceVerify: verify }).workspaceVerify,
-    ).toEqual(verify);
-    expect(
-      resolve({ version: 6 }, { version: 6, workspaceVerify: verify }, false).workspaceVerify,
-    ).toBeUndefined();
-  });
-
-  it("rejects a global verification command and malformed project commands", () => {
-    expect(
-      subagentConfigDecoder("global")({ version: 6, workspaceVerify: verify }).diagnostics,
-    ).toContain("global.workspaceVerify");
-    for (const workspaceVerify of [
-      { command: [] },
-      { command: ["pnpm", " "] },
-      { command: "pnpm test" },
-      { command: ["pnpm"], timeoutSeconds: 0 },
-      { command: ["pnpm"], timeoutSeconds: 3_601 },
-      { command: ["pnpm"], timeoutSeconds: 1.5 },
-      { command: ["pnpm"], shell: true },
-    ])
-      expect(
-        subagentConfigDecoder("project")({ version: 6, workspaceVerify }).diagnostics,
-      ).toContain("project.workspaceVerify");
-  });
-});
-
-describe("workspace include configuration", () => {
-  const workspaceInclude = [".env", "config/*.local", "!config/shared.local"];
-
-  it("takes include patterns only from a trusted project document", () => {
-    expect(resolve({ version: 6 }, { version: 6, workspaceInclude }).workspaceInclude).toEqual(
-      workspaceInclude,
-    );
-    expect(
-      resolve({ version: 6 }, { version: 6, workspaceInclude }, false).workspaceInclude,
-    ).toBeUndefined();
-    expect(
-      resolve({ version: 6 }, { version: 6, workspaceInclude: [] }).workspaceInclude,
-    ).toBeUndefined();
-  });
-
-  it("rejects global patterns and malformed project patterns", () => {
-    const global = subagentConfigDecoder("global")({ version: 6, workspaceInclude });
-    expect(global.diagnostics).toContain("global.workspaceInclude");
-    expect(global.file.workspaceInclude).toBeUndefined();
-    for (const patterns of [
-      ".env",
-      [""],
-      ["   "],
-      [".env\nsecrets"],
-      [42],
-      Array.from({ length: 65 }, (_, index) => `file-${index}`),
-    ])
-      expect(
-        subagentConfigDecoder("project")({ version: 6, workspaceInclude: patterns }).diagnostics,
-      ).toContain("project.workspaceInclude");
+      expect(subagentConfigDecoder("project")({ version: 6, ...removed }).diagnostics).toContain(
+        "project.<unknown>",
+      );
   });
 });

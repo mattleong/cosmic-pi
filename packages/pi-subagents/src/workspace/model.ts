@@ -95,7 +95,10 @@ export const WorkspaceRecordSchema = Schema.Struct({
   baseline: Schema.String,
   /** Names the lease the creating session holds while it runs; a free lease proves it ended. */
   ownerLease: Schema.optional(Schema.String),
-  /** Setup may still own processes in this tree. Cleared only after confirmed cleanup. */
+  /**
+   * A worktree hook may still own processes in this tree. Cleared only after confirmed cleanup;
+   * while set, the artifact is quarantined.
+   */
   setupCleanupPending: Schema.optional(Schema.String),
   revision: Schema.optional(WorkspaceRevisionMetadataSchema),
   preparation: Schema.optional(WorkspacePreparationSchema),
@@ -118,14 +121,14 @@ export const WorkspaceRecordSchema = Schema.Struct({
   plannedDirectories: Schema.optional(Schema.Array(Schema.String)),
   /**
    * The worker tree a rebase rebuilt, which differs from the baseline by the reapplied changes;
-   * setup run in it may change nothing else. Freeze and revise drop it.
+   * WorktreeCreate hooks run in it may change nothing else. Freeze and revise drop it.
    */
   rebasedTree: Schema.optional(Schema.String),
   /** Epoch milliseconds of the last record save; absent records use the record file's mtime. */
   lastChangedAt: Schema.optional(Schema.Finite),
   launch: Schema.optional(WorkspaceLaunchSchema),
   /**
-   * Untracked files `workspaceInclude` copied into the worker tree, relative to its root. Every
+   * Untracked files `.worktreeinclude` copied into the worker tree, relative to its root. Every
    * capture leaves them out, so they never reach a revision or publication.
    */
   includedPaths: Schema.optional(Schema.Array(Schema.String)),
@@ -154,21 +157,9 @@ export interface WorkspaceTarget {
   readonly workspaceId: string;
   readonly ownerId: string;
 }
-export interface WorkspaceSetupTarget extends WorkspaceTarget {
-  /** Checks the prepared test tree instead of the worker tree. */
+export interface WorkspaceHookTarget extends WorkspaceTarget {
+  /** Names the prepared test tree instead of the worker tree. */
   readonly preparationId?: string | undefined;
-}
-export interface WorkspaceVerifyTarget extends WorkspaceTarget {
-  readonly preparationId: string;
-}
-/** A trusted project's argv command, run without a shell at the root of an isolated tree. */
-export interface WorkspaceTreeCommand {
-  readonly command: ReadonlyArray<string>;
-  readonly timeoutSeconds?: number | undefined;
-}
-export interface WorkspaceVerification {
-  /** The last lines of the command's output, stdout followed by stderr. */
-  readonly outputTail: string;
 }
 export interface WorkspaceWorkerChanges {
   /** Captured paths whose content differs from the baseline. */

@@ -54,9 +54,7 @@ const integrated = {
   leaseReleaseUnconfirmed: false,
 } as const;
 
-const applied = (
-  overrides: Partial<Extract<WorkspaceApplyResult, { readonly integrated: true }>> = {},
-): WorkspaceApplyResult => ({
+const applied = (overrides: Partial<WorkspaceApplyResult> = {}): WorkspaceApplyResult => ({
   revisionId: "rev-1",
   preparationId: "prep-1",
   preparedCwd: "/agent/ws-1/prepared",
@@ -65,34 +63,9 @@ const applied = (
   leftOutPaths: [],
   reviewed: false,
   ...integrated,
-  integrated: true,
-  verification: { status: "not-configured" },
+  testing: "untested",
   ...overrides,
 });
-
-const verificationOutput = [
-  "EARLY_OUTPUT_SENTINEL",
-  ...Array.from({ length: 30 }, (_, index) => `line ${index}`),
-  "FINAL_OUTPUT_SENTINEL",
-].join("\n");
-
-const failedVerification: WorkspaceApplyResult = {
-  revisionId: "rev-1",
-  preparationId: "prep-1",
-  preparedCwd: "/agent/ws-1/prepared",
-  changedPaths: ["src/a.ts"],
-  changedPathCount: 1,
-  leftOutPaths: [],
-  reviewed: true,
-  integrated: false,
-  verification: {
-    status: "failed",
-    command: ["pnpm", "test"],
-    outputTail: verificationOutput,
-    message: `Verification exited with code 1: ${"x".repeat(5_000)}`,
-  },
-  nextSteps: "NEXT_STEPS_SENTINEL",
-};
 
 describe("workspace apply", () => {
   effectTest("requires a workspace, and a preparation only with its exact revision", function* () {
@@ -129,7 +102,7 @@ describe("workspace apply", () => {
     ]);
   });
 
-  effectTest("reports a prepared pair as tested by the parent, not verified", function* () {
+  effectTest("reports a prepared pair as tested by the parent", function* () {
     const args = {
       action: "apply",
       workspaceId: "ws-1",
@@ -137,18 +110,17 @@ describe("workspace apply", () => {
       preparationId: "prep-1",
     } as const;
     const result = yield* run(args, "parent", {
-      workspaceApply: () =>
-        Effect.succeed(applied({ reviewed: true, verification: { status: "parent-tested" } })),
+      workspaceApply: () => Effect.succeed(applied({ reviewed: true, testing: "parent-tested" })),
     }).pipe(Effect.orDie);
     expect(result.details).toMatchObject({
       operation: "apply",
       preparationId: "prep-1",
       reviewed: true,
-      verification: "parent-tested",
+      testing: "parent-tested",
     });
     const summary = summarize(args, result);
     expect(summary?.outcome).toBe("success");
-    expect(summary?.issues?.map((issue) => issue.code)).not.toContain("applied-unverified");
+    expect(summary?.issues?.map((issue) => issue.code)).not.toContain("applied-untested");
     expectStyledIssues(summary);
   });
 
@@ -179,16 +151,12 @@ describe("workspace apply", () => {
     }
   });
 
-  effectTest("reports whether an applied change was reviewed and verified", function* () {
-    const passed = applied({
-      reviewed: true,
-      verification: { status: "passed", command: ["pnpm", "test"], outputTail: verificationOutput },
-    });
+  effectTest("reports whether an applied change was reviewed and tested", function* () {
     const cases = [
-      [applied(), false, "not-configured"],
-      [passed, true, "passed"],
+      [applied(), false, "untested"],
+      [applied({ reviewed: true, testing: "parent-tested" }), true, "parent-tested"],
     ] as const;
-    for (const [outcome, reviewed, verification] of cases) {
+    for (const [outcome, reviewed, testing] of cases) {
       const args = { action: "apply", workspaceId: "ws-1" } as const;
       const result = yield* run(args, "parent", {
         workspaceApply: () => Effect.succeed(outcome),
@@ -200,39 +168,14 @@ describe("workspace apply", () => {
         preparationId: "prep-1",
         changedPathCount: 2,
         reviewed,
-        verification,
+        testing,
       });
       expect(resultText(result)).toContain("src/b.ts");
       const summary = summarize(args, result);
       expect(summary?.outcome).toBe("success");
       expectStyledIssues(summary);
-      expect(JSON.stringify(result.details)).not.toContain("SENTINEL");
     }
   });
-
-  effectTest(
-    "blocks a failed verification as an error that keeps the evidence out of details",
-    function* () {
-      const args = { action: "apply", workspaceId: "ws-1" } as const;
-      const result = yield* run(args, "parent", {
-        workspaceApply: () => Effect.succeed(failedVerification),
-      }).pipe(Effect.orDie);
-      expect(result.details).toMatchObject({ operation: "apply", verification: "failed" });
-      expect(result.details.warnings).toBeUndefined();
-      expect(result.details.verificationMessage?.length).toBeLessThanOrEqual(512);
-      expect(JSON.stringify(result.details)).not.toMatch(/SENTINEL/u);
-      const text = resultText(result);
-      for (const evidence of ["EARLY_OUTPUT_SENTINEL", "FINAL_OUTPUT_SENTINEL", "NEXT_STEPS"])
-        expect(text).toContain(evidence);
-      expect(text).toContain(failedVerification.preparedCwd);
-      const span = result.details.displayContent!;
-      expect(text.slice(span.offset, span.offset + span.length)).toContain("FINAL_OUTPUT_SENTINEL");
-      const summary = summarize(args, result);
-      expect(summary?.outcome).toBe("error");
-      expect(summary?.issues?.filter((issue) => issue.severity === "error")).toHaveLength(1);
-      expectStyledIssues(summary);
-    },
-  );
 
   effectTest("warns about every integration leftover the apply leaves behind", function* () {
     const args = { action: "apply", workspaceId: "ws-1" } as const;
@@ -304,7 +247,7 @@ describe("workspace prepared-pair apply and list", () => {
         Effect.succeed(
           applied({
             reviewed: true,
-            verification: { status: "parent-tested" },
+            testing: "parent-tested",
             retainedForChildren: ["ws-child-1", "ws-child-2"],
           }),
         ),

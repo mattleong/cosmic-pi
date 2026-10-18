@@ -71,20 +71,12 @@ import { writerSpawnPreparation } from "./writer-preparation.ts";
 import { WriterPools } from "./writer-pool.ts";
 import { workspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
 import { WorkspaceService } from "../workspace/service.ts";
-import type {
-  WorkspaceInclude,
-  WorkspaceSetup,
-  WorkspaceVerify,
-  WriterWorkspaceMode,
-} from "../config/schema.ts";
+import type { WorktreeHook, WriterWorkspaceMode } from "../config/schema.ts";
 
 export interface SubagentServiceOptions {
   readonly writerWorkspaceMode?: WriterWorkspaceMode;
-  readonly workspaceSetup?: WorkspaceSetup | undefined;
-  /** A trusted project's patterns for untracked files isolated writer trees receive copies of. */
-  readonly workspaceInclude?: WorkspaceInclude | undefined;
-  /** A trusted project's check that isolated writer trees must pass before their changes apply. */
-  readonly workspaceVerify?: WorkspaceVerify | undefined;
+  /** Run in order in every new worker and prepared tree before it is used. */
+  readonly worktreeCreate?: ReadonlyArray<WorktreeHook> | undefined;
   readonly workspaceOwnerId?: string;
   readonly workspaceSourceCwd?: string;
   readonly publish?: (projection: SubagentProjection) => void;
@@ -333,9 +325,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ...runContext,
     engine: Option.getOrUndefined(workspaceEngine),
     initialMode: options.writerWorkspaceMode ?? initialProfiles.effectiveConfig.writerWorkspaceMode,
-    workspaceSetup: options.workspaceSetup,
-    workspaceInclude: options.workspaceInclude,
-    workspaceVerify: options.workspaceVerify,
+    worktreeCreate: options.worktreeCreate ?? [],
     ownerId: options.workspaceOwnerId ?? runtimeNamespace,
     ...(options.workspaceSourceCwd && { sourceCwd: options.workspaceSourceCwd }),
     isClosed: () => closed,

@@ -15,8 +15,7 @@ import {
 
 type Fixture = ReturnType<typeof workspaceFixture>;
 
-const verified = () =>
-  workspaceFixture({ serviceOptions: { workspaceVerify: { command: ["pnpm", "test"] } } });
+const hooked = () => workspaceFixture({ worktreeCreate: [{ command: ["pnpm", "install"] }] });
 
 const completedWriter = (service: SubagentServiceContract, f: Fixture) =>
   Effect.gen(function* () {
@@ -25,27 +24,17 @@ const completedWriter = (service: SubagentServiceContract, f: Fixture) =>
     return run;
   });
 
-const listed = (service: SubagentServiceContract, workspaceId: string) =>
-  service
-    .workspaceList()
-    .pipe(
-      Effect.map((listing) =>
-        listing.records.find((entry) => entry.handle.workspaceId === workspaceId),
-      ),
-    );
-
 describe("one-step workspace apply", () => {
-  it.effect("integrates an unreviewed revision and reports it as unverified", () => {
+  it.effect("integrates an unreviewed revision and reports it as untested", () => {
     const f = workspaceFixture();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const applied = yield* service.workspaceApply(id);
       expect(applied).toMatchObject({
-        integrated: true,
         reviewed: false,
         changedPaths: ["file.ts"],
         changedPathCount: 1,
-        verification: { status: "not-configured" },
+        testing: "untested",
         untouchedDriftPaths: [],
         remainingBackupPaths: [],
         leaseReleaseUnconfirmed: false,
@@ -53,7 +42,6 @@ describe("one-step workspace apply", () => {
       expect(f.integrations).toMatchObject([
         { workspaceId: id, revisionId: applied.revisionId, preparationId: applied.preparationId },
       ]);
-      expect(f.verifications).toEqual([]);
       expect(f.entries.get(id)?.status).toBe("integrated");
       expect(yield* service.workspaceApply(id).pipe(Effect.flip)).toMatchObject({
         code: "workspace_finished",
@@ -61,98 +49,85 @@ describe("one-step workspace apply", () => {
     });
   });
 
-  it.effect("verifies the exact prepared tree before integrating a reviewed revision", () => {
-    const f = verified();
+  it.effect("reports a pinned, fully read revision as reviewed", () => {
+    const f = workspaceFixture();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const page = yield* service.workspaceReview(id);
       yield* service.workspaceReview(id, { revisionId: page.revisionId, offset: page.nextOffset! });
       const applied = yield* service.workspaceApply(id, { revisionId: page.revisionId });
       expect(applied).toMatchObject({
-        integrated: true,
         reviewed: true,
         revisionId: page.revisionId,
-        verification: { status: "passed", command: ["pnpm", "test"], outputTail: "verified" },
+        testing: "untested",
       });
-      expect(f.verifications).toMatchObject([{ preparationId: applied.preparationId }]);
       expect(f.entries.get(id)?.status).toBe("integrated");
     });
   });
 
-  it.effect(
-    "a failed verification integrates nothing and only a fresh careful preparation can",
-    () => {
-      const f = verified();
-      return withService(f.layer, function* (service) {
-        const id = (yield* stoppedWriter(service)).workspaceId!;
-        f.hooks.verifyFailure = new WorkspaceError({
-          operation: "verify",
-          message: "Workspace verification failed.",
-          detail: "1 failing test",
-        });
-        const failed = yield* service.workspaceApply(id);
-        expect(failed).toMatchObject({
-          integrated: false,
-          verification: {
-            status: "failed",
-            command: ["pnpm", "test"],
-            outputTail: "1 failing test",
-          },
-        });
-        expect(failed.preparedCwd).toBe(f.entries.get(id)?.preparation?.cwd);
-        expect(f.integrations).toEqual([]);
-        expect(yield* listed(service, id)).toMatchObject({
-          status: "prepared",
-          preparation: { preparationId: failed.preparationId },
-        });
-        expect(
-          yield* service
-            .workspaceApply(id, {
-              revisionId: failed.revisionId,
-              preparationId: failed.preparationId,
-            })
-            .pipe(Effect.flip),
-        ).toMatchObject({ code: "workspace_verification_failed" });
-        const careful = yield* reviewAndPrepare(service, id);
-        expect(careful.revisionId).toBe(failed.revisionId);
-        expect(careful.preparationId).not.toBe(failed.preparationId);
-        yield* service.workspaceApply(id, {
-          revisionId: careful.revisionId,
-          preparationId: careful.preparationId,
-        });
-        expect(f.integrations).toMatchObject([{ preparationId: careful.preparationId }]);
-      });
-    },
-  );
+  it.effect("runs WorktreeCreate in every prepared tree, a plain apply's included", () => {
+    const f = hooked();
+    return withService(f.layer, function* (service) {
+      const writer = yield* stoppedWriter(service);
+      const applied = yield* service.workspaceApply(writer.workspaceId!);
+      expect(f.hookRuns).toEqual([
+        { tree: "worker", runId: undefined },
+        { tree: applied.preparationId, runId: writer.id },
+      ]);
+      const careful = yield* stoppedWriter(service);
+      const { preparationId } = yield* reviewAndPrepare(service, careful.workspaceId!);
+      expect(f.hookRuns.slice(2)).toEqual([
+        { tree: "worker", runId: undefined },
+        { tree: preparationId, runId: careful.id },
+      ]);
+    });
+  });
 
-  it.effect("interrupting verification leaves the workspace free, unpublished, and usable", () => {
-    const f = verified();
+  it.effect("a failed WorktreeCreate hook in the prepared tree integrates nothing", () => {
+    const f = hooked();
+    return withService(f.layer, function* (service) {
+      const id = (yield* stoppedWriter(service)).workspaceId!;
+      f.hooks.createHookFailure = new WorkspaceError({
+        operation: "hook",
+        message: "Hook failed.",
+      });
+      expect(yield* service.workspaceApply(id).pipe(Effect.flip)).toMatchObject({
+        code: "workspace_hook_failed",
+      });
+      expect(f.integrations).toEqual([]);
+      f.hooks.createHookFailure = undefined;
+      expect(yield* service.workspaceApply(id)).toMatchObject({ testing: "untested" });
+      expect(f.entries.get(id)?.status).toBe("integrated");
+    });
+  });
+
+  it.effect("interrupting hooks leaves the workspace free, unpublished, and usable", () => {
+    const f = hooked();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const gate = yield* pauseAt;
-      f.hooks.before.verify = gate.pause;
+      f.hooks.before.createHooks = gate.pause;
       const applying = yield* service.workspaceApply(id).pipe(Effect.forkChild);
       yield* Deferred.await(gate.entered);
       yield* Fiber.interrupt(applying);
       expect(f.integrations).toEqual([]);
-      expect(yield* listed(service, id)).toMatchObject({ status: "frozen" });
-      f.hooks.before.verify = undefined;
-      expect(yield* service.workspaceApply(id)).toMatchObject({ integrated: true });
+      f.hooks.before.createHooks = undefined;
+      expect(yield* service.workspaceApply(id)).toMatchObject({ testing: "untested" });
     });
   });
 
-  it.effect("unconfirmed verification cleanup quarantines the workspace", () => {
-    const f = verified();
+  it.effect("unconfirmed hook cleanup quarantines the workspace", () => {
+    const f = hooked();
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);
       const id = writer.workspaceId!;
-      f.hooks.verifyFailure = new WorkspaceError({
-        operation: "verify",
-        message: "Verification cleanup is unconfirmed.",
+      f.hooks.createHookFailure = new WorkspaceError({
+        operation: "hook",
+        message: "Hook cleanup is unconfirmed.",
         cleanupUnconfirmed: true,
       });
       expect(yield* service.workspaceApply(id).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_verify_cleanup_unconfirmed",
+        code: "workspace_hook_cleanup_unconfirmed",
       });
       expect(yield* service.workspaceReview(id).pipe(Effect.flip)).toMatchObject({
         code: "workspace_process_unsettled",
@@ -165,12 +140,12 @@ describe("one-step workspace apply", () => {
   });
 
   it.effect("keeps the workspace busy for resume and revision until apply finishes", () => {
-    const f = verified();
+    const f = hooked();
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);
       const id = writer.workspaceId!;
       const gate = yield* pauseAt;
-      f.hooks.before.verify = gate.pause;
+      f.hooks.before.createHooks = gate.pause;
       const applying = yield* service.workspaceApply(id).pipe(Effect.forkChild);
       yield* Deferred.await(gate.entered);
       expect(yield* service.resume(writer.id).pipe(Effect.flip)).toMatchObject({
@@ -183,7 +158,7 @@ describe("one-step workspace apply", () => {
         code: "workspace_operation_in_progress",
       });
       yield* Deferred.succeed(gate.release, undefined);
-      expect(yield* Fiber.join(applying)).toMatchObject({ integrated: true });
+      expect(yield* Fiber.join(applying)).toMatchObject({ testing: "untested" });
       expect(f.children.controls).toHaveLength(1);
     });
   });
@@ -219,8 +194,8 @@ describe("one-step workspace apply", () => {
     });
   });
 
-  it.effect("integrates exactly a prepared pair without preparing or verifying again", () => {
-    const f = verified();
+  it.effect("integrates exactly a prepared pair without preparing again", () => {
+    const f = hooked();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const stale = yield* reviewAndPrepare(service, id);
@@ -230,52 +205,27 @@ describe("one-step workspace apply", () => {
           .workspaceApply(id, { revisionId: stale.revisionId, preparationId: stale.preparationId })
           .pipe(Effect.flip),
       ).toMatchObject({ code: "workspace_preparation_stale" });
+      const hookRuns = f.hookRuns.length;
       const applied = yield* service.workspaceApply(id, {
         revisionId: tested.revisionId,
         preparationId: tested.preparationId,
       });
       expect(applied).toMatchObject({
-        integrated: true,
         reviewed: true,
         revisionId: tested.revisionId,
         preparationId: tested.preparationId,
         preparedCwd: tested.cwd,
         changedPaths: ["file.ts"],
         changedPathCount: 1,
-        verification: { status: "parent-tested" },
+        testing: "parent-tested",
       });
-      expect(f.verifications).toEqual([]);
+      expect(f.hookRuns).toHaveLength(hookRuns);
       expect(f.integrations).toMatchObject([{ preparationId: tested.preparationId }]);
     });
   });
 
-  it.effect("runs setup in an applied preparation only when verification tests it", () => {
-    const workspaceSetup = { command: ["pnpm", "install"] };
-    const unverified = workspaceFixture({ workspaceSetup });
-    const checked = workspaceFixture({
-      workspaceSetup,
-      serviceOptions: { workspaceVerify: { command: ["pnpm", "test"] } },
-    });
-    return Effect.gen(function* () {
-      yield* withService(unverified.layer, function* (service) {
-        const id = (yield* stoppedWriter(service)).workspaceId!;
-        yield* service.workspaceApply(id);
-        expect(unverified.setups).toEqual(["worker"]);
-        // Manual prepare still provisions the tree the parent tests in.
-        const careful = (yield* stoppedWriter(service)).workspaceId!;
-        const { preparationId } = yield* reviewAndPrepare(service, careful);
-        expect(unverified.setups).toEqual(["worker", "worker", preparationId]);
-      });
-      yield* withService(checked.layer, function* (service) {
-        const id = (yield* stoppedWriter(service)).workspaceId!;
-        const applied = yield* service.workspaceApply(id);
-        expect(checked.setups).toEqual(["worker", applied.preparationId]);
-      });
-    });
-  });
-
   it.effect("the careful path still requires every page before preparing", () => {
-    const f = verified();
+    const f = hooked();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const page = yield* service.workspaceReview(id);

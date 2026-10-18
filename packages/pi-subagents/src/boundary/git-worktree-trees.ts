@@ -10,6 +10,7 @@ import {
   workspaceIOIfPresent,
 } from "./git-worktree-process.ts";
 import { workspaceDirectory } from "./git-worktree-store.ts";
+import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
 
 /** A workspace's private directory, which holds its record, patch, and trees. */
 export const workspaceArtifact = (registry: string, record: WorkspaceRecord) =>
@@ -98,14 +99,19 @@ export const removeWorkspaceTree = (
     return "";
   });
 
-/** Best effort: a tree that can't be removed stays for integrate or discard to clean up. */
+/**
+ * Best effort: a tree that can't be removed stays for integrate or discard to clean up. A
+ * failing `beforeRemove` keeps it too.
+ */
 export const removePreparation = (
   registry: string,
   record: WorkspaceRecord,
   preparationId: string,
+  beforeRemove?: BeforeTreeRemoval,
 ) => {
   const tree = preparationTree(registry, record, preparationId);
-  return removeWorkspaceTree(registry, record, tree).pipe(
+  return (beforeRemove ? beforeRemove(record, tree) : Effect.void).pipe(
+    Effect.andThen(removeWorkspaceTree(registry, record, tree)),
     Effect.catchTag("WorkspaceError", (error) =>
       Effect.logWarning(`Failed preparation tree remains on disk: ${error.message}`).pipe(
         Effect.annotateLogs({ workspaceId: record.handle.workspaceId, tree }),

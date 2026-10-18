@@ -16,7 +16,7 @@ describe("partial apply", () => {
       expect(f.entries.get(id)?.preparation).toBeUndefined();
       const partial = yield* service.workspaceApply(id, { paths: ["c.ts", "a.ts"] });
       expect(partial).toMatchObject({
-        integrated: true,
+        testing: "untested",
         changedPaths: ["a.ts", "c.ts"],
         changedPathCount: 2,
         remainingPaths: ["b.ts"],
@@ -35,7 +35,7 @@ describe("partial apply", () => {
       ).toMatchObject({ code: "workspace_preparation_stale" });
       f.hooks.changedPaths = ["b.ts"];
       const rest = yield* service.workspaceApply(id);
-      expect(rest).toMatchObject({ integrated: true, changedPaths: ["b.ts"] });
+      expect(rest).toMatchObject({ testing: "untested", changedPaths: ["b.ts"] });
       expect(rest.remainingPaths).toBeUndefined();
       expect(rest.revisionId).not.toBe(partial.revisionId);
       expect(f.entries.get(id)?.status).toBe("integrated");
@@ -56,15 +56,15 @@ describe("partial apply", () => {
 
 describe("rebasing revise", () => {
   it.effect(
-    "rebuilds the tree, runs setup there, and lists conflicts in the successor's task",
+    "rebuilds the tree, runs WorktreeCreate there, and lists conflicts in the successor's task",
     () => {
-      const f = workspaceFixture({ workspaceSetup: { command: ["pnpm", "install"] } });
+      const f = workspaceFixture({ worktreeCreate: [{ command: ["pnpm", "install"] }] });
       return withService(f.layer, function* (service) {
         const writer = yield* stoppedWriter(service);
         const id = writer.workspaceId!;
         yield* reviewAndPrepare(service, id);
         f.hooks.rebase = { reappliedPaths: ["file.ts", "b.ts"], conflictedPaths: ["file.ts"] };
-        const setupsBefore = f.setups.length;
+        const hookRunsBefore = f.hookRuns.length;
         const revised = yield* service.workspaceRevise(id, "Use the new API.", undefined, {
           rebase: true,
         });
@@ -73,7 +73,7 @@ describe("rebasing revise", () => {
           conflictedPaths: ["file.ts"],
         });
         expect(f.rebases).toEqual([id]);
-        expect(f.setups.slice(setupsBefore)).toEqual(["worker"]);
+        expect(f.hookRuns.slice(hookRunsBefore)).toEqual([{ tree: "worker", runId: writer.id }]);
         expect(revised.run.task).toContain("Use the new API.");
         expect(revised.run.task).toContain("Parent rebase:");
         expect(revised.run.task).toContain('"file.ts"');
@@ -121,7 +121,7 @@ describe("rebasing revise", () => {
       ).toMatchObject({ code: "workspace_rebase_refused" });
       expect(f.children.controls).toHaveLength(runsBefore);
       const applied = yield* service.workspaceApply(id, tested);
-      expect(applied.integrated).toBe(true);
+      expect(applied.testing).toBe("parent-tested");
     });
   });
 });

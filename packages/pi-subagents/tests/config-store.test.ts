@@ -140,31 +140,31 @@ describe("SubagentConfigStore activation", () => {
     }),
   );
 
-  it.effect("activates a trusted project's verification command and refuses a global one", () =>
+  it.effect("activates hooks from both scopes and refuses removed or malformed hook fields", () =>
     Effect.gen(function* () {
-      const workspaceVerify = { command: ["pnpm", "validate"], timeoutSeconds: 900 };
+      const create = { command: ["pnpm", "install"] };
+      const remove = { command: ["./cleanup"], timeout: 30 };
       const { store } = yield* setup({
-        [GLOBAL]: v6({}),
-        [PROJECT]: { version: 6, workspaceSetup: { command: ["pnpm", "install"] } },
+        [GLOBAL]: v6({}, { hooks: { WorktreeCreate: [create] } }),
+        [PROJECT]: { version: 6, hooks: { WorktreeRemove: [remove] } },
       });
-      expect((yield* store.load(CWD, AGENT, true)).workspaceVerify).toBeUndefined();
-
-      const trusted = yield* setup({
-        [GLOBAL]: v6({}),
-        [PROJECT]: { version: 6, workspaceVerify },
+      expect((yield* store.load(CWD, AGENT, true)).hooks).toEqual({
+        WorktreeCreate: [{ ...create, scope: "global" }],
+        WorktreeRemove: [{ ...remove, scope: "project" }],
       });
-      expect((yield* trusted.store.load(CWD, AGENT, true)).workspaceVerify).toEqual(
-        workspaceVerify,
-      );
-      expect((yield* trusted.store.load(CWD, AGENT, false)).workspaceVerify).toBeUndefined();
+      expect((yield* store.load(CWD, AGENT, false)).hooks.WorktreeRemove).toEqual([]);
 
-      const global = yield* setup({ [GLOBAL]: { version: 6, workspaceVerify } });
+      for (const project of [
+        { version: 6, workspaceSetup: create },
+        { version: 6, workspaceVerify: create },
+        { version: 6, workspaceInclude: [".env"] },
+        { version: 6, hooks: { WorktreeCreate: [{ command: ["pnpm"], timeout: 0 }] } },
+      ]) {
+        const invalid = yield* setup({ [GLOBAL]: v6({}), [PROJECT]: project });
+        yield* rejects(invalid.store.load(CWD, AGENT, true), "activate", PROJECT);
+      }
+      const global = yield* setup({ [GLOBAL]: v6({}, { hooks: { Unknown: [create] } }) });
       yield* rejects(global.store.load(CWD, AGENT, true), "activate", GLOBAL);
-      const invalid = yield* setup({
-        [GLOBAL]: v6({}),
-        [PROJECT]: { version: 6, workspaceVerify: { command: ["pnpm"], timeoutSeconds: 0 } },
-      });
-      yield* rejects(invalid.store.load(CWD, AGENT, true), "activate", PROJECT);
     }),
   );
 

@@ -1,0 +1,143 @@
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import {
+  clipText,
+  runBoundedProcessNode,
+  sanitizeDiagnosticContent,
+  stripTerminalControls,
+} from "pi-cosmic-core";
+import {
+  DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS,
+  type WorktreeHook,
+  type WorktreeHookEvent,
+} from "../config/schema.ts";
+import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
+
+export class WorktreeHookError extends Schema.TaggedError<WorktreeHookError>()(
+  "WorktreeHookError",
+  {
+    message: Schema.String,
+    cleanupUnconfirmed: Schema.optional(Schema.Boolean),
+  },
+) {}
+
+/** The JSON object a hook reads on stdin. */
+export interface WorktreeHookInput {
+  readonly event: WorktreeHookEvent;
+  readonly workspaceId: string;
+  /** The root of the tree the hook runs in, which is also its cwd. */
+  readonly worktreePath: string;
+  readonly sourceCwd: string;
+  readonly kind: "worker" | "prepare";
+  readonly runId?: string | undefined;
+}
+
+export interface WorktreeHookOptions {
+  readonly environment?: NodeJS.ProcessEnv;
+  /** Reports whether the process group was confirmed stopped, including after interruption. */
+  readonly onCleanup?: (confirmed: boolean) => void;
+}
+
+// Generous bounds: installers can be verbose, and overflowing kills the hook.
+const STDOUT_LIMIT_BYTES = 8 * 1024 * 1024;
+const STDERR_LIMIT_BYTES = 2 * 1024 * 1024;
+const CLEANUP_TIMEOUT_MILLIS = 5_000;
+const MESSAGE_LINE_CHARS = 400;
+// Redaction runs on a window far wider than the reported line, so a credential cut at the
+// window's start lies outside it.
+const REDACTION_WINDOW_CHARS = 16_000;
+
+const hookEnvironment = (source: NodeJS.ProcessEnv) =>
+  Object.fromEntries(
+    Object.entries(source).filter(
+      ([key, value]) => value !== undefined && !isGitLocalEnvironmentKey(key),
+    ),
+  );
+
+const lastLine = (stdout: string, stderr: string) => {
+  const text = stderr.trim() || stdout.trim();
+  const recent = sanitizeDiagnosticContent(
+    stripTerminalControls(text.slice(-REDACTION_WINDOW_CHARS)),
+    { maximumLength: Number.POSITIVE_INFINITY },
+  );
+  return (recent.split("\n").findLast((line) => line.trim()) ?? "")
+    .trim()
+    .slice(-MESSAGE_LINE_CHARS);
+};
+
+export const describeWorktreeHook = (hook: { readonly command: ReadonlyArray<string> }) =>
+  clipText(hook.command.join(" "), 80);
+
+const stdinPayload = (input: WorktreeHookInput) =>
+  new TextEncoder().encode(
+    `${JSON.stringify({
+      event: input.event,
+      workspaceId: input.workspaceId,
+      worktreePath: input.worktreePath,
+      sourceCwd: input.sourceCwd,
+      kind: input.kind,
+      ...(input.runId !== undefined && { runId: input.runId }),
+    })}\n`,
+  );
+
+/**
+ * Runs one configured hook at `input.worktreePath` without a shell, in its own process group with
+ * the user's environment minus Git variables that would redirect it to the parent repository, and
+ * the event's JSON object on stdin.
+ */
+export const runWorktreeHook = (
+  hook: WorktreeHook,
+  input: WorktreeHookInput,
+  options: WorktreeHookOptions = {},
+): Effect.Effect<void, WorktreeHookError> => {
+  const [executable, ...args] = hook.command;
+  const label = `${input.event} hook \`${describeWorktreeHook(hook)}\``;
+  if (executable === undefined)
+    return Effect.fail(new WorktreeHookError({ message: `${input.event} hook has no command.` }));
+  const timeoutSeconds = hook.timeout ?? DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS[input.event];
+  return runBoundedProcessNode({
+    executable,
+    args,
+    cwd: input.worktreePath,
+    environment: hookEnvironment(options.environment ?? process.env),
+    stdin: stdinPayload(input),
+    stdoutLimitBytes: STDOUT_LIMIT_BYTES,
+    stderrLimitBytes: STDERR_LIMIT_BYTES,
+    timeoutMillis: timeoutSeconds * 1000,
+    cleanupTimeoutMillis: CLEANUP_TIMEOUT_MILLIS,
+    detached: true,
+    sweepProcessTreeOnExit: true,
+    ...(options.onCleanup !== undefined && { onCleanup: options.onCleanup }),
+  }).pipe(
+    Effect.mapError((error) => {
+      // A hook that never spawned left no process behind, so its cleanup is confirmed; this
+      // report follows the runner's own, which can't tell that case apart.
+      const neverStarted = error.operation === "spawn";
+      if (neverStarted) options.onCleanup?.(true);
+      return new WorktreeHookError({
+        message: neverStarted
+          ? `${label} couldn't start; check that the command exists on PATH.`
+          : `${label} couldn't be read to completion.`,
+        cleanupUnconfirmed: !neverStarted,
+      });
+    }),
+    Effect.flatMap((result) => {
+      if (result.code === 0 && !result.timedOut && !result.overflowed && !result.cleanupUnconfirmed)
+        return Effect.void;
+      const reason = result.timedOut
+        ? `timed out after ${timeoutSeconds}s`
+        : result.overflowed
+          ? "produced too much output"
+          : result.cleanupUnconfirmed
+            ? "left processes that couldn't be confirmed stopped"
+            : `exited with ${result.code === null ? `signal ${result.signal ?? "unknown"}` : `code ${result.code}`}`;
+      const line = lastLine(result.stdout, result.stderr);
+      return Effect.fail(
+        new WorktreeHookError({
+          message: `${label} ${reason}${line ? `: ${line}` : "."}`,
+          cleanupUnconfirmed: result.cleanupUnconfirmed,
+        }),
+      );
+    }),
+  );
+};

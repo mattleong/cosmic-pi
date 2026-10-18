@@ -1,10 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { SafeFile } from "pi-cosmic-core";
-import type { WorkspaceInclude } from "../config/schema.ts";
+import { clipText, SafeFile } from "pi-cosmic-core";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   checkDirectory,
+  git,
   gitFields,
   repositoryGitFields,
   workspaceIO,
@@ -14,17 +14,83 @@ import {
 } from "./git-worktree-process.ts";
 import { treeEntries } from "./git-capture.ts";
 
-/** Most files `workspaceInclude` may copy into one tree. */
+/** The file at a source checkout's top level naming untracked files isolated trees receive. */
+export const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
+/** Most patterns `.worktreeinclude` may hold. */
+export const MAX_WORKTREE_INCLUDE_PATTERNS = 64;
+/** Longest pattern `.worktreeinclude` may hold. */
+export const MAX_WORKTREE_INCLUDE_PATTERN_CHARS = 1_024;
+const MAX_WORKTREE_INCLUDE_BYTES = 64 * 1024;
+/** Most files `.worktreeinclude` may copy into one tree. */
 export const MAX_INCLUDED_FILES = 256;
-/** Most bytes `workspaceInclude` may copy into one tree. */
+/** Most bytes `.worktreeinclude` may copy into one tree. */
 export const MAX_INCLUDED_BYTES = 64 * 1024 * 1024;
 
 const tooMuchIncluded = (operation: string, files: number, bytes: number) =>
-  workspaceRefusal(operation, "workspaceInclude matches too many files to copy.", {
-    rule: `workspaceInclude copies at most ${MAX_INCLUDED_FILES} files and ${MAX_INCLUDED_BYTES / 1024 / 1024} MiB into each isolated tree; it matched ${files} files of ${Math.ceil(bytes / 1024)} KiB`,
+  workspaceRefusal(operation, ".worktreeinclude matches too many files to copy.", {
+    rule: `.worktreeinclude copies at most ${MAX_INCLUDED_FILES} files and ${MAX_INCLUDED_BYTES / 1024 / 1024} MiB into each isolated tree; it matched ${files} files of ${Math.ceil(bytes / 1024)} KiB`,
     remedy:
-      "Narrow the workspaceInclude patterns in the project's .pi/pi-subagents.json to small local files such as .env, then /reload. Install dependencies with workspaceSetup instead.",
+      "Narrow the patterns in the checkout's .worktreeinclude to small local files such as .env. Install dependencies with a WorktreeCreate hook instead.",
   });
+
+const unreadableInclude = (file: string, rule: string) =>
+  workspaceRefusal("create", "The checkout's .worktreeinclude can't be used.", {
+    path: file,
+    rule,
+    remedy:
+      "Fix or remove .worktreeinclude at the checkout's top level, then start the writer again.",
+  });
+
+/**
+ * The gitignore-syntax patterns of a `.worktreeinclude` text: blank lines and `#` comments are
+ * skipped, and unescaped trailing spaces dropped, as in a `.gitignore`.
+ */
+export const parseWorktreeInclude = (text: string): ReadonlyArray<string> =>
+  text.split("\n").flatMap((raw) => {
+    const line = raw.replace(/\r$/u, "").replace(/(?<!\\) +$/u, "");
+    return line === "" || line.startsWith("#") ? [] : [line];
+  });
+
+/**
+ * The patterns of `root`'s `.worktreeinclude`, or none when it has no such file. A file that
+ * isn't a regular file, is too large, or holds too many, too long, or control-character
+ * patterns refuses.
+ */
+export const readWorktreeInclude = (root: string) =>
+  Effect.gen(function* () {
+    const file = path.join(root, WORKTREE_INCLUDE_FILE);
+    const stat = yield* workspaceIOIfPresent("create", () => fs.lstat(file));
+    if (!stat) return [];
+    const limits = `.worktreeinclude is a regular file of at most ${MAX_WORKTREE_INCLUDE_BYTES / 1024} KiB with at most ${MAX_WORKTREE_INCLUDE_PATTERNS} patterns of at most ${MAX_WORKTREE_INCLUDE_PATTERN_CHARS} characters, without control characters`;
+    const safe = yield* SafeFile;
+    const read = yield* safe
+      .readContainedRegularFile(file, root, MAX_WORKTREE_INCLUDE_BYTES)
+      .pipe(Effect.mapError(() => unreadableInclude(file, limits)));
+    const patterns = parseWorktreeInclude(new TextDecoder().decode(read.bytes));
+    if (
+      patterns.length > MAX_WORKTREE_INCLUDE_PATTERNS ||
+      patterns.some(
+        (pattern) => pattern.length > MAX_WORKTREE_INCLUDE_PATTERN_CHARS || /\p{Cc}/u.test(pattern),
+      )
+    )
+      return yield* unreadableInclude(file, limits);
+    return patterns;
+  });
+
+export const describeWorktreeInclude = (patterns: ReadonlyArray<string>) =>
+  clipText(patterns.join(", "), 400);
+
+/**
+ * The `.worktreeinclude` patterns of the checkout holding `cwd`, or undefined outside a Git
+ * checkout; the file is read the way workspace creation reads it.
+ */
+export const checkoutWorktreeInclude = (cwd: string) =>
+  git(cwd, ["rev-parse", "--show-toplevel"]).pipe(
+    Effect.option,
+    Effect.flatMap((root) =>
+      Option.isNone(root) ? Effect.succeed(undefined) : readWorktreeInclude(root.value.trim()),
+    ),
+  );
 
 /** The regular file at `name` below `root`, or undefined for anything else or nothing. */
 const includedFileSize = (root: string, name: string) =>
@@ -42,7 +108,7 @@ export const matchIncludedFiles = (
   root: string,
   repository: string,
   baseline: string,
-  patterns: WorkspaceInclude,
+  patterns: ReadonlyArray<string>,
 ) =>
   Effect.gen(function* () {
     const listed = yield* gitFields(root, [

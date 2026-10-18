@@ -242,7 +242,7 @@ describe("nested worktree writers", () => {
         expect(f.integrations).toEqual([]);
         yield* service.stop(shared.id);
         expect(yield* service.workspaceApply(parent.workspaceId!)).toMatchObject({
-          integrated: true,
+          testing: "untested",
         });
       });
     },
@@ -255,7 +255,7 @@ describe("nested worktree writers", () => {
       const { parent, child, parentWorkspace, childWorkspace } = yield* nestedPair(service);
       yield* service.stop(child.id);
       const applied = yield* service.workspaceApply(childWorkspace, {}, parent.id);
-      expect(applied).toMatchObject({ integrated: true });
+      expect(applied).toMatchObject({ testing: "untested" });
       expect(f.integrations.map((target) => target.workspaceId)).toEqual([childWorkspace]);
       // The parent's own lease covers its worker tree; other directories are leased as usual.
       expect(leases.acquired.filter((cwd) => cwd === parent.cwd)).toHaveLength(1);

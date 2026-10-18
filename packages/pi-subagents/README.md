@@ -10,7 +10,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Background by default.** Reports and failures arrive automatically; the agent waits only when it needs a result.
 - **Two-way supervision:** children can ask the parent questions and report progress; the parent can guide, interrupt, resume, retry, or stop them.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
-- **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one verified step (wholly or file by file), or reviews, tests, and applies as an exact prepared pair. Proposals can also be revised onto the parent's current files.
+- **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step (wholly or file by file), or reviews, tests, and applies as an exact prepared pair. Proposals can also be revised onto the parent's current files.
 - **Live view:** a run tree above the editor and the shared Activity manager, where you can also rename runs.
 
 ## Install
@@ -100,11 +100,16 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
   },
   "nesting": { "maxDirectChildren": 12, "maxDepth": 3 },
   "writerWorkspaceMode": "shared-checkout",
-  "delegation": "normal"
+  "delegation": "normal",
+  "hooks": {
+    "WorktreeCreate": [{ "command": ["pnpm", "install", "--offline", "--frozen-lockfile"] }]
+  }
 }
 ```
 
 If a candidate is unavailable at launch, such as an unauthenticated CLI, the next one is tried. After a run has started, fallback happens only through an explicit `retry`.
+
+`hooks` mirror Claude Code's `WorktreeCreate` and `WorktreeRemove`, but run after the engine creates an isolated tree and before it removes one rather than replacing either. A `.worktreeinclude` file at the checkout's top level names ignored local files, such as `.env`, to copy into isolated trees. See [Worktree hooks](docs/local-backends.md#worktree-hooks) and [Included files](docs/local-backends.md#included-files).
 
 Custom agents add named roles to the same files. Each one routes through a profile, replaces that profile's guidance with its instructions, and can pin effort, context, write intent, and the Pi tools its child inherits; tool lists skip Claude and Codex candidates. Launch one with `"agent": "auth-reviewer"` instead of a profile. See [Custom agents](docs/routing.md#custom-agents).
 

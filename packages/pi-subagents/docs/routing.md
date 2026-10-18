@@ -49,7 +49,7 @@ Only the seven declared profile IDs are accepted. An explicit launch profile alw
 
 Optional root `agents` declares [custom agents](#custom-agents) in global and trusted-project documents.
 
-Optional root `delegation` follows the same precedence ([Delegation settings](settings-workspace.md#delegation-settings)). Root `workspaceSetup` and `workspaceVerify` are allowed only in a trusted project document ([Setup and verification commands](local-backends.md#setup-and-verification-commands)), and so is `workspaceInclude` ([Included files](local-backends.md#included-files)).
+Optional root `delegation` follows the same precedence ([Delegation settings](settings-workspace.md#delegation-settings)). Optional root `hooks` declares `WorktreeCreate` and `WorktreeRemove` commands in global and trusted-project documents; both scopes run, global first ([Worktree hooks](local-backends.md#worktree-hooks)).
 
 ## Custom agents
 

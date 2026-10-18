@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
 import { localClaudeBackendDriver } from "./backend/local-claude.ts";
 import { localCodexBackendDriver } from "./backend/local-codex.ts";
 import { localPiBackendDriver } from "./backend/local-pi.ts";
@@ -70,7 +70,6 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
   );
   const backend = subagentBackendRegistryLayer.pipe(Layer.provide(backendBoundaries));
   const writerLeases = WriterLeaseService.layer(directory);
-  const workspaces = WorkspaceService.layer(directory);
   const service = Layer.unwrap(
     Effect.gen(function* () {
       const store = yield* SubagentConfigStore;
@@ -79,6 +78,11 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         options.agentDirectory,
         options.projectTrusted,
       );
+      const { hooks } = inspection.config;
+      const workspaces = WorkspaceService.layer({
+        ...directory,
+        worktreeRemove: hooks.WorktreeRemove,
+      });
       return SubagentService.layer({
         workspaceSourceCwd: options.cwd,
         ...(options.sessionKey && { workspaceOwnerId: options.sessionKey }),
@@ -88,13 +92,11 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         notify: options.notify,
         questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: inspection.config.writerWorkspaceMode,
-        workspaceSetup: inspection.config.workspaceSetup,
-        workspaceInclude: inspection.config.workspaceInclude,
-        workspaceVerify: inspection.config.workspaceVerify,
+        worktreeCreate: hooks.WorktreeCreate,
         proxyHandler: options.proxyHandler,
-      });
+      }).pipe(Layer.provide(workspaces));
     }),
-  ).pipe(Layer.provide(Layer.mergeAll(backend, writerLeases, profiles, workspaces, configStore)));
+  ).pipe(Layer.provide(Layer.mergeAll(backend, writerLeases, profiles, configStore)));
   return Layer.mergeAll(
     service,
     profiles,
@@ -102,6 +104,8 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
     backend,
     NativeModelCatalog.layer(directory),
     CodePreviewSchedulerService.layer,
+    // Doctor reads the checkout's .worktreeinclude the way workspace creation does.
+    SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer)),
     options.sweepPrivateState ? privateStateHousekeepingLayer(options.agentDirectory) : Layer.empty,
   );
 };

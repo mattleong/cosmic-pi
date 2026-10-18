@@ -4,15 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import { CrossProcessLock, type CrossProcessLease, type SafeFile } from "pi-cosmic-core";
-import type { WorkspaceInclude, WorkspaceSetup } from "../config/schema.ts";
+import type { WorktreeHook } from "../config/schema.ts";
 import { WorkspaceError, workspaceCheckoutRoot } from "../workspace/model.ts";
 import { partialSelection } from "../workspace/policy.ts";
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";
-import {
-  runWorkspaceSetup,
-  runWorkspaceVerification,
-  type WorkspaceCommandError,
-} from "./workspace-setup.ts";
+import { runWorktreeHook } from "./worktree-hook.ts";
+import { HOOK_QUARANTINE_REMEDY, worktreeKind, worktreeRemoveHooks } from "./git-worktree-hooks.ts";
 import type {
   WorkspaceAcquired,
   WorkspaceAdoptTarget,
@@ -26,13 +23,11 @@ import type {
   WorkspaceRecord,
   WorkspaceRevision,
   WorkspaceRevisionMetadata,
+  WorkspaceHookTarget,
   WorkspaceSettledTarget,
-  WorkspaceSetupTarget,
   WorkspaceSweepTarget,
   WorkspaceSwept,
   WorkspaceTarget,
-  WorkspaceTreeCommand,
-  WorkspaceVerifyTarget,
   WorkspaceWorkerChanges,
 } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
@@ -71,7 +66,12 @@ import {
   workerLeftOut,
 } from "./git-capture.ts";
 import { commitRevisionPatch, patchBytes, revisionText } from "./git-worktree-patch.ts";
-import { copyIncludedFiles, includedLeftOut, matchIncludedFiles } from "./git-worktree-include.ts";
+import {
+  copyIncludedFiles,
+  includedLeftOut,
+  matchIncludedFiles,
+  readWorktreeInclude,
+} from "./git-worktree-include.ts";
 import { rebaseWorkspace } from "./git-worktree-rebase.ts";
 import {
   addWorkspaceTree,
@@ -136,7 +136,6 @@ interface CreateWorkspaceInput {
   readonly ownerId: string;
   readonly sourceWorkspace?: WorkspaceTarget | undefined;
   readonly launch?: WorkspaceLaunch | undefined;
-  readonly include?: WorkspaceInclude | undefined;
   readonly onAcquired?: WorkspaceAcquired | undefined;
 }
 
@@ -214,10 +213,9 @@ const settled = (target: WorkspaceSettledTarget) =>
     ? Effect.void
     : Effect.fail(workspaceFailure("cleanup", "Process cleanup must be independently confirmed."));
 
-const withoutSetupMarker = ({ setupCleanupPending: _pending, ...record }: WorkspaceRecord) =>
-  record;
+const withoutHookMarker = ({ setupCleanupPending: _pending, ...record }: WorkspaceRecord) => record;
 
-// A failed preparation setup leaves the reviewed revision frozen, with nothing to integrate.
+// Failed WorktreeCreate hooks in a prepared tree leave the reviewed revision frozen, with nothing to integrate.
 const withoutPreparation = ({
   preparation: _preparation,
   parentTree: _parentTree,
@@ -227,8 +225,6 @@ const withoutPreparation = ({
   ...record
 }: WorkspaceRecord): WorkspaceRecord => ({ ...record, status: "frozen" });
 
-type TreeCommandOperation = "setup" | "verify";
-const commandLabel = { setup: "setup", verify: "verification" } as const;
 const MAX_LISTED_CHANGES = 5;
 
 const listedChanges = (paths: ReadonlyArray<string>) =>
@@ -236,15 +232,7 @@ const listedChanges = (paths: ReadonlyArray<string>) =>
     paths.length > MAX_LISTED_CHANGES ? `, and ${paths.length - MAX_LISTED_CHANGES} more` : ""
   }`;
 
-const commandFailure = (operation: TreeCommandOperation, error: WorkspaceCommandError) =>
-  new WorkspaceError({
-    operation,
-    message: error.message,
-    ...(operation === "verify" && error.outputTail && { detail: error.outputTail }),
-    ...(error.cleanupUnconfirmed && { cleanupUnconfirmed: true }),
-  });
-
-/** Serializes this process's workspace operations; setup and verify release it while their command runs. */
+/** Serializes this process's workspace operations; WorktreeCreate hooks release it while they run. */
 export type WorkspaceOperationGate = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ) => Effect.Effect<A, E, R>;
@@ -265,15 +253,21 @@ export const workspaceRegistry = (agentDirectory: string) =>
 
 /**
  * The engine for `registry` (see workspaceRegistry); CrossProcessLock must use its lock directory.
- * The caller serializes every operation with `gate` except setup, which takes it for each phase.
+ * The caller serializes every operation with `gate` except WorktreeCreate hooks, which take it
+ * for each phase. `worktreeRemove` hooks run before every removal of a tree a workspace handed out.
  */
-export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGate) =>
+export const gitWorkspaceEngine = (
+  registry: string,
+  gate: WorkspaceOperationGate,
+  options: { readonly worktreeRemove?: ReadonlyArray<WorktreeHook> | undefined } = {},
+) =>
   Effect.gen(function* () {
     const lockDirectory = workspaceLockDirectory(registry);
     const locks = yield* CrossProcessLock;
     const owned = new Set<string>();
-    // Workspaces whose setup command this engine is running outside the locks.
+    // Workspaces whose WorktreeCreate hooks this engine is running outside the locks.
     const settingUp = new Set<string>();
+    const beforeRemove = worktreeRemoveHooks(registry, options.worktreeRemove ?? []);
     // Held from this engine's first workspace until its scope closes, so another session can
     // prove this one ended before discarding a workspace it left behind.
     let presence: { readonly token: string; readonly lease: CrossProcessLease } | undefined;
@@ -332,17 +326,16 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
         const record = yield* readWorkspaceRecord(registry, workspaceId);
         if (record.setupCleanupPending !== undefined && settingUp.has(workspaceId))
           return yield* new WorkspaceError({
-            operation: "setup",
-            message: "Workspace setup or verification is still running.",
-            detail: `Command tree: ${record.setupCleanupPending}\nTry again once the command finishes.`,
+            operation: "hook",
+            message: "WorktreeCreate hooks are still running.",
+            detail: `Hook tree: ${record.setupCleanupPending}\nTry again once the hooks finish.`,
             cleanupUnconfirmed: true,
           });
         if (record.setupCleanupPending !== undefined)
           return yield* new WorkspaceError({
-            operation: "setup",
-            message:
-              "Workspace setup or verification cleanup is unconfirmed; the artifact is quarantined.",
-            detail: `Command tree: ${record.setupCleanupPending}\nIndependently confirm the command's process and every descendant have stopped. Preserve the proposal and recovery record before manually recovering the private trees; restarting Pi does not clear this quarantine.`,
+            operation: "hook",
+            message: "Worktree hook cleanup is unconfirmed; the artifact is quarantined.",
+            detail: `Hook tree: ${record.setupCleanupPending}\n${HOOK_QUARANTINE_REMEDY}`,
             cleanupUnconfirmed: true,
           });
         const relative = subdirectory(record);
@@ -371,7 +364,11 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
           );
         return record;
       });
+    // Only trees a workspace handed out run WorktreeRemove; create and prepare roll back their
+    // own half-made trees silently.
     const removePreparation = (record: WorkspaceRecord, preparationId: string) =>
+      removePreparationTree(registry, record, preparationId, beforeRemove);
+    const removeUnhanded = (record: WorkspaceRecord, preparationId: string) =>
       removePreparationTree(registry, record, preparationId);
     // Lock order: an operation holds at most one store lock, keyed by the real checkout at the top
     // of its record's nested chain (workspaceCheckoutRoot). A whole chain shares it, so a nested
@@ -387,7 +384,7 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
         Effect.flatMap((record) => lockedSource(workspaceCheckoutRoot(record.handle), effect)),
       );
     // A nested workspace integrates into its source workspace's worker tree, which must still
-    // hold unfinished work and must not be running a setup or verification command.
+    // hold unfinished work and must not be running a worktree hook.
     const openSourceWorkspace = (record: WorkspaceRecord, operation: string) =>
       Effect.gen(function* () {
         const sourceId = record.handle.sourceWorkspaceId;
@@ -497,10 +494,11 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
               "Source branch or index changed during snapshot acquisition.",
             );
           // Matched before the checkout, so too many matches refuse before it.
+          const patterns = yield* readWorktreeInclude(sourceRoot);
           const included =
-            input.include === undefined || input.include.length === 0
+            patterns.length === 0
               ? []
-              : yield* matchIncludedFiles(sourceRoot, repository, baseline, input.include);
+              : yield* matchIncludedFiles(sourceRoot, repository, baseline, patterns);
           yield* setWorkspaceRef(repository, workspaceId, "baseline", baseline);
           record = { ...record, baseline };
           yield* saveWorkspaceRecord(registry, record);
@@ -835,12 +833,9 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
       }).pipe(
         Effect.catchIf(
           (error) => !error.cleanupUnconfirmed,
-          (error) =>
-            removePreparation(record, preparationId).pipe(Effect.andThen(Effect.fail(error))),
+          (error) => removeUnhanded(record, preparationId).pipe(Effect.andThen(Effect.fail(error))),
         ),
-        Effect.onInterrupt(() =>
-          committed ? Effect.void : removePreparation(record, preparationId),
-        ),
+        Effect.onInterrupt(() => (committed ? Effect.void : removeUnhanded(record, preparationId))),
       );
     }, locked);
 
@@ -992,6 +987,7 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
         ? false
         : yield* removeWorkspaceTrees(registry, integrated, {
             keepWorker: retainedForChildren.length > 0,
+            beforeRemove,
           }).pipe(
             Effect.as(false),
             Effect.catchTag("WorkspaceError", (error) =>
@@ -1041,7 +1037,7 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
         yield* refuseWithChildren(record);
         // A stopped publication is undone first; until that succeeds the record stays mid-integration.
         if (record.status === "integrating") yield* rollbackPublication(registry, record);
-        yield* removeWorkspaceTrees(registry, record);
+        yield* removeWorkspaceTrees(registry, record, { beforeRemove });
         yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
         owned.delete(target.workspaceId);
         return undefined;
@@ -1101,7 +1097,10 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
         Effect.gen(function* () {
           // Until the rollback succeeds the record stays mid-integration.
           if (record.status === "integrating") yield* rollbackPublication(registry, record);
-          yield* removeWorkspaceTrees(registry, record, { requireOriginalWorker: true });
+          yield* removeWorkspaceTrees(registry, record, {
+            requireOriginalWorker: true,
+            beforeRemove,
+          });
           yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
         }),
       );
@@ -1233,7 +1232,10 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
           const kept = current
             ? record
             : (yield* freezeRecord({ ...withoutPreparation(record), status: "active" })).record;
-          yield* removeWorkspaceTrees(registry, kept, { requireOriginalWorker: true });
+          yield* removeWorkspaceTrees(registry, kept, {
+            requireOriginalWorker: true,
+            beforeRemove,
+          });
           yield* saveWorkspaceRecord(registry, {
             ...kept,
             status: "discarded",
@@ -1253,7 +1255,7 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
       target: WorkspaceSettledTarget,
     ) {
       yield* settled(target);
-      return yield* rebaseWorkspace(registry, yield* checked(target), managedRecord);
+      return yield* rebaseWorkspace(registry, yield* checked(target), managedRecord, beforeRemove);
     }, locked);
     const collectGarbage = Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -1264,16 +1266,16 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
           withFreeLock(locks, lockDirectory, sourceLockNamespace(sourceRoot), effect),
         whenOwnerEnded: (ownerLease, effect) =>
           withFreeLock(locks, lockDirectory, ownerNamespace(ownerLease), effect),
+        beforeRemove,
       });
     });
-    const setupTree = (record: WorkspaceRecord, preparation: string | undefined) =>
+    const hookTree = (record: WorkspaceRecord, preparation: string | undefined) =>
       preparation === undefined ? worker(record) : prepared(record, preparation);
     // Persist before spawning. Uncertain cleanup or a failed record commit keeps this proof missing
     // across runtime replacement; neither caller cleanup nor orphan discard can erase it, and every
     // other operation refuses the record while it is set.
-    const beginSetup = Effect.fn("GitWorkspaceEngine.beginSetup")(function* (
-      target: WorkspaceSetupTarget,
-      operation: TreeCommandOperation,
+    const beginCreateHooks = Effect.fn("GitWorkspaceEngine.beginCreateHooks")(function* (
+      target: WorkspaceHookTarget,
       began: (root: string) => void,
     ) {
       const record = yield* checked(target);
@@ -1283,11 +1285,8 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
           ? record.status !== "active"
           : record.status !== "prepared" || record.preparation?.preparationId !== preparation
       )
-        return yield* workspaceFailure(
-          operation,
-          `The ${commandLabel[operation]} tree is stale or unavailable.`,
-        );
-      const root = setupTree(record, preparation);
+        return yield* workspaceFailure("hook", "The hook's tree is stale or unavailable.");
+      const root = hookTree(record, preparation);
       // A failed save may still have renamed the marker into place.
       yield* saveWorkspaceRecord(registry, { ...record, setupCleanupPending: root }, () =>
         began(root),
@@ -1295,28 +1294,29 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
         Effect.mapError(
           (error) =>
             new WorkspaceError({
-              operation,
-              message: `Workspace ${commandLabel[operation]} couldn't record its quarantine marker; the artifact may stay quarantined.`,
-              detail: [error.message, error.detail, `Command tree: ${root}`]
+              operation: "hook",
+              message:
+                "WorktreeCreate couldn't record its quarantine marker; the artifact may stay quarantined.",
+              detail: [error.message, error.detail, `Hook tree: ${root}`]
                 .filter((line) => line !== undefined)
                 .join("\n"),
               cleanupUnconfirmed: true,
             }),
         ),
       );
-      return root;
+      return { root, sourceCwd: record.handle.sourceCwd };
     }, locked);
     // Clears the marker only after confirmed process cleanup, optionally withdrawing the
     // preparation so its untested tree can never be integrated.
-    const finishSetup = Effect.fn("GitWorkspaceEngine.finishSetup")(function* (
-      target: WorkspaceSetupTarget,
+    const finishCreateHooks = Effect.fn("GitWorkspaceEngine.finishCreateHooks")(function* (
+      target: WorkspaceHookTarget,
       root: string,
       withdraw: boolean,
     ) {
       const record = yield* readWorkspaceRecord(registry, target.workspaceId);
       if (record.setupCleanupPending !== root || record.handle.ownerId !== target.ownerId)
-        return yield* workspaceFailure("setup", "The command quarantine record changed.");
-      const cleared = withoutSetupMarker(record);
+        return yield* workspaceFailure("hook", "The hook quarantine record changed.");
+      const cleared = withoutHookMarker(record);
       const preparation = target.preparationId;
       if (!withdraw || preparation === undefined)
         return yield* saveWorkspaceRecord(registry, cleared);
@@ -1324,66 +1324,88 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
       yield* removePreparation(cleared, preparation);
       return undefined;
     }, locked);
-    // The command can run for up to an hour, so it holds neither this process's operation gate nor
-    // the checkout's store lock; the durable marker keeps every other operation away. Once the
-    // runner confirms the process group stopped, including after interruption, the marker is
-    // cleared uninterruptibly before the outcome propagates; otherwise the artifact stays
-    // quarantined.
-    const runMarked = <A>(
-      target: WorkspaceSetupTarget,
-      operation: TreeCommandOperation,
-      withdrawOnFailure: boolean,
-      command: (
-        root: string,
-        onCleanup: (confirmed: boolean) => void,
-      ) => Effect.Effect<A, WorkspaceError>,
+    /**
+     * Runs the WorktreeCreate hooks in order, stopping at the first failure. They can run for up
+     * to an hour each, so they hold neither this process's operation gate nor the checkout's store
+     * lock; the durable marker keeps every other operation away. Once the runner confirms every
+     * process group stopped, including after interruption, the marker is cleared uninterruptibly
+     * before the outcome propagates; otherwise the artifact stays quarantined. A failed or
+     * interrupted run in a prepared tree withdraws the preparation.
+     */
+    const runCreateHooks = (
+      target: WorkspaceHookTarget & {
+        readonly hooks: ReadonlyArray<WorktreeHook>;
+        readonly runId?: string | undefined;
+      },
     ) => {
       let marked: string | undefined;
-      // Reported by the runner once it stops the command; absent when no process was spawned.
-      let cleanupConfirmed: boolean | undefined;
-      const label = commandLabel[operation];
+      // False once any hook's process group couldn't be confirmed stopped.
+      let cleanupConfirmed = true;
       const finish = (root: string, failed: boolean, failure: WorkspaceError | undefined) =>
-        gate(finishSetup(target, root, failed && withdrawOnFailure)).pipe(
+        gate(finishCreateHooks(target, root, failed)).pipe(
           Effect.mapError(
             (error) =>
               new WorkspaceError({
-                operation,
-                message: `Workspace ${label} stopped, but its quarantine couldn't be cleared; the artifact stays quarantined.`,
-                detail: [failure?.message, error.message, error.detail, `Command tree: ${root}`]
+                operation: "hook",
+                message:
+                  "WorktreeCreate hooks stopped, but their quarantine couldn't be cleared; the artifact stays quarantined.",
+                detail: [failure?.message, error.message, error.detail, `Hook tree: ${root}`]
                   .filter((line) => line !== undefined)
                   .join("\n"),
                 cleanupUnconfirmed: true,
               }),
           ),
         );
+      const run = (root: string, sourceCwd: string) =>
+        Effect.forEach(
+          target.hooks,
+          (hook) =>
+            runWorktreeHook(
+              hook,
+              {
+                event: "WorktreeCreate",
+                workspaceId: target.workspaceId,
+                worktreePath: root,
+                sourceCwd,
+                kind: worktreeKind(root),
+                runId: target.runId,
+              },
+              {
+                onCleanup: (confirmed) => {
+                  if (!confirmed) cleanupConfirmed = false;
+                },
+              },
+            ).pipe(
+              Effect.mapError(
+                (error) =>
+                  new WorkspaceError({
+                    operation: "hook",
+                    message: error.message,
+                    ...(error.cleanupUnconfirmed && { cleanupUnconfirmed: true }),
+                  }),
+              ),
+            ),
+          { discard: true },
+        );
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const exit = yield* restore(
             gate(
-              beginSetup(target, operation, (root) => {
+              beginCreateHooks(target, (root) => {
                 marked = root;
                 settingUp.add(target.workspaceId);
               }),
-            ).pipe(
-              Effect.flatMap((root) =>
-                command(root, (confirmed) => {
-                  cleanupConfirmed = confirmed;
-                }),
-              ),
-            ),
+            ).pipe(Effect.flatMap(({ root, sourceCwd }) => run(root, sourceCwd))),
           ).pipe(Effect.exit);
           const root = marked;
-          // Refused before marking the tree, so no command ran.
+          // Refused before marking the tree, so no hook ran.
           if (root === undefined) return yield* exit;
-          if (Exit.isSuccess(exit)) {
-            yield* finish(root, false, undefined);
-            return exit.value;
-          }
+          if (Exit.isSuccess(exit)) return yield* finish(root, false, undefined);
           if (Cause.hasInterrupts(exit.cause)) {
-            if (cleanupConfirmed !== false)
+            if (cleanupConfirmed)
               yield* finish(root, true, undefined).pipe(
                 Effect.catch((error) =>
-                  Effect.logWarning(`Interrupted workspace ${label}: ${error.message}`).pipe(
+                  Effect.logWarning(`Interrupted WorktreeCreate hooks: ${error.message}`).pipe(
                     Effect.annotateLogs("workspaceId", target.workspaceId),
                   ),
                 ),
@@ -1400,19 +1422,9 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
             if (marked !== undefined) settingUp.delete(target.workspaceId);
           }),
         ),
-        Effect.withSpan(`GitWorkspaceEngine.${operation}`),
+        Effect.withSpan("GitWorkspaceEngine.runCreateHooks"),
       );
     };
-    // A failed or interrupted preparation setup withdraws the preparation.
-    const setup = (target: WorkspaceSetupTarget & { readonly setup: WorkspaceSetup }) =>
-      runMarked(target, "setup", true, (root, onCleanup) =>
-        runWorkspaceSetup(target.setup, root, { onCleanup }).pipe(
-          Effect.mapError((error) => commandFailure("setup", error)),
-        ),
-      );
-    // A setup command may only add ignored files such as dependencies (or credential files,
-    // which captures leave out); anything else would enter the worker's proposal or invalidate
-    // the prepared tree.
     // Compares the worker tree with its baseline, storing no commit.
     const workerChanges = (record: WorkspaceRecord) =>
       Effect.gen(function* () {
@@ -1423,14 +1435,17 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
             : yield* changedBetween(record.repository, record.baseline, snapshot.tree);
         return { snapshot, changedPaths };
       });
-    const setupChanges = Effect.fn("GitWorkspaceEngine.setupChanges")(function* (
-      target: WorkspaceSetupTarget,
+    // WorktreeCreate hooks may only add ignored files such as dependencies (or credential files,
+    // which captures leave out); anything else would enter the worker's proposal or invalidate
+    // the prepared tree.
+    const hookChanges = Effect.fn("GitWorkspaceEngine.hookChanges")(function* (
+      target: WorkspaceHookTarget,
     ) {
       const record = yield* checked(target);
       const preparation = target.preparationId;
       if (preparation === undefined) {
         if (record.status !== "active")
-          return yield* workspaceFailure("setup", "Only a new active workspace may run setup.");
+          return yield* workspaceFailure("hook", "Only an active workspace's worker runs hooks.");
         if (record.rebasedTree === undefined) return (yield* workerChanges(record)).changedPaths;
         // A rebuilt worker already differs from its baseline by the reapplied changes.
         const snapshot = yield* captureWorker(record);
@@ -1442,7 +1457,7 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
         record.preparation?.preparationId !== preparation ||
         record.preparedTree === undefined
       )
-        return yield* workspaceFailure("setup", "Preparation is stale or unknown.");
+        return yield* workspaceFailure("hook", "Preparation is stale or unknown.");
       const snapshot = yield* captureWorker(
         record,
         prepared(record, preparation),
@@ -1451,24 +1466,6 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
       if (snapshot.tree === record.preparedTree) return [];
       return yield* changedBetween(record.repository, record.preparedTree, snapshot.tree);
     }, locked);
-    // Verification may only add ignored or credential files; a failure keeps the preparation so the
-    // parent can inspect the tree. The coordinator never integrates a preparation that failed.
-    const verify = (target: WorkspaceVerifyTarget & { readonly verify: WorkspaceTreeCommand }) =>
-      Effect.gen(function* () {
-        const result = yield* runMarked(target, "verify", false, (root, onCleanup) =>
-          runWorkspaceVerification(target.verify, root, { onCleanup }).pipe(
-            Effect.mapError((error) => commandFailure("verify", error)),
-          ),
-        );
-        const changed = yield* gate(setupChanges(target));
-        if (changed.length > 0)
-          return yield* new WorkspaceError({
-            operation: "verify",
-            message: `Workspace verification changed project files (${listedChanges(changed)}); add its outputs to .gitignore.`,
-            ...(result.outputTail && { detail: result.outputTail }),
-          });
-        return result;
-      });
     // Captures the worker tree like freeze, but records no revision.
     const inspectWorkerChanges = Effect.fn("GitWorkspaceEngine.inspectWorkerChanges")(function* (
       target: WorkspaceSettledTarget,
@@ -1493,7 +1490,7 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
       checked(target, false).pipe(Effect.flatMap(revisionWithDiff));
     const unresolvedChildren = (target: WorkspaceOrphanTarget) =>
       unresolvedChildWorkspaces(registry, target.workspaceId);
-    const commandCleanupPending = (target: WorkspaceOrphanTarget) =>
+    const hookCleanupPending = (target: WorkspaceOrphanTarget) =>
       readWorkspaceRecord(registry, target.workspaceId).pipe(
         Effect.map((record) => record.setupCleanupPending !== undefined),
       );
@@ -1527,14 +1524,13 @@ export const gitWorkspaceEngine = (registry: string, gate: WorkspaceOperationGat
       sweepCandidates,
       sweepOrphan,
       collectGarbage,
-      setup,
-      verify,
-      setupChanges,
+      runCreateHooks,
+      hookChanges,
       inspectWorkerChanges,
       inspect,
       revision: currentRevision,
       unresolvedChildren,
-      commandCleanupPending,
+      hookCleanupPending,
       list,
       listRecords,
       listAll,

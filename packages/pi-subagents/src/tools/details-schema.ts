@@ -75,14 +75,11 @@ const WorkspaceWarningSchema = Schema.Struct({
 });
 export type WorkspaceWarning = typeof WorkspaceWarningSchema.Type;
 
-/** `parent-tested`: apply integrated the parent's own prepared pair and ran no verification. */
-export const WORKSPACE_VERIFICATION_STATUSES = [
-  "passed",
-  "not-configured",
-  "parent-tested",
-  "failed",
-] as const;
-export const MAX_WORKSPACE_VERIFICATION_TEXT_CHARS = 512;
+/**
+ * `parent-tested`: apply integrated the parent's own prepared pair. `untested`: apply prepared and
+ * integrated in one call, testing nothing.
+ */
+export const WORKSPACE_APPLY_TESTING = ["parent-tested", "untested"] as const;
 
 export const WorkspaceToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
@@ -106,9 +103,7 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   remainingPathCount: Schema.optionalKey(nonNegativeInteger),
   /** Whether the parent had read every diff page of the applied revision. */
   reviewed: Schema.optionalKey(Schema.Boolean),
-  verification: Schema.optionalKey(Schema.Literals(WORKSPACE_VERIFICATION_STATUSES)),
-  verificationCommand: Schema.optionalKey(NonEmptyText(MAX_WORKSPACE_VERIFICATION_TEXT_CHARS)),
-  verificationMessage: Schema.optionalKey(NonEmptyText(MAX_WORKSPACE_VERIFICATION_TEXT_CHARS)),
+  testing: Schema.optionalKey(Schema.Literals(WORKSPACE_APPLY_TESTING)),
   preparedCwd: Schema.optionalKey(NonEmptyText(1_024)),
   successorRunId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   /** A rebasing revise rebuilt the successor's tree; `conflictCount` files kept conflicts. */

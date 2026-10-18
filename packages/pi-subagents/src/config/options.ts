@@ -19,9 +19,8 @@ import {
   DEFAULT_WRITER_WORKSPACE_MODE,
   type DelegationMode,
   type WriterWorkspaceMode,
-  type WorkspaceSetup,
-  type WorkspaceInclude,
-  type WorkspaceVerify,
+  type WorktreeHook,
+  type WorktreeHookEvent,
   type DecodedSubagentConfig,
   type SubagentNestingPolicy,
 } from "./schema.ts";
@@ -34,6 +33,14 @@ export type ResolvedProfileSetSelection =
       readonly invalid?: boolean | undefined;
     };
 
+export interface ConfiguredWorktreeHook extends WorktreeHook {
+  readonly scope: "global" | "project";
+}
+/** Each event's hooks in run order: global ones first, then a trusted project's. */
+export type ResolvedWorktreeHooks = Readonly<
+  Record<WorktreeHookEvent, ReadonlyArray<ConfiguredWorktreeHook>>
+>;
+
 export interface ResolvedSubagentConfig {
   readonly globalConfigPath: string;
   readonly projectConfigPath: string;
@@ -42,12 +49,8 @@ export interface ResolvedSubagentConfig {
   readonly nesting: SubagentNestingPolicy;
   readonly writerWorkspaceMode: WriterWorkspaceMode;
   readonly delegation: DelegationMode;
-  /** Only a trusted project document can declare a setup command. */
-  readonly workspaceSetup?: WorkspaceSetup | undefined;
-  /** Only a trusted project document can declare a verification command. */
-  readonly workspaceVerify?: WorkspaceVerify | undefined;
-  /** Only a trusted project document can name untracked files isolated trees receive. */
-  readonly workspaceInclude?: WorkspaceInclude | undefined;
+  /** Untrusted project documents contribute none. */
+  readonly hooks: ResolvedWorktreeHooks;
   readonly sessionSpendLimit?: number | undefined;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
@@ -210,6 +213,21 @@ const agentLayer = (scope: NamedProfileSetScope, decoded: DecodedSubagentConfig)
   containerInvalid: decoded.invalidAgentsContainer,
 });
 
+const worktreeHooks = (
+  global: DecodedSubagentConfig,
+  project: DecodedSubagentConfig | undefined,
+): ResolvedWorktreeHooks => {
+  const layers = [
+    { scope: "global" as const, hooks: global.file.hooks },
+    { scope: "project" as const, hooks: project?.file.hooks },
+  ];
+  const forEvent = (event: WorktreeHookEvent) =>
+    layers.flatMap(({ scope, hooks }) =>
+      (hooks?.[event] ?? []).map((hook): ConfiguredWorktreeHook => Object.assign({ scope }, hook)),
+    );
+  return { WorktreeCreate: forEvent("WorktreeCreate"), WorktreeRemove: forEvent("WorktreeRemove") };
+};
+
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
   const global = resolveProfileSetLayer(input.global, "global", BUILTIN_PROFILE_LAYER);
@@ -227,9 +245,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     nesting: policy.nesting,
     writerWorkspaceMode: policy.writerWorkspaceMode,
     delegation: policy.delegation,
-    ...(project?.file.workspaceSetup && { workspaceSetup: project.file.workspaceSetup }),
-    ...(project?.file.workspaceVerify && { workspaceVerify: project.file.workspaceVerify }),
-    ...(project?.file.workspaceInclude && { workspaceInclude: project.file.workspaceInclude }),
+    hooks: worktreeHooks(input.global, project),
     ...((project?.file.sessionSpendLimit ?? input.global.file.sessionSpendLimit) !== undefined && {
       sessionSpendLimit: project?.file.sessionSpendLimit ?? input.global.file.sessionSpendLimit,
     }),

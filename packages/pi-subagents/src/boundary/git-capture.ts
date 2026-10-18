@@ -63,7 +63,7 @@ const copyIndex = (real: string, copy: string) =>
  * of the real index (keeping skip-worktree and assume-unchanged bits) takes every tracked change
  * and the untracked files Git's ignore rules leave eligible, except those `leaveOut` names.
  * Untracked nested repositories are never captured. The copy lives in `scratch`. `included` names
- * files `workspaceInclude` copied in: they are left out silently, even when staged or no longer
+ * files `.worktreeinclude` copied in: they are left out silently, even when staged or no longer
  * ignored, and Git never hashes them.
  */
 export const captureTree = (

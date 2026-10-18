@@ -15,10 +15,10 @@ import {
   type WorkspaceRebase,
   type WorkspaceRecord,
   type WorkspaceTarget,
-  type WorkspaceVerifyTarget,
   type WorkspaceWorkerChanges,
 } from "../../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/workspace/service.ts";
+import type { WorktreeHook } from "../../../src/config/schema.ts";
 import type { StartSubagentRequest } from "../../../src/run/model.ts";
 import type { SubagentServiceContract, SubagentServiceOptions } from "../../../src/run/service.ts";
 import {
@@ -61,8 +61,7 @@ type GatedOperation =
   | "freeze"
   | "prepare"
   | "discard"
-  | "setup"
-  | "verify"
+  | "createHooks"
   | "inspectWorkerChanges";
 
 interface EngineHooks {
@@ -72,9 +71,7 @@ interface EngineHooks {
   /** Probing other sessions' owner leases fails, so a listing that probes them fails. */
   ownerProbeFailure?: WorkspaceError;
   createFailure?: WorkspaceError;
-  setupFailure?: WorkspaceError | undefined;
-  verifyFailure?: WorkspaceError | undefined;
-  verifyOutputTail: string;
+  createHookFailure?: WorkspaceError | undefined;
   workerChanges: WorkspaceWorkerChanges | WorkspaceError;
   before: { [Operation in GatedOperation]?: Effect.Effect<void> | undefined };
   failDiscard: boolean;
@@ -126,7 +123,7 @@ export function workspaceFixture({
   writerLeases,
   profiles,
   children = fakeChildLayer(),
-  workspaceSetup,
+  worktreeCreate,
   serviceOptions,
 }: {
   readonly sourceCwd?: string;
@@ -134,12 +131,11 @@ export function workspaceFixture({
   readonly writerLeases?: Layer.Layer<WriterLeaseService>;
   readonly profiles?: ReturnType<typeof profileLayerFor>;
   readonly children?: ReturnType<typeof fakeChildLayer>;
-  readonly workspaceSetup?: { readonly command: ReadonlyArray<string> };
+  readonly worktreeCreate?: ReadonlyArray<WorktreeHook>;
   readonly serviceOptions?: SubagentServiceOptions;
 } = {}) {
   const hooks: EngineHooks = {
     afterCreate: Effect.void,
-    verifyOutputTail: "verified",
     // Like the revisions it freezes, the fixture's worker tree has changed by default.
     workerChanges: {
       changedPaths: ["file.ts"],
@@ -160,11 +156,8 @@ export function workspaceFixture({
   const rollbacks: string[] = [];
   /** Each rebase's workspace, in order. */
   const rebases: string[] = [];
-  /** The workspaceInclude patterns each create received, in order. */
-  const includes: Array<ReadonlyArray<string> | undefined> = [];
-  const verifications: WorkspaceVerifyTarget[] = [];
-  /** Each setup's tree: a preparation id, or "worker" for the worker tree. */
-  const setups: string[] = [];
+  /** Each WorktreeCreate run: its tree (a preparation id, or "worker") and the run it named. */
+  const hookRuns: Array<{ readonly tree: string; readonly runId?: string | undefined }> = [];
   const entries = new Map<string, WorkspaceRecord>();
   const diffs = new Map<string, string>();
   const unavailable: UnavailableWorkspaceArtifact[] = [];
@@ -176,14 +169,14 @@ export function workspaceFixture({
         return yield* new WorkspaceError({ operation: "inspect", message: "Unknown owner" });
       if (entry.setupCleanupPending !== undefined)
         return yield* new WorkspaceError({
-          operation: "setup",
-          message: "Workspace setup or verification cleanup is unconfirmed.",
+          operation: "hook",
+          message: "Worktree hook cleanup is unconfirmed.",
           cleanupUnconfirmed: true,
         });
       return entry;
     });
-  // Like the real engine, a command's durable marker stays only when its cleanup is unconfirmed;
-  // an interrupted command is modeled as confirmed stopped.
+  // Like the real engine, a hook's durable marker stays only when its cleanup is unconfirmed;
+  // an interrupted hook is modeled as confirmed stopped.
   const quarantined = <A>(workspaceId: string, effect: Effect.Effect<A, WorkspaceError>) =>
     effect.pipe(
       Effect.tapError((error) =>
@@ -192,18 +185,6 @@ export function workspaceFixture({
           if (error.cleanupUnconfirmed && entry)
             entries.set(workspaceId, { ...entry, setupCleanupPending: entry.handle.cwd });
         }),
-      ),
-    );
-  const requirePreparation = (target: WorkspaceVerifyTarget) =>
-    requireEntry(target).pipe(
-      Effect.filterOrFail(
-        (entry) =>
-          entry.status === "prepared" && entry.preparation?.preparationId === target.preparationId,
-        () =>
-          new WorkspaceError({
-            operation: "verify",
-            message: "The verification tree is stale or unavailable.",
-          }),
       ),
     );
   // Like the real engine, children are the unfinished workspaces created from a worker tree.
@@ -280,7 +261,6 @@ export function workspaceFixture({
         Effect.andThen(nestedSource(input)),
         Effect.flatMap((source) =>
           Effect.gen(function* () {
-            includes.push(input.include);
             const workspaceId = `workspace-${++ordinal}`;
             const handle = {
               workspaceId,
@@ -312,39 +292,23 @@ export function workspaceFixture({
       );
     return {
       create,
-      setup: (input) =>
+      runCreateHooks: (input) =>
         quarantined(
           input.workspaceId,
-          Effect.sync(() => setups.push(input.preparationId ?? "worker")).pipe(
+          Effect.sync(() =>
+            hookRuns.push({ tree: input.preparationId ?? "worker", runId: input.runId }),
+          ).pipe(
             Effect.andThen(
               gated(
-                "setup",
+                "createHooks",
                 Effect.suspend(() =>
-                  hooks.setupFailure ? Effect.fail(hooks.setupFailure) : Effect.void,
+                  hooks.createHookFailure ? Effect.fail(hooks.createHookFailure) : Effect.void,
                 ),
               ),
             ),
           ),
         ),
-      // Like the real engine, a failed verification keeps the preparation.
-      verify: (input) =>
-        quarantined(
-          input.workspaceId,
-          requirePreparation(input).pipe(
-            Effect.tap(() => Effect.sync(() => verifications.push(input))),
-            Effect.andThen(
-              gated(
-                "verify",
-                Effect.suspend(() =>
-                  hooks.verifyFailure
-                    ? Effect.fail(hooks.verifyFailure)
-                    : Effect.succeed({ outputTail: hooks.verifyOutputTail }),
-                ),
-              ),
-            ),
-          ),
-        ),
-      setupChanges: () => Effect.succeed([]),
+      hookChanges: () => Effect.succeed([]),
       inspectWorkerChanges: (target) =>
         gated("inspectWorkerChanges", requireEntry(target)).pipe(
           Effect.andThen(
@@ -364,7 +328,7 @@ export function workspaceFixture({
           }),
         ),
       unresolvedChildren: ({ workspaceId }) => Effect.sync(() => childrenOf(workspaceId)),
-      commandCleanupPending: ({ workspaceId }) =>
+      hookCleanupPending: ({ workspaceId }) =>
         Effect.sync(() => entries.get(workspaceId)?.setupCleanupPending !== undefined),
       list: ({ ownerId }) =>
         Effect.sync(() =>
@@ -566,7 +530,7 @@ export function workspaceFixture({
     writerWorkspaceMode: "worktree",
     workspaceOwnerId: "session-1",
     workspaceSourceCwd: sourceCwd,
-    workspaceSetup,
+    ...(worktreeCreate && { worktreeCreate }),
   };
   const engineLayer = Layer.effect(
     WorkspaceService,
@@ -593,9 +557,7 @@ export function workspaceFixture({
     integrations,
     rollbacks,
     rebases,
-    includes,
-    verifications,
-    setups,
+    hookRuns,
     statuses,
   };
 }

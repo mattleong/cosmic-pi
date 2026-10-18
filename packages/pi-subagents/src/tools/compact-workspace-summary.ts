@@ -12,11 +12,7 @@ function reviewPosition(details: WorkspaceToolDetails): string {
   return `${first ? "first" : "next"} review page, more to read`;
 }
 
-const VERIFICATION_LABELS = {
-  passed: "verified",
-  "parent-tested": "tested",
-  "not-configured": "not verified",
-} as const;
+const TESTING_LABELS = { "parent-tested": "tested", untested: "untested" } as const;
 
 function appliedFiles(changed: number, remaining: number | undefined): string {
   return remaining === undefined
@@ -24,17 +20,15 @@ function appliedFiles(changed: number, remaining: number | undefined): string {
     : `${changed} of ${countLabel(changed + remaining, "file")} applied`;
 }
 
-// Narrower fallbacks first drop the file count, then the review state, keeping verification.
+// Narrower fallbacks first drop the file count, then the review state, keeping testing.
 function applyCounters(details: WorkspaceToolDetails): string[] {
-  if (details.verification === undefined || details.changedPathCount === undefined) return [];
-  if (details.verification === "failed")
-    return ["not applied · verification failed", "not applied"];
-  const verified = VERIFICATION_LABELS[details.verification];
+  if (details.testing === undefined || details.changedPathCount === undefined) return [];
+  const tested = TESTING_LABELS[details.testing];
   const reviewed = details.reviewed ? "reviewed" : "unreviewed";
   return [
-    `${appliedFiles(details.changedPathCount, details.remainingPathCount)} · ${reviewed} · ${verified}`,
-    `${reviewed} · ${verified}`,
-    verified,
+    `${appliedFiles(details.changedPathCount, details.remainingPathCount)} · ${reviewed} · ${tested}`,
+    `${reviewed} · ${tested}`,
+    tested,
   ];
 }
 
@@ -145,7 +139,7 @@ type WorkspaceOperationReceipt = WorkspaceToolDetails &
         readonly preparationId: string;
         readonly changedPathCount: number;
         readonly reviewed: boolean;
-        readonly verification: NonNullable<WorkspaceToolDetails["verification"]>;
+        readonly testing: NonNullable<WorkspaceToolDetails["testing"]>;
       }
   );
 
@@ -162,7 +156,7 @@ function hasOperationReceipt(details: WorkspaceToolDetails): details is Workspac
     details.operation === "apply" &&
     (details.changedPathCount === undefined ||
       details.reviewed === undefined ||
-      details.verification === undefined)
+      details.testing === undefined)
   )
     return false;
   return !["prepare", "apply"].includes(details.operation) || details.preparationId !== undefined;
@@ -264,44 +258,25 @@ function reviewIssues(details: WorkspaceReviewReceipt): CompactIssue[] {
   ];
 }
 
-function verificationStep(details: WorkspaceApplyReceipt, command: string): CompactIssue {
-  switch (details.verification) {
-    case "passed":
-      return step("applied-verified", "Verification passed before apply", `Command: ${command}`);
+function testingStep(details: WorkspaceApplyReceipt): CompactIssue {
+  switch (details.testing) {
     case "parent-tested":
       return step(
         "applied-parent-tested",
         "Applied the preparation you tested",
-        "Apply integrated the exact revisionId and preparationId you prepared and ran no verification of its own; the tests you ran in the prepared cwd are the evidence.",
+        "Apply integrated the exact revisionId and preparationId you prepared; the tests you ran in the prepared cwd are the evidence.",
       );
-    case "not-configured":
-    case "failed":
+    case "untested":
       return step(
-        "applied-unverified",
-        "No verification is configured, so the change wasn't tested",
+        "applied-untested",
+        "The change wasn't tested",
         "Run relevant tests in the parent checkout before relying on this change.",
       );
   }
-  return absurd(details.verification);
+  return absurd(details.testing);
 }
 
 function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
-  const ids = `workspaceId=${details.workspaceId}, revisionId=${details.revisionId}, preparationId=${details.preparationId}`;
-  const command = details.verificationCommand ?? "the configured verification command";
-  if (details.verification === "failed")
-    return [
-      {
-        severity: "error",
-        code: "verification-failed",
-        message: "Verification failed, so the proposal wasn't applied",
-        detail: [
-          `Command: ${command}`,
-          ...(details.verificationMessage ? [`Failure: ${details.verificationMessage}`] : []),
-          `Nothing was applied and parent files are unchanged. ${ids}; this preparation can't be applied.`,
-          `Prepared tree: ${details.preparedCwd ?? "see expanded details"}. Inspect it without editing, then revise or discard the workspace, or review every page, prepare again, and apply that new preparation.`,
-        ].join("\n"),
-      },
-    ];
   const remaining = details.remainingPathCount;
   return [
     ...asWarnings(details),
@@ -325,7 +300,7 @@ function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
             "Apply integrated the proposal without a complete diff review. Inspect the changed files in the parent checkout if the change needs review.",
           ),
         ]),
-    verificationStep(details, command),
+    testingStep(details),
   ];
 }
 

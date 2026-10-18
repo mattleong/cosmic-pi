@@ -37,8 +37,9 @@ import {
   workspaceSubdirectory,
   workspaceWorker,
 } from "./git-worktree-trees.ts";
+import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
 
-/** Reads a record the engine manages, refusing one that a setup command still quarantines. */
+/** Reads a record the engine manages, refusing one that a worktree hook still quarantines. */
 export type ManagedWorkspaceRecord = (
   workspaceId: string,
 ) => Effect.Effect<WorkspaceRecord, WorkspaceError, SafeFile>;
@@ -120,7 +121,7 @@ const restoreWorker = (root: string, captured: string, baseline: string) =>
   });
 
 // A nested rebase snapshots its source like a nested create: an active workspace's worker,
-// without the files `workspaceInclude` copied into it.
+// without the files `.worktreeinclude` copied into it.
 const activeSource = (
   registry: string,
   record: WorkspaceRecord,
@@ -203,6 +204,7 @@ export const rebaseWorkspace = (
   registry: string,
   record: WorkspaceRecord,
   managedRecord: ManagedWorkspaceRecord,
+  beforeRemove?: BeforeTreeRemoval,
 ) =>
   Effect.gen(function* () {
     if (!["active", "frozen", "prepared"].includes(record.status))
@@ -285,6 +287,6 @@ export const rebaseWorkspace = (
     );
     // The rebuilt record has no preparation, so an earlier test tree is only clutter now.
     if (record.preparation)
-      yield* removePreparation(registry, record, record.preparation.preparationId);
+      yield* removePreparation(registry, record, record.preparation.preparationId, beforeRemove);
     return { reappliedPaths: changedPaths, conflictedPaths } satisfies WorkspaceRebase;
   });

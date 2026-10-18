@@ -41,59 +41,43 @@ export type DelegationMode = (typeof DELEGATION_MODES)[number];
 export const DEFAULT_DELEGATION_MODE: DelegationMode = "normal";
 export const DelegationModeSchema = Schema.Literals(DELEGATION_MODES);
 
-export const MAX_WORKSPACE_SETUP_ARGUMENTS = 64;
-export const MAX_WORKSPACE_SETUP_ARGUMENT_CHARS = 4_096;
-export const DEFAULT_WORKSPACE_SETUP_TIMEOUT_SECONDS = 600;
-export const MAX_WORKSPACE_SETUP_TIMEOUT_SECONDS = 3_600;
-/** A trusted project's command that installs dependencies in isolated writer and test trees. */
-export const WorkspaceSetupSchema = Schema.Struct({
-  command: Schema.Array(
-    Schema.String.check(Schema.isBetweenLength(1, MAX_WORKSPACE_SETUP_ARGUMENT_CHARS)),
-  ).check(Schema.isBetweenLength(1, MAX_WORKSPACE_SETUP_ARGUMENTS)),
-  timeoutSeconds: Schema.optionalKey(
-    Schema.Finite.check(
-      Schema.isInt(),
-      Schema.isGreaterThanOrEqualTo(1),
-      Schema.isLessThanOrEqualTo(MAX_WORKSPACE_SETUP_TIMEOUT_SECONDS),
-    ),
-  ),
-});
-export type WorkspaceSetup = typeof WorkspaceSetupSchema.Type;
-
-export const DEFAULT_WORKSPACE_VERIFY_TIMEOUT_SECONDS = 600;
-/** A trusted project's command that checks an isolated writer's tree before its changes apply. */
-export const WorkspaceVerifySchema = Schema.Struct({
+export const WORKTREE_HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove"] as const;
+export type WorktreeHookEvent = (typeof WORKTREE_HOOK_EVENTS)[number];
+export const MAX_WORKTREE_HOOKS_PER_EVENT = 16;
+export const MAX_WORKTREE_HOOK_ARGUMENTS = 64;
+export const MAX_WORKTREE_HOOK_ARGUMENT_CHARS = 4_096;
+export const MAX_WORKTREE_HOOK_TIMEOUT_SECONDS = 3_600;
+export const DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS: Readonly<Record<WorktreeHookEvent, number>> = {
+  WorktreeCreate: 600,
+  WorktreeRemove: 60,
+};
+/** An argv command run without a shell at the root of an isolated writer or prepared tree. */
+export const WorktreeHookSchema = Schema.Struct({
   command: Schema.Array(
     Schema.String.check(
-      Schema.isBetweenLength(1, MAX_WORKSPACE_SETUP_ARGUMENT_CHARS),
+      Schema.isBetweenLength(1, MAX_WORKTREE_HOOK_ARGUMENT_CHARS),
       Schema.isPattern(/\S/u),
     ),
-  ).check(Schema.isBetweenLength(1, MAX_WORKSPACE_SETUP_ARGUMENTS)),
-  timeoutSeconds: Schema.optionalKey(
+  ).check(Schema.isBetweenLength(1, MAX_WORKTREE_HOOK_ARGUMENTS)),
+  /** Seconds; defaults per event (DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS). */
+  timeout: Schema.optionalKey(
     Schema.Finite.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
-      Schema.isLessThanOrEqualTo(MAX_WORKSPACE_SETUP_TIMEOUT_SECONDS),
+      Schema.isLessThanOrEqualTo(MAX_WORKTREE_HOOK_TIMEOUT_SECONDS),
     ),
   ),
 });
-export type WorkspaceVerify = typeof WorkspaceVerifySchema.Type;
-
-export const MAX_WORKSPACE_INCLUDE_PATTERNS = 64;
-export const MAX_WORKSPACE_INCLUDE_PATTERN_CHARS = 1_024;
-/**
- * A trusted project's gitignore-syntax patterns naming untracked local files, such as `.env`,
- * that isolated writer and test trees receive copies of. Git matches them; one pattern per line,
- * so no pattern may hold a control character.
- */
-export const WorkspaceIncludeSchema = Schema.Array(
-  Schema.String.check(
-    Schema.isBetweenLength(1, MAX_WORKSPACE_INCLUDE_PATTERN_CHARS),
-    Schema.isPattern(/\S/u),
-    Schema.isPattern(/^\P{Cc}*$/u),
-  ),
-).check(Schema.isMaxLength(MAX_WORKSPACE_INCLUDE_PATTERNS));
-export type WorkspaceInclude = typeof WorkspaceIncludeSchema.Type;
+export type WorktreeHook = typeof WorktreeHookSchema.Type;
+const WorktreeHookListSchema = Schema.Array(WorktreeHookSchema).check(
+  Schema.isMaxLength(MAX_WORKTREE_HOOKS_PER_EVENT),
+);
+/** Claude Code-style worktree hooks, which run after the engine creates or before it removes a tree. */
+export const WorktreeHooksSchema = Schema.Struct({
+  WorktreeCreate: Schema.optionalKey(WorktreeHookListSchema),
+  WorktreeRemove: Schema.optionalKey(WorktreeHookListSchema),
+});
+export type WorktreeHooks = typeof WorktreeHooksSchema.Type;
 
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
@@ -129,9 +113,7 @@ export interface SubagentConfigFile {
   readonly nesting?: SubagentNestingPolicy | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly delegation?: DelegationMode | undefined;
-  readonly workspaceSetup?: WorkspaceSetup | undefined;
-  readonly workspaceVerify?: WorkspaceVerify | undefined;
-  readonly workspaceInclude?: WorkspaceInclude | undefined;
+  readonly hooks?: WorktreeHooks | undefined;
   readonly sessionSpendLimit?: number | undefined;
   readonly agents?: Readonly<Record<string, CustomAgentDefinition>> | undefined;
 }
@@ -446,9 +428,7 @@ const ROOT_KEYS: ReadonlySet<string> = new Set([
   "nesting",
   "writerWorkspaceMode",
   "delegation",
-  "workspaceSetup",
-  "workspaceVerify",
-  "workspaceInclude",
+  "hooks",
   "sessionSpendLimit",
   "agents",
 ]);
@@ -477,38 +457,29 @@ const decodeDefaultProfileSet = (root: UnknownRecord, scope: string, diagnostics
   return { defaultProfileSet, invalidDefaultProfileSet };
 };
 
-// Setup and verification commands are repository-specific, so only a project document may
-// declare one.
-const decodeWorkspaceCommand = (
-  root: UnknownRecord,
-  key: "workspaceSetup" | "workspaceVerify",
-  schema: typeof WorkspaceSetupSchema | typeof WorkspaceVerifySchema,
-  scope: string,
-  diagnostics: string[],
-): WorkspaceSetup | WorkspaceVerify | undefined => {
-  if (!Object.hasOwn(root, key)) return undefined;
-  const command =
-    scope === "project" ? decodeUnknownOrUndefined(schema, EXACT_FIELDS)(root[key]) : undefined;
-  if (command === undefined) {
-    diagnostics.push(`${scope}.${key}`);
-    return undefined;
-  }
-  return Object.freeze({ ...command, command: Object.freeze([...command.command]) });
-};
+const freezeHooks = (hooks: ReadonlyArray<WorktreeHook>) =>
+  Object.freeze(
+    hooks.map((hook) => Object.freeze({ ...hook, command: Object.freeze([...hook.command]) })),
+  );
 
-// Like setup commands, included files are repository-specific; an empty list includes nothing.
-const decodeWorkspaceInclude = (
+const decodeWorktreeHooks = (
   root: UnknownRecord,
   scope: string,
   diagnostics: string[],
-): WorkspaceInclude | undefined => {
-  if (!Object.hasOwn(root, "workspaceInclude")) return undefined;
-  const patterns =
-    scope === "project"
-      ? decodeUnknownOrUndefined(WorkspaceIncludeSchema)(root.workspaceInclude)
-      : undefined;
-  if (patterns === undefined) diagnostics.push(`${scope}.workspaceInclude`);
-  return patterns && patterns.length > 0 ? Object.freeze([...patterns]) : undefined;
+): WorktreeHooks | undefined => {
+  const hooks = decodeRootField(
+    root,
+    "hooks",
+    scope,
+    diagnostics,
+    WorktreeHooksSchema,
+    EXACT_FIELDS,
+  );
+  if (hooks === undefined) return undefined;
+  return Object.freeze({
+    ...(hooks.WorktreeCreate && { WorktreeCreate: freezeHooks(hooks.WorktreeCreate) }),
+    ...(hooks.WorktreeRemove && { WorktreeRemove: freezeHooks(hooks.WorktreeRemove) }),
+  });
 };
 
 const decodeCurrentBody = (
@@ -524,21 +495,7 @@ const decodeCurrentBody = (
     WriterWorkspaceModeSchema,
   );
   const delegation = decodeRootField(root, "delegation", scope, diagnostics, DelegationModeSchema);
-  const workspaceSetup = decodeWorkspaceCommand(
-    root,
-    "workspaceSetup",
-    WorkspaceSetupSchema,
-    scope,
-    diagnostics,
-  );
-  const workspaceVerify = decodeWorkspaceCommand(
-    root,
-    "workspaceVerify",
-    WorkspaceVerifySchema,
-    scope,
-    diagnostics,
-  );
-  const workspaceInclude = decodeWorkspaceInclude(root, scope, diagnostics);
+  const hooks = decodeWorktreeHooks(root, scope, diagnostics);
   const sessionSpendLimit = decodeRootField(
     root,
     "sessionSpendLimit",
@@ -563,9 +520,7 @@ const decodeCurrentBody = (
       ...(defaultProfileSet !== undefined && { defaultProfileSet }),
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
       ...(delegation !== undefined && { delegation }),
-      ...(workspaceSetup !== undefined && { workspaceSetup }),
-      ...(workspaceVerify !== undefined && { workspaceVerify }),
-      ...(workspaceInclude !== undefined && { workspaceInclude }),
+      ...(hooks !== undefined && { hooks }),
       ...(sessionSpendLimit !== undefined && { sessionSpendLimit }),
       ...(agents && Object.keys(agents.agents).length > 0 && { agents: agents.agents }),
     },

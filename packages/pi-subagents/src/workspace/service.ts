@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import { CrossProcessLock, nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
-import type { WorkspaceInclude, WorkspaceSetup } from "../config/schema.ts";
+import type { WorktreeHook } from "../config/schema.ts";
 import { gitWorkspaceEngine, workspaceRegistry } from "../boundary/git-worktree.ts";
 import { workspaceLockDirectory } from "../boundary/git-worktree-store.ts";
 import type {
@@ -22,14 +22,11 @@ import type {
   WorkspaceRebase,
   WorkspaceRecord,
   WorkspaceRevision,
+  WorkspaceHookTarget,
   WorkspaceSettledTarget,
-  WorkspaceSetupTarget,
   WorkspaceSweepTarget,
   WorkspaceSwept,
   WorkspaceTarget,
-  WorkspaceTreeCommand,
-  WorkspaceVerification,
-  WorkspaceVerifyTarget,
   WorkspaceWorkerChanges,
 } from "./model.ts";
 
@@ -38,6 +35,8 @@ export interface WorkspaceServiceContract {
    * Snapshots `sourceCwd` into a new workspace. A source inside private workspace storage must be
    * `sourceWorkspace`'s live, active worker tree or a directory in it; the new workspace then
    * integrates into that tree, and the source's worker tree is kept until it is resolved.
+   * Untracked files the source's top-level `.worktreeinclude` matches and the baseline doesn't
+   * carry are copied into the worker tree and every test tree, never into revisions.
    */
   readonly create: (input: {
     readonly sourceCwd: string;
@@ -45,11 +44,6 @@ export interface WorkspaceServiceContract {
     readonly sourceWorkspace?: WorkspaceTarget | undefined;
     /** Recorded so a session that adopts the workspace can revise it with the same launch. */
     readonly launch?: WorkspaceLaunch | undefined;
-    /**
-     * A trusted project's `workspaceInclude` patterns: matching untracked files the baseline
-     * doesn't carry are copied into the worker tree and every test tree, never into revisions.
-     */
-    readonly include?: WorkspaceInclude | undefined;
     readonly onAcquired?: WorkspaceAcquired | undefined;
   }) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly freeze: (
@@ -104,24 +98,21 @@ export interface WorkspaceServiceContract {
     target: WorkspaceSweepTarget,
   ) => Effect.Effect<WorkspaceSwept | undefined, WorkspaceError>;
   /**
-   * Runs setup with durable process-cleanup quarantine, including across owner shutdown. A failure
-   * without `cleanupUnconfirmed` leaves no quarantine; a failed or interrupted preparation setup
-   * withdraws that preparation. `commandCleanupPending` reports the quarantine.
+   * Runs WorktreeCreate hooks in order with durable process-cleanup quarantine, including across
+   * owner shutdown. A failure without `cleanupUnconfirmed` leaves no quarantine; a failed or
+   * interrupted run in a prepared tree withdraws that preparation. `hookCleanupPending` reports
+   * the quarantine.
    */
-  readonly setup: (
-    target: WorkspaceSetupTarget & { readonly setup: WorkspaceSetup },
+  readonly runCreateHooks: (
+    target: WorkspaceHookTarget & {
+      readonly hooks: ReadonlyArray<WorktreeHook>;
+      /** The writer run the workspace belongs to, when known; hooks receive it on stdin. */
+      readonly runId?: string | undefined;
+    },
   ) => Effect.Effect<void, WorkspaceError>;
-  /**
-   * Runs a verification command in a prepared tree under the same quarantine as setup, then
-   * requires the tree unchanged apart from ignored or credential files. Failure keeps the
-   * preparation and carries the output tail in `detail`.
-   */
-  readonly verify: (
-    target: WorkspaceVerifyTarget & { readonly verify: WorkspaceTreeCommand },
-  ) => Effect.Effect<WorkspaceVerification, WorkspaceError>;
-  /** Paths a setup command changed relative to the tree it ran in. */
-  readonly setupChanges: (
-    target: WorkspaceSetupTarget,
+  /** Paths WorktreeCreate hooks changed relative to the tree they ran in. */
+  readonly hookChanges: (
+    target: WorkspaceHookTarget,
   ) => Effect.Effect<ReadonlyArray<string>, WorkspaceError>;
   /** Compares the worker tree with its baseline without freezing or saving anything. */
   readonly inspectWorkerChanges: (
@@ -137,10 +128,10 @@ export interface WorkspaceServiceContract {
     target: WorkspaceOrphanTarget,
   ) => Effect.Effect<ReadonlyArray<string>, WorkspaceError>;
   /**
-   * Whether the durable setup/verification marker is set: a command is running in one of the
-   * workspace's trees, or its process cleanup is unconfirmed.
+   * Whether the durable hook marker is set: a worktree hook is running in one of the workspace's
+   * trees, or its process cleanup is unconfirmed.
    */
-  readonly commandCleanupPending: (
+  readonly hookCleanupPending: (
     target: WorkspaceOrphanTarget,
   ) => Effect.Effect<boolean, WorkspaceError>;
   readonly list: (input: {
@@ -157,23 +148,30 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
 ) {
   static readonly layer = (options: {
     readonly agentDirectory: string;
+    /** WorktreeRemove hooks, run before the engine removes any tree a workspace handed out. */
+    readonly worktreeRemove?: ReadonlyArray<WorktreeHook> | undefined;
   }): Layer.Layer<WorkspaceService, WorkspaceError> =>
     Layer.unwrap(
       workspaceRegistry(options.agentDirectory).pipe(
         Effect.map((registry) =>
-          WorkspaceService.layerAt(registry).pipe(
+          WorkspaceService.layerAt(registry, options.worktreeRemove).pipe(
             Layer.provide(CrossProcessLock.layer({ directory: workspaceLockDirectory(registry) })),
           ),
         ),
       ),
     ).pipe(Layer.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));
 
-  private static readonly layerAt = (registry: string) =>
+  private static readonly layerAt = (
+    registry: string,
+    worktreeRemove: ReadonlyArray<WorktreeHook> | undefined,
+  ) =>
     Layer.effect(
       WorkspaceService,
       Effect.gen(function* () {
         const lock = yield* Semaphore.make(1);
-        const engine = yield* gitWorkspaceEngine(registry, lock.withPermits(1));
+        const engine = yield* gitWorkspaceEngine(registry, lock.withPermits(1), {
+          worktreeRemove,
+        });
         const safe = yield* SafeFile;
         const provided = <A, E>(effect: Effect.Effect<A, E, SafeFile>) =>
           effect.pipe(Effect.provideService(SafeFile, safe));
@@ -201,18 +199,17 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           adopt: (input) => run(engine.adopt(input)),
           sweepCandidates: (input) => run(engine.sweepCandidates(input)),
           sweepOrphan: (input) => run(engine.sweepOrphan(input)),
-          // Setup and verify take the permit only around their record changes, never while their
-          // command runs.
-          setup: (input) => provided(engine.setup(input)),
-          verify: (input) => provided(engine.verify(input)),
-          setupChanges: (input) => run(engine.setupChanges(input)),
+          // WorktreeCreate hooks take the permit only around their record changes, never while
+          // they run.
+          runCreateHooks: (input) => provided(engine.runCreateHooks(input)),
+          hookChanges: (input) => run(engine.hookChanges(input)),
           inspectWorkerChanges: (input) => run(engine.inspectWorkerChanges(input)),
           inspect: (input) => run(engine.inspect(input)),
           revision: (input) => run(engine.revision(input)),
           // Lock-free reads: callers check them under the run lock, so they never wait behind
           // engine work, and this process's in-flight creates are tracked by their launches.
           unresolvedChildren: (input) => provided(engine.unresolvedChildren(input)),
-          commandCleanupPending: (input) => provided(engine.commandCleanupPending(input)),
+          hookCleanupPending: (input) => provided(engine.hookCleanupPending(input)),
           list: (input) => run(engine.list(input)),
           listRecords: run(engine.listRecords),
           listAll: run(engine.listAll),

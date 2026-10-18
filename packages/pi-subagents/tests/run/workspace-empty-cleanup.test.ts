@@ -121,7 +121,7 @@ describe("empty worktree proposal cleanup", () => {
       expect(yield* outcomeOf(service, writer.id)).toBeUndefined();
       yield* completeLocalRun(service, f.children.controls[1]!, writer.id, "Covered.");
       expect(yield* service.workspaceApply(writer.workspaceId!)).toMatchObject({
-        integrated: true,
+        testing: "untested",
       });
     });
   });

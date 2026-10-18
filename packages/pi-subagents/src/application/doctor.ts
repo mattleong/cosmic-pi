@@ -2,6 +2,7 @@ import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-wor
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import * as Option from "effect/Option";
+import type { SafeFile } from "pi-cosmic-core";
 import {
   LOCAL_CLI_LABELS,
   LOCAL_CLI_MINIMUM_VERSIONS,
@@ -11,7 +12,12 @@ import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import { nodeFsConstants, nodeFsPromises as fs } from "../boundary/node-builtins.ts";
 import { nodeExecutableProblem } from "../boundary/node-executable.ts";
-import { describeWorkspaceInclude, describeWorkspaceSetup } from "../boundary/workspace-setup.ts";
+import { describeWorktreeHook } from "../boundary/worktree-hook.ts";
+import {
+  checkoutWorktreeInclude,
+  describeWorktreeInclude,
+} from "../boundary/git-worktree-include.ts";
+import { WORKTREE_HOOK_EVENTS } from "../config/schema.ts";
 import {
   gitInstallation,
   gitVersionSupported,
@@ -79,7 +85,7 @@ export const runSubagentDoctor = (
 ): Effect.Effect<
   ReadonlyArray<DoctorCheck>,
   never,
-  SubagentProfileService | SubagentBackendRegistry
+  SubagentProfileService | SubagentBackendRegistry | SafeFile
 > =>
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
@@ -184,20 +190,20 @@ export const runSubagentDoctor = (
       writable
         ? check("Private state", "ok", input.agentDirectory)
         : check("Private state", "failed", `${input.agentDirectory} is not writable`),
-      config.workspaceSetup
-        ? check("Worktree setup", "ok", describeWorkspaceSetup(config.workspaceSetup))
-        : check("Worktree setup", "ok", "none; isolated writers start without dependencies"),
-      config.workspaceVerify
-        ? check("Worktree verification", "ok", describeWorkspaceSetup(config.workspaceVerify))
-        : check("Worktree verification", "ok", "none; isolated changes apply without a check"),
-      config.workspaceInclude
-        ? check("Worktree included files", "ok", describeWorkspaceInclude(config.workspaceInclude))
-        : check(
-            "Worktree included files",
-            "ok",
-            "none; isolated trees get no ignored or credential files",
-          ),
     );
+    for (const event of WORKTREE_HOOK_EVENTS) {
+      const hooks = config.hooks[event];
+      checks.push(
+        check(
+          `${event} hooks`,
+          "ok",
+          hooks.length === 0
+            ? "none"
+            : hooks.map((hook) => `${hook.scope}: ${describeWorktreeHook(hook)}`).join("; "),
+        ),
+      );
+    }
+    checks.push(yield* worktreeIncludeCheck(input.ctx.cwd));
     checks.push(yield* gitCheck);
     if (input.activityViewAvailable !== undefined)
       checks.push(
@@ -207,6 +213,25 @@ export const runSubagentDoctor = (
       );
     return checks;
   });
+
+// Creation reads the same file, so a file it would refuse warns here.
+const worktreeIncludeCheck = (cwd: string): Effect.Effect<DoctorCheck, never, SafeFile> =>
+  checkoutWorktreeInclude(cwd).pipe(
+    Effect.map((patterns) =>
+      patterns === undefined || patterns.length === 0
+        ? check(".worktreeinclude", "ok", "none; isolated trees get no ignored or credential files")
+        : check(".worktreeinclude", "ok", describeWorktreeInclude(patterns)),
+    ),
+    Effect.catch((error) =>
+      Effect.succeed(
+        check(
+          ".worktreeinclude",
+          "warning",
+          [error.message, ...(error.detail?.split("\n") ?? [])].join(" "),
+        ),
+      ),
+    ),
+  );
 
 // Isolated (worktree) writers need Git; shared-checkout writers don't, so problems are warnings.
 const gitCheck: Effect.Effect<DoctorCheck> = gitInstallation.pipe(

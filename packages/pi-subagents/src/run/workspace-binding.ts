@@ -1,12 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
-import type {
-  WorkspaceInclude,
-  WorkspaceSetup,
-  WorkspaceVerify,
-  WriterWorkspaceMode,
-} from "../config/schema.ts";
+import type { WorktreeHook, WriterWorkspaceMode } from "../config/schema.ts";
 import type { WriterLease } from "../boundary/writer-lease.ts";
 import type { WorkspaceHandle, WorkspaceLaunch } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
@@ -64,13 +59,8 @@ export type RevisionKnowledge =
   | {
       readonly kind: "prepared";
       readonly revisionId: string;
+      /** Recorded once its WorktreeCreate hooks succeeded; only a recorded preparation integrates. */
       readonly preparationId: string;
-      /**
-       * `tested` once setup succeeded and any verification passed; a failed verification stays
-       * inspectable but is never integrable. A preparation the engine holds without either is
-       * untested.
-       */
-      readonly verification: "tested" | "failed";
       /** Apply prepares without requiring any review. */
       readonly review?: ReviewProgress | undefined;
     };
@@ -173,9 +163,8 @@ export type WorkspaceControlDependencies = Pick<
 > & {
   readonly engine: WorkspaceServiceContract | undefined;
   readonly initialMode: WriterWorkspaceMode;
-  readonly workspaceSetup?: WorkspaceSetup | undefined;
-  readonly workspaceInclude?: WorkspaceInclude | undefined;
-  readonly workspaceVerify?: WorkspaceVerify | undefined;
+  /** Global then trusted-project WorktreeCreate hooks, run in every new worker and prepared tree. */
+  readonly worktreeCreate: ReadonlyArray<WorktreeHook>;
   readonly ownerId: string;
   readonly sourceCwd?: string;
   readonly isClosed: () => boolean;
@@ -289,16 +278,16 @@ export const workspaceBusyError = () =>
   );
 
 /**
- * Refuses a workspace whose setup or verification command may still own processes, from the
- * engine's durable marker. The read takes no engine lock, so callers may hold the run lock.
+ * Refuses a workspace whose worktree hook may still own processes, from the engine's durable
+ * marker. The read takes no engine lock, so callers may hold the run lock.
  */
-export const requireCommandSettled = (
+export const requireHooksSettled = (
   engine: WorkspaceServiceContract | undefined,
   binding: WorkspaceBinding,
   message: string,
 ): Effect.Effect<void, SubagentError> =>
   engine
-    ? engine.commandCleanupPending({ workspaceId: binding.handle.workspaceId }).pipe(
+    ? engine.hookCleanupPending({ workspaceId: binding.handle.workspaceId }).pipe(
         Effect.mapError(mapWorkspaceError),
         Effect.flatMap((pending) =>
           pending ? Effect.fail(invalid("workspace_process_unsettled", message)) : Effect.void,
@@ -432,10 +421,10 @@ export function workspaceControlContext(
           "workspace_process_unsettled",
           "A writer still works in this workspace's tree. Stop it and confirm cleanup before reviewing or changing the artifact.",
         );
-      yield* requireCommandSettled(
+      yield* requireHooksSettled(
         engine,
         binding,
-        "Workspace setup or verification cleanup is unconfirmed. Independently confirm the command's process and all descendants have stopped, preserve the proposal and recovery record, then recover the private trees manually. Restarting Pi does not clear this quarantine.",
+        "Worktree hook cleanup is unconfirmed. Independently confirm the hook's process and all descendants have stopped, preserve the proposal and recovery record, then recover the private trees manually. Restarting Pi does not clear this quarantine.",
       );
       return binding;
     });

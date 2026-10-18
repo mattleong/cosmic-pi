@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import { CrossProcessLock } from "pi-cosmic-core";
 import { git } from "../../src/boundary/git-worktree-process.ts";
 import * as files from "../../src/boundary/git-worktree-publish.ts";
-import * as commands from "../../src/boundary/workspace-setup.ts";
+import * as hookRunner from "../../src/boundary/worktree-hook.ts";
 import {
   sourceLockNamespace,
   workspaceLockDirectory,
@@ -49,7 +49,7 @@ const waitFor = (file: string, attempts = 400): Effect.Effect<void, WorkspaceErr
 
 // Writes its process ID to `started`, then blocks until `release` exists, without touching the tree
 // it runs in.
-const blockingSetup = (started: string, release: string) => ({
+const blockingHook = (started: string, release: string) => ({
   command: [
     "/bin/sh",
     "-c",
@@ -58,7 +58,11 @@ const blockingSetup = (started: string, release: string) => ({
     started,
     release,
   ],
-  timeoutSeconds: 60,
+  timeout: 60,
+});
+
+const shellHook = (script: string, ...args: ReadonlyArray<string>) => ({
+  command: ["/bin/sh", "-c", script, "sh", ...args],
 });
 
 const processAlive = (pid: number) => {
@@ -70,15 +74,15 @@ const processAlive = (pid: number) => {
   }
 };
 
-// Starts a blocking command, interrupts it once it runs, and returns the command's process ID.
+// Starts a blocking hook, interrupts it once it runs, and returns the hook's process ID.
 const interruptBlocked = (
-  run: (command: ReturnType<typeof blockingSetup>) => Effect.Effect<unknown, WorkspaceError>,
+  run: (hook: ReturnType<typeof blockingHook>) => Effect.Effect<unknown, WorkspaceError>,
 ) =>
   Effect.gen(function* () {
-    const signals = yield* temporaryDirectory("pi-setup-signal-");
+    const signals = yield* temporaryDirectory("pi-hook-signal-");
     const started = path.join(signals, "started");
     const running = yield* Effect.forkChild(
-      run(blockingSetup(started, path.join(signals, "never"))),
+      run(blockingHook(started, path.join(signals, "never"))),
     );
     yield* waitFor(started);
     const pid = Number((yield* readText(started)).trim());
@@ -106,13 +110,74 @@ const freezeAndPrepare = (service: WorkspaceServiceContract, handle: WorkspaceHa
     };
   });
 
-test("runs setup without holding the service permit or the checkout lock", function* (service, root, agent) {
+test("runs WorktreeCreate hooks in order in worker and prepared trees with the event on stdin", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  const signals = yield* temporaryDirectory("pi-setup-signal-");
+  const hooks = [
+    shellHook("mkdir -p scratch && cat > scratch/first.json"),
+    shellHook("test -e scratch/first.json && cat > scratch/second.json"),
+  ];
+  yield* service.runCreateHooks({ ...workspaceTarget(handle), hooks, runId: "run-1" });
+  expect(JSON.parse(yield* readText(handle.cwd, "scratch/second.json"))).toEqual({
+    event: "WorktreeCreate",
+    workspaceId: handle.workspaceId,
+    worktreePath: handle.cwd,
+    sourceCwd: root,
+    kind: "worker",
+    runId: "run-1",
+  });
+  expect(yield* service.hookChanges(workspaceTarget(handle))).toEqual([]);
+
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
+  const { prepared, integration } = yield* freezeAndPrepare(service, handle);
+  yield* service.runCreateHooks({
+    ...workspaceTarget(handle),
+    preparationId: prepared.preparationId,
+    hooks,
+  });
+  expect(JSON.parse(yield* readText(prepared.cwd, "scratch/first.json"))).toEqual({
+    event: "WorktreeCreate",
+    workspaceId: handle.workspaceId,
+    worktreePath: prepared.cwd,
+    sourceCwd: root,
+    kind: "prepare",
+  });
+  expect(
+    yield* service.hookChanges({
+      ...workspaceTarget(handle),
+      preparationId: prepared.preparationId,
+    }),
+  ).toEqual([]);
+  yield* service.integrate(integration);
+  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
+});
+
+test("stops at the first failing WorktreeCreate hook and reports project files hooks changed", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  const signals = yield* temporaryDirectory("pi-hook-signal-");
+  const failure = yield* failureOf(
+    service.runCreateHooks({
+      ...workspaceTarget(handle),
+      hooks: [shellHook("exit 3"), shellHook('touch "$1/second-ran"', signals)],
+    }),
+  );
+  expect(failure.cleanupUnconfirmed).not.toBe(true);
+  expect(yield* exists(path.join(signals, "second-ran"))).toBe(false);
+  expect((yield* service.inspect(workspaceTarget(handle))).setupCleanupPending).toBeUndefined();
+
+  yield* service.runCreateHooks({
+    ...workspaceTarget(handle),
+    hooks: [shellHook("echo changed > other.txt")],
+  });
+  expect(yield* service.hookChanges(workspaceTarget(handle))).toEqual(["other.txt"]);
+});
+
+test("runs WorktreeCreate hooks without holding the service permit or the checkout lock", function* (service, root, agent) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  const signals = yield* temporaryDirectory("pi-hook-signal-");
   const started = path.join(signals, "started");
   const release = path.join(signals, "release");
   const running = yield* Effect.forkChild(
-    service.setup({ ...workspaceTarget(handle), setup: blockingSetup(started, release) }),
+    service.runCreateHooks({ ...workspaceTarget(handle), hooks: [blockingHook(started, release)] }),
   );
   yield* waitFor(started);
   // Another Pi process could take the checkout lock, and this session keeps working.
@@ -125,9 +190,9 @@ test("runs setup without holding the service permit or the checkout lock", funct
   expect((yield* service.listAll).records).toHaveLength(1);
   const other = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* service.discard(workspaceTarget(other));
-  // The tree being set up stays out of reach meanwhile.
-  expect((yield* failureOf(service.inspect(workspaceTarget(handle)))).message).toContain(
-    "still running",
+  // The tree the hooks run in stays out of reach meanwhile.
+  expect((yield* failureOf(service.inspect(workspaceTarget(handle)))).cleanupUnconfirmed).toBe(
+    true,
   );
   expect(yield* fails(service.discard(workspaceTarget(handle)))).toBe(true);
   expect(yield* fails(service.freeze(workspaceTarget(handle)))).toBe(true);
@@ -135,54 +200,54 @@ test("runs setup without holding the service permit or the checkout lock", funct
   yield* Fiber.join(running);
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.setupCleanupPending).toBeUndefined();
-  expect(yield* service.setupChanges(workspaceTarget(handle))).toEqual([]);
+  expect(yield* service.hookChanges(workspaceTarget(handle))).toEqual([]);
 });
 
-test("clears the marker once an interrupted setup's processes are confirmed stopped", function* (service, root) {
+test("clears the marker once interrupted WorktreeCreate hooks are confirmed stopped", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  const { pid } = yield* interruptBlocked((setup) =>
-    service.setup({ ...workspaceTarget(handle), setup }),
+  const { pid } = yield* interruptBlocked((hook) =>
+    service.runCreateHooks({ ...workspaceTarget(handle), hooks: [hook] }),
   );
   expect(processAlive(pid)).toBe(false);
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.setupCleanupPending).toBeUndefined();
   expect(record.status).toBe("active");
-  // The workspace stays usable: setup runs again and the worker can be proposed.
-  yield* service.setup({
-    ...workspaceTarget(handle),
-    setup: { command: ["/bin/sh", "-c", "true"] },
-  });
+  // The workspace stays usable: hooks run again and the worker can be proposed.
+  yield* service.runCreateHooks({ ...workspaceTarget(handle), hooks: [shellHook("true")] });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   const { integration } = yield* freezeAndPrepare(service, handle);
   yield* service.integrate(integration);
   expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
 });
 
-test("keeps a workspace quarantined when interrupted setup cleanup is unconfirmed", function* (service, root) {
+test("keeps a workspace quarantined when interrupted hook cleanup is unconfirmed", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  // The real command runs and stops, but its runner reports the process group unconfirmed.
-  const original = commands.runWorkspaceSetup;
+  // The real hook runs and stops, but its runner reports the process group unconfirmed.
+  const original = hookRunner.runWorktreeHook;
   const spy = vi
-    .spyOn(commands, "runWorkspaceSetup")
-    .mockImplementation((setup, cwd, options) =>
-      original(setup, cwd, { ...options, onCleanup: () => options?.onCleanup?.(false) }),
+    .spyOn(hookRunner, "runWorktreeHook")
+    .mockImplementation((hook, input, options) =>
+      original(hook, input, { ...options, onCleanup: () => options?.onCleanup?.(false) }),
     );
-  yield* interruptBlocked((setup) => service.setup({ ...workspaceTarget(handle), setup })).pipe(
-    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
-  );
+  yield* interruptBlocked((hook) =>
+    service.runCreateHooks({ ...workspaceTarget(handle), hooks: [hook] }),
+  ).pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
   const failure = yield* failureOf(service.inspect(workspaceTarget(handle)));
   expect(failure.cleanupUnconfirmed).toBe(true);
-  expect(failure.message).toContain("quarantined");
   expect(yield* fails(service.discard(workspaceTarget(handle)))).toBe(true);
   expect((yield* service.listAll).records[0]?.setupCleanupPending).toBe(handle.cwd);
 });
 
-test("withdraws a preparation whose setup was interrupted", function* (service, root) {
+test("withdraws a preparation whose WorktreeCreate hooks were interrupted", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   const { prepared, integration } = yield* freezeAndPrepare(service, handle);
-  yield* interruptBlocked((setup) =>
-    service.setup({ ...workspaceTarget(handle), preparationId: prepared.preparationId, setup }),
+  yield* interruptBlocked((hook) =>
+    service.runCreateHooks({
+      ...workspaceTarget(handle),
+      preparationId: prepared.preparationId,
+      hooks: [hook],
+    }),
   );
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.status).toBe("frozen");
@@ -191,123 +256,30 @@ test("withdraws a preparation whose setup was interrupted", function* (service, 
   expect(yield* fails(service.integrate(integration))).toBe(true);
 });
 
-const verifyIn = (
-  service: WorkspaceServiceContract,
-  handle: WorkspaceHandle,
-  preparationId: string,
-  script: string,
-) =>
-  service.verify({
-    ...workspaceTarget(handle),
-    preparationId,
-    verify: { command: ["/bin/sh", "-c", script] },
-  });
-
-test("verifies a prepared tree, allowing only excluded outputs, and returns the output tail", function* (service, root) {
+test("a WorktreeCreate hook that can't start leaves no quarantine", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { prepared, integration } = yield* freezeAndPrepare(service, handle);
-  const result = yield* verifyIn(
-    service,
-    handle,
-    prepared.preparationId,
-    'grep -q worker src/main.ts && mkdir -p coverage && echo report > coverage/out.txt && echo "12 passed"',
-  );
-  expect(result.outputTail).toContain("12 passed");
-  const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record.status).toBe("prepared");
-  expect(record.setupCleanupPending).toBeUndefined();
-  yield* service.integrate(integration);
-  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
-});
-
-test("keeps the preparation when verification fails, reporting its output", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { prepared, integration } = yield* freezeAndPrepare(service, handle);
   const failure = yield* failureOf(
-    verifyIn(service, handle, prepared.preparationId, "echo 'FAIL main.test.ts' >&2; exit 1"),
-  );
-  expect(failure.message).toContain("code 1");
-  expect(failure.cleanupUnconfirmed).not.toBe(true);
-  expect(failure.detail).toContain("FAIL main.test.ts");
-  const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record.status).toBe("prepared");
-  expect(record.preparation?.preparationId).toBe(prepared.preparationId);
-  expect(yield* exists(prepared.cwd)).toBe(true);
-  // The parent may still integrate the exact pair deliberately.
-  yield* service.integrate(integration);
-  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
-});
-
-test("fails verification that changes a project file, naming it", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { prepared } = yield* freezeAndPrepare(service, handle);
-  const failure = yield* failureOf(
-    verifyIn(service, handle, prepared.preparationId, "echo snapshot > other.txt; echo ran"),
-  );
-  expect(failure.message).toContain("other.txt");
-  expect(failure.detail).toContain("ran");
-  const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record.status).toBe("prepared");
-  expect(record.setupCleanupPending).toBeUndefined();
-});
-
-test("a verification command that can't start leaves no quarantine", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { prepared } = yield* freezeAndPrepare(service, handle);
-  const failure = yield* failureOf(
-    service.verify({
+    service.runCreateHooks({
       ...workspaceTarget(handle),
-      preparationId: prepared.preparationId,
-      verify: { command: ["pi-missing-verify-command"] },
+      hooks: [{ command: ["pi-missing-hook-command"] }],
     }),
   );
   expect(failure.cleanupUnconfirmed).not.toBe(true);
-  const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record.setupCleanupPending).toBeUndefined();
-  yield* service.discard(workspaceTarget(handle));
-});
-
-test("clears the marker once an interrupted verification is confirmed stopped", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { prepared, integration } = yield* freezeAndPrepare(service, handle);
-  const { pid } = yield* interruptBlocked((verify) =>
-    service.verify({ ...workspaceTarget(handle), preparationId: prepared.preparationId, verify }),
-  );
-  expect(processAlive(pid)).toBe(false);
-  const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record.setupCleanupPending).toBeUndefined();
-  expect(record.status).toBe("prepared");
-  yield* service.integrate(integration);
-  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
-});
-
-test("clears the marker after a worker setup fails with confirmed cleanup", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  const failure = yield* failureOf(
-    service.setup({ ...workspaceTarget(handle), setup: { command: ["/bin/sh", "-c", "exit 3"] } }),
-  );
-  expect(failure.cleanupUnconfirmed).not.toBe(true);
-  expect(failure.message).toContain("code 3");
-  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("active");
+  expect((yield* service.inspect(workspaceTarget(handle))).setupCleanupPending).toBeUndefined();
   yield* service.discard(workspaceTarget(handle));
   expect(yield* exists(handle.cwd)).toBe(false);
 });
 
-test("withdraws a preparation whose setup failed so it can't be integrated", function* (service, root) {
+test("withdraws a preparation whose WorktreeCreate hooks failed so it can't be integrated", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   const { revision, prepared, integration } = yield* freezeAndPrepare(service, handle);
   expect(
     yield* fails(
-      service.setup({
+      service.runCreateHooks({
         ...workspaceTarget(handle),
         preparationId: prepared.preparationId,
-        setup: { command: ["/bin/sh", "-c", "exit 4"] },
+        hooks: [shellHook("exit 4")],
       }),
     ),
   ).toBe(true);

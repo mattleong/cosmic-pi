@@ -83,8 +83,8 @@ describe("ignore rules", () => {
     const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     expect(yield* exists(path.join(handle.cwd, "scratch.md"))).toBe(false);
 
-    yield* writeFile(path.join(handle.cwd, "scratch.md"), "setup output\n");
-    expect(yield* service.setupChanges(workspaceTarget(handle))).toEqual([]);
+    yield* writeFile(path.join(handle.cwd, "scratch.md"), "hook output\n");
+    expect(yield* service.hookChanges(workspaceTarget(handle))).toEqual([]);
     yield* writeFile(path.join(handle.cwd, "src/main.ts"), "changed\n");
     const revision = yield* service.freeze(workspaceTarget(handle));
     expect(revision.changedPaths).toEqual(["src/main.ts"]);

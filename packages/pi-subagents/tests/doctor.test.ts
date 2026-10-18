@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { runSubagentDoctor } from "../src/application/doctor.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
@@ -8,7 +9,9 @@ import { subagentProfileServiceLayerFor } from "../src/profiles/service.ts";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
 import { profileLayerFor } from "./run/fixtures/service-harness.ts";
-import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
+import { git } from "../src/boundary/git-worktree-process.ts";
+import { nodePath as path } from "../src/boundary/node-builtins.ts";
+import { temporaryDirectory, writeFile } from "./workspace/fixtures/repository.ts";
 
 const claude = (model: string) => ({
   runtime: "claude",
@@ -31,6 +34,11 @@ const config = {
     },
   },
 };
+
+const doctor = (input: Parameters<typeof runSubagentDoctor>[0]) =>
+  runSubagentDoctor(input).pipe(
+    Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))),
+  );
 
 const registry = (probed: string[]) =>
   Layer.succeed(
@@ -61,7 +69,7 @@ describe("subagents doctor", () => {
     Effect.gen(function* () {
       const agentDirectory = yield* temporaryDirectory("doctor-");
       const probed: string[] = [];
-      const checks = yield* runSubagentDoctor({
+      const checks = yield* doctor({
         pi: extensionApiFixture(),
         ctx: extensionContextFixture(),
         agentDirectory,
@@ -77,56 +85,67 @@ describe("subagents doctor", () => {
       expect(byLabel.get("Node")?.status).toBe("ok");
       expect(byLabel.get("Git")?.status).toBe("ok");
       expect(byLabel.get("Activity view")?.status).toBe("warning");
-      expect(byLabel.get("Worktree verification")?.detail).toContain("none");
+      expect(byLabel.get("WorktreeCreate hooks")?.detail).toBe("none");
+      expect(byLabel.get("WorktreeRemove hooks")?.detail).toBe("none");
     }).pipe(Effect.scoped),
   );
 
-  it.effect("reports a trusted project's worktree verification command", () =>
+  it.effect("lists configured worktree hooks per event and scope", () =>
     Effect.gen(function* () {
       const agentDirectory = yield* temporaryDirectory("doctor-");
       const profiles = subagentProfileServiceLayerFor(
-        resolveTestConfig(config, {
-          version: 6,
-          workspaceVerify: { command: ["pnpm", "validate"] },
-        }),
+        resolveTestConfig(
+          { ...config, hooks: { WorktreeCreate: [{ command: ["pnpm", "install"] }] } },
+          {
+            version: 6,
+            hooks: {
+              WorktreeCreate: [{ command: ["./copy-env"] }],
+              WorktreeRemove: [{ command: ["./prune"] }],
+            },
+          },
+        ),
       );
-      const checks = yield* runSubagentDoctor({
+      const checks = yield* doctor({
         pi: extensionApiFixture(),
         ctx: extensionContextFixture(),
         agentDirectory,
         activityViewAvailable: true,
         projectTrusted: true,
       }).pipe(Effect.provide(Layer.merge(profiles, registry([]))));
-      expect(checks.find((item) => item.label === "Worktree verification")).toMatchObject({
-        status: "ok",
-        detail: "pnpm validate",
-      });
+      const create = checks.find((item) => item.label === "WorktreeCreate hooks")?.detail ?? "";
+      expect(create.indexOf("pnpm install")).toBeLessThan(create.indexOf("./copy-env"));
+      expect(create).toContain("global");
+      expect(create).toContain("project");
+      expect(checks.find((item) => item.label === "WorktreeRemove hooks")?.detail).toContain(
+        "./prune",
+      );
     }).pipe(Effect.scoped),
   );
-  it.effect("lists a trusted project's workspaceInclude patterns", () =>
+  it.effect("lists the checkout's .worktreeinclude patterns", () =>
     Effect.gen(function* () {
       const agentDirectory = yield* temporaryDirectory("doctor-");
-      const profiles = subagentProfileServiceLayerFor(
-        resolveTestConfig(config, { version: 6, workspaceInclude: [".env", "config/*.local"] }),
-      );
-      const checks = yield* runSubagentDoctor({
+      const checkout = yield* temporaryDirectory("doctor-checkout-");
+      yield* git(checkout, ["init", "--template="]);
+      yield* writeFile(path.join(checkout, ".worktreeinclude"), "# local\n.env\nconfig/*.local\n");
+      const checks = yield* doctor({
         pi: extensionApiFixture(),
-        ctx: extensionContextFixture(),
+        ctx: extensionContextFixture({ cwd: checkout }),
         agentDirectory,
         activityViewAvailable: true,
-        projectTrusted: true,
-      }).pipe(Effect.provide(Layer.merge(profiles, registry([]))));
-      const included = checks.find((item) => item.label === "Worktree included files");
+        projectTrusted: false,
+      }).pipe(Effect.provide(Layer.merge(profileLayerFor(config), registry([]))));
+      const included = checks.find((item) => item.label === ".worktreeinclude");
       expect(included?.status).toBe("ok");
       expect(included?.detail).toContain(".env");
       expect(included?.detail).toContain("config/*.local");
+      expect(included?.detail).not.toContain("#");
     }).pipe(Effect.scoped),
   );
   it.effect("checks each custom agent's route and reports invalid agents", () =>
     Effect.gen(function* () {
       const agentDirectory = yield* temporaryDirectory("doctor-");
       const probed: string[] = [];
-      const checks = yield* runSubagentDoctor({
+      const checks = yield* doctor({
         pi: extensionApiFixture(),
         ctx: extensionContextFixture(),
         agentDirectory,

@@ -74,9 +74,16 @@ export const workspaceTarget = (handle: WorkspaceHandle) => ({
   processCleanupConfirmed: true as const,
 });
 
-/** Commits `files`, then untracks `untrack` so those paths stay in history and on disk only. */
+/**
+ * Commits `files`, then untracks `untrack` so those paths stay in history and on disk only. `layer`
+ * configures the engine, such as its WorktreeRemove hooks.
+ */
 export const workspaceTests =
-  (files: RepositoryFiles, untrack: ReadonlyArray<string> = []) =>
+  (
+    files: RepositoryFiles,
+    untrack: ReadonlyArray<string> = [],
+    layer: Omit<Parameters<typeof WorkspaceService.layer>[0], "agentDirectory"> = {},
+  ) =>
   (
     name: string,
     body: (
@@ -100,7 +107,7 @@ export const workspaceTests =
           }
           yield* Effect.gen(function* () {
             yield* body(yield* WorkspaceService, root, agent);
-          }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: agent })));
+          }).pipe(Effect.provide(WorkspaceService.layer({ ...layer, agentDirectory: agent })));
         }),
       60_000,
     );

@@ -43,7 +43,7 @@ export interface WorkspaceIntegrationResult extends WorkspaceIntegrationOutcome 
   readonly reviewed: boolean;
 }
 
-/** Integration of an exact tested pair, which apply composes; see `integrateLocked`. */
+/** Integration of an exact prepared pair, which apply composes; see `integrateLocked`. */
 export function workspaceIntegrationOperations(context: WorkspaceControlContext) {
   const { records, writerLeases: leases, state, requireBinding, requireEngine } = context;
   const { requireChildrenResolved } = context;
@@ -56,7 +56,7 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
     return pool?.lease !== undefined && pool.members.has(caller) ? pool.cwd.digest : undefined;
   };
   /**
-   * Integrates the exact tested pair. Callers hold the operations permit and run lock; `held`
+   * Integrates the exact prepared pair. Callers hold the operations permit and run lock; `held`
    * admits a binding that operation's token keeps busy.
    */
   const integrateLocked = (
@@ -97,17 +97,11 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
         );
       const knowledge = revisionKnowledge(binding);
       const recorded = knowledge?.kind === "prepared" && knowledge.preparationId === preparationId;
-      if (recorded && knowledge.verification === "failed")
-        return yield* invalid(
-          "workspace_verification_failed",
-          "This preparation failed verification and cannot be applied. Revise or discard the workspace, or review every page, prepare again, and apply the new preparation.",
-        );
       const artifact = yield* service
         .inspect({ workspaceId, ownerId: binding.handle.ownerId })
         .pipe(Effect.mapError(mapWorkspaceError));
       if (
         !recorded ||
-        knowledge.verification !== "tested" ||
         !artifact.preparation ||
         artifact.preparation.preparationId !== preparationId ||
         artifact.preparation.revisionId !== revisionId ||

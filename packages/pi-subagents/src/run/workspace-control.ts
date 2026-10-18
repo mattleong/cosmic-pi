@@ -67,11 +67,10 @@ export interface WorkspaceCoordinatorContract {
     callerRunId?: string,
   ) => Effect.Effect<WorkspacePrepared, SubagentError>;
   /**
-   * The direct parent's integration. Without a preparation it freezes, prepares, verifies, and
-   * integrates in one step, without requiring the diff to be read, and a failed verification
-   * integrates nothing; `paths` integrates only those changes and keeps the rest as the
-   * workspace's proposal. With a preparation it integrates exactly that reviewed and prepared
-   * pair.
+   * The direct parent's integration. Without a preparation it freezes, prepares, and integrates
+   * in one step, without requiring the diff to be read; `paths` integrates only those changes and
+   * keeps the rest as the workspace's proposal. With a preparation it integrates exactly that
+   * reviewed and prepared pair.
    */
   readonly workspaceApply: (
     workspaceId: string,
@@ -177,8 +176,7 @@ export function workspaceControl(
         status: "active",
         baseline: record.baseline,
       };
-    // A preparation whose setup failed or is still running cannot be integrated. One that
-    // failed verification stays listed for inspection, and integration refuses it.
+    // A preparation whose WorktreeCreate hooks failed or are still running cannot be integrated.
     if (
       knowledge &&
       record.status === "prepared" &&

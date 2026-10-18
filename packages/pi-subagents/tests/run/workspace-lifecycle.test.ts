@@ -358,16 +358,8 @@ describe("writer workspace lifecycle", () => {
     });
   });
 
-  it.effect("creates writer workspaces with the project's include patterns", () => {
-    const f = workspaceFixture({ serviceOptions: { workspaceInclude: [".env", "*.local"] } });
-    return withService(f.layer, function* (service) {
-      yield* stoppedWriter(service);
-      expect(f.includes).toEqual([[".env", "*.local"]]);
-    });
-  });
-
-  it.effect("a preparation whose setup failed cannot be integrated", () => {
-    const f = workspaceFixture({ workspaceSetup: { command: ["setup"] } });
+  it.effect("a preparation whose WorktreeCreate hooks failed cannot be integrated", () => {
+    const f = workspaceFixture({ worktreeCreate: [{ command: ["setup"] }] });
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const first = yield* service.workspaceReview(id);
@@ -375,9 +367,12 @@ describe("writer workspace lifecycle", () => {
         revisionId: first.revisionId,
         offset: first.nextOffset!,
       });
-      f.hooks.setupFailure = new WorkspaceError({ operation: "setup", message: "Setup failed." });
+      f.hooks.createHookFailure = new WorkspaceError({
+        operation: "hook",
+        message: "Hook failed.",
+      });
       expect(yield* service.workspacePrepare(id, first.revisionId).pipe(Effect.flip)).toMatchObject(
-        { code: "workspace_setup_failed" },
+        { code: "workspace_hook_failed" },
       );
       const untested = f.entries.get(id)?.preparation?.preparationId;
       expect(untested).toBeDefined();
@@ -389,7 +384,7 @@ describe("writer workspace lifecycle", () => {
           .workspaceApply(id, { revisionId: first.revisionId, preparationId: untested! })
           .pipe(Effect.flip),
       ).toMatchObject({ code: "workspace_preparation_stale" });
-      f.hooks.setupFailure = undefined;
+      f.hooks.createHookFailure = undefined;
       const prepared = yield* service.workspacePrepare(id, first.revisionId);
       yield* service.workspaceApply(id, {
         revisionId: first.revisionId,

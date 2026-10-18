@@ -240,7 +240,7 @@ export const WorkspaceParameters = Type.Object(
   {
     action: StringEnum(["list", "review", "prepare", "apply", "discard", "revise"] as const, {
       description:
-        "list needs no target. apply needs workspaceId: alone it freezes, prepares, runs the configured verification, and integrates in one call; revisionId optionally pins the revision and paths limits it to those changed files, keeping the rest as the proposal; with revisionId and preparationId it integrates exactly that reviewed and prepared pair. review freezes a cleaned-up workspace or pages an exact revision, starting with a summary. prepare needs revisionId. revise needs message and invalidates prior review/preparation; rebase first rebuilds the writer's tree from your current files. discard needs workspaceId only.",
+        "list needs no target. apply needs workspaceId: alone it freezes, prepares, and integrates in one call; revisionId optionally pins the revision and paths limits it to those changed files, keeping the rest as the proposal; with revisionId and preparationId it integrates exactly that reviewed and prepared pair. review freezes a cleaned-up workspace or pages an exact revision, starting with a summary. prepare needs revisionId. revise needs message and invalidates prior review/preparation; rebase first rebuilds the writer's tree from your current files. discard needs workspaceId only.",
     }),
     workspaceId: Type.Optional(RunIdParameter),
     revisionId: Type.Optional(RunIdParameter),

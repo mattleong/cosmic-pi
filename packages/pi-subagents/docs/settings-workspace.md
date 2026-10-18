@@ -94,6 +94,6 @@ Custom agents are edited by hand in the root `agents` object of `~/.pi/agent/pi-
 - for every profile, the launch preflight against its first eligible route (each distinct route probed once, bounded to 20 seconds); a failing first route is a warning when a fallback exists;
 - the same route check for every custom agent after its overrides, and a failure for each agent entry or `agents` object that fails closed;
 - each Claude Code or Codex CLI version a route uses, failing below the minimum and warning when missing or unrecognized;
-- whether private agent state is writable, the Git version isolated writers would use, the worktree setup and verification commands and `workspaceInclude` patterns, and whether the shared Activity view is installed.
+- whether private agent state is writable, the Git version isolated writers would use, the configured worktree hooks per event and scope, the checkout's `.worktreeinclude` patterns, and whether the shared Activity view is installed.
 
 The report is a user notification and never enters the model's context.

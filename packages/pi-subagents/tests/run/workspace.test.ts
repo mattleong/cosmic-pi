@@ -98,16 +98,16 @@ describe("writer workspace orchestration", () => {
       expect(yield* service.list).toEqual([]);
     });
   });
-  it.effect("retains an unadmitted workspace when setup cleanup is unconfirmed", () => {
-    const f = fixture({ workspaceSetup: { command: ["setup"] } });
-    f.hooks.setupFailure = new WorkspaceError({
-      operation: "setup",
-      message: "Setup descendants may remain.",
+  it.effect("retains an unadmitted workspace when hook cleanup is unconfirmed", () => {
+    const f = fixture({ worktreeCreate: [{ command: ["setup"] }] });
+    f.hooks.createHookFailure = new WorkspaceError({
+      operation: "hook",
+      message: "Hook descendants may remain.",
       cleanupUnconfirmed: true,
     });
     return withService(f.layer, function* (service) {
       expect(yield* service.start(repoWriter()).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_setup_cleanup_unconfirmed",
+        code: "workspace_hook_cleanup_unconfirmed",
       });
       expect(yield* service.list).toEqual([]);
       const workspaceId = [...f.entries.keys()][0]!;
@@ -387,7 +387,7 @@ describe("writer workspace orchestration", () => {
       });
       const outcome = yield* integrate;
       expect(f.entries.get(id)?.status).toBe("integrated");
-      expect(outcome).toMatchObject({ integrated: true, leaseReleaseUnconfirmed: true });
+      expect(outcome).toMatchObject({ testing: "parent-tested", leaseReleaseUnconfirmed: true });
       expect(yield* service.start(repoWriter()).pipe(Effect.flip)).toMatchObject({
         code: "workspace_integration_quarantined",
       });

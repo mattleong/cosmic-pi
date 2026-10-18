@@ -801,7 +801,6 @@ const appliedWorkspace = {
   treeRemovalFailed: false,
   remainingBackupPaths: [],
   leaseReleaseUnconfirmed: false,
-  integrated: true,
 } as const;
 const workspaceService: SubagentServiceDoubleInput = {
   workspaceList: () =>
@@ -832,7 +831,7 @@ const workspaceService: SubagentServiceDoubleInput = {
     Effect.succeed({
       ...appliedWorkspace,
       reviewed: true,
-      verification: { status: "parent-tested" },
+      testing: "parent-tested",
     }),
   workspaceDiscard: () => Effect.void,
   workspaceRevise: () =>
@@ -845,53 +844,19 @@ const leftoverWorkspace: SubagentServiceDoubleInput = {
     Effect.succeed({
       ...appliedWorkspace,
       reviewed: true,
-      verification: { status: "parent-tested" },
+      testing: "parent-tested",
       untouchedDriftPaths: ["src/billing.ts", "README.md"],
       remainingBackupPaths: ["/project/db/.pi-workspace-old-4f1c2a9e-0d3b-4e7a-9c55-1b2d3e4f5a6b"],
       leaseReleaseUnconfirmed: true,
     }),
 };
-const verifiedApply: SubagentServiceDoubleInput = {
-  workspaceApply: () =>
-    Effect.succeed({
-      ...appliedWorkspace,
-      reviewed: true,
-      verification: {
-        status: "passed",
-        command: ["pnpm", "test"],
-        outputTail: " Test Files  48 passed (48)\n      Tests  412 passed (412)",
-      },
-    }),
-};
-const unverifiedApply: SubagentServiceDoubleInput = {
+const untestedApply: SubagentServiceDoubleInput = {
   workspaceApply: () =>
     Effect.succeed({
       ...appliedWorkspace,
       reviewed: false,
-      verification: { status: "not-configured" },
+      testing: "untested",
       leftOutPaths: [".env.local", "certs/dev.pem"],
-    }),
-};
-const failedApply: SubagentServiceDoubleInput = {
-  workspaceApply: () =>
-    Effect.succeed({
-      revisionId: "rev-1",
-      preparationId: "prep-2",
-      preparedCwd: "/project/.pi-subagents/prepared/prep-2",
-      changedPaths: ["db/0007.sql", "src/db/schema.ts"],
-      changedPathCount: 2,
-      leftOutPaths: [],
-      reviewed: false,
-      integrated: false,
-      verification: {
-        status: "failed",
-        command: ["pnpm", "test"],
-        outputTail:
-          " FAIL  tests/db/migrate.test.ts > applies 0007\nAssertionError: expected column rotated_at to exist\n Test Files  1 failed | 47 passed (48)",
-        message: "Verification command pnpm test exited with code 1.",
-      },
-      nextSteps:
-        "Nothing was applied. Inspect the prepared tree, then revise or discard the workspace, or review every page, prepare again, and apply that new preparation.",
     }),
 };
 const nestedWorkspaces: SubagentServiceDoubleInput = {
@@ -993,26 +958,32 @@ const workspaceScenarios = Effect.all([
           Effect.succeed({
             ...appliedWorkspace,
             reviewed: true,
-            verification: { status: "parent-tested" },
+            testing: "parent-tested",
             retainedForChildren: ["ws-2"],
           }),
       },
     },
   ),
   scenario(
-    "apply a reviewed proposal that passes verification",
+    "apply an unreviewed, untested proposal",
     { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
-    { service: verifiedApply },
+    { service: untestedApply },
   ),
   scenario(
-    "apply an unreviewed proposal without verification",
+    "apply refused by a failing WorktreeCreate hook",
     { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
-    { service: unverifiedApply },
-  ),
-  scenario(
-    "apply blocked by failed verification",
-    { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
-    { service: failedApply },
+    {
+      service: {
+        workspaceApply: () =>
+          Effect.fail(
+            new InvalidSubagentRequestError({
+              code: "workspace_hook_failed",
+              message:
+                "WorktreeCreate hook `pnpm install --offline --frozen-lockfile` exited with code 1: ERR_PNPM_NO_OFFLINE_TARBALL",
+            }),
+          ),
+      },
+    },
   ),
   scenario(
     "apply refused while child workspaces are unresolved",
@@ -1046,7 +1017,7 @@ const workspaceScenarios = Effect.all([
             remainingPaths: ["src/db/schema.ts"],
             remainingPathCount: 1,
             reviewed: false,
-            verification: { status: "not-configured" },
+            testing: "untested",
           }),
       },
     },
@@ -1139,7 +1110,7 @@ const workspaceScenarios = Effect.all([
     },
   ),
   scenario(
-    "setup cleanup unconfirmed",
+    "worktree hook cleanup unconfirmed",
     {
       tool: "subagent_workspace",
       args: { action: "prepare", workspaceId: "ws-1", revisionId: "rev-1" },
@@ -1149,9 +1120,9 @@ const workspaceScenarios = Effect.all([
         workspacePrepare: () =>
           Effect.fail(
             new InvalidSubagentRequestError({
-              code: "workspace_setup_cleanup_unconfirmed",
+              code: "workspace_hook_cleanup_unconfirmed",
               message:
-                "Workspace setup cleanup is unconfirmed; the artifact is quarantined.\nIndependently confirm the setup process and every descendant have stopped. Preserve the proposal and recovery record before manual recovery; restarting Pi does not clear this quarantine.",
+                "Worktree hook cleanup is unconfirmed; the artifact is quarantined.\nIndependently confirm the hook's process and every descendant have stopped. Preserve the proposal and recovery record before manually recovering the private trees; restarting Pi does not clear this quarantine.",
             }),
           ),
       },

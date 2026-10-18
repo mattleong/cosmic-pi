@@ -11,6 +11,7 @@ import {
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import { deleteWorkspaceRefs } from "./git-capture.ts";
 import { listedWorkspaceTrees, removeWorkspaceTree } from "./git-worktree-trees.ts";
+import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
 import {
   checkDirectory,
   isSharedOrForeign,
@@ -34,11 +35,16 @@ const editableTreeName = (name: string) =>
 /**
  * Removes the workspace's linked worktrees (prepared trees first, then the worker unless kept)
  * and Git's entries for them; with the worker gone, its refs go too. Proves the removal complete.
+ * `beforeRemove` runs before each removal and keeps the tree when it fails.
  */
 export const removeWorkspaceTrees = (
   registry: string,
   record: WorkspaceRecord,
-  options: { readonly keepWorker?: boolean; readonly requireOriginalWorker?: boolean } = {},
+  options: {
+    readonly keepWorker?: boolean;
+    readonly requireOriginalWorker?: boolean;
+    readonly beforeRemove?: BeforeTreeRemoval | undefined;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const directory = workspaceDirectory(registry, record.handle.workspaceId);
@@ -77,6 +83,7 @@ export const removeWorkspaceTrees = (
         );
         if (current.filesystemIdentity !== original.filesystemIdentity) return yield* refusal();
       }
+      if (options.beforeRemove) yield* options.beforeRemove(record, tree);
       yield* removeWorkspaceTree(registry, record, tree, listed);
     }
     if ((yield* remaining).trees.length > 0)
@@ -247,6 +254,8 @@ export interface WorkspaceCollection {
     ownerLease: string,
     effect: Effect.Effect<boolean, WorkspaceError, SafeFile>,
   ) => Effect.Effect<Option.Option<boolean>, WorkspaceError, SafeFile>;
+  /** Runs before each retained tree's removal (the WorktreeRemove hooks). */
+  readonly beforeRemove?: BeforeTreeRemoval | undefined;
 }
 
 // A create that crashed after adding its worker left a locked worktree in the user's repository
@@ -281,7 +290,13 @@ const removeRetainedTrees = (
 ) =>
   Effect.gen(function* () {
     const record = yield* readWorkspaceRecord(registry, workspaceId);
-    if (!finished(record) || record.ownerLease === undefined) return false;
+    // A hook whose cleanup is unconfirmed quarantines the trees until manual recovery.
+    if (
+      !finished(record) ||
+      record.ownerLease === undefined ||
+      record.setupCleanupPending !== undefined
+    )
+      return false;
     yield* checkDirectory(workspaceDirectory(registry, workspaceId));
     if (!(yield* hasEditableTree(registry, workspaceId))) return false;
     // Rechecked under the checkout's lock; an unreadable record might be an unresolved child.
@@ -295,7 +310,9 @@ const removeRetainedTrees = (
       return false;
     const removed = yield* collection.whenOwnerEnded(
       record.ownerLease,
-      removeWorkspaceTrees(registry, record).pipe(Effect.as(true)),
+      removeWorkspaceTrees(registry, record, { beforeRemove: collection.beforeRemove }).pipe(
+        Effect.as(true),
+      ),
     );
     return Option.getOrElse(removed, () => false);
   });

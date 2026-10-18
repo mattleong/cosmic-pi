@@ -100,8 +100,8 @@ test("rebases onto current parent files, keeping conflict markers for the writer
       name.startsWith("prepare-"),
     ),
   ).toEqual([]);
-  // Setup in the rebuilt tree is judged against it, not against the new baseline.
-  expect(yield* service.setupChanges(target)).toEqual([]);
+  // Hooks in the rebuilt tree are judged against it, not against the new baseline.
+  expect(yield* service.hookChanges(target)).toEqual([]);
   yield* writeFile(path.join(handle.cwd, "src/a.ts"), "a\nparent and worker\nc\n");
   const revision = yield* service.freeze(target);
   expect(revision.changedPaths).toEqual(["src/a.ts", "src/gone.ts", "src/new.ts"]);

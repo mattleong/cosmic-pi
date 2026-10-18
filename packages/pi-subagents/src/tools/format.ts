@@ -276,7 +276,7 @@ const workspaceStatusField = (run: SubagentRunView): string | undefined => {
   const files = outcome?.status === "proposal" ? proposalDiffStatLines(outcome) : [];
   return statusField(
     "Proposal",
-    `${outcome ? `${workspaceOutcomeLabel(outcome)}. ` : ""}${files.length > 0 ? `Files: ${files.join("; ")}. ` : ""}After process cleanup, apply small or trusted changes with subagent_workspace action=apply workspaceId=${id}; it verifies when configured and reports whether the diff was reviewed. For risky changes, review every immutable page, prepare combined changes, run relevant tests in the prepared cwd, then apply the exact revisionId and preparationId. A report does not approve integration.`,
+    `${outcome ? `${workspaceOutcomeLabel(outcome)}. ` : ""}${files.length > 0 ? `Files: ${files.join("; ")}. ` : ""}After process cleanup, apply small or trusted changes with subagent_workspace action=apply workspaceId=${id}; it reports whether the diff was reviewed and tests nothing. For risky changes, review every immutable page, prepare combined changes, run relevant tests in the prepared cwd, then apply the exact revisionId and preparationId. A report does not approve integration.`,
   );
 };
 
