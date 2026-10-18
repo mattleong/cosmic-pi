@@ -224,6 +224,9 @@ const WORKSPACE_LOCK_POLL = Duration.millis(200);
 export const workspaceLockDirectory = (registry: string) => path.join(registry, "locks");
 export const sourceLockNamespace = (sourceRoot: string) => `workspace-source:${sourceRoot}`;
 
+/** Held by a live engine; free once the session that created a workspace has ended. */
+export const ownerLockNamespace = (token: string) => `workspace-owner:${token}`;
+
 const lockFailure = (error: CrossProcessLockError, directory: string) =>
   new WorkspaceError({
     operation: "lock",

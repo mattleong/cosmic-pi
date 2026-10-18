@@ -12,12 +12,10 @@ import { runWorktreeHook } from "./worktree-hook.ts";
 import { HOOK_QUARANTINE_REMEDY, worktreeKind, worktreeRemoveHooks } from "./git-worktree-hooks.ts";
 import type {
   WorkspaceAcquired,
-  WorkspaceAdoptTarget,
   WorkspaceHandle,
   WorkspaceIntegrationTarget,
   WorkspaceLaunch,
   WorkspaceListing,
-  WorkspaceOrphanDiscardTarget,
   WorkspaceOrphanTarget,
   WorkspacePreparationTarget,
   WorkspaceRecord,
@@ -25,8 +23,6 @@ import type {
   WorkspaceRevisionMetadata,
   WorkspaceHookTarget,
   WorkspaceSettledTarget,
-  WorkspaceSweepTarget,
-  WorkspaceSwept,
   WorkspaceTarget,
   WorkspaceWorkerChanges,
 } from "../workspace/model.ts";
@@ -73,6 +69,7 @@ import {
   readWorktreeInclude,
 } from "./git-worktree-include.ts";
 import { rebaseWorkspace } from "./git-worktree-rebase.ts";
+import { orphanWorkspaceOperations } from "./git-worktree-orphans.ts";
 import {
   addWorkspaceTree,
   preparationTree,
@@ -87,12 +84,11 @@ import {
   newWorkspaceId,
   readRevisionDiff,
   readWorkspaceRecord,
-  recordChangedAt,
-  revisionDiffFile,
   saveWorkspaceRecord,
   syncWorkspaceDirectory,
   validWorkspaceId,
   workspaceDirectory,
+  ownerLockNamespace,
   sourceLockNamespace,
   withFreeLock,
   withWorkspaceStoreLock,
@@ -118,8 +114,6 @@ import {
   touchedParentDrift,
 } from "./git-worktree-integration.ts";
 
-const ownerNamespace = (token: string) => `workspace-owner:${token}`;
-
 const subdirectory = workspaceSubdirectory;
 
 // Publication installs regular files only, so freeze refuses links and submodules that change.
@@ -138,44 +132,6 @@ interface CreateWorkspaceInput {
   readonly launch?: WorkspaceLaunch | undefined;
   readonly onAcquired?: WorkspaceAcquired | undefined;
 }
-
-// Statuses whose worker tree an adopting session or the orphan sweep can take over as they are.
-const openStatuses: ReadonlySet<WorkspaceRecord["status"]> = new Set([
-  "active",
-  "frozen",
-  "prepared",
-]);
-
-// Rechecked at the worker path itself while the caller holds the original writer lease.
-const requireOriginalWorker = (record: WorkspaceRecord, operation: string) =>
-  Effect.gen(function* () {
-    const refusal = () =>
-      workspaceRefusal(operation, "The original worker directory changed; takeover is unsafe.", {
-        path: record.handle.cwd,
-        rule: "an orphan's worker path must still name its original writer-directory identity",
-        remedy:
-          "Preserve both trees and the recovery record. Independently confirm every writer and descendant has stopped, then recover the artifact manually.",
-      });
-    const original = record.handle.writerCwd;
-    if (!original) return yield* refusal();
-    const current = yield* canonicalizeWriterDirectory(record.handle.cwd).pipe(
-      Effect.mapError(refusal),
-    );
-    if (current.filesystemIdentity !== original.filesystemIdentity) return yield* refusal();
-    return undefined;
-  });
-
-// How many source-workspace links separate a record from its real checkout.
-const sourceDepth = (record: WorkspaceRecord, listed: ReadonlyMap<string, WorkspaceRecord>) => {
-  let depth = 0;
-  for (
-    let link = record.handle.sourceWorkspaceId;
-    link !== undefined && depth <= MAX_WORKSPACE_NESTING;
-    link = listed.get(link)?.handle.sourceWorkspaceId
-  )
-    depth += 1;
-  return depth;
-};
 
 const withinTree = (tree: string, target: string) =>
   target === tree || target.startsWith(`${tree}${path.sep}`);
@@ -279,7 +235,7 @@ export const gitWorkspaceEngine = (
       if (presence) return presence.token;
       const token = yield* newWorkspaceId;
       const lease = yield* locks
-        .tryAcquire(ownerNamespace(token))
+        .tryAcquire(ownerLockNamespace(token))
         .pipe(
           Effect.mapError(() =>
             workspaceFailure("lock", "The workspace owner lease couldn't be acquired."),
@@ -1041,214 +997,23 @@ export const gitWorkspaceEngine = (
         return undefined;
       });
     const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target), target);
-    // Runs `effect` holding the orphan's free owner lease, which proves its creating session ended.
-    const whileOwnerEnded = <A>(
-      record: WorkspaceRecord,
-      effect: Effect.Effect<A, WorkspaceError, SafeFile>,
-    ) =>
-      Effect.gen(function* () {
-        if (owned.has(record.handle.workspaceId))
-          return yield* workspaceFailure(
-            "authorization",
-            "This session owns the workspace; discard it as its parent.",
-          );
-        if (record.ownerLease === undefined)
-          return yield* workspaceFailure(
-            "authorization",
-            "The workspace has no owner evidence, so its session can't be shown to have ended.",
-          );
-        const result = yield* withFreeLock(
-          locks,
-          lockDirectory,
-          ownerNamespace(record.ownerLease),
-          effect,
-        );
-        if (Option.isNone(result))
-          return yield* workspaceFailure(
-            "authorization",
-            "The session that created this workspace is still running.",
-          );
-        return result.value;
-      });
-    // An orphan's creating session has ended (its owner lease is free); the caller separately
-    // proves no writer still holds the worker tree.
-    const discardOrphan = Effect.fn("GitWorkspaceEngine.discardOrphan")(function* (
-      target: WorkspaceOrphanDiscardTarget,
-    ) {
-      const record = yield* managedRecord(target.workspaceId);
-      // Rolling back needs fresh writer leases on the publication's directories, which only the
-      // caller can take: the integrating session's leases ended with it.
-      if (record.status === "integrating" && target.sourceLeasesHeld !== true)
-        return yield* workspaceRefusal(
-          "discard",
-          "The workspace was left mid-integration by a session that has ended.",
-          {
-            path: path.join(directory(record), "record.json"),
-            rule: "rolling back another session's integration needs fresh writer leases on the parent checkout's directories it published into",
-            remedy:
-              "Discard it from the root session of its checkout, which takes those leases, or compare the journal's paths with the parent checkout, restore each file from its backup (paths relative to the source root) or keep the published content, delete the backup and temporary files, then remove the private workspace directory.",
-          },
-        );
-      yield* refuseWithChildren(record);
-      yield* whileOwnerEnded(
-        record,
-        Effect.gen(function* () {
-          // Until the rollback succeeds the record stays mid-integration.
-          if (record.status === "integrating") yield* rollbackPublication(registry, record);
-          yield* removeWorkspaceTrees(registry, record, {
-            requireOriginalWorker: true,
-            beforeRemove,
-          });
-          yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
-        }),
-      );
-      return undefined;
-    }, locked);
-    // Hands an orphan's ownership to this session: the record names the new owner and this
-    // engine's owner lease, so a later session can again prove this one ended. Adopting a
-    // workspace this session already adopted for the same owner returns it again.
-    const adopt = Effect.fn("GitWorkspaceEngine.adopt")(function* (target: WorkspaceAdoptTarget) {
-      const record = yield* managedRecord(target.workspaceId);
-      if (owned.has(target.workspaceId)) {
-        if (record.handle.ownerId === target.ownerId) return record.handle;
-        return yield* workspaceFailure(
-          "authorization",
-          "This session already owns the workspace under another parent.",
-        );
-      }
-      if (record.handle.sourceWorkspaceId !== undefined)
-        return yield* workspaceRefusal("adopt", "A nested orphan can only be discarded.", {
-          path: record.handle.cwd,
-          rule: "a nested workspace integrates into its source workspace's worker tree, which only the writer that started it could resolve",
-          remedy: "Discard it, children before their parent, then adopt the source workspace.",
-        });
-      if (!openStatuses.has(record.status))
-        return yield* workspaceRefusal(
-          "adopt",
-          record.status === "integrating"
-            ? "The orphan was left mid-integration; it can only be discarded."
-            : "The orphan has no open worker tree to take over.",
-          {
-            path: path.join(directory(record), "record.json"),
-            rule: "only an active, frozen, or prepared orphan can be adopted",
-            remedy:
-              record.status === "integrating"
-                ? "Discard it to roll the published files back."
-                : "Start a new writer instead.",
-          },
-        );
-      yield* refuseWithChildren(record);
-      const ownerLease = yield* ownerPresence;
-      return yield* whileOwnerEnded(
-        record,
-        Effect.gen(function* () {
-          yield* requireOriginalWorker(record, "takeover");
-          const handle: WorkspaceHandle = { ...record.handle, ownerId: target.ownerId };
-          yield* saveWorkspaceRecord(registry, { ...record, handle, ownerLease }, () => {
-            owned.add(target.workspaceId);
-          });
-          return handle;
-        }),
-      );
-    }, locked);
-    // Unfinished records another session created whose owner lease is free right now.
-    const endedOwners = (records: ReadonlyArray<WorkspaceRecord>) =>
-      Effect.forEach(records, (record) =>
-        record.ownerLease === undefined ||
-        owned.has(record.handle.workspaceId) ||
-        record.status === "integrated" ||
-        record.status === "discarded"
-          ? Effect.succeed([])
-          : withFreeLock(locks, lockDirectory, ownerNamespace(record.ownerLease), Effect.void).pipe(
-              Effect.map((free) => (Option.isSome(free) ? [record.handle.workspaceId] : [])),
-              Effect.orElseSucceed((): ReadonlyArray<string> => []),
-            ),
-      ).pipe(Effect.map((ids) => ids.flat()));
-    const oldEnough = (record: WorkspaceRecord, now: number, minimumAgeMillis: number) =>
-      recordChangedAt(registry, record).pipe(
-        Effect.map((changedAt) => now - changedAt >= minimumAgeMillis),
-      );
-    /**
-     * Records the orphan sweep may discard, children before their source workspaces so a pass can
-     * resolve a whole chain. A plain candidate scan: `sweepOrphan` rechecks each one under its
-     * checkout's lock and owner lease.
-     */
-    const sweepCandidates = (input: { readonly minimumAgeMillis: number }) =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const { records } = yield* listWorkspaceRecords(registry);
-        const listed = new Map(records.map((record) => [record.handle.workspaceId, record]));
-        const candidates: WorkspaceRecord[] = [];
-        for (const record of records)
-          if (
-            !owned.has(record.handle.workspaceId) &&
-            openStatuses.has(record.status) &&
-            record.ownerLease !== undefined &&
-            record.handle.writerCwd !== undefined &&
-            record.setupCleanupPending === undefined &&
-            (yield* oldEnough(record, now, input.minimumAgeMillis).pipe(
-              Effect.orElseSucceed(() => false),
-            ))
-          )
-            candidates.push(record);
-        return candidates.toSorted(
-          (left, right) => sourceDepth(right, listed) - sourceDepth(left, listed),
-        );
-      });
-    /**
-     * Discards an orphan unchanged for `minimumAgeMillis`, keeping its worker's changes as the
-     * revision patch beside the record until collection removes both. Returns undefined, changing
-     * nothing, for a record takeover would refuse or one that changed meanwhile. The caller holds
-     * the original writer lease.
-     */
-    const sweepOrphan = Effect.fn("GitWorkspaceEngine.sweepOrphan")(function* (
-      target: WorkspaceSweepTarget,
-    ) {
-      const record = yield* managedRecord(target.workspaceId);
-      const now = yield* Clock.currentTimeMillis;
-      if (
-        owned.has(target.workspaceId) ||
-        !openStatuses.has(record.status) ||
-        record.ownerLease === undefined ||
-        !(yield* oldEnough(record, now, target.minimumAgeMillis)) ||
-        (yield* unresolvedChildWorkspaces(registry, target.workspaceId)).length > 0
-      )
-        return undefined;
-      const swept = yield* withFreeLock(
+    const { discardOrphan, adopt, endedOwners, sweepCandidates, sweepOrphan } =
+      orphanWorkspaceOperations({
+        registry,
         locks,
         lockDirectory,
-        ownerNamespace(record.ownerLease),
-        Effect.gen(function* () {
-          yield* requireOriginalWorker(record, "sweep");
-          const { repository } = record;
-          const frozen = record.revision;
-          const current =
-            frozen !== undefined &&
-            (yield* captureWorker(record)).tree === (yield* treeOf(repository, frozen.revisionId));
-          // A frozen revision the worker still matches keeps its patch; otherwise the worker's
-          // changes are frozen anew.
-          const kept = current
-            ? record
-            : (yield* freezeRecord({ ...withoutPreparation(record), status: "active" })).record;
-          yield* removeWorkspaceTrees(registry, kept, {
-            requireOriginalWorker: true,
-            beforeRemove,
-          });
-          yield* saveWorkspaceRecord(registry, {
-            ...kept,
-            status: "discarded",
-            disposition: "orphan-swept",
-          });
-          return {
-            workspaceId: target.workspaceId,
-            sourceRoot: workspaceCheckoutRoot(record.handle),
-            changedPathCount: kept.revision?.changedPaths.length ?? 0,
-            patchPath: revisionDiffFile(registry, target.workspaceId),
-          } satisfies WorkspaceSwept;
-        }),
-      );
-      return Option.getOrUndefined(swept);
-    }, locked);
+        owned,
+        ownerPresence,
+        managedRecord,
+        refuseWithChildren,
+        workerTree: (record) => captureWorker(record).pipe(Effect.map(({ tree }) => tree)),
+        freezeAnew: (record) =>
+          freezeRecord({ ...withoutPreparation(record), status: "active" }).pipe(
+            Effect.map((frozen) => frozen.record),
+          ),
+        beforeRemove,
+        locked,
+      });
     const rebase = Effect.fn("GitWorkspaceEngine.rebase")(function* (
       target: WorkspaceSettledTarget,
     ) {
@@ -1263,7 +1028,7 @@ export const gitWorkspaceEngine = (
         whenSourceFree: (sourceRoot, effect) =>
           withFreeLock(locks, lockDirectory, sourceLockNamespace(sourceRoot), effect),
         whenOwnerEnded: (ownerLease, effect) =>
-          withFreeLock(locks, lockDirectory, ownerNamespace(ownerLease), effect),
+          withFreeLock(locks, lockDirectory, ownerLockNamespace(ownerLease), effect),
         beforeRemove,
       });
     });

@@ -87,7 +87,7 @@ A custom agent is a named role the user declares in a configuration document's r
 - The start item's `agent` choices and their descriptions are generated when the root registers its tools, and the field is absent when no agents are configured. Nested Pi children accept any agent name and the root resolves it.
 - Planning applies the agent's overrides to each candidate before the usual checks. A candidate the overrides don't fit, such as fork context or an unsupported explicit effort on Claude or Codex, is skipped with `agent_candidate_incompatible`.
 - Tool lists can only be enforced on a Pi child, so Claude and Codex candidates are skipped with `agent_tools_unsupported` whenever an agent sets `allow` or `deny`. There is no unfiltered fallback.
-- An item's `isolation` wins over the agent's; the agent's wins over nested and session defaults. A route that resolves read-only ignores the agent's.
+- An item's `isolation` wins over the agent's; the agent's wins over nested and session defaults. Either one on a launch whose selected candidate is read-only fails with `isolation_requires_writer` before admission.
 - A [model override](#per-launch-model-override) launched with an agent takes the agent's effort, context, and write intent defaults, and fails with `model_override_invalid` when the agent's tool lists need Pi.
 - The child's system prompt names the agent and carries its instructions in place of the profile guidance. Run cards, start entries, status, and the orchestration contract report `agent` alongside the routed `profile`.
 - The launch freezes the resolved agent into its route continuation, so [retry](#explicit-route-continuation) keeps its instructions, overrides, and tool lists even after the configuration changes or drops the agent.
@@ -156,7 +156,7 @@ A start item's optional `model: { runtime, model, effort? }` replaces the profil
 - `profile`, optional, defaulting to `generalist`;
 - `agent`, optional: a [custom agent](#custom-agents), never combined with `profile`;
 - `name`, optional;
-- `isolation`, optional: `shared-checkout` or `worktree`, for writers only (profile `worker`, or an agent or route with writer intent). An item whose selected candidate is read-only fails with `isolation_requires_writer` before admission;
+- `isolation`, optional: `shared-checkout` or `worktree`, for writers only (profile `worker`, or an agent or route with writer intent). An item whose selected candidate is read-only fails with `isolation_requires_writer` before admission, as does an item whose [custom agent](#launch-planning) sets `isolation`;
 - `model`, optional: a [per-launch model override](#per-launch-model-override).
 
 The schema is strict, and the service independently rejects other launch overrides, such as a top-level `effort`, `context`, or `writeIntent`, with `launch_override_not_allowed`. Model-facing schemas declare no `pattern` keyword, which some providers reject. Task-tool-shaped top-level fields fail with `[invalid_start_shape]` instead of being renamed.

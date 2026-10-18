@@ -144,6 +144,42 @@ describe("custom agent launches", () => {
     });
   });
 
+  effectTest(
+    "rejects isolation from an item or agent whose route resolves read-only",
+    function* () {
+      const requests: StartSubagentRequest[] = [];
+      const profiles = profileServiceFor({
+        profiles: {
+          reviewer: piParent,
+          worker: declaredCandidate("parent", { writeIntent: "writer" }),
+        },
+        agents: {
+          isolated: agentDefinition({ isolation: "worktree" }),
+          plain: agentDefinition(),
+          "isolated-worker": agentDefinition({ profile: "worker", isolation: "worktree" }),
+        },
+      });
+      const result = yield* invokeOptionalTool(startWith(requests, { profiles }), {
+        agents: [
+          { task: "Review", agent: "isolated" },
+          { task: "Review", agent: "plain", isolation: "worktree" },
+          { task: "Implement", agent: "isolated-worker" },
+        ],
+      });
+
+      expect(decodeStartDetails(result?.details).startFailures).toMatchObject([
+        { index: 0, code: "isolation_requires_writer" },
+        { index: 1, code: "isolation_requires_writer" },
+      ]);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        agent: "isolated-worker",
+        writeIntent: "writer",
+        writerWorkspaceModeOverride: "worktree",
+      });
+    },
+  );
+
   effectTest("skips Claude and Codex candidates when the agent sets tool lists", function* () {
     const requests: StartSubagentRequest[] = [];
     const { preflight, registry } = countingRegistry();

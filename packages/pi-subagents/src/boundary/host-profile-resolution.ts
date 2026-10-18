@@ -366,16 +366,16 @@ const resolvePlannedStart = (
           )
         : [];
     const name = input.rawInput.name?.trim();
-    if (input.rawInput.isolation !== undefined && attempt.writeIntent !== "writer")
+    // An item's isolation wins over the agent's; either one requires a writer route.
+    const isolation = input.rawInput.isolation ?? input.agent?.isolation;
+    if (isolation !== undefined && attempt.writeIntent !== "writer")
       return yield* new InvalidSubagentRequestError({
         code: "isolation_requires_writer",
-        message: `${planSubject(input.definition, input.agent)} resolved read-only, and isolation applies only to writers. Omit isolation, or use profile worker.`,
+        message:
+          input.rawInput.isolation === undefined && input.agent
+            ? `${planSubject(input.definition, input.agent)} sets isolation but resolved read-only, and isolation applies only to writers. Set the agent's writeIntent to writer, or remove its isolation.`
+            : `${planSubject(input.definition, input.agent)} resolved read-only, and isolation applies only to writers. Omit isolation, or use profile worker.`,
       });
-    // An agent's isolation is its default for writer routes; a read-only route has no workspace.
-    const isolation =
-      attempt.writeIntent === "writer"
-        ? (input.rawInput.isolation ?? input.agent?.isolation)
-        : undefined;
     const request: StartSubagentRequest = {
       ...(name && { name }),
       ...(isolation && { writerWorkspaceModeOverride: isolation }),
