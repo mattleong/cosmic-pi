@@ -36,7 +36,7 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
     "",
     ...peers,
     "",
-    "The parent owns coordination. Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task, and contact the parent and wait before work that could overlap another task.",
+    "Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task. Before work that could overlap a running peer's task, agree on it with that peer through agent_send, and tell peers about changes they depend on. Ask the parent if you can't agree.",
   ].join("\n");
 };
 

@@ -117,7 +117,7 @@ The first member acquires and durably marks the cross-process lease before any m
 - Any number of in-process shared-checkout writers may join one pool. Admission has no file claims: writers coordinate by task scope, and the parent assigns disjoint scopes.
 - Admission still refuses a writer while the pool is releasing, failed, or quarantined, or while a member in the same cwd is still confirming cleanup. A worktree writer's pool is its private worker directory.
 - Another Pi process holding the cwd's lease refuses the whole pool. Applying a worktree proposal into a checkout where a shared-checkout writer is active or launching fails with `workspace_target_busy`.
-- Shared-checkout writers are not isolated. Their tools can modify the whole cwd, and nothing observes or stops a write outside the assigned task. Writer guidance and the peer notice tell each writer which peers share the cwd and their tasks, and to contact the parent before work that could overlap another task.
+- Shared-checkout writers are not isolated. Their tools can modify the whole cwd, and nothing observes or stops a write outside the assigned task. Writer guidance and the peer notice tell each writer which peers share the cwd and their tasks, to agree on overlapping work with the running peer through `agent_send`, to tell peers about changes they depend on, and to ask the parent when they can't agree.
 
 ### Leases
 
