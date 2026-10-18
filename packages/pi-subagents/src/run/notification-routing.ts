@@ -4,6 +4,7 @@ import type {
   SubagentNotification,
   SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
+import { resumedByText } from "./agent-messaging.ts";
 import { completionNotificationKey, deliveredCompletionKeys } from "./completion.ts";
 import { isOutcomeUncertain } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
@@ -33,8 +34,9 @@ const ancestorMessage = (notification: SubagentNotification): string => {
       : (run.finalText ?? "No final report.");
   // Put qualifications before the report so bounding a long report cannot drop them.
   const warning = run.warning ? `Warning: ${run.warning}\n\n` : "";
+  const resumer = resumedByText(run);
   return sanitizeOutputText(
-    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${warning}${detail}\n\nUse subagent_status or subagent_await for the full run record.`,
+    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${resumer ? `${resumer}\n\n` : ""}${warning}${detail}\n\nUse subagent_status or subagent_await for the full run record.`,
     32 * 1024,
   );
 };

@@ -208,6 +208,9 @@ describe("subagent tool", () => {
     const tools = captureSubagentTools(service);
     // Questions are answered through subagent_send; no separate reply tool is registered.
     expect([...tools.keys()].toSorted()).toEqual([
+      "agent_list",
+      "agent_read",
+      "agent_send",
       "subagent_await",
       "subagent_lifecycle",
       "subagent_models",

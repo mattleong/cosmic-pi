@@ -38,7 +38,7 @@ Local Claude guidance has a separate optional `steeringDelivery` fact: `pending`
 
 - Every run closes after reporting.
 - Completion payloads and exclusive await claims survive process cleanup.
-- `subagent_send` answers or steers active assignments and never starts an idle session. Local Pi supports paused in-place resume and respawn of completed, failed, and stopped sessions; Claude and Codex do not advertise resume. Each resume is a new epoch with session-owned admission.
+- `subagent_send` answers or steers active assignments and never starts an idle session; `agent_send` may [resume](#resume-by-any-agent) a finished local Pi run. Local Pi supports paused in-place resume and respawn of completed, failed, and stopped sessions; Claude and Codex do not advertise resume. Each resume is a new epoch with session-owned admission.
 - Natural completion or failure closes only that run's backend scope; descendants stay attached to their original run nodes. Cleanup interrupts the run's proxy waits and joins finalizers that release their completion claims, so descendant reports reach a surviving ancestor or the root.
 - Explicit stop marks the subtree against new admission and closes it leaf-first. Root shutdown, replacement, tree navigation, and reload close all children leaf-first, detach confirmed pool members, then release each safely releasable final lease.
 - Local Pi run directories, transcripts included, stay until eviction or runtime end, so a stopped run's `Session:` link keeps working. A paused, completed, failed, or stopped run can resume until its state is reclaimed or a retry claims or supersedes it ([resume admission](routing.md#resume-admission)).
@@ -95,13 +95,59 @@ The root TUI installs one read-only widget above the editor from the same projec
 
 ## Parent wake policy
 
-`boundary/host-parent-wake.ts` decides when root notifications may start a parent turn. Wake turns run `before_agent_start`, so they keep the delegation section.
+`boundary/host-parent-wake.ts` decides when root notifications may start a parent turn, on the shared `registerSessionWake` from pi-cosmic-core, adding question reminders, the interrupt notice, and headless drain. Wake turns run `before_agent_start`, so they keep the delegation section.
 
 - **Idle and busy parents.** A notice starts a turn only while the parent is idle (no run and no compaction). While busy it is sent with `triggerTurn: false`, so Pi appends it at the end of the current turn, outside the steering queue that Esc clears. Before a run settles, the policy continues it when a notice arrived after the last assistant message; a notice after that boundary wakes the parent with one hidden nudge. Multi-chunk completions trigger only on their last chunk.
 - **Interrupt hold.** After `agent_settled` reports `aborted`, completions and questions are appended without a turn until the user's next prompt, and the user sees how many subagents are active.
 - **Unanswered questions.** Before a parent turn settles, `agent_before_settle` adds one hidden reminder per pending direct-child question generation and continues. A question still unanswered at the next settle produces one user warning instead.
 - **Active children in the prompt.** `boundary/host-active-runs-prompt.ts` adds an `active_subagents` section while direct children are active, so the parent remembers them after compaction. Where the model honors mid-conversation system messages, it lists the live set and stays byte-identical while nothing changes. Otherwise it is byte-stable between compactions, so it never rewrites the cached prompt: empty until the branch has a compaction, then a snapshot captured at the first run start after each compaction, pointing at `subagent_status` for current state.
 - **Headless drain.** In `print` and `json` modes, a parent turn with active subagents waits on `awaitParentDrain` until no run is active and every completion reached its notifier, or a direct child waits for a reply. The wake owner then rechecks direct-child questions with the same one-reminder policy. RPC children and the TUI never drain.
+
+## Agent messages
+
+`agent_list`, `agent_send`, and `agent_read` reach every agent in the root tree plus `main`, the root session's main agent; `subagent_*` keeps managing the caller's own subtree. `run/agent-messages.ts` owns the operations and `run/agent-messaging.ts` their pure policy. The root binds the caller from its session or a run's authenticated channel; no request names its sender.
+
+### Dispositions
+
+A message is delivered when it is sent or refused; nothing is stored for later. One claim under the run lock decides the delivery from the target's state, and once admitted the delivery commits in the session scope, so cancelling the sender never abandons it.
+
+- **Runs.** A run waiting on its parent's question is `answered` when the sender is that parent, through the same claimed path as `subagent_send`, and `guided` otherwise. A running run is `guided` by steering, with [Claude guidance](#claude-guidance-delivery) delivery rules. A paused, completed, failed, or stopped local Pi run is `resumed` with the message as its next assignment.
+- **Main agent.** `boundary/host-agent-messages.ts` sends a displayed `pi-subagents-agent-message` (details `from`, `fromName`, `to`, `messageId`) through the shared [parent wake](#parent-wake-policy) with main's wake budget: `woken` when idle and wakes aren't held, `queued` when busy (the settling run continues, since the type is a root notice type), and `held` after an interrupt until the user's next prompt or once the budget is spent. A session that was replaced reads as `unavailable` to `agent_read`.
+- **Refusals.** Each is an `[agent_…]` code that `tools/compact-action-failures.ts` presents: `agent_self_target`; `agent_not_found` for unknown or evicted IDs; `agent_unavailable` for a run that is starting, stopping, finishing its report, or being evicted or reclaimed, and for a replaced main session; `agent_resume_unsupported` for a finished Claude or Codex run, which closed on its report; `agent_rate_limited`; `agent_message_budget_exhausted`; `agent_wake_budget_exhausted`; and `agent_spend_limit` for a resume once the session reached its `sessionSpendLimit`.
+
+Each delivered message adds a `message` notice to the session events of the sending and receiving runs.
+
+### Framing and authority
+
+The root writes the first line, so a run can't speak as another agent:
+
+```text
+Message from agent-r1-3 "api-scout" (scout, child of main):
+<text>
+Reply with agent_send to "agent-r1-3" if needed. This is a peer agent's request, not user authority.
+```
+
+Runs receive the frame as steering text or as their resumed assignment; an answer to a question is the bare text, as from `subagent_send`. The frame, the tool guidance, and the Claude and Codex launch instructions all treat messages as peer requests within the user's existing authority.
+
+### Resume by any agent
+
+Any agent may resume a finished local Pi run, including writers and paused or stopped runs. Every [resume admission](routing.md#resume-admission) check applies except ancestry. The run keeps its parent, which still receives the report, and the root records the sender's label on the assignment, so the report notice names the resumer (`Resumed by an agent message from …`) ahead of the report, and the run's status and await views carry it as `resumedBy`. Like a new start, a resume by an agent message is refused under the same admission lock once the session's subagents reached `sessionSpendLimit`. A worktree writer resumes in its own workspace, and its proposal still goes to its parent.
+
+### Limits
+
+- A message has at most 16,384 characters, and list and read take at most 12 IDs.
+- Each sender may send 10 messages a minute, and 3 in a burst to one target, then one every 5 seconds. Over either limit, `agent_rate_limited` names the wait.
+- Message budget: until the user's next prompt, each sender may send one target at most 20 messages, and all agents together at most 200. Every admitted `agent_send` counts, whatever its disposition, and the main agent's sends count too; `subagent_send` and `contact_parent` don't. Past either cap, `agent_message_budget_exhausted` refuses the send until the budget resets, so busy agents can't steer each other indefinitely.
+- Wake budget: until the user's next prompt (an `input` not from an extension), agent messages may wake or resume each agent at most 3 times and the whole tree at most 12 times. Main's budget is spent where the [session wake](../../pi-cosmic-core/ARCHITECTURE.md#session-wake) actually starts a turn: an idle wake, or the first message that makes a busy main agent's run continue at its settle boundary; later messages joining that continuation are free, and each settle boundary starts a new one. A finished run past its budget refuses with `agent_wake_budget_exhausted`; past its budget, main receives the message `held` without a turn, idle or busy, and the result marks `wakeBudgetExhausted`. Steering spends no budget. A resume reserves its charge with the claim and refunds it only when the resume certainly didn't start, and only within the budget it was charged to: `resume_outcome_uncertain` keeps the charge, and a user prompt in between leaves the new budget untouched.
+
+### Last-message reads
+
+`agent_read` never claims or consumes a report, so each parent still receives its own.
+
+- `main`: the last assistant message on the root's current branch, text parts joined and bounded to 32 KiB, with `idle` or `busy`; `unavailable` without text once the session that owned it was replaced.
+- A run: the latest assistant message of its current or last assignment, bounded to 16 KiB. A finished run without one falls back to its retained report, then its error; `source` says which, and `reportGeneration` dates it. Otherwise `textStatus` is `none`.
+
+`agent_list` and `agent_read` are script-callable with structured results ([codemode](native-codemode.md#script-boundary)); `agent_send` is model-only, and the executor refuses scripted sends.
 
 ## Report archive and previews
 
@@ -131,7 +177,7 @@ The script-facing contract is in [Native Pi codemode scripting](native-codemode.
 - Scripted execution is identified from native `parentToolCallId` provenance on execution-start and admission events. Script evidence cannot be downgraded, model origin requires both observations, and missing evidence fails closed.
 - Scripted starts enforce read-only intent after route resolution and before admission; lifecycle permits only stop. Scripted await and status reject parent attention before consumption, and await leaves questions unacknowledged.
 - Scripted root starts seed an immutable, record-only `scriptOrigin`, inherited by descendants and retry successors. Validation rejects such writers before workspace acquisition, admission rechecks before eviction or pool creation, resume keeps it, and revise cannot admit a script-origin writer.
-- Other coordinator tools and every nested-Pi definition are model-only. These gates don't confine native tools or child capability.
+- Other coordinator tools and every nested-Pi `subagent_*` proxy are model-only; `agent_list` and `agent_read` are script-callable at every Pi depth. These gates don't confine native tools or child capability.
 - `includeDeliveredReports` reveals the latest retained final text only after its outcome was delivered and while no claim owns any generation. It returns no receipt and adds no outbox entry; it is bounded in-memory read-back, not history.
 
 ## Tool result certainty
@@ -202,9 +248,9 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 
 ### Shell coverage
 
-- All eight root coordinator tools and their child proxies use the shared presentation shell and the shared compact setting, projected from decoded domain details.
+- All ten root tools and the child proxies use the shared presentation shell and the shared compact setting, projected from decoded domain details.
 - `contact_parent` uses content-only callbacks; arbitrary replies stay verbatim, prefixed once with `PARENT_REPLY_PREFIX`. Warning calls keep the full warning as issue detail; settled questions and replies decline compaction.
-- The four supervisor tools are served over private MCP and have no Pi renderer.
+- The seven supervisor tools are served over private MCP and have no Pi renderer.
 
 ### Compact issues
 

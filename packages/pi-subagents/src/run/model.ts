@@ -71,6 +71,16 @@ export type SubagentSessionEvent =
       readonly kind: "parent" | "progress" | "warning" | "question";
       readonly text: string;
       readonly createdAt: number;
+    }
+  | {
+      readonly type: "notice";
+      readonly kind: "message";
+      /** `in` for a message this run received, `out` for one it sent. */
+      readonly direction: "in" | "out";
+      /** The other agent: a run ID or `main`. */
+      readonly peer: string;
+      readonly text: string;
+      readonly createdAt: number;
     };
 
 interface PendingParentQuestion {
@@ -170,6 +180,8 @@ export interface SubagentRunView {
   readonly nativeActivity?: SubagentNativeActivity | undefined;
   readonly predecessorRunId?: string | undefined;
   readonly supersededByRunId?: string | undefined;
+  /** Labels the agent whose message resumed the run for its current or last assignment. */
+  readonly resumedBy?: string | undefined;
   readonly remainingCandidateCount?: number | undefined;
   readonly retryExhausted?: boolean | undefined;
   readonly retryBlocked?: boolean | undefined;

@@ -22,7 +22,16 @@ import * as Fiber from "effect/Fiber";
 import { Type } from "typebox";
 import type { ActivityItem } from "pi-cosmic-ui/activity";
 import { activityGalleryFrames } from "pi-cosmic-ui/activity/testing";
-import { renderSubagentMessage } from "../src/application/messages.ts";
+import { renderAgentMessageEntry, renderSubagentMessage } from "../src/application/messages.ts";
+import { AGENT_MESSAGE_TYPE } from "../src/boundary/host-agent-messages.ts";
+import {
+  agentMessageContent,
+  MAIN_AGENT_SENDER,
+  runSender,
+  type AgentListEntry,
+  type AgentSendResult,
+} from "../src/run/agent-messaging.ts";
+import { executeAgentActionEffect } from "../src/tools/execute-agents.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
 import {
   projectSubagentActivityPanel,
@@ -44,6 +53,7 @@ import {
   type SubagentProfileServiceContract,
 } from "../src/profiles/service.ts";
 import {
+  agentMessageRefusal,
   InvalidSubagentRequestError,
   SubagentNotFoundError,
   SubagentProcessError,
@@ -66,7 +76,11 @@ import {
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../src/tools/execute.ts";
 import { awaitExecutionFor } from "../src/tools/execute-await.ts";
 import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../src/tools/outcome.ts";
-import { subagentToolAction, type SubagentToolInput } from "../src/tools/schema.ts";
+import {
+  subagentToolAction,
+  type AgentToolInput,
+  type SubagentToolInput,
+} from "../src/tools/schema.ts";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
 import { revisionReviewText } from "../src/run/workspace-review.ts";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
@@ -662,6 +676,194 @@ const retryRoute: ProfileRouteContinuation = {
   selectedCandidateIndex: 0,
   skippedCandidates: [],
 };
+
+const agentScenario = (title: string, input: AgentToolInput, service: SubagentServiceDoubleInput) =>
+  executeAgentActionEffect(input, { kind: "main" }).pipe(
+    Effect.map((result) => ({ result, isError: false })),
+    Effect.catch((error) => Effect.succeed({ result: textResult(error.message), isError: true })),
+    Effect.provideService(SubagentService, subagentServiceDouble(service)),
+    Effect.map(
+      (executed): ToolScenario => ({ tool: input.tool, title, args: input.args, ...executed }),
+    ),
+  );
+
+const listEntry = (run: SubagentRunView): AgentListEntry => ({
+  id: run.id,
+  name: run.name,
+  kind: "run",
+  state: run.state,
+  parentId: run.parentRunId ?? "main",
+  depth: run.depth ?? 1,
+  runtime: run.runtime,
+  ...(run.profile && { profile: run.profile }),
+  task: run.task,
+  self: false,
+});
+const sessionAgents: ReadonlyArray<AgentListEntry> = [
+  { id: "main", name: "main", kind: "main", state: "busy", self: true },
+  ...[authReview, schemaCheck, docsSweep, apiAudit].map(listEntry),
+];
+const sent = (to: string, name: string, disposition: AgentSendResult["disposition"]) => ({
+  agentSend: () => Effect.succeed({ messageId: "message-1", to, name, disposition }),
+});
+const peerNote = "The refresh test fixtures moved to tests/auth/fixtures; update your imports.";
+
+const agentScenarios = Effect.all([
+  agentScenario(
+    "every agent in the session",
+    { tool: "agent_list", args: {} },
+    { agentList: () => Effect.succeed({ agents: sessionAgents, missingIds: [] }) },
+  ),
+  agentScenario(
+    "one requested agent is gone",
+    { tool: "agent_list", args: { agentIds: ["agent-1", "agent-7"] } },
+    {
+      agentList: () => Effect.succeed({ agents: [listEntry(authReview)], missingIds: ["agent-7"] }),
+    },
+  ),
+  agentScenario(
+    "guidance to a running peer",
+    { tool: "agent_send", args: { to: "agent-4", message: peerNote } },
+    sent("agent-4", "schema-check", "guided"),
+  ),
+  agentScenario(
+    "message wakes the idle main agent",
+    { tool: "agent_send", args: { to: "main", message: "Schema check finished; see my report." } },
+    sent("main", "main", "woken"),
+  ),
+  agentScenario(
+    "message queued for the busy main agent",
+    { tool: "agent_send", args: { to: "main", message: "The CLI flags changed too." } },
+    sent("main", "main", "queued"),
+  ),
+  agentScenario(
+    "main agent holds messages after an interrupt",
+    { tool: "agent_send", args: { to: "main", message: "Done with the audit." } },
+    sent("main", "main", "held"),
+  ),
+  agentScenario(
+    "main agent's wake budget is spent",
+    { tool: "agent_send", args: { to: "main", message: "One more finding." } },
+    {
+      agentSend: () =>
+        Effect.succeed({
+          messageId: "message-4",
+          to: "main",
+          name: "main",
+          disposition: "held",
+          wakeBudgetExhausted: true,
+        }),
+    },
+  ),
+  agentScenario(
+    "message resumes a finished run",
+    { tool: "agent_send", args: { to: "agent-2", message: "Also check docs/cli.md." } },
+    sent("agent-2", "docs-sweep", "resumed"),
+  ),
+  agentScenario(
+    "finished Codex run can't resume",
+    { tool: "agent_send", args: { to: "agent-3", message: "Recheck v0.2." } },
+    {
+      agentSend: () =>
+        Effect.fail(
+          agentMessageRefusal(
+            "agent_resume_unsupported",
+            "Agent agent-3 on local/codex is completed and cannot be resumed.",
+          ),
+        ),
+    },
+  ),
+  agentScenario(
+    "too many messages",
+    { tool: "agent_send", args: { to: "agent-1", message: "Ping again." } },
+    {
+      agentSend: () =>
+        Effect.fail(
+          agentMessageRefusal(
+            "agent_rate_limited",
+            "Too many agent messages; wait 4 seconds before messaging agent-1 again.",
+          ),
+        ),
+    },
+  ),
+  agentScenario(
+    "main and a finished run",
+    { tool: "agent_read", args: { agentIds: ["main", "agent-2"] } },
+    {
+      agentRead: () =>
+        Effect.succeed({
+          agents: [
+            {
+              kind: "main",
+              id: "main",
+              name: "main",
+              state: "busy",
+              textStatus: "text",
+              text: "I'm splitting the auth review: agent-1 covers refresh, agent-4 the schema.\nNext I'll merge their findings.",
+              truncated: false,
+            },
+            {
+              kind: "run",
+              id: docsSweep.id,
+              name: docsSweep.name,
+              state: "completed",
+              textStatus: "text",
+              text: docsSweep.finalText,
+              truncated: false,
+              source: "report",
+              reportGeneration: 1,
+            },
+          ],
+          missingIds: [],
+        }),
+    },
+  ),
+  agentScenario(
+    "running agent without a message yet",
+    { tool: "agent_read", args: { agentIds: ["agent-4"] } },
+    {
+      agentRead: () =>
+        Effect.succeed({
+          agents: [
+            {
+              kind: "run",
+              id: schemaCheck.id,
+              name: schemaCheck.name,
+              state: "running",
+              textStatus: "none",
+              truncated: false,
+              reportGeneration: 0,
+            },
+          ],
+          missingIds: [],
+        }),
+    },
+  ),
+]);
+
+const agentMessage = (title: string, from: SubagentRunView | undefined, text: string) => ({
+  title,
+  message: {
+    role: "custom" as const,
+    timestamp: 0,
+    customType: AGENT_MESSAGE_TYPE,
+    display: true,
+    content: agentMessageContent(from ? runSender(from) : MAIN_AGENT_SENDER, text),
+    details: {
+      from: from?.id ?? "main",
+      fromName: from?.name ?? "main",
+      to: "main",
+      messageId: "message-1",
+    },
+  },
+});
+const agentMessageScenarios: ReadonlyArray<GalleryMessageScenario> = [
+  agentMessage(
+    "peer reports a finding",
+    schemaCheck,
+    `${peerNote}\nI kept the old paths as re-exports.`,
+  ),
+];
 
 const lifecycleScenarios = Effect.all([
   scenario(
@@ -1728,6 +1930,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...(yield* messagingScenarios),
         ...(yield* lifecycleScenarios),
         ...(yield* workspaceScenarios),
+        ...(yield* agentScenarios),
       ];
       const scenarios = [...executed, ...receiptScenarios, ...parentScenarios];
       const lines: string[] = [];
@@ -1751,6 +1954,13 @@ describe.skipIf(!directory)("presentation gallery", () => {
           for (const entry of messageScenarios)
             lines.push(
               ...galleryMessageFrames(renderSubagentMessage, {
+                ...entry,
+                title: `${style} · ${entry.message.customType} · ${entry.title}`,
+              }),
+            );
+          for (const entry of agentMessageScenarios)
+            lines.push(
+              ...galleryMessageFrames(renderAgentMessageEntry, {
                 ...entry,
                 title: `${style} · ${entry.message.customType} · ${entry.title}`,
               }),

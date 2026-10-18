@@ -177,12 +177,14 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     )
       return;
     const warning = foldRunWarnings(record.warningSlots);
+    const resumedBy = record.assignment.resumedBy;
     delivery.insertCompletionLocked(record, {
       outcome: state,
       ...(finalText && { finalText }),
       ...(state === "failed" && { error: settledError }),
       generation: ++record.completionGeneration,
       ...(warning && { warning }),
+      ...(resumedBy !== undefined && { resumedBy }),
     });
   };
 

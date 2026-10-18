@@ -114,6 +114,21 @@ describe("report disposition", () => {
   });
 });
 
+describe("run targets", () => {
+  it("name the agent whose message resumed the run", () => {
+    const resumedBy = 'agent-r1-3 "api-scout" (scout, child of main)';
+    const contract = decoded(
+      "subagent_status",
+      statusContract({
+        observations: [{ run: finished("a", { assignmentEpoch: 2, resumedBy }) }],
+        fullyRenderedIds: new Set(),
+        missingRunIds: [],
+      }),
+    );
+    expect(contract.targets[0]).toMatchObject({ runId: "a", resumedBy });
+  });
+});
+
 describe("await contract", () => {
   it("cancels without exposing or consuming any report and keeps requested IDs", () => {
     const secretReport = "FINAL REPORT BODY";

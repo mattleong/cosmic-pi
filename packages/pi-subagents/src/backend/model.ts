@@ -15,6 +15,7 @@ import type {
   SubagentUsage,
   SubagentCleanupDiagnostic,
 } from "../run/model.ts";
+import type { AgentListResult, AgentReadResult, AgentSendResult } from "../run/agent-messaging.ts";
 import type { LocalCliVersion } from "./local-cli-version.ts";
 
 export type BackendResumeToken = object;
@@ -52,6 +53,13 @@ export interface BackendLaunchRequest {
   readonly workspaceParent?: boolean | undefined;
   readonly resumeToken?: BackendResumeToken | undefined;
   readonly systemPrompt: string;
+}
+
+/** `agent_*` operations the root has already bound to the launched run as their caller. */
+export interface BackendAgentMessaging {
+  readonly list: (ids?: ReadonlyArray<string>) => Effect.Effect<AgentListResult, SubagentError>;
+  readonly send: (to: string, message: string) => Effect.Effect<AgentSendResult, SubagentError>;
+  readonly read: (ids: ReadonlyArray<string>) => Effect.Effect<AgentReadResult, SubagentError>;
 }
 
 export interface BackendStartupState {
@@ -219,6 +227,7 @@ export interface BackendDriver {
   readonly cliVersion?: Effect.Effect<LocalCliVersion> | undefined;
   readonly spawn: (
     request: BackendLaunchRequest,
+    agents?: BackendAgentMessaging,
   ) => Effect.Effect<BackendHandle, SubagentError, Scope.Scope>;
   readonly reclaimRunState?:
     | ((request: {

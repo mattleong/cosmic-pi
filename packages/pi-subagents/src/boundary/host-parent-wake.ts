@@ -10,16 +10,14 @@ import {
   countLabel,
   invokeHostCallback,
   notifyAtHostBoundary,
+  registerSessionWake,
   sanitizeTerminalLine,
+  type SessionWake,
 } from "pi-cosmic-core";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
-import {
-  COMPLETION_MESSAGE_TYPE,
-  type NoticeDelivery,
-  QUESTION_MESSAGE_TYPE,
-} from "./host-notifier.ts";
-import { hasUnansweredNotice } from "./notice-wake.ts";
+import { AGENT_MESSAGE_TYPE } from "./host-agent-messages.ts";
+import { COMPLETION_MESSAGE_TYPE, QUESTION_MESSAGE_TYPE } from "./host-notifier.ts";
 
 const QUESTION_REMINDER_MESSAGE_TYPE = "pi-subagents-question-reminder";
 export const WAKE_MESSAGE_TYPE = "pi-subagents-wake";
@@ -27,13 +25,11 @@ export const WAKE_MESSAGE_TYPE = "pi-subagents-wake";
 const ROOT_NOTICE_TYPES: ReadonlySet<string> = new Set([
   COMPLETION_MESSAGE_TYPE,
   QUESTION_MESSAGE_TYPE,
+  AGENT_MESSAGE_TYPE,
 ]);
 
-// After a compaction the parent becomes idle once the host finishes its own handlers.
-const IDLE_CHECK_LIMIT = 40;
-
 const WAKE_TEXT =
-  "Subagent updates arrived while you were busy and are shown above. Act on them now: answer any question with subagent_send, review reports, and continue the task.";
+  "Subagent updates or agent messages arrived while you were busy and are shown above. Act on them now: answer any question with subagent_send, review reports, reply to agent messages with agent_send only when it helps, and continue the task.";
 
 interface ParentWakeHost {
   readonly projection: () => SubagentProjection;
@@ -43,11 +39,6 @@ interface ParentWakeHost {
   readonly isIdle: () => boolean;
   /** Runs `check` again shortly, outside the current host callback. */
   readonly later: (check: () => void) => void;
-}
-
-interface ParentWake extends NoticeDelivery {
-  /** Holds wakes for the rest of this session, as it shuts down. */
-  readonly hold: () => void;
 }
 
 type PendingQuestion = SubagentRunView & {
@@ -102,87 +93,37 @@ const settleResult = (
   shouldContinue ? { entries: [...entries, ...added], continue: true } : undefined;
 
 /**
- * Owns when finished children may wake the root session. A notice starts a turn only while the
- * parent is idle. While the parent is busy Pi appends it at the end of the current turn, outside
- * the steering queue that Esc, dequeue, and tree navigation clear, and this owner continues the
- * settling run so the model sees it. A user interrupt holds wakes until the user's next prompt; a
- * pending child question gets one reminder before the turn settles; and a headless parent waits for
- * running children instead of exiting under them.
+ * Owns when finished children may wake the root session, on the shared session wake: a notice
+ * starts a turn only while the parent is idle, appends while it is busy and continues the settling
+ * run, and holds after a user interrupt until the user's next prompt. A pending child question gets
+ * one reminder before the turn settles, and a headless parent waits for running children instead of
+ * exiting under them.
  */
-export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): ParentWake {
-  let held = false;
-  // A notice was appended without a turn and no settle boundary has shown it to the model yet.
-  let owed = false;
+export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): SessionWake {
   const reminded = new Set<string>();
   const escalated = new Set<string>();
 
-  const wake = (): void => {
-    owed = false;
-    invokeHostCallback(() => {
-      pi.sendMessage(
-        { customType: WAKE_MESSAGE_TYPE, content: WAKE_TEXT, display: false },
-        { triggerTurn: true },
-      );
-    }, undefined);
-  };
-  const wakeWhenIdle = (checks = 0): void => {
-    if (!owed || held) return;
-    if (invokeHostCallback(host.isIdle, false)) {
-      wake();
-      return;
-    }
-    if (checks < IDLE_CHECK_LIMIT) host.later(() => wakeWhenIdle(checks + 1));
-  };
-
-  pi.on("agent_settled", (event, ctx) => {
-    if (!event.aborted) {
-      // A notice that arrived after the last settle boundary still needs a turn.
-      if (owed && !held) wake();
-      return;
-    }
-    held = true;
-    owed = false;
-    const active = host.projection().runs.filter((run) => isActiveRunState(run.state)).length;
-    if (active > 0 && hasUi(ctx))
-      notifyAtHostBoundary(
-        ctx,
-        `${countLabel(active, "subagent")} still active; updates will wait for your next prompt`,
-        "info",
-      );
-  });
-
-  pi.on("input", (event) => {
-    if (event.source !== "extension") held = false;
-  });
-
-  pi.on("session_start", () => {
-    held = false;
-    owed = false;
-  });
-
-  // Notices owed a turn and question reminders belong to the branch the user left.
+  // Question reminders belong to the branch the user left.
   pi.on("session_tree", () => {
-    owed = false;
     reminded.clear();
     escalated.clear();
   });
 
-  // A manual compaction makes the parent busy without a run; wake it once compaction ends.
-  pi.on("session_compact", () => wakeWhenIdle());
-  pi.on("session_compact_failed", () => wakeWhenIdle());
-
-  pi.on(
-    "agent_before_settle",
-    (
-      event,
-      ctx,
-    ):
-      | AgentBeforeSettleEventResult
-      | Promise<AgentBeforeSettleEventResult | undefined>
-      | undefined => {
-      if (event.outcome !== "completed") return undefined;
-      const landed = !held && hasUnansweredNotice(event.context, ROOT_NOTICE_TYPES);
-      owed = false;
+  return registerSessionWake(pi, {
+    noticeTypes: ROOT_NOTICE_TYPES,
+    wakeMessage: { customType: WAKE_MESSAGE_TYPE, content: WAKE_TEXT },
+    isIdle: host.isIdle,
+    later: host.later,
+    onInterrupt: (ctx) => {
+      const active = host.projection().runs.filter((run) => isActiveRunState(run.state)).length;
+      if (active > 0 && hasUi(ctx))
+        notifyAtHostBoundary(
+          ctx,
+          `${countLabel(active, "subagent")} still active; updates will wait for your next prompt`,
+          "info",
+        );
+    },
+    beforeSettle: (event, ctx, settle) => {
       const questions = pendingQuestions(host.projection());
       const live = new Set(questions.map(questionKey));
       for (const key of reminded) if (!live.has(key)) reminded.delete(key);
@@ -203,16 +144,15 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
           );
         }
       }
-      const result = settleResult(event.entries, reminder, landed || fresh.length > 0);
+      const result = settleResult(event.entries, reminder, settle.landed || fresh.length > 0);
       if (result || !isHeadless(ctx)) return result;
       if (!host.projection().runs.some((run) => isActiveRunState(run.state))) return undefined;
       // Notices delivered while draining are appended at this boundary, after the last reply.
       return host.drain()?.then(() => {
-        const arrived = owed && !held;
-        owed = false;
+        const arrived = settle.takeOwed();
         // Drain may stop for a question before its notifier can acquire the delivery gate.
         // Continue with the same one-per-question reminder instead of exiting without showing it.
-        const arrivedQuestions = held
+        const arrivedQuestions = settle.held()
           ? []
           : pendingQuestions(host.projection()).filter((run) => !reminded.has(questionKey(run)));
         for (const run of arrivedQuestions) reminded.add(questionKey(run));
@@ -223,17 +163,5 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Pare
         );
       });
     },
-  );
-
-  return {
-    deliver: (send) => {
-      const startTurn = !held && invokeHostCallback(host.isIdle, false);
-      const accepted = send(startTurn);
-      if (accepted && !startTurn && !held) owed = true;
-      return accepted;
-    },
-    hold: () => {
-      held = true;
-    },
-  };
+  });
 }

@@ -1,6 +1,6 @@
 import {
   retireRunUsageLocked,
-  sessionUsageLocked,
+  spentAtLimitLocked,
   type SessionUsageLedger,
 } from "./session-usage.ts";
 import * as Cause from "effect/Cause";
@@ -175,8 +175,8 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
 
   const spendLimitLocked = (spendLimit: number | undefined) =>
     Effect.gen(function* () {
-      const spent = sessionUsageLocked(dependencies.sessionUsage, records).cost ?? 0;
-      if (spendLimit !== undefined && spent >= spendLimit)
+      const spent = spentAtLimitLocked(dependencies.sessionUsage, records, spendLimit);
+      if (spendLimit !== undefined && spent !== undefined)
         return yield* new SubagentCapacityError({
           limit: spendLimit,
           code: "session_spend_limit",

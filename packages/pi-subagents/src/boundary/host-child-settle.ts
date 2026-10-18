@@ -4,8 +4,7 @@ import type {
   CustomMessageEntryDraft,
   ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { invokeHostCallback } from "pi-cosmic-core";
-import { hasUnansweredNotice } from "./notice-wake.ts";
+import { hasUnansweredNotice, invokeHostCallback } from "pi-cosmic-core";
 
 export const PROXY_NOTIFICATION_MESSAGE_TYPE = "pi-subagents-proxy-notification";
 export const FINAL_REPORT_REMINDER_MESSAGE_TYPE = "pi-subagents-final-report-reminder";

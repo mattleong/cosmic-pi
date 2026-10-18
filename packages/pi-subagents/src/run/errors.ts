@@ -50,6 +50,24 @@ export const processError = (
 export const invalidRequest = (code: string, message: string): InvalidSubagentRequestError =>
   new InvalidSubagentRequestError({ code, message });
 
+/** Refusals of `agent_*` messaging; each is an `InvalidSubagentRequestError` code. */
+export const AGENT_MESSAGE_REFUSAL_CODES = [
+  "agent_self_target",
+  "agent_not_found",
+  "agent_unavailable",
+  "agent_resume_unsupported",
+  "agent_rate_limited",
+  "agent_message_budget_exhausted",
+  "agent_wake_budget_exhausted",
+  "agent_spend_limit",
+] as const;
+export type AgentMessageRefusalCode = (typeof AGENT_MESSAGE_REFUSAL_CODES)[number];
+
+export const agentMessageRefusal = (
+  code: AgentMessageRefusalCode,
+  message: string,
+): InvalidSubagentRequestError => invalidRequest(code, message);
+
 export const runNotFound = (id: string): SubagentNotFoundError =>
   new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` });
 

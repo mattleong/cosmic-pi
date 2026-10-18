@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { BackendHandle } from "../backend/model.ts";
+import type { BackendAgentMessaging, BackendHandle } from "../backend/model.ts";
 import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import type { SubagentError } from "./errors.ts";
 import { invalidRequest, SubagentProcessError } from "./errors.ts";
@@ -61,6 +61,8 @@ interface RunProcessInitializerDependencies extends Pick<
   readonly markCleanupPending: RunRecordCleanup["markCleanupPending"];
   readonly closeExitedScope: RunRecordCleanup["closeExitedScope"];
   readonly failRun: RunSettlement["failRun"];
+  /** `agent_*` operations bound to the run as their caller, for backends that host the tools. */
+  readonly agentMessagingFor?: ((runId: string) => BackendAgentMessaging) | undefined;
 }
 
 export function processInitializer(dependencies: RunProcessInitializerDependencies) {
@@ -74,6 +76,7 @@ export function processInitializer(dependencies: RunProcessInitializerDependenci
     markCleanupPending,
     closeExitedScope,
     failRun,
+    agentMessagingFor,
   } = dependencies;
 
   const installProcess = (record: RunRecord) => {
@@ -104,7 +107,7 @@ export function processInitializer(dependencies: RunProcessInitializerDependenci
             `Subagent ${record.view.id} was stopped before backend spawn.`,
           );
         return yield* record.driver
-          .spawn(record.launch)
+          .spawn(record.launch, agentMessagingFor?.(record.view.id))
           .pipe(Effect.provideService(Scope.Scope, scope));
       }).pipe(
         Effect.ensuring(

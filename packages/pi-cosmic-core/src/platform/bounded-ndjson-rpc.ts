@@ -1,10 +1,16 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import { utf8ByteLength } from "../text.ts";
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-export const supervisorRpcSerialization = (
+/**
+ * Newline-delimited JSON RPC framing that bounds every frame, complete or still buffered, to
+ * `maxBufferSize` UTF-8 bytes. An oversized or malformed frame throws, so the transport closes the
+ * peer instead of buffering without limit. Each parser keeps its own partial frame.
+ */
+export const boundedNdjsonRpcSerialization = (
   maxBufferSize: number,
 ): RpcSerialization.RpcSerialization["Service"] => {
   const ndjson = RpcSerialization.makeNdjson({ maxBufferSize });
@@ -30,13 +36,13 @@ export const supervisorRpcSerialization = (
           let newline = buffer.indexOf("\n", position);
           while (newline !== -1) {
             const line = buffer.slice(position, newline);
-            checkSize(Buffer.byteLength(line, "utf8"));
+            checkSize(utf8ByteLength(line));
             if (line.length > 0) messages.push(decodeJson(line));
             position = newline + 1;
             newline = buffer.indexOf("\n", position);
           }
           buffer = buffer.slice(position);
-          checkSize(Buffer.byteLength(buffer, "utf8"));
+          checkSize(utf8ByteLength(buffer));
           return messages;
         },
       };

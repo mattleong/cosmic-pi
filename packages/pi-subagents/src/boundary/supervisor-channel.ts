@@ -1,5 +1,9 @@
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
-import { makeTokenVerifier, synchronousRandomHex } from "pi-cosmic-core";
+import {
+  boundedNdjsonRpcSerialization,
+  makeTokenVerifier,
+  synchronousRandomHex,
+} from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import type * as Cause from "effect/Cause";
@@ -13,9 +17,9 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
-import { supervisorRpcSerialization } from "./supervisor-rpc-serialization.ts";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as Predicate from "effect/Predicate";
+import type { BackendAgentMessaging } from "../backend/model.ts";
 import {
   isSupervisorRunId,
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
@@ -96,6 +100,8 @@ export interface SupervisorChannelContract {
 
 interface SupervisorChannelOpenRequest {
   readonly runId: string;
+  /** The run's own `agent_*` operations; without them the agent tools are unavailable. */
+  readonly agents?: BackendAgentMessaging | undefined;
 }
 
 export interface SupervisorChannelLayerOptions {
@@ -286,6 +292,7 @@ const acquireNodeChannelEffect = (
   options: SupervisorChannelLayerOptions,
   runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
+  agents: BackendAgentMessaging | undefined,
 ): Effect.Effect<
   {
     readonly handle: SupervisorChannelHandle;
@@ -356,6 +363,7 @@ const acquireNodeChannelEffect = (
           runId,
           verifyToken,
           events,
+          agents,
         });
         const close = Effect.gen(function* () {
           yield* session.shutdown;
@@ -372,7 +380,7 @@ const acquireNodeChannelEffect = (
         });
         acquisition.close = close;
         const handle: SupervisorChannelHandle = { metadata, events, ...session.controls };
-        const serialization = supervisorRpcSerialization(MAX_SUPERVISOR_CHANNEL_LINE_BYTES);
+        const serialization = boundedNdjsonRpcSerialization(MAX_SUPERVISOR_CHANNEL_LINE_BYTES);
         const protocol = yield* supervisorRpcServerProtocol({
           server: baseServer,
           authTimeoutMillis: options.authTimeoutMillis ?? AUTH_TIMEOUT_MILLIS,
@@ -440,7 +448,7 @@ export const makeSupervisorChannel = (
     const runId: SupervisorRunId = request.runId;
     const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
     const { handle } = yield* Effect.acquireRelease(
-      acquireNodeChannelEffect(options, runId, events),
+      acquireNodeChannelEffect(options, runId, events, request.agents),
       ({ close }) => close.pipe(Effect.orDie),
       { interruptible: true },
     );

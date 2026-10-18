@@ -35,6 +35,17 @@ export const sessionUsageLocked = (
   return total;
 };
 
+/** What the session's subagents have spent, once that reaches `spendLimit`. */
+export const spentAtLimitLocked = (
+  ledger: SessionUsageLedger,
+  records: ReadonlyMap<string, RunRecord>,
+  spendLimit: number | undefined,
+): number | undefined => {
+  if (spendLimit === undefined) return undefined;
+  const spent = sessionUsageLocked(ledger, records).cost ?? 0;
+  return spent >= spendLimit ? spent : undefined;
+};
+
 const usageSince = (current: SubagentUsage, recorded: SubagentUsage): SubagentUsage => {
   const cost = current.cost === undefined ? undefined : current.cost - (recorded.cost ?? 0);
   return {

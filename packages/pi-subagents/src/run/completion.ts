@@ -62,6 +62,7 @@ const completionNotification = (
     ...(completion.finalText && { finalText: completion.finalText }),
     ...(completion.error && { error: completion.error }),
     ...(completion.warning && { warning: completion.warning }),
+    ...(completion.resumedBy !== undefined && { resumedBy: completion.resumedBy }),
     ...(record.view.profile && { profile: record.view.profile }),
     ...(retryAvailable && { retryAvailable: true, remainingCandidateCount }),
     ...(record.view.workspaceId !== undefined && { workspaceId: record.view.workspaceId }),

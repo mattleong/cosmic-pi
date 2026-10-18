@@ -24,6 +24,17 @@ const INITIALIZATION_PROBE = "pi-subagents native initialization probe";
 
 export type ClaudeInitProtocolEvent = Extract<ClaudeProtocolEvent, { readonly type: "init" }>;
 
+/** The private server must expose exactly the supervisor tool set, no more and no fewer. */
+export const hasSupervisorToolInventory = (
+  tools: ReadonlyArray<{ readonly name: string }>,
+): boolean => {
+  const inventory = new Set(tools.map((tool) => tool.name));
+  return (
+    inventory.size === SUPERVISOR_MCP_TOOL_NAMES.length &&
+    SUPERVISOR_MCP_TOOL_NAMES.every((tool) => inventory.has(tool))
+  );
+};
+
 const nativeInitializationFailure = (
   native: ClaudeInitProtocolEvent,
   request: Pick<BackendLaunchRequest, "model" | "cwd">,
@@ -188,8 +199,7 @@ export const localClaudeControl = (
           (candidate) => candidate.name === SUPERVISOR_MCP_REGISTRATION,
         );
         if (server?.status === "connected") {
-          const inventory = new Set(server.tools?.map((tool) => tool.name));
-          if (!SUPERVISOR_MCP_TOOL_NAMES.every((tool) => inventory.has(tool)))
+          if (!hasSupervisorToolInventory(server.tools ?? []))
             return yield* processError(
               "initialize",
               "claude_supervisor_tools_missing",

@@ -1,7 +1,9 @@
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { captureCodePreviewPresentationPolicy } from "pi-code-previews";
 import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
+import { AGENT_MESSAGE_TYPE } from "../boundary/host-agent-messages.ts";
 import { STOPPED_RUNS_MESSAGE_TYPE } from "../boundary/host-stopped-runs.ts";
+import { renderAgentMessage } from "../ui/agent-message.ts";
 import { renderSubagentNotification } from "../ui/notification.ts";
 import type { WorkspaceSwept } from "../workspace/model.ts";
 
@@ -13,7 +15,16 @@ export const renderSubagentMessage: MessageRenderer = (message, options, theme) 
     theme,
   );
 
+export const renderAgentMessageEntry: MessageRenderer = (message, options, theme) =>
+  renderAgentMessage(
+    message,
+    options,
+    captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
+    theme,
+  );
+
 export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
+  pi.registerMessageRenderer(AGENT_MESSAGE_TYPE, renderAgentMessageEntry);
   for (const type of [
     "pi-subagents-completed",
     "pi-subagents-question",

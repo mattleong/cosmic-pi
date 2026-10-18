@@ -74,6 +74,18 @@ export {
 } from "./src/host-command.ts";
 export { makeSessionCapabilityProtocol, querySessionCapability } from "./src/session-capability.ts";
 export {
+  hasUnansweredNotice,
+  registerSessionWake,
+  type SessionWake,
+  type SessionWakeBudget,
+  type SessionWakeDelivery,
+  type SessionWakeOptions,
+  type SessionWakeSettle,
+  type SessionWakeSettleResult,
+} from "./src/host-wake.ts";
+export { latestAssistantText, type AssistantText } from "./src/host-transcript.ts";
+export { isSubagentChildProcess } from "./src/host-environment.ts";
+export {
   safeTextPrefix,
   safeTextSuffix,
   utf8ByteLength,
@@ -150,6 +162,7 @@ export { synchronousMonotonicNow, synchronousNow } from "./src/platform/native-c
 export { synchronousRandomHex, synchronousRandomUuid } from "./src/platform/native-crypto.ts";
 export { sha256Text } from "./src/security/sha256.ts";
 export { makeTokenVerifier, type TokenVerifier } from "./src/platform/token-verifier.ts";
+export { boundedNdjsonRpcSerialization } from "./src/platform/bounded-ndjson-rpc.ts";
 export {
   extractJwtClaim,
   hasControlCharacter,

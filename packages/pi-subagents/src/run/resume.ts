@@ -15,6 +15,7 @@ import { beginNextAssignmentLocked, type RunAssignment } from "./assignment.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateParentMessage } from "./tool-policy.ts";
 import {
+  agentMessageRefusal,
   invalidRequest,
   type InvalidSubagentRequestError,
   processError,
@@ -43,6 +44,7 @@ import type { WriterPoolLookup, WriterPools } from "./writer-pool.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
+import { spentAtLimitLocked } from "./session-usage.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { snapshotView } from "./state.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
@@ -101,6 +103,14 @@ const resumeUnavailableError = (record: RunRecord): InvalidSubagentRequestError 
   );
 };
 
+/** An agent message that resumes a run; any agent in the tree may send one. */
+export interface AgentMessageResume {
+  /** Labels the sender in the resumed assignment's report notice. */
+  readonly resumedBy: string;
+  /** Records the message in the run's session events, in place of the parent's resume notice. */
+  readonly recordNoticeLocked: (record: RunRecord, now: number) => void;
+}
+
 interface ClaimedResume {
   readonly record: RunRecord;
   readonly needsRespawn: boolean;
@@ -117,9 +127,12 @@ interface RunResumeDependencies extends Pick<
   | "requireRecord"
   | "allocateAssignmentAttemptToken"
   | "sendPeerNotices"
+  | "sessionUsage"
 > {
   readonly writerPools: WriterPoolLookup & Pick<WriterPools, "joinLocked">;
   readonly currentNesting: Effect.Effect<SubagentNestingPolicy>;
+  /** The root's `sessionSpendLimit`, which also stops agent messages from resuming runs. */
+  readonly currentSpendLimit: Effect.Effect<number | undefined>;
   readonly delivery: RunNotificationDelivery;
   readonly initializeProcess: RunProcessInitializer;
   readonly assignment: RunAssignment;
@@ -145,6 +158,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
     closeRecordScope,
     workspaces,
     sendPeerNotices,
+    sessionUsage,
   } = dependencies;
 
   const waitForRunCleanup = (id: string) =>
@@ -197,6 +211,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
     claimed: ClaimedResume,
     prompt: string,
     now: number,
+    agentMessage: AgentMessageResume | undefined,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
       const record = claimed.record;
@@ -264,15 +279,17 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
         Effect.gen(function* () {
           const resumed = claimed.record;
           if (issued.state !== "running") return snapshotView(resumed.view);
-          resumed.view = {
-            ...resumed.view,
-            sessionEvents: appendNoticeSessionEvent(
-              resumed.view.sessionEvents,
-              "parent",
-              `Resume: ${prompt}`,
-              now,
-            ),
-          };
+          if (agentMessage) agentMessage.recordNoticeLocked(resumed, now);
+          else
+            resumed.view = {
+              ...resumed.view,
+              sessionEvents: appendNoticeSessionEvent(
+                resumed.view.sessionEvents,
+                "parent",
+                `Resume: ${prompt}`,
+                now,
+              ),
+            };
           yield* publish;
           return snapshotView(resumed.view);
         }),
@@ -312,6 +329,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
     id: string,
     message?: string,
     expected?: SubagentControlExpectation,
+    agentMessage?: AgentMessageResume,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     waitForRunCleanup(id).pipe(
       Effect.andThen(
@@ -334,6 +352,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
       ),
       Effect.flatMap((candidate) =>
         Effect.gen(function* () {
+          const spendLimit = agentMessage ? yield* dependencies.currentSpendLimit : undefined;
           const currentCwd = candidate.validateCwd
             ? yield* canonicalizeWriterCwd(writerLeases, candidate.cwd)
             : undefined;
@@ -400,6 +419,13 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             yield* requireCapability(selected, "resume");
             const stateFailure = resumeStateError(selected);
             if (stateFailure) return yield* stateFailure;
+            // Like a new start, a resume by an agent message spends under the session's limit.
+            const spent = spentAtLimitLocked(sessionUsage, records, spendLimit);
+            if (spendLimit !== undefined && spent !== undefined)
+              return yield* agentMessageRefusal(
+                "agent_spend_limit",
+                `This session's subagents have spent $${spent.toFixed(2)} of its $${spendLimit.toFixed(2)} limit (sessionSpendLimit); agent messages can't resume ${id}.`,
+              );
             const needsRespawn = selected.process === undefined;
             if (needsRespawn && !selected.resumeToken)
               return yield* resumeUnavailableError(selected);
@@ -436,10 +462,13 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                     ? Deferred.makeUnsafe<void>()
                     : undefined;
                   selected.pendingInitializationSettlement = undefined;
-                  beginNextAssignmentLocked(selected, attemptToken, now, {
-                    question: undefined,
-                    currentTool: undefined,
-                  });
+                  beginNextAssignmentLocked(
+                    selected,
+                    attemptToken,
+                    now,
+                    { question: undefined, currentTool: undefined },
+                    agentMessage?.resumedBy,
+                  );
                   invalidateWorkspace();
                   yield* publish;
                   return { record: selected, needsRespawn, attemptToken };
@@ -447,7 +476,8 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
               );
               return { prompt, now, claimed };
             }),
-            (admitted) => commitResume(id, admitted.claimed, admitted.prompt, admitted.now),
+            (admitted) =>
+              commitResume(id, admitted.claimed, admitted.prompt, admitted.now, agentMessage),
           );
         }),
       ),

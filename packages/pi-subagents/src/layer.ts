@@ -55,6 +55,7 @@ export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly restoredSessionUsage?: SubagentServiceOptions["restoredSessionUsage"];
   readonly recordSessionUsage?: SubagentServiceOptions["recordSessionUsage"];
   readonly notify: SubagentNotifier;
+  readonly agentMain?: SubagentServiceOptions["agentMain"];
   readonly proxyHandler: NonNullable<SubagentServiceOptions["proxyHandler"]>;
   readonly questionnaireHandler: NonNullable<SubagentServiceOptions["questionnaireHandler"]>;
 }
@@ -90,6 +91,7 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         restoredSessionUsage: options.restoredSessionUsage,
         recordSessionUsage: options.recordSessionUsage,
         notify: options.notify,
+        agentMain: options.agentMain,
         questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: inspection.config.writerWorkspaceMode,
         worktreeCreate: hooks.WorktreeCreate,

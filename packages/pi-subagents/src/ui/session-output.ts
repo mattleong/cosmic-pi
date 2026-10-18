@@ -155,7 +155,13 @@ const NOTICE_STYLES = {
   question: { glyph: managerNoticeGlyph("warning"), color: "warning" },
   warning: { glyph: managerNoticeGlyph("warning"), color: "warning" },
   progress: { glyph: "…", color: "muted" },
+  message: { glyph: "✉", color: "muted" },
 } as const;
+
+const noticeText = (event: NoticeEvent): string =>
+  event.kind === "message"
+    ? `${event.direction === "in" ? "From" : "To"} ${event.peer}: ${event.text}`
+    : event.text;
 
 const addStyledRow = (
   container: Container,
@@ -223,7 +229,7 @@ const addLiveActivity = (
   for (const item of items) {
     if (item.type === "tools") addToolGroup(container, item.events, theme, frame);
     else if (item.type === "assistant") addAssistantMessage(container, item.event.text, theme);
-    else addStyledRow(container, NOTICE_STYLES[item.event.kind], item.event.text, theme);
+    else addStyledRow(container, NOTICE_STYLES[item.event.kind], noticeText(item.event), theme);
   }
   const noticeKinds = new Set(
     items.flatMap((item) => (item.type === "notice" ? [item.event.kind] : [])),

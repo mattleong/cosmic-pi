@@ -11,6 +11,7 @@ const packages = [
   "pi-background-task",
   "pi-ask-user",
   "pi-better-openai",
+  "pi-intercom",
 ];
 const outIndex = process.argv.indexOf("--out");
 const outArgument = outIndex >= 0 ? process.argv[outIndex + 1] : undefined;

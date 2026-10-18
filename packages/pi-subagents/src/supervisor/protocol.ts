@@ -4,10 +4,13 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import type { BackendEvent } from "../backend/model.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
 import {
+  MAX_SUPERVISOR_MCP_AGENT_ID_CHARS,
+  MAX_SUPERVISOR_MCP_AGENT_IDS,
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
   MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
   MAX_SUPERVISOR_MCP_THREAD_ID_CHARS,
+  SUPERVISOR_MCP_AGENT_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
 } from "./mcp-contract.ts";
@@ -24,6 +27,7 @@ const CHANNEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const DELIVERY_ID_PATTERN = new RegExp(SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE);
 const NONBLANK_PATTERN = new RegExp(SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE);
 const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+const AGENT_ID_PATTERN = new RegExp(SUPERVISOR_MCP_AGENT_ID_PATTERN_SOURCE);
 
 export const SupervisorRunIdSchema = Schema.String.check(
   Schema.isMinLength(1),
@@ -183,6 +187,93 @@ const SupervisorReportRpc = Rpc.make("SupervisorReport", {
   error: SupervisorRpcFailure,
 });
 
+/** A refusal the child's model can act on, such as a rate limit or an unknown agent. */
+export class SupervisorAgentRefusal extends Schema.TaggedError<SupervisorAgentRefusal>()(
+  "SupervisorAgentRefusal",
+  {
+    code: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+    message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+  },
+) {}
+
+export const MAX_SUPERVISOR_AGENT_NAME_CHARS = 128;
+export const MAX_SUPERVISOR_AGENT_READ_CHARS = 32 * 1024;
+const boundedLabel = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_SUPERVISOR_AGENT_NAME_CHARS),
+);
+const AgentStateSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32));
+export const SupervisorAgentIdSchema = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_SUPERVISOR_MCP_AGENT_ID_CHARS),
+  Schema.isPattern(AGENT_ID_PATTERN),
+);
+const AgentIdsSchema = Schema.Array(SupervisorAgentIdSchema).check(
+  Schema.isMaxLength(MAX_SUPERVISOR_MCP_AGENT_IDS),
+);
+const AgentRefusalError = Schema.Union([SupervisorRpcFailure, SupervisorAgentRefusal]);
+
+const SupervisorAgentListRpc = Rpc.make("SupervisorAgentList", {
+  payload: { ...AssignedPayload, ids: Schema.optional(AgentIdsSchema) },
+  success: Schema.Struct({
+    agents: Schema.Array(
+      Schema.Struct({
+        id: SupervisorAgentIdSchema,
+        name: boundedLabel,
+        kind: Schema.Literals(["main", "run"]),
+        state: AgentStateSchema,
+        parentId: Schema.optional(SupervisorAgentIdSchema),
+        runtime: Schema.optional(boundedLabel),
+        profile: Schema.optional(boundedLabel),
+        agent: Schema.optional(boundedLabel),
+        self: Schema.Boolean,
+      }),
+    ),
+    missingIds: AgentIdsSchema,
+  }),
+  error: AgentRefusalError,
+});
+
+const SupervisorAgentSendRpc = Rpc.make("SupervisorAgentSend", {
+  payload: {
+    ...AssignedPayload,
+    to: SupervisorAgentIdSchema,
+    message: SupervisorMessageSchema,
+    ...MainAgentCallPayload,
+  },
+  success: Schema.Struct({
+    messageId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+    to: SupervisorAgentIdSchema,
+    name: boundedLabel,
+    disposition: Schema.Literals(["answered", "guided", "resumed", "woken", "queued", "held"]),
+    wakeBudgetExhausted: Schema.optional(Schema.Literal(true)),
+  }),
+  error: AgentRefusalError,
+});
+
+const SupervisorAgentReadRpc = Rpc.make("SupervisorAgentRead", {
+  payload: {
+    ...AssignedPayload,
+    ids: AgentIdsSchema.check(Schema.isMinLength(1)),
+  },
+  success: Schema.Struct({
+    agents: Schema.Array(
+      Schema.Struct({
+        id: SupervisorAgentIdSchema,
+        name: boundedLabel,
+        state: AgentStateSchema,
+        text: Schema.optional(
+          Schema.String.check(Schema.isMaxLength(MAX_SUPERVISOR_AGENT_READ_CHARS)),
+        ),
+        truncated: Schema.Boolean,
+        source: Schema.optional(Schema.Literals(["assistant", "report", "error"])),
+      }),
+    ),
+    missingIds: AgentIdsSchema,
+  }),
+  error: AgentRefusalError,
+});
+
 export const SupervisorRpcGroup = RpcGroup.make(
   SupervisorOpenSessionRpc,
   SupervisorWatchAssignmentsRpc,
@@ -192,7 +283,14 @@ export const SupervisorRpcGroup = RpcGroup.make(
   SupervisorQuestionRpc,
   SupervisorAcknowledgeQuestionReplyRpc,
   SupervisorReportRpc,
+  SupervisorAgentListRpc,
+  SupervisorAgentSendRpc,
+  SupervisorAgentReadRpc,
 );
+
+export type SupervisorAgentListResult = typeof SupervisorAgentListRpc.successSchema.Type;
+export type SupervisorAgentSendResult = typeof SupervisorAgentSendRpc.successSchema.Type;
+export type SupervisorAgentReadResult = typeof SupervisorAgentReadRpc.successSchema.Type;
 
 export type SupervisorEvent = Extract<
   BackendEvent,

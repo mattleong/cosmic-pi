@@ -1,0 +1,84 @@
+{
+  "name": "pi-intercom",
+  "version": "0.2.0",
+  "description": "Message other live Pi sessions of the same user on this machine.",
+  "keywords": [
+    "intercom",
+    "messaging",
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "sessions"
+  ],
+  "homepage": "https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-intercom#readme",
+  "bugs": {
+    "url": "https://github.com/mattleong/cosmic-pi/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattleong/cosmic-pi.git",
+    "directory": "packages/pi-intercom"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md",
+    "ARCHITECTURE.md",
+    "LICENSE"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "pnpm typecheck && pnpm effect:diagnostics && pnpm lint && pnpm format:check",
+    "validate": "pnpm check && pnpm test",
+    "typecheck": "tsc --noEmit",
+    "effect:diagnostics": "effect-tsgo diagnostics --project tsconfig.json",
+    "lint": "oxlint --type-aware --deny-warnings .",
+    "lint:fix": "oxlint --type-aware --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm validate",
+    "pack:dry": "pnpm pack --dry-run"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "pi-code-previews": "workspace:*",
+    "pi-cosmic-core": "workspace:*",
+    "pi-cosmic-ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "typebox": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

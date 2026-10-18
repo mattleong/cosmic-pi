@@ -63,9 +63,10 @@ Detailed integration constraints live with their owners:
 | [Code Previews](../../packages/pi-code-previews/ARCHITECTURE.md)       | Renderer resolution/replay, settings publication, syntax resources, and before-write evidence                               |
 | [Ask User](../../packages/pi-ask-user/ARCHITECTURE.md)                 | Questionnaire admission, TUI/RPC dialogs, answer delivery, and external-editor cleanup                                      |
 | [Background Tasks](../../packages/pi-background-task/ARCHITECTURE.md)  | Task process lifecycle, bounded logs, and manager projection                                                                |
-| [Subagents](../../packages/pi-subagents/ARCHITECTURE.md)               | Run coordination, child/native transports, and workspace ownership                                                          |
+| [Subagents](../../packages/pi-subagents/ARCHITECTURE.md)               | Run coordination, in-session agent messaging, child/native transports, and workspace ownership                              |
 | [Better OpenAI](../../packages/pi-better-openai/ARCHITECTURE.md)       | Provider schemas/configuration, usage refresh, request policy, and image decoding/output                                    |
 | [Directory Models](../../packages/pi-directory-models/ARCHITECTURE.md) | Directory preferences and host model selection                                                                              |
 | [Herdr BTW](../../packages/pi-herdr-btw/ARCHITECTURE.md)               | Parent-session identity, child-session links, and fixed Herdr CLI interaction                                               |
+| [Intercom](../../packages/pi-intercom/ARCHITECTURE.md)                 | Cross-session registry records, session sockets, inbound message delivery, and the sweep of dead owners                     |
 
 Change these boundaries when it removes coupling or clarifies authority. Preserve cancellation and security guarantees, and update the owning document alongside the change.

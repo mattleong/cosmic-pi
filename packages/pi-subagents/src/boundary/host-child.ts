@@ -21,6 +21,7 @@ import {
   invokeBestEffort,
   invokeHostCallback,
   isProjectTrusted,
+  isSubagentChildProcess,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   safeTextPrefix,
@@ -30,7 +31,13 @@ import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-p
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { PARENT_REPLY_PREFIX } from "../supervisor/protocol.ts";
 import { clipUtf8Text } from "../run/state.ts";
-import { nestedSubagentToolNames, SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
+import {
+  AGENT_TOOL_NAME,
+  AGENT_TOOL_NAMES,
+  isAgentToolName,
+  nestedSubagentToolNames,
+  SUBAGENT_TOOL_NAMES,
+} from "../run/tool-policy.ts";
 import {
   decodeSubagentProxyResult,
   encodeSubagentProxyInput,
@@ -38,7 +45,9 @@ import {
 } from "../tools/proxy-protocol.ts";
 import type { SubagentParentContext } from "../run/model.ts";
 import { decodeSubagentContract, isSubagentContractTool } from "../tools/contract-schema.ts";
-import type { SubagentToolInput } from "../tools/schema.ts";
+import type { AgentToolInput, SubagentToolInput } from "../tools/schema.ts";
+import { registerAgentTools } from "../tools/agent.ts";
+import { scriptedAgentSendRefusal } from "../tools/execute-agents.ts";
 import { observeAwaitInterruption } from "../tools/execute-await.ts";
 import { toolArgumentPreparer } from "../tools/arguments.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
@@ -59,7 +68,7 @@ import {
 import { registerForkPromptCacheHooks } from "./fork-prompt-cache.ts";
 import { registerChildSettle } from "./host-child-settle.ts";
 import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
-import { isSubagentChildProcess, isWorkspaceParentChildProcess } from "./host-environment.ts";
+import { isWorkspaceParentChildProcess } from "./host-environment.ts";
 import {
   openLocalPiChildIpc,
   ParentContactError,
@@ -71,6 +80,7 @@ const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 // Every private name is removed on deactivation, whichever surface this child registered.
 const CHILD_PRIVATE_TOOL_NAME_SET: ReadonlySet<string> = new Set([
   ...SUBAGENT_TOOL_NAMES,
+  ...AGENT_TOOL_NAMES,
   "contact_parent",
 ]);
 let nextRequest = 1;
@@ -147,7 +157,11 @@ export function registerSubagentChildBridge(
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
 
   const workspaceParent = isWorkspaceParentChildProcess();
-  const proxyToolNames = [...nestedSubagentToolNames(workspaceParent), "contact_parent"];
+  const proxyToolNames = [
+    ...nestedSubagentToolNames(workspaceParent),
+    ...AGENT_TOOL_NAMES,
+    "contact_parent",
+  ];
   const ipc = boundaries.openIpc();
   const pending = parentCorrelations<string>();
   const pendingProxy = parentCorrelations<AgentToolResult<unknown>>();
@@ -248,8 +262,9 @@ export function registerSubagentChildBridge(
     if (!isActivationCurrent(input, token))
       return Promise.reject(new Error("Subagent proxy is unavailable for this session."));
     const requestId = `proxy-${process.pid}-${nextRequest++}`;
+    // Only subagent_* calls carry this session's native facts; the root binds every caller itself.
     const request =
-      encoded.tool === "ask_user"
+      encoded.tool === "ask_user" || isAgentToolName(encoded.tool)
         ? encoded
         : withSubagentProxyParent(encoded, input.captureParentContext());
     if (encoded.tool === "ask_user") input.questionnaires.add(requestId);
@@ -417,6 +432,11 @@ export function registerSubagentChildBridge(
       ) => proxyCall(input, token, encodeSubagentProxyInput(toolInput), signal, onInterruption);
       const scheduleAnimation: CompactAnimationScheduler = (interval, tick) =>
         isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined;
+      const owner = receipts.activate();
+      const callAgent = (toolInput: AgentToolInput, scripted: boolean, signal?: AbortSignal) =>
+        scripted && toolInput.tool === AGENT_TOOL_NAME.send
+          ? Promise.reject(new Error(scriptedAgentSendRefusal().message))
+          : proxyCall(input, token, encodeSubagentProxyInput(toolInput), signal);
       try {
         if (input.sessionId)
           input.detachRelay = publishChildQuestionnaireRelay(
@@ -433,10 +453,16 @@ export function registerSubagentChildBridge(
             proxyCall: call,
             run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
           },
-          { receipts, owner: receipts.activate() },
+          { receipts, owner },
           withCodePreviewShell,
           { workspaceParent },
         );
+        registerAgentTools(pi, {
+          execute: callAgent,
+          isScripted: (id) => receipts.isNested(owner, id),
+          scheduleAnimation,
+          nested: true,
+        });
         registerContactParent(input, token, scheduleAnimation);
         if (!isActivationCurrent(input, token)) throw new Error("Stale child activation.");
         pi.setActiveTools([...new Set([...pi.getActiveTools(), ...proxyToolNames])]);

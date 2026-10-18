@@ -6,7 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Latch from "effect/Latch";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
-import type { BackendReport } from "../backend/model.ts";
+import type { BackendAgentMessaging, BackendReport } from "../backend/model.ts";
 import {
   SupervisorChannelIdSchema,
   type SupervisorEvent,
@@ -49,13 +49,15 @@ export const supervisorChannelSession = ({
   runId,
   verifyToken,
   events,
+  agents,
 }: {
   readonly runId: SupervisorRunId;
   readonly verifyToken: TokenVerifier;
   readonly events: Queue.Queue<SupervisorEvent, Cause.Done>;
+  readonly agents?: BackendAgentMessaging | undefined;
 }) =>
   Effect.gen(function* () {
-    const state = yield* supervisorChannelState(runId, verifyToken, events);
+    const state = yield* supervisorChannelState(runId, verifyToken, events, agents);
     const { peers, assignmentEpochs, reports, epochAcknowledgements, readiness } = state;
     const handlers = supervisorChannelHandlers(state);
 

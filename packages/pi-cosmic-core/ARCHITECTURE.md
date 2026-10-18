@@ -1,8 +1,9 @@
 # Cosmic Core architecture
 
 Cosmic Core provides shared runtime, coordination, platform, and host-boundary contracts. It is a
-library, not a Pi extension: it registers nothing and owns no process-wide runtime. Feature policy,
-provider schemas, and UI remain in consumer packages. The module map below describes the current
+library, not a Pi extension: it registers nothing of its own and owns no process-wide runtime;
+host helpers such as the session wake register handlers only on the caller's extension API.
+Feature policy, provider schemas, and UI remain in consumer packages. The module map below describes the current
 implementation; the ownership and lifecycle guarantees are what refactors must preserve.
 
 ## Ownership and dependencies
@@ -15,6 +16,7 @@ implementation; the ownership and lifecycle guarantees are what refactors must p
 | [Configuration](src/config/)                                                       | Scoped document access, tolerant decoding, atomic settings commits            | Schemas, defaults, trust decisions, effective-value resolution        |
 | [Usage controller](src/usage-controller.ts)                                        | Refresh, eligibility, and configured state installation                       | Configuration persistence, provider fetching, and presentation policy |
 | [Host commands](src/host-command.ts) and [capabilities](src/session-capability.ts) | Command routing and checked synchronous capability exchange                   | Command actions, protocol identity and admission policy               |
+| [Session wake](src/host-wake.ts)                                                   | When notices start, continue, or wait for a turn                              | Notice content, reminders, extra settle work                          |
 | [Test kit](src/testing/)                                                           | Shared deterministic Layers, host fixtures, and scoped process/SDK harnesses  | Feature-specific fakes and behavioral assertions                      |
 
 Consumers import the public [root](index.ts), [testing](testing.ts), or
@@ -50,6 +52,30 @@ explicitly starting polling, avoiding a missed update during construction. Lock 
 then document, then refresh; refresh commits never acquire configuration/document locks. Publication
 authority is checked beside each actual host callback, so late refreshes cannot restore retired views.
 
+## Session wake
+
+[`registerSessionWake`](src/host-wake.ts) decides when an extension's notices reach the model. A
+notice starts a turn only while the session is idle. While it is busy the notice is sent without a
+turn, so Pi appends it at turn end outside the steering queue Esc clears, and the settling run
+continues while such a notice (`hasUnansweredNotice`) follows the model's latest reply. A notice
+appended after the last settle boundary, or during a compaction, gets one hidden wake message once
+the session is idle. After an interrupt, and after `hold` at shutdown, notices only append until the
+user's next non-extension input. With `holdDuringDialogs`, an open extension dialog also defers the
+wake until it closes, and a run settling under an open dialog leaves its notice owed until then. A
+delivery may carry a `SessionWakeBudget`: every turn its notice would start or continue, including
+deferred wakes after a dialog, a compaction, or a settle boundary, must be available from the budget
+and spends one as it starts; notices joining an admitted continuation are free, and a spent budget
+only appends. Pi chains `agent_before_settle` results across handlers, keeping the last
+defined `entries` and `continue`, so each owner returns `undefined` when it has nothing to add and
+keeps earlier handlers' entries otherwise; [two owners in one session](tests/host-wake-session.test.ts)
+each get their notices continued.
+
+[Bounded NDJSON framing](src/platform/bounded-ndjson-rpc.ts) for Effect RPC caps every frame,
+complete or still buffered, in UTF-8 bytes and throws on oversized or malformed frames so the
+transport closes the peer. `latestAssistantText` reads the latest assistant reply on a branch within
+a byte limit, and `isSubagentChildProcess` reports the pi-subagents child marker so extensions can
+stay out of child sessions.
+
 ## Persistence and resource safety
 
 [JSON document writes](src/platform/json-document.ts) resolve the document's real path first:
@@ -77,8 +103,10 @@ Exclusion requires the same private root and actual shared-resource namespace. `
 not wait; callers own retries and the returned lease. `crossProcessLockHolder` names a slot and its
 owner's process id for diagnostics without touching the lock. Recovery requires positive process-death
 evidence and a quiescent journal. Owners record their process start time when the OS reports it,
-so a live PID whose start time differs counts as dead: a reused PID does not hold a lease forever.
-`processLiveness` exports that check for consumers that record owners of their own private state.
+read independently of the time zone and locale, so a live PID whose start time differs counts as
+dead: a reused PID does not hold a lease forever. A recorded start in another format proves
+nothing and leaves liveness unknown. `processLiveness` exports that check for consumers that record
+owners of their own private state.
 An uncancellable native mutation retains the lease until its real completion callback settles it; a
 dead owner with pending native work fails closed.
 
@@ -100,7 +128,8 @@ The [workspace Effect guide](../../docs/architecture/effect-v4.md) and
 [Pi boundary guide](../../docs/architecture/pi-boundaries.md) define shared contracts. Behavioral
 anchors are the [session lifecycle](tests/session-runtime.test.ts),
 [atomic projection](tests/projection.test.ts), [refresh ownership](tests/refresh-coordinator.test.ts),
-[usage publication](tests/usage-controller.test.ts), [document races](tests/json-document.test.ts),
+[usage publication](tests/usage-controller.test.ts), [session wake](tests/host-wake.test.ts),
+[document races](tests/json-document.test.ts),
 [document files and processes](tests/json-document-files.test.ts),
 [process cleanup](tests/process-runner.test.ts), [safe-file](tests/safe-file.test.ts), and
 [cross-process recovery](tests/cross-process-lock.test.ts) tests. These protect observable guarantees;

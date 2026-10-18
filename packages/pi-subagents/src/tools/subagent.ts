@@ -28,6 +28,8 @@ import {
   renderSubagentInputContent,
 } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
+import { registerAgentTools } from "./agent.ts";
+import { executeAgentActionEffect } from "./execute-agents.ts";
 import {
   startToolParameters,
   subagentArgumentPreparer,
@@ -366,4 +368,15 @@ export function registerSubagentTools(
     ? nestedSubagentToolNames(nestedSurface.workspaceParent)
     : SUBAGENT_TOOL_NAMES)
     pi.registerTool(buildTool(name));
+  if (!nested)
+    registerAgentTools(
+      pi,
+      {
+        execute: (input, scripted, signal) =>
+          runtime.run(executeAgentActionEffect(input, { kind: "main" }, scripted), signal),
+        isScripted: (id) => receiptOwner?.receipts.isNested(receiptOwner.owner, id) ?? false,
+        ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
+      },
+      shell,
+    );
 }

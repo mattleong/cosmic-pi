@@ -23,7 +23,17 @@ import {
   MAX_TARGET_RUNS,
 } from "../run/limits.ts";
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
-import { SUBAGENT_TOOL_NAME, type SubagentToolName } from "../run/tool-policy.ts";
+import {
+  MAIN_AGENT_ID,
+  MAX_AGENT_MESSAGE_CHARS,
+  MAX_AGENT_TARGETS,
+} from "../run/agent-messaging.ts";
+import {
+  AGENT_TOOL_NAME,
+  SUBAGENT_TOOL_NAME,
+  type AgentToolName,
+  type SubagentToolName,
+} from "../run/tool-policy.ts";
 import { MAX_WORKSPACE_FILES } from "../workspace/policy.ts";
 import { decodeArgumentsObject, replacementField, toolArgumentPreparer } from "./arguments.ts";
 
@@ -402,6 +412,58 @@ const TOOL_ACTIONS: ToolActionResolvers = {
 export const subagentToolAction = <N extends SubagentToolName>(
   input: SubagentToolInput<N>,
 ): ToolActions[N] => TOOL_ACTIONS[input.tool](input.args);
+
+const AgentIdParameter = Type.String({
+  description: `A run ID from agent_list, or "${MAIN_AGENT_ID}" for the session's main agent.`,
+  ...nonblank(MAX_PROTOCOL_ID_CHARS),
+});
+const agentIdsParameter = (description: string) =>
+  Type.Array(AgentIdParameter, { description, minItems: 1, maxItems: MAX_AGENT_TARGETS });
+
+const AgentListParameters = Type.Object(
+  {
+    agentIds: Type.Optional(
+      agentIdsParameter("Agents to show. Omit to list every agent in this session."),
+    ),
+  },
+  strictObjectOptions,
+);
+
+const AgentSendParameters = Type.Object(
+  {
+    to: AgentIdParameter,
+    message: nonblankString(
+      MAX_AGENT_MESSAGE_CHARS,
+      "Self-contained message; the recipient sees who sent it.",
+    ),
+  },
+  strictObjectOptions,
+);
+
+const AgentReadParameters = Type.Object(
+  { agentIds: agentIdsParameter("Agents whose latest message to read.") },
+  strictObjectOptions,
+);
+
+export const AGENT_TOOL_SCHEMAS = {
+  [AGENT_TOOL_NAME.list]: AgentListParameters,
+  [AGENT_TOOL_NAME.send]: AgentSendParameters,
+  [AGENT_TOOL_NAME.read]: AgentReadParameters,
+} as const;
+
+export type AgentToolParameters<N extends AgentToolName> = (typeof AGENT_TOOL_SCHEMAS)[N];
+export type AgentToolArgs<N extends AgentToolName> = Static<AgentToolParameters<N>>;
+export type AgentToolInput<N extends AgentToolName = AgentToolName> = {
+  readonly [P in N]: { readonly tool: P; readonly args: AgentToolArgs<P> };
+}[N];
+
+/** Pi `prepareArguments` hook for one agent tool: precise argument errors and nonblank text. */
+export const agentArgumentPreparer = <N extends AgentToolName>(name: N) => {
+  const parameters: AgentToolParameters<N> = AGENT_TOOL_SCHEMAS[name];
+  return toolArgumentPreparer(name, parameters, (value): value is AgentToolArgs<N> =>
+    Check(parameters, value),
+  );
+};
 
 const START_SPEC_FIELDS = Object.keys(StartSpecFields);
 

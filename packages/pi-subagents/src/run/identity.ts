@@ -16,6 +16,7 @@ export function identityAllocators(runtimeNamespace: string) {
     allocateClaimToken: ordinalTokens("completion"),
     allocateRetryClaimToken: ordinalTokens("retry"),
     allocateAssignmentAttemptToken: ordinalTokens("assignment"),
+    allocateMessageId: ordinalTokens("message"),
     allocateRunIdentity,
   };
 }

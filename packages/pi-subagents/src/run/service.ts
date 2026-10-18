@@ -26,6 +26,14 @@ import {
   type SubagentNotFoundError,
   SubagentRuntimeClosedError,
 } from "./errors.ts";
+import { agentMessageOperations } from "./agent-messages.ts";
+import type {
+  AgentCaller,
+  AgentListResult,
+  AgentMainCapabilities,
+  AgentReadResult,
+  AgentSendResult,
+} from "./agent-messaging.ts";
 import { assignmentOperations } from "./assignment.ts";
 import { completionObservationOperations } from "./completion-observations.ts";
 import { peerNotifier } from "./coordination.ts";
@@ -87,6 +95,8 @@ export interface SubagentServiceOptions {
   readonly notify?: (
     notification: SubagentNotification,
   ) => SubagentNotificationDelivery | undefined | void;
+  /** Reaches the root session's main agent for `agent_*` messages; without it `main` is unavailable. */
+  readonly agentMain?: AgentMainCapabilities | undefined;
   readonly questionnaireHandler?: (
     request: AskUserRequest,
     owner: QuestionnaireOwner,
@@ -215,6 +225,24 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     id: string,
     expected?: SubagentControlExpectation,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
+  /** Lists `main` and every run in the root tree; `ids` selects up to 12 of them. */
+  readonly agentList: (
+    caller: AgentCaller,
+    ids?: ReadonlyArray<string>,
+  ) => Effect.Effect<AgentListResult, SubagentError>;
+  /** Delivers one message to another agent in the root tree now, waking or resuming it if idle. */
+  readonly agentSend: (
+    caller: AgentCaller,
+    to: string,
+    message: string,
+  ) => Effect.Effect<AgentSendResult, SubagentError>;
+  /** Reads agents' last messages without claiming or consuming any report. */
+  readonly agentRead: (
+    caller: AgentCaller,
+    ids: ReadonlyArray<string>,
+  ) => Effect.Effect<AgentReadResult, SubagentError>;
+  /** Starts new agent-message and wake budgets; the host calls it on each user prompt. */
+  readonly resetAgentMessageBudgets: Effect.Effect<void>;
   readonly projection: Effect.Effect<SubagentProjection>;
   /** Hands every eligible completion to its notifier now, as a session ends. */
   readonly deliverPendingCompletions: Effect.Effect<void>;
@@ -265,6 +293,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     allocateClaimToken,
     allocateRetryClaimToken,
     allocateAssignmentAttemptToken,
+    allocateMessageId,
     allocateRunIdentity,
   } = identityAllocators(runtimeNamespace);
   const publish = Effect.uninterruptible(
@@ -424,8 +453,20 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     markCleanupPending: cleanup.markCleanupPending,
     closeExitedScope: cleanup.closeExitedScope,
     failRun: settlement.failRun,
+    // Bound to the spawned run, so a child's channel can never name another caller.
+    agentMessagingFor: (runId) => {
+      const caller = { kind: "run", runId } as const;
+      return {
+        list: (ids) => Effect.suspend(() => agentMessages.list(caller, ids)),
+        send: (to, message) => Effect.suspend(() => agentMessages.send(caller, to, message)),
+        read: (ids) => Effect.suspend(() => agentMessages.read(caller, ids)),
+      };
+    },
   });
 
+  const currentSpendLimit = profileService.capture.pipe(
+    Effect.map((snapshot) => snapshot.effectiveConfig.sessionSpendLimit),
+  );
   const launch = launchOperations({
     ...runContext,
     backendRegistry,
@@ -438,9 +479,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     submitPrompt: assignment.submitPrompt,
     initializeProcess,
     workspaces,
-    currentSpendLimit: profileService.capture.pipe(
-      Effect.map((snapshot) => snapshot.effectiveConfig.sessionSpendLimit),
-    ),
+    currentSpendLimit,
   });
 
   const rootNesting = profileService.capture.pipe(
@@ -455,6 +494,15 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     closeRecordScope,
     workspaces,
     currentNesting: rootNesting,
+    currentSpendLimit,
+  });
+
+  const agentMessages = agentMessageOperations({
+    ...runContext,
+    main: options.agentMain,
+    deliverToRun: controls.deliver,
+    resume: resume.resume,
+    allocateMessageId,
   });
 
   const starts = sessionStartOperations({
@@ -506,6 +554,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     resume: resume.resume,
     rename: controls.rename,
     stop,
+    agentList: agentMessages.list,
+    agentSend: agentMessages.send,
+    agentRead: agentMessages.read,
+    resetAgentMessageBudgets: agentMessages.resetBudgets,
     projection,
     deliverPendingCompletions: delivery.deliverPendingCompletions,
     awaitParentDrain: parentDrainAwaiter({

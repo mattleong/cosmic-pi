@@ -1,12 +1,24 @@
+import { safeTextPrefix } from "pi-cosmic-core";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import { MAX_BACKEND_REPORT_EVIDENCE_CHARS, type BackendReport } from "../backend/model.ts";
 import {
+  type BackendAgentMessaging,
+  MAX_BACKEND_REPORT_EVIDENCE_CHARS,
+  type BackendReport,
+} from "../backend/model.ts";
+import type { AgentListResult, AgentReadResult } from "../run/agent-messaging.ts";
+import { subagentErrorCode, type SubagentError } from "../run/errors.ts";
+import {
+  MAX_SUPERVISOR_AGENT_NAME_CHARS,
+  MAX_SUPERVISOR_AGENT_READ_CHARS,
   SUPERVISOR_CHANNEL_VERSION,
+  SupervisorAgentRefusal,
+  type SupervisorAgentListResult,
+  type SupervisorAgentReadResult,
   type SupervisorRpcFailure,
   SupervisorRpcGroup,
 } from "../supervisor/protocol.ts";
@@ -46,6 +58,77 @@ const dispatchContact = (
             : "Warning recorded in parent-visible run status.",
         )
       : Effect.fail(eventQueueFull()),
+  );
+
+const agentMessaging = (
+  state: SupervisorChannelState,
+): Effect.Effect<BackendAgentMessaging, SupervisorRpcFailure> =>
+  state.agents
+    ? Effect.succeed(state.agents)
+    : rpcFailure("agent_messaging_unavailable", "Agent messaging is unavailable for this run.");
+
+const agentRefusal = (error: SubagentError) =>
+  new SupervisorAgentRefusal({
+    code: safeTextPrefix(subagentErrorCode(error), 128),
+    message: safeTextPrefix(error.message.trim() || "The agent request was refused.", 512),
+  });
+
+const agentName = (name: string, id: string): string =>
+  safeTextPrefix(name.trim() || id, MAX_SUPERVISOR_AGENT_NAME_CHARS);
+const label = (value: string | undefined): string | undefined =>
+  value?.trim() ? safeTextPrefix(value, MAX_SUPERVISOR_AGENT_NAME_CHARS) : undefined;
+
+const wireAgentList = (result: AgentListResult): SupervisorAgentListResult => ({
+  agents: result.agents.map((entry) => {
+    const runtime = label(entry.runtime);
+    const profile = label(entry.profile);
+    const agent = label(entry.agent);
+    return {
+      id: entry.id,
+      name: agentName(entry.name, entry.id),
+      kind: entry.kind,
+      state: entry.state,
+      ...(entry.parentId !== undefined && { parentId: entry.parentId }),
+      ...(runtime !== undefined && { runtime }),
+      ...(profile !== undefined && { profile }),
+      ...(agent !== undefined && { agent }),
+      self: entry.self,
+    };
+  }),
+  missingIds: result.missingIds,
+});
+
+const wireAgentRead = (result: AgentReadResult): SupervisorAgentReadResult => ({
+  agents: result.agents.map((entry) => {
+    const text =
+      entry.textStatus === "text" && entry.text !== undefined
+        ? safeTextPrefix(entry.text, MAX_SUPERVISOR_AGENT_READ_CHARS)
+        : undefined;
+    const source = entry.kind === "run" ? entry.source : undefined;
+    return {
+      id: entry.id,
+      name: agentName(entry.name, entry.id),
+      state: entry.state,
+      ...(text !== undefined && { text }),
+      truncated: entry.truncated || (text !== undefined && text.length < (entry.text?.length ?? 0)),
+      ...(source !== undefined && { source }),
+    };
+  }),
+  missingIds: result.missingIds,
+});
+
+// The channel's own run is the caller; payloads authenticate it but never choose another identity.
+const dispatchAgent = <A>(
+  state: SupervisorChannelState,
+  clientId: number,
+  payload: Parameters<typeof authorizeAssignment>[2],
+  call: (agents: BackendAgentMessaging) => Effect.Effect<A, SubagentError>,
+  admit: Effect.Effect<void, SupervisorRpcFailure> = Effect.void,
+): Effect.Effect<A, SupervisorRpcFailure | SupervisorAgentRefusal> =>
+  authorizeAssignment(state, clientId, payload).pipe(
+    Effect.andThen(admit),
+    Effect.andThen(agentMessaging(state)),
+    Effect.flatMap((agents) => call(agents).pipe(Effect.mapError(agentRefusal))),
   );
 
 export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
@@ -240,5 +323,33 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
           state.nextReportSequence += 1;
           return { duplicate: false, sequence, assignmentEpoch: payload.assignmentEpoch };
         }),
+
+      SupervisorAgentList: (payload, options) =>
+        dispatchAgent(state, options.client.id, payload, (agents) =>
+          agents.list(payload.ids).pipe(Effect.map(wireAgentList)),
+        ),
+
+      SupervisorAgentSend: (payload, options) =>
+        dispatchAgent(
+          state,
+          options.client.id,
+          payload,
+          (agents) =>
+            agents.send(payload.to, payload.message).pipe(
+              Effect.map((sent) => ({
+                messageId: sent.messageId,
+                to: sent.to,
+                name: agentName(sent.name, sent.to),
+                disposition: sent.disposition,
+                ...(sent.wakeBudgetExhausted && { wakeBudgetExhausted: true as const }),
+              })),
+            ),
+          refuseNativeSubAgent(state, payload),
+        ),
+
+      SupervisorAgentRead: (payload, options) =>
+        dispatchAgent(state, options.client.id, payload, (agents) =>
+          agents.read(payload.ids).pipe(Effect.map(wireAgentRead)),
+        ),
     }),
   );

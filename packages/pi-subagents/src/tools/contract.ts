@@ -60,7 +60,8 @@ export const metadata = (value: string | undefined, maximum: number): string | u
   return line ? sanitizeDiagnosticError(line, { maximumLength: maximum }) : undefined;
 };
 
-const projectName = (value: string): string => sanitizeName(metadata(value, MAX_NAME_CHARS) ?? "");
+export const projectName = (value: string): string =>
+  sanitizeName(metadata(value, MAX_NAME_CHARS) ?? "");
 
 const knownProfile = (profile: string | undefined): ProfileId | undefined =>
   PROFILE_IDS.find((id) => id === profile);
@@ -154,6 +155,7 @@ const targetFields = (
   const attention = projectAttention(run);
   const error = metadata(run.error, MAX_CONTRACT_ERROR_CHARS);
   const cleanup = projectRunCleanup(run.cleanup);
+  const resumedBy = metadata(run.resumedBy, MAX_CONTRACT_MESSAGE_CHARS);
   return {
     ...(cleanup !== undefined && { cleanup }),
     ...(run.writerCleanupQuarantined !== undefined && {
@@ -171,6 +173,7 @@ const targetFields = (
     capabilities: [...new Set(run.capabilities)],
     ...(hasId(run.predecessorRunId) && { predecessorRunId: run.predecessorRunId }),
     ...(hasId(run.supersededByRunId) && { successorRunId: run.supersededByRunId }),
+    ...(resumedBy !== undefined && { resumedBy }),
     parentActionRequired: isParentActionRequiredRun(run),
     ...(attention !== undefined && { attention }),
     ...(recovery?.runId === run.id && { retry: projectRecovery(recovery) }),

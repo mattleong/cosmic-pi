@@ -39,6 +39,10 @@ import {
   runsStoppedByReplacement,
 } from "../boundary/host-stopped-runs.ts";
 import { registerParentWake } from "../boundary/host-parent-wake.ts";
+import {
+  agentMainCapabilities,
+  registerAgentMessageBudgetReset,
+} from "../boundary/host-agent-messages.ts";
 import { sessionReportArchive, type ReportArchive } from "../boundary/report-archive.ts";
 import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { restoreSessionUsage, sessionUsageRecorder } from "../boundary/host-session-usage.ts";
@@ -55,9 +59,14 @@ import type { SubagentProjection } from "../run/model.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { SubagentService } from "../run/service.ts";
-import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
+import { ROOT_TOOL_NAMES } from "../run/tool-policy.ts";
+import { executeAgentActionEffect } from "../tools/execute-agents.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
-import { decodeSubagentProxyParent, decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
+import {
+  decodeAgentProxyRequest,
+  decodeSubagentProxyParent,
+  decodeSubagentProxyRequest,
+} from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerApplicationCommands } from "./commands.ts";
 import { orphanSweepNotice, registerSubagentMessageRenderers } from "./messages.ts";
@@ -68,7 +77,7 @@ import {
   profileReloadSessionKey,
 } from "./profile-reload-handoff.ts";
 
-const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
+const ROOT_TOOL_NAME_SET: ReadonlySet<string> = new Set(ROOT_TOOL_NAMES);
 const PARENT_IDLE_CHECK_INTERVAL = "50 millis";
 
 interface SubagentApplicationBoundaries {
@@ -109,17 +118,14 @@ const deactivateSubagentTools = (
   invokeHostCallback(() => {
     const active = pi.getActiveTools();
     const removed = active.filter(
-      (name) => SUBAGENT_TOOL_NAME_SET.has(name) && (only?.includes(name) ?? true),
+      (name) => ROOT_TOOL_NAME_SET.has(name) && (only?.includes(name) ?? true),
     );
     if (removed.length > 0) pi.setActiveTools(active.filter((name) => !removed.includes(name)));
     return removed;
   }, []);
 
 const activeSubagentTools = (pi: ExtensionAPI): ReadonlyArray<string> =>
-  invokeHostCallback(
-    () => pi.getActiveTools().filter((name) => SUBAGENT_TOOL_NAME_SET.has(name)),
-    [],
-  );
+  invokeHostCallback(() => pi.getActiveTools().filter((name) => ROOT_TOOL_NAME_SET.has(name)), []);
 
 function reactivateSubagentTools(pi: ExtensionAPI, names: ReadonlyArray<string>): void {
   if (names.length === 0) return;
@@ -140,7 +146,7 @@ export function registerSubagentApplication(
   registerSubagentMessageRenderers(pi);
   const replay = registerCodePreviewReplay(pi, {
     command: "subagents",
-    tools: [...SUBAGENT_TOOL_NAME_SET],
+    tools: [...ROOT_TOOL_NAME_SET],
   });
   const receipts = registerSubagentErrorReceipts(pi);
   const userInput = registerUserInputSignal(pi);
@@ -161,6 +167,12 @@ export function registerSubagentApplication(
     later: (check) => {
       slot.fork(Effect.sleep(PARENT_IDLE_CHECK_INTERVAL).pipe(Effect.andThen(Effect.sync(check))));
     },
+  });
+  registerAgentMessageBudgetReset(pi, () => {
+    if (currentActivation)
+      slot
+        .run(SubagentService.use((service) => service.resetAgentMessageBudgets))
+        .catch(() => undefined);
   });
   let reportArchive: ReportArchive | undefined;
   const notify = hostNotifier(pi, {
@@ -254,6 +266,11 @@ export function registerSubagentApplication(
             ownsActivation() && currentActivation === activation
               ? notify(notification)
               : { deliveredCompletionKeys: [], actionAccepted: false },
+          agentMain: agentMainCapabilities(pi, {
+            wake,
+            session: () =>
+              ownsActivation() && currentActivation === activation ? activation.ctx : undefined,
+          }),
           questionnaireHandler: (request, questionnaireOwner) =>
             Effect.suspend(() =>
               ownsActivation() && currentActivation === activation
@@ -277,6 +294,14 @@ export function registerSubagentApplication(
                   code: "proxy_caller_disconnected",
                   message: "The subagent session was replaced.",
                 });
+              // The authenticated channel names the caller; agent payloads carry no identity.
+              const agentInput = decodeAgentProxyRequest(request);
+              if (agentInput instanceof InvalidSubagentRequestError) return yield* agentInput;
+              if (agentInput)
+                return yield* executeAgentActionEffect(agentInput, {
+                  kind: "run",
+                  runId: callerRunId,
+                }).pipe(Effect.provideService(SubagentService, service));
               const decoded = decodeSubagentProxyParent(request);
               if (decoded instanceof InvalidSubagentRequestError) return yield* decoded;
               const parent = decoded.parentContext

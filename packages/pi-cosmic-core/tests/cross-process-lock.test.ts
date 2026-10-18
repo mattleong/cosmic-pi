@@ -9,6 +9,7 @@ import {
   nodeLockFs,
 } from "../src/platform/node-builtins.ts";
 import { killChild, spawnIpcChild, temporaryDirectory } from "../src/testing/ipc-child.ts";
+import { reusedProcessIdentity } from "../src/testing/process.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -166,7 +167,7 @@ it.live("reclaims a lease whose live PID now belongs to a different process", ()
     expect(owner).toContain('"started"');
     nodeLockFs.writeFileSync(
       ownerPath,
-      owner.replace(/"started":"[^"]*"/u, '"started":"an earlier process"'),
+      owner.replace(/"started":"[^"]*"/u, `"started":"${reusedProcessIdentity().started ?? ""}"`),
     );
     expect(acquireNativeLock("fixture", { directory }, true)).toBeDefined();
   }).pipe(Effect.scoped),

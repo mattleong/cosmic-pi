@@ -9,7 +9,11 @@ import {
   safeSubagentDirectorySegment,
 } from "../src/boundary/child-process.ts";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
-import { NESTED_SUBAGENT_TOOL_NAMES, piRootActiveToolSnapshot } from "../src/run/tool-policy.ts";
+import {
+  AGENT_TOOL_NAMES,
+  NESTED_SUBAGENT_TOOL_NAMES,
+  piRootActiveToolSnapshot,
+} from "../src/run/tool-policy.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 
 describe("subagent child process boundary", () => {
@@ -64,6 +68,10 @@ describe("subagent child process boundary", () => {
         "workflow",
         "workflow_control",
         "workflow_future",
+        "agent_send",
+        "session_list",
+        "session_send",
+        "session_read",
         "bash",
       ]);
       const policy = childToolPolicy(snapshot);
@@ -74,6 +82,7 @@ describe("subagent child process boundary", () => {
         "bash",
         "contact_parent",
         ...NESTED_SUBAGENT_TOOL_NAMES,
+        ...AGENT_TOOL_NAMES,
       ]);
       expect(policy.excluded.split(",")).toEqual([
         "herdr_agent_start",
@@ -85,8 +94,12 @@ describe("subagent child process boundary", () => {
         "herdr_agent_stop",
         "workflow",
         "workflow_control",
+        "session_list",
+        "session_send",
+        "session_read",
       ]);
       expect(policy.excluded).not.toContain("subagent_");
+      for (const name of AGENT_TOOL_NAMES) expect(policy.excluded.split(",")).not.toContain(name);
     }),
   );
 

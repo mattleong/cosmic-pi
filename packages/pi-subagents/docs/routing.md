@@ -43,7 +43,7 @@ Only the seven declared profile IDs are accepted. An explicit launch profile alw
 - An omitted `nesting` is `{ maxDirectChildren: 12, maxDepth: 3, maxActiveRuns: 16 }`. Direct children must be an integer from 1 to 32, depth from 0 to 8, and `maxActiveRuns` from 1 to 64. Invalid values fail activation without clamping.
 - Policy precedence is Session, trusted Project, Global, then built-in. A start batch captures one route and policy revision.
 - Admission counts active direct children and reservations for one parent, then active processes across the tree against `maxActiveRuns` (`tree_capacity`).
-- Optional root `sessionSpendLimit` (US dollars, Project over Global) stops new starts with `session_spend_limit` once the session's known subagent cost reaches it.
+- Optional root `sessionSpendLimit` (US dollars, Project over Global) stops new starts with `session_spend_limit` once the session's known subagent cost reaches it, and resumes by agent messages with `agent_spend_limit`.
 - That cost includes evicted runs and earlier runtimes: each run's usage is appended as a `pi-subagents-usage` custom session entry (never sent to the model) when its assignment settles and when the runtime ends. `/reload`, `/tree`, and resume restore the sum across every branch, because navigating back refunds nothing. A fork keeps the entries on its path.
 - Usage since a run last settled is lost if Pi crashes, and Codex reports no cost, so the total is a lower bound.
 
@@ -72,7 +72,7 @@ A custom agent is a named role the user declares in a configuration document's r
 - Names match `^[a-z][a-z0-9-]{0,47}$` and can't be a profile ID. A document holds at most 32 agents.
 - `description` (1–200 characters) and `instructions` (up to 16 KiB of UTF-8) are required and nonblank.
 - `profile` selects the route and defaults to `generalist`. Optional `effort` (a concrete level, not `default`), `context`, and `writeIntent` override every candidate of that route; `isolation` is the agent's writer workspace mode, so an agent with `writeIntent: "read-only"` can't set it (the entry fails closed with diagnostic `agents[i].isolation`).
-- `tools: { allow?, deny? }` lists root tool names. `allow` keeps only those tools and `deny` removes tools, applied to the Pi child's inherited active-tool snapshot. The child's `contact_parent` and `subagent_*` tools are always kept.
+- `tools: { allow?, deny? }` lists root tool names. `allow` keeps only those tools and `deny` removes tools, applied to the Pi child's inherited active-tool snapshot. The child's `contact_parent`, `subagent_*`, and `agent_*` tools are always kept.
 - Unknown keys are rejected. Diagnostics identify entries by position, like profile sets.
 
 ### Layering and failure

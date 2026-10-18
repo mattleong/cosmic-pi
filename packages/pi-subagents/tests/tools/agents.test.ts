@@ -3,9 +3,11 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { JsonObject } from "pi-cosmic-core";
 import { describe, expect, vi } from "vitest";
+import { childToolPolicy } from "../../src/boundary/child-process.ts";
 import { PROFILE_DEFINITIONS } from "../../src/profiles/definitions.ts";
 import type { CustomAgent } from "../../src/profiles/agents.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
+import { AGENT_TOOL_NAMES } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import {
   SubagentModelsDetailsSchema,
@@ -216,13 +218,23 @@ describe("custom agent launches", () => {
     function* () {
       const requests: StartSubagentRequest[] = [];
       const profiles = servicesWith({
-        denied: agentDefinition({ tools: { deny: ["bash", "contact_parent"] } }),
-        allowed: agentDefinition({ tools: { allow: ["read"] } }),
+        denied: agentDefinition({
+          tools: { deny: ["bash", "contact_parent", ...AGENT_TOOL_NAMES] },
+        }),
+        allowed: agentDefinition({ tools: { allow: ["read", "session_send"] } }),
       });
       yield* invokeOptionalTool(
         startWith(requests, {
           profiles,
-          activeTools: ["read", "bash", "grep", "contact_parent", "subagent_start"],
+          activeTools: [
+            "read",
+            "bash",
+            "grep",
+            "contact_parent",
+            "subagent_start",
+            "agent_send",
+            "session_send",
+          ],
         }),
         {
           agents: [
@@ -235,6 +247,13 @@ describe("custom agent launches", () => {
         requests.find((request) => request.agent === agent)?.activeTools;
       expect(toolsFor("denied")).toEqual(["read", "grep", "contact_parent"]);
       expect(toolsFor("allowed")).toEqual(["read", "contact_parent"]);
+      // The child launch always enables agent coordination and never cross-session messaging.
+      for (const agent of ["denied", "allowed"]) {
+        const policy = childToolPolicy(toolsFor(agent) ?? []);
+        expect(policy.enabled).toEqual(expect.arrayContaining([...AGENT_TOOL_NAMES]));
+        expect(policy.enabled).not.toContain("session_send");
+        expect(policy.excluded.split(",")).toContain("session_send");
+      }
     },
   );
 

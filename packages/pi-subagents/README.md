@@ -9,6 +9,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Three local runtimes:** Pi, Claude Code, and Codex, with ordered fallback candidates per profile.
 - **Background by default.** Reports and failures arrive automatically; the agent waits only when it needs a result.
 - **Two-way supervision:** children can ask the parent questions and report progress; the parent can guide, interrupt, resume, retry, or stop them.
+- **Agent messaging:** any agent in the session can list, message, and read any other, including the main agent.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
 - **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step (wholly or file by file), or reviews and tests before applying. Proposals can also be revised onto the parent's current files.
 - **Live view:** a run tree above the editor and the shared Activity manager, where you can also rename runs.
@@ -66,7 +67,19 @@ Ask for work that splits into independent pieces, and the agent launches subagen
 
 The mode only changes prompt guidance; no tools are restricted, and subagents keep the default guidance. Session is the default scope. `global` and `project` persist for new sessions and apply after `/reload`. The footer shows the current profile set, marked `*` when this session has its own route edits, followed by the mode when it isn't `normal`.
 
-The agent's tools are `subagent_start`, `subagent_await`, `subagent_status` (which lists the run tree when called without run IDs), `subagent_send` (which answers a waiting subagent's question or steers a running one), `subagent_lifecycle`, `subagent_models`, and `subagent_workspace`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
+The agent's tools are `subagent_start`, `subagent_await`, `subagent_status` (which lists the run tree when called without run IDs), `subagent_send` (which answers a waiting subagent's question or steers a running one), `subagent_lifecycle`, `subagent_models`, and `subagent_workspace`, plus the three agent messaging tools below. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
+
+### Agent messaging
+
+Every agent in the session, the main agent and subagents at any depth on any runtime, can reach every other one, not just its own children:
+
+| Tool         | Does                                                                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| `agent_list` | Lists `main` and every subagent with its state, parent, and role                                       |
+| `agent_send` | Messages one agent now: guides a running agent, wakes an idle main agent, or resumes a finished Pi run |
+| `agent_read` | Reads an agent's latest message, or a finished run's report, without taking the report from its parent |
+
+Nothing is stored for later: each send reports what happened or why it was refused. A resumed run still reports to its own parent, naming who resumed it. Messages are peer requests, never user authority, and rate limits and a per-prompt wake budget keep agents from waking each other in a loop. Details are in [Agent messages](docs/completion-delivery.md#agent-messages). To message other Pi sessions, use [pi-intercom](../pi-intercom/README.md).
 
 ## Configuration
 

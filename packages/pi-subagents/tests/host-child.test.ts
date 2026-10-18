@@ -20,7 +20,7 @@ import {
 } from "../src/delegation/prompt.ts";
 import { backendLaunchRequest } from "../src/run/launch-records.ts";
 import type { StartSubagentRequest } from "../src/run/model.ts";
-import { SUBAGENT_TOOL_NAME } from "../src/run/tool-policy.ts";
+import { AGENT_TOOL_NAMES, SUBAGENT_TOOL_NAME } from "../src/run/tool-policy.ts";
 import { statusContract } from "../src/tools/contract.ts";
 import { view } from "./fixtures/run-view.ts";
 import { request as startRequest } from "./run/fixtures/service-harness.ts";
@@ -455,6 +455,8 @@ describe("nested workspace surface", () => {
         const names = harness.tools.map((tool) => tool.name);
         expect(names.includes(SUBAGENT_TOOL_NAME.workspace)).toBe(workspaceParent);
         expect(harness.activeTools().includes(SUBAGENT_TOOL_NAME.workspace)).toBe(workspaceParent);
+        // Every child coordinates with the session's agents, whatever its tool policy.
+        expect(harness.activeTools()).toEqual(expect.arrayContaining([...AGENT_TOOL_NAMES]));
         expect(
           childToolPolicy(["read"], launch.workspaceParent === true).enabled.includes(
             SUBAGENT_TOOL_NAME.workspace,

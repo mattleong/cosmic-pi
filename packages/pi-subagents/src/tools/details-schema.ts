@@ -492,3 +492,50 @@ export const DETAILS_PARSE_OPTIONS = {
   propertyOrder: "none",
   reportInput: false,
 } as const;
+
+const AGENT_DETAILS_STATES = [...SUBAGENT_RUN_STATES, "idle", "busy", "unavailable"] as const;
+const AgentDetailsStateSchema = Schema.Literals(AGENT_DETAILS_STATES);
+const AgentIdSchema = NonEmptyText(MAX_PROTOCOL_ID_CHARS);
+const AgentDetailsIdsSchema = boundedArray(AgentIdSchema, MAX_TARGET_RUNS);
+const AgentDetailsNameSchema = NonEmptyText(MAX_NAME_CHARS);
+
+/** Presentation receipts of `agent_list`, `agent_send`, and `agent_read`; text stays in content. */
+export const AgentToolDetailsSchema = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    action: Schema.Literal("agent_list"),
+    agentCount: nonNegativeInteger,
+    states: boundedArray(
+      Schema.Struct({ state: AgentDetailsStateSchema, count: nonNegativeInteger }),
+      AGENT_DETAILS_STATES.length,
+    ),
+    /** The only listed agent, when exactly one was listed. */
+    only: Schema.optionalKey(Schema.Struct({ id: AgentIdSchema, name: AgentDetailsNameSchema })),
+    missingIds: AgentDetailsIdsSchema,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    action: Schema.Literal("agent_send"),
+    to: AgentIdSchema,
+    name: AgentDetailsNameSchema,
+    disposition: Schema.Literals(["answered", "guided", "resumed", "woken", "queued", "held"]),
+    wakeBudgetExhausted: Schema.optionalKey(Schema.Literal(true)),
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    action: Schema.Literal("agent_read"),
+    agents: boundedArray(
+      Schema.Struct({
+        id: AgentIdSchema,
+        name: AgentDetailsNameSchema,
+        state: AgentDetailsStateSchema,
+        textStatus: Schema.Literals(["text", "none"]),
+        truncated: Schema.Boolean,
+        source: Schema.optionalKey(Schema.Literals(["assistant", "report", "error"])),
+      }),
+      MAX_TARGET_RUNS,
+    ),
+    missingIds: AgentDetailsIdsSchema,
+  }),
+]);
+export type AgentToolDetails = typeof AgentToolDetailsSchema.Type;

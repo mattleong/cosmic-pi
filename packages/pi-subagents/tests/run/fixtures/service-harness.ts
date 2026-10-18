@@ -10,6 +10,7 @@ import type {
   BackendDriver,
   BackendCleanupVerifier,
   BackendEvent,
+  BackendAgentMessaging,
   BackendLaunchRequest,
   BackendReport,
 } from "../../../src/backend/model.ts";
@@ -683,12 +684,13 @@ export function fakeNativeReportBackendLayer(
 ) {
   const controls: FakeNativeReportControl[] = [];
   const launches: BackendLaunchRequest[] = [];
+  const agentMessaging: Array<BackendAgentMessaging | undefined> = [];
   const driver: BackendDriver = {
     runtime: "claude",
     capabilities: options.capabilities ?? ["steer"],
     supportsContext: (context) => context === "fresh",
     preflight: () => Effect.void,
-    spawn: (launch) =>
+    spawn: (launch, agents) =>
       Effect.acquireRelease(
         Effect.gen(function* () {
           const events = yield* Queue.unbounded<BackendEvent, Cause.Done>();
@@ -717,6 +719,7 @@ export function fakeNativeReportBackendLayer(
           };
           controls.push(control);
           launches.push(launch);
+          agentMessaging.push(agents);
           return {
             handle: {
               pid: 22_001,
@@ -763,6 +766,7 @@ export function fakeNativeReportBackendLayer(
   return {
     controls,
     launches,
+    agentMessaging,
     layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor([driver])),
   };
 }

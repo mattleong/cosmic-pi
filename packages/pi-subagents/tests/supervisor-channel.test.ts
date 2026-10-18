@@ -29,8 +29,11 @@ import {
   type SupervisorChannelLayerOptions,
 } from "../src/boundary/supervisor-channel.ts";
 import { SupervisorChannelError } from "../src/boundary/supervisor-channel-errors.ts";
+import type { BackendAgentMessaging } from "../src/backend/model.ts";
+import { agentMessageRefusal } from "../src/run/errors.ts";
 import {
   SupervisorAuthTokenSchema,
+  SupervisorRunIdSchema,
   SupervisorChannelIdSchema,
   type SupervisorChannelConfig,
   SupervisorChannelConfigSchema,
@@ -106,12 +109,20 @@ const stageAgentHome = (prefix: string) =>
     }),
   );
 
-const openIn = (scope: Scope.Closeable, options: SupervisorChannelLayerOptions, runId: string) =>
-  makeSupervisorChannel(options).open({ runId }).pipe(Effect.provideService(Scope.Scope, scope));
+const openIn = (
+  scope: Scope.Closeable,
+  options: SupervisorChannelLayerOptions,
+  runId: string,
+  agents?: BackendAgentMessaging,
+) =>
+  makeSupervisorChannel(options)
+    .open({ runId, agents })
+    .pipe(Effect.provideService(Scope.Scope, scope));
 
 const openChannel = (
   runId = "agent-supervisor-test",
   options: Omit<SupervisorChannelLayerOptions, "agentDirectory"> = {},
+  agents?: BackendAgentMessaging,
 ): Promise<OpenTestChannel> =>
   stageAgentHome("pi-subagents-supervisor-").then(({ root, agentDirectory, scope }) => {
     const projectDirectory = nodePath.join(root, "project");
@@ -119,7 +130,7 @@ const openChannel = (
       .then(() =>
         writeFile(nodePath.join(projectDirectory, "marker.txt"), "project-only\n", "utf8"),
       )
-      .then(() => Effect.runPromise(openIn(scope, { agentDirectory, ...options }, runId)))
+      .then(() => Effect.runPromise(openIn(scope, { agentDirectory, ...options }, runId, agents)))
       .then((handle) => ({ handle, scope, agentDirectory, projectDirectory }));
   });
 
@@ -323,6 +334,75 @@ const connectDirectRpc = (
 
 const connectionConfig = (handle: SupervisorChannelHandle): Promise<SupervisorChannelConfig> =>
   readFile(handle.metadata.connectionConfigPath, "utf8").then(decodeConnectionConfig);
+
+type AgentCall =
+  | { readonly kind: "list"; readonly ids?: ReadonlyArray<string> | undefined }
+  | { readonly kind: "send"; readonly to: string; readonly message: string }
+  | { readonly kind: "read"; readonly ids: ReadonlyArray<string> };
+
+const RATE_LIMITED_AGENT = "agent-r1-9";
+
+// Stands in for the root's operations, already bound to the channel's run as the caller.
+const recordingAgents = (selfId: string) => {
+  const calls: AgentCall[] = [];
+  const agents: BackendAgentMessaging = {
+    list: (ids) =>
+      Effect.sync(() => {
+        calls.push({ kind: "list", ids });
+        return {
+          agents: [
+            { id: "main", name: "main", kind: "main", state: "busy", self: false },
+            {
+              id: selfId,
+              name: "api-scout",
+              kind: "run",
+              state: "running",
+              parentId: "main",
+              runtime: "claude",
+              profile: "scout",
+              self: true,
+            },
+          ],
+          missingIds: ids?.filter((id) => id !== "main" && id !== selfId) ?? [],
+        };
+      }),
+    send: (to, message) =>
+      to === RATE_LIMITED_AGENT
+        ? Effect.fail(agentMessageRefusal("agent_rate_limited", "Wait 5 seconds, then send."))
+        : Effect.sync(() => {
+            calls.push({ kind: "send", to, message });
+            return { messageId: "message-r1-1", to, name: "peer", disposition: "guided" };
+          }),
+    read: (ids) =>
+      Effect.sync(() => {
+        calls.push({ kind: "read", ids });
+        return {
+          agents: ids.map((id) => ({
+            kind: "run" as const,
+            id,
+            name: "peer",
+            state: "completed" as const,
+            textStatus: "text" as const,
+            text: `Findings from ${id}.`,
+            truncated: false,
+            source: "report" as const,
+            reportGeneration: 1,
+          })),
+          missingIds: [],
+        };
+      }),
+  };
+  return { calls, agents };
+};
+
+const toolText = (value: JsonRpcValue) =>
+  Predicate.isObject(value) &&
+  Predicate.isObject(value.result) &&
+  Array.isArray(value.result.content) &&
+  Predicate.isObject(value.result.content[0]) &&
+  Predicate.isString(value.result.content[0].text)
+    ? { text: value.result.content[0].text, isError: value.result.isError === true }
+    : undefined;
 
 describe("private supervisor channel", () => {
   liveTest(
@@ -611,6 +691,12 @@ describe("private supervisor channel", () => {
                 additionalProperties: false,
               },
             },
+            { name: "agent_list", inputSchema: { properties: { ids: {} } } },
+            {
+              name: "agent_send",
+              inputSchema: { properties: { to: {}, message: {} }, required: ["to", "message"] },
+            },
+            { name: "agent_read", inputSchema: { properties: { ids: {} }, required: ["ids"] } },
           ],
         },
       });
@@ -992,4 +1078,135 @@ describe("private supervisor channel", () => {
     },
     20_000,
   );
+
+  liveTest(
+    "serves agent tools for the channel's own run and ignores forged run identities",
+    function* () {
+      const runId = "agent-supervisor-agents";
+      const fixture = recordingAgents(runId);
+      const { handle } = yield* step(() => openChannel(runId, {}, fixture.agents));
+      const { rpc } = yield* readyHelper(handle);
+
+      const listed = toolText(yield* step(() => toolCall(rpc, "list", "agent_list", {})));
+      expect(listed?.isError).toBe(false);
+      expect(listed?.text).toContain(`${runId} "api-scout"`);
+      expect(listed?.text).toMatch(/scout; runtime claude; child of main; you/u);
+
+      const read = toolText(
+        yield* step(() => toolCall(rpc, "read", "agent_read", { ids: ["agent-r1-2", "main"] })),
+      );
+      expect(read?.text).toContain("Findings from agent-r1-2.");
+      expect(read?.text).toContain("from its report");
+
+      const sent = toolText(
+        yield* step(() =>
+          toolCall(rpc, "send", "agent_send", { to: "agent-r1-2", message: "Compare notes." }),
+        ),
+      );
+      expect(sent).toMatchObject({ isError: false, text: stringContaining("guided") });
+      const refused = toolText(
+        yield* step(() =>
+          toolCall(rpc, "send-limited", "agent_send", { to: RATE_LIMITED_AGENT, message: "Hi." }),
+        ),
+      );
+      expect(refused).toMatchObject({
+        isError: true,
+        text: stringContaining("agent_rate_limited"),
+      });
+      expect(fixture.calls).toEqual([
+        { kind: "list", ids: undefined },
+        { kind: "read", ids: ["agent-r1-2", "main"] },
+        { kind: "send", to: "agent-r1-2", message: "Compare notes." },
+      ]);
+
+      const config = yield* step(() => connectionConfig(handle));
+      const direct = yield* step(() => connectDirectRpc(handle, config));
+      yield* Effect.orDie(direct.client.SupervisorOpenSession(config));
+      const forged = yield* direct.client
+        .SupervisorAgentSend({
+          ...config,
+          runId: SupervisorRunIdSchema.make("agent-forged-sender"),
+          assignmentEpoch: 1,
+          to: "agent-r1-2",
+          message: "Pretend to be another run.",
+        })
+        .pipe(Effect.exit, Effect.timeout("5 seconds"), Effect.orDie);
+      // The channel refuses the identity and closes the peer, so the reply may never arrive.
+      expect(Exit.isFailure(forged)).toBe(true);
+      yield* step(() => direct.close());
+      expect(fixture.calls).toHaveLength(3);
+    },
+    20_000,
+  );
+
+  liveTest(
+    "refuses agent_send from a native sub-agent thread but lets it list and read",
+    function* () {
+      const runId = "agent-supervisor-native-agents";
+      const fixture = recordingAgents(runId);
+      const { handle } = yield* step(() => openChannel(runId, {}, fixture.agents));
+      const { rpc } = yield* readyHelper(handle);
+      handle.setMainAgentThread("main-thread");
+      const fromThread = (id: string, name: string, args: JsonRpcObject, threadId: string) =>
+        step(() =>
+          rpc.request({
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name, arguments: args, _meta: { threadId } },
+          }),
+        ).pipe(Effect.map(toolText));
+      const message = { to: "main", message: "Sub-agent findings." };
+
+      expect(yield* fromThread("sub-send", "agent_send", message, "sub-thread")).toMatchObject({
+        isError: true,
+        text: stringContaining("main agent"),
+      });
+      expect(yield* fromThread("sub-list", "agent_list", {}, "sub-thread")).toMatchObject({
+        isError: false,
+      });
+      expect(
+        yield* fromThread("sub-read", "agent_read", { ids: ["main"] }, "sub-thread"),
+      ).toMatchObject({ isError: false });
+      expect(fixture.calls.map((call) => call.kind)).toEqual(["list", "read"]);
+
+      expect(yield* fromThread("main-send", "agent_send", message, "main-thread")).toMatchObject({
+        isError: false,
+      });
+      expect(fixture.calls.at(-1)).toEqual({ kind: "send", ...message });
+    },
+    20_000,
+  );
+
+  liveTest("rejects oversized agent tool arguments before they reach the root", function* () {
+    const runId = "agent-supervisor-agent-bounds";
+    const fixture = recordingAgents(runId);
+    const { handle } = yield* step(() => openChannel(runId, {}, fixture.agents));
+    const { rpc } = yield* readyHelper(handle);
+    const tooMany = Array.from({ length: 13 }, (_, index) => `agent-r1-${index + 1}`);
+
+    for (const [id, name, args, problem] of [
+      ["long", "agent_send", { to: "main", message: "x".repeat(16_385) }, "16,384"],
+      ["blank", "agent_send", { to: "main", message: "  " }, "message"],
+      ["bad-to", "agent_send", { to: "../main", message: "Hi." }, "agent ID"],
+      ["many-read", "agent_read", { ids: tooMany }, "the limit is 12"],
+      ["many-list", "agent_list", { ids: tooMany }, "the limit is 12"],
+      ["empty-read", "agent_read", { ids: [] }, "at least one"],
+      ["extra", "agent_list", { ids: [], all: true }, "Unexpected argument all"],
+    ] as const)
+      expect(toolText(yield* step(() => toolCall(rpc, id, name, args)))).toMatchObject({
+        isError: true,
+        text: stringContaining(problem),
+      });
+
+    const config = yield* step(() => connectionConfig(handle));
+    const direct = yield* step(() => connectDirectRpc(handle, config));
+    yield* Effect.orDie(direct.client.SupervisorOpenSession(config));
+    const oversized = yield* direct.client
+      .SupervisorAgentRead({ ...config, assignmentEpoch: 1, ids: tooMany })
+      .pipe(Effect.exit, Effect.timeout("5 seconds"), Effect.orDie);
+    expect(Exit.isFailure(oversized)).toBe(true);
+    yield* step(() => direct.close());
+    expect(fixture.calls).toEqual([]);
+  });
 });

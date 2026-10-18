@@ -19,8 +19,9 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import {
+  AGENT_TOOL_NAMES,
   nestedSubagentToolNames,
-  PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
+  PI_CHILD_EXCLUDED_TOOL_ARGUMENT,
 } from "../run/tool-policy.ts";
 import { SUBAGENT_WORKSPACE_PARENT_ENV } from "./host-environment.ts";
 import { processCauseError as processError, type SubagentProcessError } from "../run/errors.ts";
@@ -124,9 +125,14 @@ export const childToolPolicy = (
   workspaceParent = false,
 ) => ({
   enabled: [
-    ...new Set([...rootActiveTools, "contact_parent", ...nestedSubagentToolNames(workspaceParent)]),
+    ...new Set([
+      ...rootActiveTools,
+      "contact_parent",
+      ...nestedSubagentToolNames(workspaceParent),
+      ...AGENT_TOOL_NAMES,
+    ]),
   ],
-  excluded: PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
+  excluded: PI_CHILD_EXCLUDED_TOOL_ARGUMENT,
 });
 
 export const requestCooperativeAbort = (

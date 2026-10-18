@@ -16,6 +16,7 @@ const extensionPackages = [
   "pi-cosmic-ui",
   "pi-code-previews",
   "pi-directory-models",
+  "pi-intercom",
   "pi-background-task",
   "pi-subagents",
 ];
@@ -193,7 +194,7 @@ try {
     const load = (specifier) => jiti.import(specifier);
     const api = await load("pi-cosmic-core");
     const testing = await load("pi-cosmic-core/testing");
-    for (const packageName of ["pi-ask-user","pi-better-openai","pi-cosmic-ui","pi-directory-models","pi-background-task","pi-subagents"]) {
+    for (const packageName of ["pi-ask-user","pi-better-openai","pi-cosmic-ui","pi-directory-models","pi-intercom","pi-background-task","pi-subagents"]) {
       const extension = await load(packageName);
       if (typeof extension.default !== "function") throw new Error("missing " + packageName + " extension export");
     }

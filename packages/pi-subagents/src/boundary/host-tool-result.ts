@@ -4,7 +4,7 @@ import type {
   ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { SUBAGENT_TOOL_NAMES, type SubagentToolName } from "../run/tool-policy.ts";
+import { ROOT_TOOL_NAMES, type SubagentToolName } from "../run/tool-policy.ts";
 import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../tools/outcome.ts";
 
 export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
@@ -14,7 +14,7 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
     { readonly tool: SubagentToolName; readonly details: unknown }
   >();
   const calls = new Map<string, "pending" | "model" | "script">();
-  const ownedNames = new Set<string>(SUBAGENT_TOOL_NAMES);
+  const ownedNames = new Set<string>(ROOT_TOOL_NAMES);
   const clear = (): void => {
     receipts.clear();
     calls.clear();

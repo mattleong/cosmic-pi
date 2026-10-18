@@ -7,10 +7,15 @@ import { isJsonObject, runtimeTypeName, type JsonObject, type JsonValue } from "
 import type { SupervisorRpcFailure } from "./protocol.ts";
 import type { SupervisorToolFailure } from "./tool-call.ts";
 import {
+  MAX_SUPERVISOR_MCP_AGENT_ID_CHARS,
+  MAX_SUPERVISOR_MCP_AGENT_IDS,
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
   MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
   MAX_SUPERVISOR_MCP_THREAD_ID_CHARS,
+  SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY,
+  SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS,
+  SUPERVISOR_MCP_AGENT_TOOL_NAMES,
   SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
   SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
@@ -110,6 +115,18 @@ const toolAnnotations = {
   idempotentHint: false,
   openWorldHint: false,
 } as const;
+const agentIdSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: MAX_SUPERVISOR_MCP_AGENT_ID_CHARS,
+} as const;
+const agentIdsSchema = (description: string) =>
+  ({
+    type: "array",
+    description,
+    items: agentIdSchema,
+    maxItems: MAX_SUPERVISOR_MCP_AGENT_IDS,
+  }) as const;
 const messageTool = (name: string, description: string) => ({
   name,
   description,
@@ -151,6 +168,57 @@ export const toolDefinitions = [
       additionalProperties: false,
     },
     annotations: { ...toolAnnotations, idempotentHint: true },
+  },
+  {
+    name: SUPERVISOR_MCP_AGENT_TOOL_NAMES[0],
+    description:
+      'List the agents in this session: the main agent "main" and every subagent at any depth, with ID, name, state, role, runtime, and parent.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        [SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY]: agentIdsSchema(
+          "Up to 12 agent IDs to show; omit to list every agent.",
+        ),
+      },
+      additionalProperties: false,
+    },
+    annotations: { ...toolAnnotations, readOnlyHint: true, idempotentHint: true },
+  },
+  {
+    name: SUPERVISOR_MCP_AGENT_TOOL_NAMES[1],
+    description:
+      "Main agent only: send one bounded message to another agent in this session now. A running agent receives it as guidance, an idle main agent is woken, and a finished Pi run is resumed. Do not resend after an uncertain result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: { ...agentIdSchema, description: "One agent ID from agent_list, or main." },
+        message: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+        },
+      },
+      required: SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS,
+      additionalProperties: false,
+    },
+    annotations: toolAnnotations,
+  },
+  {
+    name: SUPERVISOR_MCP_AGENT_TOOL_NAMES[2],
+    description:
+      "Read agents' last assistant messages, or a finished run's report or error, without consuming anything.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        [SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY]: {
+          ...agentIdsSchema("One to 12 agent IDs from agent_list, or main."),
+          minItems: 1,
+        },
+      },
+      required: [SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY],
+      additionalProperties: false,
+    },
+    annotations: { ...toolAnnotations, readOnlyHint: true, idempotentHint: true },
   },
 ];
 

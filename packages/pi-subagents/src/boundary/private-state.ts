@@ -12,7 +12,7 @@ import {
 import { removePrivateTree, safeAgentDirectory } from "./harness-shared.ts";
 import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 
-/** Private state nobody has touched for this long is abandoned, whoever owned it. */
+/** Private state nobody has touched for this long is abandoned unless a recorded owner may be live. */
 export const PRIVATE_STATE_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1000;
 
 export const SUBAGENT_STATE_ROOT = "subagents";
@@ -128,12 +128,15 @@ const ownerLiveness = (context: SweepContext, owner: ProcessIdentity): ProcessLi
   return liveness;
 };
 
-/** Abandoned when its owner is provably gone, or, without a provably live owner, when stale. */
+/**
+ * Abandoned when its owner is provably gone, or, without a readable owner record, when stale. An
+ * owner whose liveness can't be decided, such as one recorded in another identity format, may be
+ * a live session, so its state is never aged out.
+ */
 const isAbandoned = (context: SweepContext, directory: string): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const owner = yield* readOwner(directory);
-    const liveness = Option.isSome(owner) ? ownerLiveness(context, owner.value) : "unknown";
-    if (liveness !== "unknown") return liveness === "dead";
+    if (Option.isSome(owner)) return ownerLiveness(context, owner.value) === "dead";
     const modified = yield* newestModification(directory);
     return Option.isSome(modified) && context.now - modified.value > PRIVATE_STATE_RETENTION_MILLIS;
   });

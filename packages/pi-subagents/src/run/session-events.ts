@@ -117,6 +117,24 @@ export function appendNoticeSessionEvent(
   });
 }
 
+/** Records an agent message this run received (`in`) or sent (`out`). */
+export function appendMessageSessionEvent(
+  current: ReadonlyArray<SubagentSessionEvent>,
+  direction: "in" | "out",
+  peer: string,
+  text: string,
+  createdAt: number,
+): ReadonlyArray<SubagentSessionEvent> {
+  return appendSessionEvent(current, {
+    type: "notice",
+    kind: "message",
+    direction,
+    peer: sanitizeDiagnosticText(peer, MAX_PROTOCOL_ID_CHARS),
+    text: sanitizeDiagnosticText(text, MAX_NOTICE_CHARS),
+    createdAt,
+  });
+}
+
 export function startToolSessionEvent(
   current: ReadonlyArray<SubagentSessionEvent>,
   input: {

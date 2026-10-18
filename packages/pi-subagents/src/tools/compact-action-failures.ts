@@ -1,5 +1,6 @@
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
 import { failureMessage, quoteText } from "pi-cosmic-core";
+import type { AgentMessageRefusalCode } from "../run/errors.ts";
 import type { CompactToolActionFailure, SubagentRunCard } from "./details-schema.ts";
 import {
   actionFailureDisposition,
@@ -301,4 +302,104 @@ export function rejectedCallIssue(action: string, text: string, target: string):
     message: readable ?? couldNot(action, target),
     ...(detail && { detail }),
   };
+}
+
+/** Failures of `agent_*` calls: the service's refusals plus request validation. */
+type AgentFailureCode =
+  | AgentMessageRefusalCode
+  | "too_many_targets"
+  | "agent_ids_required"
+  | "scripted_agent_send_not_supported"
+  | "message_required"
+  | "message_too_large";
+
+interface AgentFailurePresentation {
+  readonly message: (subject: string) => string;
+  readonly recovery: string;
+}
+
+const AGENT_FAILURES = {
+  agent_self_target: {
+    message: () => "An agent can't message itself",
+    recovery: "Name another agent from agent_list, or main.",
+  },
+  agent_not_found: {
+    message: (subject) => `${subject} isn't in this session`,
+    recovery:
+      "Refresh agent IDs with agent_list; runs removed from the session can't receive messages.",
+  },
+  agent_unavailable: {
+    message: (subject) => `${subject} can't receive messages right now`,
+    recovery:
+      "Check the agent's state with agent_list. A starting agent accepts messages once it runs; a stopping or removed one never does. Read a finishing run's report with agent_read instead.",
+  },
+  agent_resume_unsupported: {
+    message: (subject) => `${subject} has finished and can't be resumed`,
+    recovery:
+      "Finished Claude and Codex runs can't be resumed. Start a new agent with the context it needs, or message its parent.",
+  },
+  agent_rate_limited: {
+    message: () => "Too many agent messages were sent; wait before sending again",
+    recovery:
+      "Each agent may send 10 messages a minute, and 3 in a row to one agent before waiting 5 seconds per message. Wait as long as the error says before sending again, and don't resend in a loop.",
+  },
+  agent_message_budget_exhausted: {
+    message: () => "Agents already sent as many messages as allowed",
+    recovery:
+      "Until the user's next prompt, each agent may send another agent 20 messages, and the session's agents 200 in all. Finish with what you have, report to your parent, or leave the rest to the user; don't retry.",
+  },
+  agent_wake_budget_exhausted: {
+    message: (subject) => `${subject} was already resumed by messages as often as allowed`,
+    recovery:
+      "Agent messages may resume each agent 3 times, and the session 12 times, until the user's next prompt. Message an agent that is still running, or leave it to the user.",
+  },
+  agent_spend_limit: {
+    message: (subject) => `${subject} can't be resumed after the session's spend limit`,
+    recovery:
+      "This session's subagents reached sessionSpendLimit, so agent messages can't resume finished runs. Message an agent that is still running, or leave it to the user.",
+  },
+  too_many_targets: {
+    message: () => "Too many agents were named",
+    recovery: "Name at most 12 agents, or call agent_list without agentIds.",
+  },
+  agent_ids_required: {
+    message: () => "No agent was named",
+    recovery: "Name at least one agent ID from agent_list, or main.",
+  },
+  scripted_agent_send_not_supported: {
+    message: () => "Scripts can't send agent messages",
+    recovery: "End the script and send the message with agent_send directly.",
+  },
+  message_required: {
+    message: () => "The message is empty",
+    recovery: "Send a nonblank, self-contained message.",
+  },
+  message_too_large: {
+    message: () => "The message is too long",
+    recovery: "Shorten the message to at most 16,384 characters.",
+  },
+} satisfies Record<AgentFailureCode, AgentFailurePresentation>;
+
+const AGENT_FAILURE_CODES: ReadonlyMap<string, AgentFailurePresentation> = new Map(
+  Object.entries(AGENT_FAILURES),
+);
+
+const CODED_FAILURE = /^\[([a-z][a-z0-9_]*)\] /u;
+
+/**
+ * Issues for a rejected `agent_*` call. Its error text starts with the refusal code in brackets;
+ * `subject` names the agent the call addressed.
+ */
+export function agentFailureIssues(text: string, action: string, subject: string): CompactIssue[] {
+  const code = CODED_FAILURE.exec(text.trimStart())?.[1];
+  const known = code === undefined ? undefined : AGENT_FAILURE_CODES.get(code);
+  if (!known) return [rejectedCallIssue(action, text, subject.toLowerCase())];
+  return [
+    {
+      severity: "error",
+      code: `agent:${code ?? "failed"}`,
+      message: known.message(subject),
+      detail: `${text.trim()}\n${known.recovery}`,
+    },
+  ];
 }

@@ -1,12 +1,12 @@
 # Architecture
 
-`pi-subagents` owns session-scoped background agents on local Pi, Claude, and Codex on macOS and Linux.
+`pi-subagents` owns session-scoped background agents on local Pi, Claude, and Codex on macOS and Linux, and messaging among the agents of one root session.
 
 ## Ownership and boundaries
 
 - `extension.ts`, `application/`, and `layer.ts` register the extension and compose its Effect runtime through Cosmic Core's session-runtime slot. Root sessions own application services; nested Pi processes use authenticated proxies.
 - `config/store.ts` is the configuration persistence entrypoint. `profiles/` owns route planning, custom agent resolution, and the revisioned Current Session working set. `domain/` holds pure routing policy.
-- `run/` owns `SubagentService`: authoritative run records under one shared lock, admission and writer pools, process lifecycle, assignment transitions, completion claims, and immutable fleet projections. Factories receive only the capabilities they need from the service's composition root.
+- `run/` owns `SubagentService`: authoritative run records under one shared lock, admission and writer pools, process lifecycle, assignment transitions, completion claims, agent messaging with its rate limits and wake budget, and immutable fleet projections. Factories receive only the capabilities they need from the service's composition root. The root session's main agent is reached through host capabilities in `boundary/host-agent-messages.ts`.
 - `backend/` translates Pi, Claude, and Codex behavior into normalized handles, controls, and events. `boundary/` and `supervisor/` own host integration, processes, files, leases, and authenticated transport. Run orchestration never interprets native wire protocols.
 - `workspace/` owns isolated-writer artifacts, Git operations, and worktree hooks with their process-cleanup quarantine. Run-level bindings keep parent authority and cleanup evidence; workspace operations serialize separately from ordinary run activity.
 - `delegation/` owns each delegation mode's prompt guidance, applied to the root session through `boundary/host-delegation-prompt.ts`.
@@ -24,12 +24,12 @@ One root runtime owns the descendant tree and its processes, transports, leases,
 
 ## Critical invariants
 
-- Authenticated ancestry determines subtree visibility and target authority; caller-supplied identifiers never grant parent authority.
+- `subagent_*` authority comes from ancestry; `agent_*` reaches any agent in the same root tree; the caller's identity is always authenticated (never caller-supplied). An `agent_send` may resume any finished local Pi run; the run still reports to its own parent, and the report notice names the resumer ([agent messages](docs/completion-delivery.md#agent-messages)).
 - Writer admission, assignment changes, completion consumption, and cleanup evidence stay coordinated under their owning locks. Cleanup disposition is independent of task outcome, and closed scopes and uncertain lease commits are never replayed.
 - Shared-checkout writers in one cwd share its writer pool and cross-process lease without file claims; they coordinate by task scope and are not isolated from each other. Another process holding the lease refuses the whole pool.
 - Worktree reports are proposals. Only an explicit `apply` by the authenticated direct parent integrates one, publishing exactly one revision's changed paths and refusing parent drift in them. Files the checkout's `.worktreeinclude` copies into isolated trees never enter a capture, so they never reach Git objects, revisions, or publication. An interrupted publication holds its source leases until its own session's discard rolls it back or refuses; once that session ends, another root may roll it back only under fresh leases on the same directories. Rules are in [Isolated workspace lifecycle](docs/local-backends.md#isolated-workspace-lifecycle).
 - Workspace operations wait for a finished writer's process cleanup and refuse a running writer or quarantined cleanup. Destructive workspace operations serialize with admission and never remove a tree a run still holds. Another session's root may adopt, discard, or sweep an orphaned workspace only once its owner lease is free and it holds the original writer lease; adoption rewrites the owner atomically under the checkout's store lock.
-- Only a child's main agent may submit its report or ask the parent a blocking question; native sub-agent identity is decided at the call, never from output ordering.
+- Only a child's main agent may submit its report, ask the parent a blocking question, or send agent messages; native sub-agent identity is decided at the call, never from output ordering.
 - Tools and UI read frozen projections. A terminal state or start receipt does not prove cleanup or completion. Native result contracts stay separate from bounded presentation details.
 - Delegation modes change only the root session's prompt guidance; they never restrict tools or reach nested children.
 - Current Session edits affect later launches. Saved-set edits never change the active working set, and Project writes recheck trust.
@@ -44,7 +44,7 @@ Runs belong to one live root session, which owns their processes, authority, rep
 - **Agent memory.** Profiles and [custom agents](docs/routing.md#custom-agents) route to a runtime and model; the parent writes each assignment, and runs carry no memory between sessions.
 - **Lazy tool loader.** Tools register with the activation, and children receive the root's active tools at launch.
 - **Pane inspectors.** The root's fleet and Activity views show every run's transcript from one projection.
-- **Cross-session messaging.** Target authority comes from authenticated ancestry within one tree.
+- **Cross-session messaging.** It belongs to [pi-intercom](../pi-intercom/ARCHITECTURE.md); pi-subagents never reaches another root.
 - **Workflow scripts.** Orchestration is the parent agent's job, optionally through native codemode scripts calling the ordinary tools.
 
 ## Detailed contracts

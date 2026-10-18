@@ -292,6 +292,7 @@ const compactStatusFields = (
     : statusField("Cwd", run.cwd),
   optionalStatusField("Predecessor", run.predecessorRunId),
   optionalStatusField("Superseded by", run.supersededByRunId),
+  optionalStatusField("Resumed by", run.resumedBy),
   routeRetryStatus(run),
   optionalStatusField("Route warning", run.selection.warning),
   ...workspaceStatusFields(run),

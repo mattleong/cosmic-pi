@@ -62,10 +62,14 @@ export interface CompletionGenerationRecord {
   readonly finalText?: string | undefined;
   readonly error?: string | undefined;
   readonly warning?: string | undefined;
+  /** The agent whose message resumed the run for this outcome's assignment. */
+  readonly resumedBy?: string | undefined;
 }
 
 interface AssignmentState {
   readonly epoch: number;
+  /** Labels the agent whose message resumed the run for this assignment. */
+  readonly resumedBy?: string | undefined;
   phase: "preparing" | "issuing" | "running" | "reported";
   readonly attemptToken: string;
   startedObserved: boolean;

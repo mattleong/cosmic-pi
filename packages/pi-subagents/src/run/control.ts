@@ -8,6 +8,7 @@ import {
   isTerminalRunState,
   type SubagentRunView,
   type SubagentControlExpectation,
+  type SubagentSendDelivery,
   type SubagentSendOutcome,
 } from "./model.ts";
 import {
@@ -56,6 +57,31 @@ const recordParentNoticeLocked = (record: RunRecord, text: string, now: number) 
   };
 };
 
+/** A message for a run, decided under the run lock as an answer or as guidance. */
+export interface RunControlMessage {
+  /** Answers a pending question; only the run's direct parent may, so others leave it unset. */
+  readonly answer?: string | undefined;
+  /** Steers the turn, including a turn waiting on a question when `answer` is unset. */
+  readonly guidance: string;
+  /** Records the applied delivery in the run's session events. */
+  readonly recordNoticeLocked: (
+    record: RunRecord,
+    delivery: SubagentSendDelivery,
+    now: number,
+  ) => void;
+}
+
+const parentMessage = (message: string): RunControlMessage => ({
+  answer: message,
+  guidance: message,
+  recordNoticeLocked: (record, delivery, now) =>
+    recordParentNoticeLocked(
+      record,
+      `${delivery === "answered" ? "Reply" : "Guidance"}: ${message}`,
+      now,
+    ),
+});
+
 export function controlOperations(dependencies: RunControlDependencies) {
   const {
     ownerScope,
@@ -90,13 +116,16 @@ export function controlOperations(dependencies: RunControlDependencies) {
 
   const finalizeGuidance = (
     record: RunRecord,
-    message: string,
+    message: RunControlMessage,
   ): Effect.Effect<SubagentRunView, InvalidSubagentRequestError> =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       return yield* withLock(
         Effect.gen(function* () {
-          if (record.view.state !== "running")
+          const steerable =
+            record.view.state === "running" ||
+            (message.answer === undefined && record.view.state === "waiting_for_parent");
+          if (!steerable)
             return yield* invalidRequest(
               "guidance_outcome_uncertain",
               `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
@@ -106,7 +135,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
               "guidance_outcome_uncertain",
               `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
             );
-          recordParentNoticeLocked(record, `Guidance: ${message}`, now);
+          message.recordNoticeLocked(record, "guided", now);
           yield* publish;
           return snapshotView(record.view);
         }),
@@ -142,10 +171,19 @@ export function controlOperations(dependencies: RunControlDependencies) {
       return { delivery: "answered" as const, record, process, question };
     });
 
-  const claimGuidanceLocked = (record: RunRecord) =>
+  const claimGuidanceLocked = (record: RunRecord, steerWaiting: boolean) =>
     Effect.gen(function* () {
       const id = record.view.id;
       yield* requireCapability(record, "steer");
+      if (steerWaiting && record.view.state === "waiting_for_parent") {
+        if (record.pauseRequested)
+          return yield* invalidRequest(
+            "interrupt_in_flight",
+            `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
+          );
+        admitTurnInput(record);
+        return { delivery: "guided" as const, record };
+      }
       if (record.view.state === "paused" || record.view.state === "completed") {
         const recovery = hasSubagentCapability(record.view, "resume")
           ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
@@ -174,7 +212,11 @@ export function controlOperations(dependencies: RunControlDependencies) {
       return { delivery: "guided" as const, record };
     });
 
-  const claimDelivery = (id: string, expected: SubagentControlExpectation | undefined) =>
+  const claimDelivery = (
+    id: string,
+    expected: SubagentControlExpectation | undefined,
+    mayAnswer: boolean,
+  ) =>
     withLock(
       Effect.gen(function* () {
         const record = yield* requireRecord(id);
@@ -184,17 +226,17 @@ export function controlOperations(dependencies: RunControlDependencies) {
             "reply_in_flight",
             `Subagent ${id} already has a parent reply in flight; inspect it with subagent_status before sending again.`,
           );
-        return record.view.state === "waiting_for_parent"
+        return mayAnswer && record.view.state === "waiting_for_parent"
           ? yield* claimAnswerLocked(record)
-          : yield* claimGuidanceLocked(record);
+          : yield* claimGuidanceLocked(record, !mayAnswer);
       }),
     );
 
   const guide = (
     record: RunRecord,
-    message: string,
+    message: RunControlMessage,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
-    processControls.steer(record, message).pipe(
+    processControls.steer(record, message.guidance).pipe(
       Effect.tapError((error) =>
         Predicate.isTagged(error, "SubagentProcessError") &&
         isOutcomeUncertain(error) &&
@@ -207,10 +249,11 @@ export function controlOperations(dependencies: RunControlDependencies) {
 
   const answer = (
     claimed: Extract<Effect.Success<ReturnType<typeof claimDelivery>>, { delivery: "answered" }>,
-    message: string,
+    message: RunControlMessage,
+    reply: string,
   ): Effect.Effect<SubagentRunView, SubagentError> => {
     const id = claimed.record.view.id;
-    return claimed.process.controls.reply(claimed.question.requestId, message).pipe(
+    return claimed.process.controls.reply(claimed.question.requestId, reply).pipe(
       Effect.catchTag("SubagentProcessError", (error) => {
         if (error.code === "transport_not_sent")
           return Effect.fail(
@@ -236,7 +279,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
           Effect.gen(function* () {
             if (claimed.record.replyPendingRequestId === claimed.question.requestId)
               claimed.record.replyPendingRequestId = undefined;
-            recordParentNoticeLocked(claimed.record, `Reply: ${message}`, now);
+            message.recordNoticeLocked(claimed.record, "answered", now);
             yield* publish;
             return snapshotView(claimed.record.view);
           }),
@@ -278,31 +321,37 @@ export function controlOperations(dependencies: RunControlDependencies) {
   // One locked claim decides whether the message answers a pending question or steers the turn.
   // An answer commits in the owner scope so a cancelled caller never abandons the claimed
   // question; guidance stays caller-scoped and releases its turn-input admission on exit.
+  const deliver = (
+    id: string,
+    message: RunControlMessage,
+    expected?: SubagentControlExpectation,
+  ): Effect.Effect<SubagentSendOutcome, SubagentError> =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.flatMap(
+        claimDelivery(id, expected, message.answer !== undefined),
+        (claimed): Effect.Effect<SubagentSendOutcome, SubagentError> =>
+          claimed.delivery === "answered" && message.answer !== undefined
+            ? Effect.flatMap(
+                Effect.forkIn(answer(claimed, message, message.answer), ownerScope, {
+                  startImmediately: true,
+                }),
+                (fiber) => restore(Fiber.join(fiber)),
+              ).pipe(Effect.map((run) => ({ delivery: claimed.delivery, run })))
+            : restore(guide(claimed.record, message)).pipe(
+                Effect.ensuring(releaseTurnInput(claimed.record)),
+                Effect.map((run) => ({ delivery: "guided" as const, run })),
+              ),
+      ),
+    );
+
   const send = (
     id: string,
     message: string,
     expected?: SubagentControlExpectation,
   ): Effect.Effect<SubagentSendOutcome, SubagentError> =>
-    Effect.gen(function* () {
-      const normalized = yield* validateParentMessage(message, "Message is required.");
-      return yield* Effect.uninterruptibleMask((restore) =>
-        Effect.flatMap(
-          claimDelivery(id, expected),
-          (claimed): Effect.Effect<SubagentSendOutcome, SubagentError> =>
-            claimed.delivery === "answered"
-              ? Effect.flatMap(
-                  Effect.forkIn(answer(claimed, normalized), ownerScope, {
-                    startImmediately: true,
-                  }),
-                  (fiber) => restore(Fiber.join(fiber)),
-                ).pipe(Effect.map((run) => ({ delivery: claimed.delivery, run })))
-              : restore(guide(claimed.record, normalized)).pipe(
-                  Effect.ensuring(releaseTurnInput(claimed.record)),
-                  Effect.map((run) => ({ delivery: claimed.delivery, run })),
-                ),
-        ),
-      );
-    });
+    validateParentMessage(message, "Message is required.").pipe(
+      Effect.flatMap((normalized) => deliver(id, parentMessage(normalized), expected)),
+    );
 
   const interrupt = (
     id: string,
@@ -456,5 +505,5 @@ export function controlOperations(dependencies: RunControlDependencies) {
           : Effect.succeed(snapshotView(record.view)),
     );
 
-  return { send, interrupt, rename, stop };
+  return { send, deliver, interrupt, rename, stop };
 }

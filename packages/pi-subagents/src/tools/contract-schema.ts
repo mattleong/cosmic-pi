@@ -1,7 +1,16 @@
 import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
-import { PROFILE_CANDIDATE_WRITE_INTENTS, PROFILE_IDS } from "../profiles/model.ts";
+import {
+  PROFILE_CANDIDATE_RUNTIMES,
+  PROFILE_CANDIDATE_WRITE_INTENTS,
+  PROFILE_IDS,
+} from "../profiles/model.ts";
+import {
+  MAX_AGENT_TARGETS,
+  MAX_MAIN_READ_CHARS,
+  MAX_RUN_READ_CHARS,
+} from "../run/agent-messaging.ts";
 import {
   MAX_PROTOCOL_ID_CHARS,
   MAX_START_BATCH,
@@ -15,7 +24,7 @@ import {
   SUBAGENT_RUN_STATES,
 } from "../run/model.ts";
 import { MAX_NAME_CHARS } from "../run/state.ts";
-import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
+import { AGENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
   AgentNameSchema,
   MAX_CARD_QUESTION_CHARS,
@@ -34,6 +43,7 @@ export const MAX_CONTRACT_REPORT_CHARS = MAX_TOOL_OUTPUT_CHARS;
 export const MAX_CONTRACT_MESSAGE_CHARS = 1_024;
 export const MAX_CONTRACT_ERROR_CHARS = 2_048;
 export const MAX_CONTRACT_QUESTION_CHARS = MAX_CARD_QUESTION_CHARS;
+export const MAX_CONTRACT_TASK_CHARS = 256;
 
 const LIFECYCLE_ACTIONS = ["resume", "interrupt", "stop", "retry"] as const satisfies ReadonlyArray<
   SubagentLifecycleInput["action"]
@@ -118,6 +128,7 @@ const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
     ),
     predecessorRunId: Schema.optionalKey(RunIdSchema),
     successorRunId: Schema.optionalKey(RunIdSchema),
+    resumedBy: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_MESSAGE_CHARS)),
     parentActionRequired: Schema.Boolean,
     cleanup: Schema.optionalKey(RunCleanupSchema),
     writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
@@ -228,12 +239,70 @@ const ModelsContractSchema = Schema.Struct({
   ...envelope(SUBAGENT_TOOL_NAME.models),
   ...ModelsContractFields,
 });
+
+const AgentIdsSchema = Schema.Array(RunIdSchema).check(Schema.isMaxLength(MAX_AGENT_TARGETS));
+const MainStateSchema = Schema.Literals(["idle", "busy"]);
+const AgentTextFields = {
+  textStatus: Schema.Literals(["text", "none"]),
+  truncated: Schema.Boolean,
+};
+
+// `main` and every run in the root tree, parents before children.
+const AgentListContractSchema = Schema.Struct({
+  ...envelope(AGENT_TOOL_NAME.list),
+  agents: Schema.Array(
+    Schema.Struct({
+      id: RunIdSchema,
+      name: NameSchema,
+      kind: Schema.Literals(["main", "run"]),
+      state: Schema.Union([StateSchema, MainStateSchema, Schema.Literal("unavailable")]),
+      parentId: Schema.optionalKey(RunIdSchema),
+      depth: Schema.optionalKey(count),
+      runtime: Schema.optionalKey(Schema.Literals(PROFILE_CANDIDATE_RUNTIMES)),
+      profile: Schema.optionalKey(ProfileSchema),
+      agent: Schema.optionalKey(AgentNameSchema),
+      task: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_TASK_CHARS)),
+      self: Schema.Boolean,
+    }),
+  ),
+  missingIds: AgentIdsSchema,
+});
+
+const AgentReadContractSchema = Schema.Struct({
+  ...envelope(AGENT_TOOL_NAME.read),
+  agents: Schema.Array(
+    Schema.Union([
+      Schema.Struct({
+        kind: Schema.Literal("main"),
+        id: RunIdSchema,
+        name: NameSchema,
+        state: Schema.Union([MainStateSchema, Schema.Literal("unavailable")]),
+        ...AgentTextFields,
+        text: Schema.optionalKey(NonEmptyText(MAX_MAIN_READ_CHARS)),
+      }),
+      Schema.Struct({
+        kind: Schema.Literal("run"),
+        id: RunIdSchema,
+        name: NameSchema,
+        state: StateSchema,
+        ...AgentTextFields,
+        text: Schema.optionalKey(NonEmptyText(MAX_RUN_READ_CHARS)),
+        source: Schema.optionalKey(Schema.Literals(["assistant", "report", "error"])),
+        reportGeneration: count,
+      }),
+    ]),
+  ).check(Schema.isMaxLength(MAX_AGENT_TARGETS)),
+  missingIds: AgentIdsSchema,
+});
+
 export const CONTRACT_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.start]: StartContractSchema,
   [SUBAGENT_TOOL_NAME.await]: AwaitContractSchema,
   [SUBAGENT_TOOL_NAME.status]: StatusContractSchema,
   [SUBAGENT_TOOL_NAME.lifecycle]: LifecycleContractSchema,
   [SUBAGENT_TOOL_NAME.models]: ModelsContractSchema,
+  [AGENT_TOOL_NAME.list]: AgentListContractSchema,
+  [AGENT_TOOL_NAME.read]: AgentReadContractSchema,
 } as const;
 
 export type SubagentContractTool = keyof typeof CONTRACT_SCHEMAS;
@@ -245,6 +314,8 @@ export type SubagentStatusContract = typeof StatusTargetsContractSchema.Type;
 export type SubagentStatusListContract = typeof StatusListContractSchema.Type;
 export type SubagentLifecycleContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.lifecycle>;
 export type SubagentModelsContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.models>;
+export type AgentListContract = SubagentContract<typeof AGENT_TOOL_NAME.list>;
+export type AgentReadContract = SubagentContract<typeof AGENT_TOOL_NAME.read>;
 export type ContractRunTarget = typeof RunTargetSchema.Type;
 export type ContractWithheldRunTarget = typeof WithheldRunTargetSchema.Type;
 export type ContractReport = typeof ReportSchema.Type;
@@ -264,6 +335,8 @@ export const SubagentContractSchema = Schema.Union([
   StatusContractSchema,
   LifecycleContractSchema,
   ModelsContractSchema,
+  AgentListContractSchema,
+  AgentReadContractSchema,
 ]);
 export const encodeSubagentContract = Schema.encodeSync(
   Schema.toCodecJson(SubagentContractSchema),

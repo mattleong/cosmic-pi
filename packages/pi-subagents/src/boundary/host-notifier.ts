@@ -5,7 +5,9 @@ import {
   invokeHostCallback,
   sanitizeDiagnosticContent,
   sanitizeTerminalLine,
+  type SessionWakeDelivery,
 } from "pi-cosmic-core";
+import { resumedByText } from "../run/agent-messaging.ts";
 import type { SubagentWorkspaceOutcome } from "../run/model.ts";
 import { proposalDiffStatLines, proposalGuidance } from "../tools/format.ts";
 import type { ArchivedReport, ReportArchive } from "./report-archive.ts";
@@ -18,6 +20,8 @@ export interface SubagentCompletionNotification {
   readonly finalText?: string | undefined;
   readonly error?: string | undefined;
   readonly warning?: string | undefined;
+  /** The agent whose message resumed this run; the report still comes to its parent. */
+  readonly resumedBy?: string | undefined;
   readonly retryAvailable?: boolean | undefined;
   readonly profile?: string | undefined;
   readonly remainingCandidateCount?: number | undefined;
@@ -108,8 +112,9 @@ const completionBody = (run: SubagentCompletionNotification, archived?: Archived
   const retry = run.retryAvailable
     ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with subagent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
     : undefined;
-  // The workspace outcome leads so that truncating a long report can't drop it.
+  // The workspace outcome and resumer lead so that truncating a long report can't drop them.
   return [
+    resumedByText(run),
     workspaceText(run),
     primary,
     warning && warning !== run.error?.trim() ? `Warning: ${warning}` : undefined,
@@ -223,11 +228,13 @@ const sendNotice = (
 
 /** Decides whether a notice starts a parent turn, and learns when one was appended without one. */
 export interface NoticeDelivery {
-  /** Runs `send` once; it starts a turn only when told to and returns whether Pi accepted it. */
-  readonly deliver: (send: (startTurn: boolean) => boolean) => boolean;
+  /** Runs `send` once; it starts a turn only when told to. Reports how Pi took the notice. */
+  readonly deliver: (send: (startTurn: boolean) => boolean) => SessionWakeDelivery;
 }
 
-const STARTS_TURN: NoticeDelivery = { deliver: (send) => send(true) };
+const STARTS_TURN: NoticeDelivery = {
+  deliver: (send) => (send(true) ? "woken" : "refused"),
+};
 
 interface HostNotifierOptions {
   /** The parent wake policy; without one every notice starts or steers a turn. */
@@ -273,17 +280,18 @@ export function hostNotifier(
       return { deliveredCompletionKeys };
     }
     return {
-      actionAccepted: delivery.deliver((startTurn) =>
-        sendNotice(
-          pi,
-          {
-            customType: QUESTION_MESSAGE_TYPE,
-            details: { version: 1, kind: "question", name: displayName(notification.name) },
-            content: clip(questionContent(notification)),
-          },
-          startTurn,
-        ),
-      ),
+      actionAccepted:
+        delivery.deliver((startTurn) =>
+          sendNotice(
+            pi,
+            {
+              customType: QUESTION_MESSAGE_TYPE,
+              details: { version: 1, kind: "question", name: displayName(notification.name) },
+              content: clip(questionContent(notification)),
+            },
+            startTurn,
+          ),
+        ) !== "refused",
     };
   };
 }

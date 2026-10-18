@@ -13,11 +13,13 @@ import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import type { SubagentParentContext } from "../run/model.ts";
 import { invalidRequest, type InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import type { SubagentToolName } from "../run/tool-policy.ts";
+import { isAgentToolName, type AgentToolName, type SubagentToolName } from "../run/tool-policy.ts";
 import { blankStringPath } from "./arguments.ts";
 import { SubagentContractSchema, encodeSubagentContract } from "./contract-schema.ts";
 import {
+  AGENT_TOOL_SCHEMAS,
   SUBAGENT_TOOL_SCHEMAS,
+  type AgentToolInput,
   type SubagentToolArgs,
   type SubagentToolInput,
   type SubagentToolParameters,
@@ -28,7 +30,9 @@ export interface SubagentProxyRequest {
   readonly argumentsJson: string;
 }
 
-export const encodeSubagentProxyInput = (input: SubagentToolInput): SubagentProxyRequest => ({
+export const encodeSubagentProxyInput = (
+  input: SubagentToolInput | AgentToolInput,
+): SubagentProxyRequest => ({
   tool: input.tool,
   argumentsJson: JSON.stringify(input.args),
 });
@@ -187,6 +191,35 @@ export const decodeSubagentProxyRequest = (
   if (!isSubagentToolName(tool)) return invalid("Nested Pi requested an unknown coordinator tool.");
   return (
     decodeToolArguments(tool, decoded.value) ??
+    invalid(`Nested ${tool} arguments failed strict validation.`)
+  );
+};
+
+const decodeAgentToolArguments = <N extends AgentToolName>(
+  tool: N,
+  args: Schema.Json,
+): AgentToolInput<N> | undefined =>
+  Check(AGENT_TOOL_SCHEMAS[tool], args) && blankStringPath(args) === undefined
+    ? { tool, args }
+    : undefined;
+
+/**
+ * Decodes a nested `agent_*` call, or returns undefined for other tools. Arguments are the public
+ * tool arguments alone: the root binds the caller from the authenticated channel, so a payload that
+ * names a caller, ancestry, or parent context fails strict validation.
+ */
+export const decodeAgentProxyRequest = (
+  request: SubagentProxyRequest,
+): AgentToolInput | InvalidSubagentRequestError | undefined => {
+  const { tool } = request;
+  if (!isAgentToolName(tool)) return undefined;
+  if (request.argumentsJson.length > MAX_PROXY_JSON_CHARS)
+    return invalid("Nested agent request arguments were not bounded JSON.");
+  const decoded = decodeProxyArgumentsJson(request.argumentsJson);
+  if (Option.isNone(decoded))
+    return invalid("Nested agent request arguments were not bounded JSON.");
+  return (
+    decodeAgentToolArguments(tool, decoded.value) ??
     invalid(`Nested ${tool} arguments failed strict validation.`)
   );
 };

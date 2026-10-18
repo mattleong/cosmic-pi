@@ -4,7 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
 import * as Queue from "effect/Queue";
-import type { BackendReport } from "../backend/model.ts";
+import type { BackendAgentMessaging, BackendReport } from "../backend/model.ts";
 import { NATIVE_SUB_AGENT_REFUSAL } from "../supervisor/mcp-contract.ts";
 import type {
   SupervisorChannelId,
@@ -65,6 +65,8 @@ export type SupervisorContactPayload = typeof SupervisorProgressRpc.payloadSchem
 
 export interface SupervisorChannelState {
   readonly runId: SupervisorRunId;
+  /** Bound by the root to this run as the caller; requests never name their own caller. */
+  readonly agents: BackendAgentMessaging | undefined;
   readonly verifyToken: TokenVerifier;
   readonly events: Queue.Queue<SupervisorEvent, Cause.Done>;
   readonly peers: Map<number, RpcPeer>;
@@ -86,9 +88,11 @@ export const supervisorChannelState = (
   runId: SupervisorRunId,
   verifyToken: TokenVerifier,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
+  agents?: BackendAgentMessaging,
 ): Effect.Effect<SupervisorChannelState> =>
   Effect.map(Latch.make(), (readiness) => ({
     runId,
+    agents,
     verifyToken,
     events,
     peers: new Map(),

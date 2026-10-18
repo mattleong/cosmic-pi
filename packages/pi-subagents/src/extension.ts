@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { isSubagentChildProcess } from "./boundary/host-environment.ts";
+import { isSubagentChildProcess } from "pi-cosmic-core";
 
 export default function subagents(pi: ExtensionAPI): void | Promise<void> {
   if (isSubagentChildProcess()) return;

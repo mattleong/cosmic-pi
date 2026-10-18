@@ -11,8 +11,9 @@ A pnpm workspace for Pi extensions.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
 - [`pi-herdr-btw`](packages/pi-herdr-btw) — deterministic reusable blank Pi side sessions in user-owned panes in the current Herdr tab.
+- [`pi-intercom`](packages/pi-intercom) — discovery of, and messaging between, your live Pi sessions on this machine.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements: the footer and information area, and the Activity view for subagents and tasks.
-- [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents with supervisor communication and a `/subagents` fleet UI.
+- [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents with supervisor communication, messaging among a session's agents, and a `/subagents` fleet UI.
 
 ## Requirements
 
@@ -36,6 +37,7 @@ pi install "$PWD/packages/pi-code-previews"
 pi install "$PWD/packages/pi-cosmic-ui"
 pi install "$PWD/packages/pi-directory-models"
 pi install "$PWD/packages/pi-herdr-btw"
+pi install "$PWD/packages/pi-intercom"
 pi install "$PWD/packages/pi-subagents"
 ```
 
@@ -65,6 +67,7 @@ pnpm --filter pi-code-previews test
 pnpm --filter pi-cosmic-ui test
 pnpm --filter pi-directory-models test
 pnpm --filter pi-herdr-btw test
+pnpm --filter pi-intercom test
 pnpm --filter pi-subagents test
 ```
 
@@ -80,6 +83,7 @@ pi -e ./packages/pi-code-previews
 pi -e ./packages/pi-cosmic-ui
 pi -e ./packages/pi-directory-models
 pi -e ./packages/pi-herdr-btw
+pi -e ./packages/pi-intercom
 pi -e ./packages/pi-subagents
 ```
 

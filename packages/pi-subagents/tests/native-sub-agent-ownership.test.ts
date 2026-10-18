@@ -55,91 +55,97 @@ const HookRegistration = Schema.Struct({
 });
 const isHookRegistration = Schema.is(HookRegistration);
 
-const startedClaude = Effect.gen(function* () {
-  const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
-  const supervisorEvents = yield* Queue.unbounded<SupervisorEvent, Cause.Done>();
-  const sent: LocalCliOutboundFrame[] = [];
-  const offerChild = (value: ClaudeInboundFrame): void => {
-    Queue.offerUnsafe(childEvents, { type: "message", value: wireJson(value) });
-  };
-  const answerControl = (frame: Extract<LocalCliOutboundFrame, { type: "control_request" }>) =>
-    offerChild({
-      type: "control_response",
-      response: {
-        subtype: "success",
-        request_id: frame.request_id,
-        response: Match.value(frame.request.subtype).pipe(
-          Match.when("initialize", () => ({
-            models: [{ value: "fixture", resolvedModel: "fixture" }],
-          })),
-          Match.when("mcp_status", () => ({
-            mcpServers: [
-              {
-                name: SUPERVISOR_MCP_REGISTRATION,
-                status: "connected",
-                tools: SUPERVISOR_MCP_TOOL_NAMES.map((name) => ({ name })),
-              },
-            ],
-          })),
-          Match.orElse(() => ({})),
-        ),
-      },
-    });
-  const child: LocalCliHandle = {
-    pid: 1,
-    events: childEvents,
-    awaitExit: Effect.never,
-    acknowledge: () => {},
-    terminate: () => Effect.void,
-    send: (frame) =>
-      Effect.sync(() => {
-        sent.push(frame);
-        if (!("type" in frame)) return;
-        if (frame.type === "control_request") return answerControl(frame);
-        if (frame.type !== "user") return;
-        offerChild({
-          type: "user",
-          uuid: frame.uuid,
-          isReplay: true,
-          session_id: SESSION,
-          message: frame.message,
-        });
-        offerChild({
-          type: "result",
+const claudeBackend = (inventory: ReadonlyArray<string> = SUPERVISOR_MCP_TOOL_NAMES) =>
+  Effect.gen(function* () {
+    const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
+    const supervisorEvents = yield* Queue.unbounded<SupervisorEvent, Cause.Done>();
+    const sent: LocalCliOutboundFrame[] = [];
+    const offerChild = (value: ClaudeInboundFrame): void => {
+      Queue.offerUnsafe(childEvents, { type: "message", value: wireJson(value) });
+    };
+    const answerControl = (frame: Extract<LocalCliOutboundFrame, { type: "control_request" }>) =>
+      offerChild({
+        type: "control_response",
+        response: {
           subtype: "success",
-          is_error: false,
-          session_id: SESSION,
-          user_message_uuid: frame.uuid,
-        });
-      }),
-  };
-  const backend = yield* localClaudeBackendDriver(
-    {
-      preflight: () => Effect.void,
-      spawn: ({ launch }) =>
+          request_id: frame.request_id,
+          response: Match.value(frame.request.subtype).pipe(
+            Match.when("initialize", () => ({
+              models: [{ value: "fixture", resolvedModel: "fixture" }],
+            })),
+            Match.when("mcp_status", () => ({
+              mcpServers: [
+                {
+                  name: SUPERVISOR_MCP_REGISTRATION,
+                  status: "connected",
+                  tools: inventory.map((name) => ({ name })),
+                },
+              ],
+            })),
+            Match.orElse(() => ({})),
+          ),
+        },
+      });
+    const child: LocalCliHandle = {
+      pid: 1,
+      events: childEvents,
+      awaitExit: Effect.never,
+      acknowledge: () => {},
+      terminate: () => Effect.void,
+      send: (frame) =>
         Effect.sync(() => {
+          sent.push(frame);
+          if (!("type" in frame)) return;
+          if (frame.type === "control_request") return answerControl(frame);
+          if (frame.type !== "user") return;
           offerChild({
-            type: "system",
-            subtype: "init",
-            cwd: launch.cwd,
+            type: "user",
+            uuid: frame.uuid,
+            isReplay: true,
             session_id: SESSION,
-            model: launch.model,
-            tools: SUPERVISOR_MCP_TOOL_NAMES.map(supervisorTool),
-            mcp_servers: [{ name: SUPERVISOR_MCP_REGISTRATION, status: "connected" }],
+            message: frame.message,
           });
-          return child;
+          offerChild({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            session_id: SESSION,
+            user_message_uuid: frame.uuid,
+          });
         }),
-    },
-    {
-      open: () =>
-        Effect.succeed(
-          backendSupervisor(supervisorMetadata(), supervisorEvents, {
-            hasAcceptedReport: () => Effect.succeed(false),
-            acceptedReportForEpoch: () => Effect.undefined,
+    };
+    const backend = yield* localClaudeBackendDriver(
+      {
+        preflight: () => Effect.void,
+        spawn: ({ launch }) =>
+          Effect.sync(() => {
+            offerChild({
+              type: "system",
+              subtype: "init",
+              cwd: launch.cwd,
+              session_id: SESSION,
+              model: launch.model,
+              tools: SUPERVISOR_MCP_TOOL_NAMES.map(supervisorTool),
+              mcp_servers: [{ name: SUPERVISOR_MCP_REGISTRATION, status: "connected" }],
+            });
+            return child;
           }),
-        ),
-    },
-  ).spawn(backendLaunch());
+      },
+      {
+        open: () =>
+          Effect.succeed(
+            backendSupervisor(supervisorMetadata(), supervisorEvents, {
+              hasAcceptedReport: () => Effect.succeed(false),
+              acceptedReportForEpoch: () => Effect.undefined,
+            }),
+          ),
+      },
+    ).spawn(backendLaunch());
+    return { backend, sent, offerChild };
+  });
+
+const startedClaude = Effect.gen(function* () {
+  const { backend, sent, offerChild } = yield* claudeBackend();
   yield* backend.controls.initialize;
   const hookCallback = (requestId: string, toolName: string, agentId?: string) =>
     offerChild({
@@ -183,20 +189,43 @@ describe("native sub-agent report ownership", () => {
           expect.arrayContaining([
             supervisorTool("supervisor_submit_report"),
             supervisorTool("supervisor_question"),
+            supervisorTool("agent_send"),
           ]),
         );
-        expect(matchers).not.toContain(supervisorTool("supervisor_progress"));
-        expect(matchers).not.toContain(supervisorTool("supervisor_warning"));
+        for (const name of [
+          "supervisor_progress",
+          "supervisor_warning",
+          "agent_list",
+          "agent_read",
+        ])
+          expect(matchers).not.toContain(supervisorTool(name));
 
         hookCallback("sub-agent-report", supervisorTool("supervisor_submit_report"), "a6a15e2");
         const refused = yield* answerTo("sub-agent-report");
         expect(refused.hookSpecificOutput?.permissionDecision).toBe("deny");
         expect(refused.hookSpecificOutput?.permissionDecisionReason).toContain("parent");
 
+        hookCallback("sub-agent-send", supervisorTool("agent_send"), "a6a15e2");
+        expect((yield* answerTo("sub-agent-send")).hookSpecificOutput?.permissionDecision).toBe(
+          "deny",
+        );
+
         hookCallback("main-report", supervisorTool("supervisor_submit_report"));
         expect((yield* answerTo("main-report")).hookSpecificOutput).toBeUndefined();
       }),
     ),
+  );
+
+  it.effect("Claude starts only when the supervisor server lists exactly its tool set", () =>
+    Effect.gen(function* () {
+      const fewer = SUPERVISOR_MCP_TOOL_NAMES.filter((name) => name !== "agent_read");
+      for (const inventory of [fewer, [...SUPERVISOR_MCP_TOOL_NAMES, "agent_spawn"]]) {
+        const { backend } = yield* claudeBackend(inventory);
+        expect(yield* backend.controls.initialize.pipe(Effect.flip)).toMatchObject({
+          code: "claude_supervisor_tools_missing",
+        });
+      }
+    }).pipe(Effect.scoped),
   );
 
   it.effect("Codex names its main thread and follows 0.162 sub-agent activity", () =>

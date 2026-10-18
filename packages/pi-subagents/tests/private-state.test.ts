@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import { reusedProcessIdentity } from "pi-cosmic-core/testing";
 import {
   recordPrivateStateOwner,
   sweepAbandonedPrivateState,
@@ -65,7 +66,7 @@ const exitedProcessId = Effect.callback<number>((resume) => {
 });
 
 /** This process's PID recorded with another start time: the PID was reused. */
-const reusedPid = { pid: process.pid, started: "an earlier process" };
+const reusedPid = reusedProcessIdentity();
 
 describe("private state sweep", () => {
   it.live("removes state as soon as its owner is gone, credentials and rollouts included", () =>
@@ -152,28 +153,48 @@ describe("private state sweep", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("removes state without a provable owner only after a week untouched", () =>
+  it.live("removes state without an owner record only after a week untouched", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const root = path.join(agent, "subagents");
       const fresh = path.join(root, SESSION, "agent-r1-1");
       const stale = path.join(root, SESSION, "agent-r1-2");
-      const unknownOwner = path.join(root, SESSION, "agent-r1-3");
       const malformed = path.join(root, "supervisor-channels-v3", "agent-r1-4-0123456789ab");
       yield* entry(fresh, { "system-prompt.md": "prompt" });
       yield* entry(stale, { "system-prompt.md": "prompt" });
-      yield* entry(unknownOwner, { "system-prompt.md": "prompt" }, { pid: process.pid });
       yield* entry(malformed, { "connection.json": "{}", "owner.json": "not json" });
       yield* age(stale, 8);
-      yield* age(unknownOwner, 8);
       yield* age(malformed, 8);
 
       yield* sweepAbandonedPrivateState(agent);
 
       expect(yield* exists(fresh)).toBe(true);
       expect(yield* exists(stale)).toBe(false);
-      expect(yield* exists(unknownOwner)).toBe(false);
       expect(yield* exists(malformed)).toBe(false);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("keeps old state whose live owner recorded an incomparable identity", () =>
+    Effect.gen(function* () {
+      const agent = yield* temporaryAgent;
+      const session = path.join(agent, "subagents", SESSION);
+      const oldFormat = path.join(session, "agent-r1-1");
+      const withoutStart = path.join(session, "agent-r1-2");
+      const reused = path.join(session, "agent-r1-3");
+      yield* entry(
+        oldFormat,
+        { "system-prompt.md": "prompt" },
+        { pid: process.pid, started: "Sun Oct 18 20:54:19 2026" },
+      );
+      yield* entry(withoutStart, { "system-prompt.md": "prompt" }, { pid: process.pid });
+      yield* entry(reused, { "system-prompt.md": "prompt" }, reusedPid);
+      for (const directory of [oldFormat, withoutStart, reused]) yield* age(directory, 30);
+
+      yield* sweepAbandonedPrivateState(agent);
+
+      expect(yield* exists(oldFormat)).toBe(true);
+      expect(yield* exists(withoutStart)).toBe(true);
+      expect(yield* exists(reused)).toBe(false);
     }).pipe(Effect.scoped),
   );
 

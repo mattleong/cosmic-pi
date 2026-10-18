@@ -4,28 +4,30 @@ Part of the [pi-subagents](../README.md) documentation. Service-side gates are i
 
 Native Pi `codemode` runs JavaScript that coordinates ordinary subagents inside the main agent's turn. Pi owns the VM, dispatch, cancellation, and model access. Scripts suit short read-only coordination whose receipts the main agent needs in the same turn. Agents launched by a script still run in the background, and the main agent keeps responsibility for recovery, writer handoffs, and synthesis.
 
-These examples are for the root session. Nested Pi children delegate only through their model-only `subagent_*` proxy tools, and Claude and Codex children reach the root only through the supervisor channel. An explicit `profile` always wins; an omitted profile uses `generalist`.
+These examples are for the root session. Nested Pi children delegate only through their model-only `subagent_*` proxy tools, though their scripts may call `agent_list` and `agent_read`, and Claude and Codex children reach the root only through the supervisor channel. An explicit `profile` always wins; an omitted profile uses `generalist`.
 
 ## Script boundary
 
-- Root scripts can call `subagent_models`, `subagent_start`, `subagent_await`, `subagent_status`, and `subagent_lifecycle` with `action: "stop"`. Other coordinator tools are model-only.
+- Root scripts can call `subagent_models`, `subagent_start`, `subagent_await`, `subagent_status`, `subagent_lifecycle` with `action: "stop"`, `agent_list`, and `agent_read`. Other coordinator tools, including `agent_send`, are model-only.
 - Starts must resolve to read-only intent; by default that is every profile except `worker`. A writer entry becomes a failed receipt before admission without discarding independent successful entries.
 - Script-started runs carry an immutable restriction: descendants at every depth, retry successors, and resumed runs stay read-only, even when their delegation or retry is model-issued. The root main agent may still launch separate writer work outside a script-origin tree.
+- The restriction governs what script-origin runs start, not whom they message. A script-started run's model keeps `agent_send`, so it can guide any running agent in the session, including writers, and resume any finished local Pi run, including a writer outside its tree; the resumed run keeps its own write intent and reports to its own parent.
 - A scripted await or status that meets a question or pause rejects before consuming reports, and await leaves questions unacknowledged. End the script and let the main agent handle the attention; don't catch it to re-await in a loop.
-- Messages and answers to questions (`subagent_send`), worktree review and integration, interrupt, resume, and retry require the main agent.
+- Messages and answers to questions (`subagent_send`, `agent_send`), worktree review and integration, interrupt, resume, and retry require the main agent.
 - A script's stop uses the root's normal target authority, so it can stop any run in the session. Stop only runs the script launched or that the user approved stopping.
 
 These are orchestration safeguards, not capability confinement: read-only Pi agents and native tools keep their cooperative authority.
 
 ## Results and failures
 
-All five script-callable tools expose `outputSchema` and `structuredContent` with `contract: "pi-subagents/orchestration"`, `version: 3`, and the exact `tool` name, so scripts receive objects rather than presentation text. Use `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data, so check the envelope before using a result. Scripts should check `version` and stop rather than guess when it differs.
+All seven script-callable tools expose `outputSchema` and `structuredContent` with `contract: "pi-subagents/orchestration"`, `version: 3`, and the exact `tool` name, so scripts receive objects rather than presentation text. Use `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data, so check the envelope before using a result. Scripts should check `version` and stop rather than guess when it differs.
 
 - **Models:** `fallbackProfile` and `profiles`, optionally filtered. Each profile has its `id`, description, source, defaults, and declared-order `candidates` with runtime, model, effort, context, write intent, OpenAI fast mode, `status` (`eligible` or `skipped`), and reason. This is static eligibility, not readiness, and doesn't authorize substituting a model.
 - **Start:** `outcome` is `started`, `partial`, or `failed`. Request-ordered `launches` have `index` and `status`; successes add `runId`, the actual `profile`, and `modelOverride` when the item set `model`, and failures add `failure` and, after admitted-failure cleanup settles, optional `admittedRun` cleanup and retry facts.
 - **Await:** `outcome` is `finished`, `attention`, `cancelled`, `timed_out` (after `timeoutSeconds`), or `user_input`, with `requestedRunIds` and `targets`. Finished means the assignment settled, not that it succeeded. Scripted attention rejects instead. Cancellation keeps observed targets, unobserved IDs, and `cleanup`, and stops only the wait. A late abort during delivery yields `report.status: "unknown"`; recover with opt-in status.
 - **Status:** with `runIds`, `targets` and `missingRunIds`. Without `runIds`, a complete `runs` list in parent-before-child order with `parentRunId` and `depth`, never clipped and never reading or consuming reports; check for `runs` versus `targets`. Targets of a run launched on a model override carry `modelOverride`. With `runIds`, `includeDeliveredReports: true` reads the latest retained delivered report without a claim or notification; competing claims still redact it. Compare `reportGeneration` when an assignment may have changed. Eviction or session replacement can make a run unavailable.
 - **Lifecycle:** `outcome` is `succeeded`, `partial`, or `failed`. Ordered `results` keep `requestedRunId` separate from a retry successor's `target.runId`.
+- **Agent list and read:** `agents` and `missingIds`. List entries cover `main` and every run, parents first, with `state`, `parentId`, and `self`; read entries carry bounded `text` with `textStatus` and `truncated`, plus `source` and `reportGeneration` for runs ([last-message reads](completion-delivery.md#last-message-reads)). Reads never consume reports.
 
 Target `report.status` is `delivered` or `read_back` when `text` is present; otherwise `deferred`, `claimed`, `already_delivered`, `missing`, `not_finished`, or `unknown`. A deferred report is not consumed. Don't treat absent text as an empty deliverable, and never treat absent retry facts as permission to retry.
 
