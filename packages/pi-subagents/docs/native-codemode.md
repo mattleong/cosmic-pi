@@ -1,41 +1,41 @@
 # Native Pi codemode scripting
 
-Part of the [pi-subagents](../README.md) documentation. See [completion and delivery](completion-delivery.md#script-results-and-report-read-back) for the service and host boundaries.
+Part of the [pi-subagents](../README.md) documentation. Service-side gates are in [Script results and report read-back](completion-delivery.md#script-results-and-report-read-back).
 
-Native Pi `codemode` runs JavaScript that coordinates ordinary pi-subagents inside the main agent's own turn. Pi owns the VM, dispatch, cancellation and model access. Scripts suit short read-only coordination whose receipts the main agent needs in the same turn. Agents launched by a script still run in the background; the main agent retains responsibility for recovery, writer handoffs, and final synthesis.
+Native Pi `codemode` runs JavaScript that coordinates ordinary subagents inside the main agent's turn. Pi owns the VM, dispatch, cancellation, and model access. Scripts suit short read-only coordination whose receipts the main agent needs in the same turn. Agents launched by a script still run in the background, and the main agent keeps responsibility for recovery, writer handoffs, and synthesis.
 
-These examples are for the root session. Native nested delegation exists only inside local Pi children, through their `subagent_*` proxy tools, which remain model-only. Local Claude and Codex children reach the root only through the supervisor channel (progress, warnings, questions, and reports) and cannot delegate. The main agent chooses profiles and coordination branches. An explicit `profile` always wins; an omitted profile uses `generalist`, just as in model-issued starts.
+These examples are for the root session. Nested Pi children delegate only through their model-only `subagent_*` proxy tools, and Claude and Codex children reach the root only through the supervisor channel. An explicit `profile` always wins; an omitted profile uses `generalist`.
 
 ## Script boundary
 
-Root scripts can call `subagent_models`, `subagent_start`, `subagent_list`, `subagent_await`, `subagent_status`, `subagent_rename`, and `subagent_lifecycle` with `action: "stop"`. Other coordinator tools remain model-only. Starts must resolve to read-only write intent: a root script can launch any profile whose resolved route is read-only, which by default is every profile except `worker`. A writer entry becomes a failed launch receipt before admission, without discarding independent successful entries. Script-started runs carry an immutable internal restriction: descendants at every depth and retry successors must stay read-only, even when their delegation or retry is model-issued. Resume/respawn retains that restriction. Writer delegation is refused before writer leases, workspace creation, or history eviction. Model-started trees keep their existing behavior; the root main agent may explicitly launch separate writer work outside a script-origin tree.
+- Root scripts can call `subagent_models`, `subagent_start`, `subagent_await`, `subagent_status`, and `subagent_lifecycle` with `action: "stop"`. Other coordinator tools are model-only.
+- Starts must resolve to read-only intent; by default that is every profile except `worker`. A writer entry becomes a failed receipt before admission without discarding independent successful entries.
+- Script-started runs carry an immutable restriction: descendants at every depth, retry successors, and resumed runs stay read-only, even when their delegation or retry is model-issued. The root main agent may still launch separate writer work outside a script-origin tree.
+- A scripted await or status that meets a question or pause rejects before consuming reports, and await leaves questions unacknowledged. End the script and let the main agent handle the attention; don't catch it to re-await in a loop.
+- Replies, worktree review and integration, interrupt, resume, and retry require the main agent.
+- A script's stop uses the root's normal target authority, so it can stop any run in the session. Stop only runs the script launched or that the user approved stopping.
 
-A scripted await or status encountering a question, pause, or paused writer admission rejects before consuming reports; await also leaves questions unacknowledged. End that script and let the main agent handle the returned attention and existing notifications. Do not catch it merely to re-await in a loop. Replies, claim changes, worktree review/integration, interrupt, resume, and retry require the main agent.
-
-A root script's stop uses the root's normal target authority, not an origin check. It can stop any run in the session, including model-started trees and writers, not only runs the script launched. Stop only runs this script launched or that the user approved stopping; leave unrelated work alone.
-
-These are orchestration safeguards, not capability confinement: read-only Pi agents and native tools still have their existing cooperative authority.
+These are orchestration safeguards, not capability confinement: read-only Pi agents and native tools keep their cooperative authority.
 
 ## Results and failures
 
-All seven root tools—models, start, list, await, status, rename, and lifecycle—expose `outputSchema` and `structuredContent`. Human-facing content and persisted display details are unchanged. Each of their results has `contract: "pi-subagents/orchestration"`, `version: 1`, and its exact `tool` name. Native codemode therefore receives objects, not presentation text. Inspect declarations with `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data; check the envelope before using a result.
+All five script-callable tools expose `outputSchema` and `structuredContent` with `contract: "pi-subagents/orchestration"`, `version: 2`, and the exact `tool` name, so scripts receive objects rather than presentation text. Use `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data, so check the envelope before using a result.
 
-- **Models:** `fallbackProfile` and `profiles`, optionally filtered by requested profile. Each profile includes its stable `id`, description, source, defaults, and declared-order `candidates` with host, runtime, model, effort, context, write intent, OpenAI fast mode, close-on-report, `status` (`eligible` or `skipped`), and reason. This is static eligibility, not runtime authentication or readiness; it does not authorize substituting a model or bypassing an ineligible route.
-- **List:** the complete visible `runs` array in parent-before-child order, with report-free target fields plus `parentRunId` and `depth`. No display-card, retained-history, or targeted-action limit clips this array. Listing never claims, consumes, or reads back report text.
-- **Rename:** `requestedRunId` and `outcome`: `succeeded` carries the actual renamed, report-free `target`; `failed` carries the existing projected `failure`, including uncertainty. Existing capability checks, backend update, and peer notices still apply. A failed or interrupted rename may already have had an effect; inspect current state rather than blindly replaying the script.
+Version 2 replaced version 1 with breaking changes: status results are a union of `targets` and `runs` (the list tool is gone), the rename envelope was removed, and attention no longer has the `admission-paused` kind. Scripts written for version 1 should check `version` and stop rather than guess.
 
-- **Start:** `outcome` is `started`, `partial`, or `failed`. `launches` is request-ordered; each entry has `index` and `status`. Successful entries include `runId` and the actual `profile`. Failed entries include `failure` and, after admitted failure cleanup settles, optional `admittedRun` cleanup/retry facts.
-- **Await:** `outcome` is `finished`, `attention`, `cancelled`, `timed_out` (after an optional `timeoutSeconds`), or `user_input` (the user sent a message during the wait), with `requestedRunIds` and `targets`. Finished means the assignment settled, not that it succeeded or that backend cleanup is confirmed. Scripted attention rejects instead of returning the direct-call attention result. Cancellation retains observed targets, unobserved IDs, and `cleanup`; it stops only the wait. A late abort during delivery yields `report.status: "unknown"`, not a promise that the report remains unconsumed. Recover with opt-in status.
-- **Status:** `targets` and `missingRunIds`. `includeDeliveredReports: true` reads the latest retained delivered report without another claim, consumption, or notification. Competing claims still redact it. It is not historical storage; compare `reportGeneration` when an assignment may have changed. Eviction or session replacement can make a run unavailable.
-- **Lifecycle:** `outcome` is `succeeded`, `partial`, or `failed`. Ordered `results` preserve `requestedRunId` separately from a retry successor's `target.runId` in model-issued calls. Scripts may only stop, with the root's normal target authority described above.
+- **Models:** `fallbackProfile` and `profiles`, optionally filtered. Each profile has its `id`, description, source, defaults, and declared-order `candidates` with host, runtime, model, effort, context, write intent, OpenAI fast mode, close-on-report, `status` (`eligible` or `skipped`), and reason. This is static eligibility, not readiness, and doesn't authorize substituting a model.
+- **Start:** `outcome` is `started`, `partial`, or `failed`. Request-ordered `launches` have `index` and `status`; successes add `runId` and the actual `profile`, and failures add `failure` and, after admitted-failure cleanup settles, optional `admittedRun` cleanup and retry facts.
+- **Await:** `outcome` is `finished`, `attention`, `cancelled`, `timed_out` (after `timeoutSeconds`), or `user_input`, with `requestedRunIds` and `targets`. Finished means the assignment settled, not that it succeeded or that cleanup is confirmed. Scripted attention rejects instead. Cancellation keeps observed targets, unobserved IDs, and `cleanup`, and stops only the wait. A late abort during delivery yields `report.status: "unknown"`; recover with opt-in status.
+- **Status:** with `runIds`, `targets` and `missingRunIds`. Without `runIds`, a complete `runs` list in parent-before-child order with `parentRunId` and `depth`, never clipped and never reading or consuming reports; check for `runs` versus `targets`. With `runIds`, `includeDeliveredReports: true` reads the latest retained delivered report without a claim or notification; competing claims still redact it. Compare `reportGeneration` when an assignment may have changed. Eviction or session replacement can make a run unavailable.
+- **Lifecycle:** `outcome` is `succeeded`, `partial`, or `failed`. Ordered `results` keep `requestedRunId` separate from a retry successor's `target.runId`.
 
-Target `report.status` is `delivered` or `read_back` when `text` is present. Otherwise it is `deferred`, `claimed`, `already_delivered`, `missing`, `not_finished`, or `unknown`. A deferred owned report is not consumed; bounding leaves it available for notification or later observation. Do not treat absent text as an empty deliverable. Retry facts are optional authoritative observations; absence never grants permission to retry.
+Target `report.status` is `delivered` or `read_back` when `text` is present; otherwise `deferred`, `claimed`, `already_delivered`, `missing`, `not_finished`, or `unknown`. A deferred report is not consumed. Don't treat absent text as an empty deliverable, and never treat absent retry facts as permission to retry.
 
-Batch `outcome` and entry `status: "failed"` describe failed receipts, not rollback or absence of admitted work. Always check `failure.disposition` (`failed` versus `unconfirmed`) and admitted cleanup/retry facts before recovery. In particular, a failed stop can still have an unconfirmed effect. Returned partial/domain failures, including failed renames, resolve to objects even when Pi marks the direct tool result as an error. Validation, blocked calls, parent attention and thrown whole-call failures reject; an interrupted rename rejects rather than inventing a receipt. Do not parse exception prose to choose recovery.
+Batch `outcome` and entry `status: "failed"` describe receipts, not rollback or absence of admitted work. Check `failure.disposition` (`failed` versus `unconfirmed`) and admitted cleanup and retry facts before recovery; a failed stop can still have an unconfirmed effect. Partial and domain failures resolve to objects even when Pi marks the call as an error. Validation, blocked calls, parent attention, and whole-call failures reject. Never parse exception prose to choose recovery.
 
 ## Example: launch, checkpoint, then branch
 
-Run this as the first codemode call. It launches two bounded repository scouts and immediately prints the receipts. Storing IDs is convenient, but store writes commit only when the script succeeds; tool effects are not rolled back if it fails.
+Run this as the first codemode call. It launches two read-only scouts and prints the receipts at once. Store writes commit only when the script succeeds, and tool effects aren't rolled back if it fails.
 
 ```js
 const started = await tools.subagent_start({
@@ -53,20 +53,20 @@ const started = await tools.subagent_start({
   ],
 });
 text(started); // Preserve successful IDs even if a later step fails.
-if (started?.contract !== "pi-subagents/orchestration" || started.version !== 1)
+if (started?.contract !== "pi-subagents/orchestration" || started.version !== 2)
   throw new Error("Structured orchestration results are unavailable; hand back to the main agent.");
 const ids = started.launches.filter((x) => x.status === "started").map((x) => x.runId);
 store("codemode-demo-ids", ids);
 ```
 
-Continue independent main-agent work if there is any. At the dependency barrier, use a second codemode call:
+Continue independent main-agent work, if any. At the dependency barrier, use a second call:
 
 ```js
 const ids = load("codemode-demo-ids");
 if (!Array.isArray(ids) || ids.length === 0) return "No launched work to await";
 const result = await tools.subagent_await({ runIds: ids, until: "all_finished" });
 text(result); // Await may consume reports; preserve them before any later call can fail.
-if (result?.contract !== "pi-subagents/orchestration" || result.version !== 1) return result;
+if (result?.contract !== "pi-subagents/orchestration" || result.version !== 2) return result;
 if (
   result.outcome !== "finished" ||
   result.targets.some(
@@ -81,7 +81,7 @@ const missing = targets.filter((t) => !("text" in t.report)).map((t) => t.runId)
 if (missing.length) {
   const recovered = await tools.subagent_status({ runIds: missing, includeDeliveredReports: true });
   text(recovered); // Preserve observed reports even if validation or generation matching fails.
-  if (recovered?.contract !== "pi-subagents/orchestration" || recovered.version !== 1)
+  if (recovered?.contract !== "pi-subagents/orchestration" || recovered.version !== 2)
     return recovered;
   const byId = new Map(recovered.targets.map((t) => [t.runId, t]));
   targets = targets.map((t) => {
@@ -119,20 +119,20 @@ const followup = await tools.subagent_start({
   ],
 });
 text(followup); // Print the receipt and run ID before anything else can fail.
-if (followup?.contract !== "pi-subagents/orchestration" || followup.version !== 1) return followup;
+if (followup?.contract !== "pi-subagents/orchestration" || followup.version !== 2) return followup;
 // Hand failed or partial launches back to the main agent; do not retry from the script.
 if (followup.outcome !== "started")
   return { reports, followup, handoff: "Main-agent judgment needed" };
 return { reports, followup: followup.launches[0] };
 ```
 
-The main agent can choose different profiles, branches, and tasks for each assignment. These examples are not a prescribed DAG. Profiles use their configured model routes; scripts do not choose another role or model from report text. Keep evidence excerpts bounded and appropriate for the selected subagent. Writes, cleanup, claim changes, retries, integration, and user consent remain explicit main-agent decisions.
+These examples are not a prescribed DAG; the main agent chooses profiles, branches, and tasks. Scripts don't choose another role or model from report text. Keep evidence excerpts bounded and appropriate for the selected subagent.
 
-Use non-overlapping await batches of at most 12 IDs and respect the configured launch capacity. Bound loops and total steps, await every tool call, and avoid deadlines around launches that could hide admitted IDs. Print IDs immediately: partial output survives a failed script, while store writes do not. On interruption, inspect existing runs through the main agent rather than restarting the script. Reload/replacement ends the run registry even if stored IDs survive on the session branch.
+Use non-overlapping await batches of at most 12 IDs and respect launch capacity. Bound loops and total steps, await every call, and avoid deadlines around launches that could hide admitted IDs. Print IDs immediately: partial output survives a failed script, but store writes don't. On interruption, inspect existing runs through the main agent rather than restarting the script. Reload or replacement ends the run registry even if stored IDs survive on the branch.
 
 ## Pattern: read-only lanes with rolling hand-off
 
-Each area gets a scout, and as soon as one scout finishes its area moves on to a reviewer, without waiting for the slowest scout. `until: "any_finished"` returns when any requested run finishes, and `timeoutSeconds` bounds each wait. The loop is bounded, prints every receipt, and hands anything unusual back to the main agent.
+Each area gets a scout, and as soon as one finishes its area moves to a reviewer, without waiting for the slowest. `until: "any_finished"` returns when any requested run finishes, and `timeoutSeconds` bounds each wait.
 
 ```js
 const areas = ["packages/pi-subagents/src/run", "packages/pi-subagents/src/tools"];
@@ -144,7 +144,7 @@ const started = await tools.subagent_start({
   })),
 });
 text(started);
-if (started?.contract !== "pi-subagents/orchestration" || started.version !== 1) return started;
+if (started?.contract !== "pi-subagents/orchestration" || started.version !== 2) return started;
 const lanes = new Map(
   started.launches.filter((x) => x.status === "started").map((x) => [x.runId, areas[x.index]]),
 );
@@ -180,24 +180,15 @@ return { reviewers, unfinished: [...lanes.keys()] };
 
 ## Background tasks in the same script
 
-When pi-background-task is loaded, `background_task` also gives scripts version-1 structured results. Every success has `contract: "pi-background-task/task"`, `version: 1`, `tool: "background_task"`, and the `action` it ran. The model-facing text and details are unchanged.
+When pi-background-task is loaded, `background_task` also returns structured results to scripts; its contract is in the [pi-background-task reference](../../pi-background-task/docs/reference.md#native-code-mode-results). Points that matter when combining it with subagents:
 
-- **Task metadata:** `start`, `status`, and `stop` return one `task`; `list` and `stop_all` return `tasks`. A task has `id`, optional `name`, `state`, `finished`, `startedAt`, `logCursor`, and `droppedLogBytes`, plus `endedAt`, `exitCode`, `signal`, `error`, and a failed task's `cause` when known. It never includes the command, cwd, or process ID. `finished` means the task state is terminal. It does not prove that the process tree exited or was cleaned up, or that the command succeeded; read `state` and `exitCode`.
-- **Wait:** `outcome` is `matched`, `completed`, or `timeout`, with `task`, `nextCursor`, `earliestAvailableCursor`, `droppedBytes`, and `matchCursor` after a match. A timeout is data: the task keeps running and is not stopped. The configured `maxWaitSeconds` (30 seconds by default) caps every wait.
-- **Logs:** `id`, `state`, `finished`, `output`, `truncated`, `nextCursor`, `earliestAvailableCursor`, and `droppedBytes`. `output` is the newest sanitized stdout and stderr from the requested slice, at most 1 MiB, without the model-facing header, and `""` when nothing new arrived. Stderr chunks are prefixed `[stderr] ` before clipping; clipping can remove the first retained prefix. Output is not credential-redacted. With neither `afterCursor` nor `tailLines`, the slice is only the last 200 lines; use `afterCursor: 0` to request all retained output. `truncated` means payload clipping, not tail selection, and the clipped bytes cannot be paged; `droppedBytes` counts output the buffer had already discarded. Pass `nextCursor` as the next `afterCursor`.
-- **Clear:** `removed`.
-
-Success describes the operation, not the task. A wait on a command that exits non-zero resolves with `state: "failed"` and its `exitCode`. Unknown IDs, missing fields, invalid waits, cancellation, and termination failures reject and carry no structured result. An interrupted start may already have admitted a task without returning its ID; the main agent must inspect `background_task` list/status before replaying the command. A rejected stop is not a confirmed stop: the task can stay `stopping` with `finished: false` and keep consuming active capacity. If a result cannot be encoded, a direct model call retains the ordinary receipt marked as an error. A scripted call rejects with that receipt in its error message; the model sees it only if the script prints it or lets the error propagate.
-
-Scripts have the same local-user authority as model-issued `background_task` calls, and no narrower scope. `stop` accepts any task ID in the session, and `stop_all` and `clear` act on every task, including tasks the model or user started. Start only commands the main agent would run itself. Stop only a task this script started, and only when the plan or the user calls for it. Do not use `stop_all` or `clear` in a script.
-
-### Task IDs belong to one runtime
-
-Task IDs restart at `task-1` whenever the task registry is replaced. Reload, session replacement, and tree navigation each terminate the earlier tasks and start a new registry, but `store()` checkpoints survive on the session branch, so an old ID can name a different, newer task. Never reuse task IDs from a checkpoint written before the current runtime started. Delete it with `store(key, undefined)` and record new IDs from new starts. Comparing a stored `startedAt` with the task's current `startedAt` is a useful guard, not a substitute for clearing old checkpoints.
+- Scripts have the same local-user authority as model-issued calls. `stop` accepts any task in the session, and `stop_all` and `clear` act on every task. Stop only tasks the script started, and don't use `stop_all` or `clear` in a script.
+- A wait timeout is data: the task keeps running. `finished` means terminal, not successful; branch on `state` and `exitCode`, never on log or exception text.
+- Task IDs restart at `task-1` whenever the registry is replaced by reload, session replacement, or tree navigation, but `store()` checkpoints survive on the branch. Never reuse task IDs from a checkpoint written before the current runtime; clear it with `store(key, undefined)`. Comparing `startedAt` is a useful guard, not runtime identity.
 
 ### Example: agents plus a background test run
 
-The first codemode call launches a read-only scout and the package tests, prints both receipts, and replaces any older checkpoint.
+The first call launches a read-only scout and the package tests, prints both receipts, and replaces any older checkpoint.
 
 ```js
 const started = await tools.subagent_start({
@@ -218,9 +209,9 @@ const tests = await tools.background_task({
 text(tests);
 if (
   started?.contract !== "pi-subagents/orchestration" ||
-  started.version !== 1 ||
+  started.version !== 2 ||
   tests?.contract !== "pi-background-task/task" ||
-  tests.version !== 1
+  tests.version !== 2
 )
   throw new Error("Structured orchestration results are unavailable; hand back to the main agent.");
 store("agents-and-tests", {
@@ -229,7 +220,7 @@ store("agents-and-tests", {
 });
 ```
 
-At the dependency barrier, use the second call only without an intervening reload, replacement, or tree navigation. Its timestamp comparison is an additional stale-checkpoint guard, not runtime identity proof. It awaits the scout and then waits once for the tests.
+At the dependency barrier, use the second call only without an intervening reload, replacement, or tree navigation. It awaits the scout, then waits once for the tests.
 
 ```js
 const saved = load("agents-and-tests");
@@ -244,7 +235,7 @@ try {
 text(current);
 if (
   current?.contract !== "pi-background-task/task" ||
-  current.version !== 1 ||
+  current.version !== 2 ||
   current.tool !== "background_task" ||
   current.action !== "status"
 )
@@ -267,7 +258,7 @@ const waited = await tools.background_task({
 text(waited); // Preserve the receipt even if middleware removed structured data.
 if (
   waited?.contract !== "pi-background-task/task" ||
-  waited.version !== 1 ||
+  waited.version !== 2 ||
   waited.tool !== "background_task" ||
   waited.action !== "wait"
 )
@@ -291,15 +282,11 @@ store("agents-and-tests", undefined); // Done; these IDs must not outlive this r
 return "Scout finished and package tests passed";
 ```
 
-Branch on `state`, `exitCode`, and `outcome`, never on log or exception text. Do not restart failed tasks, relaunch agents, or loop on waits automatically. A script that meets a failure, timeout, or parent attention hands its evidence back; the main agent decides on retries, stops, and fixes.
+Don't restart failed tasks, relaunch agents, or loop on waits automatically. A script that meets a failure, timeout, or parent attention hands its evidence back; the main agent decides on retries, stops, and fixes.
 
 ### Optional interrupted-wait check
 
-To exercise the complete native script, compose the examples above:
-
-1. Write a follow-up task with the concrete existing-implementation review goal above and only small, approved context. Set `profile: "reviewer"` explicitly. If the entry fails, stop and hand back; do not relaunch from the script. A read-only launch does not authorize writes or recovery.
-2. Launch that follow-up alongside the test task. Print both receipts immediately, including the launched IDs, and commit the `agents-and-tests` checkpoint in a successful script. For the optional drill, also clear the probe with `store("interrupted-wait-probe", undefined)` in this successful launch script. Use a test run long enough that its wait is still pending during the drill; for example, `pnpm --filter pi-background-task test && pnpm --filter pi-subagents test`.
-3. In a **separate call containing no launches or stops**, deliberately interrupt only the waits:
+To exercise cancellation, launch a follow-up reviewer alongside a long test task in one successful script (committing the `agents-and-tests` checkpoint and clearing `interrupted-wait-probe`), then interrupt only the waits in a separate call containing no launches or stops:
 
 ```js
 // @options: {"timeout_ms": 1500, "max_output_tokens": 2500}
@@ -327,7 +314,4 @@ const waits = await Promise.allSettled([
 text(waits);
 ```
 
-This intentionally fails if a wait remains pending at 1.5 seconds. It is a diagnostic, not the normal barrier pattern. A fast job may finish first; that is not proof of interruption. Earlier successful checkpoints survive, failed-script store writes do not commit, and cancellation does not stop either launched job. If any wait reports attention or another failure instead, hand its evidence to the main agent rather than repeating the drill.
-
-4. The main agent inspects the **existing IDs** with direct `subagent_status` and `background_task` status calls. Do not replay the launch script. Without an intervening runtime replacement, verify the checkpoint remains and `load("interrupted-wait-probe")` is `undefined`, then resume the ordinary barrier only after main-agent review.
-5. Inspect the task's structured `state` and `exitCode`; retain logs as evidence, not control input. If the agent report was already delivered, recover it with `subagent_status({ runIds, includeDeliveredReports: true })`, comparing `reportGeneration`. Clear the checkpoint after successful synthesis. No automatic retry, writer handoff, or scheduler is involved.
+This intentionally fails if a wait is still pending at 1.5 seconds; a fast job finishing first proves nothing. Cancellation stops neither job, and the failed script's store write must not commit. The main agent then inspects the existing IDs with direct `subagent_status` and `background_task` status calls, verifies `load("interrupted-wait-probe")` is `undefined`, and recovers any delivered report with `includeDeliveredReports`. Never replay the launch script, and don't repeat the drill after attention or another failure.

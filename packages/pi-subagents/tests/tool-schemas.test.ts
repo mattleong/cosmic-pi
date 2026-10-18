@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { WRITER_WORKSPACE_MODES } from "../src/config/schema.ts";
 import { toolDefinitions as supervisorToolDefinitions } from "../src/supervisor/mcp-wire.ts";
 import {
-  claimsOperationError,
+  statusOperationError,
   subagentArgumentPreparer,
   SUBAGENT_TOOL_SCHEMAS,
   workspaceOperationError,
@@ -102,16 +102,10 @@ describe("workspace apply arguments", () => {
   });
 });
 
-describe("claimsOperationError", () => {
-  it("rejects cross-field combinations the previous union rejected", () => {
-    expect(claimsOperationError({ action: "list", runIds: ["a"], runId: "a" })).toEqual(
-      expect.any(String),
-    );
-    expect(
-      claimsOperationError({ action: "grant", runId: "a", paths: ["p"], runIds: ["a"] }),
-    ).toEqual(expect.any(String));
-    expect(claimsOperationError({ action: "resume_admission", runId: "a", paths: ["p"] })).toEqual(
-      expect.any(String),
-    );
+describe("statusOperationError", () => {
+  it("rereads delivered reports only for named runs", () => {
+    expect(statusOperationError({ includeDeliveredReports: true })).toEqual(expect.any(String));
+    expect(statusOperationError({ runIds: ["a"], includeDeliveredReports: true })).toBeUndefined();
+    expect(statusOperationError({})).toBeUndefined();
   });
 });

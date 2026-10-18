@@ -8,8 +8,20 @@ import { WorkspaceToolDetailsSchema, type WorkspaceToolDetails } from "./details
 
 function reviewPosition(details: WorkspaceToolDetails): string {
   const first = (details.offset ?? 0) === 0;
-  if (details.nextOffset === undefined) return first ? "whole diff" : "last diff page";
-  return `${first ? "first" : "next"} diff page, more to read`;
+  if (details.nextOffset === undefined) return first ? "whole review" : "last review page";
+  return `${first ? "first" : "next"} review page, more to read`;
+}
+
+const VERIFICATION_LABELS = {
+  passed: "verified",
+  "parent-tested": "tested",
+  "not-configured": "not verified",
+} as const;
+
+function appliedFiles(changed: number, remaining: number | undefined): string {
+  return remaining === undefined
+    ? `${countLabel(changed, "file")} applied`
+    : `${changed} of ${countLabel(changed + remaining, "file")} applied`;
 }
 
 // Narrower fallbacks first drop the file count, then the review state, keeping verification.
@@ -17,13 +29,21 @@ function applyCounters(details: WorkspaceToolDetails): string[] {
   if (details.verification === undefined || details.changedPathCount === undefined) return [];
   if (details.verification === "failed")
     return ["not applied · verification failed", "not applied"];
-  const verified = details.verification === "passed" ? "verified" : "not verified";
+  const verified = VERIFICATION_LABELS[details.verification];
   const reviewed = details.reviewed ? "reviewed" : "unreviewed";
   return [
-    `${countLabel(details.changedPathCount, "file")} applied · ${reviewed} · ${verified}`,
+    `${appliedFiles(details.changedPathCount, details.remainingPathCount)} · ${reviewed} · ${verified}`,
     `${reviewed} · ${verified}`,
     verified,
   ];
+}
+
+function reviseLine(details: WorkspaceToolDetails): string {
+  if (!details.rebased) return "revision requested";
+  const conflicts = details.conflictCount ?? 0;
+  return conflicts === 0
+    ? "rebased · revision requested"
+    : `rebased with ${countLabel(conflicts, "conflict")} · revision requested`;
 }
 
 export function workspaceReceiptLine(details: WorkspaceToolDetails): string | undefined {
@@ -48,12 +68,15 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
       return reviewPosition(details);
     case "prepare":
       return "ready to test";
+    // Saved by versions before apply took over integrating a prepared pair.
     case "integrate":
       return "integrated";
     case "apply":
       return applyCounters(details)[0];
+    case "export":
+      return details.exportFormat === "branch" ? "exported to a branch" : "exported as a patch";
     case "revise":
-      return "revision requested";
+      return reviseLine(details);
     case "discard":
       return "discarded";
   }
@@ -114,6 +137,12 @@ type WorkspaceOperationReceipt = WorkspaceToolDetails &
         readonly preparationId: string;
       }
     | {
+        readonly operation: "export";
+        readonly workspaceId: string;
+        readonly revisionId: string;
+        readonly exportFormat: NonNullable<WorkspaceToolDetails["exportFormat"]>;
+      }
+    | {
         readonly operation: "apply";
         readonly workspaceId: string;
         readonly revisionId: string;
@@ -132,10 +161,11 @@ function hasOperationReceipt(details: WorkspaceToolDetails): details is Workspac
   if (details.operation === "list") return true;
   if (!details.workspaceId) return false;
   if (
-    ["review", "prepare", "integrate", "apply"].includes(details.operation) &&
+    ["review", "prepare", "integrate", "apply", "export"].includes(details.operation) &&
     !details.revisionId
   )
     return false;
+  if (details.operation === "export" && details.exportFormat === undefined) return false;
   if (
     details.operation === "apply" &&
     (details.changedPathCount === undefined ||
@@ -191,7 +221,7 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
       step(
         "orphan-recovery",
         "Listing a workspace does not authorize its recovery",
-        "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan. When the user asks, discard deletes an orphan whose creating session has ended once no writer holds it.",
+        "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan. Once its creating session has ended and no writer holds it, export saves its proposal as a patch without changing it, and, when the user asks, discard deletes it.",
       ),
     );
   if (details.nextOffset !== undefined)
@@ -208,13 +238,13 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
 function reviewIssues(details: WorkspaceReviewReceipt): CompactIssue[] {
   const next =
     details.nextOffset === undefined
-      ? " End of diff does not prove earlier pages were read."
+      ? " End of review does not prove earlier pages were read."
       : ` Next: review workspaceId=${details.workspaceId}, revisionId=${details.revisionId}, offset=${details.nextOffset}.`;
   return [
     step(
       "read-revision",
-      "Read every diff page before preparing",
-      `Diff page available in expanded details. Read ALL pages of exact revisionId=${details.revisionId} before prepare or integrate.${next}`,
+      "Read every review page before preparing",
+      `Review page available in expanded details; the first page summarizes changed files and line counts. Read ALL pages of exact revisionId=${details.revisionId} before prepare.${next}`,
     ),
     step(
       "prepare-revision",
@@ -227,11 +257,32 @@ function reviewIssues(details: WorkspaceReviewReceipt): CompactIssue[] {
       "Run relevant tests in the returned combined cwd; do not edit the prepared tree.",
     ),
     step(
-      "integrate-preparation",
-      "Integrate only after tests pass",
-      "Only after passing tests, integrate the exact revisionId and preparationId.",
+      "apply-preparation",
+      "Apply only after tests pass",
+      "Only after passing tests, apply the exact revisionId and preparationId.",
     ),
   ];
+}
+
+function verificationStep(details: WorkspaceApplyReceipt, command: string): CompactIssue {
+  switch (details.verification) {
+    case "passed":
+      return step("applied-verified", "Verification passed before apply", `Command: ${command}`);
+    case "parent-tested":
+      return step(
+        "applied-parent-tested",
+        "Applied the preparation you tested",
+        "Apply integrated the exact revisionId and preparationId you prepared and ran no verification of its own; the tests you ran in the prepared cwd are the evidence.",
+      );
+    case "not-configured":
+    case "failed":
+      return step(
+        "applied-unverified",
+        "No verification is configured, so the change wasn't tested",
+        "Run relevant tests in the parent checkout before relying on this change.",
+      );
+  }
+  return absurd(details.verification);
 }
 
 function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
@@ -246,13 +297,25 @@ function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
         detail: [
           `Command: ${command}`,
           ...(details.verificationMessage ? [`Failure: ${details.verificationMessage}`] : []),
-          `Nothing was applied and parent files are unchanged. ${ids}; this preparation can't be integrated.`,
-          `Prepared tree: ${details.preparedCwd ?? "see expanded details"}. Inspect it without editing, then revise or discard the workspace, or review every page, prepare again, and integrate that new preparation.`,
+          `Nothing was applied and parent files are unchanged. ${ids}; this preparation can't be applied.`,
+          `Prepared tree: ${details.preparedCwd ?? "see expanded details"}. Inspect it without editing, then revise or discard the workspace, or review every page, prepare again, and apply that new preparation.`,
         ].join("\n"),
       },
     ];
+  const remaining = details.remainingPathCount;
   return [
     ...asWarnings(details),
+    ...(remaining === undefined
+      ? []
+      : [
+          step(
+            "remaining-proposal",
+            remaining === 1
+              ? "One changed file stays in the workspace"
+              : `${remaining} changed files stay in the workspace`,
+            `Partial apply integrated only the chosen paths. The revision's ${countLabel(remaining, "other changed file")} ${remaining === 1 ? "stays" : "stay"} in workspace ${details.workspaceId} as an unreviewed proposal; apply, review, export, revise, or discard ${remaining === 1 ? "it" : "them"} later.`,
+          ),
+        ]),
     ...(details.reviewed
       ? []
       : [
@@ -262,13 +325,59 @@ function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
             "Apply integrated the proposal without a complete diff review. Inspect the changed files in the parent checkout if the change needs review.",
           ),
         ]),
-    details.verification === "passed"
-      ? step("applied-verified", "Verification passed before apply", `Command: ${command}`)
-      : step(
-          "applied-unverified",
-          "No verification is configured, so the change wasn't tested",
-          "Run relevant tests in the parent checkout before relying on this change.",
-        ),
+    verificationStep(details, command),
+  ];
+}
+
+type WorkspaceExportReceipt = Extract<WorkspaceOperationReceipt, { readonly operation: "export" }>;
+
+function exportIssues(details: WorkspaceExportReceipt): CompactIssue[] {
+  const branch = details.exportBranch ?? "<branch>";
+  const patch = details.exportPath ?? "<patch>";
+  const location =
+    details.exportFormat === "branch"
+      ? `Branch ${branch}: its commit adds the proposal to HEAD; inspect it with git diff HEAD...${branch} and merge it with git merge ${branch}. The index, HEAD, and files are unchanged.`
+      : `Patch ${patch}, in the repository's Git directory: apply it from the repository root with git apply ${patch}, adding --3way to merge with local edits.`;
+  return [
+    step(
+      details.exportFormat === "branch" ? "use-export-branch" : "use-export-patch",
+      details.exportFormat === "branch"
+        ? "The proposal is on a branch to merge by hand"
+        : "The proposal is in a patch file to apply by hand",
+      location,
+    ),
+    step(
+      "export-proposal-kept",
+      "The workspace is unchanged and still a proposal",
+      `Export applied nothing and resolved nothing. Workspace ${details.workspaceId} stays until it is applied or discarded; discard it once the export is all that's needed.`,
+    ),
+    ...asWarnings(details),
+  ];
+}
+
+function reviseIssues(details: WorkspaceToolDetails): CompactIssue[] {
+  const conflicts = details.conflictCount ?? 0;
+  return [
+    {
+      severity: "warning",
+      code: "revision-invalidated",
+      message: "Earlier review and test preparation no longer apply",
+      detail: `Prior review and preparation are invalid. Await successor ${details.successorRunId ?? "shown in expanded details"}, then review its new immutable revision from the beginning before preparing and testing again.`,
+    },
+    ...(details.rebased && conflicts > 0
+      ? [
+          {
+            severity: "warning" as const,
+            code: "rebase-conflicts",
+            message:
+              conflicts === 1
+                ? "One file has merge conflicts for the writer to resolve"
+                : `${conflicts} files have merge conflicts for the writer to resolve`,
+            detail:
+              "The rebase rebuilt the writer's tree from current parent files and reapplied its changes; these files kept conflict markers. The successor's task lists them and asks it to resolve them first. Review its new revision for leftover markers.",
+          },
+        ]
+      : []),
   ];
 }
 
@@ -286,20 +395,16 @@ function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
           `Combined test cwd: ${details.preparedCwd ?? "see expanded details"}. Run relevant tests there; do not edit this prepared tree.`,
         ),
         step(
-          "integrate-preparation",
-          "Integrate only after tests pass",
-          "After passing tests and complete diff review, integrate this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
+          "apply-preparation",
+          "Apply only after tests pass",
+          "After passing tests and complete review, apply this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
         ),
+        ...asWarnings(details),
       ];
     case "revise":
-      return [
-        {
-          severity: "warning",
-          code: "revision-invalidated",
-          message: "Earlier review and test preparation no longer apply",
-          detail: `Prior review and preparation are invalid. Await successor ${details.successorRunId ?? "shown in expanded details"}, then review its new immutable revision from the beginning before preparing and testing again.`,
-        },
-      ];
+      return reviseIssues(details);
+    case "export":
+      return exportIssues(details);
     case "integrate":
       return asWarnings(details);
     case "apply":

@@ -116,7 +116,7 @@ const useSet = (
   if (action.action === "use-current") {
     const preview = PROFILE_IDS.map(
       (profile) =>
-        `${profile}: ${resolved.profiles[profile].candidates.map((candidate) => `${candidate.host}/${candidate.runtime} ${candidate.model}${candidate.openaiFastMode ? " ⚡" : ""} · ${candidate.effort}`).join(" → ") || "disabled"}`,
+        `${profile}: ${resolved.profiles[profile].candidates.map((candidate) => `local/${candidate.runtime} ${candidate.model}${candidate.openaiFastMode ? " ⚡" : ""} · ${candidate.effort}`).join(" → ") || "disabled"}`,
     ).join("\n");
     return host
       .confirm(

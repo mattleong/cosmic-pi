@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import { runBoundedProcessNode } from "pi-cosmic-core";
+import { runBoundedProcessNode, type BoundedProcessResult } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import { gitInstallation } from "./git-installation.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
@@ -33,11 +33,7 @@ export const workspaceRefusal = (
 export const workspaceIO = <A>(operation: string, run: () => PromiseLike<A>) =>
   Effect.tryPromise({
     try: run,
-    catch: () =>
-      workspaceFailure(
-        operation,
-        "Workspace filesystem operation failed; retained artifacts may require recovery.",
-      ),
+    catch: () => workspaceFailure(operation, "A workspace filesystem operation failed."),
   });
 export const workspaceIOIfPresent = <A>(operation: string, run: () => Promise<A>) =>
   workspaceIO(operation, () =>
@@ -47,11 +43,35 @@ export const workspaceIOIfPresent = <A>(operation: string, run: () => Promise<A>
     }),
   );
 
-export const git = (
-  cwd: string,
-  args: ReadonlyArray<string>,
-  options?: { readonly stdin?: Uint8Array },
-) =>
+const MAX_GIT_DETAIL_LINES = 12;
+const MAX_GIT_DETAIL_CHARS = 2000;
+
+/** The last lines of Git's stderr, without control characters, for a failure's detail. */
+export const gitStderrLines = (stderr: string) =>
+  stderr
+    .split("\n")
+    .map((line) => line.replace(/\p{Cc}/gu, " ").trimEnd())
+    .filter((line) => line !== "")
+    .slice(-MAX_GIT_DETAIL_LINES)
+    .map((line) => line.slice(0, MAX_GIT_DETAIL_CHARS));
+
+// The subcommand, past any leading `-c name=value` overrides.
+const gitSubcommand = (args: ReadonlyArray<string>) => {
+  let index = 0;
+  while (args[index] === "-c") index += 2;
+  return args[index] ?? "";
+};
+
+export type GitResult = BoundedProcessResult;
+
+export interface GitOptions {
+  readonly stdin?: Uint8Array;
+  /** Extra variables, such as a temporary `GIT_INDEX_FILE` that keeps the real index untouched. */
+  readonly environment?: Readonly<Record<string, string>>;
+}
+
+/** Runs Git and returns its result whatever its exit status; fails only when Git can't run. */
+export const gitResult = (cwd: string, args: ReadonlyArray<string>, options?: GitOptions) =>
   gitInstallation.pipe(
     Effect.flatMap((installation) =>
       runBoundedProcessNode({
@@ -93,6 +113,7 @@ export const git = (
           GIT_AUTHOR_EMAIL: "workspace@invalid",
           GIT_COMMITTER_NAME: "Pi workspace",
           GIT_COMMITTER_EMAIL: "workspace@invalid",
+          ...options?.environment,
         },
         ...(options?.stdin && { stdin: options.stdin }),
         stdoutLimitBytes: 48 * 1024 * 1024,
@@ -106,22 +127,90 @@ export const git = (
           () =>
             new WorkspaceError({
               operation: "git",
-              message: "Git execution failed; no automatic retry is safe.",
+              message: "Git couldn't be run; no automatic retry is safe.",
               cleanupUnconfirmed: true,
             }),
         ),
       ),
     ),
+  );
+
+export const gitSucceeded = (result: GitResult) =>
+  result.code === 0 && !result.timedOut && !result.overflowed && !result.cleanupUnconfirmed;
+
+/**
+ * Says what failed without claiming what happened to workspace artifacts, which the caller
+ * decides; only uncertain process cleanup retains them for recovery.
+ */
+export const gitFailure = (args: ReadonlyArray<string>, result: GitResult) => {
+  const command = `git ${gitSubcommand(args)}`;
+  const stderr = gitStderrLines(result.stderr);
+  const message = result.cleanupUnconfirmed
+    ? `A Git process's cleanup is uncertain (${command}); workspace artifacts were retained for recovery.`
+    : result.timedOut
+      ? `Git timed out (${command}).`
+      : result.overflowed
+        ? `Git produced more output than a workspace allows (${command}).`
+        : `Git failed (${command}).`;
+  return new WorkspaceError({
+    operation: "git",
+    message,
+    ...(stderr.length > 0 && { detail: `Git reported:\n${stderr.join("\n")}` }),
+    ...(result.cleanupUnconfirmed && { cleanupUnconfirmed: true }),
+  });
+};
+
+const MAX_LISTED_PATHS = 5;
+
+/** Names up to five paths, then how many more there are. */
+export const listedPaths = (paths: ReadonlyArray<string>) =>
+  `${paths
+    .slice(0, MAX_LISTED_PATHS)
+    .map((name) => JSON.stringify(name))
+    .join(
+      ", ",
+    )}${paths.length > MAX_LISTED_PATHS ? `, and ${paths.length - MAX_LISTED_PATHS} more` : ""}`;
+
+/**
+ * The changed paths `git apply --check` reported conflicts for. Git names each in an `error:`
+ * line, such as `patch failed: <path>:<line>` or `<path>: already exists in working directory`.
+ */
+export const applyConflictPaths = (stderr: string, changedPaths: ReadonlyArray<string>) => {
+  const errors = stderr.split("\n").filter((line) => line.startsWith("error: "));
+  return changedPaths.filter((name) =>
+    errors.some(
+      (line) =>
+        line.startsWith(`error: ${name}: `) || line.startsWith(`error: patch failed: ${name}:`),
+    ),
+  );
+};
+
+/** The reviewed patch doesn't apply to the parent's current files. */
+export const applyConflict = (result: GitResult, changedPaths: ReadonlyArray<string>) => {
+  const paths = applyConflictPaths(result.stderr, changedPaths);
+  const stderr = gitStderrLines(result.stderr);
+  return new WorkspaceError({
+    operation: "prepare",
+    code: "workspace_conflict",
+    message:
+      paths.length === 1
+        ? "The proposal conflicts with a parent file."
+        : paths.length > 1
+          ? `The proposal conflicts with ${paths.length} parent files.`
+          : "The proposal conflicts with the parent's files.",
+    detail: [
+      ...(paths.length > 0 ? [`Conflicting: ${listedPaths(paths)}`] : []),
+      ...(stderr.length > 0 ? [`Git reported:\n${stderr.join("\n")}`] : []),
+      "Nothing was changed, and the preparation tree was removed.",
+      "Remedy: reconcile the conflicting parent files and prepare again, or discard this workspace and start a writer from the current checkout.",
+    ].join("\n"),
+  });
+};
+
+export const git = (cwd: string, args: ReadonlyArray<string>, options?: GitOptions) =>
+  gitResult(cwd, args, options).pipe(
     Effect.flatMap((result) =>
-      result.code === 0 && !result.timedOut && !result.overflowed && !result.cleanupUnconfirmed
-        ? Effect.succeed(result.stdout)
-        : Effect.fail(
-            new WorkspaceError({
-              operation: "git",
-              message: "Git operation failed or cleanup is uncertain; artifacts were retained.",
-              cleanupUnconfirmed: result.cleanupUnconfirmed,
-            }),
-          ),
+      gitSucceeded(result) ? Effect.succeed(result.stdout) : Effect.fail(gitFailure(args, result)),
     ),
   );
 

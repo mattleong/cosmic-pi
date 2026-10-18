@@ -23,9 +23,9 @@ import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import * as SubagentLayers from "../src/layer.ts";
-import { captureSubagentControlExpectation, type SubagentProjection } from "../src/run/model.ts";
+import type { SubagentProjection } from "../src/run/model.ts";
 import { SubagentService } from "../src/run/service.ts";
-import { encodeFleetActionRequest } from "../src/tools/proxy-fleet.ts";
+import { encodeSubagentProxyInput } from "../src/tools/proxy-protocol.ts";
 import { view } from "./fixtures/run-view.ts";
 import { completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
@@ -166,20 +166,19 @@ describe("subagent Pi registration", () => {
         state: "waiting_for_parent",
         question: { requestId: "current-question", message: "Proceed?" },
       });
-      const expectation = captureSubagentControlExpectation(pending);
       const reply = vi.fn(() => Effect.succeed(view({ id: pending.id })));
       const service = subagentServiceDouble({
         visibleList: () => Effect.succeed([view({ id: "caller" }), pending]),
         authorizeTargets: () => Effect.void,
         reply,
       });
-      const fleetAction = encodeFleetActionRequest(
-        { tool: "subagent_reply", args: { runId: pending.id, message: "Yes" } },
-        expectation,
-      );
+      const replyRequest = encodeSubagentProxyInput({
+        tool: "subagent_reply",
+        args: { runId: pending.id, message: "Yes" },
+      });
       const dispatch = (options: SubagentLayers.SubagentLayerOptions) =>
         options
-          .proxyHandler(service, "caller", { ...fleetAction, requestId: "fleet-action" })
+          .proxyHandler(service, "caller", { ...replyRequest, requestId: "reply" })
           .pipe(
             Effect.provideService(SubagentProfileService, fallbackProfileService),
             Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
@@ -189,7 +188,7 @@ describe("subagent Pi registration", () => {
       });
       expect(reply).not.toHaveBeenCalled();
       yield* dispatch(current).pipe(Effect.orDie);
-      expect(reply).toHaveBeenCalledWith(pending.id, "Yes", expectation);
+      expect(reply).toHaveBeenCalledWith(pending.id, "Yes", undefined);
       current.notify({
         type: "question",
         id: "current",

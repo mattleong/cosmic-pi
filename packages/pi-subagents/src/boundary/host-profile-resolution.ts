@@ -19,13 +19,13 @@ import {
 } from "../run/errors.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
-import { type SubagentEffort, type SubagentHost, type SubagentRuntime } from "../domain/routing.ts";
+import type { SubagentEffort } from "../domain/routing.ts";
 import type { RuntimeApiKey, StartSubagentRequest, SubagentParentContext } from "../run/model.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import type { SubagentRetryClaim } from "../run/retry.ts";
 import {
-  profileCandidateLabel,
   PROFILE_IDS,
+  skippedCandidateRoute,
   supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileDefinition,
@@ -82,13 +82,6 @@ interface ResolvedModel {
   readonly model: string;
   readonly runtimeApiKey?: RuntimeApiKey | undefined;
 }
-
-const routeLabel = (route: {
-  readonly host: SubagentHost;
-  readonly runtime: SubagentRuntime;
-  readonly model: string;
-  readonly effort: SubagentEffort;
-}): string => `${route.host}/${route.runtime}/${route.model}:${route.effort}`;
 
 const resolvePiModel = (
   selector: string,
@@ -180,14 +173,12 @@ const resolveConcreteModel = (
       });
     yield* registry.preflight(
       {
-        host: attempt.host,
         runtime: attempt.runtime,
         context: attempt.effectiveContext,
       },
       {
         context: attempt.effectiveContext,
         writeIntent: attempt.writeIntent,
-        closeOnReport: attempt.closeOnReport,
         model: resolved.model,
         effort: attempt.effort,
         cwd,
@@ -201,7 +192,7 @@ const dynamicCandidateSkip = (
   error: InvalidSubagentRequestError,
 ): SkippedProfileCandidate => ({
   candidateIndex: attempt.candidateIndex,
-  candidate: routeLabel(attempt),
+  candidate: skippedCandidateRoute(attempt),
   code: (error.code ?? "") || error._tag,
   reason: error.message,
 });
@@ -258,9 +249,7 @@ const selectCandidate = (
         const configuredCandidate = input.routeCandidates[attempt.candidateIndex];
         skipped.push({
           candidateIndex: attempt.candidateIndex,
-          candidate: configuredCandidate
-            ? profileCandidateLabel(configuredCandidate)
-            : routeLabel(attempt),
+          candidate: skippedCandidateRoute(configuredCandidate ?? attempt),
           code: "write_claims_read_only",
           reason: "writes may be supplied only for a writer profile candidate.",
         });
@@ -318,7 +307,7 @@ const resolvePlannedStart = (
       routeSource: attempt.routeSource,
       candidateIndex: attempt.candidateIndex,
       reason: input.retry
-        ? `Profile ${input.definition.id} continued failed run ${input.retry.sourceRunId} with frozen route candidate ${attempt.candidateIndex + 1} (${attempt.host}/${attempt.runtime}).`
+        ? `Profile ${input.definition.id} continued failed run ${input.retry.sourceRunId} with frozen route candidate ${attempt.candidateIndex + 1} (local/${attempt.runtime}).`
         : attempt.reason,
       skippedCandidates: skipped,
     };
@@ -344,9 +333,7 @@ const resolvePlannedStart = (
       ...(name && { name }),
       ...(normalizedClaims && { writes: normalizedClaims.claims }),
       ...(isolation && { writerWorkspaceModeOverride: isolation }),
-      host: attempt.host,
       runtime: attempt.runtime,
-      closeOnReport: attempt.closeOnReport,
       openaiFastMode: attempt.openaiFastMode,
       task,
       profile: input.definition.id,
@@ -448,9 +435,7 @@ export const resolveProfileRetry = (
       claim.continuation.candidates[claim.continuation.selectedCandidateIndex];
     const failedSkip: SkippedProfileCandidate = {
       candidateIndex: claim.continuation.selectedCandidateIndex,
-      candidate: failedCandidate
-        ? profileCandidateLabel(failedCandidate)
-        : routeLabel(claim.source),
+      candidate: skippedCandidateRoute(failedCandidate ?? claim.source),
       code: "previous_run_failed",
       reason: `Candidate ${claim.continuation.selectedCandidateIndex + 1} failed in ${claim.source.id}: ${claim.source.error ?? "Run failed without a diagnostic."}`,
     };

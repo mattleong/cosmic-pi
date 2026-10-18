@@ -4,15 +4,10 @@ import * as Effect from "effect/Effect";
 import { flow } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { JsonDocumentStore, configDocumentErrorFactory, type JsonObject } from "pi-cosmic-core";
 import {
-  invokeHostCallback,
-  JsonDocumentStore,
-  configDocumentErrorFactory,
-  type JsonObject,
-} from "pi-cosmic-core";
-import {
+  declaredProfileCandidate,
   isProfileId,
   PROFILE_IDS,
   type DeclaredProfileRoute,
@@ -44,7 +39,6 @@ import {
   type WriterWorkspaceMode,
   WriterWorkspaceModeSchema,
 } from "./schema.ts";
-import { ownTypedProperty } from "./probe.ts";
 
 export class SubagentConfigStoreError extends Schema.TaggedError<SubagentConfigStoreError>()(
   "SubagentConfigStoreError",
@@ -221,10 +215,7 @@ const applyProfilePatch: ApplyPatch<SubagentProfilePatch> = Effect.fnUntraced(
   function* (current, patch, path) {
     if (!isProfileSetName(patch.profileSet) || !isProfileId(patch.profile))
       return yield* mutationError(path, "Invalid profile target.");
-    const routeProperty = ownTypedProperty(patch, "route");
-    const captured = routeProperty.valid
-      ? captureProfilePatchRoute(routeProperty.present ? routeProperty.value : undefined)
-      : undefined;
+    const captured = captureProfilePatchRoute(patch.route);
     if (!captured) return yield* mutationError(path, "Invalid profile route.");
     const { route } = captured;
     const sets = { ...currentProfileSets(current) };
@@ -292,24 +283,19 @@ const snapshotProfilesJson = (
     path,
     "The session snapshot contains an invalid profile route.",
   );
-  const keys = invokeHostCallback(() => Reflect.ownKeys(routes), undefined);
-  if (!keys) return Effect.fail(invalidRoute);
-  if (
-    keys.length !== PROFILE_IDS.length ||
-    !keys.every((key) => Predicate.isString(key) && isProfileId(key))
-  )
+  const keys = Object.keys(routes);
+  if (keys.length !== PROFILE_IDS.length || !keys.every(isProfileId))
     return Effect.fail(
       mutationError(path, "A session snapshot must contain exactly all seven profiles."),
     );
   const profiles: JsonObject = {};
   for (const profile of PROFILE_IDS) {
-    const field = ownTypedProperty(routes, profile);
-    const route = field.valid && field.present ? decodeProfileRoute(field.value) : undefined;
+    const route = decodeProfileRoute(routes[profile]);
     if (!route) return Effect.fail(invalidRoute);
     profiles[profile] =
       route.candidates.length === 0
         ? "disabled"
-        : route.candidates.map((candidate) => candidateJson(candidate));
+        : route.candidates.map((candidate) => candidateJson(declaredProfileCandidate(candidate)));
   }
   return Effect.succeed(profiles);
 };

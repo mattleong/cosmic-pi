@@ -18,7 +18,9 @@ import {
   type SubagentConfigStoreError,
   type SubagentProfileRestorePatch,
 } from "../src/config/store.ts";
+import { isRecord } from "../src/config/profile-restore.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
+import { declaredProfileCandidate } from "../src/profiles/model.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import { objectContaining, stringContaining } from "./support/matchers.ts";
 
@@ -108,7 +110,17 @@ describe("SubagentConfigStore activation", () => {
         [PROJECT]: { version: 6 },
       });
       const config = yield* store.load(CWD, AGENT, true);
-      expect(config.profiles.worker).toEqual({ candidates: [worker] });
+      expect(config.profiles.worker).toEqual({
+        candidates: [
+          {
+            runtime: "pi",
+            model: "openai/worker",
+            effort: "high",
+            context: "fresh",
+            writeIntent: "writer",
+          },
+        ],
+      });
       expect(config.profileSources.worker).toBe("global");
       expect(config.fallbackProfile).toBe("generalist");
       expect(config.nesting).toEqual({ maxDirectChildren: 12, maxDepth: 3, maxActiveRuns: 16 });
@@ -185,10 +197,9 @@ describe("SubagentConfigStore profile writes", () => {
       ];
       const initial = v6({ scout: declaredCandidate("parent", { effort: "default" }), reviewer });
       const { memory, store } = yield* setup({ [GLOBAL]: initial });
-      const scout = profileCandidate("openai-codex/gpt-5.6-sol", {
-        effort: "low",
-        openaiFastMode: true,
-      });
+      const scout = declaredProfileCandidate(
+        profileCandidate("openai-codex/gpt-5.6-sol", { effort: "low", openaiFastMode: true }),
+      );
       yield* store.patchProfile(CWD, AGENT, {
         ...at("global", initial),
         profileSet: "default",
@@ -264,7 +275,27 @@ describe("SubagentConfigStore profile sets", () => {
         profileSet: "alpha",
         profiles: BUILTIN_PROFILE_ROUTES,
       });
-      const generalist = profileCandidate("openai-codex/gpt-5.6-sol", { openaiFastMode: true });
+      // Saved candidates keep spelling out the version-6 retired fields.
+      expect(memory.documents.get(GLOBAL)?.profileSets).toEqual({
+        alpha: {
+          profiles: objectContaining({
+            scout: [
+              {
+                host: "local",
+                runtime: "pi",
+                model: "parent",
+                effort: "default",
+                context: "fresh",
+                writeIntent: "read-only",
+                closeOnReport: true,
+              },
+            ],
+          }),
+        },
+      });
+      const generalist = declaredProfileCandidate(
+        profileCandidate("openai-codex/gpt-5.6-sol", { openaiFastMode: true }),
+      );
       yield* store.patchProfile(CWD, AGENT, {
         ...current(),
         profileSet: "alpha",
@@ -298,6 +329,22 @@ describe("SubagentConfigStore profile sets", () => {
   );
 });
 
+type KeyOrder = string | number | boolean | null | ReadonlyArray<KeyOrder>;
+const keyOrder = (value: JsonObject[string] | undefined): KeyOrder => {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(keyOrder);
+  return isRecord(value)
+    ? Object.entries(value).map(([key, item]) => [key, keyOrder(item)])
+    : value;
+};
+
+const savedWorker = (document: JsonObject | undefined): JsonObject[string] | undefined => {
+  const sets = document?.profileSets;
+  const saved = isRecord(sets) ? sets.saved : undefined;
+  const profiles = isRecord(saved) ? saved.profiles : undefined;
+  return isRecord(profiles) ? profiles.worker : undefined;
+};
+
 describe("profile declaration visit restore", () => {
   const candidate = {
     host: "local",
@@ -329,10 +376,20 @@ describe("profile declaration visit restore", () => {
       return { memory, result };
     });
 
-  for (const declaration of [candidate])
+  const reordered = {
+    writeIntent: "writer",
+    closeOnReport: true,
+    model: "openai/worker",
+    effort: "high",
+    runtime: "pi",
+    context: "fresh",
+    host: "local",
+  } as const;
+  for (const declaration of [candidate, [reordered, candidate]])
     it.effect(`preserves declaration ${JSON.stringify(declaration)}`, () =>
       Effect.gen(function* () {
         const { memory, result } = yield* restore(original, { declaration });
+        expect(keyOrder(savedWorker(memory.documents.get(GLOBAL)))).toEqual(keyOrder(declaration));
         const profiles: JsonObject = { scout: "disabled" };
         if (declaration !== undefined) profiles.worker = declaration;
         const expected = {
@@ -348,14 +405,6 @@ describe("profile declaration visit restore", () => {
 
   it.effect("rejects invalid or unauthorized restores without changing the document", () =>
     Effect.gen(function* () {
-      let reads = 0;
-      const accessor = {
-        ...candidate,
-        get closeOnReport() {
-          reads += 1;
-          return true;
-        },
-      };
       for (const patch of [
         { declaration: [] },
         { declaration: { ...candidate, host: "herdr" } },
@@ -364,7 +413,6 @@ describe("profile declaration visit restore", () => {
         { declaration: { ...candidate, unknown: true } },
         { declaration: { ...candidate, openaiFastMode: "false" } },
         { declaration: "broken" },
-        { declaration: accessor },
         { profileSet: "missing" },
         { scope: "project" as const, projectTrusted: false },
         { expectedDocument: { version: 6 } },
@@ -373,7 +421,6 @@ describe("profile declaration visit restore", () => {
         expect(result._tag).toBe("Failure");
         expect(memory.documents.get(GLOBAL)).toEqual(original);
       }
-      expect(reads).toBe(0);
     }),
   );
 

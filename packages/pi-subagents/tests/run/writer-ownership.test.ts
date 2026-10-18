@@ -39,7 +39,6 @@ describe("SubagentService", () => {
       const counts = leaseCounts();
       const projections: SubagentProjection[] = [];
       const driver: BackendDriver = {
-        host: "local",
         runtime: "pi",
         capabilities: ["steer"],
         supportsContext: (context) => context === "fresh",
@@ -75,10 +74,8 @@ describe("SubagentService", () => {
         const failure = yield* service
           .start(
             request({
-              host: "local",
               runtime: "pi",
               writeIntent: "writer",
-              closeOnReport: true,
               name: "uncertain-local-writer",
             }),
           )
@@ -97,7 +94,6 @@ describe("SubagentService", () => {
         const conflict = yield* service
           .start(
             request({
-              host: "local",
               runtime: "pi",
               name: "replacement",
               writeIntent: "writer",

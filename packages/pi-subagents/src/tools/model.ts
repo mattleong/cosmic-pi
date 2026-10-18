@@ -1,10 +1,5 @@
 import type { ProfileCandidate, ProfileId, ProfileRouteSource } from "../profiles/model.ts";
-import type {
-  SubagentEffort,
-  SubagentHost,
-  SubagentRuntime,
-  SubagentWriteIntent,
-} from "../domain/routing.ts";
+import type { SubagentEffort, SubagentRuntime, SubagentWriteIntent } from "../domain/routing.ts";
 import type { FailedStartRecovery, SubagentRunView } from "../run/model.ts";
 
 export interface SubagentStartFailure {
@@ -17,7 +12,6 @@ export interface SubagentStartFailure {
 
 export interface SubagentStartResolvedRoute {
   readonly profile: string;
-  readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effort: SubagentEffort;

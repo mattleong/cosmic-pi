@@ -12,7 +12,11 @@ import {
 } from "../src/config/schema.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../src/config/store.ts";
 import { resolvePiModelSelector } from "../src/run/model-catalog.ts";
-import { isNativeProfileModelSelector, type ProfileCandidate } from "../src/profiles/model.ts";
+import {
+  declaredProfileCandidate,
+  isNativeProfileModelSelector,
+  type ProfileCandidate,
+} from "../src/profiles/model.ts";
 import { resolveProfileContinuationPlan, resolveProfilePlan } from "../src/profiles/resolve.ts";
 import {
   SubagentProfileService,
@@ -63,7 +67,7 @@ const document = (value?: {
 };
 
 const candidate = (value: Partial<ProfileCandidate> = {}) =>
-  profileCandidate("parent", { effort: "default", ...value });
+  declaredProfileCandidate(profileCandidate("parent", { effort: "default", ...value }));
 const invalidRoutes = (decoded: DecodedSubagentConfig) =>
   decoded.invalidProfileSetRoutes.default ?? [];
 
@@ -120,32 +124,26 @@ const environment = {
 };
 
 describe("subagent v6 profile configuration and resolution", () => {
-  it("decodes disabled, one candidate, and ordered candidates with closeOnReport defaulting true", () => {
-    const decoded = subagentConfigDecoder("global")(
-      document({
-        profiles: {
-          scout: candidate(),
-          worker: [
-            candidate({ model: "openai/gpt-review", effort: "medium", writeIntent: "writer" }),
-            candidate({ runtime: "claude", model: "sonnet", closeOnReport: true }),
-          ],
-          reviewer: "disabled",
-        },
-      }),
-    );
+  it("decodes disabled, one candidate, and ordered candidates with optional closeOnReport", () => {
+    const { closeOnReport: _omitted, ...scout } = candidate();
+    const worker = [
+      candidate({ model: "openai/gpt-review", effort: "medium", writeIntent: "writer" }),
+      candidate({ runtime: "claude", model: "sonnet" }),
+    ];
+    const global = document({ profiles: { scout, worker, reviewer: "disabled" } });
+    const decoded = subagentConfigDecoder("global")(global);
     expect(invalidRoutes(decoded)).toEqual([]);
-    expect(decoded.file.profileSets?.default?.profiles?.scout).toMatchObject({
-      closeOnReport: true,
+    expect(decoded.file.profileSets?.default?.profiles).toEqual({
+      scout,
+      worker,
+      reviewer: "disabled",
     });
-    expect(decoded.file.profileSets?.default?.profiles?.worker).toEqual([
-      candidate({
-        model: "openai/gpt-review",
-        effort: "medium",
-        writeIntent: "writer",
-        closeOnReport: true,
-      }),
-      candidate({ runtime: "claude", model: "sonnet", closeOnReport: true }),
+    const config = resolveTestConfig(global);
+    expect(config.profiles.scout.candidates).toEqual([
+      profileCandidate("parent", { effort: "default" }),
     ]);
+    expect(config.profiles.worker.candidates[1]).not.toHaveProperty("host");
+    expect(config.profiles.worker.candidates[1]).not.toHaveProperty("closeOnReport");
   });
 
   it("bounds and redacts named profile sets and fails invalid defaults closed", () => {
@@ -224,8 +222,8 @@ describe("subagent v6 profile configuration and resolution", () => {
           scout: { ...candidate(), execution: "background" },
           researcher: { ...candidate(), host: "herdr" },
           planner: candidate({ runtime: "claude", model: "sonnet", context: "fork" }),
-          worker: candidate({ closeOnReport: false, writeIntent: "writer" }),
-          reviewer: candidate({ closeOnReport: false }),
+          worker: { ...candidate({ writeIntent: "writer" }), closeOnReport: false },
+          reviewer: { ...candidate(), closeOnReport: false },
         },
       }),
     );

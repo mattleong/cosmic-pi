@@ -2,7 +2,12 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { SubagentError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
-import type { SubagentWorkspaceOutcome } from "./model.ts";
+import { diffStatTotals, type WorkspaceDiffStatFile } from "../workspace/diffstat.ts";
+import {
+  MAX_OUTCOME_DIFFSTAT_FILES,
+  type SubagentWorkspaceDiffStat,
+  type SubagentWorkspaceOutcome,
+} from "./model.ts";
 import {
   mapWorkspaceError,
   runHoldsCwd,
@@ -13,10 +18,24 @@ import {
 } from "./workspace-binding.ts";
 import type { workspaceReviewOperations } from "./workspace-review.ts";
 
+const outcomeFile = (file: WorkspaceDiffStatFile): SubagentWorkspaceDiffStat["files"][number] => ({
+  path: file.path,
+  addedLines: file.addedLines,
+  deletedLines: file.deletedLines,
+  ...(file.binary && { binary: true as const }),
+});
+
+const outcomeDiffStat = (
+  files: ReadonlyArray<WorkspaceDiffStatFile>,
+): SubagentWorkspaceDiffStat => ({
+  ...diffStatTotals(files),
+  files: files.slice(0, MAX_OUTCOME_DIFFSTAT_FILES).map(outcomeFile),
+});
+
 /**
  * Best-effort cleanup once a completed worktree writer's processes are confirmed stopped: a
  * workspace whose tree matches its baseline, with no uncaptured files and no unresolved child
- * workspaces, is discarded; any other records its change count. It never delays report delivery, and any doubt keeps the workspace.
+ * workspaces, is discarded; any other records its change counts and bounded diffstat. It never delays report delivery, and any doubt keeps the workspace.
  */
 export function workspaceSettleOperations(
   context: WorkspaceControlContext,
@@ -25,7 +44,7 @@ export function workspaceSettleOperations(
 ) {
   const { engine, records, state, withLock, operations, unresolvedChildrenLocked } = context;
   // The parent may already be reviewing or applying it; only an untouched, settled
-  // workspace that no run still uses is eligible.
+  // workspace that no run still uses is eligible. The engine refuses a quarantined one.
   const eligibleLocked = (
     record: RunRecord,
     assignmentEpoch: number,
@@ -40,15 +59,8 @@ export function workspaceSettleOperations(
       record.process !== undefined ||
       record.cleanupPending ||
       record.cleanupDisposition !== "confirmed" ||
-      binding.finished ||
-      binding.busy !== undefined ||
-      binding.preparing ||
-      binding.revision !== undefined ||
-      binding.reopenPending ||
-      binding.setupCleanupPending ||
-      binding.reviewedRevision !== undefined ||
-      binding.testedPreparation !== undefined ||
-      binding.verificationFailedPreparation !== undefined
+      binding.state.phase !== "idle" ||
+      binding.state.knowledge.kind !== "unreviewed"
     )
       return undefined;
     const directory = workspaceArtifactDirectory(binding.handle);
@@ -101,17 +113,19 @@ export function workspaceSettleOperations(
                   children.workspaceIds.length === 0 &&
                   children.creating === 0
                 ) {
-                  yield* discardLocked(engine, binding);
-                  binding.autoDiscarded = true;
+                  yield* discardLocked(engine, binding, "auto-discarded");
                 }
                 yield* recordOutcomeLocked(
                   record,
-                  binding.autoDiscarded
+                  binding.state.phase === "finished"
                     ? { status: "auto-discarded" }
                     : {
                         status: "proposal",
                         changedFileCount,
                         ...(uncapturedFileCount > 0 && { uncapturedFileCount }),
+                        ...(changes.diffStat.length > 0 && {
+                          diffStat: outcomeDiffStat(changes.diffStat),
+                        }),
                       },
                 );
               }),

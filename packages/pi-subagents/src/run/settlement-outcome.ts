@@ -78,8 +78,6 @@ export const viewForSettlement = (
   lastActivityAt: now,
   currentTool: undefined,
   question: undefined,
-  // Offender-only containment ends with the run; its write audit remains as evidence.
-  ...(record.view.writeAdmissionPaused !== true && { writeViolationOffender: undefined }),
   ...(record.view.steeringDelivery === "pending" && {
     steeringDelivery:
       state === "completed" ? ("report-unconfirmed" as const) : ("unresolved" as const),

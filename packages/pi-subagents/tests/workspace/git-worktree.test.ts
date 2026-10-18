@@ -6,7 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { git } from "../../src/boundary/git-worktree-process.ts";
-import { WorkspaceService } from "../../src/workspace/service.ts";
+import { WorkspaceService, type WorkspaceServiceContract } from "../../src/workspace/service.ts";
 import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
 import { type WorkspaceHandle } from "../../src/workspace/model.ts";
 import {
@@ -217,36 +217,96 @@ const publicationArtifacts = (root: string) =>
     ),
   );
 
-test("keeps backups for manual recovery when publication stops partway", function* (service, root) {
+// Publication stops at src/main.ts because an editor saved it after the preimage check, so
+// other.txt is already published with its original in a backup.
+const originalPublish = files.publishWorkspaceFile;
+const stopPublicationAtMain = (
+  service: WorkspaceServiceContract,
+  handle: WorkspaceHandle,
+  root: string,
+) =>
+  Effect.gen(function* () {
+    yield* writeFile(path.join(handle.cwd, "other.txt"), "published first\n");
+    yield* writeFile(path.join(handle.cwd, "src/main.ts"), "never published\n");
+    const { integration } = yield* prepareIntegration(handle);
+    const spy = vi.spyOn(files, "publishWorkspaceFile").mockImplementation((request, hooks) =>
+      Effect.gen(function* () {
+        if (request.name === "main.ts")
+          yield* writeFile(path.join(request.directory, request.name), "editor save\n");
+        return yield* originalPublish(request, hooks);
+      }).pipe(Effect.orDie),
+    );
+    yield* failureOf(service.integrate(integration)).pipe(
+      Effect.ensuring(Effect.sync(() => spy.mockRestore())),
+    );
+    expect(yield* readText(root, "other.txt")).toBe("published first\n");
+    expect(yield* readText(root, "src/main.ts")).toBe("editor save\n");
+  });
+
+test("discard rolls back a publication that stopped partway", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "other.txt"), "published first\n");
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "never published\n");
-  const { integration } = yield* prepareIntegration(handle);
-  const original = files.publishWorkspaceFile;
-  const spy = vi.spyOn(files, "publishWorkspaceFile").mockImplementation((request) =>
-    Effect.gen(function* () {
-      if (request.name === "main.ts")
-        yield* writeFile(path.join(request.directory, request.name), "editor save\n");
-      return yield* original(request);
-    }),
-  );
-  const failure = yield* failureOf(service.integrate(integration)).pipe(
-    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
-  );
-  expect(failure.message).toContain("No automatic rollback");
+  yield* stopPublicationAtMain(service, handle, root);
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.status).toBe("integrating");
-  expect(record.publishedCount).toBe(1);
-  expect(yield* readText(root, "other.txt")).toBe("published first\n");
-  expect(yield* readText(root, "src/main.ts")).toBe("editor save\n");
   // The conflicting file was put back as it was found, so only the published file's backup remains.
-  const backups = (record.journal ?? [])
-    .slice(0, record.publishedCount)
-    .map((entry) => entry.backupPath);
-  expect(yield* publicationArtifacts(root)).toEqual(backups);
-  expect(yield* readText(root, backups[0]!)).toBe("other\n");
+  expect(yield* publicationArtifacts(root)).toEqual([record.journal?.[0]?.backupPath]);
   expect((yield* io(() => fs.stat(path.join(root, "src/main.ts")))).nlink).toBe(1);
-  expect(yield* fails(service.discard(workspaceTarget(handle)))).toBe(true);
+  yield* service.discard(workspaceTarget(handle));
+  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("discarded");
+  expect(yield* readText(root, "other.txt")).toBe("other\n");
+  expect(yield* readText(root, "src/main.ts")).toBe("editor save\n");
+  expect(yield* publicationArtifacts(root)).toEqual([]);
+  expect(yield* exists(handle.cwd)).toBe(false);
+});
+
+test("refuses rollback while a published file has changed since, then completes it", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* stopPublicationAtMain(service, handle, root);
+  yield* writeFile(path.join(root, "other.txt"), "edited after publication\n");
+  const refused = yield* failureOf(service.discard(workspaceTarget(handle)));
+  expect(refused.code).toBe("workspace_rollback_refused");
+  expect(refused.detail).toContain('"other.txt"');
+  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("integrating");
+  expect(yield* readText(root, "other.txt")).toBe("edited after publication\n");
+  expect(yield* publicationArtifacts(root)).toHaveLength(1);
+  yield* writeFile(path.join(root, "other.txt"), "published first\n");
+  yield* service.discard(workspaceTarget(handle));
+  expect(yield* readText(root, "other.txt")).toBe("other\n");
+  expect(yield* publicationArtifacts(root)).toEqual([]);
+});
+
+test("rollback removes created files and the directories made for them", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* io(() => fs.mkdir(path.join(handle.cwd, "feature/deep"), { recursive: true }));
+  yield* writeFile(path.join(handle.cwd, "feature/deep/new.ts"), "new\n");
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
+  const { integration } = yield* prepareIntegration(handle);
+  const spy = vi
+    .spyOn(files, "publishWorkspaceFile")
+    .mockImplementation((request, hooks) =>
+      request.name === "main.ts"
+        ? Effect.succeed({ status: "uncertain", reason: "io-failure" })
+        : originalPublish(request, hooks),
+    );
+  yield* failureOf(service.integrate(integration)).pipe(
+    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
+  );
+  expect(yield* readText(root, "feature/deep/new.ts")).toBe("new\n");
+  yield* service.discard(workspaceTarget(handle));
+  expect(yield* exists(path.join(root, "feature"))).toBe(false);
+  expect(yield* readText(root, "src/main.ts")).toBe("baseline\n");
+});
+
+test("keeps a frozen revision's patch out of its record and reads it back", function* (service, root, agent) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker change\n");
+  const { revision, integration } = yield* prepareIntegration(handle);
+  expect(revision.diff).toContain("+worker change");
+  const record = yield* readText(agent, "git-workspaces", handle.workspaceId, "record.json");
+  expect(record).not.toContain("worker change");
+  expect(yield* service.revision(workspaceTarget(handle))).toEqual(revision);
+  yield* service.integrate(integration);
+  expect(yield* readText(root, "src/main.ts")).toBe("worker change\n");
 });
 
 test("binds acceptance to unchanged worker, tested tree and source preimages", function* (service, root) {
@@ -259,32 +319,81 @@ test("binds acceptance to unchanged worker, tested tree and source preimages", f
   yield* writeFile(path.join(handle.cwd, "other.txt"), "late worker\n");
   expect(yield* fails(service.integrate(request))).toBe(true);
   yield* writeFile(path.join(handle.cwd, "other.txt"), "other\n");
-  yield* writeFile(path.join(root, "other.txt"), "late parent\n");
-  expect(yield* fails(service.integrate(request))).toBe(true);
-  expect(yield* readText(root, "src/main.ts")).toBe("baseline\n");
-  expect(yield* readText(root, "other.txt")).toBe("late parent\n");
+  yield* writeFile(path.join(root, "src/main.ts"), "late parent\n");
+  const touched = yield* failureOf(service.integrate(request));
+  expect(touched.code).toBe("workspace_parent_changed");
+  expect(touched.detail).toContain('"src/main.ts"');
+  expect(yield* readText(root, "src/main.ts")).toBe("late parent\n");
+  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("prepared");
 });
 
-test("keeps the worker when it holds files the integrated revision left out", function* (service, root) {
+test("keeps parent edits to files the proposal doesn't touch, naming them", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  const invoice = path.join(handle.cwd, "src/Billing/Invoice.cs");
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  yield* io(() => fs.mkdir(path.dirname(invoice), { recursive: true }));
-  yield* writeFile(invoice, "class Invoice {}\n");
+  const { integration } = yield* prepareIntegration(handle);
+  yield* writeFile(path.join(root, "other.txt"), "late parent\n");
+  yield* writeFile(path.join(root, "src/late.ts"), "new parent file\n");
+  const integrated = yield* service.integrate(integration);
+  expect(integrated.untouchedDriftPaths).toEqual(["other.txt", "src/late.ts"]);
+  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
+  expect(yield* readText(root, "other.txt")).toBe("late parent\n");
+  expect(yield* readText(root, "src/late.ts")).toBe("new parent file\n");
+});
+
+test("carries every new worker file, whatever its name or extension", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  const created = [
+    "src/Billing/Invoice.cs",
+    "assets/icon.svg",
+    "src/__snapshots__/main.test.ts.snap",
+    "src/auth/credentials.ts",
+  ];
+  for (const name of created) {
+    yield* io(() => fs.mkdir(path.dirname(path.join(handle.cwd, name)), { recursive: true }));
+    yield* writeFile(path.join(handle.cwd, name), `${name}\n`);
+  }
   yield* writeFile(path.join(handle.cwd, "ignored.ts"), "output\n");
   const { revision, prepared, integration } = yield* prepareIntegration(handle);
-  expect(revision.changedPaths).toEqual(["src/main.ts"]);
+  expect(revision.changedPaths.toSorted()).toEqual(created.toSorted());
+  expect(revision.uncapturedPaths).toBeUndefined();
   const integrated = yield* service.integrate(integration);
-  expect(integrated.uncapturedPaths).toEqual(["src/Billing/Invoice.cs"]);
-  expect(integrated.record.status).toBe("integrated");
-  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
-  expect(yield* exists(path.join(root, "src/Billing/Invoice.cs"))).toBe(false);
-  expect(yield* readText(integrated.workerRoot, "src/Billing/Invoice.cs")).toBe(
-    "class Invoice {}\n",
-  );
+  for (const name of created) expect(yield* readText(root, name)).toBe(`${name}\n`);
+  expect(yield* exists(path.join(root, "ignored.ts"))).toBe(false);
+  expect(yield* exists(integrated.workerRoot)).toBe(false);
   expect(yield* exists(prepared.cwd)).toBe(false);
-  yield* service.discard(workspaceTarget(handle));
-  expect(yield* exists(handle.cwd)).toBe(false);
+});
+
+test("refuses to prepare a revision that leaves an unsafely named worker file behind", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
+  yield* writeFile(path.join(handle.cwd, "-draft.ts"), "draft\n");
+  const revision = yield* service.freeze(workspaceTarget(handle));
+  expect(revision.uncapturedPaths).toEqual(["-draft.ts"]);
+  const refused = yield* failureOf(
+    service.prepare({ ...workspaceTarget(handle), revisionId: revision.revisionId }),
+  );
+  expect(refused.code).toBe("workspace_uncaptured_files");
+  expect(refused.detail).toContain('"-draft.ts"');
+  expect(yield* readText(root, "src/main.ts")).toBe("baseline\n");
+});
+
+test("integrates a revision whose only uncaptured files sit in dependency or build directories", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
+  for (const directory of ["vendor", "node_modules/left-pad", ".pi"])
+    yield* io(() => fs.mkdir(path.join(handle.cwd, directory), { recursive: true }));
+  yield* writeFile(path.join(handle.cwd, "vendor/lib.js"), "vendored\n");
+  yield* writeFile(path.join(handle.cwd, "node_modules/left-pad/index.js"), "pad\n");
+  yield* writeFile(path.join(handle.cwd, ".pi/state.json"), "{}\n");
+  const { revision, integration } = yield* prepareIntegration(handle);
+  expect(revision.uncapturedPaths).toEqual([
+    ".pi/state.json",
+    "node_modules/left-pad/index.js",
+    "vendor/lib.js",
+  ]);
+  yield* service.integrate(integration);
+  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
+  expect(yield* exists(path.join(root, "vendor/lib.js"))).toBe(false);
 });
 
 test("rejects source symlinks, hardlinks and sensitive literals before copying", function* (service, root) {

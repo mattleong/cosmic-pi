@@ -30,7 +30,7 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
   const records = [...source];
   const self = records.find((record) => record.view.id === selfId);
   const selfLine = self
-    ? `Your current ownership summary: ${ownershipSummary(self)}. A parent reply is authoritative for any complete changed claim set.`
+    ? `Your current ownership summary: ${ownershipSummary(self)}.`
     : "Your current ownership record is unavailable; contact the parent before modifying files.";
   const workspacePeers = self ? records.filter((record) => record.view.cwd === self.view.cwd) : [];
   const peers = activePeerLines(workspacePeers, selfId);
@@ -43,7 +43,7 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
     "",
     ...peers,
     "",
-    "The parent owns coordination and all claim grants. Writers may run concurrently only with disjoint exact-file claims. Never edit a peer's claimed file; contact the parent and wait before work that could overlap another task.",
+    "The parent owns coordination, and claims stay fixed for each run. Writers may run concurrently only with disjoint exact-file claims. Never edit a peer's claimed file; contact the parent and wait before work that could overlap another task.",
   ].join("\n");
 };
 

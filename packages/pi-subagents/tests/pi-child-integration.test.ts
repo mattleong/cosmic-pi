@@ -102,7 +102,6 @@ describe("installed Pi child through the local launch path", () => {
             model: SCRIPTED_MODEL,
             activeTools,
             projectTrusted: true,
-            closeOnReport: true,
             parentRunId,
           });
 

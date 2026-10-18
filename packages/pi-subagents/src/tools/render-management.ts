@@ -35,7 +35,7 @@ const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): strin
   `${formatRunRoute({
     ...candidate,
     openaiFastMode: candidate.openaiFastMode && candidate.status === "eligible",
-  })} · ${candidate.context} · ${candidate.writeIntent} · ${candidate.closeOnReport ? "close after report" : "retain after report"}`;
+  })} · ${candidate.context} · ${candidate.writeIntent}`;
 
 const PROFILE_SOURCE_LABELS = {
   session: "session override",
@@ -137,14 +137,10 @@ const primaryCount = (details: RunToolDetails, count: number): string => {
     case "send":
     case "reply":
       return `${count} delivered`;
-    case "rename":
-      return `${count} renamed`;
     case "interrupt":
       return `${count} paused`;
     case "retry":
       return `${countLabel(count, "retry", "retries")} started`;
-    case "claims":
-      return countLabel(count, "subagent");
     case "resume":
     case "stop":
       return `${count} updated`;

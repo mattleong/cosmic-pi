@@ -106,7 +106,6 @@ interface FleetOptions {
   readonly requestRender: () => void;
   readonly close: () => void;
   readonly actions: FleetActions;
-  readonly visibilityRootId?: string | undefined;
   readonly onDispose?: (() => void) | undefined;
   readonly isCurrent?: (() => boolean) | undefined;
 }
@@ -136,11 +135,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private tree(projection: SubagentProjection) {
-    return projectFleetTree(
-      projection.runs,
-      this.options.visibilityRootId ?? "root",
-      this.collapsedRunIds,
-    );
+    return projectFleetTree(projection.runs, "root", this.collapsedRunIds);
   }
 
   get noticeKind(): FleetNoticeKind | undefined {

@@ -45,6 +45,27 @@ test("refuses unstaged credential content, naming its path, and accepts it once 
   expect(yield* readText(handle.cwd, "tests/fixture.test.ts")).toContain("AKIA");
 });
 
+test("scans only the lines an edit adds to an indexed file, naming the line", function* (service, root) {
+  const fixture = path.join(root, "tests/fixture.test.ts");
+  yield* writeFile(fixture, `// An unrelated edit.\n${fixtureTest}const extra = 1;\n`);
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  expect(yield* readText(handle.cwd, "tests/fixture.test.ts")).toContain("An unrelated edit");
+  yield* service.discard(workspaceTarget(handle));
+
+  yield* writeFile(fixture, `${fixtureTest}const extra = 1;\nconst leaked = "${githubToken}";\n`);
+  const refused = yield* failureOf(service.create({ sourceCwd: root, ownerId: "parent" }));
+  expect(refused.detail).toContain('"tests/fixture.test.ts"');
+  expect(refused.detail).toContain("a GitHub token (line 4)");
+
+  // A second copy of a line the index already holds is an added line too.
+  yield* writeFile(
+    fixture,
+    `${fixtureTest}const again = "${apiKey}";\nconst token = "${apiKey}";\n`,
+  );
+  const copied = yield* failureOf(service.create({ sourceCwd: root, ownerId: "parent" }));
+  expect(copied.detail).toContain("an sk- API key (line 3)");
+});
+
 test("scans the parent again at prepare, but never worker-written content", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(
@@ -122,3 +143,73 @@ named("omits dependency directories, not files that share their names", function
   expect(handle.omittedTrackedPaths).toEqual(["build/output.js", "node_modules"]);
   expect(yield* exists(path.join(handle.cwd, "node_modules"))).toBe(false);
 });
+
+// "café\n" in Latin-1: text without a NUL byte that isn't UTF-8.
+const latin1 = new Uint8Array([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+const legacy = workspaceTests([
+  ["src/main.ts", "baseline\n"],
+  ["docs/legacy.txt", latin1],
+]);
+
+legacy(
+  "captures unchanged text that isn't UTF-8, refusing only a change to it",
+  function* (service, root) {
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+    expect(yield* io(() => fs.readFile(path.join(handle.cwd, "docs/legacy.txt")))).toEqual(
+      Buffer.from(latin1),
+    );
+    yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
+    const revision = yield* service.freeze(workspaceTarget(handle));
+    const prepared = yield* service.prepare({
+      ...workspaceTarget(handle),
+      revisionId: revision.revisionId,
+    });
+    yield* service.integrate({
+      ...workspaceTarget(handle),
+      revisionId: revision.revisionId,
+      preparationId: prepared.preparationId,
+    });
+    expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
+
+    const edited = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+    yield* writeFile(
+      path.join(edited.cwd, "docs/legacy.txt"),
+      new Uint8Array([...latin1, 0x6e, 0xe9, 0x0a]),
+    );
+    const refused = yield* failureOf(service.freeze(workspaceTarget(edited)));
+    expect(refused.detail).toContain('"docs/legacy.txt"');
+    expect((yield* service.inspect(workspaceTarget(edited))).status).toBe("active");
+  },
+);
+
+// Git sorts a directory as if its name ended in "/", after "a-b.ts" and "a.ts" but before "a0.ts".
+const ordered = workspaceTests([
+  ["a.ts", "dot\n"],
+  ["a/b.ts", "nested\n"],
+  ["a-b.ts", "dash\n"],
+  ["a0.ts", "digit\n"],
+  ["a b.ts", "space\n"],
+]);
+
+ordered(
+  "verifies trees whose entry order depends on Git's directory rule",
+  function* (service, root) {
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+    yield* writeFile(path.join(handle.cwd, "a/b.ts"), "worker\n");
+    expect(yield* service.inspectWorkerChanges(workspaceTarget(handle))).toMatchObject({
+      changedPaths: ["a/b.ts"],
+      uncapturedPaths: [],
+    });
+    const revision = yield* service.freeze(workspaceTarget(handle));
+    const prepared = yield* service.prepare({
+      ...workspaceTarget(handle),
+      revisionId: revision.revisionId,
+    });
+    yield* service.integrate({
+      ...workspaceTarget(handle),
+      revisionId: revision.revisionId,
+      preparationId: prepared.preparationId,
+    });
+    expect(yield* readText(root, "a/b.ts")).toBe("worker\n");
+  },
+);

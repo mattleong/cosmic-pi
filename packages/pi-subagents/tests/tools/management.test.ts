@@ -34,13 +34,6 @@ const awaitSingle = (run: SubagentRunView) =>
     { runIds: [run.id], until: "all_finished" },
   );
 
-const expectInOrder = (text: string, needles: ReadonlyArray<string>, last: string) => {
-  const indexes = needles.map((needle) => text.indexOf(needle));
-  indexes.push(text.indexOf(last, indexes.at(-1)));
-  expect(indexes.every((index) => index >= 0)).toBe(true);
-  indexes.slice(1).forEach((index, position) => expect(indexes[position]).toBeLessThan(index));
-};
-
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
@@ -61,16 +54,19 @@ describe("subagent tool", () => {
             withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run }]),
           }),
         );
-        for (const toolName of ["subagent_status", "subagent_list", "subagent_await"]) {
-          const response = yield* step(() =>
-            executeTool(tools.get(toolName)!, { runIds: [run.id], until: "all_finished" }),
-          );
+        for (const [toolName, args] of [
+          ["subagent_status", { runIds: [run.id] }],
+          ["subagent_status", {}],
+          ["subagent_await", { runIds: [run.id], until: "all_finished" }],
+        ] as const) {
+          const listed = !("runIds" in args);
+          const response = yield* step(() => executeTool(tools.get(toolName)!, args));
           expect(response.details).toMatchObject({
             cards: [{ steeringDelivery, state: "failed" }],
           });
           const text = resultText(response);
           expect(text).toContain(`steeringDelivery=${steeringDelivery}`);
-          if (toolName === "subagent_list") continue;
+          if (listed) continue;
           if (hasUnresolvedSteeringDelivery(run)) {
             expect(text).toContain("Do not resend");
             expect(text).not.toContain("action=retry");
@@ -309,31 +305,28 @@ describe("subagent tool", () => {
     expect(consumed).toEqual([receipt]);
   });
 
-  effectTest("does not recommend granting an outside-workspace violation", function* () {
-    const result = yield* awaitSingle(
-      containedWriter({
-        id: "agent-outside",
-        name: "outside-writer",
-        state: "stopped",
-        capabilities: ["interrupt"],
-        writeAudit: violationAudit("<outside workspace>"),
-      }),
-    );
-    const text = result?.content[0]?.text ?? "";
+  effectTest(
+    "recommends relaunching an outside-workspace violation without claiming it",
+    function* () {
+      const result = yield* awaitSingle(
+        containedWriter({
+          id: "agent-outside",
+          name: "outside-writer",
+          state: "stopped",
+          capabilities: ["interrupt"],
+          writeAudit: violationAudit("<outside workspace>"),
+        }),
+      );
+      const text = result?.content[0]?.text ?? "";
 
-    expect(text).toContain("<outside workspace>");
-    expect(text).not.toContain('action: "grant"');
-    expectInOrder(
-      text,
-      [
-        "Confirm process and writer cleanup",
-        'subagent_claims({ action: "resume_admission"',
-        "subagent_start",
-      ],
-      "subagent_await",
-    );
-    expect(result?.details).toMatchObject({ action: "await", attentionRequired: true });
-  });
+      expect(text).toContain("<outside workspace>");
+      expect(text).toContain("Only this writer was stopped");
+      expect(text).toContain("subagent_start");
+      expect(text).toContain("Never claim outside-workspace or absolute paths");
+      expect(result?.details).toMatchObject({ action: "await" });
+      expect(result?.details).not.toHaveProperty("attentionRequired");
+    },
+  );
 
   effectTest(
     "enforces the combined target count and aggregate detailed-output budget",

@@ -71,10 +71,9 @@ const entryName = (spec: SubagentStartSpec, index: number): string =>
   sanitizeTerminalLine((spec.name?.trim() ?? "") || `launch ${index + 1}`);
 
 const routeFields = (
-  source: Pick<StartSubagentRequest, "host" | "runtime" | "model" | "effort" | "openaiFastMode">,
+  source: Pick<StartSubagentRequest, "runtime" | "model" | "effort" | "openaiFastMode">,
   selection?: Pick<SubagentSelectionProvenance, "candidateIndex" | "warning">,
 ) => ({
-  host: source.host,
   runtime: source.runtime,
   model: source.model,
   effort: source.effort,

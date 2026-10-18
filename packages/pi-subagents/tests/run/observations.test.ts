@@ -219,8 +219,8 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("waits for an offending writer to pause but returns an admission-paused peer", () => {
-    const { fake, projections, layer } = localServiceFixture();
+  it.effect("returns an offender's await once it stops while its peer keeps working", () => {
+    const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const offender = yield* service.start(
         request({ name: "pool-offender", writeIntent: "writer", writes: ["src/a.ts"] }),
@@ -228,8 +228,6 @@ describe("SubagentService", () => {
       const peer = yield* service.start(
         request({ name: "awaited-pool-peer", writeIntent: "writer", writes: ["src/b.ts"] }),
       );
-      const interruptGate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextSend("abort", interruptGate);
       const offenderAwait = yield* awaitRuns(service, [offender.id], "all_finished").pipe(
         Effect.forkScoped,
       );
@@ -243,26 +241,13 @@ describe("SubagentService", () => {
         toolName: "edit",
         args: { path: "src/c.ts", edits: [] },
       });
-      yield* yieldUntil(
-        () =>
-          projections.at(-1)?.runs.find((candidate) => candidate.id === offender.id)
-            ?.writeViolationOffender === true,
-      );
-
-      expect(offenderAwait.pollUnsafe()).toBeUndefined();
-      expect(yield* Fiber.join(peerAwait)).toMatchObject([
-        { id: peer.id, state: "running", writeAdmissionPaused: true },
-      ]);
-
-      yield* Deferred.succeed(interruptGate, undefined);
       expect(yield* Fiber.join(offenderAwait)).toMatchObject([
-        {
-          id: offender.id,
-          state: "paused",
-          writeAdmissionPaused: true,
-          writeViolationOffender: true,
-        },
+        { id: offender.id, state: "stopped", writeViolationOffender: true },
       ]);
+      expect(peerAwait.pollUnsafe()).toBeUndefined();
+
+      fake.controls[1]?.settle();
+      expect(yield* Fiber.join(peerAwait)).toMatchObject([{ id: peer.id, state: "completed" }]);
     });
   });
 

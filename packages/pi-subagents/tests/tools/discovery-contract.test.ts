@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
 import { decodeSubagentContract, type SubagentContract } from "../../src/tools/contract-schema.ts";
-import { listContract, modelsContract } from "../../src/tools/discovery-contract.ts";
+import { modelsContract, statusListContract } from "../../src/tools/discovery-contract.ts";
 import { view } from "../fixtures/run-view.ts";
 import { effectTest, step } from "../support/effect-test.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
@@ -37,9 +37,13 @@ const expectPrivate = (value: SubagentContract) => {
     expect(serialized).not.toContain(hidden);
 };
 
+const decodeStatus = decodeSubagentContract("subagent_status");
+const statusList = (contract: ReturnType<typeof decodeStatus>) =>
+  contract && "runs" in contract ? contract : undefined;
+
 describe("discovery contracts", () => {
   effectTest(
-    "returns the complete visible hierarchy beyond action and retention bounds without reading reports",
+    "lists the complete visible hierarchy beyond action and retention bounds without reading reports",
     function* () {
       const children = Array.from({ length: 64 }, (_, index) =>
         view({
@@ -59,8 +63,8 @@ describe("discovery contracts", () => {
           consumeCompletions: () => Effect.die("Discovery must not consume reports"),
         }),
       );
-      const result = yield* step(() => executeTool(tools.get("subagent_list")!, {}));
-      const contract = decodeSubagentContract("subagent_list")(result.structuredContent)!;
+      const result = yield* step(() => executeTool(tools.get("subagent_status")!, {}));
+      const contract = statusList(decodeStatus(result.structuredContent))!;
       expect(contract.runs.map((run) => run.runId)).toEqual([
         "parent",
         ...children.map((run) => run.id),
@@ -77,9 +81,9 @@ describe("discovery contracts", () => {
       });
       expectPrivate(contract);
       expect(input.at(-1)?.reportStatus).toBe("available");
-      expect(listContract([]).runs).toEqual([]);
+      expect(statusListContract([]).runs).toEqual([]);
       expect(
-        decodeSubagentContract("subagent_list")({
+        decodeStatus({
           ...contract,
           runs: [{ ...contract.runs[0], report: { status: "read_back", text: "PRIVATE-REPORT" } }],
         }),
@@ -99,13 +103,11 @@ describe("discovery contracts", () => {
           defaultWriteIntent: "read-only",
           candidates: [
             {
-              host: "local",
               runtime: "claude",
               model: "sonnet",
               effort: "high",
               context: "fresh",
               writeIntent: "read-only",
-              closeOnReport: true,
               status: "skipped",
               reason: "Authorization: Bearer sk-reason-abcdefghijklmnopqrstuvwxyz",
             },
@@ -116,5 +118,10 @@ describe("discovery contracts", () => {
     );
     expect(decodeSubagentContract("subagent_models")(contract)).toEqual(contract);
     expect(JSON.stringify(contract)).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    // The v1 contract keeps reporting the retired route fields as constants.
+    expect(contract.profiles[0]?.candidates[0]).toMatchObject({
+      host: "local",
+      closeOnReport: true,
+    });
   });
 });

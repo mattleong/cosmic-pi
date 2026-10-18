@@ -102,6 +102,31 @@ describe("profile reload handoff", () => {
     },
   );
 
+  it("restores candidates that earlier module instances wrote with retired route fields", () => {
+    const legacy = { ...candidate("openai/override"), host: "local", closeOnReport: true };
+    const baseline = completeBaseline("global");
+    writeSlot({
+      value: {
+        version: 2,
+        sessionKey: "session-one",
+        seed: {
+          revision: 3,
+          overrides: { worker: { candidates: [legacy] } },
+          baseline: {
+            ...baseline,
+            profiles: { ...baseline.profiles, scout: { candidates: [legacy] } },
+          },
+        },
+      },
+    });
+
+    const restored = handoff.capture("session-one");
+    expect(restored?.overrides.worker).toEqual({ candidates: [candidate("openai/override")] });
+    expect(restored?.baseline?.profiles.scout).toEqual({
+      candidates: [candidate("openai/override")],
+    });
+  });
+
   it("clears conditionally without deleting a different session handoff", () => {
     handoff.publish("session-one", completeSeed());
     handoff.clear("session-two");

@@ -1,10 +1,12 @@
+import * as Predicate from "effect/Predicate";
 import { type CompactIssue } from "pi-code-previews";
-import { isOffenderOnlyContainment, runAttention, runCleanupAttention } from "../run/attention.ts";
+import { skippedCandidateLabel } from "../profiles/model.ts";
+import { runAttention, runCleanupAttention } from "../run/attention.ts";
 import { isTerminalRunState } from "../run/model.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
-import { cleanupRecoveryText, OUTSIDE_WORKSPACE_RESUME_GUIDANCE } from "./format.ts";
-import { countLabel, failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
+import { cleanupRecoveryText, proposalChangeSummary, proposalDiffStatLines } from "./format.ts";
+import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
 
 type AddIssue = (
   severity: CompactIssue["severity"],
@@ -47,23 +49,17 @@ interface RunIssueOptions {
   readonly requestedPause?: boolean | undefined;
 }
 
-const PROFILE_OPTION_KEY =
-  /^([^/]+)\/([^/]+)\/(.+):([^:]+):[^:]+:[^:]+:openaiFastMode=(?:true|false):closeOnReport=(?:true|false)$/u;
+type CardSkippedCandidate = SubagentRunCard["selection"]["skippedCandidates"][number]["candidate"];
 
-export const profileOptionLabel = (key: string): string => {
-  const match = PROFILE_OPTION_KEY.exec(key);
-  if (!match) return key;
-  const [, host, runtime, model, effort] = match;
-  return host !== undefined && runtime !== undefined && model !== undefined && effort !== undefined
-    ? `${host}/${runtime} · ${model}:${effort}`
-    : key;
-};
+/** Names a skipped option; cards persisted by earlier versions carry a label string instead. */
+export const skippedOptionLabel = (candidate: CardSkippedCandidate): string =>
+  Predicate.isString(candidate) ? candidate : skippedCandidateLabel(candidate);
 
 const skippedOptionsDetail = (card: SubagentRunCard): string =>
   card.selection.skippedCandidates
     .map(
       (entry) =>
-        `${profileOptionLabel(entry.candidate)}: ${failureMessage(entry.reason, "skipped", QUOTED_TEXT_LIMIT)}`,
+        `${skippedOptionLabel(entry.candidate)}: ${failureMessage(entry.reason, "skipped", QUOTED_TEXT_LIMIT)}`,
     )
     .join("\n");
 
@@ -157,87 +153,29 @@ function outsideClaims(card: SubagentRunCard): string {
   return `${shown}${paths.length > 1 ? ` and ${paths.length - 1} more` : ""} outside its file claims`;
 }
 
-function offenderOnlyContainmentIssues(
+function claimViolationIssues(
   card: SubagentRunCard,
   label: string,
   id: string,
   add: AddIssue,
 ): void {
   const terminal = isTerminalRunState(card.state);
-  const pausing = card.state !== "paused" && !terminal;
   add(
     "warning",
-    "containment-audit",
-    `${label} wrote outside the workspace${card.state === "paused" ? "; paused" : pausing ? "; waiting for it to pause" : ""}`,
+    "claim-violation",
+    `${label} wrote to ${outsideClaims(card)}${terminal ? "; stopped" : card.state === "stopping" ? "; stopping" : ""}`,
     [
-      "Containment applies only to this writer; its peers and writer admission are unaffected. Review the full audit with subagent_status; projected paths may be omitted. Do not use subagent_reply or resume_admission for this containment.",
-      ...(pausing
-        ? [
-            "Wait for containment to reach paused or terminal, then inspect status. If still active, check again; do not issue a duplicate stop solely because pause has not published.",
-          ]
-        : []),
+      "Only this writer is stopped; its peers continue, and new writers are still admitted. Review the full write audit with subagent_status; projected paths may be omitted.",
+      ...(terminal
+        ? []
+        : [
+            `Wait for it to stop with subagent_await({ runIds: [${id}], until: "all_finished" }); don't issue a duplicate stop.`,
+          ]),
+      runCleanupAttention(card) === undefined
+        ? "If the work is still needed, review what it changed, then relaunch it with subagent_start and corrected exact workspace-relative writes. Never claim outside-workspace or absolute paths."
+        : "Relaunch only after its cleanup is confirmed.",
     ].join("\n"),
   );
-  if (terminal || runCleanupAttention(card) !== undefined) return;
-  if (card.capabilities.includes("resume"))
-    add(
-      "info",
-      "containment-resume",
-      `${label} can resume with guidance or be stopped`,
-      `Once confirmed paused, review the audit, then subagent_lifecycle({ action: "resume", runIds: [${id}], message: ${JSON.stringify(OUTSIDE_WORKSPACE_RESUME_GUIDANCE)} }) and subagent_await again, or stop it with subagent_lifecycle({ action: "stop", runIds: [${id}] }).`,
-    );
-  else
-    add(
-      "info",
-      "containment-stop",
-      `${label} is being stopped by containment`,
-      `This backend cannot resume, so containment is stopping it. Confirm it reaches terminal with subagent_status({ runIds: [${id}] }); if still active, check again rather than issuing a duplicate stop. If the work is still needed, launch a corrected replacement with exact workspace-relative claims and await its run ID.`,
-    );
-}
-
-function containmentIssues(card: SubagentRunCard, label: string, id: string, add: AddIssue): void {
-  if (isOffenderOnlyContainment(card)) {
-    offenderOnlyContainmentIssues(card, label, id, add);
-    return;
-  }
-  const terminal = isTerminalRunState(card.state);
-  const pausing = card.state !== "paused" && !terminal;
-  add(
-    "warning",
-    "containment-audit",
-    `${label} wrote to ${outsideClaims(card)}${card.state === "paused" ? "; paused" : pausing ? "; waiting for it to pause" : ""}`,
-    [
-      "Claim containment. Review the full audit and shared tree with subagent_status; projected paths may be omitted. Do not use subagent_reply for containment.",
-      ...(pausing
-        ? [
-            "Wait for containment to reach paused or terminal, then inspect status. If still active, check again; do not issue a duplicate stop solely because pause has not published.",
-          ]
-        : []),
-    ].join("\n"),
-  );
-  if (runCleanupAttention(card) !== undefined) {
-    add(
-      "info",
-      "containment-await-cleanup",
-      `${label}: file-access review is blocked by unconfirmed cleanup`,
-      "Claim containment and cleanup quarantine are independent. Review the full write audit, but resolve cleanup before reopening claim admission or replacing the offender.",
-    );
-    return;
-  }
-  if (!terminal && card.capabilities.includes("resume"))
-    add(
-      "info",
-      "containment-resume",
-      `${label} can resume once its claims are reviewed`,
-      `Once confirmed paused, review the full audit and grant only reviewed, intended, conflict-free missing workspace-relative claims with subagent_claims; never claim outside-workspace or absolute paths. Then subagent_claims({ action: "resume_admission", runId: ${id} }), then subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue only within the authoritative claims returned by subagent_claims." }), then subagent_await. If the audit includes outside-workspace writes, resume with the message ${JSON.stringify(OUTSIDE_WORKSPACE_RESUME_GUIDANCE)} instead. If containment instead reaches terminal, confirm process and writer cleanup before reopening admission and launching and awaiting a corrected replacement.`,
-    );
-  else
-    add(
-      "info",
-      "containment-stop",
-      `${label} must be stopped and replaced`,
-      `Once containment reaches paused or terminal, if paused, stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }). Confirm process and writer cleanup before subagent_claims({ action: "resume_admission", runId: ${id} }); then launch a corrected replacement with reviewed exact workspace-relative claims and await its run ID.`,
-    );
 }
 
 function attentionIssues(
@@ -252,15 +190,7 @@ function attentionIssues(
     case undefined:
       return;
     case "containment":
-      containmentIssues(card, label, id, add);
-      return;
-    case "admission-paused":
-      add(
-        "warning",
-        "peer-admission-paused",
-        `${label}: new writes are paused while another worker's file access is reviewed`,
-        "Writer admission paused. Inspect subagent_list and the recorded offender's full subagent_status audit. Do not change this peer's claims. Contain or clean up every offender first; reopen admission only after confirmed pause or terminal cleanup, then continue or await this peer.",
-      );
+      claimViolationIssues(card, label, id, add);
       return;
     case "paused":
       if (runCleanupAttention(card) !== undefined) return;
@@ -278,7 +208,7 @@ function attentionIssues(
         "warning",
         "parent-question",
         `${label} asks: ${firstLineMessage(attention.message, "a question", QUOTED_TEXT_LIMIT)}`,
-        `Question: ${attention.message}\nRead the full question in expanded details if omitted. If this is a writer's request for additional file claims, review and grant only intended, conflict-free workspace-relative claims with subagent_claims before replying. Reply with subagent_reply({ runId: ${id}, message: "..." }), then subagent_await again.`,
+        `Question: ${attention.message}\nRead the full question in expanded details if omitted. Reply with subagent_reply({ runId: ${id}, message: "..." }), then subagent_await again.`,
       );
       return;
     case "question-unavailable":
@@ -368,10 +298,11 @@ function workspaceOutcomeIssue(card: SubagentRunCard, label: string, add: AddIss
     "info",
     outcome ? "workspace-outcome" : "workspace-approval",
     outcome
-      ? `${label}: ${countLabel(outcome.changedFileCount, "changed file")}${outcome.uncapturedFileCount ? ` (+${outcome.uncapturedFileCount} uncaptured)` : ""} proposed; apply or review`
+      ? `${label}: ${proposalChangeSummary(outcome)}${outcome.uncapturedFileCount ? ` (+${outcome.uncapturedFileCount} uncaptured)` : ""} proposed; apply or review`
       : `${label}: changes are ready for review`,
     [
-      `Apply small or trusted changes with subagent_workspace action=apply${workspace}; for risky ones, review every diff page, prepare, test, and integrate. A report does not approve workspace integration.`,
+      ...(outcome ? proposalDiffStatLines(outcome) : []),
+      `Apply small or trusted changes with subagent_workspace action=apply${workspace}; for risky ones, review every page, prepare, test, then apply the exact revisionId and preparationId. A report does not approve workspace integration.`,
       ...(outcome?.uncapturedFileCount
         ? [
             "Uncaptured files, such as .env or vendored code, are not part of the proposal and stay in the worker tree.",
@@ -398,6 +329,6 @@ function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssu
       "warning",
       "write-audit",
       `${label} wrote to ${outsideClaims(card)}`,
-      "Recorded write violations are available in expanded details. Inspect the full audit and current offender status before recovery.",
+      "Recorded write violations are available in expanded details. Inspect the full audit with subagent_status before recovery.",
     );
 }

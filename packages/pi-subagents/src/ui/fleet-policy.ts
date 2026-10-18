@@ -38,7 +38,7 @@ const UNAVAILABLE_REASONS = new Map([
   ["m", "This run cannot receive guidance, a reply, or a new assignment in its current state."],
   ["i", "This run cannot be interrupted in its current state or backend."],
   ["u", "This run cannot be resumed in its current state or backend."],
-  ["e", "This run cannot be renamed in its current state or backend."],
+  ["e", "This run cannot be renamed in its current state."],
 ]);
 
 export const shortcutUnavailableReason = (key: string, run: SubagentRunView): string =>

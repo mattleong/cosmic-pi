@@ -68,7 +68,7 @@ const projectRecovery = (recovery: FailedStartRecovery): ContractRecovery => ({
   remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
 });
 
-export const projectFailure = (
+const projectFailure = (
   action: string,
   failure: Pick<SubagentActionFailure, "code" | "message" | "pendingDelivery">,
 ): ContractFailure => {
@@ -315,7 +315,7 @@ export const statusContract = (input: StatusContractInput): SubagentStatusContra
   missingRunIds: [...input.missingRunIds],
 });
 
-export type LifecycleContractOutcome =
+type LifecycleContractOutcome =
   | { readonly runId: string; readonly run: SubagentRunView }
   | { readonly runId: string; readonly failure: SubagentActionFailure };
 

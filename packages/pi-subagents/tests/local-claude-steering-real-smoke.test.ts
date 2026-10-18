@@ -283,7 +283,7 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
           "After the bounded work (or an unavailable-tool limitation), call mcp__pi_subagents_supervisor__supervisor_submit_report exactly once with a short report.",
         ].join(" "),
       });
-      yield* driver.preflight({ ...launch, closeOnReport: true });
+      yield* driver.preflight(launch);
       const backend = yield* driver.spawn(launch);
       const activity = yield* Deferred.make<boolean>();
       const finished = yield* Deferred.make<void>();

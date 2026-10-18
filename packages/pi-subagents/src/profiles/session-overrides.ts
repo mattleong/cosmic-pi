@@ -2,19 +2,14 @@ import * as Effect from "effect/Effect";
 import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, freezeSnapshot, invokeHostCallback } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
 import type { ResolvedProfileSetSelection, ResolvedSubagentConfig } from "../config/options.ts";
-import {
-  ownDataProperty,
-  ownTypedProperty,
-  probeFields,
-  type ProbedFields,
-} from "../config/probe.ts";
 import {
   decodeProfileRoute,
   decodeSubagentNesting,
   DelegationModeSchema,
   isProfileSetName,
+  ProfileRouteInputSchema,
   SubagentNestingSchema,
   type DelegationMode,
   type SubagentNestingPolicy,
@@ -22,7 +17,6 @@ import {
 import { BUILTIN_PROFILE_ROUTES } from "./definitions.ts";
 import {
   cloneProfileRoute,
-  completeProfileRecord,
   isProfileId,
   mapProfileIds,
   PROFILE_IDS,
@@ -91,7 +85,7 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
     Schema.isGreaterThanOrEqualTo(0),
     Schema.isLessThanOrEqualTo(MAX_SESSION_PROFILE_REVISION),
   ),
-  overrides: Schema.Unknown,
+  overrides: Schema.Struct(mapProfileIds(() => Schema.optionalKey(ProfileRouteInputSchema))),
   nesting: Schema.optional(SubagentNestingSchema),
   delegation: Schema.optional(DelegationModeSchema),
   // Discard the previous runtime's preference until version-2 reload envelopes retire.
@@ -106,7 +100,7 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
           invalid: Schema.optional(Schema.Boolean),
         }),
       ]),
-      profiles: Schema.Unknown,
+      profiles: Schema.Struct(mapProfileIds(() => ProfileRouteInputSchema)),
       profileSources: Schema.Record(
         Schema.Literals(PROFILE_IDS),
         Schema.Literals(PROFILE_ROUTE_SOURCES),
@@ -114,29 +108,6 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
     }),
   ),
 });
-
-const decodeRouteRecord = (
-  holder: ProbedFields,
-  key: string,
-): Partial<Record<ProfileId, ProfileRoute>> | undefined => {
-  const field = ownDataProperty(holder, key);
-  const record = field.valid && field.present ? probeFields(field.value) : undefined;
-  if (
-    !record ||
-    !Reflect.ownKeys(record).every((profile) => Predicate.isString(profile) && isProfileId(profile))
-  )
-    return undefined;
-  const routes: Partial<Record<ProfileId, ProfileRoute>> = {};
-  for (const profile of PROFILE_IDS) {
-    const routeField = ownDataProperty(record, profile);
-    if (!routeField.valid) return undefined;
-    if (!routeField.present) continue;
-    const route = decodeProfileRoute(routeField.value);
-    if (!route) return undefined;
-    routes[profile] = route;
-  }
-  return routes;
-};
 
 const cloneOrigin = (origin: ResolvedProfileSetSelection): ResolvedProfileSetSelection => {
   if (origin.scope === "builtin") return { scope: "builtin" };
@@ -217,35 +188,17 @@ const decodeSeedInput = decodeUnknownOrUndefined(SessionProfileOverrideSeedInput
   onExcessProperty: "error",
 });
 
-const decodeBaselineRoutes = (value: ProbedFields) => {
-  const baselineField = ownDataProperty(value, "baseline");
-  if (!baselineField.valid) return { valid: false };
-  if (!baselineField.present) return { valid: true };
-  const baselineFields = probeFields(baselineField.value);
-  const baselineRecord = baselineFields && decodeRouteRecord(baselineFields, "profiles");
-  const routes = baselineRecord && completeProfileRecord(baselineRecord);
-  return routes ? { valid: true, routes } : { valid: false };
-};
-
-const seedFromFields = (value: ProbedFields): SessionProfileOverrideSeed | undefined =>
-  invokeHostCallback(() => {
-    const overrides = decodeRouteRecord(value, "overrides");
-    const baselineRoutes = decodeBaselineRoutes(value);
-    if (!overrides || !baselineRoutes.valid) return undefined;
-    const decoded = decodeSeedInput(value);
-    const baseline = decoded?.baseline &&
-      baselineRoutes.routes && { ...decoded.baseline, profiles: baselineRoutes.routes };
+export const decodeSessionProfileOverrideSeed = flow(
+  decodeSeedInput,
+  (decoded): SessionProfileOverrideSeed | undefined => {
+    const baseline = decoded?.baseline;
     if (
       !decoded ||
       (baseline && !(isValidOrigin(baseline.origin) && isDetachedBaselineProvenanceValid(baseline)))
     )
       return undefined;
-    return cloneSessionProfileOverrideSeed({ ...decoded, overrides, baseline });
-  }, undefined);
-
-export const decodeSessionProfileOverrideSeed = flow(
-  probeFields,
-  (value) => value && seedFromFields(value),
+    return cloneSessionProfileOverrideSeed(decoded);
+  },
 );
 
 export const sessionProfileSnapshot = (
@@ -331,10 +284,8 @@ export const patchSessionProfileSnapshot = (
   patch: SessionProfilePatch,
 ): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_PROFILES, () => {
-    const routeProperty = ownTypedProperty(patch, "route");
-    const declared = routeProperty.valid && routeProperty.present ? routeProperty.value : undefined;
-    const route = declared === undefined ? undefined : decodeProfileRoute(declared);
-    if (!isProfileId(patch.profile) || !routeProperty.valid || (declared !== undefined && !route))
+    const route = patch.route === undefined ? undefined : decodeProfileRoute(patch.route);
+    if (!isProfileId(patch.profile) || (patch.route !== undefined && !route))
       return "The profile route is invalid and was not applied.";
     const current = snapshot.overrides[patch.profile];
     if (route === undefined ? current === undefined : current && sameProfileRoute(current, route))
@@ -356,19 +307,15 @@ export const replaceSessionProfileSnapshot = (
   patch: SessionProfileSetPatch,
 ): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_PROFILES, () => {
-    const baseline = invokeHostCallback(
-      () =>
-        decodeSessionProfileOverrideSeed({
-          revision: 0,
-          overrides: {},
-          baseline: {
-            origin: patch.origin,
-            profiles: patch.profiles,
-            profileSources: patch.profileSources,
-          },
-        })?.baseline,
-      undefined,
-    );
+    const baseline = decodeSessionProfileOverrideSeed({
+      revision: 0,
+      overrides: {},
+      baseline: {
+        origin: patch.origin,
+        profiles: patch.profiles,
+        profileSources: patch.profileSources,
+      },
+    })?.baseline;
     if (!baseline)
       return "The replacement profile baseline has invalid routes or provenance and was not applied.";
     const unchanged =

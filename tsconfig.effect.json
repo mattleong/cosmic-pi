@@ -69,7 +69,6 @@
           },
           {
             "include": [
-              "**/packages/pi-subagents/src/boundary/git-worktree-publish-helper.mjs",
               "**/packages/pi-subagents/src/boundary/supervisor-mcp-helper.mjs",
               "**/packages/pi-subagents/tests/fixtures/hanging-probe-fixture.mjs"
             ],

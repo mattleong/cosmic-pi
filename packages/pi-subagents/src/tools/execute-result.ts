@@ -60,12 +60,7 @@ export const presentSubagentResult = (
   const resultText = (): string => {
     if (input.tool === SUBAGENT_TOOL_NAME.start)
       return formattedText ?? formatStartResult(runs, startFailures);
-    const acknowledgement = () =>
-      managementAcknowledgement(
-        subagentToolAction(input),
-        runs,
-        input.tool === SUBAGENT_TOOL_NAME.claims ? input.args.action : undefined,
-      );
+    const acknowledgement = () => managementAcknowledgement(subagentToolAction(input), runs);
     if (actionFailures.length > 0)
       return input.tool === SUBAGENT_TOOL_NAME.status
         ? detailedText()
@@ -75,18 +70,17 @@ export const presentSubagentResult = (
           ]);
     if (runs.length === 0) return "No subagent runs.";
     switch (input.tool) {
-      case SUBAGENT_TOOL_NAME.list:
-        return projectRunCardTree(runs)
-          .map((row) => `${runTreeBranch(row)}${formatRun(row.run)}`)
-          .join("\n");
       case SUBAGENT_TOOL_NAME.status:
+        return input.args.runIds === undefined
+          ? projectRunCardTree(runs)
+              .map((row) => `${runTreeBranch(row)}${formatRun(row.run)}`)
+              .join("\n")
+          : detailedText();
       case SUBAGENT_TOOL_NAME.await:
         return detailedText();
       case SUBAGENT_TOOL_NAME.send:
       case SUBAGENT_TOOL_NAME.reply:
       case SUBAGENT_TOOL_NAME.lifecycle:
-      case SUBAGENT_TOOL_NAME.rename:
-      case SUBAGENT_TOOL_NAME.claims:
         return acknowledgement();
     }
     return absurd(input);

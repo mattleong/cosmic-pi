@@ -38,7 +38,6 @@ const registry = (probed: string[]) =>
     SubagentBackendRegistry,
     backendRegistryFor([
       {
-        host: "local",
         runtime: "claude",
         capabilities: [],
         supportsContext: () => true,

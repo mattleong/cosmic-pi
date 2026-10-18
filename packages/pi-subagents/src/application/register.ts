@@ -57,12 +57,6 @@ import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import { isPendingDeliveryError } from "../tools/outcome.ts";
 import { decodeSubagentProxyParent, decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
-import {
-  decodeFleetActionRequest,
-  executeFleetSnapshot,
-  FLEET_ACTION_TOOL_NAME,
-  FLEET_SNAPSHOT_TOOL_NAME,
-} from "../tools/proxy-fleet.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerApplicationCommands } from "./commands.ts";
 import { registerSubagentMessageRenderers } from "./messages.ts";
@@ -290,16 +284,7 @@ export function registerSubagentApplication(
               const parent = decoded.parentContext
                 ? yield* service.captureLaunchParent(callerRunId, decoded.parentContext)
                 : undefined;
-              if (decoded.request.tool === FLEET_SNAPSHOT_TOOL_NAME)
-                return yield* executeFleetSnapshot(decoded.request, callerRunId).pipe(
-                  Effect.provideService(SubagentService, service),
-                );
-              const fleetAction =
-                decoded.request.tool === FLEET_ACTION_TOOL_NAME
-                  ? decodeFleetActionRequest(decoded.request)
-                  : undefined;
-              if (fleetAction instanceof InvalidSubagentRequestError) return yield* fleetAction;
-              const input = fleetAction?.input ?? decodeSubagentProxyRequest(decoded.request);
+              const input = decodeSubagentProxyRequest(decoded.request);
               if (input instanceof InvalidSubagentRequestError) return yield* input;
               const caller = (yield* service.visibleList(callerRunId)).find(
                 (run) => run.id === callerRunId,
@@ -322,7 +307,6 @@ export function registerSubagentApplication(
                 callerRunId,
                 undefined,
                 false,
-                fleetAction?.expected,
               ).pipe(Effect.provideService(SubagentService, service));
             }),
         });

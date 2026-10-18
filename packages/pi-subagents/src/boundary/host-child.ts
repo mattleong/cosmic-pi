@@ -31,8 +31,6 @@ import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.t
 import { PARENT_REPLY_PREFIX } from "../supervisor/protocol.ts";
 import { clipUtf8Text } from "../run/state.ts";
 import { nestedSubagentToolNames, SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
-import { encodeFleetActionRequest, fleetSnapshotProxyRequest } from "../tools/proxy-fleet.ts";
-import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import {
   decodeSubagentProxyResult,
   encodeSubagentProxyInput,
@@ -61,13 +59,7 @@ import {
 import { registerForkPromptCacheHooks } from "./fork-prompt-cache.ts";
 import { registerChildSettle } from "./host-child-settle.ts";
 import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
-import {
-  isSubagentChildProcess,
-  isWorkspaceParentChildProcess,
-  subagentChildRunId,
-} from "./host-environment.ts";
-import { nodeWriteSync } from "./node-builtins.ts";
-import { protocolMismatch } from "./protocol-fingerprint.ts";
+import { isSubagentChildProcess, isWorkspaceParentChildProcess } from "./host-environment.ts";
 import {
   openLocalPiChildIpc,
   ParentContactError,
@@ -446,16 +438,6 @@ export function registerSubagentChildBridge(
           { workspaceParent },
         );
         registerContactParent(input, token, scheduleAnimation);
-        const runId = subagentChildRunId();
-        if (runId)
-          registerSubagentProxyManagerCommand(
-            pi,
-            runId,
-            (request, expected, signal) =>
-              proxyCall(input, token, encodeFleetActionRequest(request, expected), signal),
-            (signal) => proxyCall(input, token, fleetSnapshotProxyRequest, signal),
-            () => isActivationCurrent(input, token),
-          );
         if (!isActivationCurrent(input, token)) throw new Error("Stale child activation.");
         pi.setActiveTools([...new Set([...pi.getActiveTools(), ...proxyToolNames])]);
       } catch {
@@ -496,12 +478,5 @@ export function registerSubagentChildBridge(
 
 export default function subagentChildBridge(pi: ExtensionAPI): void {
   if (!isSubagentChildProcess()) return;
-  const mismatch = protocolMismatch(process.env);
-  if (mismatch) {
-    // A dedicated child that can't speak its parent's protocol stops before taking any work; the
-    // parent reports this stderr line as the failed start.
-    nodeWriteSync(2, `${mismatch}\n`);
-    process.exit(78);
-  }
   registerSubagentChildBridge(pi);
 }

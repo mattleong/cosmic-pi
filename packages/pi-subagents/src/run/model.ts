@@ -2,7 +2,6 @@ import type * as Redacted from "effect/Redacted";
 import type {
   SubagentContextMode,
   SubagentEffort,
-  SubagentHost,
   SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
@@ -33,7 +32,6 @@ export const PI_SUBAGENT_CAPABILITIES = [
   "steer",
   "interrupt",
   "resume",
-  "rename-display",
   "parent-contact",
   "peer-notice",
   "native-fork",
@@ -146,7 +144,23 @@ export type SubagentWorkspaceOutcome =
       readonly changedFileCount: number;
       /** Writer-created files the proposal cannot carry, such as `.env`; gitignored files don't count. */
       readonly uncapturedFileCount?: number | undefined;
+      readonly diffStat?: SubagentWorkspaceDiffStat | undefined;
     };
+
+export const MAX_OUTCOME_DIFFSTAT_FILES = 20;
+
+/** A proposal's changed-line totals and its first changed files' counts. */
+export interface SubagentWorkspaceDiffStat {
+  readonly addedLines: number;
+  readonly deletedLines: number;
+  /** At most `MAX_OUTCOME_DIFFSTAT_FILES`; `changedFileCount` counts every file. */
+  readonly files: ReadonlyArray<{
+    readonly path: string;
+    readonly addedLines: number;
+    readonly deletedLines: number;
+    readonly binary?: true | undefined;
+  }>;
+}
 
 export interface SubagentRunView {
   readonly cleanup?: SubagentCleanup | undefined;
@@ -177,12 +191,10 @@ export interface SubagentRunView {
   readonly writeIntent: SubagentWriteIntent;
   readonly writeClaims?: ReadonlyArray<string> | undefined;
   readonly writeAudit?: SubagentWriteAudit | undefined;
-  readonly writeAdmissionPaused?: boolean | undefined;
+  /** Stopped after a native write outside its fixed claims; the write audit names the paths. */
   readonly writeViolationOffender?: boolean | undefined;
   readonly openaiFastMode: boolean;
-  readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
-  readonly closeOnReport: boolean;
   readonly reportGeneration: number;
   readonly assignmentEpoch: number;
   readonly capabilities: ReadonlyArray<SubagentCapability>;
@@ -275,9 +287,7 @@ export interface StartSubagentRequest {
   readonly name?: string | undefined;
   readonly parentRunId?: string | undefined;
   readonly nestingPolicy?: SubagentNestingPolicy | undefined;
-  readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
-  readonly closeOnReport: boolean;
   readonly task: string;
   readonly profile?: ProfileId | undefined;
   readonly profileGuidance?: string | undefined;
@@ -311,23 +321,14 @@ export const hasSubagentCapability = (
 ): boolean => run.capabilities.includes(capability);
 
 export const isParentActionRequiredRun = (
-  run: Pick<
-    SubagentRunView,
-    | "state"
-    | "writeAdmissionPaused"
-    | "writeViolationOffender"
-    | "cleanup"
-    | "writerCleanupQuarantined"
-  > & {
+  run: Pick<SubagentRunView, "state" | "cleanup" | "writerCleanupQuarantined"> & {
     readonly question?: unknown;
   },
 ): boolean =>
   run.cleanup?.disposition === "quarantined" ||
   run.writerCleanupQuarantined === true ||
   (run.state === "waiting_for_parent" && run.question !== undefined) ||
-  run.state === "paused" ||
-  (run.writeAdmissionPaused === true &&
-    (run.writeViolationOffender !== true || isTerminalRunState(run.state)));
+  run.state === "paused";
 
 const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
   "starting",

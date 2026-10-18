@@ -155,7 +155,6 @@ export const localCliBackendDriver =
         }),
       );
     return {
-      host: "local",
       runtime,
       capabilities: ["steer", "interrupt", "parent-contact"],
       supportsContext: (context) => context === "fresh",
@@ -180,7 +179,6 @@ export const localCliBackendDriver =
             ...handle,
             controls: {
               ...handle.controls,
-              renameDisplay: () => unsupported("rename-display"),
               reply: (requestId: string, message: string) =>
                 supervisor
                   .reply(requestId, message)

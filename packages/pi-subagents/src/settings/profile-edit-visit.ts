@@ -42,14 +42,12 @@ const rawRestore = (
 const candidatesKey = (draft: ProfileRouteDraft): string =>
   JSON.stringify(
     draft.candidates.map((c) => [
-      c.host,
       c.runtime,
       c.model,
       c.effort,
       c.context,
       c.writeIntent,
       c.openaiFastMode ?? false,
-      c.closeOnReport,
     ]),
   );
 const draftKey = (draft: ProfileRouteDraft): string => `${draft.kind}:${candidatesKey(draft)}`;

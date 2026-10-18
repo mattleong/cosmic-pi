@@ -48,7 +48,7 @@ const expectStyledIssues = (summary: ReturnType<typeof summarize>) => {
 
 const integrated = {
   workerRoot: "/agent/ws-1/worker",
-  uncapturedPaths: [],
+  untouchedDriftPaths: [],
   treeRemovalFailed: false,
   remainingBackupPaths: [],
   leaseReleaseUnconfirmed: false,
@@ -62,6 +62,7 @@ const applied = (
   preparedCwd: "/agent/ws-1/prepared",
   changedPaths: ["src/a.ts", "src/b.ts"],
   changedPathCount: 2,
+  leftOutPaths: [],
   reviewed: false,
   ...integrated,
   integrated: true,
@@ -81,6 +82,7 @@ const failedVerification: WorkspaceApplyResult = {
   preparedCwd: "/agent/ws-1/prepared",
   changedPaths: ["src/a.ts"],
   changedPathCount: 1,
+  leftOutPaths: [],
   reviewed: true,
   integrated: false,
   verification: {
@@ -93,7 +95,7 @@ const failedVerification: WorkspaceApplyResult = {
 };
 
 describe("workspace apply", () => {
-  effectTest("requires a workspace and accepts only an optional revision pin", function* () {
+  effectTest("requires a workspace, and a preparation only with its exact revision", function* () {
     for (const operation of [
       { action: "apply" },
       { action: "apply", workspaceId: "ws-1", preparationId: "prep-1" },
@@ -104,26 +106,77 @@ describe("workspace apply", () => {
     }
   });
 
-  effectTest("forwards the caller and the optional revision pin", function* () {
-    const calls: Array<readonly [string, string | undefined, string | undefined]> = [];
+  effectTest("forwards the caller, the optional revision pin, and a prepared pair", function* () {
+    const calls: Array<readonly [string, unknown, string | undefined]> = [];
     const workspaceApply: SubagentServiceDoubleInput["workspaceApply"] = (
       workspaceId,
       options,
       caller,
     ) => {
-      calls.push([workspaceId, options?.revisionId, caller]);
+      calls.push([workspaceId, options, caller]);
       return Effect.succeed(applied());
     };
-    yield* run({ action: "apply", workspaceId: "ws-1" }, "parent", { workspaceApply }).pipe(
-      Effect.orDie,
-    );
-    yield* run({ action: "apply", workspaceId: "ws-1", revisionId: "rev-1" }, "parent", {
-      workspaceApply,
-    }).pipe(Effect.orDie);
+    for (const operation of [
+      { action: "apply", workspaceId: "ws-1" },
+      { action: "apply", workspaceId: "ws-1", revisionId: "rev-1" },
+      { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-1" },
+    ] as const)
+      yield* run(operation, "parent", { workspaceApply }).pipe(Effect.orDie);
     expect(calls).toEqual([
-      ["ws-1", undefined, "parent"],
-      ["ws-1", "rev-1", "parent"],
+      ["ws-1", { revisionId: undefined }, "parent"],
+      ["ws-1", { revisionId: "rev-1" }, "parent"],
+      ["ws-1", { revisionId: "rev-1", preparationId: "prep-1" }, "parent"],
     ]);
+  });
+
+  effectTest("reports a prepared pair as tested by the parent, not verified", function* () {
+    const args = {
+      action: "apply",
+      workspaceId: "ws-1",
+      revisionId: "rev-1",
+      preparationId: "prep-1",
+    } as const;
+    const result = yield* run(args, "parent", {
+      workspaceApply: () =>
+        Effect.succeed(applied({ reviewed: true, verification: { status: "parent-tested" } })),
+    }).pipe(Effect.orDie);
+    expect(result.details).toMatchObject({
+      operation: "apply",
+      preparationId: "prep-1",
+      reviewed: true,
+      verification: "parent-tested",
+    });
+    const summary = summarize(args, result);
+    expect(summary?.outcome).toBe("success");
+    expect(summary?.issues?.map((issue) => issue.code)).not.toContain("applied-unverified");
+    expectStyledIssues(summary);
+  });
+
+  effectTest("warns about worker files left out of the proposal on purpose", function* () {
+    const leftOut = ["node_modules/left-pad/index.js", "dist/app.js", ".env", "certs/dev.pem"];
+    const applyArgs = { action: "apply", workspaceId: "ws-1" } as const;
+    const prepareArgs = { action: "prepare", workspaceId: "ws-1", revisionId: "rev-1" } as const;
+    const service: SubagentServiceDoubleInput = {
+      workspaceApply: () => Effect.succeed(applied({ leftOutPaths: leftOut })),
+      workspacePrepare: () =>
+        Effect.succeed({
+          preparationId: "prep-1",
+          revisionId: "rev-1",
+          cwd: "/agent/ws-1/prepared",
+          leaseDirectories: [],
+          leftOutPaths: leftOut,
+        }),
+    };
+    for (const args of [applyArgs, prepareArgs]) {
+      const result = yield* run(args, "parent", service).pipe(Effect.orDie);
+      for (const name of leftOut) expect(resultText(result)).toContain(name);
+      const summary = summarize(args, result);
+      expect(summary?.outcome).toBe("warning");
+      expect(
+        summary?.issues?.filter((issue) => issue.severity === "warning").map((issue) => issue.code),
+      ).toEqual(["worker-files-left-out", "credential-files-left-out"]);
+      expectStyledIssues(summary);
+    }
   });
 
   effectTest("reports whether an applied change was reviewed and verified", function* () {
@@ -187,7 +240,7 @@ describe("workspace apply", () => {
       workspaceApply: () =>
         Effect.succeed(
           applied({
-            uncapturedPaths: [".env"],
+            untouchedDriftPaths: ["src/notes.md"],
             treeRemovalFailed: true,
             remainingBackupPaths: ["/project/.backup"],
             leaseReleaseUnconfirmed: true,
@@ -223,17 +276,57 @@ describe("workspace refusals", () => {
   });
 });
 
-describe("workspace integrate and list", () => {
-  effectTest("warns when unresolved child workspaces keep the worker tree", function* () {
+describe("workspace prepared-pair apply and list", () => {
+  it("still renders integrate results saved by earlier versions", () => {
     const args = {
       action: "integrate",
       workspaceId: "ws-1",
       revisionId: "rev-1",
       preparationId: "prep-1",
+    };
+    const summary = createSubagentCompactSummary("subagent_workspace")({
+      phase: "settled",
+      args,
+      result: {
+        content: [{ type: "text", text: "Integrated the exact reviewed and tested revision." }],
+        details: {
+          version: 1,
+          action: "workspace",
+          operation: "integrate",
+          workspaceId: "ws-1",
+          revisionId: "rev-1",
+          preparationId: "prep-1",
+          warnings: [
+            {
+              code: "untested-parent-changes",
+              message: "notes.md changed in the parent after testing",
+              detail: "Rerun relevant tests in the parent checkout.",
+            },
+          ],
+        },
+      },
+      context: renderContextFixture({ isError: false }),
+    });
+    expect(summary?.outcome).toBe("warning");
+    expect(summary?.counters).toEqual(["integrated"]);
+  });
+
+  effectTest("warns when unresolved child workspaces keep the worker tree", function* () {
+    const args = {
+      action: "apply",
+      workspaceId: "ws-1",
+      revisionId: "rev-1",
+      preparationId: "prep-1",
     } as const;
     const result = yield* run(args, "parent", {
-      workspaceIntegrate: () =>
-        Effect.succeed({ ...integrated, retainedForChildren: ["ws-child-1", "ws-child-2"] }),
+      workspaceApply: () =>
+        Effect.succeed(
+          applied({
+            reviewed: true,
+            verification: { status: "parent-tested" },
+            retainedForChildren: ["ws-child-1", "ws-child-2"],
+          }),
+        ),
     }).pipe(Effect.orDie);
     expect(resultText(result)).toContain("ws-child-2");
     const summary = summarize(args, result);
@@ -300,7 +393,7 @@ describe("workspace tool", () => {
           return Effect.succeed({
             revisionId: "immutable",
             changedPaths: ["file"],
-            diff: diff.slice(offset, next),
+            text: diff.slice(offset, next),
             offset,
             totalChars: diff.length,
             ...(next < diff.length && { nextOffset: next }),
@@ -346,14 +439,13 @@ describe("workspace tool", () => {
         message: "Direct parent required.",
       });
       const failed = yield* run(
-        { action: "integrate", workspaceId: "w", revisionId: "r", preparationId: "p" },
+        { action: "apply", workspaceId: "w", revisionId: "r", preparationId: "p" },
         "child",
         {
-          workspaceIntegrate: (workspaceId, revisionId, preparationId, caller) => {
-            expect([workspaceId, revisionId, preparationId, caller]).toEqual([
+          workspaceApply: (workspaceId, options, caller) => {
+            expect([workspaceId, options, caller]).toEqual([
               "w",
-              "r",
-              "p",
+              { revisionId: "r", preparationId: "p" },
               "child",
             ]);
             return Effect.fail(denial);

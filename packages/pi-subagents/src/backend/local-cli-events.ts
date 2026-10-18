@@ -18,8 +18,13 @@ export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
   label = "local-CLI",
 ): LocalCliRawEventOwnership<Raw> => {
   const rawOwners = new Map<BackendEvent, Raw>();
+  // Activity only refreshes the run's throttled liveness timestamp, so one pending event per
+  // assignment carries the same information as a delta burst without consuming queue capacity.
+  const pendingActivity = new Map<number, BackendEvent>();
   const release = (raw: Raw): Effect.Effect<void> => Effect.sync(() => acknowledgeRaw(raw));
   const acknowledge = (event: BackendEvent): void => {
+    if (event.type === "activity" && pendingActivity.get(event.assignmentEpoch) === event)
+      pendingActivity.delete(event.assignmentEpoch);
     const raw = rawOwners.get(event);
     if (!raw) return;
     rawOwners.delete(event);
@@ -28,6 +33,7 @@ export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
   const acknowledgeAll = (): void => {
     for (const raw of rawOwners.values()) acknowledgeRaw(raw);
     rawOwners.clear();
+    pendingActivity.clear();
   };
   const dropDiagnostic = (event: BackendEvent): Effect.Effect<void> =>
     Effect.logWarning(
@@ -35,6 +41,10 @@ export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
     ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event))));
   const offer = (event: BackendEvent, raw?: Raw): Effect.Effect<void> =>
     Effect.suspend(() => {
+      if (event.type === "activity") {
+        if (pendingActivity.has(event.assignmentEpoch)) return raw ? release(raw) : Effect.void;
+        pendingActivity.set(event.assignmentEpoch, event);
+      }
       if (raw) rawOwners.set(event, raw);
       return Queue.offer(events, event).pipe(
         Effect.flatMap((delivered) => (delivered ? Effect.void : dropDiagnostic(event))),

@@ -45,7 +45,6 @@ const processFixture = () =>
                 start: () => Effect.void,
                 steer: () => Effect.void,
                 interrupt: Effect.void,
-                renameDisplay: () => Effect.void,
                 reply: () => Effect.void,
                 notifyPeers: () => Effect.void,
               },

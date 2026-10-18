@@ -246,7 +246,7 @@ const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
     // A private temp directory leaves with its harness, so outcomes are read while the run lives.
     const { targets, outcome } = yield* Effect.gen(function* () {
       const backend = driver(observedProcesses, yield* SupervisorChannel);
-      yield* backend.preflight({ ...launch, closeOnReport: true });
+      yield* backend.preflight(launch);
       const handle = yield* backend.spawn(launch);
       yield* handle.controls.initialize;
       const planned = canaryTargets(runtime, root, tag, yield* Ref.get(privateTemporaryDirectory));

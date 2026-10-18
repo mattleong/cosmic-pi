@@ -26,17 +26,6 @@ import {
   workspaceDirectory,
 } from "./git-worktree-store.ts";
 
-// Line-based porcelain works with Git before 2.36; workspace paths never contain a newline.
-const registrations = (repository: string) =>
-  git(repository, ["worktree", "list", "--porcelain"]).pipe(
-    Effect.map((output) =>
-      output
-        .split("\n")
-        .filter((line) => line.startsWith("worktree "))
-        .map((line) => line.slice(9)),
-    ),
-  );
-
 export const removeWorkspaceTrees = (
   registry: string,
   record: WorkspaceRecord,
@@ -47,38 +36,6 @@ export const removeWorkspaceTrees = (
     const directory = workspaceDirectory(registry, record.handle.workspaceId);
     const repository = path.join(directory, "repo.git");
     const names = yield* workspaceIO("discard", () => fs.readdir(directory));
-    if (names.includes("seed"))
-      return yield* workspaceFailure(
-        "recovery",
-        "A fork seed remains; manual recovery is required.",
-      );
-    if (record.predecessorWorkspaceId !== undefined) {
-      if (
-        !validWorkspaceId(record.predecessorWorkspaceId) ||
-        record.predecessorWorkspaceId === record.handle.workspaceId
-      )
-        return yield* workspaceFailure("recovery", "Invalid predecessor workspace identity.");
-      const predecessor = yield* readWorkspaceRecord(registry, record.predecessorWorkspaceId);
-      if (
-        predecessor.handle.ownerId !== record.handle.ownerId ||
-        predecessor.handle.sourceRoot !== record.handle.sourceRoot ||
-        predecessor.handle.sourceCwd !== record.handle.sourceCwd
-      )
-        return yield* workspaceFailure(
-          "recovery",
-          "Predecessor ownership or source identity does not match.",
-        );
-      const seedRepository = path.join(
-        workspaceDirectory(registry, predecessor.handle.workspaceId),
-        "repo.git",
-      );
-      yield* checkDirectory(seedRepository);
-      if ((yield* registrations(seedRepository)).includes(path.join(directory, "seed")))
-        return yield* workspaceFailure(
-          "recovery",
-          "Seed registration remains without its editable tree.",
-        );
-    }
     // Keep the worker available for identity checks until every preparation is gone.
     const trees = names
       .filter((entry) => removedWorker(entry) || /^prepare-[a-f0-9-]{36}$/u.test(entry))
@@ -96,7 +53,7 @@ export const removeWorkspaceTrees = (
           });
         const original = record.handle.writerCwd;
         if (!original) return yield* refusal();
-        // Service, source-lock, and predecessor checks can all wait. Revalidate at removal,
+        // Service, source-lock, and owner-lease checks can all wait. Revalidate at removal,
         // not merely before entering the engine, while the original writer lease is held.
         const current = yield* canonicalizeWriterDirectory(record.handle.cwd).pipe(
           Effect.mapError(refusal),
@@ -192,31 +149,36 @@ const finished = (record: WorkspaceRecord) =>
 
 /**
  * Workspaces created from `workspaceId`'s worker tree that are neither integrated nor discarded.
- * Unreadable records grant nothing and block nothing here; listing reports them separately.
+ * A plain scan of the small records, without listing's registry revalidation or source-chain
+ * resolution, because the coordinator runs it under its run lock. Unreadable records grant nothing
+ * and block nothing here; listing reports them separately.
  */
 export const unresolvedChildWorkspaces = (registry: string, workspaceId: string) =>
-  listWorkspaceRecords(registry).pipe(
-    Effect.map(({ records }) =>
-      records
-        .filter((record) => record.handle.sourceWorkspaceId === workspaceId && !finished(record))
-        .map((record) => record.handle.workspaceId),
-    ),
-  );
+  Effect.gen(function* () {
+    const names = yield* workspaceIOIfPresent("registry", () => fs.readdir(registry));
+    const children: string[] = [];
+    for (const name of (names ?? []).filter(validWorkspaceId).toSorted()) {
+      if (name === workspaceId) continue;
+      const record = yield* readWorkspaceRecord(registry, name).pipe(
+        Effect.catchTag("WorkspaceError", () => Effect.void),
+      );
+      if (record?.handle.sourceWorkspaceId === workspaceId && !finished(record))
+        children.push(name);
+    }
+    return children;
+  });
 
 /** Discarded and integrated records stay this long for inspection, like delivered reports. */
 export const WORKSPACE_RECORD_RETENTION = Duration.days(7);
 
 const COLLECTED_PREFIX = ".collected-";
 
-// A fork names its predecessor; a nested workspace names its source workspace, whose record its
-// listing attribution needs until the nested record is collected too.
-const references = (record: WorkspaceRecord) => [
-  ...(record.predecessorWorkspaceId === undefined ? [] : [record.predecessorWorkspaceId]),
-  ...(record.handle.sourceWorkspaceId === undefined ? [] : [record.handle.sourceWorkspaceId]),
-];
+// A nested workspace names its source workspace, whose record its listing attribution needs until
+// the nested record is collected too.
+const references = (record: WorkspaceRecord) =>
+  record.handle.sourceWorkspaceId === undefined ? [] : [record.handle.sourceWorkspaceId];
 
-const editableTree = (name: string) =>
-  name === "worker" || name === "seed" || name.startsWith("prepare-");
+const editableTree = (name: string) => name === "worker" || name.startsWith("prepare-");
 
 // Renaming first keeps a half-removed directory out of every listing.
 const removeCollected = (registry: string, workspaceId: string) =>
@@ -235,8 +197,8 @@ const collectRecord = (registry: string, workspaceId: string, now: number) =>
   Effect.gen(function* () {
     const record = yield* readWorkspaceRecord(registry, workspaceId);
     if (!finished(record)) return false;
-    // Fork and nested creation hold this checkout's lock too. The pre-lock listing is only a
-    // candidate scan: a retry or nested writer may have persisted a new reference meanwhile.
+    // Nested creation holds this checkout's lock too. The pre-lock listing is only a candidate
+    // scan: a nested writer may have persisted a new reference meanwhile.
     const current = yield* listWorkspaceRecords(registry);
     if (
       current.unavailable.length > 0 ||
@@ -266,9 +228,8 @@ export interface WorkspaceCollection {
 
 /**
  * Deletes discarded and integrated records once they are a week old, unless an editable tree
- * remains (such as a worker kept for files integration left out), a later fork still names the
- * record as its predecessor, or a nested workspace names it as its source. Unreadable artifacts
- * are never touched.
+ * remains (such as a worker kept for a reader or an unresolved child) or a nested workspace names
+ * it as its source. Unreadable artifacts are never touched.
  */
 export const collectWorkspaceRecords = (registry: string, collection: WorkspaceCollection) =>
   Effect.gen(function* () {

@@ -40,7 +40,11 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
 ];
 const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   SCRIPTED_WRITER_RECOVERY,
-  [["notfound", "not_found"], "Refresh run IDs with subagent_list.", ["not found"]],
+  [
+    ["notfound", "not_found"],
+    "Refresh run IDs with subagent_status without runIds.",
+    ["not found"],
+  ],
   [
     ["completion_claim_conflict"],
     "Wait for or cancel the operation that already owns this completion, then retry.",
@@ -103,7 +107,7 @@ export const failureRecovery = (
     ? [
         UNCERTAIN_FAILURE_RECOVERY_RULES,
         context === "start"
-          ? "Do not retry the launch automatically; it may already have taken effect. Inspect subagent_list and subagent_status before recovery."
+          ? "Do not retry the launch automatically; it may already have taken effect. List runs and inspect subagent_status before recovery."
           : unconfirmedActionRecovery,
       ]
     : context === "start"
@@ -140,10 +144,6 @@ const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> =
     ["report_delivery_backlog"],
     (subject) => `${subject}'s earlier outcome is still being delivered`,
   ],
-  [
-    ["write_claim_change_not_waiting"],
-    (subject) => `${subject}'s claims can change only while it waits on a claim question`,
-  ],
   [["write_claim"], () => "A requested file claim is invalid"],
   [["not_running"], (subject) => `${subject} isn't running`],
   [["run_starting"], (subject) => `${subject} is still starting`],
@@ -162,8 +162,6 @@ const VERBS = new Map([
   ["resume", "resume"],
   ["stop", "stop"],
   ["retry", "retry"],
-  ["rename", "rename"],
-  ["claims", "change claims for"],
   ["status", "find"],
   ["list", "list"],
   ["await", "wait for"],
@@ -171,7 +169,6 @@ const VERBS = new Map([
   ["models", "inspect"],
   ["review", "review"],
   ["prepare", "prepare"],
-  ["integrate", "integrate"],
   ["revise", "request a revision of"],
   ["discard", "discard"],
   ["progress", "send progress to"],
@@ -195,8 +192,6 @@ const NOUNS = new Map([
   ["resume", "resume"],
   ["stop", "stop"],
   ["retry", "retry"],
-  ["rename", "rename"],
-  ["claims", "claim change"],
 ]);
 
 const unconfirmedMessage = (action: string, name: string | undefined): string => {

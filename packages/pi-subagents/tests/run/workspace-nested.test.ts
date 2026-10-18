@@ -120,7 +120,7 @@ const parentOperations = (
 ): ReadonlyArray<Effect.Effect<unknown, SubagentError>> => [
   service.workspaceReview(workspaceId),
   service.workspacePrepare(workspaceId, "revision-1"),
-  service.workspaceIntegrate(workspaceId, "revision-1", "prepared-1"),
+  service.workspaceApply(workspaceId, { revisionId: "revision-1", preparationId: "prepared-1" }),
   service.workspaceApply(workspaceId),
   service.workspaceRevise(workspaceId, "Try again."),
 ];
@@ -266,7 +266,7 @@ describe("nested worktree writers", () => {
     });
   });
 
-  it.effect("the parent revises its child in place and retries fork from its tree", () => {
+  it.effect("the parent revises its child in place and retries from its own tree", () => {
     const f = fixture();
     return withService(f.layer, function* (service) {
       const parent = yield* service.start(repoWriter());
@@ -278,25 +278,25 @@ describe("nested worktree writers", () => {
       control.exit(1);
       yield* yieldUntil(() => control.released() === 1);
       const claim = yield* service.claimRetryContinuation(failed.id);
-      const forked = yield* service.startRetrySessionOwned({
+      const retried = yield* service.startRetrySessionOwned({
         ...repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(1) }),
         cwd: parent.cwd,
         parentRunId: parent.id,
         supersedes: { runId: failed.id, claimToken: claim.claimToken },
       });
-      expect(forked.workspaceId).not.toBe(failed.workspaceId);
-      expect(f.entries.get(forked.workspaceId!)?.handle).toMatchObject({
+      expect(retried.workspaceId).not.toBe(failed.workspaceId);
+      expect(f.entries.get(retried.workspaceId!)?.handle).toMatchObject({
         ownerId: `session-1/${parent.id}`,
         sourceWorkspaceId: parent.workspaceId,
       });
-      yield* service.stop(forked.id);
-      const successor = yield* service.workspaceRevise(
-        forked.workspaceId!,
+      yield* service.stop(retried.id);
+      const { run: successor } = yield* service.workspaceRevise(
+        retried.workspaceId!,
         "Also cover the edge case.",
         parent.id,
       );
       expect(successor).toMatchObject({
-        workspaceId: forked.workspaceId,
+        workspaceId: retried.workspaceId,
         parentRunId: parent.id,
         writerWorkspaceMode: "worktree",
       });
@@ -317,7 +317,10 @@ describe("nested worktree writers", () => {
       const childOperations: ReadonlyArray<Effect.Effect<unknown, SubagentError>> = [
         service.workspaceReview(childWorkspace),
         service.workspaceApply(childWorkspace),
-        service.workspaceIntegrate(childWorkspace, "revision-1", "prepared-1"),
+        service.workspaceApply(childWorkspace, {
+          revisionId: "revision-1",
+          preparationId: "prepared-1",
+        }),
         service.workspaceRevise(childWorkspace, "Continue."),
       ];
       for (const operation of childOperations)
@@ -396,7 +399,7 @@ describe("nested worktree writers", () => {
     return withService(f.layer, function* (service) {
       const { parent, child, parentWorkspace, childWorkspace } = yield* nestedPair(service);
       yield* service.stop(child.id);
-      f.hooks.workerChanges = { changedPaths: [], uncapturedPaths: [] };
+      f.hooks.workerChanges = { changedPaths: [], uncapturedPaths: [], diffStat: [] };
       yield* completeLocalRun(service, f.children.controls[0]!, parent.id, "Done.");
       expect(yield* outcomeOf(service, parent.id)).toEqual({
         status: "proposal",

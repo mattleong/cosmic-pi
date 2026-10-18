@@ -307,8 +307,7 @@ type CorrelatedRpcCommand =
       readonly streamingBehavior?: "steer" | undefined;
     }
   | { readonly type: "clear_queue"; readonly id?: string | undefined }
-  | { readonly type: "abort"; readonly id?: string | undefined }
-  | { readonly type: "set_session_name"; readonly id?: string | undefined; readonly name: string };
+  | { readonly type: "abort"; readonly id?: string | undefined };
 
 export type RpcCommand =
   | CorrelatedRpcCommand

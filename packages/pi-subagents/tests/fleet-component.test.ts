@@ -17,7 +17,6 @@ const makeFleet = (
   options: {
     readonly height?: number;
     readonly matchesKeybinding?: (data: string, id: FullScreenSelectionKeybindingId) => boolean;
-    readonly visibilityRootId?: string;
     readonly isCurrent?: () => boolean;
   } = {},
 ) => {
@@ -37,7 +36,6 @@ const makeFleet = (
     getHeight: () => height,
     getNow: () => 1_000,
     matchesKeybinding: options.matchesKeybinding,
-    visibilityRootId: options.visibilityRootId,
     isCurrent: options.isCurrent,
     requestRender: () => {},
     close,

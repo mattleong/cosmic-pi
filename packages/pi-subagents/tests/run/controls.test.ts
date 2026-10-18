@@ -15,6 +15,22 @@ import { anyString } from "../support/matchers.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 
 describe("SubagentService", () => {
+  it.effect("renames any running run's display name in the root alone", () => {
+    const { backend, layer } = nativeReportServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.startSessionOwned(nativeReportRequest({ name: "first-name" }));
+      expect((yield* service.rename(run.id, "  second-name  ")).name).toBe("second-name");
+      expect(yield* service.status(run.id)).toMatchObject({
+        state: "running",
+        name: "second-name",
+      });
+      expect(backend.controls).toHaveLength(1);
+      expect(yield* service.rename(run.id, "   ").pipe(Effect.flip)).toBeInstanceOf(
+        InvalidSubagentRequestError,
+      );
+    });
+  });
+
   it.effect("clears a waiting parent question when its MCP caller cancels", () => {
     const { backend, projections, layer } = nativeReportServiceFixture();
     return withService(layer, function* (service) {

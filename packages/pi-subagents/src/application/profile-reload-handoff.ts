@@ -1,7 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import {
   cloneSessionProfileOverrideSeed,
   decodeSessionProfileOverrideSeed,
@@ -27,7 +26,8 @@ export class IncompatibleProfileReloadHandoffError extends Schema.TaggedError<In
   { message: Schema.String },
 ) {}
 
-const decodeEnvelope = Schema.decodeUnknownOption(
+// An envelope may come from an earlier module instance, so it is decoded as unknown input.
+const decodeEnvelope = decodeUnknownOrUndefined(
   Schema.Struct({
     version: Schema.Literal(2),
     sessionKey: ProfileReloadSessionKeySchema,
@@ -72,10 +72,7 @@ const readEnvelope = (
     return undefined;
   }
   if (slot.value === undefined) return undefined;
-  const decoded = invokeHostCallback(
-    () => Option.getOrUndefined(decodeEnvelope(slot.value)),
-    undefined,
-  );
+  const decoded = decodeEnvelope(slot.value);
   if (decoded) {
     const seed = decodeSessionProfileOverrideSeed(decoded.seed);
     if (seed?.baseline) return { sessionKey: decoded.sessionKey, seed };

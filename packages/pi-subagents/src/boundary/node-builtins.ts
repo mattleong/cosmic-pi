@@ -14,7 +14,6 @@ export const nodeFsPromises = fsModule.promises;
 export const nodeMkdirSync = fsModule.mkdirSync;
 export const nodeWriteFileSync = fsModule.writeFileSync;
 export const nodeReadFileSync = fsModule.readFileSync;
-export const nodeWriteSync = fsModule.writeSync;
 export const nodeCreateHash = cryptoModule.createHash;
 export const nodePath = pathModule;
 export const nodeAvailableParallelism = osModule.availableParallelism;

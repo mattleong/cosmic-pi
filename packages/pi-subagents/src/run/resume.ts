@@ -345,7 +345,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
               if (!selected.resumeToken)
                 return yield* invalidRequest(
                   "backend_resume_unavailable",
-                  `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
+                  `Subagent ${id} cannot resume because local/${selected.view.runtime} did not provide continuation state.`,
                 );
               const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
               const nesting = yield* dependencies.currentNesting;
@@ -408,8 +408,6 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                     ? Deferred.makeUnsafe<void>()
                     : undefined;
                   selected.pendingInitializationSettlement = undefined;
-                  // Writer admission is open here, so any remaining offender state is offender-only
-                  // containment that this parent-guided resume resolves.
                   selected.writeViolationContainmentStarted = false;
                   beginNextAssignmentLocked(selected, attemptToken, now, {
                     question: undefined,

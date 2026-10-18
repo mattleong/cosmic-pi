@@ -7,21 +7,18 @@ import type { StartSubagentRequest } from "./model.ts";
 export const SUBAGENT_TOOL_NAME = Object.freeze({
   models: "subagent_models",
   start: "subagent_start",
-  list: "subagent_list",
   status: "subagent_status",
   await: "subagent_await",
   send: "subagent_send",
   reply: "subagent_reply",
   lifecycle: "subagent_lifecycle",
-  rename: "subagent_rename",
-  claims: "subagent_claims",
   workspace: "subagent_workspace",
 } as const);
 
 export const SUBAGENT_TOOL_NAMES = Object.freeze(Object.values(SUBAGENT_TOOL_NAME));
 export type SubagentToolName = (typeof SUBAGENT_TOOL_NAMES)[number];
 
-/** Nested children that are not worktree writers have no workspaces to review or integrate. */
+/** Nested children that are not worktree writers have no workspaces to review or apply. */
 export const NESTED_SUBAGENT_TOOL_NAMES = Object.freeze(
   SUBAGENT_TOOL_NAMES.filter((name) => name !== SUBAGENT_TOOL_NAME.workspace),
 );
@@ -125,12 +122,12 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     ...(request.workspace
       ? [
           "You work in an isolated workspace, named with your task. Work only there; don't write into the source checkout or another worker's directory.",
-          "Your changes are a proposal: don't stage, commit, merge, or integrate them. Your parent reviews and tests them before integrating. The isolation is not a security sandbox.",
+          "Your changes are a proposal: don't stage, commit, merge, or integrate them. Your parent reviews or tests them before applying them. The isolation is not a security sandbox.",
         ]
       : []),
     ...(isWorkspaceParentRequest(request)
       ? [
-          `You may start worktree writer children (isolation: worktree) for parallel slices of your task. Their workspaces are yours: review, prepare, and integrate each one into your own workspace with subagent_workspace, or discard it.${request.writes ? " Their changes count against your own write claims." : ""} Integrate or discard every child workspace before you report, because unresolved child workspaces block your parent's integration.`,
+          `You may start worktree writer children (isolation: worktree) for parallel slices of your task. Their workspaces are yours: apply each one into your own workspace with subagent_workspace, or discard it.${request.writes ? " Their changes count against your own write claims." : ""} Apply or discard every child workspace before you report, because unresolved child workspaces block your parent's integration.`,
         ]
       : []),
     request.writeIntent === "writer"
@@ -144,7 +141,7 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
               ? "Read repository files as needed, but modify only the claimed paths inside your isolated cwd."
               : "Read any repository file, but modify only the claimed paths. Re-read a file immediately before editing because peers may change the checkout concurrently. Don't write outside the working directory, except for scratch files in the system temporary directory such as /tmp.",
             "Use Bash for targeted validation and ordinary work, but don't mutate files outside your claims. Don't run Git mutations, package installation, broad formatting, snapshot updates, or broad code generation unless every affected file is claimed.",
-            "If you need another file, ask with contact_parent(kind=question), naming the exact workspace-relative paths, and wait. Only the parent's grant and reply expand your claims; peers can't transfer them.",
+            "Your claims are fixed for this run, and a native write outside them stops you. If the task needs another file, don't edit it: finish what you can within your claims and name the exact workspace-relative paths in your final report, so the parent can relaunch with corrected claims.",
             "Report every changed file, validation command, and any possible out-of-claim side effect in the final report.",
           ].join("\n\n")
         : request.workspace

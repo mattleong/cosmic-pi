@@ -6,7 +6,6 @@ import type { SubagentError, SubagentProcessError } from "../run/errors.ts";
 import type {
   SubagentContextMode,
   SubagentEffort,
-  SubagentHost,
   SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
@@ -174,7 +173,6 @@ export interface BackendControls {
   readonly start: (message: string, assignmentEpoch: number) => Effect.Effect<void, SubagentError>;
   readonly steer: (message: string) => Effect.Effect<void, SubagentError>;
   readonly interrupt: Effect.Effect<void, SubagentError>;
-  readonly renameDisplay: (name: string) => Effect.Effect<void, SubagentError>;
   readonly reply: (requestId: string, message: string) => Effect.Effect<void, SubagentError>;
   readonly notifyPeers: (message: string) => Effect.Effect<void, SubagentError>;
   readonly deliverNotification?:
@@ -205,14 +203,12 @@ export interface BackendHandle {
 export interface BackendPreflightRequest {
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  readonly closeOnReport: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly cwd?: string | undefined;
 }
 
 export interface BackendDriver {
-  readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly supportsContext: (context: SubagentContextMode) => boolean;

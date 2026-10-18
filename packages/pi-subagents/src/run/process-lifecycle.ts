@@ -46,8 +46,6 @@ export function processControlOperations(withLock: WithRunLock) {
     steer: (record: RunRecord, message: string) =>
       runControl(record, (process) => process.controls.steer(message)),
     interrupt: (record: RunRecord) => runControl(record, (process) => process.controls.interrupt),
-    renameDisplay: (record: RunRecord, name: string) =>
-      runControl(record, (process) => process.controls.renameDisplay(name)),
   };
 }
 
@@ -146,12 +144,15 @@ export function processInitializer(dependencies: RunProcessInitializerDependenci
           "start_cancelled",
           `Subagent ${record.view.id} was stopped during startup.`,
         );
-      const isCurrentProcess = withLock(
-        Effect.sync(() => record.scope === scope && record.process === process),
+      const readCurrentProcess = Effect.sync(
+        () => record.scope === scope && record.process === process,
       );
+      const isCurrentProcess = withLock(readCurrentProcess);
       const eventConsumer = yield* Stream.fromQueue(process.events).pipe(
         Stream.runForEach((event) =>
-          isCurrentProcess.pipe(
+          // Each field changes in one locked assignment, and this pairing turns false only once,
+          // so an unlocked read is as current as a locked one and keeps hot events off the lock.
+          readCurrentProcess.pipe(
             Effect.flatMap((isCurrent) =>
               isCurrent
                 ? handleBackendEvent(record, event, process).pipe(

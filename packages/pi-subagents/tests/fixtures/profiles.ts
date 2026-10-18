@@ -10,14 +10,12 @@ export const profileCandidate = (
   model = "parent",
   overrides: Partial<ProfileCandidate> = {},
 ): ProfileCandidate => ({
-  host: "local",
   runtime: "pi",
   model,
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
   openaiFastMode: false,
-  closeOnReport: true,
   ...overrides,
 });
 

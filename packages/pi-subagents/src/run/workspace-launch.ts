@@ -5,7 +5,7 @@ import {
   DEFAULT_SUBAGENT_NESTING_POLICY,
   type WriterWorkspaceMode,
 } from "../config/schema.ts";
-import type { WorkspaceHandle, WorkspaceTarget } from "../workspace/model.ts";
+import type { WorkspaceHandle, WorkspaceRebase, WorkspaceTarget } from "../workspace/model.ts";
 import { processCapacityError, treeCapacityError } from "./admission.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
@@ -18,11 +18,19 @@ import {
 import { runSessionOwned } from "./session-owned.ts";
 import { provisionWorkspaceTree } from "./workspace-setup.ts";
 import {
+  bindingSlot,
+  clearBindingSlot,
+  isBindingFinished,
   type LaunchSlot,
   mapWorkspaceError,
   reopenBindingLocked,
+  requireCommandSettled,
   type RevisionHold,
+  runHoldsCwd,
+  runsWithin,
   type SharedReservation,
+  UNREVIEWED,
+  workspaceArtifactDirectory,
   type WorkspaceBinding,
   type WorkspaceControlContext,
   workspaceBusyError,
@@ -32,6 +40,17 @@ import {
 type WorkspaceStart = (
   request: StartSubagentRequest,
 ) => Effect.Effect<SubagentRunView, SubagentError>;
+
+export interface WorkspaceReviseOptions {
+  /** Rebuild the worker from current parent files and reapply its changes before the pass. */
+  readonly rebase?: boolean | undefined;
+}
+
+export interface WorkspaceRevised {
+  readonly run: SubagentRunView;
+  /** Present when the successor's worker tree was rebuilt; it lists the conflicted files. */
+  readonly rebase?: WorkspaceRebase | undefined;
+}
 
 interface LaunchSelection {
   readonly mode: WriterWorkspaceMode;
@@ -63,20 +82,52 @@ const successorRequest = (binding: WorkspaceBinding, message: string): StartSuba
   supersedes: undefined,
 });
 
+const MAX_PROMPT_CONFLICTS = 50;
+
+/** The successor's task names the rebase and every file it must resolve first. */
+const rebasedSuccessor = (
+  request: StartSubagentRequest,
+  { conflictedPaths }: WorkspaceRebase,
+): StartSubagentRequest => {
+  const listed = conflictedPaths
+    .slice(0, MAX_PROMPT_CONFLICTS)
+    .map((name) => `- ${JSON.stringify(name.slice(0, 256))}`);
+  const more =
+    conflictedPaths.length > MAX_PROMPT_CONFLICTS
+      ? [
+          `- and ${conflictedPaths.length - MAX_PROMPT_CONFLICTS} more; search the workspace for <<<<<<< to find them`,
+        ]
+      : [];
+  const note =
+    conflictedPaths.length === 0
+      ? "Your workspace was rebuilt from the parent's current files, and your previous changes reapplied cleanly with a three-way merge. Check that they still fit the parent's changes."
+      : [
+          `Your workspace was rebuilt from the parent's current files, and your previous changes were reapplied with a three-way merge. These ${conflictedPaths.length === 1 ? "file has" : `${conflictedPaths.length} files have`} conflicts; resolve them before anything else:`,
+          ...listed,
+          ...more,
+          "In each text file, replace every block from <<<<<<< through >>>>>>> with content that keeps both the parent's change (ours) and yours (theirs), and leave no markers. A conflicted binary file holds the parent's version; redo your change to it.",
+        ].join("\n");
+  return { ...request, task: `${request.task}\n\nParent rebase:\n${note}` };
+};
+
 const integrationQuarantinedError = () =>
   invalid(
     "workspace_integration_quarantined",
     "Integration ownership is quarantined; writer admission is blocked.",
   );
 
+const holdsRevision = ({ binding, revision }: Succession) =>
+  binding.state.phase === "revising" && binding.state.hold === revision;
+
 const releaseRevisionLocked = ({ binding, revision }: Succession) => {
-  if (binding.revision !== revision) return;
-  binding.revision = undefined;
-  binding.preparing = false;
+  const { state } = binding;
+  if (state.phase === "revising" && state.hold === revision)
+    binding.state = { phase: "idle", knowledge: state.knowledge };
 };
 
 export function workspaceLaunchOperations(context: WorkspaceControlContext) {
   const { records, withLock, isClosed, state, ownerFor, requireEngine, requireBinding } = context;
+  const { engine } = context;
   const { workspaceSetup, requireChildrenResolved } = context;
   const { operations, ownerScope } = context;
   const releaseSlotLocked = (slot: LaunchSlot | undefined) => {
@@ -86,10 +137,11 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     Deferred.doneUnsafe(released, Effect.void);
   };
   const releaseBindingSlotLocked = (binding: WorkspaceBinding) => {
-    const slot = binding.slot;
-    binding.slot = undefined;
+    const slot = bindingSlot(binding);
+    clearBindingSlot(binding);
     releaseSlotLocked(slot);
   };
+  /** Admission settles a new workspace, or commits a revision to its successor. */
   const bind = (request: StartSubagentRequest, admitted?: RunRecord) => {
     if (!request.workspace) return;
     const binding = state.bindings.get(request.workspace.workspaceId);
@@ -97,15 +149,16 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     releaseBindingSlotLocked(binding);
     if (!admitted) return;
     binding.record = admitted;
-    if (!binding.revision) return;
-    binding.request = binding.revision.successor;
+    const { state: current } = binding;
+    if (current.phase === "creating") binding.state = UNREVIEWED;
+    if (current.phase !== "revising") return;
+    binding.request = current.hold.successor;
     reopenBindingLocked(binding);
   };
   /** Counts slots held by worktree launches still creating workspaces; omit caller for the tree. */
   const heldLaunchSlots = (caller?: string, request?: StartSubagentRequest): number => {
-    const own = request?.workspace
-      ? state.bindings.get(request.workspace.workspaceId)?.slot
-      : undefined;
+    const binding = request?.workspace && state.bindings.get(request.workspace.workspaceId);
+    const own = binding ? bindingSlot(binding) : undefined;
     return [...state.launchSlots].filter(
       (slot) => slot !== own && (caller === undefined || slot.caller === caller),
     ).length;
@@ -123,21 +176,6 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
         treeCapacityError(records, tree, undefined, heldLaunchSlots()))
         ? state.slotReleased
         : undefined;
-    });
-  /** A route retry forks only from the failed writer that still owns an unfinished workspace. */
-  const holdForkSourceLocked = (predecessor: RunRecord, workspaceId: string, caller: string) =>
-    Effect.gen(function* () {
-      const current = state.bindings.get(workspaceId);
-      if (current?.finished) return yield* workspaceFinishedError(current);
-      if (current && current.record !== predecessor)
-        return yield* invalid(
-          "workspace_owner_unavailable",
-          "A revision successor now owns this workspace, so the failed writer's retry cannot fork from it.",
-        );
-      const binding = yield* requireBinding(workspaceId, caller);
-      const token = Symbol("workspace fork");
-      binding.busy = token;
-      return { binding, token };
     });
   /**
    * The binding of an active Pi worktree writer that may own worktree writer children, judged
@@ -157,7 +195,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     )
       return undefined;
     const binding = state.bindings.get(view.workspaceId);
-    return binding?.record === record && !binding.finished ? binding : undefined;
+    return binding?.record === record && !isBindingFinished(binding) ? binding : undefined;
   };
   const checkLaunchLocked = (
     request: StartSubagentRequest,
@@ -197,7 +235,8 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           return binding.record === undefined;
         }),
       );
-      if (!unadmitted || binding.setupCleanupPending) return;
+      // The engine refuses a workspace whose setup cleanup is unconfirmed, which then stays.
+      if (!unadmitted) return;
       const service = yield* requireEngine;
       yield* service
         .discard({ workspaceId, ownerId, processCleanupConfirmed: true })
@@ -249,8 +288,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           binding = {
             handle,
             request: bindingRequest(request, handle, selectedMode),
-            preparing: true,
-            slot,
+            state: { phase: "creating", slot },
           };
           state.bindings.set(handle.workspaceId, binding);
         };
@@ -258,52 +296,29 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           if (succession) {
             yield* withLock(
               Effect.sync(() => {
-                if (succession.binding.revision === succession.revision)
-                  succession.binding.slot = slot;
+                const { state: current } = succession.binding;
+                if (current.phase === "revising" && current.hold === succession.revision)
+                  succession.binding.state = { ...current, slot };
               }),
             );
             return succession.binding.handle;
           }
+          // A route retry starts from a fresh snapshot like any launch; the failed writer's
+          // workspace stays an ordinary proposal.
           const service = yield* requireEngine;
-          const predecessor = request.supersedes
-            ? records.get(request.supersedes.runId)
-            : undefined;
-          const prior = predecessor?.view.workspaceId
-            ? yield* withLock(
-                holdForkSourceLocked(predecessor, predecessor.view.workspaceId, caller),
-              )
-            : undefined;
-          const acquiring = prior
-            ? service
-                .fork({
-                  workspaceId: prior.binding.handle.workspaceId,
-                  ownerId: ownerFor(caller),
-                  processCleanupConfirmed: true,
-                  onAcquired,
-                })
-                .pipe(
-                  Effect.ensuring(
-                    withLock(
-                      Effect.sync(() => {
-                        if (prior.binding.busy === prior.token) prior.binding.busy = undefined;
-                      }),
-                    ),
-                  ),
-                )
-            : service.create({
+          const handle = yield* restore(
+            service
+              .create({
                 sourceCwd: request.cwd,
                 ownerId: ownerFor(caller),
                 sourceWorkspace,
                 onAcquired,
-              });
-          const handle = yield* restore(acquiring.pipe(Effect.mapError(mapWorkspaceError)));
+              })
+              .pipe(Effect.mapError(mapWorkspaceError)),
+          );
           yield* withLock(Effect.sync(() => onAcquired(handle)));
           if (workspaceSetup)
-            yield* restore(
-              provisionWorkspaceTree(service, workspaceSetup, handle, {}, (pending) => {
-                if (binding) binding.setupCleanupPending = pending;
-              }),
-            );
+            yield* restore(provisionWorkspaceTree(service, workspaceSetup, handle, {}));
           return handle;
         });
         return yield* Effect.gen(function* () {
@@ -328,20 +343,62 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
                 state.sharedReservations.delete(reservation);
                 releaseSlotLocked(slot);
                 const holder = binding ?? succession?.binding;
-                if (holder?.slot === slot) holder.slot = undefined;
-                if (binding) binding.preparing = false;
+                if (holder && bindingSlot(holder) === slot) clearBindingSlot(holder);
+                // An unadmitted workspace whose discard failed stays for the parent to discard.
+                if (binding?.state.phase === "creating") binding.state = UNREVIEWED;
               }),
             ),
           ),
         );
       });
     });
+  /**
+   * Rebuilds the held workspace's worker tree from current parent files and runs setup there like
+   * a new launch. Once the tree changed, no earlier review or preparation describes it, even if
+   * setup or the successor's admission then fails.
+   */
+  const rebaseHeld = (held: Succession): Effect.Effect<WorkspaceRebase, SubagentError> =>
+    Effect.gen(function* () {
+      const service = yield* requireEngine;
+      const { binding } = held;
+      const { workspaceId, ownerId } = binding.handle;
+      yield* withLock(
+        Effect.gen(function* () {
+          const directory = workspaceArtifactDirectory(binding.handle);
+          if (!holdsRevision(held) || !directory)
+            return yield* invalid(
+              "workspace_owner_unavailable",
+              "The revision that requested this rebase no longer holds its workspace.",
+            );
+          // A rebase removes and rewrites the worker's files, like discard removes them.
+          if ([...runsWithin(records, [directory]).keys()].some(runHoldsCwd))
+            return yield* invalid(
+              "workspace_process_unsettled",
+              "A run still uses this workspace's tree. Stop it and confirm cleanup before a rebase rebuilds the tree.",
+            );
+          return undefined;
+        }),
+      );
+      const rebased = yield* service
+        .rebase({ workspaceId, ownerId, processCleanupConfirmed: true })
+        .pipe(Effect.mapError(mapWorkspaceError));
+      yield* withLock(
+        Effect.sync(() => {
+          const { state: current } = binding;
+          if (current.phase === "revising" && current.hold === held.revision)
+            binding.state = { ...current, knowledge: { kind: "unreviewed" } };
+        }),
+      );
+      if (workspaceSetup)
+        yield* provisionWorkspaceTree(service, workspaceSetup, binding.handle, {});
+      return rebased;
+    });
   const launchSuccessor = (
     held: Succession,
     start: WorkspaceStart,
-  ): Effect.Effect<SubagentRunView, SubagentError> =>
+  ): Effect.Effect<WorkspaceRevised, SubagentError> =>
     Effect.uninterruptibleMask((restore) => {
-      if (held.binding.revision !== held.revision || held.revision.launched)
+      if (!holdsRevision(held) || held.revision.launched)
         return Effect.fail(
           invalid(
             "workspace_owner_unavailable",
@@ -349,9 +406,15 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           ),
         );
       held.revision.launched = true;
-      return restore(launchWriter(held.revision.successor, start, held)).pipe(
-        Effect.ensuring(withLock(Effect.sync(() => releaseRevisionLocked(held)))),
-      );
+      return Effect.gen(function* () {
+        const { successor } = held.revision;
+        if (!held.revision.rebase)
+          return { run: yield* restore(launchWriter(successor, start, held)) };
+        const rebase = yield* restore(rebaseHeld(held));
+        // The note goes to this successor only; later revisions extend the plain request.
+        const run = yield* restore(launchWriter(rebasedSuccessor(successor, rebase), start, held));
+        return { run, rebase };
+      }).pipe(Effect.ensuring(withLock(Effect.sync(() => releaseRevisionLocked(held)))));
     });
   const withLaunch = (
     request: StartSubagentRequest,
@@ -364,19 +427,20 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     Effect.gen(function* () {
       if (!record.view.workspaceId) return () => {};
       const binding = state.bindings.get(record.view.workspaceId);
-      if (!binding || binding.record !== record || binding.preparing)
+      const phase = binding?.state.phase;
+      if (!binding || binding.record !== record || phase === "creating" || phase === "revising")
         return yield* invalid(
           "workspace_owner_unavailable",
           "Workspace resume ownership is unavailable or belongs to a revision successor.",
         );
-      if (binding.busy !== undefined) return yield* workspaceBusyError();
-      if (binding.finished) return yield* workspaceFinishedError(binding);
+      if (phase === "busy") return yield* workspaceBusyError();
+      if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
       if (state.integrationQuarantined) return yield* integrationQuarantinedError();
-      if (binding.setupCleanupPending)
-        return yield* invalid(
-          "workspace_process_unsettled",
-          "Workspace setup cleanup is unconfirmed; this artifact requires manual recovery.",
-        );
+      yield* requireCommandSettled(
+        engine,
+        binding,
+        "Workspace setup or verification cleanup is unconfirmed; this artifact requires manual recovery.",
+      );
       if (record.process !== undefined) return () => {};
       return () => reopenBindingLocked(binding);
     });
@@ -386,7 +450,8 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       workspaceId: string,
       message: string,
       caller = SUBAGENT_ROOT_RUN_ID,
-    ): Effect.Effect<SubagentRunView, SubagentError> =>
+      options: WorkspaceReviseOptions = {},
+    ): Effect.Effect<WorkspaceRevised, SubagentError> =>
       Effect.uninterruptibleMask((restore) => {
         let held: Succession | undefined;
         return Effect.gen(function* () {
@@ -397,15 +462,21 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
               withLock(
                 Effect.gen(function* () {
                   const binding = yield* requireBinding(workspaceId, caller);
-                  if (binding.finished) return yield* workspaceFinishedError();
+                  const { state: current } = binding;
+                  if (current.phase !== "idle") return yield* workspaceFinishedError();
                   yield* requireChildrenResolved(binding);
                   const revision: RevisionHold = {
                     successor: successorRequest(binding, message),
+                    rebase: options.rebase === true,
                     launched: false,
                   };
                   yield* checkLaunchLocked(revision.successor);
-                  binding.preparing = true;
-                  binding.revision = revision;
+                  binding.state = {
+                    phase: "revising",
+                    hold: revision,
+                    slot: undefined,
+                    knowledge: current.knowledge,
+                  };
                   held = { binding, revision };
                   return held;
                 }),

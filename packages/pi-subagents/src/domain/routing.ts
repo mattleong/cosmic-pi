@@ -4,7 +4,6 @@ import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
-export type SubagentHost = "local";
 export type SubagentRuntime = "pi" | "claude" | "codex";
 
 export const SUBAGENT_EFFORTS = [

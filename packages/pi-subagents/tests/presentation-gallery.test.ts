@@ -64,6 +64,7 @@ import { awaitExecutionFor } from "../src/tools/execute-await.ts";
 import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../src/tools/outcome.ts";
 import { subagentToolAction, type SubagentToolInput } from "../src/tools/schema.ts";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
+import { revisionReviewText } from "../src/run/workspace-review.ts";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
 import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import { containedWriter, view } from "./fixtures/run-view.ts";
@@ -137,11 +138,9 @@ const apiAudit = view({
   name: "api-audit",
   task: "Audit the public API surface for breaking changes",
   profile: "researcher",
-  host: "local",
   runtime: "codex",
   model: "gpt-5.5",
   effort: "medium",
-  closeOnReport: true,
   state: "completed",
   reportGeneration: 1,
   capabilities: ["steer", "interrupt", "parent-contact"],
@@ -185,7 +184,7 @@ const dbMigration = view({
   state: "waiting_for_parent",
   question: {
     requestId: "q-1",
-    message: "src/db/seed.ts also needs the new column. May I claim it?",
+    message: "src/db/seed.ts also needs the new column. Should I leave it for a follow-up?",
   },
   ...timing(5),
 });
@@ -193,7 +192,7 @@ const apiWriter = containedWriter({
   id: "agent-9",
   name: "api-writer",
   profile: "worker",
-  state: "paused",
+  state: "stopped",
 });
 
 const fleet = new Map(
@@ -261,13 +260,11 @@ const launched = (request: StartSubagentRequest, id: string) =>
     name: request.name ?? "subagent",
     task: request.task,
     profile: request.profile,
-    host: request.host,
     runtime: request.runtime,
     model: request.model,
     effort: request.effort,
     context: request.context,
     writeIntent: request.writeIntent,
-    closeOnReport: request.closeOnReport,
     openaiFastMode: request.openaiFastMode,
     selection: request.selection ?? view().selection,
     ...timing(0),
@@ -462,7 +459,7 @@ const modelScenarios = Effect.all([
 const inspectionScenarios = Effect.all([
   scenario(
     "fleet with a nested worker",
-    { tool: "subagent_list", args: {} },
+    { tool: "subagent_status", args: {} },
     {
       service: {
         list: Effect.succeed([authReview, schemaCheck, docsSweep, apiAudit, migrationReview]),
@@ -471,7 +468,7 @@ const inspectionScenarios = Effect.all([
   ),
   scenario(
     "no workers",
-    { tool: "subagent_list", args: {} },
+    { tool: "subagent_status", args: {} },
     { service: { list: Effect.succeed([]) } },
   ),
   scenario(
@@ -575,7 +572,7 @@ const retryRoute: ProfileRouteContinuation = {
   profile: "reviewer",
   routeSource: "global",
   candidates: [candidate({ model: "anthropic/claude-opus-4-7" }), candidate()].map((entry) =>
-    Object.assign({}, entry, { openaiFastMode: false, closeOnReport: true }),
+    Object.assign({}, entry, { openaiFastMode: false }),
   ),
   selectedCandidateIndex: 0,
   skippedCandidates: [],
@@ -671,65 +668,9 @@ const lifecycleScenarios = Effect.all([
     tool: "subagent_lifecycle",
     args: { action: "stop", runIds: ["agent-1"], message: "Wrap up first." },
   }),
-  scenario(
-    "rename",
-    { tool: "subagent_rename", args: { runId: "agent-1", name: "session-review" } },
-    { service: { rename: (id, name) => updated(id, { name }) } },
-  ),
 ]);
 
-const claimsScenarios = Effect.all([
-  scenario(
-    "inspect claims",
-    { tool: "subagent_claims", args: { action: "list", runIds: ["agent-6"] } },
-    { service: { status: lookup } },
-  ),
-  scenario(
-    "grant a claim",
-    {
-      tool: "subagent_claims",
-      args: { action: "grant", runId: "agent-6", paths: ["src/db/seed.ts"] },
-    },
-    {
-      service: {
-        grantWriteClaims: (id, paths) =>
-          lookup(id).pipe(
-            Effect.map((run) => ({ ...run, writeClaims: [...(run.writeClaims ?? []), ...paths] })),
-          ),
-      },
-    },
-  ),
-  scenario(
-    "grant refused",
-    {
-      tool: "subagent_claims",
-      args: { action: "grant", runId: "agent-1", paths: ["src/auth/session.ts"] },
-    },
-    {
-      service: {
-        grantWriteClaims: (id) =>
-          Effect.fail(
-            new InvalidSubagentRequestError({
-              code: "write_claim_change_not_waiting",
-              message: `Subagent ${id} must be blocked on a parent claim question or be the confirmed paused claim-violation offender, with no other active tool, before its claims can change.`,
-            }),
-          ),
-      },
-    },
-  ),
-  scenario(
-    "resume writer admission",
-    { tool: "subagent_claims", args: { action: "resume_admission", runId: "agent-9" } },
-    {
-      service: {
-        resumeWriterAdmission: (id) =>
-          updated(id, { writeAdmissionPaused: undefined, writeViolationOffender: undefined }),
-      },
-    },
-  ),
-]);
-
-const diffPage = [
+const reviewedPatch = [
   "diff --git a/db/0007.sql b/db/0007.sql",
   "new file mode 100644",
   "--- /dev/null",
@@ -738,6 +679,12 @@ const diffPage = [
   "+ALTER TABLE sessions ADD COLUMN rotated_at timestamptz;",
   "+CREATE INDEX sessions_rotated_at ON sessions (rotated_at);",
 ].join("\n");
+const reviewPage = revisionReviewText({
+  revisionId: "rev-1",
+  changedPaths: ["db/0007.sql"],
+  uncapturedPaths: ["node_modules/.pnpm/lock.yaml"],
+  diff: reviewedPatch,
+});
 const workspaceRecord: WorkspaceRecord = {
   version: 1,
   handle: {
@@ -749,8 +696,36 @@ const workspaceRecord: WorkspaceRecord = {
   },
   status: "frozen",
   baseline: "4f2a9c1",
-  revision: { revisionId: "rev-1", diff: diffPage, changedPaths: ["db/0007.sql"] },
+  revision: { revisionId: "rev-1", changedPaths: ["db/0007.sql"] },
 };
+const proposalOutcome = {
+  status: "proposal",
+  changedFileCount: 3,
+  uncapturedFileCount: 1,
+  diffStat: {
+    addedLines: 48,
+    deletedLines: 7,
+    files: [
+      { path: "src/auth/session.ts", addedLines: 31, deletedLines: 7 },
+      { path: "tests/auth/session.test.ts", addedLines: 17, deletedLines: 0 },
+      { path: "assets/refresh.png", addedLines: 0, deletedLines: 0, binary: true },
+    ],
+  },
+} as const;
+const appliedWorkspace = {
+  revisionId: "rev-1",
+  preparationId: "prep-2",
+  preparedCwd: "/project/.pi-subagents/prepared/prep-2",
+  changedPaths: ["db/0007.sql", "src/db/schema.ts"],
+  changedPathCount: 2,
+  leftOutPaths: [],
+  workerRoot: "/agent/git-workspaces/ws-1/worker",
+  untouchedDriftPaths: [],
+  treeRemovalFailed: false,
+  remainingBackupPaths: [],
+  leaseReleaseUnconfirmed: false,
+  integrated: true,
+} as const;
 const workspaceService: SubagentServiceDoubleInput = {
   workspaceList: () =>
     Effect.succeed({
@@ -763,10 +738,10 @@ const workspaceService: SubagentServiceDoubleInput = {
     Effect.succeed({
       revisionId: "rev-1",
       changedPaths: ["db/0007.sql"],
-      diff: diffPage,
+      text: reviewPage,
       offset: 0,
-      totalChars: diffPage.length + 16_000,
-      nextOffset: diffPage.length,
+      totalChars: reviewPage.length + 16_000,
+      nextOffset: reviewPage.length,
     }),
   workspacePrepare: (_workspaceId, revisionId) =>
     Effect.succeed({
@@ -774,44 +749,31 @@ const workspaceService: SubagentServiceDoubleInput = {
       revisionId,
       cwd: "/project/.pi-subagents/prepared/prep-1",
       leaseDirectories: [],
+      leftOutPaths: [],
     }),
-  workspaceIntegrate: () =>
+  workspaceApply: () =>
     Effect.succeed({
-      workerRoot: "/agent/git-workspaces/ws-1/worker",
-      uncapturedPaths: [],
-      treeRemovalFailed: false,
-      remainingBackupPaths: [],
-      leaseReleaseUnconfirmed: false,
+      ...appliedWorkspace,
+      reviewed: true,
+      verification: { status: "parent-tested" },
     }),
   workspaceDiscard: () => Effect.void,
   workspaceRevise: () =>
-    Effect.succeed(
-      view({ id: "agent-10", name: "db-migration", profile: "worker", writeIntent: "writer" }),
-    ),
+    Effect.succeed({
+      run: view({ id: "agent-10", name: "db-migration", profile: "worker", writeIntent: "writer" }),
+    }),
 };
 const leftoverWorkspace: SubagentServiceDoubleInput = {
-  workspaceIntegrate: () =>
+  workspaceApply: () =>
     Effect.succeed({
-      workerRoot: "/agent/git-workspaces/ws-1/worker",
-      uncapturedPaths: ["src/Billing/Invoice.cs", "assets/logo.svg"],
-      treeRemovalFailed: false,
+      ...appliedWorkspace,
+      reviewed: true,
+      verification: { status: "parent-tested" },
+      untouchedDriftPaths: ["src/billing.ts", "README.md"],
       remainingBackupPaths: ["/project/db/.pi-workspace-old-4f1c2a9e-0d3b-4e7a-9c55-1b2d3e4f5a6b"],
       leaseReleaseUnconfirmed: true,
     }),
 };
-const appliedWorkspace = {
-  revisionId: "rev-1",
-  preparationId: "prep-2",
-  preparedCwd: "/project/.pi-subagents/prepared/prep-2",
-  changedPaths: ["db/0007.sql", "src/db/schema.ts"],
-  changedPathCount: 2,
-  workerRoot: "/agent/git-workspaces/ws-1/worker",
-  uncapturedPaths: [],
-  treeRemovalFailed: false,
-  remainingBackupPaths: [],
-  leaseReleaseUnconfirmed: false,
-  integrated: true,
-} as const;
 const verifiedApply: SubagentServiceDoubleInput = {
   workspaceApply: () =>
     Effect.succeed({
@@ -830,6 +792,7 @@ const unverifiedApply: SubagentServiceDoubleInput = {
       ...appliedWorkspace,
       reviewed: false,
       verification: { status: "not-configured" },
+      leftOutPaths: ["node_modules/.pnpm/lock.yaml", "dist/index.js"],
     }),
 };
 const failedApply: SubagentServiceDoubleInput = {
@@ -840,6 +803,7 @@ const failedApply: SubagentServiceDoubleInput = {
       preparedCwd: "/project/.pi-subagents/prepared/prep-2",
       changedPaths: ["db/0007.sql", "src/db/schema.ts"],
       changedPathCount: 2,
+      leftOutPaths: [],
       reviewed: false,
       integrated: false,
       verification: {
@@ -850,7 +814,7 @@ const failedApply: SubagentServiceDoubleInput = {
         message: "Verification command pnpm test exited with code 1.",
       },
       nextSteps:
-        "Nothing was applied. Inspect the prepared tree, then revise or discard the workspace, or review every page, prepare again, and integrate that new preparation.",
+        "Nothing was applied. Inspect the prepared tree, then revise or discard the workspace, or review every page, prepare again, and apply that new preparation.",
     }),
 };
 const nestedWorkspaces: SubagentServiceDoubleInput = {
@@ -894,7 +858,7 @@ const workspaceScenarios = Effect.all([
     { service: workspaceService },
   ),
   scenario(
-    "review the first diff page",
+    "review the first page, led by its summary",
     { tool: "subagent_workspace", args: { action: "review", workspaceId: "ws-1" } },
     { service: workspaceService },
   ),
@@ -907,51 +871,34 @@ const workspaceScenarios = Effect.all([
     { service: workspaceService },
   ),
   scenario(
-    "integrate",
+    "apply the prepared pair you tested",
     {
       tool: "subagent_workspace",
-      args: {
-        action: "integrate",
-        workspaceId: "ws-1",
-        revisionId: "rev-1",
-        preparationId: "prep-1",
-      },
+      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-2" },
     },
     { service: workspaceService },
   ),
   scenario(
-    "integrate leaving files and the source lock behind",
+    "apply a prepared pair leaving files and the source lock behind",
     {
       tool: "subagent_workspace",
-      args: {
-        action: "integrate",
-        workspaceId: "ws-1",
-        revisionId: "rev-1",
-        preparationId: "prep-1",
-      },
+      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-2" },
     },
     { service: leftoverWorkspace },
   ),
   scenario(
-    "integrate keeping the working copy for child workspaces",
+    "apply a prepared pair keeping the working copy for child workspaces",
     {
       tool: "subagent_workspace",
-      args: {
-        action: "integrate",
-        workspaceId: "ws-1",
-        revisionId: "rev-1",
-        preparationId: "prep-1",
-      },
+      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-2" },
     },
     {
       service: {
-        workspaceIntegrate: () =>
+        workspaceApply: () =>
           Effect.succeed({
-            workerRoot: "/agent/git-workspaces/ws-1/worker",
-            uncapturedPaths: [],
-            treeRemovalFailed: false,
-            remainingBackupPaths: [],
-            leaseReleaseUnconfirmed: false,
+            ...appliedWorkspace,
+            reviewed: true,
+            verification: { status: "parent-tested" },
             retainedForChildren: ["ws-2"],
           }),
       },
@@ -982,7 +929,87 @@ const workspaceScenarios = Effect.all([
             new InvalidSubagentRequestError({
               code: "workspace_children_unresolved",
               message:
-                "Child workspaces created from this workspace are still unresolved. Apply, integrate, or discard ws-2 first.",
+                "Child workspaces created from this workspace are still unresolved. Apply or discard ws-2 first.",
+            }),
+          ),
+      },
+    },
+  ),
+  scenario(
+    "apply only some of a proposal's files",
+    {
+      tool: "subagent_workspace",
+      args: { action: "apply", workspaceId: "ws-1", paths: ["db/0007.sql"] },
+    },
+    {
+      service: {
+        workspaceApply: () =>
+          Effect.succeed({
+            ...appliedWorkspace,
+            changedPaths: ["db/0007.sql"],
+            changedPathCount: 1,
+            remainingPaths: ["src/db/schema.ts"],
+            remainingPathCount: 1,
+            reviewed: false,
+            verification: { status: "not-configured" },
+          }),
+      },
+    },
+  ),
+  scenario(
+    "export a proposal as a patch",
+    { tool: "subagent_workspace", args: { action: "export", workspaceId: "ws-1" } },
+    {
+      service: {
+        workspaceExport: () =>
+          Effect.succeed({
+            format: "patch",
+            path: "/project/.git/pi-subagents/ws-1-rev-1.patch",
+            revisionId: "rev-1",
+            changedPaths: ["db/0007.sql", "src/db/schema.ts"],
+            uncapturedPaths: [],
+            orphan: false,
+          }),
+      },
+    },
+  ),
+  scenario(
+    "export an orphaned proposal to a branch",
+    {
+      tool: "subagent_workspace",
+      args: { action: "export", workspaceId: "ws-7", format: "branch" },
+    },
+    {
+      service: {
+        workspaceExport: () =>
+          Effect.succeed({
+            format: "branch",
+            branch: "pi-subagent/db-migration",
+            commit: "9c1e4b7d2a6f08e35b1c4d7e9f0a2b3c4d5e6f70",
+            base: "4f2a9c1b8e7d6c5b4a3928170f6e5d4c3b2a1908",
+            identity: "user",
+            revisionId: "rev-3",
+            changedPaths: ["db/0007.sql"],
+            uncapturedPaths: [],
+            orphan: true,
+          }),
+      },
+    },
+  ),
+  scenario(
+    "export refused because the branch exists",
+    {
+      tool: "subagent_workspace",
+      args: { action: "export", workspaceId: "ws-1", format: "branch" },
+    },
+    {
+      service: {
+        workspaceExport: () =>
+          Effect.fail(
+            new InvalidSubagentRequestError({
+              code: "workspace_branch_exists",
+              message:
+                "Branch pi-subagent/db-migration already exists, so nothing was exported.\nRemedy: delete or rename that branch (git branch -D pi-subagent/db-migration) and export again, or export with format patch.",
             }),
           ),
       },
@@ -1000,6 +1027,54 @@ const workspaceScenarios = Effect.all([
       args: { action: "revise", workspaceId: "ws-1", message: "Add a down migration." },
     },
     { service: workspaceService },
+  ),
+  scenario(
+    "request a rebased revision with conflicts",
+    {
+      tool: "subagent_workspace",
+      args: {
+        action: "revise",
+        workspaceId: "ws-1",
+        message: "Build on the new schema module.",
+        rebase: true,
+      },
+    },
+    {
+      service: {
+        workspaceRevise: () =>
+          Effect.succeed({
+            run: view({
+              id: "agent-11",
+              name: "db-migration",
+              profile: "worker",
+              writeIntent: "writer",
+            }),
+            rebase: {
+              reappliedPaths: ["db/0007.sql", "src/db/schema.ts"],
+              conflictedPaths: ["src/db/schema.ts"],
+            },
+          }),
+      },
+    },
+  ),
+  scenario(
+    "rebase refused when changes can't be reapplied",
+    {
+      tool: "subagent_workspace",
+      args: { action: "revise", workspaceId: "ws-1", message: "Retry.", rebase: true },
+    },
+    {
+      service: {
+        workspaceRevise: () =>
+          Effect.fail(
+            new InvalidSubagentRequestError({
+              code: "workspace_rebase_refused",
+              message:
+                "The previous changes can't be reapplied to the parent's current files.\nUnmergeable: \"src/db/legacy.ts\"\nNothing was changed; the workspace keeps its worker tree and revision.\nRemedy: revise without rebase, or apply or export the proposal and start a new writer from the current checkout.",
+            }),
+          ),
+      },
+    },
   ),
   scenario(
     "discard",
@@ -1068,7 +1143,6 @@ const awaited = (
 const route = {
   profile: "reviewer",
   routeStatus: "selected",
-  host: "local",
   runtime: "pi",
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
@@ -1076,6 +1150,33 @@ const route = {
 } as const;
 
 const receiptScenarios: ReadonlyArray<ToolScenario> = [
+  {
+    tool: "subagent_workspace",
+    title: "integrate saved by an earlier version",
+    args: {
+      action: "integrate",
+      workspaceId: "ws-1",
+      revisionId: "rev-1",
+      preparationId: "prep-1",
+    },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "Integrated the exact reviewed and tested revision as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.",
+        },
+      ],
+      details: {
+        version: 1,
+        action: "workspace",
+        operation: "integrate",
+        workspaceId: "ws-1",
+        revisionId: "rev-1",
+        preparationId: "prep-1",
+        displayContent: { offset: 0, length: 0 },
+      },
+    },
+  },
   {
     tool: "subagent_start",
     title: "expanded writer task and exact file claims",
@@ -1118,24 +1219,19 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     ],
     { attentionRequired: true },
   ),
-  awaited("writer outside its claims", [containedWriter({ state: "running" })], {
-    attentionRequired: true,
-  }),
-  awaited(
-    "writer contained alone after an outside-workspace write",
-    [
-      containedWriter({
-        state: "paused",
-        writeAdmissionPaused: undefined,
-        writeAudit: {
-          observedFileWrites: ["src/a.ts", "<temporary directory>", "<outside workspace>"],
-          violations: [{ path: "<outside workspace>", toolName: "write", observedAt: 2 }],
-          bashWriteHints: 0,
-        },
-      }),
-    ],
-    { attentionRequired: true },
-  ),
+  awaited("writer stopping after writing outside its claims", [
+    containedWriter({ state: "stopping" }),
+  ]),
+  awaited("writer stopped after an outside-workspace write", [
+    containedWriter({
+      state: "stopped",
+      writeAudit: {
+        observedFileWrites: ["src/a.ts", "<temporary directory>", "<outside workspace>"],
+        violations: [{ path: "<outside workspace>", toolName: "write", observedAt: 2 }],
+        bashWriteHints: 0,
+      },
+    }),
+  ]),
   awaited("worker and system warnings", [
     view({
       state: "completed",
@@ -1170,10 +1266,10 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     { attentionRequired: true },
   ),
   awaited(
-    "claim containment coexists with manual cleanup quarantine",
+    "claim violation coexists with manual cleanup quarantine",
     [
       containedWriter({
-        state: "completed",
+        state: "stopped",
         finalText: "Completed report retained for review.",
         cleanup: {
           disposition: "quarantined",
@@ -1214,7 +1310,7 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
       writeIntent: "writer",
       writerWorkspaceMode: "worktree",
       workspaceId: "ws-1",
-      workspaceOutcome: { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 },
+      workspaceOutcome: proposalOutcome,
       finalText: "Implemented.",
     }),
   ]),
@@ -1388,7 +1484,7 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
     type: "completed",
     runs: [
       completion(worktreeProposal, {
-        workspaceOutcome: { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 },
+        workspaceOutcome: proposalOutcome,
       }),
       completion(
         { ...worktreeProposal, id: "agent-11", name: "lint-check", finalText: "Nothing to fix." },
@@ -1436,13 +1532,13 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
       display: true,
       timestamp: 0,
       content: [
-        "Your current ownership summary: read-only. A parent reply is authoritative for any complete changed claim set.",
+        "Your current ownership summary: read-only.",
         "",
         "You share this working directory with 1 other active subagent:",
         "",
         "- db-migration (agent-6): writer claims db/0007.sql, src/db/schema.ts; running; task: Implement the 0007 migration",
         "",
-        "The parent owns coordination and all claim grants. Writers may run concurrently only with disjoint exact-file claims. Never edit a peer's claimed file; contact the parent and wait before work that could overlap another task.",
+        "The parent owns coordination, and claims stay fixed for each run. Writers may run concurrently only with disjoint exact-file claims. Never edit a peer's claimed file; contact the parent and wait before work that could overlap another task.",
       ].join("\n"),
     },
   },
@@ -1490,7 +1586,7 @@ const activityScenarios: ReadonlyArray<ActivityScenario> = [
     runs: [
       {
         ...worktreeProposal,
-        workspaceOutcome: { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 },
+        workspaceOutcome: proposalOutcome,
       },
       {
         ...worktreeProposal,
@@ -1635,7 +1731,6 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...(yield* inspectionScenarios),
         ...(yield* messagingScenarios),
         ...(yield* lifecycleScenarios),
-        ...(yield* claimsScenarios),
         ...(yield* workspaceScenarios),
       ];
       const scenarios = [...executed, ...receiptScenarios, ...parentScenarios];

@@ -211,7 +211,6 @@ const unsupportedCapabilityMessage = (
       return `${backend} subagents do not support parent questions or subagent_reply; use subagent_await or subagent_status instead.`;
     case "native-fork":
     case "peer-notice":
-    case "rename-display":
     case "resume":
       return `${backend} subagents do not support ${capability}. Inspect supported operations with subagent_status({ runIds: ["${id}"] }).`;
   }
@@ -223,7 +222,7 @@ export const requireCapability = (
   capability: SubagentCapability,
 ): Effect.Effect<void, UnsupportedSubagentCapabilityError> => {
   if (hasSubagentCapability(record.view, capability)) return Effect.void;
-  const backend = `${record.view.host}/${record.view.runtime}`;
+  const backend = `local/${record.view.runtime}`;
   return Effect.fail(
     new UnsupportedSubagentCapabilityError({
       backend,

@@ -7,6 +7,7 @@ import { workspaceOrphanOperations } from "../../src/run/workspace-orphan.ts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { CrossProcessLock } from "pi-cosmic-core";
 import {
@@ -15,6 +16,7 @@ import {
   workspaceLockDirectory,
 } from "../../src/boundary/git-worktree-store.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { WorkspaceRecordSchema } from "../../src/workspace/model.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import {
   commitRepository,
@@ -22,6 +24,7 @@ import {
   failureOf,
   io,
   openWorkspaceService,
+  readText,
   temporaryDirectory,
   workspaceTarget,
   workspaceTests,
@@ -74,10 +77,9 @@ for (const replaced of [false, true]) {
           isClosed: () => false,
         });
         expect(
-          yield* workspaceOrphanOperations(
-            context,
-            Effect.succeed,
-          )(handle.workspaceId).pipe(Effect.flip),
+          yield* workspaceOrphanOperations(context, Effect.succeed)
+            .discardOrphan(handle.workspaceId)
+            .pipe(Effect.flip),
         ).toMatchObject({ code: "workspace_process_unsettled" });
         expect(yield* exists(path.join(renamed, "main.ts"))).toBe(true);
         if (replaced) expect(yield* exists(path.join(handle.cwd, "replacement.ts"))).toBe(true);
@@ -136,10 +138,9 @@ it.live(
           lockDirectory,
           sourceLockNamespace(source),
           Effect.gen(function* () {
-            const discard = yield* workspaceOrphanOperations(
-              context,
-              Effect.succeed,
-            )(handle.workspaceId).pipe(Effect.result, Effect.forkChild);
+            const discard = yield* workspaceOrphanOperations(context, Effect.succeed)
+              .discardOrphan(handle.workspaceId)
+              .pipe(Effect.result, Effect.forkChild);
             yield* Deferred.await(verified);
             yield* io(() => fs.rename(handle.cwd, renamed));
             // Retain valid worktree metadata: Git would otherwise happily remove this copy.
@@ -211,31 +212,49 @@ const age = (agent: string, workspaceId: string, days: number) =>
     );
   });
 
-test("collects week-old finished records but keeps unintegrated work and fork predecessors", function* (service, root, agent) {
+test("collects week-old finished records but keeps unintegrated work", function* (service, root, agent) {
   const expired = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* service.discard(workspaceTarget(expired));
   const recent = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* service.discard(workspaceTarget(recent));
   const kept = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(kept.cwd, "src/main.ts"), "integrated\n");
-  yield* writeFile(path.join(kept.cwd, "notes.cs"), "left out of the proposal\n");
   const revision = yield* service.freeze(workspaceTarget(kept));
   const prepared = yield* service.prepare({
     ...workspaceTarget(kept),
     revisionId: revision.revisionId,
   });
-  const integrated = yield* service.integrate({
+  // A reader still using the worker tree keeps it after integration.
+  yield* service.integrate({
     ...workspaceTarget(kept),
     revisionId: revision.revisionId,
     preparationId: prepared.preparationId,
+    retainTrees: true,
   });
-  expect(integrated.uncapturedPaths).toEqual(["notes.cs"]);
+  expect(yield* exists(kept.cwd)).toBe(true);
   const active = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  const predecessor = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* service.fork(workspaceTarget(predecessor));
-  yield* service.discard(workspaceTarget(predecessor));
-  for (const handle of [expired, kept, active, predecessor])
-    yield* age(agent, handle.workspaceId, 8);
+  // A record saved by an earlier version may still name a fork predecessor and carry its patch
+  // inline; it stays readable and discardable, and the name no longer keeps that record.
+  const legacy = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  const legacyFile = path.join(agent, "git-workspaces", legacy.workspaceId, "record.json");
+  const saved = yield* Schema.decodeEffect(Schema.fromJsonString(WorkspaceRecordSchema))(
+    yield* readText(legacyFile),
+  );
+  yield* writeFile(
+    legacyFile,
+    JSON.stringify({
+      ...saved,
+      predecessorWorkspaceId: expired.workspaceId,
+      revision: { revisionId: "legacy", diff: "inline patch", changedPaths: [] },
+    }),
+  );
+  expect(
+    (yield* service.listAll).records.find(
+      (record) => record.handle.workspaceId === legacy.workspaceId,
+    )?.revision,
+  ).toEqual({ revisionId: "legacy", changedPaths: [] });
+  yield* service.discard(workspaceTarget(legacy));
+  for (const handle of [expired, kept, active]) yield* age(agent, handle.workspaceId, 8);
 
   const registry = path.join(agent, "git-workspaces");
   const remaining = yield* Effect.gen(function* () {
@@ -243,7 +262,7 @@ test("collects week-old finished records but keeps unintegrated work and fork pr
     return (yield* restarted.listAll).records.map((record) => record.handle.workspaceId);
   }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: agent })));
   expect(remaining).not.toContain(expired.workspaceId);
-  for (const handle of [recent, kept, active, predecessor])
+  for (const handle of [recent, kept, active, legacy])
     expect(remaining).toContain(handle.workspaceId);
   expect(yield* exists(path.join(registry, expired.workspaceId))).toBe(false);
   expect((yield* io(() => fs.readdir(registry))).some((name) => name.startsWith("."))).toBe(false);

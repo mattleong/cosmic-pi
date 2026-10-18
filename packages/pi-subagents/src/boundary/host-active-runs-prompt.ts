@@ -65,9 +65,11 @@ const runsSection = (
   if (active.length === 0) return undefined;
   const listed = active.slice(0, MAX_LISTED_RUNS).map(line);
   const more = active.length - listed.length;
-  return [heading, ...listed, ...(more > 0 ? [`- and ${more} more; see subagent_list`] : [])].join(
-    "\n",
-  );
+  return [
+    heading,
+    ...listed,
+    ...(more > 0 ? [`- and ${more} more; see subagent_status`] : []),
+  ].join("\n");
 };
 
 /**
@@ -89,7 +91,7 @@ export const activeRunsSection = (projection: SubagentProjection): string | unde
 export const compactionRunsSection = (projection: SubagentProjection): string | undefined =>
   runsSection(
     projection,
-    "Subagents you started that were still active after the last context compaction. This list is not updated as they finish; their reports and questions arrive on their own, and subagent_list shows current state. Check it before starting work that may duplicate theirs.",
+    "Subagents you started that were still active after the last context compaction. This list is not updated as they finish; their reports and questions arrive on their own, and subagent_status without runIds shows current state. Check it before starting work that may duplicate theirs.",
     runIdentity,
   );
 

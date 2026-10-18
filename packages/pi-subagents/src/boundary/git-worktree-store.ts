@@ -102,6 +102,93 @@ export const saveWorkspaceRecord = (
     return undefined;
   });
 
+// Git's own stdout bound for workspace commands.
+export const MAX_REVISION_DIFF_BYTES = 48 * 1024 * 1024;
+const revisionDiffFile = (root: string, id: string) =>
+  path.join(workspaceDirectory(root, id), "revision.diff");
+
+/**
+ * Moves a checked patch file into place as the workspace's current revision patch. Freeze commits
+ * it before the record that names the revision, so a frozen record's patch is always this file.
+ */
+export const commitRevisionDiff = (root: string, id: string, file: string) =>
+  Effect.gen(function* () {
+    yield* workspaceIO("freeze", () => fs.rename(file, revisionDiffFile(root, id)));
+    yield* syncWorkspaceDirectory(workspaceDirectory(root, id));
+  }).pipe(Effect.uninterruptible);
+
+/** Whether the workspace holds a revision patch file; records frozen by earlier versions don't. */
+export const revisionDiffExists = (root: string, id: string) =>
+  workspaceIOIfPresent("revision", () => fs.lstat(revisionDiffFile(root, id))).pipe(
+    Effect.map((stat) => stat !== undefined),
+  );
+
+/** The current revision patch's bytes, kept out of the record so listings stay small. */
+export const readRevisionDiff = (root: string, id: string) =>
+  Effect.gen(function* () {
+    const safe = yield* SafeFile;
+    const { bytes } = yield* safe
+      .readContainedRegularFile(revisionDiffFile(root, id), root, MAX_REVISION_DIFF_BYTES)
+      .pipe(Effect.mapError(() => workspaceFailure("revision", "Cannot read the revision patch.")));
+    return bytes;
+  });
+
+/**
+ * How far a mid-integration publication got: the planned directories and journal entries it
+ * started, in order. Later ones were never touched. Small, so it is rewritten before every step
+ * while the record, with its journal, is written once.
+ */
+const PublicationProgressSchema = Schema.Struct({
+  directories: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  files: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+export type PublicationProgress = typeof PublicationProgressSchema.Type;
+const MAX_PROGRESS_BYTES = 4096;
+const encodeProgress = Schema.encodeEffect(Schema.fromJsonString(PublicationProgressSchema));
+const decodeProgress = Schema.decodeUnknownEffect(Schema.fromJsonString(PublicationProgressSchema));
+const progressFile = (root: string, id: string) =>
+  path.join(workspaceDirectory(root, id), "publication.json");
+
+export const savePublicationProgress = (root: string, id: string, progress: PublicationProgress) =>
+  Effect.gen(function* () {
+    const directory = workspaceDirectory(root, id);
+    const temporary = path.join(directory, `${yield* newWorkspaceId}.tmp`);
+    const data = yield* encodeProgress(progress).pipe(
+      Effect.mapError(() => workspaceFailure("registry", "Invalid publication progress.")),
+    );
+    yield* writeWorkspaceFile(temporary, new TextEncoder().encode(data), 0o600);
+    yield* Effect.gen(function* () {
+      yield* workspaceIO("registry", () => fs.rename(temporary, progressFile(root, id)));
+      yield* syncWorkspaceDirectory(directory);
+    }).pipe(Effect.uninterruptible);
+  });
+
+/** The saved progress, or undefined when publication never recorded any. */
+export const readPublicationProgress = (root: string, id: string) =>
+  Effect.gen(function* () {
+    const safe = yield* SafeFile;
+    const file = progressFile(root, id);
+    if (!(yield* workspaceIOIfPresent("registry", () => fs.lstat(file)))) return undefined;
+    const { bytes } = yield* safe
+      .readContainedRegularFile(file, root, MAX_PROGRESS_BYTES)
+      .pipe(
+        Effect.mapError(() => workspaceFailure("registry", "Cannot read publication progress.")),
+      );
+    return yield* decodeProgress(new TextDecoder().decode(bytes)).pipe(
+      Effect.mapError(() => workspaceFailure("registry", "Invalid publication progress.")),
+    );
+  });
+
+export const removePublicationProgress = (root: string, id: string) =>
+  Effect.gen(function* () {
+    yield* workspaceIO("registry", () =>
+      fs.unlink(progressFile(root, id)).catch((cause: unknown) => {
+        if (nodeErrorCode(cause) !== "ENOENT") throw cause;
+      }),
+    );
+    yield* syncWorkspaceDirectory(workspaceDirectory(root, id));
+  });
+
 export const readWorkspaceRecord = (root: string, id: string) =>
   Effect.gen(function* () {
     if (!validWorkspaceId(id))

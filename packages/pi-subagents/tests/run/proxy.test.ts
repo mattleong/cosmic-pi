@@ -39,7 +39,7 @@ const offerProxyRequest = (control: FakeChildControl, requestId: string) => {
     channel: "pi-subagents",
     type: "proxy_request",
     requestId,
-    tool: "subagent_list",
+    tool: "subagent_status",
     argumentsJson: "{}",
   });
 };

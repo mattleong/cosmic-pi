@@ -1,11 +1,10 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
-import type { SubagentContextMode, SubagentHost, SubagentRuntime } from "../domain/routing.ts";
+import type { SubagentContextMode, SubagentRuntime } from "../domain/routing.ts";
 import type { BackendDriver, BackendPreflightRequest } from "./model.ts";
 
 export interface BackendSelection {
-  readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly context: SubagentContextMode;
 }
@@ -20,28 +19,26 @@ export interface SubagentBackendRegistryContract {
   ) => Effect.Effect<BackendDriver, InvalidSubagentRequestError>;
 }
 
-const driverKey = (host: SubagentHost, runtime: SubagentRuntime): string => `${host}/${runtime}`;
-
 export const backendRegistryFor = (
   drivers: ReadonlyArray<BackendDriver>,
 ): SubagentBackendRegistryContract => {
-  const bySelection = new Map(
-    drivers.map((driver) => [driverKey(driver.host, driver.runtime), driver]),
+  const byRuntime = new Map<SubagentRuntime, BackendDriver>(
+    drivers.map((driver) => [driver.runtime, driver]),
   );
   const resolve: SubagentBackendRegistryContract["resolve"] = (selection) => {
-    const driver = bySelection.get(driverKey(selection.host, selection.runtime));
+    const driver = byRuntime.get(selection.runtime);
     if (!driver)
       return Effect.fail(
         new InvalidSubagentRequestError({
           code: "backend_not_implemented",
-          message: `${selection.host}/${selection.runtime} is configured but has no registered pi-subagents driver.`,
+          message: `local/${selection.runtime} is configured but has no registered pi-subagents driver.`,
         }),
       );
     if (!driver.supportsContext(selection.context))
       return Effect.fail(
         new InvalidSubagentRequestError({
           code: "context_unsupported",
-          message: `${selection.host}/${selection.runtime} does not support ${selection.context} context.`,
+          message: `local/${selection.runtime} does not support ${selection.context} context.`,
         }),
       );
     return Effect.succeed(driver);

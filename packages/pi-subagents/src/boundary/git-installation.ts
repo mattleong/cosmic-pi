@@ -179,6 +179,78 @@ export const repositoryExcludesFile = (
     ),
   );
 
+export interface GitIdentity {
+  readonly name: string;
+  readonly email: string;
+}
+/** A commit role is undefined when neither the environment nor configuration names it fully. */
+export interface UserCommitIdentity {
+  readonly author?: GitIdentity | undefined;
+  readonly committer?: GitIdentity | undefined;
+}
+
+const MAX_IDENTITY_CHARS = 256;
+const identityPart = (value: string | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length <= MAX_IDENTITY_CHARS && !hasControlCharacter(trimmed)
+    ? trimmed
+    : undefined;
+};
+
+const configuredValue = (
+  executable: string,
+  environment: NodeJS.ProcessEnv,
+  repository: string,
+  key: string,
+) =>
+  runGit(executable, ["config", "--includes", "--get", key], environment, repository).pipe(
+    Effect.map((result) =>
+      result.code === 0 && !result.timedOut && !result.overflowed && !result.cleanupUnconfirmed
+        ? identityPart(result.stdout)
+        : undefined,
+    ),
+    Effect.orElseSucceed(() => undefined),
+  );
+
+/**
+ * The identity this user's own commit in `repository` would carry: GIT_AUTHOR_* and
+ * GIT_COMMITTER_* from the environment, else user.name and user.email from the user's Git
+ * configuration as the repository sees it. Isolated workspace Git reads no user configuration.
+ */
+export const userCommitIdentity = (
+  repository: string,
+): Effect.Effect<UserCommitIdentity, WorkspaceError> =>
+  gitInstallation.pipe(
+    Effect.flatMap((installation) =>
+      Effect.gen(function* () {
+        const environment = process.env;
+        const name = yield* configuredValue(
+          installation.executable,
+          environment,
+          repository,
+          "user.name",
+        );
+        const email = yield* configuredValue(
+          installation.executable,
+          environment,
+          repository,
+          "user.email",
+        );
+        const role = (nameKey: string, emailKey: string): GitIdentity | undefined => {
+          const resolvedName = identityPart(environment[nameKey]) ?? name;
+          const resolvedEmail = identityPart(environment[emailKey]) ?? email;
+          return resolvedName && resolvedEmail
+            ? { name: resolvedName, email: resolvedEmail }
+            : undefined;
+        };
+        return {
+          author: role("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"),
+          committer: role("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"),
+        };
+      }),
+    ),
+  );
+
 export const supportedGitInstallation = gitInstallation.pipe(
   Effect.filterOrFail(
     (installation) => gitVersionSupported(installation.version),

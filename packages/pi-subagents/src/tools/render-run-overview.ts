@@ -20,7 +20,7 @@ import {
 } from "pi-cosmic-ui/tool";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
-import { profileOptionLabel } from "./compact-run-issues.ts";
+import { skippedOptionLabel } from "./compact-run-issues.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { attentionRecoveryText, cleanupEvidenceText } from "./format.ts";
 import { DESCENDANTS_OMITTED } from "./render-await.ts";
@@ -93,7 +93,6 @@ const runSelectionSummary = (run: SubagentRunCard): string => {
 };
 
 const CAPABILITY_LABELS = new Map<string, string>([
-  ["rename-display", "rename"],
   ["parent-contact", "ask the parent"],
   ["peer-notice", "notify peers"],
   ["native-fork", "fork"],
@@ -145,9 +144,6 @@ const runStateDiagnostics = (run: SubagentRunCard, width: number, theme: Theme):
       ? wrapTextWithAnsi(theme.fg("accent", sanitizeTerminalLine(run.progress)), width)
       : []),
     ...(writer ? dimLines(writer, width, theme) : []),
-    ...(run.writeAdmissionPaused
-      ? dimLines("Writer admission paused after claim containment", width, theme)
-      : []),
     ...cleanupEvidenceText(run)
       .split("\n")
       .filter(Boolean)
@@ -162,7 +158,7 @@ const runStateDiagnostics = (run: SubagentRunCard, width: number, theme: Theme):
 const runRouteDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => [
   ...run.selection.skippedCandidates.flatMap((candidate) =>
     dimLines(
-      `Skipped ${profileOptionLabel(candidate.candidate)} [${candidate.code}] · ${candidate.reason}`,
+      `Skipped ${skippedOptionLabel(candidate.candidate)} [${candidate.code}] · ${candidate.reason}`,
       width,
       theme,
     ),

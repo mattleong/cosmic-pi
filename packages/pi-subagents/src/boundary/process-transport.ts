@@ -20,7 +20,9 @@ export const MAX_PROCESS_LINE_BYTES = 4 * 1024 * 1024;
 const encodeFrame = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
-const EVENT_CAPACITY = 512;
+// The byte budget bounds memory for ordinary output; the count only bounds per-event overhead
+// for floods of tiny lines, so it must stay far above any burst of streaming deltas.
+const EVENT_CAPACITY = 65_536;
 const WRITE_TIMEOUT = "10 seconds";
 
 export interface ProcessExit {

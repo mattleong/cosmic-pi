@@ -5,7 +5,12 @@ import {
   MAX_PROFILE_MODEL_SELECTOR_CHARS,
   PROFILE_IDS,
 } from "../profiles/model.ts";
-import type { SubagentRunView, SubagentUsage } from "../run/model.ts";
+import {
+  MAX_OUTCOME_DIFFSTAT_FILES,
+  type SubagentRunView,
+  type SubagentUsage,
+  type SubagentWorkspaceDiffStat,
+} from "../run/model.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { MAX_OBSERVED_WRITE_PATHS, MAX_WRITE_CLAIM_VIOLATIONS } from "../run/claims-observation.ts";
@@ -13,12 +18,12 @@ import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
   MAX_NAME_CHARS,
-  boundedAsciiOr,
   sanitizeName,
 } from "../run/state.ts";
 import {
   MAX_CLEANUP_DIAGNOSTIC_CODE_CHARS,
   MAX_CLEANUP_DIAGNOSTIC_MESSAGE_CHARS,
+  MAX_CARD_DIFFSTAT_PATH_CHARS,
   MAX_CARD_MODEL_CHARS,
   MAX_CARD_PROVENANCE_CHARS,
   MAX_CARD_QUESTION_CHARS,
@@ -40,85 +45,13 @@ import {
   type SubagentProfileRouteCard,
   type SubagentRunCard,
   type SubagentStartEntry,
+  type WorkspaceDiffStatCard,
 } from "./details-schema.ts";
 import type { SubagentProfileView } from "./model.ts";
 import { actionFailureDisposition } from "./outcome.ts";
 
-export type DetailDensity = "full" | "compact" | "minimal";
-
-const FULL_LIMITS = {
-  id: MAX_PROTOCOL_ID_CHARS,
-  provenance: MAX_CARD_PROVENANCE_CHARS,
-  skipped: MAX_CARD_SKIPS,
-  currentTool: MAX_CURRENT_TOOL_CHARS,
-  progress: MAX_PROGRESS_CHARS,
-  warning: MAX_WARNING_CHARS,
-  question: MAX_CARD_QUESTION_CHARS,
-  writeClaims: MAX_WRITE_CLAIMS,
-  observedWrites: MAX_OBSERVED_WRITE_PATHS,
-  writeViolations: MAX_WRITE_CLAIM_VIOLATIONS,
-  shortName: MAX_NAME_CHARS,
-  startProfile: MAX_PROFILE_CHARS,
-  startWarning: MAX_CARD_PROVENANCE_CHARS,
-  failureMessage: MAX_FAILURE_MESSAGE_CHARS,
-  failureCode: MAX_FAILURE_CODE_CHARS,
-  profileDescription: MAX_PROFILE_DESCRIPTION_CHARS,
-  profileModel: MAX_PROFILE_MODEL_SELECTOR_CHARS,
-  profileReason: MAX_PROFILE_CANDIDATE_REASON_CHARS,
-  actionFailureMessage: MAX_ACTION_FAILURE_MESSAGE_CHARS,
-  actionFailureId: MAX_ACTION_FAILURE_ID_CHARS,
-} as const;
-
-const COMPACT_LIMITS = {
-  ...FULL_LIMITS,
-  id: 256,
-  provenance: 256,
-  skipped: 4,
-  currentTool: 128,
-  progress: 256,
-  warning: 256,
-  question: 1_024,
-  writeClaims: 16,
-  observedWrites: 16,
-  writeViolations: 8,
-  startProfile: 48,
-  startWarning: 512,
-  failureMessage: 256,
-  failureCode: 64,
-  profileDescription: 256,
-  profileReason: 256,
-  actionFailureMessage: 160,
-} as const;
-
-const DENSITY_LIMITS = {
-  full: FULL_LIMITS,
-  compact: COMPACT_LIMITS,
-  minimal: {
-    ...COMPACT_LIMITS,
-    id: 128,
-    provenance: 96,
-    skipped: 0,
-    currentTool: 64,
-    progress: 96,
-    warning: 96,
-    question: 512,
-    writeClaims: 4,
-    observedWrites: 0,
-    writeViolations: 1,
-    shortName: 48,
-    startProfile: 32,
-    startWarning: 160,
-    failureMessage: 96,
-    failureCode: 48,
-    profileDescription: 48,
-    profileModel: 24,
-    profileReason: 24,
-    actionFailureMessage: 96,
-    actionFailureId: 64,
-  },
-} as const;
-
-export const DENSITY_ORDER: ReadonlyArray<DetailDensity> = ["full", "compact", "minimal"];
+// Collapsed issue messages quote at most 120 characters, so condensed text keeps them complete.
+const CONDENSED_TEXT_CHARS = 256;
 
 const clean = (value: string, maximum: number): string =>
   safeTextPrefix(stripTerminalControls(value).replaceAll("\u0000", ""), maximum);
@@ -144,21 +77,27 @@ const projectUsage = (usage: SubagentUsage): SubagentRunCard["usage"] => ({
 
 const projectSelection = (
   selection: SubagentRunView["selection"],
-  density: DetailDensity,
 ): SubagentRunCard["selection"] => {
-  const limits = DENSITY_LIMITS[density];
-  const warning = optionalText(selection.warning, limits.provenance);
+  const warning = optionalText(selection.warning, MAX_CARD_PROVENANCE_CHARS);
   return {
     source: selection.source,
     reason: requiredText(
       selection.reason,
-      limits.provenance,
+      MAX_CARD_PROVENANCE_CHARS,
       "Route selection detail unavailable.",
     ),
-    skippedCandidates: selection.skippedCandidates.slice(0, limits.skipped).map((candidate) => ({
-      candidate: requiredText(candidate.candidate, limits.provenance, "unknown candidate"),
+    skippedCandidates: selection.skippedCandidates.slice(0, MAX_CARD_SKIPS).map((candidate) => ({
+      candidate: {
+        runtime: candidate.candidate.runtime,
+        model: requiredText(
+          candidate.candidate.model,
+          Math.min(MAX_CARD_PROVENANCE_CHARS, MAX_CARD_MODEL_CHARS),
+          "unknown-model",
+        ),
+        effort: candidate.candidate.effort,
+      },
       code: requiredText(candidate.code, MAX_FAILURE_CODE_CHARS, "unavailable"),
-      reason: requiredText(candidate.reason, limits.provenance, "Unavailable."),
+      reason: requiredText(candidate.reason, MAX_CARD_PROVENANCE_CHARS, "Unavailable."),
     })),
     ...(selection.candidateIndex !== undefined && {
       candidateIndex: nonNegativeInteger(selection.candidateIndex),
@@ -186,20 +125,37 @@ const projectWorkspaceFields = (value: {
   }),
 });
 
+const projectDiffStatFile = (
+  file: SubagentWorkspaceDiffStat["files"][number],
+): WorkspaceDiffStatCard["files"][number] => ({
+  path: requiredText(file.path, MAX_CARD_DIFFSTAT_PATH_CHARS, "unknown-path"),
+  addedLines: nonNegativeInteger(file.addedLines),
+  deletedLines: nonNegativeInteger(file.deletedLines),
+  ...(file.binary && { binary: true as const }),
+});
+
 const projectWorkspaceOutcome = (
   outcome: SubagentRunView["workspaceOutcome"],
 ): SubagentRunCard["workspaceOutcome"] => {
   if (outcome?.status !== "proposal") return outcome && { status: outcome.status };
+  const stat = outcome.diffStat;
   return {
     status: "proposal",
     changedFileCount: nonNegativeInteger(outcome.changedFileCount),
     ...(outcome.uncapturedFileCount !== undefined && {
       uncapturedFileCount: nonNegativeInteger(outcome.uncapturedFileCount),
     }),
+    ...(stat !== undefined && {
+      diffStat: {
+        addedLines: nonNegativeInteger(stat.addedLines),
+        deletedLines: nonNegativeInteger(stat.deletedLines),
+        files: stat.files.slice(0, MAX_OUTCOME_DIFFSTAT_FILES).map(projectDiffStatFile),
+      },
+    }),
   };
 };
 
-// Keep complete bounded cleanup evidence at every density; it gates safe recovery.
+// Keep complete bounded cleanup evidence, even when condensed; it gates safe recovery.
 export const projectRunCleanup = (
   cleanup: SubagentRunView["cleanup"],
 ): SubagentRunCard["cleanup"] => {
@@ -227,13 +183,7 @@ export const projectRunCleanup = (
   };
 };
 
-const projectWriteCardFields = (
-  run: SubagentRunView,
-  density: DetailDensity,
-): Partial<SubagentRunCard> => {
-  const limits = DENSITY_LIMITS[density];
-  const violationLimit =
-    density === "minimal" && !run.writeViolationOffender ? 0 : limits.writeViolations;
+const projectWriteCardFields = (run: SubagentRunView): Partial<SubagentRunCard> => {
   const cleanup = projectRunCleanup(run.cleanup);
   const workspaceOutcome = projectWorkspaceOutcome(run.workspaceOutcome);
   return {
@@ -245,44 +195,37 @@ const projectWriteCardFields = (
     ...projectWorkspaceFields(run),
     ...(run.writeClaims !== undefined && {
       writeClaims: run.writeClaims
-        .slice(0, limits.writeClaims)
+        .slice(0, MAX_WRITE_CLAIMS)
         .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
       writeClaimCount: run.writeClaims.length,
-      ...(run.writeClaims.length > limits.writeClaims && { writeClaimsOmitted: true as const }),
+      ...(run.writeClaims.length > MAX_WRITE_CLAIMS && { writeClaimsOmitted: true as const }),
     }),
     ...(run.writeAudit !== undefined && {
       writeAudit: {
-        observedFileWrites: (limits.observedWrites === 0
-          ? []
-          : run.writeAudit.observedFileWrites.slice(-limits.observedWrites)
-        ).map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
-        violations: (violationLimit === 0
-          ? []
-          : run.writeAudit.violations.slice(-violationLimit)
-        ).map((violation) => ({
-          path: requiredText(violation.path, MAX_WRITE_CLAIM_CHARS, "unknown-file"),
-          toolName: requiredText(violation.toolName, 200, "unknown-tool"),
-          observedAt: nonNegative(violation.observedAt),
-        })),
+        observedFileWrites: run.writeAudit.observedFileWrites
+          .slice(-MAX_OBSERVED_WRITE_PATHS)
+          .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
+        violations: run.writeAudit.violations
+          .slice(-MAX_WRITE_CLAIM_VIOLATIONS)
+          .map((violation) => ({
+            path: requiredText(violation.path, MAX_WRITE_CLAIM_CHARS, "unknown-file"),
+            toolName: requiredText(violation.toolName, 200, "unknown-tool"),
+            observedAt: nonNegative(violation.observedAt),
+          })),
         bashWriteHints: nonNegativeInteger(run.writeAudit.bashWriteHints),
       },
     }),
-    ...(run.writeAdmissionPaused === true && { writeAdmissionPaused: true as const }),
     ...(run.writeViolationOffender === true && { writeViolationOffender: true as const }),
   };
 };
 
-const projectOptionalCardFields = (
-  run: SubagentRunView,
-  density: DetailDensity,
-): Partial<SubagentRunCard> => {
-  const limits = DENSITY_LIMITS[density];
-  const currentTool = optionalText(run.currentTool, limits.currentTool);
-  const progress = optionalText(run.progress, limits.progress);
-  const warning = optionalText(run.warning, limits.warning);
-  const systemWarning = optionalText(run.systemWarning, limits.warning);
+const projectOptionalCardFields = (run: SubagentRunView): Partial<SubagentRunCard> => {
+  const currentTool = optionalText(run.currentTool, MAX_CURRENT_TOOL_CHARS);
+  const progress = optionalText(run.progress, MAX_PROGRESS_CHARS);
+  const warning = optionalText(run.warning, MAX_WARNING_CHARS);
+  const systemWarning = optionalText(run.systemWarning, MAX_WARNING_CHARS);
   const endedAt = run.endedAt === undefined ? undefined : nonNegative(run.endedAt);
-  const question = optionalText(run.question?.message, limits.question);
+  const question = optionalText(run.question?.message, MAX_CARD_QUESTION_CHARS);
   return {
     ...(currentTool !== undefined && { currentTool }),
     ...(progress !== undefined && { progress }),
@@ -332,21 +275,15 @@ const projectReportCardFields = (run: SubagentRunView): Partial<SubagentRunCard>
   };
 };
 
-export const projectSubagentRunCard = (
-  run: SubagentRunView,
-  density: DetailDensity = "full",
-): SubagentRunCard => {
-  const limits = DENSITY_LIMITS[density];
+export const projectSubagentRunCard = (run: SubagentRunView): SubagentRunCard => {
   const profile = run.profile && PROFILE_IDS.includes(run.profile) ? run.profile : undefined;
-  const parentRunId = optionalText(run.parentRunId, limits.id);
+  const parentRunId = optionalText(run.parentRunId, MAX_PROTOCOL_ID_CHARS);
   const nativeActivity = projectNativeActivity(run.nativeActivity);
   return {
-    id: requiredText(run.id, limits.id, "unknown-run"),
+    id: requiredText(run.id, MAX_PROTOCOL_ID_CHARS, "unknown-run"),
     name: sanitizeName(run.name) || "subagent",
     state: run.state,
-    host: run.host,
     runtime: run.runtime,
-    closeOnReport: run.closeOnReport,
     reportGeneration: nonNegativeInteger(run.reportGeneration),
     ...(run.reportStatus !== undefined && { reportStatus: run.reportStatus }),
     model: requiredText(run.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
@@ -358,9 +295,9 @@ export const projectSubagentRunCard = (
     startedAt: nonNegative(run.startedAt),
     lastActivityAt: nonNegative(run.lastActivityAt),
     usage: projectUsage(run.usage),
-    selection: projectSelection(run.selection, density),
-    ...projectWriteCardFields(run, density),
-    ...projectOptionalCardFields(run, density),
+    selection: projectSelection(run.selection),
+    ...projectWriteCardFields(run),
+    ...projectOptionalCardFields(run),
     ...(parentRunId !== undefined && {
       parentRunId,
       depth: nonNegativeInteger(run.depth ?? 1),
@@ -382,18 +319,65 @@ export const omitReports = (card: SubagentRunCard): SubagentRunCard => {
   };
 };
 
-export const projectFailure = (
-  failure: SubagentCardFailure,
-  density: DetailDensity,
-): SubagentCardFailure => {
-  const limits = DENSITY_LIMITS[density];
-  const name = optionalText(failure.name, limits.shortName);
-  const code = optionalText(failure.code, limits.failureCode);
-  const message = requiredText(failure.message, limits.failureMessage, "Launch failed.");
+const condensed = (text: string): string => safeTextPrefix(text, CONDENSED_TEXT_CHARS);
+
+/**
+ * The report-free fallback when bounded cards still do not fit: drops live activity, skipped
+ * route candidates, and write and diffstat path lists, and shortens issue text. IDs, counts,
+ * offender and admission evidence, cleanup, and workspace recovery fields stay complete.
+ */
+export const condenseRunCard = (card: SubagentRunCard): SubagentRunCard => {
+  const {
+    currentTool: _currentTool,
+    progress: _progress,
+    writeClaims,
+    writeAudit,
+    selection,
+    warning,
+    systemWarning,
+    question,
+    workspaceOutcome,
+    ...essential
+  } = omitReports(card);
+  return {
+    ...essential,
+    ...(workspaceOutcome !== undefined && {
+      workspaceOutcome:
+        workspaceOutcome.status === "proposal" && workspaceOutcome.diffStat !== undefined
+          ? { ...workspaceOutcome, diffStat: { ...workspaceOutcome.diffStat, files: [] } }
+          : workspaceOutcome,
+    }),
+    selection: {
+      source: selection.source,
+      reason: condensed(selection.reason),
+      skippedCandidates: [],
+      ...(selection.candidateIndex !== undefined && { candidateIndex: selection.candidateIndex }),
+      ...(selection.warning !== undefined && { warning: condensed(selection.warning) }),
+    },
+    ...(writeClaims !== undefined &&
+      writeClaims.length > 0 && { writeClaimsOmitted: true as const }),
+    ...(writeAudit !== undefined && {
+      writeAudit: {
+        observedFileWrites: [],
+        // An offender keeps its latest violation as containment evidence.
+        violations: card.writeViolationOffender === true ? writeAudit.violations.slice(-1) : [],
+        bashWriteHints: writeAudit.bashWriteHints,
+      },
+    }),
+    ...(warning !== undefined && { warning: condensed(warning) }),
+    ...(systemWarning !== undefined && { systemWarning: condensed(systemWarning) }),
+    ...(question !== undefined && { question: { message: condensed(question.message) } }),
+  };
+};
+
+export const projectFailure = (failure: SubagentCardFailure): SubagentCardFailure => {
+  const name = optionalText(failure.name, MAX_NAME_CHARS);
+  const code = optionalText(failure.code, MAX_FAILURE_CODE_CHARS);
+  const message = requiredText(failure.message, MAX_FAILURE_MESSAGE_CHARS, "Launch failed.");
   const recovery = failure.admittedRun;
   const admittedRun = recovery
     ? {
-        runId: requiredText(recovery.runId, limits.id, "unknown-run"),
+        runId: requiredText(recovery.runId, MAX_PROTOCOL_ID_CHARS, "unknown-run"),
         cleanupDisposition: recovery.cleanupDisposition,
         retryDisposition: recovery.retryDisposition,
         remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
@@ -409,25 +393,25 @@ export const projectFailure = (
   };
 };
 
-export const projectStartEntry = (
-  entry: SubagentStartEntry,
-  density: DetailDensity,
-): SubagentStartEntry => {
-  const limits = DENSITY_LIMITS[density];
+export const condenseFailure = (failure: SubagentCardFailure): SubagentCardFailure => ({
+  ...failure,
+  message: condensed(failure.message),
+});
+
+export const projectStartEntry = (entry: SubagentStartEntry): SubagentStartEntry => {
   const identity = {
     index: nonNegativeInteger(entry.index),
-    name: requiredText(entry.name, limits.shortName, "launch"),
-    profile: requiredText(entry.profile, limits.startProfile, "generalist"),
+    name: requiredText(entry.name, MAX_NAME_CHARS, "launch"),
+    profile: requiredText(entry.profile, MAX_PROFILE_CHARS, "generalist"),
   };
   if (entry.status === "pending")
     return { ...identity, status: "pending", routeStatus: "resolving" };
   if (entry.routeStatus === "unavailable")
     return { ...identity, status: "failed", routeStatus: "unavailable" };
-  const warning = optionalText(entry.warning, limits.startWarning);
+  const warning = optionalText(entry.warning, MAX_CARD_PROVENANCE_CHARS);
   const selectedFields = {
     ...projectWorkspaceFields(entry),
     routeStatus: "selected" as const,
-    host: entry.host,
     runtime: entry.runtime,
     model: requiredText(entry.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
     effort: entry.effort,
@@ -442,69 +426,68 @@ export const projectStartEntry = (
         ...identity,
         status: "started",
         ...selectedFields,
-        runId: requiredText(entry.runId, limits.id, "unknown-run"),
+        runId: requiredText(entry.runId, MAX_PROTOCOL_ID_CHARS, "unknown-run"),
       }
     : { ...identity, status: "failed", ...selectedFields };
 };
 
-const projectProfileRouteCard = (
-  profile: SubagentProfileView,
-  density: DetailDensity,
-): SubagentProfileRouteCard => {
-  const limits = DENSITY_LIMITS[density];
-  return {
-    id: profile.id,
-    description: requiredText(profile.description, limits.profileDescription, "Profile route."),
-    source: profile.source,
-    isDefault: profile.isDefault,
-    defaultContext: profile.defaultContext,
-    defaultWriteIntent: profile.defaultWriteIntent,
-    candidates: profile.candidates.slice(0, MAX_PROFILE_CANDIDATES).map((candidate) => ({
-      host: candidate.host,
-      runtime: candidate.runtime,
-      model:
-        density === "minimal"
-          ? boundedAsciiOr(
-              candidate.model,
-              limits.profileModel,
-              candidate.runtime === "pi" ? "x/y" : "x",
-            )
-          : requiredText(candidate.model, limits.profileModel, "omitted-model"),
-      effort: candidate.effort,
-      context: candidate.context,
-      writeIntent: candidate.writeIntent,
-      openaiFastMode: candidate.openaiFastMode ?? false,
-      closeOnReport: candidate.closeOnReport,
-      status: candidate.status,
-      reason:
-        density === "minimal"
-          ? boundedAsciiOr(candidate.reason, limits.profileReason, "Omitted.")
-          : requiredText(candidate.reason, limits.profileReason, "Route detail omitted."),
-    })),
-    ...(profile.defaultEffort !== undefined && { defaultEffort: profile.defaultEffort }),
-  };
-};
+export const condenseStartEntry = (entry: SubagentStartEntry): SubagentStartEntry =>
+  entry.routeStatus === "selected" && entry.warning !== undefined
+    ? { ...entry, warning: condensed(entry.warning) }
+    : entry;
+
+const projectProfileRouteCard = (profile: SubagentProfileView): SubagentProfileRouteCard => ({
+  id: profile.id,
+  description: requiredText(profile.description, MAX_PROFILE_DESCRIPTION_CHARS, "Profile route."),
+  source: profile.source,
+  isDefault: profile.isDefault,
+  defaultContext: profile.defaultContext,
+  defaultWriteIntent: profile.defaultWriteIntent,
+  candidates: profile.candidates.slice(0, MAX_PROFILE_CANDIDATES).map((candidate) => ({
+    runtime: candidate.runtime,
+    model: requiredText(candidate.model, MAX_PROFILE_MODEL_SELECTOR_CHARS, "omitted-model"),
+    effort: candidate.effort,
+    context: candidate.context,
+    writeIntent: candidate.writeIntent,
+    openaiFastMode: candidate.openaiFastMode ?? false,
+    status: candidate.status,
+    reason: requiredText(
+      candidate.reason,
+      MAX_PROFILE_CANDIDATE_REASON_CHARS,
+      "Route detail omitted.",
+    ),
+  })),
+  ...(profile.defaultEffort !== undefined && { defaultEffort: profile.defaultEffort }),
+});
 
 export const projectSubagentProfileRoutes = (
   profiles: ReadonlyArray<SubagentProfileView>,
-  density: DetailDensity = "full",
 ): ReadonlyArray<SubagentProfileRouteCard> =>
-  profiles.slice(0, PROFILE_IDS.length).map((profile) => projectProfileRouteCard(profile, density));
+  profiles.slice(0, PROFILE_IDS.length).map(projectProfileRouteCard);
+
+export const condenseProfileRoute = (
+  profile: SubagentProfileRouteCard,
+): SubagentProfileRouteCard => ({
+  ...profile,
+  description: condensed(profile.description),
+  candidates: profile.candidates.map((candidate) => ({
+    ...candidate,
+    reason: condensed(candidate.reason),
+  })),
+});
 
 const projectActionFailure = (
   action: RunDetailsAction,
   failure: CompactToolActionFailure,
-  density: DetailDensity,
 ): CompactToolActionFailure => {
-  const limits = DENSITY_LIMITS[density];
   const code = optionalText(failure.code, MAX_ACTION_FAILURE_CODE_CHARS);
   const pendingDelivery =
     actionFailureDisposition(action, { code, pendingDelivery: failure.pendingDelivery }) ===
     "pending";
   return {
-    id: requiredText(failure.id, limits.actionFailureId, "unknown-run"),
+    id: requiredText(failure.id, MAX_ACTION_FAILURE_ID_CHARS, "unknown-run"),
     ...(code !== undefined && { code }),
-    message: requiredText(failure.message, limits.actionFailureMessage, "Action failed."),
+    message: requiredText(failure.message, MAX_ACTION_FAILURE_MESSAGE_CHARS, "Action failed."),
     ...(pendingDelivery && { pendingDelivery: true as const }),
   };
 };
@@ -512,10 +495,7 @@ const projectActionFailure = (
 export const projectActionFailures = (
   action: RunDetailsAction,
   failures: ReadonlyArray<CompactToolActionFailure> | undefined,
-  density: DetailDensity,
 ): ReadonlyArray<CompactToolActionFailure> | undefined => {
   if (!failures || failures.length === 0) return undefined;
-  return failures
-    .slice(0, MAX_TARGET_RUNS)
-    .map((failure) => projectActionFailure(action, failure, density));
+  return failures.slice(0, MAX_TARGET_RUNS).map((failure) => projectActionFailure(action, failure));
 };

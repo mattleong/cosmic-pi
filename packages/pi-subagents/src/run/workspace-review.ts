@@ -1,27 +1,52 @@
 import * as Effect from "effect/Effect";
+import { revisionSummary } from "../workspace/diffstat.ts";
 import type {
   WorkspacePreparation,
   WorkspaceRevision,
+  WorkspaceRevisionMetadata,
   WorkspaceSettledTarget,
 } from "../workspace/model.ts";
+import { leftOutUncapturedPaths } from "../workspace/policy.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
   mapWorkspaceError,
+  type ReviewProgress,
+  type RevisionKnowledge,
+  revisionKnowledge,
+  reviewProgress,
   runHoldsCwd,
   runsWithin,
+  settleBinding,
+  settledState,
+  updateKnowledge,
   workspaceArtifactDirectory,
   type WorkspaceAccess,
   type WorkspaceBinding,
+  workspaceBusyError,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
 import { provisionWorkspaceTree } from "./workspace-setup.ts";
 
-export interface WorkspaceReview extends WorkspaceRevision {
+/**
+ * One page of a revision's review text: its summary followed by its patch. `text` is the page;
+ * offsets index the whole text, which is deterministic for the revision.
+ */
+export interface WorkspaceReview extends WorkspaceRevisionMetadata {
+  readonly text: string;
   readonly offset: number;
   readonly totalChars: number;
   readonly nextOffset?: number;
+}
+
+/** The text review pages: the revision's summary, then its patch. */
+export const revisionReviewText = (revision: WorkspaceRevision) =>
+  `${revisionSummary(revision)}${revision.diff}`;
+
+export interface WorkspacePrepared extends WorkspacePreparation {
+  /** Worker files left out on purpose because they sit in dependency, build, or Pi state directories. */
+  readonly leftOutPaths: ReadonlyArray<string>;
 }
 
 export interface WorkspaceReviewOptions {
@@ -37,17 +62,95 @@ export interface HeldBinding {
   readonly heldLocked: () => Effect.Effect<void, SubagentError>;
 }
 
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+
+/**
+ * Where a page starting at `offset` ends: at most `limit` UTF-16 units, never between the two
+ * halves of a character, unless that character alone is longer than the limit.
+ */
+export const pageEnd = (text: string, offset: number, limit: number) => {
+  const end = Math.min(text.length, offset + limit);
+  if (
+    end >= text.length ||
+    !isHighSurrogate(text.charCodeAt(end - 1)) ||
+    !isLowSurrogate(text.charCodeAt(end))
+  )
+    return end;
+  return end - 1 > offset ? end - 1 : end + 1;
+};
+
 const engineRecord = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
   service
     .inspect({ workspaceId: handle.workspaceId, ownerId: handle.ownerId })
     .pipe(Effect.mapError(mapWorkspaceError));
+
+const staleRevision = () =>
+  invalid("workspace_revision_stale", "The immutable workspace revision no longer matches.");
+
+const engineRevision = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
+  service.revision({ workspaceId: handle.workspaceId, ownerId: handle.ownerId }).pipe(
+    Effect.mapError(mapWorkspaceError),
+    Effect.filterOrFail(
+      (revision): revision is WorkspaceRevision => revision !== undefined,
+      staleRevision,
+    ),
+  );
+
+/** Records that the parent read the review text of `revisionId` from `offset` up to `nextOffset`. */
+const readThrough = (
+  knowledge: RevisionKnowledge,
+  revisionId: string,
+  totalChars: number,
+  offset: number,
+  nextOffset: number,
+): RevisionKnowledge => {
+  const known = reviewProgress(knowledge);
+  const base: ReviewProgress =
+    known?.revisionId === revisionId ? known : { revisionId, reviewedThrough: 0, totalChars };
+  const review =
+    offset <= base.reviewedThrough
+      ? { ...base, reviewedThrough: Math.max(base.reviewedThrough, nextOffset) }
+      : base;
+  return knowledge.kind === "prepared" && knowledge.revisionId === revisionId
+    ? { ...knowledge, review }
+    : { kind: "frozen", review };
+};
+
+/** Every page of `revisionId` was read. */
+export const fullyReviewed = (knowledge: RevisionKnowledge | undefined, revisionId: string) => {
+  const review = reviewProgress(knowledge);
+  return review?.revisionId === revisionId && review.reviewedThrough === review.totalChars;
+};
+
+/** The engine replaces any earlier preparation, which is no longer tested from here on. */
+const withoutPreparation = (knowledge: RevisionKnowledge): RevisionKnowledge =>
+  knowledge.kind !== "prepared"
+    ? knowledge
+    : knowledge.review
+      ? { kind: "frozen", review: knowledge.review }
+      : { kind: "unreviewed" };
+
+/** Records a preparation's outcome; a failed verification is kept but never integrable. */
+export const withPreparation =
+  (preparation: WorkspacePreparation, verification: "tested" | "failed") =>
+  (knowledge: RevisionKnowledge): RevisionKnowledge => {
+    const review = reviewProgress(knowledge);
+    return {
+      kind: "prepared",
+      revisionId: preparation.revisionId,
+      preparationId: preparation.preparationId,
+      verification,
+      ...(review?.revisionId === preparation.revisionId && { review }),
+    };
+  };
 
 export function workspaceReviewOperations(context: WorkspaceControlContext) {
   const { records, withLock, state, requireBinding, requireEngine, operations, workspaceSetup } =
     context;
   const { requireChildrenResolved } = context;
   /**
-   * Marks the binding busy for `use`, so resume, revise, fork, and other operations refuse it. A
+   * Marks the binding busy for `use`, so resume, revise, and other operations refuse it. A
    * workspace that is the source of unresolved child workspaces is refused.
    */
   const hold = <A>(
@@ -61,12 +164,15 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
         Effect.gen(function* () {
           const binding = yield* requireBinding(workspaceId, caller, undefined, access);
           yield* requireChildrenResolved(binding);
+          const settled = settledState(binding);
+          if (!settled) return yield* workspaceBusyError();
           const token = Symbol("workspace operation");
-          binding.busy = token;
+          binding.state = { phase: "busy", token, settled };
+          const holds = () => binding.state.phase === "busy" && binding.state.token === token;
           return {
             binding,
             heldLocked: () =>
-              state.bindings.get(workspaceId) === binding && binding.busy === token
+              state.bindings.get(workspaceId) === binding && holds()
                 ? Effect.void
                 : Effect.fail(
                     invalid(
@@ -82,7 +188,9 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
       ({ binding, token }) =>
         withLock(
           Effect.sync(() => {
-            if (binding.busy === token) binding.busy = undefined;
+            const { state: current } = binding;
+            if (current.phase === "busy" && current.token === token)
+              binding.state = current.settled;
           }),
         ),
     );
@@ -104,26 +212,19 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
         ownerId: binding.handle.ownerId,
         processCleanupConfirmed: true,
       };
-      if (binding.reopenPending) {
-        if (revisionId)
-          return yield* invalid(
-            "workspace_revision_stale",
-            "The immutable workspace revision no longer matches.",
-          );
+      if (revisionKnowledge(binding)?.kind === "reopened") {
+        if (revisionId) return yield* staleRevision();
         yield* service.revise(target).pipe(Effect.mapError(mapWorkspaceError));
         return yield* service.freeze(target).pipe(Effect.mapError(mapWorkspaceError));
       }
       const { status, revision } = yield* engineRecord(service, binding);
       if (revisionId) {
-        if (revision?.revisionId !== revisionId)
-          return yield* invalid(
-            "workspace_revision_stale",
-            "The immutable workspace revision no longer matches.",
-          );
-        return revision;
+        if (revision?.revisionId !== revisionId) return yield* staleRevision();
+        return yield* engineRevision(service, binding);
       }
       // The engine freezes only active workspaces; a frozen or prepared one keeps its revision.
-      if (revision && (status === "frozen" || status === "prepared")) return revision;
+      if (revision && (status === "frozen" || status === "prepared"))
+        return yield* engineRevision(service, binding);
       return yield* service.freeze(target).pipe(Effect.mapError(mapWorkspaceError));
     });
   /** Freezes or reuses the current revision; a freeze after resume or revision settles its reopen. */
@@ -133,13 +234,13 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
     revisionId: string | undefined,
   ): Effect.Effect<WorkspaceRevision, SubagentError> =>
     Effect.gen(function* () {
-      const reopened = binding.reopenPending === true && !revisionId;
+      const reopened = revisionKnowledge(binding)?.kind === "reopened" && !revisionId;
       const revision = yield* reviewedRevision(service, binding, revisionId);
       yield* withLock(
         heldLocked().pipe(
           Effect.andThen(
             Effect.sync(() => {
-              if (reopened) binding.reopenPending = undefined;
+              if (reopened) updateKnowledge(binding, () => ({ kind: "unreviewed" }));
             }),
           ),
         ),
@@ -147,49 +248,40 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
       return revision;
     });
   /**
-   * Prepares the revision and provisions its tree. The preparation is untested until the caller
-   * records it, after any verification it requires.
+   * Prepares the revision, or only `paths` of it, and, when `provision` is set, runs the
+   * project's setup in its tree. The preparation is untested until the caller records it, after
+   * any verification it requires.
    */
   const prepareHeld = (
     service: WorkspaceServiceContract,
     { binding }: HeldBinding,
     revisionId: string,
+    provision: boolean,
+    paths?: ReadonlyArray<string>,
   ): Effect.Effect<WorkspacePreparation, SubagentError> =>
     Effect.gen(function* () {
-      // The engine replaces any earlier preparation, which is no longer tested from here on.
-      yield* withLock(
-        Effect.sync(() => {
-          binding.testedPreparation = undefined;
-          binding.verificationFailedPreparation = undefined;
-        }),
-      );
+      yield* withLock(Effect.sync(() => updateKnowledge(binding, withoutPreparation)));
       const preparation = yield* service
         .prepare({
           workspaceId: binding.handle.workspaceId,
           ownerId: binding.handle.ownerId,
           revisionId,
+          paths,
         })
         .pipe(Effect.mapError(mapWorkspaceError));
-      if (workspaceSetup)
-        yield* provisionWorkspaceTree(
-          service,
-          workspaceSetup,
-          binding.handle,
-          preparation,
-          (pending) => {
-            binding.setupCleanupPending = pending;
-          },
-        );
+      if (provision && workspaceSetup)
+        yield* provisionWorkspaceTree(service, workspaceSetup, binding.handle, preparation);
       return preparation;
     });
-  const markTested = ({ binding, heldLocked }: HeldBinding, preparation: WorkspacePreparation) =>
-    withLock(
-      heldLocked().pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            binding.testedPreparation = preparation.preparationId;
-          }),
-        ),
+  /** Records a held binding's preparation outcome under the run lock. */
+  const markPrepared = (
+    { binding, heldLocked }: HeldBinding,
+    preparation: WorkspacePreparation,
+    verification: "tested" | "failed",
+  ) =>
+    heldLocked().pipe(
+      Effect.andThen(
+        Effect.sync(() => updateKnowledge(binding, withPreparation(preparation, verification))),
       ),
     );
   /**
@@ -200,6 +292,7 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
   const discardLocked = (
     service: WorkspaceServiceContract,
     binding: WorkspaceBinding,
+    outcome: "discarded" | "auto-discarded" = "discarded",
   ): Effect.Effect<void, SubagentError> =>
     Effect.gen(function* () {
       const { workspaceId, ownerId } = binding.handle;
@@ -220,7 +313,25 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
       yield* service
         .discard({ workspaceId, ownerId, processCleanupConfirmed: true })
         .pipe(Effect.mapError(mapWorkspaceError));
-      binding.finished = true;
+      // A stopped integration was rolled back, so the source leases it kept are released.
+      const settled = settledState(binding);
+      const leases = settled?.phase === "stopped-integration" ? settled.leases : [];
+      settleBinding(binding, { phase: "finished", outcome });
+      for (const lease of leases.toReversed())
+        yield* context.writerLeases.release(lease).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning(
+              `Rolled-back integration lease release is unconfirmed: ${error.message}`,
+            ).pipe(
+              Effect.annotateLogs("workspaceId", workspaceId),
+              Effect.andThen(
+                Effect.sync(() => {
+                  state.integrationQuarantined = true;
+                }),
+              ),
+            ),
+          ),
+        );
       return undefined;
     });
   const workspaceReview = (
@@ -246,28 +357,27 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
       return yield* operate(workspaceId, caller, (held) =>
         Effect.gen(function* () {
           const { binding, heldLocked } = held;
-          const revision = yield* settledRevision(service, held, options.revisionId);
+          const current = yield* settledRevision(service, held, options.revisionId);
+          const text = revisionReviewText(current);
+          const { diff: _diff, ...revision } = current;
           return yield* withLock(
             Effect.gen(function* () {
               yield* heldLocked();
-              if (offset > revision.diff.length)
+              if (offset > text.length)
                 return yield* invalid(
                   "workspace_diff_bounds",
-                  "Diff offset exceeds this revision.",
+                  "Review offset exceeds this revision.",
                 );
-              const nextOffset = Math.min(revision.diff.length, offset + limit);
-              if (binding.reviewedRevision !== revision.revisionId) {
-                binding.reviewedRevision = revision.revisionId;
-                binding.reviewedThrough = 0;
-              }
-              if (offset <= (binding.reviewedThrough ?? 0))
-                binding.reviewedThrough = Math.max(binding.reviewedThrough ?? 0, nextOffset);
+              const nextOffset = pageEnd(text, offset, limit);
+              updateKnowledge(binding, (knowledge) =>
+                readThrough(knowledge, revision.revisionId, text.length, offset, nextOffset),
+              );
               return {
                 ...revision,
-                diff: revision.diff.slice(offset, nextOffset),
+                text: text.slice(offset, nextOffset),
                 offset,
-                totalChars: revision.diff.length,
-                ...(nextOffset < revision.diff.length && { nextOffset }),
+                totalChars: text.length,
+                ...(nextOffset < text.length && { nextOffset }),
               };
             }),
           );
@@ -278,26 +388,26 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
     workspaceId: string,
     revisionId: string,
     caller = SUBAGENT_ROOT_RUN_ID,
-  ): Effect.Effect<WorkspacePreparation, SubagentError> =>
+  ): Effect.Effect<WorkspacePrepared, SubagentError> =>
     Effect.gen(function* () {
       const service = yield* requireEngine;
       return yield* operate(workspaceId, caller, (held) =>
         Effect.gen(function* () {
           const { binding } = held;
           const { revision } = yield* engineRecord(service, binding);
-          if (
-            binding.reviewedRevision !== revisionId ||
-            revision?.revisionId !== revisionId ||
-            binding.reviewedThrough !== revision.diff.length
-          )
+          const reviewed = yield* withLock(
+            Effect.sync(() => fullyReviewed(revisionKnowledge(binding), revisionId)),
+          );
+          if (!reviewed || revision?.revisionId !== revisionId)
             return yield* invalid(
               "workspace_review_incomplete",
               "Read every page of this exact immutable revision before preparing integration.",
             );
-          // The careful path leaves testing to the parent, so a configured verify does not run here.
-          const preparation = yield* prepareHeld(service, held, revisionId);
-          yield* markTested(held, preparation);
-          return preparation;
+          // The careful path leaves testing to the parent, so a configured verify does not run
+          // here; setup does, so the parent can test the prepared tree.
+          const preparation = yield* prepareHeld(service, held, revisionId, true);
+          yield* withLock(markPrepared(held, preparation, "tested"));
+          return { ...preparation, leftOutPaths: leftOutUncapturedPaths(revision.uncapturedPaths) };
         }),
       );
     });
@@ -321,6 +431,6 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
     workspacePrepare,
     workspaceDiscard,
     /** Phases a multi-step operation composes while it keeps one binding busy. */
-    held: { hold, settledRevision, prepareHeld, discardLocked },
+    held: { hold, operate, settledRevision, prepareHeld, markPrepared, discardLocked },
   };
 }

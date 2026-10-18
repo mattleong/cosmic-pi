@@ -5,7 +5,6 @@ import {
   subagentRuntimeEfforts,
   type SubagentContextMode,
   type SubagentEffort,
-  type SubagentHost,
   type SubagentRuntime,
   type SubagentWriteIntent,
 } from "../domain/routing.ts";
@@ -13,7 +12,7 @@ import { PROFILE_DEFINITIONS } from "./definitions.ts";
 import {
   isLocalPiProfileCandidate,
   isProfileId,
-  profileCandidateLabel,
+  skippedCandidateRoute,
   supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileDefinition,
@@ -47,13 +46,11 @@ export interface ProfileCandidateAttempt {
   readonly source: SubagentSelectionSource;
   readonly routeSource: ProfileRouteSource;
   readonly candidateIndex: number;
-  readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effectiveContext: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
   readonly openaiFastMode: boolean;
-  readonly closeOnReport: boolean;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
   readonly reason: string;
@@ -112,10 +109,14 @@ const resolveCandidate = (
   environment: ProfileResolutionEnvironment,
   profileDefaultEffort: SubagentEffort | undefined,
 ): CandidateResult => {
-  const label = profileCandidateLabel(candidate);
   const hardEffort = candidate.effort === "default" ? undefined : candidate.effort;
   const skipCandidate = (code: string, reason: string): CandidateResult => ({
-    skipped: { candidateIndex, candidate: label, code, reason },
+    skipped: {
+      candidateIndex,
+      candidate: skippedCandidateRoute(candidate),
+      code,
+      reason,
+    },
   });
   // Explicit efforts stay strict; soft defaults and the inherited parent level can name a level
   // this runtime or model lacks, such as "off" for Claude, so they move to the nearest one.
@@ -133,13 +134,11 @@ const resolveCandidate = (
     attempt: {
       source: candidate.model === "parent" ? "profile-parent-candidate" : "profile-candidate",
       candidateIndex,
-      host: candidate.host,
       runtime: candidate.runtime,
       model,
       effectiveContext: candidate.context,
       writeIntent: candidate.writeIntent,
       openaiFastMode: candidate.openaiFastMode ?? false,
-      closeOnReport: candidate.closeOnReport,
       effort: hardEffort ?? softEffort(modelEfforts),
       effortWasExplicit: hardEffort !== undefined,
     },
@@ -225,7 +224,7 @@ const resolveKnownProfileRoute = (
     if (result.attempt) {
       attempts.push({
         ...result.attempt,
-        reason: `Profile ${profile} selected ${routeLabel} candidate ${result.attempt.candidateIndex + 1} (${result.attempt.host}/${result.attempt.runtime}).`,
+        reason: `Profile ${profile} selected ${routeLabel} candidate ${result.attempt.candidateIndex + 1} (local/${result.attempt.runtime}).`,
         routeSource,
         skippedBefore: pendingSkipped,
       });

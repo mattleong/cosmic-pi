@@ -10,7 +10,7 @@ import {
   sessionProfileSeed,
 } from "../src/profiles/session-overrides.ts";
 import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
-import { profileCandidate as candidate } from "./fixtures/profiles.ts";
+import { declaredCandidate, profileCandidate as candidate } from "./fixtures/profiles.ts";
 import { stringContaining } from "./support/matchers.ts";
 
 const route = (model: string): ProfileRoute => ({ candidates: [candidate(model)] });
@@ -20,13 +20,15 @@ const baseConfig = (projectReviewerModel = "openai/project") =>
     {
       version: 6,
       defaultProfileSet: "default",
-      profileSets: { default: { profiles: { reviewer: candidate("openai/global") } } },
+      profileSets: { default: { profiles: { reviewer: declaredCandidate("openai/global") } } },
       nesting: { maxDirectChildren: 20, maxDepth: 6 },
     },
     {
       version: 6,
       defaultProfileSet: "default",
-      profileSets: { default: { profiles: { reviewer: candidate(projectReviewerModel) } } },
+      profileSets: {
+        default: { profiles: { reviewer: declaredCandidate(projectReviewerModel) } },
+      },
       nesting: { maxDirectChildren: 4, maxDepth: 2 },
     },
   );

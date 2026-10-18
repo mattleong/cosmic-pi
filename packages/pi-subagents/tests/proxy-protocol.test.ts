@@ -9,7 +9,7 @@ import {
   withSubagentProxyParent,
 } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
-import { listContract, modelsContract, renameContract } from "../src/tools/discovery-contract.ts";
+import { modelsContract, statusListContract } from "../src/tools/discovery-contract.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 import { view } from "./fixtures/run-view.ts";
 
@@ -71,7 +71,7 @@ describe("nested Pi proxy protocol", () => {
     ).toBeInstanceOf(InvalidSubagentRequestError);
   });
 
-  it("round-trips discovery and rename contracts while rejecting report-text injection", () => {
+  it("round-trips discovery contracts while rejecting report-text injection", () => {
     const run = view({
       id: "a",
       state: "completed",
@@ -79,7 +79,9 @@ describe("nested Pi proxy protocol", () => {
       reportStatus: "available",
     });
     const contracts = [
-      listContract(Array.from({ length: 64 }, (_, index) => ({ ...run, id: `run-${index}` }))),
+      statusListContract(
+        Array.from({ length: 64 }, (_, index) => ({ ...run, id: `run-${index}` })),
+      ),
       modelsContract(
         [
           {
@@ -100,24 +102,17 @@ describe("nested Pi proxy protocol", () => {
         ],
         "generalist",
       ),
-      renameContract({ runId: "a", run }),
-      renameContract({
-        runId: "missing",
-        failure: { id: "missing", code: "rename_outcome_uncertain", message: "Outcome unknown" },
-      }),
     ];
     for (const structuredContent of contracts) {
       const result = {
         content: [{ type: "text", text: "Existing human output" }],
         details: { unchanged: true },
         structuredContent,
-        ...(structuredContent.tool === "subagent_rename" &&
-          structuredContent.outcome === "failed" && { isError: true }),
       };
       expect(decodeSubagentProxyResult(JSON.stringify(result))).toEqual(result);
       expect(JSON.stringify(result)).not.toContain("PRIVATE-REPORT");
     }
-    const list = listContract([run]);
+    const list = statusListContract([run]);
     expect(
       decodeSubagentProxyResult(
         JSON.stringify({
@@ -135,7 +130,7 @@ describe("nested Pi proxy protocol", () => {
   it.each([
     { action: "list", callerRunId: "root" },
     { action: "discard", workspaceId: "w", ownerId: "root" },
-    { action: "integrate", workspaceId: "w", revisionId: "r", preparationId: "p", approved: true },
+    { action: "apply", workspaceId: "w", revisionId: "r", preparationId: "p", approved: true },
   ])("rejects invalid or forged workspace arguments %j", (args) => {
     expect(
       decodeSubagentProxyRequest({

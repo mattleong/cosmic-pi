@@ -1,32 +1,45 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import { WorkspaceError } from "../workspace/model.ts";
 import type { WorkspacePreparation, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 import {
   checkDirectory,
-  isSharedOrForeign,
+  listedPaths,
   workspaceFailure,
   workspaceIO,
   workspaceIOIfPresent,
 } from "./git-worktree-process.ts";
 import {
   createWorkspaceDirectory,
+  inspectPublishedFile,
+  publicationBackupPrefix,
+  publicationTemporaryPrefix,
   publishWorkspaceFile,
   removeEmptyWorkspaceDirectory,
   removeWorkspaceBackups,
+  restoreBackup,
+  syncDirectory,
+  unlinkIdentified,
+  type DirectoryIdentity,
   type WorkspaceBackupRemovalRequest,
   type WorkspaceDirectoryRemovalRequest,
 } from "./git-worktree-publish.ts";
+import { blobId, readWorkspaceFile, type SnapshotEntry } from "./git-worktree-snapshot.ts";
 import {
-  publicationBackupPrefix,
-  publicationTemporaryPrefix,
-} from "./git-worktree-publish-helper.ts";
-import {
-  readWorkspaceFile,
-  type SnapshotEntry,
-  type WorkspaceSnapshot,
-} from "./git-worktree-snapshot.ts";
-import { newWorkspaceId, saveWorkspaceRecord } from "./git-worktree-store.ts";
+  newWorkspaceId,
+  readPublicationProgress,
+  readWorkspaceRecord,
+  removePublicationProgress,
+  savePublicationProgress,
+  saveWorkspaceRecord,
+  workspaceDirectory,
+} from "./git-worktree-store.ts";
+
+type JournalEntry = NonNullable<WorkspaceRecord["journal"]>[number];
+const EMPTY_BLOB = blobId(new Uint8Array());
+type SnapshotEntries = ReadonlyMap<string, SnapshotEntry>;
 
 const directoryIdentity = (directory: string) =>
   Effect.gen(function* () {
@@ -34,24 +47,38 @@ const directoryIdentity = (directory: string) =>
     const stat = yield* workspaceIO("integrate", () => fs.lstat(directory));
     if (!stat.isDirectory() || stat.isSymbolicLink())
       return yield* workspaceFailure("integrate", "Publication directory changed.");
-    return { directoryDev: stat.dev, directoryIno: stat.ino };
+    return { directoryDev: stat.dev, directoryIno: stat.ino } satisfies DirectoryIdentity;
   });
-const checkPreimage = (root: string, name: string, expected: SnapshotEntry | undefined) =>
-  Effect.gen(function* () {
-    const visible = yield* readWorkspaceFile(root, name);
-    if (
-      (visible === undefined) !== (expected === undefined) ||
-      (visible &&
-        expected &&
-        (visible.mode !== expected.mode ||
-          visible.permissions !== expected.permissions ||
-          Buffer.compare(visible.bytes, expected.bytes) !== 0))
-    )
-      return yield* workspaceFailure(
-        "integrate",
-        "Source preimage changed; publication stopped and recovery artifacts retained.",
-      );
-    return undefined;
+
+/** Whether the parent file still holds exactly the content the integration captured. */
+const preimageHolds = (root: string, name: string, expected: SnapshotEntry | undefined) =>
+  readWorkspaceFile(root, name).pipe(
+    Effect.map(
+      (visible) =>
+        (visible === undefined) === (expected === undefined) &&
+        (visible === undefined ||
+          expected === undefined ||
+          (visible.mode === expected.mode &&
+            visible.permissions === expected.permissions &&
+            Buffer.compare(visible.bytes, expected.bytes) === 0)),
+    ),
+    Effect.orElseSucceed(() => false),
+  );
+
+/** Parent files the proposal changes moved on since they were tested; nothing was published. */
+export const touchedParentDrift = (paths: ReadonlyArray<string>) =>
+  new WorkspaceError({
+    operation: "integrate",
+    code: "workspace_parent_changed",
+    message:
+      paths.length === 1
+        ? "A parent file the proposal changes no longer matches the tested one."
+        : `${paths.length} parent files the proposal changes no longer match the tested ones.`,
+    detail: [
+      `Changed: ${listedPaths(paths)}`,
+      "Nothing was published.",
+      "Remedy: prepare again so the proposal is tested against the current files, then integrate the new preparation. A parent file that captures skip, such as an untracked credential file, never matches: move it aside, or revise the workspace so the writer leaves that path alone.",
+    ].join("\n"),
   });
 
 export const requiredLeaseDirectories = (
@@ -81,30 +108,12 @@ export const requiredLeaseDirectories = (
     return [...directories].toSorted();
   });
 
-type SnapshotEntries = ReadonlyMap<string, SnapshotEntry>;
-type DirectoryIdentity = Effect.Success<ReturnType<typeof directoryIdentity>>;
-
-// The helper starts once per file, directory and backup group. Its transpile cache lives in the
-// private registry rather than jiti's shared tmpdir default, and is only an optimization.
-const publicationHelperCache = (registry: string) =>
-  Effect.gen(function* () {
-    const cache = path.join(registry, "publication-cache");
-    yield* workspaceIO("integrate", () =>
-      fs.mkdir(cache, { mode: 0o700 }).catch((cause: unknown) => {
-        if (nodeErrorCode(cause) !== "EEXIST") throw cause;
-      }),
-    );
-    const stat = yield* workspaceIO("integrate", () => fs.lstat(cache));
-    return stat.isDirectory() && !isSharedOrForeign(stat) ? cache : undefined;
-  }).pipe(Effect.orElseSucceed(() => undefined));
-
 // Ancestors of deleted files, deepest first, that publication may remove once they are empty, as
 // `git apply` would. The source root and the session's cwd and its ancestors always stay.
 const emptiedDirectoryCandidates = (
   record: WorkspaceRecord,
   deleted: ReadonlyArray<string>,
   directories: ReadonlyMap<string, DirectoryIdentity>,
-  helperCache: string | undefined,
 ) => {
   const { sourceRoot, sourceCwd } = record.handle;
   const candidates = new Map<string, WorkspaceDirectoryRemovalRequest>();
@@ -118,7 +127,6 @@ const emptiedDirectoryCandidates = (
       candidates.set(full, {
         directory: path.dirname(full),
         ...anchor,
-        helperCache,
         name: path.basename(full),
         targetDev: target.directoryDev,
         targetIno: target.directoryIno,
@@ -128,15 +136,6 @@ const emptiedDirectoryCandidates = (
     .toSorted(([left], [right]) => right.split(path.sep).length - left.split(path.sep).length)
     .map(([, candidate]) => candidate);
 };
-
-const changedPaths = (previous: SnapshotEntries, next: SnapshotEntries) =>
-  [...new Set([...previous.keys(), ...next.keys()])]
-    .filter((name) => {
-      const a = previous.get(name),
-        b = next.get(name);
-      return a?.oid !== b?.oid || a?.mode !== b?.mode;
-    })
-    .toSorted();
 
 const publishedPermissions = (
   expected: SnapshotEntry | undefined,
@@ -194,60 +193,91 @@ const journalEntry = (
         mode: content.mode,
         permissions: publishedPermissions(expected, content),
       },
-    };
+    } satisfies JournalEntry;
+  });
+
+const journalFile = (registry: string, record: WorkspaceRecord) =>
+  path.join(workspaceDirectory(registry, record.handle.workspaceId), "record.json");
+
+// Every artifact a stopped publication may have left, for the error and manual recovery.
+const stoppedPublication = (
+  registry: string,
+  record: WorkspaceRecord,
+  message: string,
+  stoppedAt?: string,
+) =>
+  new WorkspaceError({
+    operation: "integrate",
+    message,
+    detail: [
+      ...(stoppedAt === undefined ? [] : [`Stopped at: ${JSON.stringify(stoppedAt)}`]),
+      `Journal: ${journalFile(registry, record)}`,
+      "Remedy: discard the workspace to roll back the files it published, or inspect the journal's backup and temporary paths (relative to the source root) and recover manually.",
+    ].join("\n"),
   });
 
 const createPlannedDirectories = (
   registry: string,
   journal: WorkspaceRecord,
-  root: string,
   directories: Map<string, DirectoryIdentity>,
-  helperCache: string | undefined,
 ) =>
   Effect.gen(function* () {
-    let createdDirectoryCount = journal.createdDirectoryCount ?? 0;
-    for (const name of journal.plannedDirectories ?? []) {
+    const root = journal.handle.sourceRoot;
+    const planned = journal.plannedDirectories ?? [];
+    for (const [index, name] of planned.entries()) {
       const target = path.join(root, name),
         parent = path.dirname(target);
       const identity = directories.get(parent);
       if (!identity)
         return yield* workspaceFailure("integrate", "Missing parent directory ownership.");
+      yield* savePublicationProgress(registry, journal.handle.workspaceId, {
+        directories: index + 1,
+        files: 0,
+      });
       const created = yield* createWorkspaceDirectory({
         directory: parent,
         ...identity,
-        helperCache,
         name: path.basename(target),
-      });
+      }).pipe(
+        Effect.mapError(() =>
+          stoppedPublication(
+            registry,
+            journal,
+            "A directory the proposal needs couldn't be created; the workspace is mid-integration.",
+            name,
+          ),
+        ),
+      );
       directories.set(target, created);
-      createdDirectoryCount += 1;
-      yield* saveWorkspaceRecord(registry, { ...journal, createdDirectoryCount });
     }
-    return { ...journal, createdDirectoryCount };
+    return planned.length;
   });
 
 const publishEntries = (
   registry: string,
   journal: WorkspaceRecord,
-  root: string,
+  createdDirectories: number,
   directories: ReadonlyMap<string, DirectoryIdentity>,
   previous: SnapshotEntries,
   next: SnapshotEntries,
-  helperCache: string | undefined,
 ) =>
   Effect.gen(function* () {
-    let publishedCount = journal.publishedCount ?? 0;
+    const root = journal.handle.sourceRoot;
     const backups = new Map<string, WorkspaceBackupRemovalRequest>();
-    for (const entry of journal.journal ?? []) {
+    for (const [index, entry] of (journal.journal ?? []).entries()) {
       const directory = path.dirname(path.join(root, entry.path));
       const identity = directories.get(directory);
       if (!identity)
         return yield* workspaceFailure("integrate", "Missing publication directory ownership.");
       const expected = previous.get(entry.path),
         content = next.get(entry.path);
+      yield* savePublicationProgress(registry, journal.handle.workspaceId, {
+        directories: createdDirectories,
+        files: index + 1,
+      });
       const result = yield* publishWorkspaceFile({
         directory,
         ...identity,
-        helperCache,
         name: path.basename(entry.path),
         temporaryName: path.basename(entry.temporaryPath),
         backupName: path.basename(entry.backupPath),
@@ -257,32 +287,32 @@ const publishEntries = (
         }),
       });
       if (result.status !== "success")
-        return yield* workspaceFailure(
-          "integrate",
-          "Publication conflict or uncertainty; inspect the retained journal, backups and any temporary file. No automatic rollback occurred.",
+        return yield* stoppedPublication(
+          registry,
+          journal,
+          result.status === "conflict"
+            ? "A parent file changed during publication; the workspace is mid-integration."
+            : "Publication of a file is uncertain; the workspace is mid-integration.",
+          entry.path,
         );
       if (expected)
         backups.set(directory, {
           directory,
           ...identity,
-          helperCache,
           names: [...(backups.get(directory)?.names ?? []), path.basename(entry.backupPath)],
         });
-      publishedCount += 1;
-      yield* saveWorkspaceRecord(registry, { ...journal, publishedCount });
     }
-    return { record: { ...journal, publishedCount }, backups: [...backups.values()] };
+    return [...backups.values()];
   });
 
 /**
  * Deletes the preimage backups a publication left beside the files it replaced or deleted. Call it
- * only once the integration has committed: until then the backups are the manual recovery copy.
+ * only once the integration has committed: until then the backups are the rollback copy.
  * Returns the backup paths that remain.
  */
 export const removePublicationBackups = (backups: ReadonlyArray<WorkspaceBackupRemovalRequest>) =>
   Effect.forEach(backups, (group) =>
     removeWorkspaceBackups(group).pipe(
-      Effect.map((result) => result.retained),
       Effect.orElseSucceed(() => group.names),
       Effect.map((names) => names.map((name) => path.join(group.directory, name))),
     ),
@@ -309,17 +339,20 @@ export const removeEmptiedDirectories = (
     { discard: true },
   );
 
+/**
+ * Publishes `changed` from `next` over the parent files in `previous`, which hold their current
+ * content. The record and its journal are saved once before the first change; publication.json
+ * then records each step before it starts, so a rollback knows which entries were never touched.
+ */
 export const publishWorkspace = (
   registry: string,
   record: WorkspaceRecord,
-  before: WorkspaceSnapshot,
-  after: WorkspaceSnapshot,
+  previous: SnapshotEntries,
+  next: SnapshotEntries,
+  changed: ReadonlyArray<string>,
   preparation: Pick<WorkspacePreparation, "leaseDirectories">,
 ) =>
   Effect.gen(function* () {
-    const previous = new Map(before.entries.map((entry) => [entry.path, entry]));
-    const next = new Map(after.entries.map((entry) => [entry.path, entry]));
-    const changed = changedPaths(previous, next);
     if (
       changed.some(
         (name) => previous.get(name)?.mode === "120000" || next.get(name)?.mode === "120000",
@@ -330,9 +363,9 @@ export const publishWorkspace = (
         "Symlink changes cannot be published; source files were not modified.",
       );
     const root = record.handle.sourceRoot;
-    const helperCache = yield* publicationHelperCache(registry);
     const directories = new Map([[root, yield* directoryIdentity(root)]]);
     const missingDirectories = new Set<string>();
+    const drifted: string[] = [];
     for (const name of changed) {
       yield* checkDirectory(path.dirname(path.join(root, name)), true);
       yield* checkAncestors(
@@ -342,8 +375,9 @@ export const publishWorkspace = (
         directories,
         missingDirectories,
       );
-      yield* checkPreimage(root, name, previous.get(name));
+      if (!(yield* preimageHolds(root, name, previous.get(name)))) drifted.push(name);
     }
+    if (drifted.length > 0) return yield* touchedParentDrift(drifted);
     const plannedDirectories = [...missingDirectories].toSorted(
       (a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b),
     );
@@ -353,33 +387,219 @@ export const publishWorkspace = (
     const journal: WorkspaceRecord = {
       ...record,
       status: "integrating",
-      publishedCount: 0,
       plannedDirectories,
-      createdDirectoryCount: 0,
       journal: entries,
     };
+    // Progress an earlier publication left (its removal is best effort) must not describe this
+    // journal: a rollback after stopping before the first step would otherwise skip or revisit
+    // entries by its stale counts.
+    yield* savePublicationProgress(registry, record.handle.workspaceId, {
+      directories: 0,
+      files: 0,
+    });
     yield* saveWorkspaceRecord(registry, journal);
     const emptiedDirectories = emptiedDirectoryCandidates(
       record,
       changed.filter((name) => !next.has(name)),
       directories,
-      helperCache,
     );
-    const created = yield* createPlannedDirectories(
-      registry,
-      journal,
-      root,
-      directories,
-      helperCache,
+    const created = yield* createPlannedDirectories(registry, journal, directories);
+    const backups = yield* publishEntries(registry, journal, created, directories, previous, next);
+    return { record: journal, backups, emptiedDirectories };
+  });
+
+/**
+ * Every file is already published, so the record stays mid-integration with its journal and every
+ * backup; discard rolls the files back.
+ */
+export const publishedMidIntegration = (
+  registry: string,
+  journal: WorkspaceRecord,
+  message: string,
+  remedy: string,
+) => {
+  const entries = journal.journal ?? [];
+  const backups = entries.flatMap((entry) => (entry.before ? [entry.backupPath] : []));
+  return new WorkspaceError({
+    operation: "integrate",
+    message,
+    detail: [
+      `Published: all ${entries.length} reviewed file changes in ${journal.handle.sourceRoot}`,
+      `Journal: ${journalFile(registry, journal)}`,
+      ...(backups.length > 0
+        ? [`Backups (relative to the source root): ${backups.join(", ")}`]
+        : []),
+      `Remedy: ${remedy}`,
+    ].join("\n"),
+  });
+};
+
+/**
+ * Saves the record that ends a publication, `committed`, in place of its mid-integration
+ * `journal`. A failed save can still have renamed the record into place before its directory sync
+ * failed, so the record is reread: once it no longer says integrating, the publication is
+ * committed and its cleanup proceeds. Otherwise the journal still tracks every backup for
+ * discard's rollback, and the failure says so.
+ */
+export const commitPublication = (
+  registry: string,
+  journal: WorkspaceRecord,
+  committed: WorkspaceRecord,
+) =>
+  saveWorkspaceRecord(registry, committed).pipe(
+    Effect.catchTag("WorkspaceError", (error) =>
+      Effect.gen(function* () {
+        const saved = yield* readWorkspaceRecord(registry, committed.handle.workspaceId).pipe(
+          Effect.option,
+        );
+        if (
+          Option.isSome(saved) &&
+          saved.value.status === committed.status &&
+          saved.value.baseline === committed.baseline
+        )
+          return yield* Effect.logWarning(
+            `The workspace record was saved, but its durability is unconfirmed: ${error.message}`,
+          ).pipe(Effect.annotateLogs("workspaceId", committed.handle.workspaceId));
+        return yield* publishedMidIntegration(
+          registry,
+          journal,
+          "Every reviewed file was published, but the workspace record couldn't be saved; the workspace stays mid-integration.",
+          "discard the workspace to roll the published files back, or keep them and delete the backups manually.",
+        );
+      }),
+    ),
+    Effect.uninterruptible,
+  );
+
+/** Clears the progress file once the integration record says integrated; best effort. */
+export const finishPublication = (registry: string, record: WorkspaceRecord) =>
+  removePublicationProgress(registry, record.handle.workspaceId).pipe(Effect.ignore);
+
+type RollbackStep =
+  | { readonly kind: "keep" }
+  | { readonly kind: "refuse"; readonly reason: string }
+  | { readonly kind: "undo"; readonly run: Effect.Effect<void, WorkspaceError> };
+
+const keep: RollbackStep = { kind: "keep" };
+const refuse = (reason: string): RollbackStep => ({ kind: "refuse", reason });
+
+// Decides from the files on disk alone what undoing one touched journal entry takes: the backup
+// must still hold the reviewed preimage, and an installed file must still hold the published
+// content. Anything else was changed by someone else, so it is refused rather than overwritten.
+const rollbackStep = (root: string, entry: JournalEntry) =>
+  Effect.gen(function* () {
+    const target = path.join(root, entry.path);
+    const backup = path.join(root, entry.backupPath);
+    const temporary = path.join(root, entry.temporaryPath);
+    const directory = path.dirname(target);
+    const anchored = yield* checkDirectory(directory, true).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
     );
-    const published = yield* publishEntries(
-      registry,
-      created,
-      root,
-      directories,
-      previous,
-      next,
-      helperCache,
+    if (!anchored) return refuse("a directory leading to it is no longer a real directory");
+    const current = yield* inspectPublishedFile(target);
+    const saved = yield* inspectPublishedFile(backup);
+    const staged = yield* workspaceIOIfPresent("rollback", () => fs.lstat(temporary));
+    if (staged && !staged.isFile()) return refuse("its temporary path holds something else");
+    const installed =
+      entry.after !== undefined && current.kind === "file" && current.oid === entry.after.oid;
+    const steps: Array<Effect.Effect<void, WorkspaceError>> = staged
+      ? [workspaceIO("rollback", () => fs.unlink(temporary))]
+      : [];
+    // Publication reserves the backup name with an empty file before moving the target there; a
+    // stop between the two leaves that reservation beside the untouched original.
+    const reservation =
+      entry.before !== undefined &&
+      saved.kind === "file" &&
+      saved.oid === EMPTY_BLOB &&
+      current.kind === "file" &&
+      current.oid === entry.before.oid &&
+      (current.dev !== saved.dev || current.ino !== saved.ino);
+    if (reservation) steps.push(unlinkIdentified(backup, saved));
+    else if (entry.before === undefined) {
+      if (installed) steps.push(unlinkIdentified(target, current));
+    } else if (saved.kind === "file" && saved.oid === entry.before.oid) {
+      if (current.kind === "file" && current.dev === saved.dev && current.ino === saved.ino)
+        steps.push(workspaceIO("rollback", () => fs.unlink(backup)));
+      else if (current.kind === "absent") steps.push(restoreBackup(backup, target));
+      else if (installed)
+        steps.push(unlinkIdentified(target, current), restoreBackup(backup, target));
+      else return refuse("it changed after publication replaced it");
+    } else if (saved.kind !== "absent") return refuse("its backup no longer holds the original");
+    else if (installed && entry.after?.oid !== entry.before.oid)
+      return refuse("its backup is missing");
+    if (steps.length === 0) return keep;
+    return {
+      kind: "undo",
+      run: Effect.gen(function* () {
+        for (const step of steps) yield* step;
+        yield* syncDirectory(directory);
+      }),
+    } satisfies RollbackStep;
+  });
+
+/**
+ * Undoes a stopped publication from its journal: published files that still hold their new
+ * content are removed, backups that still hold the reviewed preimage are put back, temporary
+ * files are deleted, and directories it created are removed once empty. Entries it never reached
+ * are left alone. If any touched file matches neither side, nothing changes and the refusal names
+ * it, keeping every artifact for manual recovery.
+ */
+export const rollbackPublication = (registry: string, record: WorkspaceRecord) =>
+  Effect.gen(function* () {
+    const root = record.handle.sourceRoot;
+    yield* checkDirectory(root);
+    const progress = yield* readPublicationProgress(registry, record.handle.workspaceId);
+    const journal = record.journal ?? [];
+    const planned = record.plannedDirectories ?? [];
+    // Without progress, as for a record saved by an earlier version, every entry may be touched.
+    const touched = journal.slice(0, progress?.files ?? journal.length);
+    const steps = yield* Effect.forEach(touched, (entry) =>
+      rollbackStep(root, entry).pipe(Effect.map((step) => ({ entry, step }))),
     );
-    return { ...published, emptiedDirectories };
+    const refused = steps.flatMap(({ entry, step }) =>
+      step.kind === "refuse" ? [`${JSON.stringify(entry.path)}: ${step.reason}`] : [],
+    );
+    if (refused.length > 0)
+      return yield* new WorkspaceError({
+        operation: "discard",
+        code: "workspace_rollback_refused",
+        message:
+          refused.length === 1
+            ? "A file the integration published has changed since; rollback was refused."
+            : `${refused.length} files the integration published have changed since; rollback was refused.`,
+        detail: [
+          ...refused.slice(0, 5),
+          ...(refused.length > 5 ? [`and ${refused.length - 5} more`] : []),
+          "Nothing was rolled back; the workspace stays mid-integration.",
+          `Journal: ${journalFile(registry, record)}`,
+          "Remedy: put each named file back to its published or original content and discard again, or recover manually from the journal's backup paths (relative to the source root).",
+        ].join("\n"),
+      });
+    for (const { step } of steps) if (step.kind === "undo") yield* step.run;
+    const created = planned.slice(0, progress?.directories ?? planned.length);
+    for (const name of created.toReversed()) {
+      const directory = path.join(root, name);
+      const stat = yield* workspaceIOIfPresent("rollback", () => fs.lstat(directory));
+      // Never created, or replaced by something that isn't a real directory: not publication's.
+      if (
+        !stat?.isDirectory() ||
+        Option.isNone(yield* checkDirectory(directory).pipe(Effect.option))
+      )
+        continue;
+      const removed = yield* workspaceIO("rollback", () =>
+        fs.rmdir(directory).then(
+          () => true,
+          (cause: unknown) => {
+            // Someone else's files keep it.
+            const code = nodeErrorCode(cause);
+            if (code === "ENOENT" || code === "ENOTEMPTY" || code === "EEXIST") return false;
+            throw cause;
+          },
+        ),
+      );
+      if (removed) yield* syncDirectory(path.dirname(directory));
+    }
+    yield* removePublicationProgress(registry, record.handle.workspaceId);
+    return undefined;
   });

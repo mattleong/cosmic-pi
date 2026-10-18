@@ -41,7 +41,7 @@ export type WorkspaceMessage = {
 export interface ModelPickerOpening {
   readonly preferAdvertisedDefault?: boolean | undefined;
   readonly priorNotices?: ReadonlyArray<string> | undefined;
-  readonly nativeSwitch?: Pick<ProfileCandidate, "host" | "runtime"> | undefined;
+  readonly nativeSwitch?: Pick<ProfileCandidate, "runtime"> | undefined;
 }
 
 export abstract class ProfileWorkspaceState {

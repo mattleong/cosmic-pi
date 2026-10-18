@@ -65,7 +65,6 @@ export function writerSpawnPreparation({
               case "failed":
                 return Effect.fail(pool.preparationError ?? cancelled());
               case "releasing":
-              case "paused":
               case "quarantined":
                 return Effect.fail(cancelled());
             }

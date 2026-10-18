@@ -59,7 +59,6 @@ const check = (label: string, status: DoctorStatus, detail: string): DoctorCheck
 
 const attemptKey = (attempt: ProfileCandidateAttempt): string =>
   [
-    attempt.host,
     attempt.runtime,
     attempt.model,
     attempt.effectiveContext,
@@ -68,7 +67,7 @@ const attemptKey = (attempt: ProfileCandidateAttempt): string =>
   ].join("|");
 
 const routeLabel = (attempt: ProfileCandidateAttempt): string =>
-  `${attempt.host}/${attempt.runtime} · ${attempt.model}`;
+  `local/${attempt.runtime} · ${attempt.model}`;
 
 /**
  * Checks what a subagent launch depends on, each check independently: Pi's version, saved
@@ -127,7 +126,7 @@ export const runSubagentDoctor = (
         continue;
       }
       for (const attempt of plan.attempts)
-        if (attempt.host === "local" && attempt.runtime !== "pi") cliRuntimes.add(attempt.runtime);
+        if (attempt.runtime !== "pi") cliRuntimes.add(attempt.runtime);
       const [first] = plan.attempts;
       if (!first) {
         checks.push(check(`Profile ${id}`, "failed", "no eligible route"));
@@ -212,11 +211,10 @@ const readinessFailure = (
 ): Effect.Effect<string | undefined> =>
   backends
     .preflight(
-      { host: attempt.host, runtime: attempt.runtime, context: attempt.effectiveContext },
+      { runtime: attempt.runtime, context: attempt.effectiveContext },
       {
         context: attempt.effectiveContext,
         writeIntent: attempt.writeIntent,
-        closeOnReport: attempt.closeOnReport,
         model: attempt.model,
         effort: attempt.effort,
         cwd,
@@ -262,7 +260,7 @@ const cliVersionCheck = (
   backends: SubagentBackendRegistry["Service"],
   runtime: LocalCliRuntime,
 ): Effect.Effect<DoctorCheck | undefined> =>
-  backends.resolve({ host: "local", runtime, context: "fresh" }).pipe(
+  backends.resolve({ runtime, context: "fresh" }).pipe(
     Effect.flatMap((driver) => driver.cliVersion ?? Effect.succeed(undefined)),
     Effect.map((version) => version && versionCheck(runtime, version)),
     Effect.orElseSucceed(() => undefined),

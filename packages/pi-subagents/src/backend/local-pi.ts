@@ -408,7 +408,6 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
         yield* rpc({ type: "abort" });
       }),
     ),
-    renameDisplay: (name: string) => rpc({ type: "set_session_name", name }).pipe(Effect.asVoid),
     reply: (requestId: string, message: string) =>
       withTurnControl(
         ipcAck(
@@ -466,7 +465,6 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
 });
 
 export const localPiBackendDriver = (childProcesses: ChildProcessContract): BackendDriver => ({
-  host: "local",
   runtime: "pi",
   capabilities: PI_SUBAGENT_CAPABILITIES,
   supportsContext: (context) => context === "fresh" || context === "fork",

@@ -11,7 +11,6 @@ import { declaredCandidate } from "../fixtures/profiles.ts";
 import { profileServiceFor } from "../tools/fixtures/tool-harness.ts";
 
 const driver: BackendDriver = {
-  host: "local",
   runtime: "claude",
   capabilities: [],
   supportsContext: (context) => context === "fresh",

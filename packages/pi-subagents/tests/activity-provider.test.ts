@@ -64,7 +64,6 @@ describe("subagent activity provider", () => {
       const detail = subagentActivityDetail(bridge.get(), run.id)!;
       expect(detail).toContain("Cleanup detail sentinel");
       expect(detail).toContain("Accepted work report sentinel");
-      expect(detail).not.toContain("resume_admission");
       const signal = new AbortController().signal;
       yield* step(() => invoke("stop", signal));
       expect(act).toHaveBeenCalledWith(
@@ -170,7 +169,7 @@ describe("subagent activity provider", () => {
               ...(changed === "question" && {
                 question: { requestId: "q-new", message: "Another question" },
               }),
-              ...(changed === "policy" && { writeAdmissionPaused: true }),
+              ...(changed === "policy" && { writeViolationOffender: true }),
             },
           ],
         });

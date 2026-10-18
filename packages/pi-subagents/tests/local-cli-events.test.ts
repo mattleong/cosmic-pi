@@ -9,10 +9,11 @@ import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import type { Scope } from "effect/Scope";
 import { provideBuiltLayer } from "pi-cosmic-core";
-import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
+import { capturedTelemetrySnapshot, makeCapturedLogger, yieldUntil } from "pi-cosmic-core/testing";
 import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import {
+  localCliEventIngress,
   makeLocalCliRawEventOwnership,
   type LocalCliRawEventOwnership,
 } from "../src/backend/local-cli-events.ts";
@@ -349,5 +350,47 @@ describe("local CLI raw event ownership", () => {
         expect(warnings()).toContain("ingress overflowed");
       }),
     ),
+  );
+
+  it.effect("coalesces an activity burst behind a stalled consumer without reordering", () =>
+    Effect.gen(function* () {
+      const acknowledged: string[] = [];
+      const ingress = yield* localCliEventIngress((raw) => void acknowledged.push(rawId(raw)));
+      let offered = false;
+      yield* Effect.forEach(
+        Array.from({ length: 10_000 }, (_, id) => id),
+        (id) => ingress.offer(backendEvent(1), rawEvent(id)),
+        { discard: true },
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            offered = true;
+          }),
+        ),
+        Effect.forkChild,
+      );
+      yield* yieldUntil(() => offered, 1_000);
+      expect(acknowledged).toHaveLength(9_999);
+      expect(acknowledged).not.toContain("raw-0");
+
+      const finished: BackendEvent = {
+        type: "tool_finished",
+        assignmentEpoch: 1,
+        toolCallId: "call",
+        toolName: "edit",
+        isError: false,
+      };
+      yield* ingress.offer(finished, rawEvent(10_000));
+      const pending = yield* Queue.take(ingress.events);
+      expect(pending.type).toBe("activity");
+      expect(yield* Queue.take(ingress.events)).toBe(finished);
+      ingress.acknowledge(pending);
+      expect(acknowledged).toContain("raw-0");
+
+      const next = backendEvent(1);
+      yield* ingress.offer(next, rawEvent(10_001));
+      expect(acknowledged).not.toContain("raw-10001");
+      expect(yield* Queue.take(ingress.events)).toBe(next);
+    }).pipe(Effect.scoped),
   );
 });

@@ -2,7 +2,6 @@ import { contentText, type SystemMessage } from "@earendil-works/pi-ai";
 import { sha256Text, synchronousRandomHex, synchronousRandomUuid } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
-import { PROTOCOL_FINGERPRINT_ENV, protocolFingerprint } from "./protocol-fingerprint.ts";
 import { FORK_PROMPT_CACHE_KEY_ENV, forkPromptCacheKey } from "./fork-prompt-cache.ts";
 import { nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
@@ -147,7 +146,6 @@ export function childProcessEnvironment(
       ),
     ),
     PI_SUBAGENT_CHILD: "1",
-    [PROTOCOL_FINGERPRINT_ENV]: protocolFingerprint(),
     PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
     PI_SUBAGENT_RUN_ID: request.runId,
     ...(request.workspaceParent && { [SUBAGENT_WORKSPACE_PARENT_ENV]: "1" }),

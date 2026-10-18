@@ -73,7 +73,6 @@ const backendFixture = (parent: SessionManager) => {
   const launches: BackendLaunchRequest[] = [];
   const controls: Array<{ readonly offer: (event: BackendEvent) => void; released: boolean }> = [];
   const driver = (runtime: BackendDriver["runtime"]): BackendDriver => ({
-    host: "local",
     runtime,
     capabilities: [],
     supportsContext: () => true,
@@ -107,7 +106,6 @@ const backendFixture = (parent: SessionManager) => {
                   Effect.sync(() => control.offer({ type: "run_started", assignmentEpoch })),
                 steer: () => Effect.void,
                 interrupt: Effect.void,
-                renameDisplay: () => Effect.void,
                 reply: () => Effect.void,
                 notifyPeers: () => Effect.void,
               },

@@ -67,5 +67,4 @@ const UNNAMEABLE_STATES: ReadonlySet<SubagentRunState> = new Set([
   "failed",
 ]);
 
-export const canRenameRun = (run: SubagentRunView): boolean =>
-  hasSubagentCapability(run, "rename-display") && !UNNAMEABLE_STATES.has(run.state);
+export const canRenameRun = (run: SubagentRunView): boolean => !UNNAMEABLE_STATES.has(run.state);

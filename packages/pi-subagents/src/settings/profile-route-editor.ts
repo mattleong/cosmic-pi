@@ -5,6 +5,7 @@ import { builtinProfileCandidate } from "../profiles/definitions.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import {
   cloneProfileCandidates as cloneCandidates,
+  declaredProfileCandidate,
   MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate as cloneCandidate,
   profileCandidateValidationIssues,
@@ -227,8 +228,6 @@ const candidateIssueMessage = (
       return "The parent model is available only with Local Pi.";
     case "fork_requires_local_pi":
       return "Fork is available only with Local Pi.";
-    case "close_after_report_required":
-      return "Runs must close after reporting.";
     case "fast_mode_unsupported":
       return `Fast mode is not available with ${runtimeLabel(candidate.runtime)}/${candidate.model}.`;
     case "effort_unsupported":
@@ -244,7 +243,7 @@ export const candidateValidationError = (candidate: ProfileCandidate): string | 
 
 export function updateCandidateControls(
   candidate: ProfileCandidate,
-  patch: Partial<Pick<ProfileCandidate, "host" | "runtime" | "writeIntent">>,
+  patch: Partial<Pick<ProfileCandidate, "runtime" | "writeIntent">>,
   defaults: CandidateControlDefaults,
 ): CandidateUpdate {
   const notices: string[] = [];
@@ -267,7 +266,6 @@ export function updateCandidateControls(
     switch (issue.code) {
       case "model_selector_invalid":
       case "parent_requires_local_pi":
-      case "close_after_report_required":
         return { notices, error: candidateIssueMessage(next, issue.code) };
       case "fork_requires_local_pi":
         next = { ...next, context: "fresh" };
@@ -331,7 +329,7 @@ export function declaredRouteForDraft(draft: ProfileRouteDraft): RouteDeclaratio
     const error = candidateValidationError(candidate);
     if (error) return { valid: false, error: `${profileRouteOptionLabel(index)}: ${error}` };
   }
-  const candidates = cloneCandidates(draft.candidates);
+  const candidates = draft.candidates.map(declaredProfileCandidate);
   return {
     valid: true,
     route: candidates.length === 1 ? candidates[0] : candidates,

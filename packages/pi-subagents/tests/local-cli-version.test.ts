@@ -46,7 +46,6 @@ const preflight = (
     runtime,
     context: "fresh",
     writeIntent: "read-only",
-    closeOnReport: true,
     model: "fixture-model",
     effort: "high",
   });

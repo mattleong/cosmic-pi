@@ -69,7 +69,6 @@ import { writeClaimContainment } from "./write-claim-containment.ts";
 import { proxyExecutionHandler } from "./proxy-execution.ts";
 import { writerSpawnPreparation } from "./writer-preparation.ts";
 import { WriterPools } from "./writer-pool.ts";
-import { writeClaimControl } from "./write-claim-control.ts";
 import { workspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
 import { WorkspaceService } from "../workspace/service.ts";
 import type { WorkspaceSetup, WorkspaceVerify, WriterWorkspaceMode } from "../config/schema.ts";
@@ -226,15 +225,6 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     id: string,
     expected?: SubagentControlExpectation,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly grantWriteClaims: (
-    id: string,
-    paths: ReadonlyArray<string>,
-  ) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly revokeWriteClaims: (
-    id: string,
-    paths: ReadonlyArray<string>,
-  ) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly resumeWriterAdmission: (id: string) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly projection: Effect.Effect<SubagentProjection>;
   /** Hands every eligible completion to its notifier now, as a session ends. */
   readonly deliverPendingCompletions: Effect.Effect<void>;
@@ -413,11 +403,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   });
 
   const stop = subtreeStopper({ ...runContext, stopRun: controls.stop });
-  const containWriteClaimViolation = writeClaimContainment({
-    ...runContext,
-    stop,
-    interrupt: controls.interrupt,
-  });
+  const containWriteClaimViolation = writeClaimContainment({ ...runContext, stop });
 
   const { proxyHandler, questionnaireHandler } = options;
   const handleProxyEvent = proxyExecutionHandler({
@@ -485,8 +471,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     currentNesting: rootNesting,
   });
 
-  const writeClaims = writeClaimControl(runContext);
-
   const starts = sessionStartOperations({
     ...runContext,
     launch,
@@ -519,8 +503,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     workspaceList: workspaces.workspaceList,
     workspaceReview: workspaces.workspaceReview,
     workspacePrepare: workspaces.workspacePrepare,
-    workspaceIntegrate: workspaces.workspaceIntegrate,
     workspaceDiscard: workspaces.workspaceDiscard,
+    workspaceExport: workspaces.workspaceExport,
     workspaceApply: workspaces.workspaceApply,
     workspaceRevise: workspaces.revise(launch.start),
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
@@ -537,9 +521,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     resume: resume.resume,
     rename: controls.rename,
     stop,
-    grantWriteClaims: writeClaims.grant,
-    revokeWriteClaims: writeClaims.revoke,
-    resumeWriterAdmission: writeClaims.resumeAdmission,
     projection,
     deliverPendingCompletions: delivery.deliverPendingCompletions,
     awaitParentDrain: parentDrainAwaiter({

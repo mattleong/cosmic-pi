@@ -22,15 +22,7 @@ export interface SummaryArguments {
   runIds?: unknown;
   agents?: unknown;
   profile?: unknown;
-  paths?: unknown;
 }
-
-const OPERATION_LABELS = new Map([
-  ["list", "inspect"],
-  ["resume_admission", "resume admission"],
-]);
-
-const operationLabel = (operation: string): string => OPERATION_LABELS.get(operation) ?? operation;
 
 const decodeTargetIds = Schema.decodeUnknownOption(Schema.Array(Schema.String));
 
@@ -54,22 +46,6 @@ function startSubject(input: SummaryArguments): string {
   return "profile" in agent && Predicate.isString(agent.profile) ? agent.profile : "";
 }
 
-function claimCounters(
-  details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
-): string[] | undefined {
-  const counts = details.cards.map((card) => card.writeClaimCount ?? card.writeClaims?.length);
-  if (!counts.length || !counts.every((count) => count !== undefined)) return undefined;
-  const count = countLabel(
-    counts.reduce((sum, value) => sum + value, 0),
-    "file claim",
-  );
-  return [
-    details.runCount > details.cards.length
-      ? `${details.cards.length}/${details.runCount} shown, ${count}`
-      : count,
-  ];
-}
-
 export function argumentSummary(
   input: SummaryArguments,
   action: string,
@@ -84,16 +60,13 @@ export function argumentSummary(
         : action === "workspace"
           ? "Proposed changes"
           : "";
-  const counters =
-    action === "claims" && Array.isArray(input.paths)
-      ? [`${countLabel(input.paths.length, "file claim")} requested`]
-      : Array.isArray(input.agents)
-        ? [`${input.agents.length} requested`]
-        : ids && ids.length > 1
-          ? [countLabel(ids.length, "subagent")]
-          : [];
+  const counters = Array.isArray(input.agents)
+    ? [`${input.agents.length} requested`]
+    : ids && ids.length > 1
+      ? [countLabel(ids.length, "subagent")]
+      : [];
   const summary: CompactSummary = { subject, counters, metadata: [] };
-  if (operation !== action) summary.action = operationLabel(operation);
+  if (operation !== action) summary.action = operation;
   return summary;
 }
 
@@ -154,8 +127,6 @@ export function applyArgumentLanes(
   phase: CompactPhase,
   lanes: CompactSummary,
 ): void {
-  if (details.action === "claims")
-    summary.counters = claimCounters(details) ?? summary.counters ?? [];
   if (phase === "settled" && (details.action === "send" || details.action === "reply")) {
     const count = receiptCounter(details, details.action === "send" ? "sent" : "replied");
     summary.counters = [
@@ -176,7 +147,7 @@ export const isTypedReceipt = (result: { readonly details?: unknown }): boolean 
 function rejectedTarget(input: SummaryArguments, action: string): string {
   if (action === "workspace") return "the proposed changes";
   if (action === "models") return "profile routes";
-  if (action === "list") return "subagents";
+  if (action === "status" && input.runIds === undefined) return "subagents";
   const ids = requestedRunIds(input);
   return (ids?.length ?? 0) > 1 || Array.isArray(input.agents) ? "the subagents" : "the subagent";
 }
@@ -195,7 +166,7 @@ export function rejectedCall(
     operation !== "retry" &&
     Predicate.isString(input.message);
   const issue = rejectedCallIssue(
-    action === "claims" ? action : operation,
+    operation,
     getTextContent(result.content),
     rejectedTarget(input, action),
   );

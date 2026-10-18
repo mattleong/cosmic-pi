@@ -31,9 +31,49 @@ export const dependencyWorkspacePath = (path: string, mayBeDirectory = false): b
 export const credentialWorkspacePath = (path: string): boolean =>
   path.split("/").some((part) => CREDENTIAL_NAME.test(part) || CREDENTIAL_EXTENSION.test(part));
 
+// Programming-language sources, which credential-shaped names such as `credentials.ts` can be.
+// Data formats such as JSON, YAML, and text are not, because credential files use them.
+const SOURCE_CODE_EXTENSION =
+  /\.(?:[cm]?[jt]sx?|py|rs|go|c|h|cc|cpp|hpp|cs|java|kt|kts|scala|swift|rb|php|ex|exs|lua|dart|sh|bash|zsh|vue|svelte)$/iu;
+
+/**
+ * An untracked private-tree file with a credential-shaped name that isn't source code, such as
+ * `.env`, `.npmrc`, a `.pem` key, an SSH key, or `credentials.json`. Captures leave it out so a
+ * worker's local secrets never reach a proposal; `src/auth/credentials.ts` stays source.
+ */
+export const credentialPrivatePath = (path: string): boolean =>
+  safeWorkspacePath(path) && credentialWorkspacePath(path) && !SOURCE_CODE_EXTENSION.test(path);
+
+/** Why captures leave an uncaptured worker file out on purpose; undefined when it blocks. */
+export const leftOutReason = (path: string): "dependency" | "credential" | undefined =>
+  dependencyWorkspacePath(path)
+    ? "dependency"
+    : credentialPrivatePath(path)
+      ? "credential"
+      : undefined;
+
+/**
+ * A worker file no capture can hold that blocks preparation and integration. Files in dependency,
+ * build, and Pi state directories and credential files are left out on purpose, so they never
+ * block.
+ */
+export const blockingUncapturedPath = (path: string): boolean => leftOutReason(path) === undefined;
+
+/** The uncaptured worker files a revision leaves out on purpose. */
+export const leftOutUncapturedPaths = (paths: ReadonlyArray<string> = []) =>
+  paths.filter((path) => !blockingUncapturedPath(path));
+
+/**
+ * Untracked files a private tree (worker, prepared, or nested source) contributes: everything a
+ * snapshot can represent outside dependency, build, and Pi state directories, except credential
+ * files.
+ */
+export const capturablePrivatePath = (path: string): boolean =>
+  safeWorkspacePath(path) && leftOutReason(path) === undefined;
+
+/** Untracked files the user's checkout contributes: source-like names that aren't credentials. */
 export const eligibleUntrackedSource = (path: string): boolean =>
-  safeWorkspacePath(path) &&
-  !dependencyWorkspacePath(path) &&
+  capturablePrivatePath(path) &&
   !credentialWorkspacePath(path) &&
   (/\.(?:[cm]?[jt]sx?|json|md|txt|ya?ml|toml|py|rs|go|c|h|cpp|hpp|java|kt|swift|rb|php|sh|bash|zsh|css|scss|html|vue|svelte|sql|graphql|proto|xml)$/iu.test(
     path,
@@ -52,14 +92,62 @@ export interface SensitiveContentMatch {
   readonly line: number;
 }
 
-/** Finds the first literal that looks like a credential, without returning the literal itself. */
-export const sensitiveWorkspaceContent = (bytes: Uint8Array): SensitiveContentMatch | undefined => {
-  const text = new TextDecoder().decode(bytes);
-  let first: { readonly index: number; readonly rule: string } | undefined;
-  for (const [pattern, rule] of SENSITIVE_CONTENT) {
-    const index = pattern.exec(text)?.index;
-    if (index !== undefined && (first === undefined || index < first.index))
-      first = { index, rule };
+/**
+ * Finds the first line that looks like it holds a credential, without returning the literal
+ * itself. With `previous` content, only lines it doesn't already hold are scanned: lines compare
+ * as a multiset, so unchanged or moved lines pass and each extra copy of a line counts as added.
+ */
+export const sensitiveWorkspaceContent = (
+  bytes: Uint8Array,
+  previous?: string,
+): SensitiveContentMatch | undefined => {
+  const held = new Map<string, number>();
+  for (const line of previous?.split("\n") ?? []) held.set(line, (held.get(line) ?? 0) + 1);
+  for (const [index, line] of new TextDecoder().decode(bytes).split("\n").entries()) {
+    const copies = held.get(line) ?? 0;
+    if (copies > 0) {
+      held.set(line, copies - 1);
+      continue;
+    }
+    const match = SENSITIVE_CONTENT.find(([pattern]) => pattern.test(line));
+    if (match) return { rule: match[1], line: index + 1 };
   }
-  return first && { rule: first.rule, line: text.slice(0, first.index).split("\n").length };
+  return undefined;
+};
+
+const EXPORT_BRANCH_PREFIX = "pi-subagent/";
+const MAX_BRANCH_SLUG_CHARS = 64;
+
+/**
+ * `pi-subagent/<slug>` from the writer's display name, falling back to the workspace ID when the
+ * name leaves nothing a branch name can hold.
+ */
+export const exportBranchName = (name: string | undefined, workspaceId: string) => {
+  const slug = (name ?? "")
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, "-")
+    .replace(/[._-]{2,}/gu, "-")
+    .slice(0, MAX_BRANCH_SLUG_CHARS)
+    .replace(/^[._-]+|[._-]+$/gu, "")
+    .replace(/\.lock$/u, "-lock");
+  return `${EXPORT_BRANCH_PREFIX}${slug || workspaceId}`;
+};
+
+/**
+ * A partial apply's selection from a revision's changed paths: the names it doesn't change, and
+ * the selected paths in revision order, undefined when the selection names every changed path.
+ */
+export const partialSelection = (
+  changedPaths: ReadonlyArray<string>,
+  paths: ReadonlyArray<string>,
+) => {
+  const selected = new Set(paths);
+  return {
+    unknown: [...selected].filter((name) => !changedPaths.includes(name)),
+    subset:
+      selected.size === changedPaths.length
+        ? undefined
+        : changedPaths.filter((name) => selected.has(name)),
+  };
 };

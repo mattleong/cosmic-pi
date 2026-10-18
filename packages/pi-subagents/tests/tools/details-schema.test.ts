@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { captureRegistrations, createToolPresentationHarness } from "pi-code-previews/testing";
+import { assert, describe, expect, it } from "vitest";
+import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { compactToolDetails } from "../../src/tools/details.ts";
-import { projectSubagentRunCard } from "../../src/tools/details-projection.ts";
 import { decodeCompactToolDetails } from "../../src/tools/details-decode.ts";
 import type { CompactSubagentToolDetails } from "../../src/tools/details-schema.ts";
 import { actionFailureDisposition, marksSubagentToolError } from "../../src/tools/outcome.ts";
@@ -25,7 +26,7 @@ const actionFailuresOf = (value: CompactSubagentToolDetails | undefined) => {
 };
 
 describe("subagent detail evidence", () => {
-  it("retains redacted cleanup evidence at every density without inferring historical cleanup", () => {
+  it("retains redacted cleanup evidence when fitted without inferring historical cleanup", () => {
     const historical = compactToolDetails({ action: "status", runs: [view()] });
     expect(decodeCompactToolDetails(historical)).toEqual(historical);
     expect(historical).not.toHaveProperty("cards.0.cleanup");
@@ -46,19 +47,33 @@ describe("subagent detail evidence", () => {
       },
       writerCleanupQuarantined: true,
     });
-    for (const density of ["full", "compact", "minimal"] as const) {
-      const card = projectSubagentRunCard(run, density);
-      expect(card).toMatchObject({
-        state: "completed",
-        cleanup: { disposition: "quarantined", recovery: "stop" },
-        writerCleanupQuarantined: true,
-      });
-      expect(card.cleanup?.diagnostic?.message.length).toBeLessThanOrEqual(1_024);
-      expect(JSON.stringify(card.cleanup)).not.toContain("cleanup-secret");
-      expect(card).not.toHaveProperty("writeViolationOffender");
-      expect(card).not.toHaveProperty("writeAdmissionPaused");
-      const details = { version: 2, action: "status", runCount: 1, cards: [card] };
+    const oversized = Array.from({ length: 12 }, (_, index) => ({
+      ...run,
+      id: `agent-${index}`,
+      progress: "p".repeat(512),
+      selection: {
+        ...run.selection,
+        skippedCandidates: Array.from({ length: 8 }, () => ({
+          candidate: { runtime: "pi" as const, model: "c".repeat(1_000), effort: "high" as const },
+          code: "unavailable",
+          reason: "r".repeat(1_000),
+        })),
+      },
+    }));
+    for (const runs of [[run], oversized]) {
+      const details = compactToolDetails({ action: "status", runs });
       expect(decodeCompactToolDetails(details)).toEqual(details);
+      expect(details.action === "models" ? 0 : details.cards.length).toBe(runs.length);
+      for (const card of details.action === "models" ? [] : details.cards) {
+        expect(card).toMatchObject({
+          state: "completed",
+          cleanup: { disposition: "quarantined", recovery: "stop" },
+          writerCleanupQuarantined: true,
+        });
+        expect(card.cleanup?.diagnostic?.message.length).toBeLessThanOrEqual(1_024);
+        expect(JSON.stringify(card.cleanup)).not.toContain("cleanup-secret");
+        expect(card).not.toHaveProperty("writeViolationOffender");
+      }
     }
     const details = compactToolDetails({ action: "status", runs: [run] });
     expect(decodeCompactToolDetails(details)).toEqual(details);
@@ -89,5 +104,65 @@ describe("subagent detail evidence", () => {
       const mixed = compactToolDetails({ action, runs: [], actionFailures: failures });
       expect(marksSubagentToolError(mixed)).toBe(true);
     }
+  });
+});
+
+const statusTool = () =>
+  captureRegistrations((pi) =>
+    registerSubagentTools(pi, {
+      environment: { cwd: "/project", projectTrusted: false },
+      run: () => Promise.reject(new Error("render-only fixture")),
+      startUiTicker: () => () => undefined,
+      toolPresentation: {
+        beginStart: () => () => undefined,
+        beginAwait: () => () => undefined,
+        isLiveHierarchyAvailable: () => false,
+      },
+    }),
+  ).tools.find((tool) => tool.name === "subagent_status")!;
+
+type RunDetails = Exclude<CompactSubagentToolDetails, { readonly action: "models" }>;
+/** Run details as session history stored them, under any action an earlier version used. */
+type PersistedDetails = Omit<RunDetails, "action"> & { readonly action: string };
+
+describe("historical version-2 cards", () => {
+  const run = view({ name: "historic-run", writeIntent: "writer" });
+  const status = compactToolDetails({ action: "status", runs: [run] });
+  assert(status.action !== "models");
+
+  /** Replays persisted details through the status renderer, expanded, as history redraws them. */
+  const replayed = (details: PersistedDetails) => {
+    const harness = createToolPresentationHarness(statusTool(), { width: 160 });
+    harness.call({ runIds: [run.id] }, { expanded: true });
+    harness.result(
+      { content: [{ type: "text", text: "raw history sentinel" }], details },
+      { expanded: true },
+    );
+    return harness.render().join("\n");
+  };
+
+  it.each(["rename", "claims"])("decodes a retired subagent_%s card as a status card", (action) => {
+    const historical = { ...status, action };
+    expect(decodeCompactToolDetails(historical)).toEqual(status);
+    expect(replayed(historical)).toContain("historic-run");
+  });
+
+  it("decodes a retired subagent_list card", () => {
+    const listed = compactToolDetails({ action: "list", runs: [run] });
+    assert(listed.action !== "models");
+    expect(decodeCompactToolDetails(listed)).toEqual(listed);
+    expect(replayed(listed)).toContain("historic-run");
+  });
+
+  it("decodes a card that waited on a retired admission pause", () => {
+    const historical = {
+      ...status,
+      cards: status.cards.map((card) => Object.assign({}, card, { writeAdmissionPaused: true })),
+    };
+    expect(decodeCompactToolDetails(historical)).toMatchObject({
+      action: "status",
+      cards: [{ id: run.id, writeAdmissionPaused: true }],
+    });
+    expect(replayed(historical)).toContain("historic-run");
   });
 });

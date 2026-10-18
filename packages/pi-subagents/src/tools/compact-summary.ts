@@ -51,15 +51,18 @@ export function createSubagentCompactSummary(toolName: string): CompactSummaryPr
   return ({ phase, args, result, context }) => {
     if (!Predicate.isObject(args)) return undefined;
     const input: SummaryArguments = args;
-    const operation = Predicate.isString(input.action) ? input.action : action;
+    // Status without run IDs lists the visible run tree.
+    const operation = Predicate.isString(input.action)
+      ? input.action
+      : action === "status" && input.runIds === undefined
+        ? "list"
+        : action;
     const lanes = argumentSummary(input, action, operation);
     if (!result) return context.isError || phase === "settled" ? undefined : lanes;
     if (action === "workspace" && !context.isError)
       return compactWorkspaceSummary(result, operation);
     const details =
-      action === "workspace"
-        ? undefined
-        : decodeSubagentOutcomeDetails(action === "claims" ? "claims" : operation, result);
+      action === "workspace" ? undefined : decodeSubagentOutcomeDetails(operation, result);
     if (!details)
       return context.isError && phase === "settled"
         ? rejectedCall(input, action, operation, lanes, result)
@@ -128,7 +131,7 @@ function awaitIssues(
       code: "descendant-context",
       message: "Descendant subagents are shown for context only",
       detail:
-        "Descendants are context only; this await summarizes requested targets. Inspect subagent_list or subagent_status for descendant state.",
+        "Descendants are context only; this await summarizes requested targets. Inspect subagent_status for descendant state.",
     });
   if (details.cancelled && details.endedByUserInput) {
     issues.push({
@@ -167,7 +170,6 @@ function awaitIssues(
     !cards.some(
       (card) =>
         card.question !== undefined ||
-        card.writeAdmissionPaused === true ||
         card.writeViolationOffender === true ||
         runCleanupAttention(card) !== undefined ||
         card.state === "paused" ||
@@ -179,7 +181,7 @@ function awaitIssues(
       code: "parent-action",
       message: "A subagent needs attention before it can continue",
       detail:
-        "Parent action required; inspect full target subagent_status for the question, pause capabilities, or claim containment before acting.",
+        "Parent action required; inspect full target subagent_status for the question, pause capabilities, or claim violation before acting.",
     });
   if (details.attentionRequired && !details.cancelled) summary.outcome = "warning";
 }
@@ -283,7 +285,6 @@ function cardOutcome(
   if (
     cards.some(
       (card) =>
-        card.writeAdmissionPaused === true ||
         card.writeViolationOffender === true ||
         runCleanupAttention(card) !== undefined ||
         card.question !== undefined ||

@@ -19,6 +19,8 @@ import {
 } from "../run/limits.ts";
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME, type SubagentToolName } from "../run/tool-policy.ts";
+import { WORKSPACE_EXPORT_FORMATS } from "../run/workspace-export.ts";
+import { MAX_WORKSPACE_FILES } from "../workspace/policy.ts";
 import { decodeArgumentsObject, replacementField, toolArgumentPreparer } from "./arguments.ts";
 
 const strictObjectOptions = { additionalProperties: false } as const;
@@ -58,7 +60,7 @@ const StartSpecFields = {
   isolation: Type.Optional(
     StringEnum(WRITER_WORKSPACE_MODES, {
       description:
-        "Where a writer works: shared-checkout edits your checkout; worktree edits a private copy you apply, or review and integrate. Omit for the session default; read-only profiles ignore it.",
+        "Where a writer works: shared-checkout edits your checkout; worktree edits a private copy whose proposal you apply. Omit for the session default; read-only profiles ignore it.",
     }),
   ),
 } as const;
@@ -99,14 +101,19 @@ const StartParameters = Type.Object(
   strictObjectOptions,
 );
 
-const ListParameters = Type.Object({}, strictObjectOptions);
-
 const StatusParameters = Type.Object(
   {
-    runIds: RunIdsParameters,
+    runIds: Type.Optional(
+      Type.Array(RunIdParameter, {
+        description: "Target run IDs. Omit to list every visible run as a tree, without reports.",
+        minItems: 1,
+        maxItems: MAX_TARGET_RUNS,
+      }),
+    ),
     includeDeliveredReports: Type.Optional(
       Type.Boolean({
-        description: "Reread the latest report you already received, without another notification.",
+        description:
+          "With runIds, reread the latest report you already received, without another notification.",
       }),
     ),
   },
@@ -165,63 +172,39 @@ const LifecycleParameters = Type.Object(
   strictObjectOptions,
 );
 
-const RenameParameters = Type.Object(
-  {
-    runId: Type.String({ ...nonblank(MAX_PROTOCOL_ID_CHARS), description: "Run ID to rename." }),
-    name: nonblankString(MAX_NAME_CHARS, "New nonblank display name."),
-  },
-  strictObjectOptions,
-);
-
-const ClaimsParameters = Type.Object(
-  {
-    action: StringEnum(["list", "grant", "revoke", "resume_admission"] as const, {
-      description:
-        "list takes runIds; grant and revoke take runId plus a non-empty paths array; resume_admission takes runId only.",
-    }),
-    runIds: Type.Optional(RunIdsParameters),
-    runId: Type.Optional(RunIdParameter),
-    paths: Type.Optional(writePaths()),
-  },
-  strictObjectOptions,
-);
-
-type ClaimsField = Exclude<keyof SubagentClaimsInput, "action">;
-const CLAIMS_ACTION_FIELDS = {
-  list: ["runIds"],
-  grant: ["runId", "paths"],
-  revoke: ["runId", "paths"],
-  resume_admission: ["runId"],
-} as const satisfies Record<SubagentClaimsInput["action"], ReadonlyArray<ClaimsField>>;
-const CLAIMS_FIELDS = ["runIds", "runId", "paths"] as const satisfies ReadonlyArray<ClaimsField>;
-
-export const claimsOperationError = (operation: SubagentClaimsInput): string | undefined => {
-  if (!Object.hasOwn(CLAIMS_ACTION_FIELDS, operation.action))
-    return "subagent_claims requires a supported action.";
-  const required: ReadonlyArray<ClaimsField> = CLAIMS_ACTION_FIELDS[operation.action];
-  const subject = `subagent_claims action="${operation.action}"`;
-  const missing = required.find((field) =>
-    field === "paths" ? !operation.paths?.length : operation[field] === undefined,
-  );
-  if (missing === "paths") return `${subject} requires a non-empty paths array.`;
-  if (missing !== undefined) return `${subject} requires ${missing}.`;
-  return CLAIMS_FIELDS.some((field) => !required.includes(field) && operation[field] !== undefined)
-    ? `${subject} takes ${required.join(" and ")} only.`
-    : undefined;
-};
-
 export const WorkspaceParameters = Type.Object(
   {
     action: StringEnum(
-      ["list", "review", "prepare", "integrate", "apply", "discard", "revise"] as const,
+      ["list", "review", "prepare", "apply", "export", "discard", "revise"] as const,
       {
         description:
-          "list needs no target. apply needs workspaceId: it freezes, prepares, runs the configured verification, and integrates in one call; revisionId optionally pins the revision. review freezes a cleaned-up workspace or pages an exact revision. prepare needs revisionId; integrate also needs preparationId. revise needs message and invalidates prior review/preparation. discard needs workspaceId only.",
+          "list needs no target. apply needs workspaceId: alone it freezes, prepares, runs the configured verification, and integrates in one call; revisionId optionally pins the revision and paths limits it to those changed files, keeping the rest as the proposal; with revisionId and preparationId it integrates exactly that reviewed and prepared pair. review freezes a cleaned-up workspace or pages an exact revision, starting with a summary. prepare needs revisionId. export writes the proposal as a patch file or branch in your repository without applying or resolving it. revise needs message and invalidates prior review/preparation; rebase first rebuilds the writer's tree from your current files. discard needs workspaceId only.",
       },
     ),
     workspaceId: Type.Optional(RunIdParameter),
     revisionId: Type.Optional(RunIdParameter),
     preparationId: Type.Optional(RunIdParameter),
+    paths: Type.Optional(
+      Type.Array(nonblankString(1_023), {
+        description:
+          "apply only: exact changed paths from the revision to integrate now; the rest stay in the workspace as its proposal. Not with preparationId.",
+        minItems: 1,
+        maxItems: MAX_WORKSPACE_FILES,
+        uniqueItems: true,
+      }),
+    ),
+    format: Type.Optional(
+      StringEnum(WORKSPACE_EXPORT_FORMATS, {
+        description:
+          "export only. patch (default) writes a git apply-able file in the repository's Git directory; branch creates pi-subagent/<name> whose commit adds the changes to HEAD.",
+      }),
+    ),
+    rebase: Type.Optional(
+      Type.Boolean({
+        description:
+          "revise only: rebuild the writer's tree from your current files and reapply its changes with a three-way merge; the writer resolves any conflicts.",
+      }),
+    ),
     offset: Type.Optional(
       Type.Integer({
         minimum: 0,
@@ -234,7 +217,7 @@ export const WorkspaceParameters = Type.Object(
         minimum: 1,
         maximum: 16_000,
         description:
-          "Maximum review characters per page; default 16000. The careful path reads every page before prepare and integrate.",
+          "Maximum review characters per page; default 16000. The careful path reads every page before prepare.",
       }),
     ),
     message: Type.Optional(MessageParameters),
@@ -249,10 +232,10 @@ const WORKSPACE_ACTION_FIELDS = {
   list: { required: [], optional: ["offset"] },
   review: { required: ["workspaceId"], optional: ["revisionId", "offset", "limit"] },
   prepare: { required: ["workspaceId", "revisionId"], optional: [] },
-  integrate: { required: ["workspaceId", "revisionId", "preparationId"], optional: [] },
-  apply: { required: ["workspaceId"], optional: ["revisionId"] },
+  apply: { required: ["workspaceId"], optional: ["revisionId", "preparationId", "paths"] },
+  export: { required: ["workspaceId"], optional: ["revisionId", "format"] },
   discard: { required: ["workspaceId"], optional: [] },
-  revise: { required: ["workspaceId", "message"], optional: [] },
+  revise: { required: ["workspaceId", "message"], optional: ["rebase"] },
 } satisfies Record<
   SubagentWorkspaceInput["action"],
   {
@@ -279,6 +262,18 @@ export const workspaceOperationError = (operation: SubagentWorkspaceInput): stri
     operation.revisionId === undefined
   )
     return "Review paging requires the exact revisionId returned by the first page.";
+  if (
+    operation.action === "apply" &&
+    operation.preparationId !== undefined &&
+    operation.revisionId === undefined
+  )
+    return "Workspace apply with preparationId requires the exact revisionId it prepared.";
+  if (
+    operation.action === "apply" &&
+    operation.preparationId !== undefined &&
+    operation.paths !== undefined
+  )
+    return "Workspace apply with preparationId integrates that whole preparation and does not accept paths.";
   return undefined;
 };
 
@@ -286,18 +281,22 @@ export type SubagentStartSpec = Static<typeof StartSpecParameters>;
 export type SubagentModelsInput = Static<typeof ModelsParameters>;
 export type SubagentStartInput = Static<typeof StartParameters>;
 export type SubagentLifecycleInput = Static<typeof LifecycleParameters>;
-export type SubagentClaimsInput = Static<typeof ClaimsParameters>;
+export type SubagentStatusInput = Static<typeof StatusParameters>;
 
 export const lifecycleMessageError = (input: SubagentLifecycleInput): string | undefined =>
   input.action !== "resume" && input.message !== undefined
     ? 'subagent_lifecycle message is valid only when action="resume".'
     : undefined;
 
+export const statusOperationError = (input: SubagentStatusInput): string | undefined =>
+  input.runIds === undefined && input.includeDeliveredReports !== undefined
+    ? "subagent_status includeDeliveredReports requires runIds."
+    : undefined;
+
 export const SUBAGENT_TOOL_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.models]: { parameters: ModelsParameters },
   [SUBAGENT_TOOL_NAME.start]: { parameters: StartParameters },
-  [SUBAGENT_TOOL_NAME.list]: { parameters: ListParameters },
-  [SUBAGENT_TOOL_NAME.status]: { parameters: StatusParameters },
+  [SUBAGENT_TOOL_NAME.status]: { parameters: StatusParameters, validate: statusOperationError },
   [SUBAGENT_TOOL_NAME.await]: { parameters: AwaitParameters },
   [SUBAGENT_TOOL_NAME.send]: { parameters: SendParameters },
   [SUBAGENT_TOOL_NAME.reply]: { parameters: ReplyParameters },
@@ -305,8 +304,6 @@ export const SUBAGENT_TOOL_SCHEMAS = {
     parameters: LifecycleParameters,
     validate: lifecycleMessageError,
   },
-  [SUBAGENT_TOOL_NAME.rename]: { parameters: RenameParameters },
-  [SUBAGENT_TOOL_NAME.claims]: { parameters: ClaimsParameters, validate: claimsOperationError },
   [SUBAGENT_TOOL_NAME.workspace]: {
     parameters: WorkspaceParameters,
     validate: workspaceOperationError,
@@ -325,9 +322,11 @@ type ToolNameAction = keyof typeof SUBAGENT_TOOL_NAME;
 type ToolActions = {
   readonly [N in SubagentToolName]: N extends typeof SUBAGENT_TOOL_NAME.lifecycle
     ? SubagentToolArgs<N>["action"]
-    : {
-        readonly [A in ToolNameAction]: (typeof SUBAGENT_TOOL_NAME)[A] extends N ? A : never;
-      }[ToolNameAction];
+    : N extends typeof SUBAGENT_TOOL_NAME.status
+      ? "status" | "list"
+      : {
+          readonly [A in ToolNameAction]: (typeof SUBAGENT_TOOL_NAME)[A] extends N ? A : never;
+        }[ToolNameAction];
 };
 export type SubagentToolAction = ToolActions[SubagentToolName];
 
@@ -338,14 +337,12 @@ type ToolActionResolvers = {
 const TOOL_ACTIONS: ToolActionResolvers = {
   [SUBAGENT_TOOL_NAME.models]: () => "models",
   [SUBAGENT_TOOL_NAME.start]: () => "start",
-  [SUBAGENT_TOOL_NAME.list]: () => "list",
-  [SUBAGENT_TOOL_NAME.status]: () => "status",
+  // Status without run IDs lists the visible run tree.
+  [SUBAGENT_TOOL_NAME.status]: (args) => (args.runIds === undefined ? "list" : "status"),
   [SUBAGENT_TOOL_NAME.await]: () => "await",
   [SUBAGENT_TOOL_NAME.send]: () => "send",
   [SUBAGENT_TOOL_NAME.reply]: () => "reply",
   [SUBAGENT_TOOL_NAME.lifecycle]: (args) => args.action,
-  [SUBAGENT_TOOL_NAME.rename]: () => "rename",
-  [SUBAGENT_TOOL_NAME.claims]: () => "claims",
   [SUBAGENT_TOOL_NAME.workspace]: () => "workspace",
 };
 

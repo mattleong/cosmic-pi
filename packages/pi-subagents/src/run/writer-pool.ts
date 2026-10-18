@@ -4,35 +4,22 @@ import * as Scope from "effect/Scope";
 import type { CanonicalWriterCwd, WriterLease } from "../boundary/writer-lease.ts";
 import type { SubagentError } from "./errors.ts";
 
-type WriterPoolState =
-  | "pending"
-  | "preparing"
-  | "held"
-  | "failed"
-  | "releasing"
-  | "paused"
-  | "quarantined";
+type WriterPoolState = "pending" | "preparing" | "held" | "failed" | "releasing" | "quarantined";
 
 export interface WriterPoolView {
   readonly cwd: CanonicalWriterCwd;
   readonly state: WriterPoolState;
   readonly members: ReadonlySet<string>;
-  readonly violationRunIds: ReadonlySet<string>;
-  readonly admissionPaused: boolean;
-  readonly pauseReason: string | undefined;
 }
 
 export class WriterPoolEntry implements WriterPoolView {
   readonly #members = new Set<string>();
-  readonly #violationRunIds = new Set<string>();
   readonly #cleanupQuarantinedRunIds = new Set<string>();
   #leaseCleanupUncertain = false;
   #state: WriterPoolState = "pending";
   #lease: WriterLease | undefined;
   #preparationError: SubagentError | undefined;
   #releaseAuthorized = false;
-  #admissionPaused = false;
-  #pauseReason: string | undefined;
 
   readonly cwd: CanonicalWriterCwd;
   readonly leaseScope: Scope.Closeable;
@@ -50,10 +37,6 @@ export class WriterPoolEntry implements WriterPoolView {
 
   get members(): ReadonlySet<string> {
     return this.#members;
-  }
-
-  get violationRunIds(): ReadonlySet<string> {
-    return this.#violationRunIds;
   }
 
   get state(): WriterPoolState {
@@ -78,14 +61,6 @@ export class WriterPoolEntry implements WriterPoolView {
 
   get releaseAuthorized(): boolean {
     return this.#releaseAuthorized;
-  }
-
-  get admissionPaused(): boolean {
-    return this.#admissionPaused;
-  }
-
-  get pauseReason(): string | undefined {
-    return this.#pauseReason;
   }
 
   joinLocked(runId: string): void {
@@ -134,20 +109,7 @@ export class WriterPoolEntry implements WriterPoolView {
     if (this.#state !== "releasing") return false;
     this.#members.delete(runId);
     this.#lease = undefined;
-    if (this.#admissionPaused) this.#state = "paused";
     return true;
-  }
-
-  pauseAdmissionLocked(offenderRunIds: Iterable<string>, message: string): void {
-    this.#admissionPaused = true;
-    for (const runId of offenderRunIds) this.#violationRunIds.add(runId);
-    this.#pauseReason = message;
-  }
-
-  resumeAdmissionLocked(): void {
-    this.#admissionPaused = false;
-    this.#violationRunIds.clear();
-    this.#pauseReason = undefined;
   }
 
   quarantineLocked(runId: string, leaseCleanupUncertain = false): void {
@@ -195,23 +157,11 @@ export class WriterPools implements WriterPoolLookup {
 
   completeReleaseLocked(pool: WriterPoolEntry, runId: string): boolean {
     if (!pool.completeReleaseLocked(runId)) return false;
-    if (!pool.admissionPaused) this.removeLocked(pool);
+    this.removeLocked(pool);
     return true;
-  }
-
-  resumeAdmissionLocked(pool: WriterPoolEntry): void {
-    pool.resumeAdmissionLocked();
-    if (pool.state === "paused" && pool.members.size === 0) this.removeLocked(pool);
   }
 
   private removeLocked(pool: WriterPoolEntry): void {
     if (this.#pools.get(pool.cwd.digest) === pool) this.#pools.delete(pool.cwd.digest);
   }
 }
-
-export const writerPoolUnavailable = (pool: WriterPoolView | undefined): boolean =>
-  pool?.state === "failed" ||
-  pool?.state === "quarantined" ||
-  pool?.state === "releasing" ||
-  pool?.state === "paused" ||
-  pool?.admissionPaused === true;

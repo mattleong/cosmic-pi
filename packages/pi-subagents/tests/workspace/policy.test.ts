@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  blockingUncapturedPath,
+  capturablePrivatePath,
   credentialWorkspacePath,
   dependencyWorkspacePath,
   eligibleUntrackedSource,
@@ -32,5 +34,15 @@ describe("workspace snapshot policy", () => {
     }
     expect(eligibleUntrackedSource("src/new.ts")).toBe(true);
     expect(eligibleUntrackedSource("arbitrary.dat")).toBe(false);
+  });
+  it("leaves credential files out of private trees without blocking, but not credential-named source", () => {
+    for (const value of [".env.local", ".npmrc", "keys/deploy.key", "id_ed25519", "secrets.yaml"]) {
+      expect(capturablePrivatePath(value)).toBe(false);
+      expect(blockingUncapturedPath(value)).toBe(false);
+    }
+    for (const value of ["src/auth/credentials.ts", "lib/secrets.py", "src/secrets/store.go"])
+      expect(capturablePrivatePath(value)).toBe(true);
+    // An unsafe name still blocks, whatever it looks like.
+    expect(blockingUncapturedPath("-id_rsa")).toBe(true);
   });
 });

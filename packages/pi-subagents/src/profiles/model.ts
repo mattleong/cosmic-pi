@@ -5,7 +5,6 @@ import {
   subagentRuntimeSupportsEffort,
   type SubagentContextMode,
   type SubagentEffort,
-  type SubagentHost,
   type SubagentRuntime,
   type SubagentWriteIntent,
 } from "../domain/routing.ts";
@@ -31,21 +30,6 @@ export const mapProfileIds = <A>(f: (id: ProfileId) => A) => ({
   oracle: f("oracle"),
   generalist: f("generalist"),
 });
-
-export const completeProfileRecord = <A>(
-  partial: Partial<Readonly<Record<ProfileId, A>>>,
-): Record<ProfileId, A> | undefined => {
-  const { scout, researcher, planner, worker, reviewer, oracle, generalist } = partial;
-  return scout !== undefined &&
-    researcher !== undefined &&
-    planner !== undefined &&
-    worker !== undefined &&
-    reviewer !== undefined &&
-    oracle !== undefined &&
-    generalist !== undefined
-    ? { scout, researcher, planner, worker, reviewer, oracle, generalist }
-    : undefined;
-};
 
 export const isProfileId = (value: string): value is ProfileId =>
   PROFILE_IDS.some((profileId) => profileId === value);
@@ -88,51 +72,75 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
 };
 
 export interface ProfileCandidate {
-  readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effort: ProfileCandidateEffort;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
   readonly openaiFastMode?: boolean | undefined;
-  readonly closeOnReport: boolean;
 }
 
 export interface ProfileRoute {
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
 
-export type DeclaredProfileCandidate = Omit<ProfileCandidate, "closeOnReport"> & {
-  readonly closeOnReport?: boolean | undefined;
-};
+/**
+ * A saved version-6 candidate. The document contract still requires the retired `host: "local"`
+ * and accepts `closeOnReport: true`; neither reaches the routing model.
+ */
+export interface DeclaredProfileCandidate extends ProfileCandidate {
+  readonly host: (typeof PROFILE_CANDIDATE_HOSTS)[number];
+  readonly closeOnReport?: true | undefined;
+}
 export type DeclaredProfileRoute =
   | DeclaredProfileCandidate
   | ReadonlyArray<DeclaredProfileCandidate>
   | "disabled";
 
-export const normalizeProfileCandidate = (
-  candidate: DeclaredProfileCandidate,
-): ProfileCandidate => ({
-  ...candidate,
-  closeOnReport: candidate.closeOnReport ?? true,
+export const normalizeProfileCandidate = ({
+  runtime,
+  model,
+  effort,
+  context,
+  writeIntent,
+  openaiFastMode,
+}: ProfileCandidate): ProfileCandidate => ({
+  runtime,
+  model,
+  effort,
+  context,
+  writeIntent,
+  ...(openaiFastMode !== undefined && { openaiFastMode }),
+});
+
+/** The declaration settings writes for a candidate, spelled out as version-6 documents always were. */
+export const declaredProfileCandidate = (
+  candidate: ProfileCandidate,
+): DeclaredProfileCandidate => ({
+  host: "local",
+  ...normalizeProfileCandidate(candidate),
+  closeOnReport: true,
 });
 
 export const cloneProfileCandidates = (
-  candidates: ReadonlyArray<DeclaredProfileCandidate>,
+  candidates: ReadonlyArray<ProfileCandidate>,
 ): ReadonlyArray<ProfileCandidate> => candidates.map(normalizeProfileCandidate);
 
 export const cloneProfileRoute = (route: ProfileRoute): ProfileRoute => ({
   candidates: cloneProfileCandidates(route.candidates),
 });
 
+export const isDeclaredCandidateList = (
+  route: Exclude<DeclaredProfileRoute, "disabled">,
+): route is ReadonlyArray<DeclaredProfileCandidate> => Array.isArray(route);
+
 export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): ProfileRoute => {
   if (route === "disabled") return { candidates: [] };
-  return { candidates: cloneProfileCandidates("host" in route ? [route] : route) };
+  return { candidates: cloneProfileCandidates(isDeclaredCandidateList(route) ? route : [route]) };
 };
 
-export const isLocalPiProfileCandidate = (
-  candidate: Pick<ProfileCandidate, "host" | "runtime">,
-): boolean => candidate.host === "local" && candidate.runtime === "pi";
+export const isLocalPiProfileCandidate = (candidate: Pick<ProfileCandidate, "runtime">): boolean =>
+  candidate.runtime === "pi";
 
 export const supportsSubagentFastMode = (runtime: SubagentRuntime, model: string): boolean => {
   if (runtime === "codex") return isNativeProfileModelSelector("codex", model);
@@ -146,7 +154,6 @@ export const PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES = [
   "model_selector_invalid",
   "parent_requires_local_pi",
   "fork_requires_local_pi",
-  "close_after_report_required",
   "fast_mode_unsupported",
   "effort_unsupported",
 ] as const;
@@ -166,7 +173,6 @@ export const profileCandidateValidationIssues = (
     issues.push({ code: "parent_requires_local_pi" });
   if (candidate.context === "fork" && !isLocalPiProfileCandidate(candidate))
     issues.push({ code: "fork_requires_local_pi" });
-  if (!candidate.closeOnReport) issues.push({ code: "close_after_report_required" });
   if (
     candidate.openaiFastMode === true &&
     !supportsSubagentFastMode(candidate.runtime, candidate.model)
@@ -181,21 +187,13 @@ export const profileCandidateValidationIssues = (
 };
 
 export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
-  `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:openaiFastMode=${candidate.openaiFastMode ?? false}:closeOnReport=${candidate.closeOnReport}`;
+  `${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:openaiFastMode=${candidate.openaiFastMode ?? false}`;
 
-export const PROFILE_CANDIDATE_BASE_KEYS = [
-  "host",
-  "runtime",
-  "model",
-  "effort",
-  "context",
-  "writeIntent",
-  "closeOnReport",
-] as const;
+const PROFILE_CANDIDATE_KEYS = ["runtime", "model", "effort", "context", "writeIntent"] as const;
 
 export const sameProfileCandidate = Equivalence.make<ProfileCandidate>(
   (left, right) =>
-    PROFILE_CANDIDATE_BASE_KEYS.every((key) => left[key] === right[key]) &&
+    PROFILE_CANDIDATE_KEYS.every((key) => left[key] === right[key]) &&
     (left.openaiFastMode ?? false) === (right.openaiFastMode ?? false),
 );
 export const sameProfileRoute = Equivalence.mapInput(
@@ -221,9 +219,21 @@ export interface ProfileDefinition {
   readonly defaultEffort?: SubagentEffort | undefined;
 }
 
+/** The route fields that identify a skipped candidate; effort may already be resolved. */
+export type SkippedCandidateRoute = Pick<ProfileCandidate, "runtime" | "model" | "effort">;
+
+export const skippedCandidateRoute = ({
+  runtime,
+  model,
+  effort,
+}: SkippedCandidateRoute): SkippedCandidateRoute => ({ runtime, model, effort });
+
+export const skippedCandidateLabel = ({ runtime, model, effort }: SkippedCandidateRoute): string =>
+  `local/${runtime} · ${model}:${effort}`;
+
 export interface SkippedProfileCandidate {
   readonly candidateIndex?: number | undefined;
-  readonly candidate: string;
+  readonly candidate: SkippedCandidateRoute;
   readonly code: string;
   readonly reason: string;
 }

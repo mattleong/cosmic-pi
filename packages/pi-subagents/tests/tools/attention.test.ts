@@ -6,16 +6,7 @@ const question = { requestId: "q", message: "May I edit db/0007.sql?" };
 
 it("resolves one attention state per run by precedence", () => {
   for (const [run, kind] of [
-    [containedWriter({ state: "paused" }), "containment"],
-    [
-      view({
-        writeIntent: "writer",
-        writeClaims: ["a"],
-        writeAdmissionPaused: true,
-        state: "paused",
-      }),
-      "admission-paused",
-    ],
+    [containedWriter({ state: "stopped" }), "containment"],
     [view({ state: "paused" }), "paused"],
     [view({ state: "waiting_for_parent", question }), "question"],
     [view({ state: "waiting_for_parent" }), "question-unavailable"],

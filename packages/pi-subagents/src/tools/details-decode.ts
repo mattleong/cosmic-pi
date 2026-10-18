@@ -8,12 +8,12 @@ import { MAX_PROFILE_CANDIDATES, PROFILE_IDS } from "../profiles/model.ts";
 import { MAX_START_BATCH, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { MAX_WRITE_CLAIMS } from "../domain/write-claims.ts";
 import { MAX_OBSERVED_WRITE_PATHS, MAX_WRITE_CLAIM_VIOLATIONS } from "../run/claims-observation.ts";
-import { PI_SUBAGENT_CAPABILITIES } from "../run/model.ts";
 import {
   CompactSubagentToolDetailsSchema,
   DETAILS_PARSE_OPTIONS,
+  HISTORICAL_RUN_DETAILS_ACTIONS,
+  MAX_CARD_CAPABILITIES,
   MAX_CARD_SKIPS,
-  RUN_DETAILS_ACTIONS,
   RunActionDetailsSchema,
   SubagentAwaitDetailsSchema,
   SubagentModelsDetailsSchema,
@@ -30,7 +30,7 @@ const AWAIT_KEYS = new Set(Object.keys(SubagentAwaitDetailsSchema.fields));
 const MODELS_KEYS = new Set(Object.keys(SubagentModelsDetailsSchema.fields));
 const RUN_ACTION_KEYS = new Set(Object.keys(RunActionDetailsSchema.fields));
 const KNOWN_ROOT_KEYS = new Set([...START_KEYS, ...AWAIT_KEYS, ...MODELS_KEYS, ...RUN_ACTION_KEYS]);
-const RUN_ACTION_SET: ReadonlySet<string> = new Set(RUN_DETAILS_ACTIONS);
+const RUN_ACTION_SET: ReadonlySet<string> = new Set(HISTORICAL_RUN_DETAILS_ACTIONS);
 
 const DetailsFieldsSchema = Schema.Record(Schema.String, Schema.Unknown);
 type DetailsFields = typeof DetailsFieldsSchema.Type;
@@ -64,7 +64,7 @@ const preflightArray = (
 
 const preflightCard: FieldsVisitor = (card) => {
   if (!card) return true;
-  if (!preflightArray(card, "capabilities", PI_SUBAGENT_CAPABILITIES.length)) return false;
+  if (!preflightArray(card, "capabilities", MAX_CARD_CAPABILITIES)) return false;
   if (!preflightArray(card, "writeClaims", MAX_WRITE_CLAIMS)) return false;
   if (Object.hasOwn(card, "writeAudit")) {
     const audit = card.writeAudit;
@@ -191,7 +191,7 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
   return true;
 };
 
-// An offender without an admission pause is offender-only containment.
+// Only writers can break their write claims.
 const validRunCardRelationships = (card: SubagentRunCard): boolean =>
   card.writeViolationOffender !== true || card.writeIntent === "writer";
 

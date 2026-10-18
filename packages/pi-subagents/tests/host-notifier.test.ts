@@ -83,6 +83,32 @@ describe("subagent host notifier", () => {
     expect(sendMessage).toHaveBeenCalledTimes(3);
   });
 
+  it("lists a proposal's line totals and bounded per-file counts", () => {
+    const { notify, content } = notifier();
+    notify({
+      type: "completed",
+      runs: [
+        completion("agent-1", "writer", {
+          workspaceOutcome: {
+            status: "proposal",
+            changedFileCount: 3,
+            diffStat: {
+              addedLines: 12,
+              deletedLines: 4,
+              files: [
+                { path: "src/session.ts", addedLines: 10, deletedLines: 4 },
+                { path: "assets/logo.png", addedLines: 0, deletedLines: 0, binary: true },
+              ],
+            },
+          },
+        }),
+      ],
+    });
+    const text = content();
+    for (const evidence of ["+12", "-4", "src/session.ts", "assets/logo.png"])
+      expect(text).toContain(evidence);
+  });
+
   it("tells the parent how a worktree writer's workspace ended, even when the report is clipped", () => {
     const { notify, content } = notifier();
     const proposal = { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 } as const;

@@ -367,12 +367,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
         }),
     );
 
-  const renameLocked = (record: RunRecord, name: string) => {
-    record.launch = { ...record.launch, name };
-    record.view = { ...record.view, name };
-    return publish.pipe(Effect.as(snapshotView(record.view)));
-  };
-
+  // Renaming is root-owned and changes only the display name; the child session never sees it.
   const rename = (
     id: string,
     rawName: string,
@@ -381,39 +376,16 @@ export function controlOperations(dependencies: RunControlDependencies) {
     Effect.gen(function* () {
       const name = sanitizeName(rawName);
       if (!name) return yield* invalidRequest("name_required", "Subagent name is required.");
-      const selected = yield* withLock(
+      const view = yield* withLock(
         Effect.gen(function* () {
           const record = yield* requireRecord(id);
           yield* requireControlExpectation(record, expected);
-          yield* requireCapability(record, "rename-display");
-          if (record.view.state === "stopping")
-            return yield* invalidRequest(
-              "rename_state_invalid",
-              `Subagent ${id} cannot be renamed while stopping.`,
-            );
-          return record.view.state === "running" ||
-            record.view.state === "waiting_for_parent" ||
-            record.view.state === "paused"
-            ? { record }
-            : { record, localView: yield* renameLocked(record, name) };
+          record.launch = { ...record.launch, name };
+          record.view = { ...record.view, name };
+          yield* publish;
+          return snapshotView(record.view);
         }),
       );
-      if (!selected.localView) yield* processControls.renameDisplay(selected.record, name);
-      const view =
-        selected.localView ??
-        (yield* withLock(
-          Effect.gen(function* () {
-            if (
-              selected.record.view.state === "stopping" ||
-              isTerminalRunState(selected.record.view.state)
-            )
-              return yield* invalidRequest(
-                "rename_outcome_uncertain",
-                `Subagent ${id} stopped before rename completed.`,
-              );
-            return yield* renameLocked(selected.record, name);
-          }),
-        ));
       yield* sendPeerNotices(id);
       return view;
     });

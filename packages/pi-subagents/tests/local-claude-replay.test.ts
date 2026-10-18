@@ -963,7 +963,7 @@ describe("local Claude task-notification replays", () => {
         yield* harness.backgroundTasks(1);
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         yield* harness.taskCompleted;
-        expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
+        // Both notification frames are activity; the second coalesces into the pending first.
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         yield* harness.assignmentResult();
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
@@ -981,7 +981,7 @@ describe("local Claude task-notification replays", () => {
         yield* harness.backgroundTasks(1);
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         yield* harness.taskCompleted;
-        expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
+        // Both notification frames are activity; the second coalesces into the pending first.
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         yield* harness.activity;
         expect(yield* take(backend)).toMatchObject({ type: "tool_started" });

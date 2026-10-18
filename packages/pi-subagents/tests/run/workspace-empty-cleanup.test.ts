@@ -22,7 +22,7 @@ import {
 
 type Fixture = ReturnType<typeof workspaceFixture>;
 
-const unchanged = { changedPaths: [], uncapturedPaths: [] };
+const unchanged = { changedPaths: [], uncapturedPaths: [], diffStat: [] };
 
 const completedWriter = (service: SubagentServiceContract, f: Fixture) =>
   Effect.gen(function* () {
@@ -74,7 +74,9 @@ describe("empty worktree proposal cleanup", () => {
           code: "workspace_finished",
         });
         expect(
-          yield* service.workspaceIntegrate(id, "revision-1", "prepared-1").pipe(Effect.flip),
+          yield* service
+            .workspaceApply(id, { revisionId: "revision-1", preparationId: "prepared-1" })
+            .pipe(Effect.flip),
         ).toMatchObject({ code: "workspace_finished" });
         const resumed = yield* service.resume(writer.id).pipe(Effect.flip);
         expect(resumed).toMatchObject({ code: "workspace_finished" });
@@ -84,14 +86,35 @@ describe("empty worktree proposal cleanup", () => {
     },
   );
 
-  it.effect("keeps a changed proposal and records its file counts until a resume", () => {
+  it.effect("keeps a changed proposal and records its bounded diffstat until a resume", () => {
     const f = workspaceFixture();
-    f.hooks.workerChanges = { changedPaths: ["a.ts", "b.ts"], uncapturedPaths: [] };
+    const changedPaths = Array.from({ length: 25 }, (_, index) => `src/file-${index}.ts`);
+    f.hooks.workerChanges = {
+      changedPaths,
+      uncapturedPaths: [],
+      diffStat: changedPaths.map((path, index) => ({
+        path,
+        change: "modified" as const,
+        binary: index === 0,
+        addedLines: index === 0 ? 0 : 2,
+        deletedLines: index === 0 ? 0 : 1,
+      })),
+    };
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);
-      expect(yield* settledOutcome(service, writer.id)).toEqual({
+      const outcome = yield* settledOutcome(service, writer.id);
+      expect(outcome).toMatchObject({
         status: "proposal",
-        changedFileCount: 2,
+        changedFileCount: 25,
+        diffStat: { addedLines: 48, deletedLines: 24 },
+      });
+      const files = outcome.status === "proposal" ? (outcome.diffStat?.files ?? []) : [];
+      expect(files).toHaveLength(20);
+      expect(files[0]).toEqual({
+        path: "src/file-0.ts",
+        addedLines: 0,
+        deletedLines: 0,
+        binary: true,
       });
       expect(f.entries.get(writer.workspaceId!)?.status).toBe("active");
       yield* service.resume(writer.id, "Also cover the edge case.");
@@ -105,7 +128,7 @@ describe("empty worktree proposal cleanup", () => {
 
   it.effect("keeps a writer whose only changes the proposal cannot capture", () => {
     const f = workspaceFixture();
-    f.hooks.workerChanges = { changedPaths: [], uncapturedPaths: [".env"] };
+    f.hooks.workerChanges = { changedPaths: [], uncapturedPaths: [".env"], diffStat: [] };
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);
       expect(yield* settledOutcome(service, writer.id)).toEqual({
@@ -117,32 +140,35 @@ describe("empty worktree proposal cleanup", () => {
     });
   });
 
-  it.effect("never probes failed or stopped writers, so a failed one still forks on retry", () => {
-    const f = workspaceFixture();
-    f.hooks.workerChanges = unchanged;
-    const counter = countInspections(f);
-    return withService(f.layer, function* (service) {
-      const failed = yield* service.start(
-        repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
-      );
-      const control = f.children.controls.at(-1)!;
-      control.exit(1);
-      yield* yieldUntil(() => control.released() === 1);
-      const stopped = yield* stoppedWriter(service);
-      yield* settleTurns;
-      expect(counter.inspected).toBe(0);
-      expect(yield* outcomeOf(service, failed.id)).toBeUndefined();
-      expect(yield* outcomeOf(service, stopped.id)).toBeUndefined();
-      expect(f.statuses()).toEqual(["active", "active"]);
-      const claim = yield* service.claimRetryContinuation(failed.id);
-      const retried = yield* service.startRetrySessionOwned({
-        ...repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(1) }),
-        supersedes: { runId: failed.id, claimToken: claim.claimToken },
+  it.effect(
+    "never probes failed or stopped writers, and a retry keeps the failed one's workspace",
+    () => {
+      const f = workspaceFixture();
+      f.hooks.workerChanges = unchanged;
+      const counter = countInspections(f);
+      return withService(f.layer, function* (service) {
+        const failed = yield* service.start(
+          repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
+        );
+        const control = f.children.controls.at(-1)!;
+        control.exit(1);
+        yield* yieldUntil(() => control.released() === 1);
+        const stopped = yield* stoppedWriter(service);
+        yield* settleTurns;
+        expect(counter.inspected).toBe(0);
+        expect(yield* outcomeOf(service, failed.id)).toBeUndefined();
+        expect(yield* outcomeOf(service, stopped.id)).toBeUndefined();
+        expect(f.statuses()).toEqual(["active", "active"]);
+        const claim = yield* service.claimRetryContinuation(failed.id);
+        const retried = yield* service.startRetrySessionOwned({
+          ...repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(1) }),
+          supersedes: { runId: failed.id, claimToken: claim.claimToken },
+        });
+        expect(retried.workspaceId).not.toBe(failed.workspaceId);
+        expect(f.entries.size).toBe(3);
       });
-      expect(retried.workspaceId).not.toBe(failed.workspaceId);
-      expect(f.entries.size).toBe(3);
-    });
-  });
+    },
+  );
 
   it.effect("keeps an unchanged workspace a read-only descendant still uses", () => {
     const f = workspaceFixture();

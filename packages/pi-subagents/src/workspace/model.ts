@@ -1,8 +1,20 @@
 import * as Schema from "effect/Schema";
+import type { WorkspaceDiffStatFile } from "./diffstat.ts";
+
+/** Failures a caller can act on specifically; others surface as a generic workspace failure. */
+export const WORKSPACE_ERROR_CODES = [
+  "workspace_conflict",
+  "workspace_uncaptured_files",
+  "workspace_parent_changed",
+  "workspace_rollback_refused",
+  "workspace_branch_exists",
+  "workspace_rebase_refused",
+] as const;
 
 export class WorkspaceError extends Schema.TaggedError<WorkspaceError>()("WorkspaceError", {
   operation: Schema.String,
   message: Schema.String,
+  code: Schema.optional(Schema.Literals(WORKSPACE_ERROR_CODES)),
   /** The path, rule, and remedy behind a refusal, shown beneath the message. */
   detail: Schema.optional(Schema.String),
   cleanupUnconfirmed: Schema.optional(Schema.Boolean),
@@ -33,17 +45,27 @@ export type WorkspaceHandle = typeof WorkspaceHandleSchema.Type;
 /** The real checkout a workspace ultimately comes from, through any chain of nested sources. */
 export const workspaceCheckoutRoot = (handle: WorkspaceHandle) =>
   handle.checkoutRoot ?? handle.sourceRoot;
-export const WorkspaceRevisionSchema = Schema.Struct({
+/** A frozen revision as its record keeps it; the patch is stored in a file beside the record. */
+export const WorkspaceRevisionMetadataSchema = Schema.Struct({
   revisionId: Schema.String,
-  diff: Schema.String,
   changedPaths: Schema.Array(Schema.String),
+  /**
+   * Worker files the revision can't carry. Files in dependency, build, or Pi state directories
+   * are left out on purpose; any other, such as an unsafe name, refuses preparation and integration.
+   */
+  uncapturedPaths: Schema.optional(Schema.Array(Schema.String)),
 });
-export type WorkspaceRevision = typeof WorkspaceRevisionSchema.Type;
+export type WorkspaceRevisionMetadata = typeof WorkspaceRevisionMetadataSchema.Type;
+export interface WorkspaceRevision extends WorkspaceRevisionMetadata {
+  readonly diff: string;
+}
 export const WorkspacePreparationSchema = Schema.Struct({
   preparationId: Schema.String,
   revisionId: Schema.String,
   cwd: Schema.String,
   leaseDirectories: Schema.Array(Schema.String),
+  /** A partial preparation's subset of the revision's changed paths; absent for all of them. */
+  paths: Schema.optional(Schema.Array(Schema.String)),
 });
 export type WorkspacePreparation = typeof WorkspacePreparationSchema.Type;
 const WorkspaceJournalFileSchema = Schema.Struct({
@@ -51,6 +73,8 @@ const WorkspaceJournalFileSchema = Schema.Struct({
   mode: Schema.String,
   permissions: Schema.Finite,
 });
+// Decoding ignores fields that records saved by earlier versions may still carry, such as a fork's
+// `predecessorWorkspaceId` or an inline revision `diff`.
 export const WorkspaceRecordSchema = Schema.Struct({
   version: Schema.Literal(1),
   handle: WorkspaceHandleSchema,
@@ -64,13 +88,12 @@ export const WorkspaceRecordSchema = Schema.Struct({
     "discarded",
   ]),
   baseline: Schema.String,
-  predecessorWorkspaceId: Schema.optional(Schema.String),
   /** Names the lease the creating session holds while it runs; a free lease proves it ended. */
   ownerLease: Schema.optional(Schema.String),
   /** Setup may still own processes in this tree. Cleared only after confirmed cleanup. */
   setupCleanupPending: Schema.optional(Schema.String),
   excludedPaths: Schema.optional(Schema.Array(Schema.String)),
-  revision: Schema.optional(WorkspaceRevisionSchema),
+  revision: Schema.optional(WorkspaceRevisionMetadataSchema),
   preparation: Schema.optional(WorkspacePreparationSchema),
   preparedTree: Schema.optional(Schema.String),
   parentTree: Schema.optional(Schema.String),
@@ -87,9 +110,13 @@ export const WorkspaceRecordSchema = Schema.Struct({
       }),
     ),
   ),
-  publishedCount: Schema.optional(Schema.Finite),
+  /** Missing ancestor directories publication creates, shallowest first. */
   plannedDirectories: Schema.optional(Schema.Array(Schema.String)),
-  createdDirectoryCount: Schema.optional(Schema.Finite),
+  /**
+   * The worker tree a rebase rebuilt, which differs from the baseline by the reapplied changes;
+   * setup run in it may change nothing else. Freeze and revise drop it.
+   */
+  rebasedTree: Schema.optional(Schema.String),
 });
 export type WorkspaceRecord = typeof WorkspaceRecordSchema.Type;
 
@@ -120,14 +147,6 @@ export interface WorkspaceTreeCommand {
   readonly command: ReadonlyArray<string>;
   readonly timeoutSeconds?: number | undefined;
 }
-export interface WorkspaceQuarantineObserver {
-  /**
-   * Called once the call leaves no durable setup-cleanup marker: it was refused before marking
-   * the tree, or the command's processes were confirmed stopped and the marker cleared, including
-   * after interruption. Never called while the artifact stays quarantined.
-   */
-  readonly onQuarantineCleared?: (() => void) | undefined;
-}
 export interface WorkspaceVerification {
   /** The last lines of the command's output, stdout followed by stderr. */
   readonly outputTail: string;
@@ -135,8 +154,10 @@ export interface WorkspaceVerification {
 export interface WorkspaceWorkerChanges {
   /** Captured paths whose content differs from the baseline. */
   readonly changedPaths: ReadonlyArray<string>;
-  /** Writer-created files no capture can hold, such as `.env` or vendored code; gitignored files don't count. */
+  /** Writer-created files no capture can hold, such as vendored or built code; gitignored files don't count. */
   readonly uncapturedPaths: ReadonlyArray<string>;
+  /** Git's line counts for each changed path. */
+  readonly diffStat: ReadonlyArray<WorkspaceDiffStatFile>;
 }
 export interface WorkspaceOrphanTarget {
   readonly workspaceId: string;
@@ -147,6 +168,50 @@ export interface WorkspaceSettledTarget extends WorkspaceTarget {
 export interface WorkspaceRevisionTarget extends WorkspaceTarget {
   readonly revisionId: string;
 }
+export interface WorkspacePreparationTarget extends WorkspaceRevisionTarget {
+  /** A strict, nonempty subset of the revision's changed paths to prepare alone. */
+  readonly paths?: ReadonlyArray<string> | undefined;
+}
+/** A patch file in the source checkout's Git directory, or a branch in its repository. */
+export type WorkspaceExportRequest =
+  | { readonly format: "patch" }
+  | { readonly format: "branch"; readonly branch: string };
+export interface WorkspaceExportTarget extends WorkspaceRevisionTarget {
+  readonly export: WorkspaceExportRequest;
+}
+export interface WorkspaceOrphanExportTarget extends WorkspaceOrphanTarget {
+  /** Must match the record's frozen revision; omit to export an unfrozen worker tree. */
+  readonly revisionId?: string | undefined;
+  readonly export: WorkspaceExportRequest;
+}
+interface WorkspaceExportCommon {
+  readonly revisionId: string;
+  readonly changedPaths: ReadonlyArray<string>;
+  /** Worker files absent from the export, as a revision lists them. */
+  readonly uncapturedPaths: ReadonlyArray<string>;
+}
+export type WorkspaceExport = WorkspaceExportCommon &
+  (
+    | { readonly format: "patch"; readonly path: string }
+    | {
+        readonly format: "branch";
+        readonly branch: string;
+        readonly commit: string;
+        /** The source HEAD commit the branch's commit extends. */
+        readonly base: string;
+        /**
+         * `user`: the commit carries the user's Git identity; `placeholder`: it isn't configured,
+         * so the author or committer is Pi's placeholder identity.
+         */
+        readonly identity: "user" | "placeholder";
+      }
+  );
+export interface WorkspaceRebase {
+  /** The previous changes reapplied onto the fresh snapshot. */
+  readonly reappliedPaths: ReadonlyArray<string>;
+  /** Files the three-way merge left conflicted; text files keep conflict markers. */
+  readonly conflictedPaths: ReadonlyArray<string>;
+}
 export interface WorkspaceIntegrationTarget
   extends WorkspaceRevisionTarget, WorkspaceSettledTarget {
   readonly preparationId: string;
@@ -155,11 +220,17 @@ export interface WorkspaceIntegrationTarget
 export interface WorkspaceIntegration {
   readonly record: WorkspaceRecord;
   readonly workerRoot: string;
-  readonly uncapturedPaths: ReadonlyArray<string>;
+  /** Parent files the proposal doesn't touch that changed after preparation; they were kept. */
+  readonly untouchedDriftPaths: ReadonlyArray<string>;
   readonly treeRemovalFailed: boolean;
   /** Preimage backups left in the source checkout because deleting them failed. */
   readonly remainingBackupPaths: ReadonlyArray<string>;
   /** Unresolved child workspaces created from the worker tree, which therefore stays. */
   readonly retainedForChildren?: ReadonlyArray<string> | undefined;
+  /**
+   * A partial integration's changed paths left out; the workspace stays active with them as its
+   * remaining proposal.
+   */
+  readonly remainingPaths?: ReadonlyArray<string> | undefined;
 }
 export type WorkspaceAcquired = (handle: WorkspaceHandle) => void;

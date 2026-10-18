@@ -10,8 +10,10 @@ import {
   WorkspaceError,
   workspaceCheckoutRoot,
   type UnavailableWorkspaceArtifact,
+  type WorkspaceExport,
+  type WorkspaceExportRequest,
   type WorkspaceIntegrationTarget,
-  type WorkspaceQuarantineObserver,
+  type WorkspaceRebase,
   type WorkspaceRecord,
   type WorkspaceTarget,
   type WorkspaceVerifyTarget,
@@ -74,23 +76,14 @@ interface EngineHooks {
   workerChanges: WorkspaceWorkerChanges | WorkspaceError;
   before: { [Operation in GatedOperation]?: Effect.Effect<void> | undefined };
   failDiscard: boolean;
+  /** Integration stops mid-publication, leaving the record integrating. */
+  integrateStops?: boolean;
+  revisionDiff?: string;
+  /** The changed paths each frozen revision lists. */
+  changedPaths: ReadonlyArray<string>;
+  /** What a rebase reports, or how it fails; it reopens the record either way it succeeds. */
+  rebase: WorkspaceRebase | WorkspaceError;
 }
-
-// Like the real engine, a command's quarantine clears unless its cleanup is unconfirmed, and an
-// interrupted command is modeled as confirmed stopped.
-const quarantined = <A>(
-  observer: WorkspaceQuarantineObserver,
-  effect: Effect.Effect<A, WorkspaceError>,
-) =>
-  effect.pipe(
-    Effect.tapError((error) =>
-      Effect.sync(() => {
-        if (!error.cleanupUnconfirmed) observer.onQuarantineCleared?.();
-      }),
-    ),
-    Effect.tap(() => Effect.sync(() => observer.onQuarantineCleared?.())),
-    Effect.onInterrupt(() => Effect.sync(() => observer.onQuarantineCleared?.())),
-  );
 
 export const pauseAt = Effect.gen(function* () {
   const entered = yield* Deferred.make<void>();
@@ -135,23 +128,57 @@ export function workspaceFixture({
     afterCreate: Effect.void,
     verifyOutputTail: "verified",
     // Like the revisions it freezes, the fixture's worker tree has changed by default.
-    workerChanges: { changedPaths: ["file.ts"], uncapturedPaths: [] },
+    workerChanges: {
+      changedPaths: ["file.ts"],
+      uncapturedPaths: [],
+      diffStat: [
+        { path: "file.ts", change: "modified", binary: false, addedLines: 1, deletedLines: 1 },
+      ],
+    },
     before: {},
     failDiscard: false,
+    changedPaths: ["file.ts"],
+    rebase: { reappliedPaths: ["file.ts"], conflictedPaths: [] },
   };
   const gated = <A, E>(operation: GatedOperation, effect: Effect.Effect<A, E>) =>
     Effect.suspend(() => hooks.before[operation] ?? Effect.void).pipe(Effect.andThen(effect));
   const integrations: WorkspaceIntegrationTarget[] = [];
+  const exports: Array<{ readonly workspaceId: string; readonly request: WorkspaceExportRequest }> =
+    [];
+  /** Each rebase's workspace, in order. */
+  const rebases: string[] = [];
   const verifications: WorkspaceVerifyTarget[] = [];
+  /** Each setup's tree: a preparation id, or "worker" for the worker tree. */
+  const setups: string[] = [];
   const entries = new Map<string, WorkspaceRecord>();
+  const diffs = new Map<string, string>();
   const unavailable: UnavailableWorkspaceArtifact[] = [];
+  // Like the real engine, a quarantined record refuses every operation on it.
   const requireEntry = (target: WorkspaceTarget) =>
     Effect.gen(function* () {
       const entry = entries.get(target.workspaceId);
       if (!entry || entry.handle.ownerId !== target.ownerId)
         return yield* new WorkspaceError({ operation: "inspect", message: "Unknown owner" });
+      if (entry.setupCleanupPending !== undefined)
+        return yield* new WorkspaceError({
+          operation: "setup",
+          message: "Workspace setup or verification cleanup is unconfirmed.",
+          cleanupUnconfirmed: true,
+        });
       return entry;
     });
+  // Like the real engine, a command's durable marker stays only when its cleanup is unconfirmed;
+  // an interrupted command is modeled as confirmed stopped.
+  const quarantined = <A>(workspaceId: string, effect: Effect.Effect<A, WorkspaceError>) =>
+    effect.pipe(
+      Effect.tapError((error) =>
+        Effect.sync(() => {
+          const entry = entries.get(workspaceId);
+          if (error.cleanupUnconfirmed && entry)
+            entries.set(workspaceId, { ...entry, setupCleanupPending: entry.handle.cwd });
+        }),
+      ),
+    );
   const requirePreparation = (target: WorkspaceVerifyTarget) =>
     requireEntry(target).pipe(
       Effect.filterOrFail(
@@ -209,6 +236,42 @@ export function workspaceFixture({
         checkoutRoot: workspaceCheckoutRoot(parent.handle),
       };
     });
+  // Like the real engine, export writes a frozen revision without changing the record.
+  const exported = (
+    entry: WorkspaceRecord,
+    requested: WorkspaceExportRequest,
+    revisionId: string | undefined,
+  ): Effect.Effect<WorkspaceExport, WorkspaceError> => {
+    const { revision } = entry;
+    if (
+      !revision ||
+      (entry.status !== "frozen" && entry.status !== "prepared") ||
+      (revisionId !== undefined && revision.revisionId !== revisionId)
+    )
+      return refuse("revision", "Reviewed revision is stale or unknown.");
+    exports.push({ workspaceId: entry.handle.workspaceId, request: requested });
+    const common = {
+      revisionId: revision.revisionId,
+      changedPaths: revision.changedPaths,
+      uncapturedPaths: [],
+    };
+    return Effect.succeed(
+      requested.format === "patch"
+        ? {
+            ...common,
+            format: "patch",
+            path: `/repo/.git/pi-subagents/${entry.handle.workspaceId}-${revision.revisionId}.patch`,
+          }
+        : {
+            ...common,
+            format: "branch",
+            branch: requested.branch,
+            commit: "commit-1",
+            base: "head-1",
+            identity: "user",
+          },
+    );
+  };
   let ordinal = 0;
   let revisions = 0;
   let preparations = 0;
@@ -254,18 +317,22 @@ export function workspaceFixture({
       create,
       setup: (input) =>
         quarantined(
-          input,
-          gated(
-            "setup",
-            Effect.suspend(() =>
-              hooks.setupFailure ? Effect.fail(hooks.setupFailure) : Effect.void,
+          input.workspaceId,
+          Effect.sync(() => setups.push(input.preparationId ?? "worker")).pipe(
+            Effect.andThen(
+              gated(
+                "setup",
+                Effect.suspend(() =>
+                  hooks.setupFailure ? Effect.fail(hooks.setupFailure) : Effect.void,
+                ),
+              ),
             ),
           ),
         ),
       // Like the real engine, a failed verification keeps the preparation.
       verify: (input) =>
         quarantined(
-          input,
+          input.workspaceId,
           requirePreparation(input).pipe(
             Effect.tap(() => Effect.sync(() => verifications.push(input))),
             Effect.andThen(
@@ -292,7 +359,16 @@ export function workspaceFixture({
           ),
         ),
       inspect: requireEntry,
+      revision: (target) =>
+        requireEntry(target).pipe(
+          Effect.map(({ revision }) => {
+            const diff = revision && diffs.get(revision.revisionId);
+            return revision && diff !== undefined ? { ...revision, diff } : undefined;
+          }),
+        ),
       unresolvedChildren: ({ workspaceId }) => Effect.sync(() => childrenOf(workspaceId)),
+      commandCleanupPending: ({ workspaceId }) =>
+        Effect.sync(() => entries.get(workspaceId)?.setupCleanupPending !== undefined),
       list: ({ ownerId }) =>
         Effect.sync(() =>
           [...entries.values()].filter((entry) => entry.handle.ownerId === ownerId),
@@ -311,11 +387,12 @@ export function workspaceFixture({
               );
             const revision = {
               revisionId: `revision-${++revisions}`,
-              diff: "a".repeat(20_000),
-              changedPaths: ["file.ts"],
+              changedPaths: [...hooks.changedPaths],
             };
+            const diff = hooks.revisionDiff ?? "a".repeat(20_000);
+            diffs.set(revision.revisionId, diff);
             entries.set(target.workspaceId, { ...entry, status: "frozen", revision });
-            return Effect.succeed(revision);
+            return Effect.succeed({ ...revision, diff });
           }),
         ),
       prepare: (target) =>
@@ -328,6 +405,7 @@ export function workspaceFixture({
               revisionId: target.revisionId,
               cwd: `/private/${target.workspaceId}/prepare-${preparationId}`,
               leaseDirectories: [entry.handle.sourceRoot, `${entry.handle.sourceRoot}/packages/b`],
+              ...(target.paths !== undefined && { paths: target.paths }),
             };
             entries.set(target.workspaceId, { ...entry, status: "prepared", preparation });
             return preparation;
@@ -336,14 +414,38 @@ export function workspaceFixture({
       integrate: (target) =>
         requireEntry(target).pipe(
           Effect.flatMap((entry) => requireOpenSource(entry, "integrate")),
+          Effect.tap((entry) =>
+            hooks.integrateStops
+              ? Effect.sync(() =>
+                  entries.set(target.workspaceId, { ...entry, status: "integrating" }),
+                ).pipe(Effect.andThen(refuse("integrate", "Publication stopped partway.")))
+              : Effect.void,
+          ),
           Effect.map((entry) => {
             integrations.push(target);
+            const partial = entry.preparation?.paths;
+            if (partial !== undefined) {
+              // Like the real engine, a partial integration keeps the rest as an active proposal.
+              const { revision, preparation: _preparation, ...rest } = entry;
+              const reopened = { ...rest, status: "active" as const, baseline: "advanced-base" };
+              entries.set(target.workspaceId, reopened);
+              return {
+                record: reopened,
+                workerRoot: entry.handle.cwd,
+                untouchedDriftPaths: [],
+                treeRemovalFailed: false,
+                remainingBackupPaths: [],
+                remainingPaths: (revision?.changedPaths ?? []).filter(
+                  (name) => !partial.includes(name),
+                ),
+              };
+            }
             const integrated = { ...entry, status: "integrated" as const };
             entries.set(target.workspaceId, integrated);
             return {
               record: integrated,
               workerRoot: entry.handle.cwd,
-              uncapturedPaths: [],
+              untouchedDriftPaths: [],
               treeRemovalFailed: false,
               remainingBackupPaths: [],
             };
@@ -357,22 +459,43 @@ export function workspaceFixture({
             return entry.handle;
           }),
         ),
-      fork: (target) =>
+      rebase: (target) =>
         requireEntry(target).pipe(
           Effect.flatMap((entry) => {
-            const sourceId = entry.handle.sourceWorkspaceId;
-            const source = sourceId === undefined ? undefined : entries.get(sourceId);
-            return create({
-              sourceCwd: entry.handle.sourceCwd,
-              ownerId: entry.handle.ownerId,
-              sourceWorkspace: source && {
-                workspaceId: source.handle.workspaceId,
-                ownerId: source.handle.ownerId,
-              },
-              onAcquired: target.onAcquired,
-            });
+            if (hooks.rebase instanceof WorkspaceError) return Effect.fail(hooks.rebase);
+            rebases.push(target.workspaceId);
+            const { revision: _revision, preparation: _preparation, ...rest } = entry;
+            entries.set(target.workspaceId, { ...rest, status: "active" });
+            return Effect.succeed(hooks.rebase);
           }),
         ),
+      exportRevision: (target) =>
+        requireEntry(target).pipe(
+          Effect.flatMap((entry) => exported(entry, target.export, target.revisionId)),
+        ),
+      exportOrphan: ({ workspaceId, revisionId, export: requested }) =>
+        Effect.suspend(() => {
+          const entry = entries.get(workspaceId);
+          if (!entry || !hooks.orphanOwnerEnded)
+            return Effect.fail(
+              new WorkspaceError({
+                operation: "authorization",
+                message: "The session that created this workspace is still running.",
+              }),
+            );
+          // Like the real engine, an unfrozen orphan's worker is captured without freezing it.
+          return entry.status === "active" && revisionId === undefined
+            ? exported(
+                {
+                  ...entry,
+                  status: "frozen",
+                  revision: { revisionId: "worker-capture", changedPaths: [...hooks.changedPaths] },
+                },
+                requested,
+                undefined,
+              )
+            : exported(entry, requested, revisionId);
+        }),
       discardOrphan: ({ workspaceId }) =>
         Effect.suspend(() => {
           const entry = entries.get(workspaceId);
@@ -445,7 +568,10 @@ export function workspaceFixture({
     canonicalized,
     hooks,
     integrations,
+    exports,
+    rebases,
     verifications,
+    setups,
     statuses,
   };
 }

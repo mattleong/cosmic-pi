@@ -30,7 +30,6 @@ const fixture = Effect.gen(function* () {
         reply: (id, message) => Effect.sync(() => void deliveries.push(`${id}: ${message}`)),
         steer: () => Effect.sync(() => void deliveries.push("guidance")),
         interrupt: Effect.sync(() => void deliveries.push("interrupt")),
-        renameDisplay: () => Effect.sync(() => void deliveries.push("rename")),
       },
     },
   });

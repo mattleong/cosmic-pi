@@ -27,35 +27,35 @@ it.live(
         },
         status: "frozen",
         baseline: "baseline",
-        revision: { revisionId: "revision", changedPaths: ["deleted.ts"], diff: "" },
+        revision: { revisionId: "revision", changedPaths: [""] },
       };
       const cap = 64 * 1024 * 1024;
       const overhead = Buffer.byteLength(
         yield* Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema))(record),
       );
-      const diff =
+      const name =
         "\\".repeat(Math.floor((cap - overhead - 2) / 2)) + "é" + "x".repeat((cap - overhead) % 2);
-      yield* saveWorkspaceRecord(root, { ...record, revision: { ...record.revision!, diff } });
+      const named = (changed: string): WorkspaceRecord => ({
+        ...record,
+        revision: { revisionId: "revision", changedPaths: [changed] },
+      });
+      yield* saveWorkspaceRecord(root, named(name));
       expect((yield* Effect.promise(() => fs.stat(path.join(directory, "record.json")))).size).toBe(
         cap,
       );
-      expect((yield* readWorkspaceRecord(root, workspaceId)).revision?.diff.length).toBe(
-        diff.length,
-      );
       expect(
-        (yield* saveWorkspaceRecord(root, {
-          ...record,
-          revision: { ...record.revision!, diff: diff + "x" },
-        }).pipe(Effect.flip)).operation,
+        (yield* readWorkspaceRecord(root, workspaceId)).revision?.changedPaths[0]?.length,
+      ).toBe(name.length);
+      expect(
+        (yield* saveWorkspaceRecord(root, named(name + "x")).pipe(Effect.flip)).operation,
       ).toBe("registry");
-      const failure = yield* saveWorkspaceRecord(root, {
-        ...record,
-        revision: { ...record.revision!, diff: "\\".repeat(32 * 1024 * 1024) },
-      }).pipe(Effect.flip);
-      expect(failure.operation).toBe("registry");
-      expect((yield* readWorkspaceRecord(root, workspaceId)).revision?.diff.length).toBe(
-        diff.length,
+      const failure = yield* saveWorkspaceRecord(root, named("\\".repeat(32 * 1024 * 1024))).pipe(
+        Effect.flip,
       );
+      expect(failure.operation).toBe("registry");
+      expect(
+        (yield* readWorkspaceRecord(root, workspaceId)).revision?.changedPaths[0]?.length,
+      ).toBe(name.length);
       expect(yield* Effect.promise(() => fs.readdir(directory))).toEqual(["record.json"]);
     }).pipe(Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer)))),
   60_000,

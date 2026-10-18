@@ -1,11 +1,10 @@
 import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import {
+  cloneProfileCandidates,
   MAX_PROFILE_CANDIDATES,
-  normalizeProfileCandidate,
-  PROFILE_CANDIDATE_BASE_KEYS,
   PROFILE_CANDIDATE_CONTEXTS,
   PROFILE_CANDIDATE_EFFORTS,
   PROFILE_CANDIDATE_HOSTS,
@@ -19,15 +18,6 @@ import {
   type ProfileId,
   type ProfileRoute,
 } from "../profiles/model.ts";
-import {
-  denseElements,
-  ownDataProperty,
-  ownKeysAre,
-  probeFields,
-  probeList,
-  type ProbedFields,
-  type ProbedList,
-} from "./probe.ts";
 
 export const SUBAGENT_CONFIG_BASENAME = "pi-subagents.json";
 export const SUBAGENT_CONFIG_VERSION = 6;
@@ -61,7 +51,6 @@ export const WorkspaceSetupSchema = Schema.Struct({
   ),
 });
 export type WorkspaceSetup = typeof WorkspaceSetupSchema.Type;
-const WORKSPACE_COMMAND_KEYS = new Set(["command", "timeoutSeconds"]);
 
 export const DEFAULT_WORKSPACE_VERIFY_TIMEOUT_SECONDS = 600;
 /** A trusted project's command that checks an isolated writer's tree before its changes apply. */
@@ -158,7 +147,15 @@ export const DEFAULT_SUBAGENT_NESTING_POLICY: SubagentNestingPolicy = Object.fre
   maxActiveRuns: DEFAULT_MAX_ACTIVE_RUNS,
 });
 
-const NESTING_KEYS = new Set(["maxDirectChildren", "maxDepth", "maxActiveRuns"]);
+const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
+type UnknownRecord = typeof UnknownRecordSchema.Type;
+/** A not-yet-decoded value read from a decoded document record. */
+type FieldValue = UnknownRecord[string];
+const UnknownListSchema = Schema.Array(Schema.Unknown);
+type UnknownList = typeof UnknownListSchema.Type;
+const decodeUnknownRecord = decodeUnknownOrUndefined(UnknownRecordSchema);
+const decodeUnknownList = decodeUnknownOrUndefined(UnknownListSchema);
+const EXACT_FIELDS = { onExcessProperty: "error" } as const;
 
 const nullPrototypeRecord = <Value>() => {
   const record: Record<string, Value> = {};
@@ -166,21 +163,19 @@ const nullPrototypeRecord = <Value>() => {
   return record;
 };
 
-const decodeNestingFields = decodeUnknownOrUndefined(SubagentNestingSchema);
-
-const nestingFromFields = (record: ProbedFields): SubagentNestingPolicy | undefined => {
-  if (!ownKeysAre(record, NESTING_KEYS)) return undefined;
-  const decoded = decodeNestingFields(record);
-  return decoded && Object.freeze({ ...decoded });
-};
-
 export const decodeSubagentNesting = flow(
-  probeFields,
-  (record) => record && nestingFromFields(record),
+  decodeUnknownOrUndefined(SubagentNestingSchema, EXACT_FIELDS),
+  (nesting): SubagentNestingPolicy | undefined => nesting && Object.freeze({ ...nesting }),
 );
 
-const CandidateContractSchema = Schema.Struct({
-  host: Schema.Literals(PROFILE_CANDIDATE_HOSTS),
+const hasValidCandidatePolicy = Schema.makeFilter((candidate: ProfileCandidate) =>
+  profileCandidateValidationIssues(candidate).length === 0
+    ? true
+    : "Profile candidate violates cross-field policy.",
+);
+
+const RetiredHostSchema = Schema.Literals(PROFILE_CANDIDATE_HOSTS);
+const CandidateFields = {
   runtime: Schema.Literals(PROFILE_CANDIDATE_RUNTIMES),
   model: Schema.String,
   effort: Schema.Literals(PROFILE_CANDIDATE_EFFORTS),
@@ -188,135 +183,99 @@ const CandidateContractSchema = Schema.Struct({
   writeIntent: Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS),
   openaiFastMode: Schema.optional(Schema.Boolean),
   closeOnReport: Schema.optional(Schema.Literal(true)),
+};
+const DeclaredProfileCandidateSchema = Schema.Struct({
+  host: RetiredHostSchema,
+  ...CandidateFields,
+}).check(hasValidCandidatePolicy);
+// Earlier module instances also wrote the retired fields into Current Session handoffs.
+const ProfileCandidateInputSchema = Schema.Struct({
+  host: Schema.optional(RetiredHostSchema),
+  ...CandidateFields,
+}).check(hasValidCandidatePolicy);
+/** Decodes to a route whose candidates may still carry retired fields; normalize before use. */
+export const ProfileRouteInputSchema = Schema.Struct({
+  candidates: Schema.Array(ProfileCandidateInputSchema).check(
+    Schema.isMaxLength(MAX_PROFILE_CANDIDATES),
+  ),
 });
-const decodeCandidateContract = decodeUnknownOrUndefined(CandidateContractSchema);
-
-const readField = (record: ProbedFields, key: string, path: string, diagnostics: string[]) => {
-  try {
-    if (!Object.hasOwn(record, key)) return { present: false as const };
-    return { present: true as const, value: record[key] };
-  } catch {
-    diagnostics.push(path);
-    return { present: true as const };
-  }
-};
-
-const CANDIDATE_KEYS: ReadonlyArray<string> = [...PROFILE_CANDIDATE_BASE_KEYS, "openaiFastMode"];
-const CANDIDATE_KEY_SET = new Set(CANDIDATE_KEYS);
-const OPTIONAL_CANDIDATE_KEYS = new Set(["closeOnReport", "openaiFastMode"]);
-
-const candidateFields = (record: ProbedFields) => {
-  const values: Array<readonly [string, ProbedFields[string]]> = [];
-  let decodable = true;
-  for (const key of CANDIDATE_KEYS) {
-    const field = ownDataProperty(record, key);
-    if (!field.valid || (!OPTIONAL_CANDIDATE_KEYS.has(key) && !field.present)) decodable = false;
-    else if (field.present) values.push([key, field.value]);
-  }
-  return { decodable, values };
-};
-
-const declaredCandidateFromFields = (
-  record: ProbedFields,
-): DeclaredProfileCandidate | undefined => {
-  if (!ownKeysAre(record, CANDIDATE_KEY_SET)) return undefined;
-  const { decodable, values } = candidateFields(record);
-  const decoded = decodable ? decodeCandidateContract(Object.fromEntries(values)) : undefined;
-  return decoded &&
-    profileCandidateValidationIssues(normalizeProfileCandidate(decoded)).length === 0
-    ? decoded
-    : undefined;
-};
 
 export const decodeDeclaredProfileCandidate = flow(
-  probeFields,
-  (record) => record && declaredCandidateFromFields(record),
+  decodeUnknownOrUndefined(DeclaredProfileCandidateSchema, EXACT_FIELDS),
+  (candidate): DeclaredProfileCandidate | undefined => candidate,
 );
 
-export const decodeProfileCandidate = flow(
-  decodeDeclaredProfileCandidate,
-  (declared): ProfileCandidate | undefined => declared && normalizeProfileCandidate(declared),
+export const decodeProfileRoute = flow(
+  decodeUnknownOrUndefined(ProfileRouteInputSchema, EXACT_FIELDS),
+  (route): ProfileRoute | undefined =>
+    route && { candidates: cloneProfileCandidates(route.candidates) },
 );
-
-const routeFromFields = (record: ProbedFields): ProfileRoute | undefined =>
-  invokeHostCallback(() => {
-    const keys = Reflect.ownKeys(record);
-    const field = ownDataProperty(record, "candidates");
-    const list =
-      keys.length === 1 && keys[0] === "candidates" && field.valid && field.present
-        ? probeList(field.value)
-        : undefined;
-    const inputs = list && denseElements(list, MAX_PROFILE_CANDIDATES);
-    const candidates = inputs?.map((input) => decodeProfileCandidate(input));
-    return candidates?.every(Predicate.isNotUndefined) ? { candidates } : undefined;
-  }, undefined);
-
-export const decodeProfileRoute = flow(probeFields, (record) => record && routeFromFields(record));
 
 const routeFromList = (
-  list: ProbedList,
+  list: UnknownList,
   path: string,
   diagnostics: string[],
 ): DeclaredProfileRoute | undefined => {
-  const length = invokeHostCallback(() => list.length, Number.NaN);
-  if (!(length > 0 && length <= MAX_PROFILE_CANDIDATES)) {
+  if (!(list.length > 0 && list.length <= MAX_PROFILE_CANDIDATES)) {
     diagnostics.push(
-      length > MAX_PROFILE_CANDIDATES ? `${path}[${MAX_PROFILE_CANDIDATES}+]` : path,
+      list.length > MAX_PROFILE_CANDIDATES ? `${path}[${MAX_PROFILE_CANDIDATES}+]` : path,
     );
     return undefined;
   }
-  const candidates = Array.from({ length }, (_, index) => {
-    const candidate = invokeHostCallback(() => decodeProfileCandidate(list[index]), undefined);
+  const candidates = list.map((input, index) => {
+    const candidate = decodeDeclaredProfileCandidate(input);
     if (!candidate) diagnostics.push(`${path}[${index}]`);
     return candidate;
   });
   return candidates.every(Predicate.isNotUndefined) ? candidates : undefined;
 };
 
-const decodeRouteField = (
-  record: ProbedFields,
-  id: ProfileId,
+const decodeDeclaredRoute = (
+  value: FieldValue,
   path: string,
   diagnostics: string[],
-):
-  | { readonly present: false }
-  | { readonly present: true; readonly route?: DeclaredProfileRoute } => {
-  const field = readField(record, id, path, diagnostics);
-  if (!field.present) return { present: false };
-  if (field.value === "disabled") return { present: true, route: "disabled" };
-  const list = probeList(field.value);
-  if (list) {
-    const route = routeFromList(list, path, diagnostics);
-    return route === undefined ? { present: true } : { present: true, route };
-  }
-  const candidate = decodeProfileCandidate(field.value);
+): DeclaredProfileRoute | undefined => {
+  if (value === "disabled") return "disabled";
+  const list = decodeUnknownList(value);
+  if (list) return routeFromList(list, path, diagnostics);
+  const candidate = decodeDeclaredProfileCandidate(value);
   if (!candidate) diagnostics.push(path);
-  return candidate === undefined ? { present: true } : { present: true, route: candidate };
+  return candidate;
 };
+
+export const decodeDeclaredProfileRoute = (value: FieldValue): DeclaredProfileRoute | undefined =>
+  decodeDeclaredRoute(value, "route", []);
+
+const hasOnlyKeys = (record: UnknownRecord, allowed: ReadonlySet<string>): boolean =>
+  Object.keys(record).every((key) => allowed.has(key));
 
 interface DecodedProfiles {
   readonly profiles: Partial<Record<ProfileId, DeclaredProfileRoute>>;
   readonly invalidRoutes: ReadonlyArray<ProfileId>;
 }
 
-const profilesFromFields = (
-  record: ProbedFields,
+const PROFILE_KEYS: ReadonlySet<string> = new Set(PROFILE_IDS);
+
+const profilesFromRecord = (
+  record: UnknownRecord,
   path: string,
   diagnostics: string[],
 ): DecodedProfiles => {
   const profiles: Partial<Record<ProfileId, DeclaredProfileRoute>> = {};
   const invalidRoutes: ProfileId[] = [];
   for (const id of PROFILE_IDS) {
-    const field = decodeRouteField(record, id, `${path}.${id}`, diagnostics);
-    if (!field.present) continue;
-    if (field.route === undefined) invalidRoutes.push(id);
-    else profiles[id] = field.route;
+    if (!Object.hasOwn(record, id)) continue;
+    const route = decodeDeclaredRoute(record[id], `${path}.${id}`, diagnostics);
+    if (route === undefined) invalidRoutes.push(id);
+    else profiles[id] = route;
   }
-  if (!ownKeysAre(record, new Set<string>(PROFILE_IDS))) diagnostics.push(`${path}.<unknown>`);
+  if (!hasOnlyKeys(record, PROFILE_KEYS)) diagnostics.push(`${path}.<unknown>`);
   return { profiles, invalidRoutes };
 };
 
-const SET_KEYS = new Set(["profiles"]);
+const ProfileSetInputSchema = Schema.Struct({ profiles: UnknownRecordSchema });
+const decodeProfileSetInput = decodeUnknownOrUndefined(ProfileSetInputSchema, EXACT_FIELDS);
+const SET_KEYS: ReadonlySet<string> = new Set(["profiles"]);
 
 interface DecodedBody {
   readonly file: SubagentConfigFile;
@@ -333,35 +292,27 @@ const EMPTY_BODY: DecodedBody = Object.freeze({
 });
 
 const decodeProfileSet = (
-  record: ProbedFields,
-  name: string,
+  value: FieldValue,
   setPath: string,
   diagnostics: string[],
 ): DecodedProfiles | undefined => {
-  const field = readField(record, name, setPath, diagnostics);
-  const setRecord = field.present ? probeFields(field.value) : undefined;
-  if (!setRecord || !ownKeysAre(setRecord, SET_KEYS)) {
-    diagnostics.push(setPath);
-    return undefined;
-  }
-  const profilesPath = `${setPath}.profiles`;
-  const profilesField = readField(setRecord, "profiles", profilesPath, diagnostics);
-  const profilesRecord = profilesField.present ? probeFields(profilesField.value) : undefined;
-  if (!profilesRecord) {
-    diagnostics.push(profilesPath);
-    return undefined;
-  }
-  return profilesFromFields(profilesRecord, profilesPath, diagnostics);
+  const set = decodeProfileSetInput(value);
+  if (set) return profilesFromRecord(set.profiles, `${setPath}.profiles`, diagnostics);
+  // Distinguish a malformed profiles container from a malformed set for repair diagnostics.
+  const fields = decodeUnknownRecord(value);
+  diagnostics.push(fields && hasOnlyKeys(fields, SET_KEYS) ? `${setPath}.profiles` : setPath);
+  return undefined;
 };
 
 const decodeProfileSets = (
-  record: ProbedFields | undefined,
+  value: FieldValue,
   path: string,
   diagnostics: string[],
 ): Pick<DecodedBody, "invalidProfileSetRoutes" | "invalidProfileSets"> & {
   readonly sets: Record<string, SubagentProfileSet>;
 } => {
-  const names = record && invokeHostCallback(() => Object.keys(record), undefined);
+  const record = decodeUnknownRecord(value);
+  const names = record && Object.keys(record);
   if (!record || !names || names.length > MAX_PROFILE_SETS) {
     diagnostics.push(
       names && names.length > MAX_PROFILE_SETS ? `${path}[${MAX_PROFILE_SETS}+]` : path,
@@ -371,13 +322,14 @@ const decodeProfileSets = (
   const sets = nullPrototypeRecord<SubagentProfileSet>();
   const invalidProfileSetRoutes: Record<string, ReadonlyArray<ProfileId>> = {};
   const invalidProfileSets: string[] = [];
+  // Set names may be private, so diagnostics identify sets by position.
   names.forEach((name, index) => {
     const setPath = `${path}[${index}]`;
     if (!isProfileSetName(name)) {
       diagnostics.push(`${setPath}.name`);
       return;
     }
-    const decoded = decodeProfileSet(record, name, setPath, diagnostics);
+    const decoded = decodeProfileSet(record[name], setPath, diagnostics);
     if (!decoded) {
       invalidProfileSets.push(name);
       return;
@@ -390,7 +342,7 @@ const decodeProfileSets = (
 
 export const isSupportedConfigVersion = Schema.is(Schema.Literal(SUBAGENT_CONFIG_VERSION));
 
-const ROOT_KEYS = new Set([
+const ROOT_KEYS: ReadonlySet<string> = new Set([
   "version",
   "defaultProfileSet",
   "profileSets",
@@ -402,97 +354,88 @@ const ROOT_KEYS = new Set([
   "sessionSpendLimit",
 ]);
 
-const readRootField = <S extends Schema.Constraint>(
-  rawRoot: ProbedFields,
+const decodeRootField = <S extends Schema.ConstraintDecoder<unknown>>(
+  root: UnknownRecord,
   key: string,
   scope: string,
   diagnostics: string[],
   schema: S,
+  options?: typeof EXACT_FIELDS,
 ): S["Type"] | undefined => {
-  const path = `${scope}.${key}`;
-  const field = readField(rawRoot, key, path, diagnostics);
-  if (!field.present) return undefined;
-  if (Schema.is(schema)(field.value)) return field.value;
-  diagnostics.push(path);
-  return undefined;
+  if (!Object.hasOwn(root, key)) return undefined;
+  const decoded = decodeUnknownOrUndefined(schema, options)(root[key]);
+  if (decoded === undefined) diagnostics.push(`${scope}.${key}`);
+  return decoded;
 };
 
-const decodeDefaultProfileSet = (rawRoot: ProbedFields, scope: string, diagnostics: string[]) => {
-  const defaultPath = `${scope}.defaultProfileSet`;
-  const defaultField = readField(rawRoot, "defaultProfileSet", defaultPath, diagnostics);
+const decodeDefaultProfileSet = (root: UnknownRecord, scope: string, diagnostics: string[]) => {
+  const present = Object.hasOwn(root, "defaultProfileSet");
+  const value = root.defaultProfileSet;
   const defaultProfileSet =
-    Predicate.isString(defaultField.value) && isProfileSetName(defaultField.value)
-      ? defaultField.value
-      : undefined;
-  const invalidDefaultProfileSet = defaultField.present && defaultProfileSet === undefined;
-  if (invalidDefaultProfileSet) diagnostics.push(defaultPath);
+    present && Predicate.isString(value) && isProfileSetName(value) ? value : undefined;
+  const invalidDefaultProfileSet = present && defaultProfileSet === undefined;
+  if (invalidDefaultProfileSet) diagnostics.push(`${scope}.defaultProfileSet`);
   return { defaultProfileSet, invalidDefaultProfileSet };
 };
 
 // Setup and verification commands are repository-specific, so only a project document may
 // declare one.
 const decodeWorkspaceCommand = (
-  rawRoot: ProbedFields,
+  root: UnknownRecord,
   key: "workspaceSetup" | "workspaceVerify",
   schema: typeof WorkspaceSetupSchema | typeof WorkspaceVerifySchema,
   scope: string,
   diagnostics: string[],
 ): WorkspaceSetup | WorkspaceVerify | undefined => {
-  const path = `${scope}.${key}`;
-  const field = readField(rawRoot, key, path, diagnostics);
-  if (!field.present) return undefined;
-  const fields = probeFields(field.value);
-  if (
-    scope === "project" &&
-    fields !== undefined &&
-    ownKeysAre(fields, WORKSPACE_COMMAND_KEYS) &&
-    Schema.is(schema)(fields)
-  )
-    return Object.freeze({ ...fields, command: Object.freeze([...fields.command]) });
-  diagnostics.push(path);
-  return undefined;
+  if (!Object.hasOwn(root, key)) return undefined;
+  const command =
+    scope === "project" ? decodeUnknownOrUndefined(schema, EXACT_FIELDS)(root[key]) : undefined;
+  if (command === undefined) {
+    diagnostics.push(`${scope}.${key}`);
+    return undefined;
+  }
+  return Object.freeze({ ...command, command: Object.freeze([...command.command]) });
 };
 
 const decodeCurrentBody = (
-  rawRoot: ProbedFields,
+  root: UnknownRecord,
   scope: string,
   diagnostics: string[],
 ): DecodedBody => {
-  const writerWorkspaceMode = readRootField(
-    rawRoot,
+  const writerWorkspaceMode = decodeRootField(
+    root,
     "writerWorkspaceMode",
     scope,
     diagnostics,
     WriterWorkspaceModeSchema,
   );
-  const delegation = readRootField(rawRoot, "delegation", scope, diagnostics, DelegationModeSchema);
+  const delegation = decodeRootField(root, "delegation", scope, diagnostics, DelegationModeSchema);
   const workspaceSetup = decodeWorkspaceCommand(
-    rawRoot,
+    root,
     "workspaceSetup",
     WorkspaceSetupSchema,
     scope,
     diagnostics,
   );
   const workspaceVerify = decodeWorkspaceCommand(
-    rawRoot,
+    root,
     "workspaceVerify",
     WorkspaceVerifySchema,
     scope,
     diagnostics,
   );
-  const sessionSpendLimit = readRootField(
-    rawRoot,
+  const sessionSpendLimit = decodeRootField(
+    root,
     "sessionSpendLimit",
     scope,
     diagnostics,
     SessionSpendLimitSchema,
   );
-  const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
-  const decoded = setsField.present
-    ? decodeProfileSets(probeFields(setsField.value), `${scope}.profileSets`, diagnostics)
+  const decoded = Object.hasOwn(root, "profileSets")
+    ? decodeProfileSets(root.profileSets, `${scope}.profileSets`, diagnostics)
     : undefined;
   const { defaultProfileSet, invalidDefaultProfileSet } = decodeDefaultProfileSet(
-    rawRoot,
+    root,
     scope,
     diagnostics,
   );
@@ -512,19 +455,6 @@ const decodeCurrentBody = (
   };
 };
 
-const decodeRootNesting = (
-  rawRoot: ProbedFields,
-  scope: string,
-  supported: boolean,
-  diagnostics: string[],
-): SubagentNestingPolicy | undefined => {
-  const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
-  if (!supported || !nestingField.present) return undefined;
-  const nesting = decodeSubagentNesting(nestingField.value);
-  if (nesting === undefined) diagnostics.push(`${scope}.nesting`);
-  return nesting;
-};
-
 const declaresMissingDefault = (file: SubagentConfigFile): boolean => {
   const defaultName = file.defaultProfileSet;
   return (
@@ -533,22 +463,24 @@ const declaresMissingDefault = (file: SubagentConfigFile): boolean => {
 };
 
 const decodeConfigRoot = (
-  decodedRoot: ProbedFields | undefined,
+  decodedRoot: UnknownRecord | undefined,
   scope: string,
 ): DecodedSubagentConfig => {
   const diagnostics: string[] = [];
-  const rawRoot: ProbedFields = decodedRoot ?? {};
+  const root: UnknownRecord = decodedRoot ?? {};
   if (!decodedRoot) diagnostics.push(scope);
-  const rawVersion = readField(rawRoot, "version", `${scope}.version`, diagnostics).value;
-  const version = isSupportedConfigVersion(rawVersion) ? rawVersion : undefined;
-  if (!ownKeysAre(rawRoot, ROOT_KEYS)) diagnostics.push(`${scope}.<unknown>`);
+  const version = isSupportedConfigVersion(root.version) ? root.version : undefined;
+  if (!hasOnlyKeys(root, ROOT_KEYS)) diagnostics.push(`${scope}.<unknown>`);
 
-  const body = version === undefined ? EMPTY_BODY : decodeCurrentBody(rawRoot, scope, diagnostics);
-  const nesting = decodeRootNesting(rawRoot, scope, version !== undefined, diagnostics);
+  const body = version === undefined ? EMPTY_BODY : decodeCurrentBody(root, scope, diagnostics);
+  const nesting =
+    version === undefined
+      ? undefined
+      : decodeRootField(root, "nesting", scope, diagnostics, SubagentNestingSchema, EXACT_FIELDS);
   const file: SubagentConfigFile = {
     ...(version !== undefined && { version }),
     ...body.file,
-    ...(nesting !== undefined && { nesting }),
+    ...(nesting !== undefined && { nesting: Object.freeze({ ...nesting }) }),
   };
 
   const missingDefault = declaresMissingDefault(file);
@@ -570,6 +502,6 @@ const decodeConfigRoot = (
 };
 
 export const subagentConfigDecoder = (scope: string) =>
-  flow(probeFields, (root) => decodeConfigRoot(root, scope));
+  flow(decodeUnknownRecord, (root) => decodeConfigRoot(root, scope));
 
 export const decodeSubagentConfig = subagentConfigDecoder("config");

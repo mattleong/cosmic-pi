@@ -1,4 +1,3 @@
-import * as Match from "effect/Match";
 import {
   defineTool,
   type ExtensionAPI,
@@ -70,14 +69,11 @@ type SubagentToolInputs = {
 const TOOL_INPUTS: SubagentToolInputs = {
   [SUBAGENT_TOOL_NAME.models]: (args) => ({ tool: SUBAGENT_TOOL_NAME.models, args }),
   [SUBAGENT_TOOL_NAME.start]: (args) => ({ tool: SUBAGENT_TOOL_NAME.start, args }),
-  [SUBAGENT_TOOL_NAME.list]: (args) => ({ tool: SUBAGENT_TOOL_NAME.list, args }),
   [SUBAGENT_TOOL_NAME.status]: (args) => ({ tool: SUBAGENT_TOOL_NAME.status, args }),
   [SUBAGENT_TOOL_NAME.await]: (args) => ({ tool: SUBAGENT_TOOL_NAME.await, args }),
   [SUBAGENT_TOOL_NAME.send]: (args) => ({ tool: SUBAGENT_TOOL_NAME.send, args }),
   [SUBAGENT_TOOL_NAME.reply]: (args) => ({ tool: SUBAGENT_TOOL_NAME.reply, args }),
   [SUBAGENT_TOOL_NAME.lifecycle]: (args) => ({ tool: SUBAGENT_TOOL_NAME.lifecycle, args }),
-  [SUBAGENT_TOOL_NAME.rename]: (args) => ({ tool: SUBAGENT_TOOL_NAME.rename, args }),
-  [SUBAGENT_TOOL_NAME.claims]: (args) => ({ tool: SUBAGENT_TOOL_NAME.claims, args }),
   [SUBAGENT_TOOL_NAME.workspace]: (args) => ({ tool: SUBAGENT_TOOL_NAME.workspace, args }),
 };
 
@@ -90,24 +86,21 @@ type SubagentArgumentPreparers = {
 const ARGUMENT_PREPARERS: SubagentArgumentPreparers = {
   [SUBAGENT_TOOL_NAME.models]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.models),
   [SUBAGENT_TOOL_NAME.start]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.start),
-  [SUBAGENT_TOOL_NAME.list]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.list),
   [SUBAGENT_TOOL_NAME.status]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.status),
   [SUBAGENT_TOOL_NAME.await]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.await),
   [SUBAGENT_TOOL_NAME.send]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.send),
   [SUBAGENT_TOOL_NAME.reply]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.reply),
   [SUBAGENT_TOOL_NAME.lifecycle]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.lifecycle),
-  [SUBAGENT_TOOL_NAME.rename]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.rename),
-  [SUBAGENT_TOOL_NAME.claims]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.claims),
   [SUBAGENT_TOOL_NAME.workspace]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.workspace),
 };
 
 const SCRIPTED_SUBAGENT_GUIDELINE =
-  "Native codemode can script read-only delegation with subagent_start, subagent_await, subagent_status, subagent_models, subagent_list, subagent_rename, and lifecycle stop, which return version-1 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, claims, and integration to the main agent.";
+  "Native codemode can script read-only delegation with subagent_start, subagent_await, subagent_status, subagent_models, and lifecycle stop, which return version-2 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
 
 // The audience-specific delegation rule from delegation/prompt.ts is prepended at registration.
 const START_GUIDELINES = [
   "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.",
-  "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Set isolation: worktree for writers whose change you'll review and apply as a diff or that run while you edit. Run several shared-checkout writers only with pairwise-disjoint `writes` claims.",
+  "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Set isolation: worktree for writers whose change you'll review and apply as a diff or that run while you edit. Run several shared-checkout writers only with pairwise-disjoint `writes` claims, fixed at launch; a writer that writes outside them is stopped, and you relaunch it with corrected claims.",
   "If a start fails, follow its Next step or tell the user; don't run claude, codex, or pi from the shell instead.",
 ];
 
@@ -135,21 +128,21 @@ const TOOL_SPECS: SubagentToolSpecs = {
       ),
     lease: (presentation, args) => presentation.beginStart(args.agents.length),
   },
-  [SUBAGENT_TOOL_NAME.list]: {
-    label: "List Subagents",
-    description: "List your visible subagent runs as a parent-before-child tree, without reports.",
-    renderCall: (_args, theme) => renderSubagentCall("List subagents", "", theme),
-  },
   [SUBAGENT_TOOL_NAME.status]: {
     label: "Subagent Status",
     description:
-      "Inspect up to 12 subagent runs, including which controls each one supports. Set includeDeliveredReports to reread a report you already received.",
-    renderCall: (args, theme) => renderSubagentCall(`Inspect ${targetsLabel(args)}`, "", theme),
+      "Inspect up to 12 subagent runs, including their claims and which controls each one supports; set includeDeliveredReports to reread a report you already received. Omit runIds to list your visible runs as a parent-before-child tree, without reports.",
+    renderCall: (args, theme) =>
+      renderSubagentCall(
+        args.runIds === undefined ? "List subagents" : `Inspect ${targetsLabel(args)}`,
+        "",
+        theme,
+      ),
   },
   [SUBAGENT_TOOL_NAME.await]: {
     label: "Wait for Subagents",
     description:
-      "Wait for selected subagents and return their reports, with live progress. Returns early when a selected run pauses or has writer admission paused, when any subagent asks you a question, or when the user sends a message; children keep running. Follow the steps in the result, then await again.",
+      "Wait for selected subagents and return their reports, with live progress. Returns early when a selected run pauses, when any subagent asks you a question, or when the user sends a message; children keep running. Follow the steps in the result, then await again.",
     promptSnippet: "Wait for subagent reports when your next step depends on them",
     promptGuidelines: [
       "After starting subagents, keep working on parts you didn't delegate; don't redo a subagent's slice while it runs. Call subagent_await only when your next step depends on a report; reports arrive on their own, so don't poll subagent_status.",
@@ -191,41 +184,15 @@ const TOOL_SPECS: SubagentToolSpecs = {
       return renderSubagentCall(`${action} ${targetsLabel(args)}`, message, theme);
     },
   },
-  [SUBAGENT_TOOL_NAME.rename]: {
-    label: "Rename Subagent",
-    description: "Change one subagent's display name.",
-    renderCall: (args, theme) =>
-      renderSubagentCall("Rename subagent", args.name ? `to ${args.name}` : "", theme),
-  },
-  [SUBAGENT_TOOL_NAME.claims]: {
-    label: "Manage Writer Claims",
-    description:
-      "Inspect, grant, or revoke exact file claims for shared-checkout writers, or reopen writer admission after a claim violation. Grant and revoke work only for a writer waiting on your claim question or the paused offender of a violation, while no other tool call is running. Claims coordinate writers; they don't sandbox file access.",
-    promptSnippet: "Coordinate exact file ownership for shared-checkout writers",
-    promptGuidelines: [
-      "Only you grant claims: when a writer asks for another file, grant it with subagent_claims before replying. For a claim violation, follow the recovery steps in the tool result instead of using subagent_reply.",
-    ],
-    renderCall: (args, theme) =>
-      renderSubagentCall(
-        Match.value(args.action).pipe(
-          Match.when("list", () => "Inspect writer claims"),
-          Match.when("resume_admission", () => "Resume writer admission"),
-          Match.when("grant", () => "Grant writer claims"),
-          Match.when("revoke", () => "Revoke writer claims"),
-          Match.exhaustive,
-        ),
-        args.action === "list" ? "" : (args.paths ?? []).join(", "),
-        theme,
-      ),
-  },
   [SUBAGENT_TOOL_NAME.workspace]: {
     label: "Manage Writer Workspace",
     description:
-      "Apply, review, and integrate worktree writers' proposals as their direct parent. apply freezes, prepares, runs the project's configured verification, and integrates in one call, without requiring the diff to be read; its result says whether the diff was reviewed and whether it was verified, and failed verification applies nothing. The careful path: review freezes a finished writer's changes and returns the diff in pages; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. integrate applies the exact revisionId and preparationId as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. revise asks the writer for another pass; discard deletes a rejected proposal, or an orphaned workspace whose session has ended.",
-    promptSnippet: "Apply, or review, test, and integrate, worktree writers' proposals",
+      "Apply worktree writers' proposals as their direct parent. apply with just workspaceId freezes, prepares, runs the project's configured verification, and integrates in one call, without requiring the diff to be read; its result says whether the diff was reviewed and whether it was verified, and failed verification applies nothing. The careful path: review freezes a finished writer's changes and returns pages that start with a summary of changed files and line counts, then the diff; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. apply with that revisionId and preparationId integrates exactly that pair as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. apply with paths integrates only those changed files and keeps the rest as the proposal. export writes the proposal as a patch file or branch in your repository without resolving it, including an orphaned workspace whose session has ended. revise asks the writer for another pass, and rebase first rebuilds its tree from your current files; discard deletes a rejected proposal, or an orphan.",
+    promptSnippet: "Apply, or review, test, and apply, worktree writers' proposals",
     promptGuidelines: [
-      "A worktree writer's report is a proposal, not approval, and nothing applies it automatically. For small or trusted changes, call apply; for risky changes, review every diff page, prepare that revision, run the relevant tests in the prepared cwd without editing it, then integrate that exact revisionId and preparationId. Either path needs no user confirmation. Don't stage or commit parent changes.",
-      "Failed verification blocks the proposal: inspect the prepared tree, then revise or discard it, or review every page and integrate a fresh preparation after its tests pass. If review or tests fail, revise with concrete feedback, await the successor, and review or apply its new revision. A stale preparation needs a fresh prepare and test run. Discard only proposals you mean to delete.",
+      "A worktree writer's report is a proposal, not approval, and nothing applies it automatically. For small or trusted changes, call apply with the workspaceId; for risky changes, review every page, prepare that revision, run the relevant tests in the prepared cwd without editing it, then apply that exact revisionId and preparationId. Either path needs no user confirmation. Don't stage or commit parent changes.",
+      "Failed verification blocks the proposal: inspect the prepared tree, then revise or discard it, or review every page and apply a fresh preparation after its tests pass. If review or tests fail, revise with concrete feedback, await the successor, and review or apply its new revision. A stale preparation needs a fresh prepare and test run; when your files moved on under the proposal, revise with rebase. Discard only proposals you mean to delete.",
+      "To keep a proposal you can't apply now, such as one left by a session that ended, export it as a patch (or a branch) and tell the user where it is; export never applies or resolves the workspace.",
     ],
     renderCall: (args, theme) => renderSubagentCall("Writer workspace", args.action ?? "", theme),
   },
@@ -248,7 +215,7 @@ export function registerSubagentTools(
   runtime: SubagentToolRuntime,
   receiptOwner?: SubagentErrorReceiptOwner,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
-  /** A nested worktree writer also reviews and integrates its own worktree writer children. */
+  /** A nested worktree writer also reviews and applies its own worktree writer children. */
   nestedSurface: { readonly workspaceParent: boolean } = { workspaceParent: false },
 ): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;

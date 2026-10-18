@@ -36,7 +36,7 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
       Effect.gen(function* () {
         const supervisors = yield* SupervisorChannel;
         const driver = localClaudeBackendDriver(processes, supervisors);
-        yield* driver.preflight({ ...launch, closeOnReport: true });
+        yield* driver.preflight(launch);
         const backend = yield* driver.spawn(launch);
         yield* backend.controls.initialize;
         yield* backend.controls.start(

@@ -12,7 +12,6 @@ const RPC_TIMEOUT = "10 seconds";
 
 const RPC_OUTCOME_CODES = new Map<RpcCommand["type"], string>([
   ["abort", "interrupt_outcome_uncertain"],
-  ["set_session_name", "rename_outcome_uncertain"],
 ]);
 
 const isGuidance = (command: RpcCommand): boolean =>

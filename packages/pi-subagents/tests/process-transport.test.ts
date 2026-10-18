@@ -12,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
+import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import { ChildProcess } from "../src/boundary/child-process.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
 import { acquireLocalCliTransport } from "../src/boundary/local-cli-transport.ts";
@@ -82,6 +83,12 @@ const fixture = () => {
     },
     completeWrite: (error?: Error) => completeWrite?.(error),
   };
+};
+
+// Three unacknowledged 3 MiB lines exceed the 8 MiB process backlog budget.
+const overflowBacklog = (f: ReturnType<typeof fixture>) => {
+  const line = Buffer.from(`"${"x".repeat(3 * 1024 * 1024)}"\n`);
+  for (let i = 0; i < 3; i++) f.stdout.emit("data", line);
 };
 
 const spawnListenerReady = (child: NodeChildProcess) =>
@@ -207,6 +214,19 @@ describe("shared process transport", () => {
     }),
   );
 
+  it.effect("bounds an unconsumed burst of small events by bytes rather than count", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const { handle, release } = yield* openNative(f);
+      f.stdout.emit("data", Buffer.from('{"type":"x"}\n'.repeat(5_000)));
+      expect(boundary.terminate).not.toHaveBeenCalled();
+      overflowBacklog(f);
+      yield* yieldUntil(() => boundary.terminate.mock.calls.length > 0);
+      expect((yield* handle.awaitExit).stderr).toContain("event backlog exceeded");
+      yield* release;
+    }),
+  );
+
   it.effect("gives an overflowed child a SIGTERM grace period before SIGKILL", () =>
     Effect.gen(function* () {
       const f = fixture();
@@ -214,7 +234,7 @@ describe("shared process transport", () => {
         mode === "force" ? Effect.sync(f.finish) : Effect.void,
       );
       const { release } = yield* openNative(f);
-      for (let i = 0; i < 513; i++) f.stdout.emit("data", Buffer.from("{}\n"));
+      overflowBacklog(f);
       yield* yieldUntil(() => boundary.terminate.mock.calls.length > 0);
       yield* TestClock.adjust("1 second");
       expect(boundary.terminate.mock.calls.map((call) => call[1])).toEqual(["graceful"]);
@@ -311,7 +331,7 @@ describe("shared process transport", () => {
       );
       const scope = yield* Scope.make();
       yield* start(f.child, acquireNative().pipe(Scope.provide(scope)));
-      for (let i = 0; i < 513; i++) f.stdout.emit("data", Buffer.from("{}\n"));
+      overflowBacklog(f);
       expect(boundary.terminate).toHaveBeenCalledWith(f.child, "force");
       const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void));
       yield* TestClock.adjust("5 seconds");
@@ -449,6 +469,46 @@ describe("shared process transport", () => {
 });
 
 describe("Pi transport policy", () => {
+  it.effect("keeps a Pi child alive through a delta burst while its run consumer stalls", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const scope = yield* Scope.make();
+      const agentDirectory = yield* temporaryDirectory("pi-transport-test-");
+      const context = yield* Layer.build(
+        ChildProcess.layer({ agentDirectory, transportRuntime: boundary }),
+      );
+      const pending = yield* Effect.forkChild(
+        localPiBackendDriver(Context.get(context, ChildProcess))
+          .spawn(backendLaunch())
+          .pipe(Effect.provideService(Scope.Scope, scope)),
+      );
+      yield* spawnListenerReady(f.child);
+      f.child.emit("spawn");
+      const backend = yield* Fiber.join(pending);
+      const delta = '{"type":"message_update","assistantMessageEvent":{"type":"text_delta"}}\n';
+      for (let chunk = 0; chunk < 30; chunk++) {
+        f.stdout.emit("data", Buffer.from(delta.repeat(100)));
+        yield* Effect.yieldNow;
+      }
+      f.stdout.emit(
+        "data",
+        Buffer.from(
+          '{"type":"tool_execution_end","toolCallId":"call","toolName":"edit","result":null,"isError":false}\n',
+        ),
+      );
+      yield* Effect.yieldNow;
+      expect(boundary.terminate).not.toHaveBeenCalled();
+      const activity = yield* Queue.take(backend.events);
+      expect(activity.type).toBe("activity");
+      backend.acknowledge(activity);
+      expect(yield* Queue.take(backend.events)).toMatchObject({
+        type: "tool_finished",
+        toolCallId: "call",
+      });
+      expect(boundary.terminate).not.toHaveBeenCalled();
+      yield* closeScope(scope);
+    }),
+  );
   it.effect("includes unacknowledged Node IPC payloads in the process byte budget", () =>
     Effect.gen(function* () {
       const f = fixture();

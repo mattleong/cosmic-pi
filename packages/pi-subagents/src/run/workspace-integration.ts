@@ -1,29 +1,52 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { WriterLease } from "../boundary/writer-lease.ts";
+import { leftOutUncapturedPaths } from "../workspace/policy.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
-import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
+import { isActiveRunState } from "./model.ts";
+import { fullyReviewed } from "./workspace-review.ts";
 import {
   isWithin,
   mapWorkspaceError,
+  revisionKnowledge,
   runHoldsCwd,
   runsWithin,
+  settleBinding,
+  UNREVIEWED,
   workspaceArtifactDirectory,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
 
 export interface WorkspaceIntegrationOutcome {
   readonly workerRoot: string;
-  readonly uncapturedPaths: ReadonlyArray<string>;
+  /** Parent files the proposal doesn't touch that changed after preparation; they were kept. */
+  readonly untouchedDriftPaths: ReadonlyArray<string>;
   readonly treeRemovalFailed: boolean;
   readonly remainingBackupPaths: ReadonlyArray<string>;
   readonly leaseReleaseUnconfirmed: boolean;
   /** Unresolved child workspaces created from the worker tree, which therefore stays. */
   readonly retainedForChildren?: ReadonlyArray<string> | undefined;
+  /**
+   * A partial integration's changed paths left out. The workspace stays an unreviewed proposal
+   * of exactly these changes.
+   */
+  readonly remainingPaths?: ReadonlyArray<string> | undefined;
 }
 
+/** A committed integration with what the coordinator knew of its revision and preparation. */
+export interface WorkspaceIntegrationResult extends WorkspaceIntegrationOutcome {
+  /** Every path the integration published: the revision's, or a partial preparation's subset. */
+  readonly changedPaths: ReadonlyArray<string>;
+  /** Worker files left out on purpose because they sit in dependency, build, or Pi state directories. */
+  readonly leftOutPaths: ReadonlyArray<string>;
+  readonly preparedCwd: string;
+  /** Whether the parent had read every page of the revision's review text. */
+  readonly reviewed: boolean;
+}
+
+/** Integration of an exact tested pair, which apply composes; see `integrateLocked`. */
 export function workspaceIntegrationOperations(context: WorkspaceControlContext) {
-  const { records, withLock, writerLeases: leases, state, requireBinding, requireEngine } = context;
+  const { records, writerLeases: leases, state, requireBinding, requireEngine } = context;
   const { requireChildrenResolved } = context;
   /**
    * The writer lease the integrating caller's own writer pool holds on its worker tree. A nested
@@ -43,7 +66,7 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
     preparationId: string,
     caller: string,
     held?: symbol,
-  ): Effect.Effect<WorkspaceIntegrationOutcome, SubagentError> =>
+  ): Effect.Effect<WorkspaceIntegrationResult, SubagentError> =>
     Effect.gen(function* () {
       const binding = yield* requireBinding(workspaceId, caller, held);
       const service = yield* requireEngine;
@@ -73,25 +96,34 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
           "workspace_target_busy",
           "A shared-checkout writer is still active or launching in the integration target.",
         );
-      if (binding.verificationFailedPreparation === preparationId)
+      const knowledge = revisionKnowledge(binding);
+      const recorded = knowledge?.kind === "prepared" && knowledge.preparationId === preparationId;
+      if (recorded && knowledge.verification === "failed")
         return yield* invalid(
           "workspace_verification_failed",
-          "This preparation failed verification and cannot be integrated. Revise or discard the workspace, or review every page, prepare again, and integrate the new preparation.",
+          "This preparation failed verification and cannot be applied. Revise or discard the workspace, or review every page, prepare again, and apply the new preparation.",
         );
       const artifact = yield* service
         .inspect({ workspaceId, ownerId: binding.handle.ownerId })
         .pipe(Effect.mapError(mapWorkspaceError));
       if (
-        binding.reopenPending ||
-        binding.testedPreparation !== preparationId ||
+        !recorded ||
+        knowledge.verification !== "tested" ||
         !artifact.preparation ||
         artifact.preparation.preparationId !== preparationId ||
-        artifact.preparation.revisionId !== revisionId
+        artifact.preparation.revisionId !== revisionId ||
+        artifact.revision?.revisionId !== revisionId
       )
         return yield* invalid(
           "workspace_preparation_stale",
           "The tested integration preparation no longer matches this revision.",
         );
+      const known = {
+        changedPaths: artifact.preparation.paths ?? artifact.revision.changedPaths,
+        leftOutPaths: leftOutUncapturedPaths(artifact.revision.uncapturedPaths),
+        preparedCwd: artifact.preparation.cwd,
+        reviewed: fullyReviewed(knowledge, revisionId),
+      };
       const roots = yield* Effect.forEach(artifact.preparation.leaseDirectories, (cwd) =>
         leases.canonicalize(cwd).pipe(Effect.mapError(mapWorkspaceError)),
       );
@@ -133,8 +165,13 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
               })
               .pipe(Effect.mapError(mapWorkspaceError));
             applying = false;
-            binding.finished = true;
-            binding.integrated = true;
+            // A partial integration leaves the rest of the proposal for a later review or apply.
+            settleBinding(
+              binding,
+              integration.remainingPaths === undefined
+                ? { phase: "finished", outcome: "integrated" }
+                : UNREVIEWED,
+            );
             return integration;
           }).pipe(
             Effect.ensuring(
@@ -143,9 +180,15 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
                   const current = yield* service
                     .inspect({ workspaceId, ownerId: binding.handle.ownerId })
                     .pipe(Effect.option);
-                  if (Option.isNone(current) || current.value.status === "integrating") {
+                  if (Option.isNone(current)) {
                     state.integrationQuarantined = true;
-                    binding.finished = true;
+                    settleBinding(binding, { phase: "finished", outcome: "unknown" });
+                    return;
+                  }
+                  // Its leases stay held so no writer edits the half-published files before
+                  // discard rolls them back.
+                  if (current.value.status === "integrating") {
+                    settleBinding(binding, { phase: "stopped-integration", leases: [...owned] });
                     return;
                   }
                 }
@@ -165,18 +208,9 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
             yield* Effect.logWarning(
               "Integration lease release is unconfirmed. Further writer admission is blocked pending manual recovery.",
             ).pipe(Effect.annotateLogs("workspaceId", workspaceId));
-          return { ...committed, leaseReleaseUnconfirmed: releaseFailed };
+          return { ...committed, ...known, leaseReleaseUnconfirmed: releaseFailed };
         }),
       );
     });
-  const workspaceIntegrate = (
-    workspaceId: string,
-    revisionId: string,
-    preparationId: string,
-    caller = SUBAGENT_ROOT_RUN_ID,
-  ): Effect.Effect<WorkspaceIntegrationOutcome, SubagentError> =>
-    context.operations.withPermits(1)(
-      withLock(integrateLocked(workspaceId, revisionId, preparationId, caller)),
-    );
-  return { workspaceIntegrate, integrateLocked };
+  return integrateLocked;
 }

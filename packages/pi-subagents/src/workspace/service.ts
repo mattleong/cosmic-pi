@@ -9,16 +9,19 @@ import { workspaceLockDirectory } from "../boundary/git-worktree-store.ts";
 import type {
   WorkspaceAcquired,
   WorkspaceError,
+  WorkspaceExport,
+  WorkspaceExportTarget,
   WorkspaceHandle,
   WorkspaceIntegration,
   WorkspaceIntegrationTarget,
   WorkspaceListing,
+  WorkspaceOrphanExportTarget,
   WorkspaceOrphanTarget,
   WorkspacePreparation,
-  WorkspaceQuarantineObserver,
+  WorkspacePreparationTarget,
+  WorkspaceRebase,
   WorkspaceRecord,
   WorkspaceRevision,
-  WorkspaceRevisionTarget,
   WorkspaceSettledTarget,
   WorkspaceSetupTarget,
   WorkspaceTarget,
@@ -43,28 +46,49 @@ export interface WorkspaceServiceContract {
   readonly freeze: (
     target: WorkspaceSettledTarget,
   ) => Effect.Effect<WorkspaceRevision, WorkspaceError>;
+  /** Prepares the revision, or with `paths` only those of its changes. */
   readonly prepare: (
-    target: WorkspaceRevisionTarget,
+    target: WorkspacePreparationTarget,
   ) => Effect.Effect<WorkspacePreparation, WorkspaceError>;
+  /**
+   * Publishes the prepared changes. A partial preparation's integration leaves the workspace
+   * active, proposing its remaining changes against an advanced baseline.
+   */
   readonly integrate: (
     target: WorkspaceIntegrationTarget,
   ) => Effect.Effect<WorkspaceIntegration, WorkspaceError>;
   readonly revise: (
     target: WorkspaceSettledTarget,
   ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
-  readonly fork: (
-    target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
-  ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
+  /**
+   * Rebuilds the worker tree in place from a fresh snapshot of its source, reapplies its changes
+   * with a three-way merge, and leaves the workspace active. Refuses, changing nothing, when the
+   * merge can't run at all.
+   */
+  readonly rebase: (
+    target: WorkspaceSettledTarget,
+  ) => Effect.Effect<WorkspaceRebase, WorkspaceError>;
+  /** Writes the frozen revision as a patch file or branch in the source repository. */
+  readonly exportRevision: (
+    target: WorkspaceExportTarget,
+  ) => Effect.Effect<WorkspaceExport, WorkspaceError>;
+  /**
+   * Exports a workspace whose creating session provably ended, without changing it; the caller
+   * proves its writer stopped.
+   */
+  readonly exportOrphan: (
+    target: WorkspaceOrphanExportTarget,
+  ) => Effect.Effect<WorkspaceExport, WorkspaceError>;
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
   /** Discards a workspace whose creating session provably ended; the caller proves its writer stopped. */
   readonly discardOrphan: (target: WorkspaceOrphanTarget) => Effect.Effect<void, WorkspaceError>;
   /**
    * Runs setup with durable process-cleanup quarantine, including across owner shutdown. A failure
    * without `cleanupUnconfirmed` leaves no quarantine; a failed or interrupted preparation setup
-   * withdraws that preparation.
+   * withdraws that preparation. `commandCleanupPending` reports the quarantine.
    */
   readonly setup: (
-    target: WorkspaceSetupTarget & WorkspaceQuarantineObserver & { readonly setup: WorkspaceSetup },
+    target: WorkspaceSetupTarget & { readonly setup: WorkspaceSetup },
   ) => Effect.Effect<void, WorkspaceError>;
   /**
    * Runs a verification command in a prepared tree under the same quarantine as setup, then
@@ -72,8 +96,7 @@ export interface WorkspaceServiceContract {
    * preparation and carries the output tail in `detail`.
    */
   readonly verify: (
-    target: WorkspaceVerifyTarget &
-      WorkspaceQuarantineObserver & { readonly verify: WorkspaceTreeCommand },
+    target: WorkspaceVerifyTarget & { readonly verify: WorkspaceTreeCommand },
   ) => Effect.Effect<WorkspaceVerification, WorkspaceError>;
   /** Paths a setup command changed relative to the tree it ran in. */
   readonly setupChanges: (
@@ -84,10 +107,21 @@ export interface WorkspaceServiceContract {
     target: WorkspaceSettledTarget,
   ) => Effect.Effect<WorkspaceWorkerChanges, WorkspaceError>;
   readonly inspect: (target: WorkspaceTarget) => Effect.Effect<WorkspaceRecord, WorkspaceError>;
+  /** The record's current revision with its patch, or undefined while it holds none. */
+  readonly revision: (
+    target: WorkspaceTarget,
+  ) => Effect.Effect<WorkspaceRevision | undefined, WorkspaceError>;
   /** Workspaces created from this one's worker tree that are neither integrated nor discarded. */
   readonly unresolvedChildren: (
     target: WorkspaceOrphanTarget,
   ) => Effect.Effect<ReadonlyArray<string>, WorkspaceError>;
+  /**
+   * Whether the durable setup/verification marker is set: a command is running in one of the
+   * workspace's trees, or its process cleanup is unconfirmed.
+   */
+  readonly commandCleanupPending: (
+    target: WorkspaceOrphanTarget,
+  ) => Effect.Effect<boolean, WorkspaceError>;
   readonly list: (input: {
     readonly ownerId: string;
   }) => Effect.Effect<ReadonlyArray<WorkspaceRecord>, WorkspaceError>;
@@ -137,7 +171,9 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           prepare: (input) => run(engine.prepare(input)),
           integrate: (input) => run(engine.integrate(input)),
           revise: (input) => run(engine.revise(input)),
-          fork: (input) => run(engine.fork(input)),
+          rebase: (input) => run(engine.rebase(input)),
+          exportRevision: (input) => run(engine.exportRevision(input)),
+          exportOrphan: (input) => run(engine.exportOrphan(input)),
           discard: (input) => run(engine.discard(input)),
           discardOrphan: (input) => run(engine.discardOrphan(input)),
           // Setup and verify take the permit only around their record changes, never while their
@@ -147,9 +183,11 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           setupChanges: (input) => run(engine.setupChanges(input)),
           inspectWorkerChanges: (input) => run(engine.inspectWorkerChanges(input)),
           inspect: (input) => run(engine.inspect(input)),
-          // A lock-free listing: callers check it under the run lock, so it never waits behind
+          revision: (input) => run(engine.revision(input)),
+          // Lock-free reads: callers check them under the run lock, so they never wait behind
           // engine work, and this process's in-flight creates are tracked by their launches.
           unresolvedChildren: (input) => provided(engine.unresolvedChildren(input)),
+          commandCleanupPending: (input) => provided(engine.commandCleanupPending(input)),
           list: (input) => run(engine.list(input)),
           listAll: run(engine.listAll),
         });

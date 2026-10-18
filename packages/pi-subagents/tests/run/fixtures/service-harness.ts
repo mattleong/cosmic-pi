@@ -684,9 +684,8 @@ export function fakeNativeReportBackendLayer(
   const controls: FakeNativeReportControl[] = [];
   const launches: BackendLaunchRequest[] = [];
   const driver: BackendDriver = {
-    host: "local",
     runtime: "claude",
-    capabilities: options.capabilities ?? ["steer", "rename-display"],
+    capabilities: options.capabilities ?? ["steer"],
     supportsContext: (context) => context === "fresh",
     preflight: () => Effect.void,
     spawn: (launch) =>
@@ -743,7 +742,6 @@ export function fakeNativeReportBackendLayer(
                 interrupt: options.interruptGate
                   ? Deferred.await(options.interruptGate)
                   : Effect.void,
-                renameDisplay: () => Effect.void,
                 reply: () => Effect.void,
                 notifyPeers: () => Effect.void,
               },
@@ -853,9 +851,7 @@ export const askParent = (
   });
 
 export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRequest => ({
-  host: "local",
   runtime: "pi",
-  closeOnReport: true,
   task: "Inspect authentication",
   cwd: "/project",
   context: "fresh",

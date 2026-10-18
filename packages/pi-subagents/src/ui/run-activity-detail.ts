@@ -72,11 +72,10 @@ const usageLine = (run: SubagentRunView): string =>
 const technical = (run: SubagentRunView): string =>
   [
     `ID: ${run.id} · assignment/report: ${run.reportGeneration} · report: ${run.reportStatus ?? "unknown"}`,
-    `Route: ${run.host}/${run.runtime} · ${run.model}`,
+    `Route: local/${run.runtime} · ${run.model}`,
     `Cwd: ${run.cwd} · PID: ${run.pid ?? "none"}`,
     `Capabilities: ${run.capabilities.join(", ")} · steering: ${run.steeringDelivery ?? "none"}`,
     `Writes: ${run.writeIntent} · claims: ${run.writeClaims?.join(", ") ?? "exclusive / none"}`,
-    `File access paused: ${run.writeAdmissionPaused === true}`,
     `Workspace: ${run.writerWorkspaceMode ?? "shared-checkout"} · ${run.workspaceId ?? "none"}`,
     `Native agents: ${run.nativeActivity?.active ?? 0} active / ${run.nativeActivity?.total ?? 0} total`,
     run.sessionFile ? `Session: ${run.sessionFile}` : "",

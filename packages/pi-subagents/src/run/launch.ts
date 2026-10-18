@@ -220,7 +220,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
         const spendLimit = yield* dependencies.currentSpendLimit;
         const driver = yield* restore(
           backendRegistry.resolve({
-            host: request.host,
             runtime: request.runtime,
             context: request.context,
           }),
@@ -245,7 +244,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
           driver.preflight({
             context: request.context,
             writeIntent: request.writeIntent,
-            closeOnReport: request.closeOnReport,
             model: request.model,
             effort: request.effort,
             cwd,
@@ -305,8 +303,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
 
         const plan: LaunchPlan = { request, parentRunId, cwd, writeClaims };
         const promptRequest = (base: StartSubagentRequest) => withWriteClaims(base, writeClaims);
-        const evictionEligible = (record: RunRecord) =>
-          isEvictionEligible({ records, writerPools }, record);
+        const evictionEligible = (record: RunRecord) => isEvictionEligible({ records }, record);
 
         const admitLocked = (
           evicted: RunRecord | undefined,

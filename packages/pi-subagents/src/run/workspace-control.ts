@@ -2,15 +2,15 @@ import * as Effect from "effect/Effect";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import {
   type WorkspaceListing,
-  type WorkspacePreparation,
   type WorkspaceRecord,
   workspaceCheckoutRoot,
 } from "../workspace/model.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunContext } from "./internal.ts";
-import { SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
+import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
   isWithin,
+  revisionKnowledge,
   workspaceControlContext,
   mapWorkspaceError,
   type WorkspaceControlDependencies,
@@ -21,13 +21,20 @@ import {
   type WorkspaceApplyResult,
 } from "./workspace-apply.ts";
 import {
-  workspaceIntegrationOperations,
-  type WorkspaceIntegrationOutcome,
-} from "./workspace-integration.ts";
-import { workspaceLaunchOperations } from "./workspace-launch.ts";
+  workspaceExportOperations,
+  type WorkspaceExportOptions,
+  type WorkspaceExportResult,
+} from "./workspace-export.ts";
+import { workspaceIntegrationOperations } from "./workspace-integration.ts";
+import {
+  workspaceLaunchOperations,
+  type WorkspaceReviseOptions,
+  type WorkspaceRevised,
+} from "./workspace-launch.ts";
 import { workspaceOrphanOperations } from "./workspace-orphan.ts";
 import {
   workspaceReviewOperations,
+  type WorkspacePrepared,
   type WorkspaceReview,
   type WorkspaceReviewOptions,
 } from "./workspace-review.ts";
@@ -51,16 +58,13 @@ export interface WorkspaceCoordinatorContract {
     workspaceId: string,
     revisionId: string,
     callerRunId?: string,
-  ) => Effect.Effect<WorkspacePreparation, SubagentError>;
-  readonly workspaceIntegrate: (
-    workspaceId: string,
-    revisionId: string,
-    preparationId: string,
-    callerRunId?: string,
-  ) => Effect.Effect<WorkspaceIntegrationOutcome, SubagentError>;
+  ) => Effect.Effect<WorkspacePrepared, SubagentError>;
   /**
-   * The direct parent's one-step freeze, prepare, setup, verify, and integrate; it does not
-   * require the diff to be read. A failed verification integrates nothing.
+   * The direct parent's integration. Without a preparation it freezes, prepares, verifies, and
+   * integrates in one step, without requiring the diff to be read, and a failed verification
+   * integrates nothing; `paths` integrates only those changes and keeps the rest as the
+   * workspace's proposal. With a preparation it integrates exactly that reviewed and prepared
+   * pair.
    */
   readonly workspaceApply: (
     workspaceId: string,
@@ -71,11 +75,22 @@ export interface WorkspaceCoordinatorContract {
     workspaceId: string,
     callerRunId?: string,
   ) => Effect.Effect<void, SubagentError>;
+  /**
+   * Writes the proposal out as a patch file or branch in the source repository without resolving
+   * it. The root may also export an orphan whose session has ended.
+   */
+  readonly workspaceExport: (
+    workspaceId: string,
+    options?: WorkspaceExportOptions,
+    callerRunId?: string,
+  ) => Effect.Effect<WorkspaceExportResult, SubagentError>;
+  /** Starts a successor writer; `rebase` first rebuilds its tree from current parent files. */
   readonly workspaceRevise: (
     workspaceId: string,
     message: string,
     callerRunId?: string,
-  ) => Effect.Effect<SubagentRunView, SubagentError>;
+    options?: WorkspaceReviseOptions,
+  ) => Effect.Effect<WorkspaceRevised, SubagentError>;
   readonly inspectWriterWorkspace: Effect.Effect<WriterWorkspaceInspection, SubagentError>;
   readonly setWriterWorkspaceMode: <A, E, R>(
     mode: WriterWorkspaceMode,
@@ -145,24 +160,27 @@ export function workspaceControl(
     );
   const currentRecord = (record: WorkspaceRecord): WorkspaceRecord => {
     const binding = state.bindings.get(record.handle.workspaceId);
-    if (binding?.reopenPending && (record.status === "frozen" || record.status === "prepared"))
+    const knowledge = binding && revisionKnowledge(binding);
+    if (
+      knowledge?.kind === "reopened" &&
+      (record.status === "frozen" || record.status === "prepared")
+    )
       return {
         version: record.version,
         handle: record.handle,
         status: "active",
         baseline: record.baseline,
-        ...(record.predecessorWorkspaceId !== undefined && {
-          predecessorWorkspaceId: record.predecessorWorkspaceId,
-        }),
         ...(record.excludedPaths !== undefined && { excludedPaths: record.excludedPaths }),
       };
     // A preparation whose setup failed or is still running cannot be integrated. One that
     // failed verification stays listed for inspection, and integration refuses it.
     if (
-      binding &&
+      knowledge &&
       record.status === "prepared" &&
-      record.preparation?.preparationId !== binding.testedPreparation &&
-      record.preparation?.preparationId !== binding.verificationFailedPreparation
+      !(
+        knowledge.kind === "prepared" &&
+        knowledge.preparationId === record.preparation?.preparationId
+      )
     ) {
       const { preparation: _preparation, preparedTree: _preparedTree, ...frozen } = record;
       return { ...frozen, status: "frozen" };
@@ -191,8 +209,8 @@ export function workspaceControl(
       );
     });
   const review = workspaceReviewOperations(context);
-  const integration = workspaceIntegrationOperations(context);
-  const discardOrphan = workspaceOrphanOperations(context, sourceRecords);
+  const integrateLocked = workspaceIntegrationOperations(context);
+  const orphans = workspaceOrphanOperations(context, sourceRecords);
   // The root may discard a workspace no live binding owns once its creating session has ended.
   const workspaceDiscard: WorkspaceCoordinatorContract["workspaceDiscard"] = (
     workspaceId,
@@ -200,7 +218,7 @@ export function workspaceControl(
   ) =>
     Effect.suspend(() =>
       caller === SUBAGENT_ROOT_RUN_ID && !state.bindings.has(workspaceId)
-        ? discardOrphan(workspaceId)
+        ? orphans.discardOrphan(workspaceId)
         : review.workspaceDiscard(workspaceId, caller),
     );
   return {
@@ -208,8 +226,8 @@ export function workspaceControl(
     workspaceReview: review.workspaceReview,
     workspacePrepare: review.workspacePrepare,
     workspaceDiscard,
-    workspaceIntegrate: integration.workspaceIntegrate,
-    workspaceApply: workspaceApplyOperations(context, review.held, integration.integrateLocked),
+    workspaceExport: workspaceExportOperations(context, review.held, orphans),
+    workspaceApply: workspaceApplyOperations(context, review.held, integrateLocked),
     /** Forked once a worktree writer completes; see `workspaceSettleOperations`. */
     settleCompletedWorkspace: workspaceSettleOperations(
       context,

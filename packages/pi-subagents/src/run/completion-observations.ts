@@ -177,7 +177,7 @@ export function completionObservationOperations(
             if (claimAll && missingIds.length > 0)
               return yield* invalidRequest(
                 "subagent_runs_not_found",
-                `Subagent runs not found: ${missingIds.join(", ")}. Use subagent_list to refresh active run IDs.`,
+                `Subagent runs not found: ${missingIds.join(", ")}. Call subagent_status without runIds to list current run IDs.`,
               );
             const claimToken = allocateClaimToken();
             const desired = selected.flatMap((record) => {

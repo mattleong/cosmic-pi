@@ -36,7 +36,7 @@ import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeStartBatch } from "./execute-start.ts";
 import { presentSubagentResult, type SubagentExecutionResult } from "./execute-result.ts";
 import { awaitContract, statusContract, startContract, lifecycleContract } from "./contract.ts";
-import { listContract, renameContract } from "./discovery-contract.ts";
+import { statusListContract } from "./discovery-contract.ts";
 import {
   attentionRecoveryText,
   formatActionFailures,
@@ -54,10 +54,9 @@ import { executeWorkspaceAction } from "./execute-workspace.ts";
 import type { SubagentActionFailure } from "./model.ts";
 import { isPendingDeliveryError, isUncertainToolFailure } from "./outcome.ts";
 import {
-  claimsOperationError,
   lifecycleMessageError,
+  statusOperationError,
   subagentToolAction,
-  type SubagentClaimsInput,
   type SubagentLifecycleInput,
   type SubagentToolAction,
   type SubagentToolInput,
@@ -260,10 +259,7 @@ export const executeSubagentActionEffect = (
           ...(contract && { contract }),
         };
         const result = yield* Effect.sync(() => present(outcome));
-        const receipts =
-          input.tool === SUBAGENT_TOOL_NAME.claims
-            ? []
-            : renderedCompletionReceipts(observations, formatted.fullyRenderedIds);
+        const receipts = renderedCompletionReceipts(observations, formatted.fullyRenderedIds);
         awaitState?.markDeliveryAttempt(receipts.map((receipt) => receipt.id));
         yield* service.consumeCompletions(receipts);
         return { result, fullyRenderedIds: formatted.fullyRenderedIds };
@@ -278,7 +274,7 @@ export const executeSubagentActionEffect = (
                 (id): SubagentActionFailure => ({
                   id,
                   code: "SubagentNotFoundError",
-                  message: `Subagent run not found: ${id}. Use subagent_list to refresh active run IDs.`,
+                  message: `Subagent run not found: ${id}. Call subagent_status without runIds to list current run IDs.`,
                 }),
               );
               return completeObservations(
@@ -371,25 +367,6 @@ export const executeSubagentActionEffect = (
           ),
         );
       });
-    const executeClaims = (operation: SubagentClaimsInput) =>
-      Effect.gen(function* () {
-        const operationError = claimsOperationError(operation);
-        if (operationError !== undefined)
-          return yield* invalidRequest("claims_input_invalid", operationError);
-        if (operation.action === "list")
-          return yield* finishStatus(yield* requiredTargetIds(action, operation.runIds ?? []));
-        const id = yield* required(action, "runId", operation.runId ?? "");
-        yield* authorize([id]);
-        return present(
-          yield* forEachOutcome([id], (runId) =>
-            Match.value(operation.action).pipe(
-              Match.when("grant", () => service.grantWriteClaims(runId, operation.paths ?? [])),
-              Match.when("revoke", () => service.revokeWriteClaims(runId, operation.paths ?? [])),
-              Match.orElse(() => service.resumeWriterAdmission(runId)),
-            ),
-          ),
-        );
-      });
 
     switch (input.tool) {
       case SUBAGENT_TOOL_NAME.start: {
@@ -407,12 +384,16 @@ export const executeSubagentActionEffect = (
           contract: startContract(input.args.agents, result.startOutcomes),
         });
       }
-      case SUBAGENT_TOOL_NAME.list: {
-        const runs = yield* callerRunId ? service.visibleList(callerRunId) : service.list;
-        return present({ runs, contract: listContract(runs) });
-      }
-      case SUBAGENT_TOOL_NAME.status:
+      case SUBAGENT_TOOL_NAME.status: {
+        const statusError = statusOperationError(input.args);
+        if (statusError !== undefined)
+          return yield* invalidRequest("status_input_invalid", statusError);
+        if (input.args.runIds === undefined) {
+          const runs = yield* callerRunId ? service.visibleList(callerRunId) : service.list;
+          return present({ runs, contract: statusListContract(runs) });
+        }
         return yield* finishStatus(yield* requiredTargetIds(action, input.args.runIds));
+      }
       case SUBAGENT_TOOL_NAME.await: {
         const ids = yield* requiredTargetIds(action, input.args.runIds);
         yield* authorize(ids);
@@ -453,19 +434,6 @@ export const executeSubagentActionEffect = (
       }
       case SUBAGENT_TOOL_NAME.lifecycle:
         return yield* executeLifecycle(input.args);
-      case SUBAGENT_TOOL_NAME.rename: {
-        const id = yield* required(action, "runId", input.args.runId);
-        yield* authorize([id]);
-        const result = yield* forEachOutcome([id], (runId) =>
-          service.rename(runId, input.args.name.trim(), expected),
-        );
-        const [outcome] = result.outcomes;
-        if (outcome === undefined)
-          return yield* Effect.die(new Error("Rename produced no outcome."));
-        return present({ ...result, contract: renameContract(outcome) });
-      }
-      case SUBAGENT_TOOL_NAME.claims:
-        return yield* executeClaims(input.args);
     }
     return absurd<never>(input);
   });

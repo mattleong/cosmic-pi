@@ -15,14 +15,16 @@ import {
 } from "./details-schema.ts";
 import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 import {
-  DENSITY_ORDER,
+  condenseFailure,
+  condenseProfileRoute,
+  condenseRunCard,
+  condenseStartEntry,
   omitReports,
   projectActionFailures,
   projectFailure,
   projectStartEntry,
   projectSubagentProfileRoutes,
   projectSubagentRunCard,
-  type DetailDensity,
 } from "./details-projection.ts";
 import type { SubagentProfileView } from "./model.ts";
 
@@ -55,6 +57,14 @@ export type CompactToolDetailsInput =
       readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
     };
 
+/**
+ * Fitting stages, tried in order until details decode within their persisted bound: bounded cards
+ * with reports, then without reports, then condensed to their essential evidence.
+ */
+type FitStage = "reports" | "report-free" | "condensed";
+const REPORT_STAGES: ReadonlyArray<FitStage> = ["reports", "report-free", "condensed"];
+const REPORT_FREE_STAGES: ReadonlyArray<FitStage> = ["report-free", "condensed"];
+
 const semanticCandidate = <Stage, Candidate, Details>(
   stages: ReadonlyArray<Stage>,
   project: (stage: Stage) => Candidate,
@@ -67,30 +77,32 @@ const semanticCandidate = <Stage, Candidate, Details>(
   throw new Error("Unable to construct bounded persisted subagent details.");
 };
 
-const startDetailsCandidate = (
-  input: StartDetailsInput,
-  density: DetailDensity,
-): SubagentStartDetails => {
+const startDetailsCandidate = (input: StartDetailsInput, stage: FitStage): SubagentStartDetails => {
+  const condense = stage === "condensed";
   const failures = input.startFailures
     ? [...input.startFailures]
         .toSorted((left, right) => left.index - right.index)
         .slice(0, MAX_START_BATCH)
-        .map((failure) => projectFailure(failure, density))
+        .map((failure) => {
+          const projected = projectFailure(failure);
+          return condense ? condenseFailure(projected) : projected;
+        })
     : undefined;
   return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "start",
-    startEntries: input.startEntries
-      .slice(0, MAX_START_BATCH)
-      .map((entry) => projectStartEntry(entry, density)),
+    startEntries: input.startEntries.slice(0, MAX_START_BATCH).map((entry) => {
+      const projected = projectStartEntry(entry);
+      return condense ? condenseStartEntry(projected) : projected;
+    }),
     ...(failures !== undefined && failures.length > 0 && { startFailures: failures }),
   };
 };
 
 export const startDetails = (input: StartDetailsInput): SubagentStartDetails =>
   semanticCandidate(
-    DENSITY_ORDER,
-    (density) => startDetailsCandidate(input, density),
+    REPORT_FREE_STAGES,
+    (stage) => startDetailsCandidate(input, stage),
     (value) => {
       const decoded = decodeStartAwaitCardDetails(value);
       return decoded?.action === "start" ? decoded : undefined;
@@ -102,19 +114,15 @@ const reportsWereOmitted = (runs: ReadonlyArray<SubagentRunView>): boolean =>
 
 const projectedCards = (
   runs: ReadonlyArray<SubagentRunView>,
-  density: DetailDensity,
-  includeReports: boolean,
+  stage: FitStage,
 ): ReadonlyArray<SubagentRunCard> =>
   runs.slice(0, MAX_TARGET_RUNS).map((run) => {
-    const card = projectSubagentRunCard(run, density);
-    return includeReports ? card : omitReports(card);
+    const card = projectSubagentRunCard(run);
+    if (stage === "reports") return card;
+    return stage === "report-free" ? omitReports(card) : condenseRunCard(card);
   });
 
-const awaitCandidate = (
-  input: AwaitDetailsInput,
-  density: DetailDensity,
-  includeReports: boolean,
-): SubagentAwaitDetails => {
+const awaitCandidate = (input: AwaitDetailsInput, stage: FitStage): SubagentAwaitDetails => {
   const source = input.runs.slice(0, MAX_TARGET_RUNS);
   const requestedAwaitedRunIds = (input.awaitedRunIds ?? source.map((run) => run.id)).slice(
     0,
@@ -125,11 +133,11 @@ const awaitCandidate = (
     .map((row) => row.run)
     .filter((run) => !targetIds.has(run.id));
   const contextSource = contextCandidates.slice(0, Math.max(0, MAX_TARGET_RUNS - source.length));
-  const targetCards = projectedCards(source, density, includeReports);
-  const contextCards = projectedCards(contextSource, density, false);
+  const targetCards = projectedCards(source, stage);
+  const contextCards = projectedCards(contextSource, stage === "reports" ? "report-free" : stage);
   const awaitedRunIds =
     targetCards.length > 0 ? targetCards.map((card) => card.id) : requestedAwaitedRunIds;
-  const omitted = !includeReports && reportsWereOmitted(source);
+  const reportsOmitted = stage === "report-free" && reportsWereOmitted(source);
   return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "await",
@@ -146,9 +154,8 @@ const awaitCandidate = (
         cancellationCleanup: "unconfirmed" as const,
       }),
     ...(contextCandidates.length > contextSource.length && { contextOmitted: true as const }),
-    ...(omitted && { contentOmitted: true as const }),
-    ...(omitted &&
-      density === "full" &&
+    ...((reportsOmitted || stage === "condensed") && { contentOmitted: true as const }),
+    ...(reportsOmitted &&
       ![...source, ...contextSource].some((run) => run.error !== undefined) && {
         reportsOnlyOmitted: true as const,
       }),
@@ -157,8 +164,8 @@ const awaitCandidate = (
 
 export const awaitDetails = (input: AwaitDetailsInput): SubagentAwaitDetails =>
   semanticCandidate(
-    ["reports", ...DENSITY_ORDER] as const,
-    (stage) => awaitCandidate(input, stage === "reports" ? "full" : stage, stage === "reports"),
+    REPORT_STAGES,
+    (stage) => awaitCandidate(input, stage),
     (value) => {
       const decoded = decodeStartAwaitCardDetails(value);
       return decoded?.action === "await" ? decoded : undefined;
@@ -167,24 +174,22 @@ export const awaitDetails = (input: AwaitDetailsInput): SubagentAwaitDetails =>
 
 const runDetailsCandidate = (
   input: Extract<CompactToolDetailsInput, { readonly action: RunDetailsAction }>,
-  density: DetailDensity,
-  includeReports: boolean,
+  stage: FitStage,
 ): Exclude<CompactSubagentToolDetails, { readonly action: "models" }> => {
   const orderedRuns =
     input.action === "list" ? projectRunCardTree(input.runs).map((row) => row.run) : input.runs;
   const source = orderedRuns.slice(0, MAX_TARGET_RUNS);
-  const cards = projectedCards(source, density, includeReports);
-  const failures = projectActionFailures(input.action, input.actionFailures, density);
-  const omitted = !includeReports && reportsWereOmitted(source);
+  const cards = projectedCards(source, stage);
+  const failures = projectActionFailures(input.action, input.actionFailures);
+  const reportsOmitted = stage === "report-free" && reportsWereOmitted(source);
   return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: input.action,
     cards,
     runCount: input.runs.length,
     ...(failures !== undefined && failures.length > 0 && { actionFailures: failures }),
-    ...(omitted && { contentOmitted: true as const }),
-    ...(omitted &&
-      density === "full" &&
+    ...((reportsOmitted || stage === "condensed") && { contentOmitted: true as const }),
+    ...(reportsOmitted &&
       !input.runs.some((run) => run.error !== undefined) &&
       !input.actionFailures?.length && { reportsOnlyOmitted: true as const }),
   };
@@ -192,28 +197,28 @@ const runDetailsCandidate = (
 
 const modelDetailsCandidate = (
   input: Extract<CompactToolDetailsInput, { readonly action: "models" }>,
-  density: DetailDensity,
+  stage: FitStage,
 ): Extract<CompactSubagentToolDetails, { readonly action: "models" }> => {
+  const profiles = projectSubagentProfileRoutes(input.profiles);
   const base: Extract<CompactSubagentToolDetails, { readonly action: "models" }> = {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "models",
-    profiles: projectSubagentProfileRoutes(input.profiles, density),
+    profiles: stage === "condensed" ? profiles.map(condenseProfileRoute) : profiles,
     fallbackProfile: input.fallbackProfile,
   };
-  return density === "full" ? base : { ...base, contentOmitted: true as const };
+  return stage === "condensed" ? { ...base, contentOmitted: true as const } : base;
 };
 
 export const compactToolDetails = (input: CompactToolDetailsInput): CompactSubagentToolDetails => {
   if (input.action === "models")
     return semanticCandidate(
-      DENSITY_ORDER,
-      (density) => modelDetailsCandidate(input, density),
+      REPORT_FREE_STAGES,
+      (stage) => modelDetailsCandidate(input, stage),
       decodeCompactToolDetails,
     );
   return semanticCandidate(
-    input.action === "status" ? (["reports", ...DENSITY_ORDER] as const) : DENSITY_ORDER,
-    (stage) =>
-      runDetailsCandidate(input, stage === "reports" ? "full" : stage, stage === "reports"),
+    input.action === "status" ? REPORT_STAGES : REPORT_FREE_STAGES,
+    (stage) => runDetailsCandidate(input, stage),
     decodeCompactToolDetails,
   );
 };

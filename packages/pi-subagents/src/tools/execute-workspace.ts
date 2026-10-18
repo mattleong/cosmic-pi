@@ -8,8 +8,14 @@ import { invalidRequest } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import type { WorkspaceApplyResult } from "../run/workspace-apply.ts";
+import type { WorkspaceExportResult } from "../run/workspace-export.ts";
 import type { WorkspaceIntegrationOutcome } from "../run/workspace-integration.ts";
 import { UnavailableWorkspaceArtifactSchema, WorkspaceRecordSchema } from "../workspace/model.ts";
+import {
+  blockingUncapturedPath,
+  leftOutReason,
+  leftOutUncapturedPaths,
+} from "../workspace/policy.ts";
 import {
   MAX_WORKSPACE_VERIFICATION_TEXT_CHARS,
   type WorkspaceToolDetails,
@@ -56,17 +62,17 @@ const listedPaths = (paths: ReadonlyArray<string>) => {
 
 function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWarning[] {
   const warnings: WorkspaceWarning[] = [];
-  const paths = outcome.uncapturedPaths;
   const worker = JSON.stringify(outcome.workerRoot);
-  if (paths.length > 0) {
-    const onlyPath = paths.length === 1 ? paths[0] : undefined;
+  const drifted = outcome.untouchedDriftPaths;
+  if (drifted.length > 0) {
+    const onlyPath = drifted.length === 1 ? drifted[0] : undefined;
     warnings.push({
-      code: "worker-retained",
+      code: "untested-parent-changes",
       message:
         onlyPath !== undefined
-          ? `${fileName(onlyPath)} wasn't in the proposal, so the working copy was kept`
-          : `${countLabel(paths.length, "file")} weren't in the proposal, so the working copy was kept`,
-      detail: `The workspace snapshot did not capture these worker files, so they were neither reviewed nor integrated: ${listedPaths(paths)}. The worker tree, which these paths are relative to, was kept at ${worker} so they are not lost. Copy any you need into the parent checkout, then discard this workspace to delete the tree.`,
+          ? `${fileName(onlyPath)} changed in the parent after testing`
+          : `${countLabel(drifted.length, "parent file")} changed after testing`,
+      detail: `The integration published only the proposal's own changes and kept these parent edits, which it doesn't touch, as they are: ${listedPaths(drifted)}. They changed after the combined tree was prepared, so tests run there didn't include them; rerun relevant tests in the parent checkout.`,
     });
   }
   const children = outcome.retainedForChildren ?? [];
@@ -77,7 +83,7 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
         children.length === 1
           ? "The working copy was kept for an unresolved child workspace"
           : `The working copy was kept for ${countLabel(children.length, "unresolved child workspace")}`,
-      detail: `The integration committed, but child workspaces created from the worker tree are still unresolved: ${listedPaths(children)}. The worker tree at ${worker} stays until each child is integrated or discarded; then discard this workspace to delete the tree.`,
+      detail: `The integration committed, but child workspaces created from the worker tree are still unresolved: ${listedPaths(children)}. The worker tree at ${worker} stays until each child is applied or discarded; then discard this workspace to delete the tree.`,
     });
   if (outcome.treeRemovalFailed)
     warnings.push({
@@ -105,19 +111,36 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
   return warnings;
 }
 
-const integrationResult = (
-  outcome: WorkspaceIntegrationOutcome,
-  receipt: Omit<WorkspaceToolDetails, "version" | "action" | "warnings">,
-) => {
-  const warnings = integrationWarnings(outcome);
-  return result(
-    [
-      "Integrated the exact reviewed and tested revision as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.",
-      ...warnings.map((warning) => `Warning: ${warning.detail}`),
-    ].join("\n"),
-    { ...receipt, ...(warnings.length > 0 && { warnings }) },
-  );
-};
+function leftOutWarnings(leftOut: ReadonlyArray<string>): WorkspaceWarning[] {
+  const paths = leftOut.filter((path) => leftOutReason(path) === "dependency");
+  const credentials = leftOut.filter((path) => leftOutReason(path) === "credential");
+  return [
+    ...(paths.length > 0
+      ? [
+          {
+            code: "worker-files-left-out",
+            message:
+              paths.length === 1
+                ? "A worker file in a dependency or build directory was left out"
+                : `${countLabel(paths.length, "worker file")} in dependency or build directories were left out`,
+            detail: `Proposals leave out files in dependency, build, and Pi state directories (node_modules, vendor, dist, build, coverage, .pi) on purpose, so these never reach the parent checkout: ${listedPaths(paths)}. Regenerate them there, for example by installing dependencies or rebuilding, if the change needs them.`,
+          },
+        ]
+      : []),
+    ...(credentials.length > 0
+      ? [
+          {
+            code: "credential-files-left-out",
+            message:
+              credentials.length === 1
+                ? "A credential file the worker created was left out"
+                : `${countLabel(credentials.length, "credential file")} the worker created were left out`,
+            detail: `Proposals leave out worker-created files with credential names that aren't source code (such as .env, .npmrc, keys, and credentials or secrets files), so local secrets never reach the parent checkout: ${listedPaths(credentials)}. Create them in the parent checkout yourself if the change needs them.`,
+          },
+        ]
+      : []),
+  ];
+}
 
 const WorkspaceMetadataSchema = Schema.Struct({
   workspaceId: Schema.String,
@@ -197,7 +220,7 @@ const executeWorkspaceList = (
         nextOffset === undefined
           ? "End of workspace list."
           : `More workspaces: call list with offset=${nextOffset}.`,
-        "Metadata visibility does not authorize recovery. If ownership/cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan. When the user asks, discard deletes an orphan whose creating session has ended once no writer holds it.",
+        "Metadata visibility does not authorize recovery. If ownership/cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan. Once its creating session has ended and no writer holds it, export saves its proposal as a patch without changing it, and, when the user asks, discard deletes it.",
       ].join("\n"),
       {
         operation: "list",
@@ -231,20 +254,26 @@ const executeWorkspaceReview = (
       },
       callerRunId,
     );
+    const blocking = (review.uncapturedPaths ?? []).filter(blockingUncapturedPath);
     const prefix = [
       `Workspace ${workspaceId}; immutable revision ${review.revisionId}.`,
-      `Diff characters ${review.offset}..${review.offset + review.diff.length} of ${review.totalChars}.`,
+      `Review characters ${review.offset}..${review.offset + review.text.length} of ${review.totalChars}: a summary of changed files and line counts, then the diff.`,
       review.nextOffset !== undefined
-        ? `Incomplete review. Call review with workspaceId=${workspaceId}, revisionId=${review.revisionId}, offset=${review.nextOffset}. Read ALL pages before prepare/integrate.`
-        : "End of diff. After reviewing every page, prepare this exact revision and run relevant tests in the returned combined cwd before integrate.",
-      "BEGIN IMMUTABLE DIFF PAGE",
+        ? `Incomplete review. Call review with workspaceId=${workspaceId}, revisionId=${review.revisionId}, offset=${review.nextOffset}. Read ALL pages before prepare.`
+        : "End of review. After reading every page, prepare this exact revision, run relevant tests in the returned combined cwd, then apply that revisionId and preparationId.",
+      ...(blocking.length > 0
+        ? [
+            `Uncaptured worker files, absent from this diff: ${listedPaths(blocking)}. Prepare and apply refuse (workspace_uncaptured_files) until a revision no longer leaves them; revise so the writer renames, removes, or gitignores them, or copy them from the worker tree and discard.`,
+          ]
+        : []),
+      "BEGIN IMMUTABLE REVIEW PAGE",
     ].join("\n");
-    return result([prefix, review.diff, "END IMMUTABLE DIFF PAGE"].join("\n"), {
+    return result([prefix, review.text, "END IMMUTABLE REVIEW PAGE"].join("\n"), {
       ...receipt,
       revisionId: review.revisionId,
       offset: review.offset,
       totalChars: review.totalChars,
-      displayContent: { offset: prefix.length + 1, length: review.diff.length },
+      displayContent: { offset: prefix.length + 1, length: review.text.length },
       ...(review.nextOffset !== undefined && { nextOffset: review.nextOffset }),
     });
   });
@@ -263,16 +292,19 @@ const executeWorkspacePrepare = (
     );
     const prefix = `Prepared revision ${preparation.revisionId}; preparationId=${preparation.preparationId}.`;
     const cwdLine = `Combined test cwd: ${preparation.cwd}`;
+    const warnings = leftOutWarnings(preparation.leftOutPaths);
     return result(
       [
         prefix,
         cwdLine,
-        "Run relevant tests in this cwd, which combines the proposal with current parent edits. Do not edit this prepared tree. After passing tests and complete diff review, integrate with this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
+        "Run relevant tests in this cwd, which combines the proposal with current parent edits. Do not edit this prepared tree. After passing tests and complete diff review, apply with this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
+        ...warnings.map((warning) => `Warning: ${warning.detail}`),
       ].join("\n"),
       {
         ...receipt,
         revisionId: preparation.revisionId,
         preparationId: preparation.preparationId,
+        ...(warnings.length > 0 && { warnings }),
         ...preparedCwdMetadata(preparation.cwd, {
           offset: prefix.length + 1,
           length: cwdLine.length,
@@ -300,21 +332,33 @@ const appliedReviewLine = (reviewed: boolean) =>
 
 const applyVerificationLines = (
   verification: Extract<WorkspaceApplyResult, { readonly integrated: true }>["verification"],
-) =>
-  verification.status === "passed"
-    ? {
+) => {
+  switch (verification.status) {
+    case "passed":
+      return {
         status: [`Verified: ${sanitizeTerminalLine(verification.command.join(" "))} passed.`],
         output: outputSection(
           "Verification output tail:",
           lastLines(verification.outputTail, PASSED_TAIL_LINES, PASSED_TAIL_CHARS),
         ),
-      }
-    : {
+      };
+    case "parent-tested":
+      return {
+        status: [
+          "Tested by you: apply integrated the preparation you tested in its combined cwd and ran no verification of its own.",
+        ],
+        output: [],
+      };
+    case "not-configured":
+      return {
         status: [
           "Not verified: no workspace verification command is configured, so the change wasn't tested. Run relevant tests in the parent checkout.",
         ],
         output: [],
       };
+  }
+  return absurd<never>(verification);
+};
 
 const executeWorkspaceApply = (
   service: SubagentServiceContract,
@@ -326,11 +370,20 @@ const executeWorkspaceApply = (
     const workspaceId = operation.workspaceId ?? "";
     const applied = yield* service.workspaceApply(
       workspaceId,
-      operation.revisionId === undefined ? {} : { revisionId: operation.revisionId },
+      operation.preparationId !== undefined && operation.revisionId !== undefined
+        ? { revisionId: operation.revisionId, preparationId: operation.preparationId }
+        : { revisionId: operation.revisionId, paths: operation.paths },
       callerRunId,
     );
     const ids = `workspace ${workspaceId}, revision ${applied.revisionId}, preparationId=${applied.preparationId}`;
     const changed = `Changed files (${applied.changedPathCount}): ${applied.changedPaths.length > 0 ? listedPaths(applied.changedPaths) : "none listed"}${applied.changedPathCount > applied.changedPaths.length ? ` (${applied.changedPathCount - applied.changedPaths.length} not listed)` : ""}`;
+    const remainingCount = applied.remainingPathCount;
+    const remaining =
+      remainingCount === undefined
+        ? []
+        : [
+            `Partial apply: ${countLabel(remainingCount, "other changed file")} ${applied.integrated ? (remainingCount === 1 ? "stays" : "stay") : "would stay"} in workspace ${workspaceId} as an unreviewed proposal: ${listedPaths(applied.remainingPaths ?? [])}${remainingCount > (applied.remainingPaths ?? []).length ? ` (${remainingCount - (applied.remainingPaths ?? []).length} not listed)` : ""}. Apply, review, export, revise, or discard them later.`,
+          ];
     const command =
       "command" in applied.verification
         ? verificationText(applied.verification.command.join(" "))
@@ -340,6 +393,7 @@ const executeWorkspaceApply = (
       revisionId: applied.revisionId,
       preparationId: applied.preparationId,
       changedPathCount: applied.changedPathCount,
+      ...(remainingCount !== undefined && { remainingPathCount: remainingCount }),
       reviewed: applied.reviewed,
       verification: applied.verification.status,
       ...(command && { verificationCommand: command }),
@@ -347,12 +401,13 @@ const executeWorkspaceApply = (
     };
     if (!applied.integrated) {
       const { verification } = applied;
-      const heading = `Verification failed for ${ids}. Nothing was applied; parent files are unchanged, and this preparation can't be integrated.`;
+      const heading = `Verification failed for ${ids}. Nothing was applied; parent files are unchanged, and this preparation can't be applied.`;
       const body = [
         `Command: ${sanitizeTerminalLine(verification.command.join(" "))}`,
         `Failure: ${sanitizeTerminalLine(verification.message)}`,
         `Prepared tree (inspect it; don't edit it): ${applied.preparedCwd}`,
         changed,
+        ...remaining,
         ...outputSection("Verification output tail:", verification.outputTail),
       ].join("\n");
       const message = verificationText(verification.message);
@@ -362,20 +417,112 @@ const executeWorkspaceApply = (
         displayContent: { offset: heading.length + 1, length: body.length },
       });
     }
-    const warnings = integrationWarnings(applied);
+    const warnings = [...integrationWarnings(applied), ...leftOutWarnings(applied.leftOutPaths)];
     const { status, output } = applyVerificationLines(applied.verification);
     const heading = [
       `Applied ${ids} as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.`,
       appliedReviewLine(applied.reviewed),
       ...status,
     ].join("\n");
-    const body = [changed, ...output].join("\n");
+    const body = [changed, ...remaining, ...output].join("\n");
     return result(
       [heading, body, ...warnings.map((warning) => `Warning: ${warning.detail}`)].join("\n"),
       {
         ...metadata,
         ...(warnings.length > 0 && { warnings }),
         displayContent: { offset: heading.length + 1, length: body.length },
+      },
+    );
+  });
+
+const shortId = (id: string) => sanitizeTerminalLine(id.slice(0, 12));
+
+/** How to use what export wrote, and that the workspace is still a proposal. */
+const exportLines = (workspaceId: string, exported: WorkspaceExportResult) => {
+  const unchanged = exported.orphan
+    ? "The orphaned workspace was read without changing it; discard it once the export is safe."
+    : `Workspace ${workspaceId} is unchanged and still a proposal; apply, revise, or discard it as before, and discard it once the export is all you need.`;
+  if (exported.format === "patch")
+    return {
+      location: `Patch: ${exported.path}`,
+      steps: [
+        `Apply it from the repository root with: git apply ${JSON.stringify(exported.path)} (run with --check first; --3way merges it with local edits). It is outside the working tree, so it is never committed by accident.`,
+        unchanged,
+      ],
+    };
+  return {
+    location: `Branch: ${exported.branch}`,
+    steps: [
+      `Its commit ${shortId(exported.commit)} adds the changes to HEAD ${shortId(exported.base)}; your index, HEAD, and files are unchanged. Inspect it with: git diff HEAD...${exported.branch}; merge it with: git merge ${exported.branch}.`,
+      unchanged,
+    ],
+  };
+};
+
+function exportWarnings(exported: WorkspaceExportResult): WorkspaceWarning[] {
+  const paths = exported.uncapturedPaths;
+  const blocking = paths.filter(blockingUncapturedPath);
+  return [
+    ...(exported.format === "branch" && exported.identity === "placeholder"
+      ? [
+          {
+            code: "export-placeholder-identity",
+            message: "The branch commit uses a placeholder identity",
+            detail: `Git user.name and user.email aren't configured for this repository, so the commit on ${exported.branch} names Pi workspace <workspace@invalid> as its author or committer. Configure your identity, then fix the commit with: git commit --amend --reset-author after checking out the branch.`,
+          },
+        ]
+      : []),
+    ...leftOutWarnings(leftOutUncapturedPaths(paths)),
+    ...(blocking.length > 0
+      ? [
+          {
+            code: "uncaptured-files-not-exported",
+            message:
+              blocking.length === 1
+                ? "A worker file the proposal can't carry isn't in the export"
+                : `${countLabel(blocking.length, "worker file")} the proposal can't carry aren't in the export`,
+            detail: `These worker files have names no proposal can hold, so the export leaves them out: ${listedPaths(blocking)}. Copy what you need from the worker tree before discarding the workspace.`,
+          },
+        ]
+      : []),
+  ];
+}
+
+const executeWorkspaceExport = (
+  service: SubagentServiceContract,
+  operation: SubagentWorkspaceInput,
+  receipt: WorkspaceReceipt,
+  callerRunId: string,
+) =>
+  Effect.gen(function* () {
+    const workspaceId = operation.workspaceId ?? "";
+    const exported = yield* service.workspaceExport(
+      workspaceId,
+      { revisionId: operation.revisionId, format: operation.format },
+      callerRunId,
+    );
+    const heading = `Exported workspace ${workspaceId}, revision ${exported.revisionId}, with ${countLabel(exported.changedPaths.length, "changed file")}.`;
+    const { location, steps } = exportLines(workspaceId, exported);
+    const warnings = exportWarnings(exported);
+    const target =
+      exported.format === "patch"
+        ? exported.path.length <= 1_024 && { exportPath: exported.path }
+        : { exportBranch: exported.branch };
+    return result(
+      [
+        heading,
+        location,
+        ...steps,
+        ...warnings.map((warning) => `Warning: ${warning.detail}`),
+      ].join("\n"),
+      {
+        ...receipt,
+        revisionId: exported.revisionId,
+        changedPathCount: exported.changedPaths.length,
+        exportFormat: exported.format,
+        ...target,
+        ...(warnings.length > 0 && { warnings }),
+        displayContent: { offset: heading.length + 1, length: location.length },
       },
     );
   });
@@ -391,7 +538,6 @@ export const executeWorkspaceAction = (
     if (error !== undefined) return yield* invalidRequest("workspace_input_invalid", error);
     const service = yield* SubagentService;
     const workspaceId = operation.workspaceId ?? "";
-    const revisionId = operation.revisionId ?? "";
     const receipt = { operation: operation.action, ...(workspaceId && { workspaceId }) };
     switch (operation.action) {
       case "list":
@@ -400,18 +546,10 @@ export const executeWorkspaceAction = (
         return yield* executeWorkspaceReview(service, operation, receipt, callerRunId);
       case "prepare":
         return yield* executeWorkspacePrepare(service, operation, receipt, callerRunId);
-      case "integrate": {
-        const preparationId = operation.preparationId ?? "";
-        const outcome = yield* service.workspaceIntegrate(
-          workspaceId,
-          revisionId,
-          preparationId,
-          callerRunId,
-        );
-        return integrationResult(outcome, { ...receipt, revisionId, preparationId });
-      }
       case "apply":
         return yield* executeWorkspaceApply(service, operation, receipt, callerRunId);
+      case "export":
+        return yield* executeWorkspaceExport(service, operation, receipt, callerRunId);
       case "discard":
         yield* service.workspaceDiscard(workspaceId, callerRunId);
         return result(
@@ -419,14 +557,31 @@ export const executeWorkspaceAction = (
           receipt,
         );
       case "revise": {
-        const run = yield* service.workspaceRevise(
+        const { run, rebase } = yield* service.workspaceRevise(
           workspaceId,
           operation.message ?? "",
           callerRunId,
+          { rebase: operation.rebase },
         );
+        const conflicts = rebase?.conflictedPaths ?? [];
+        const rebased =
+          rebase === undefined
+            ? []
+            : [
+                conflicts.length === 0
+                  ? "Rebased: the writer's tree was rebuilt from your current files, and its changes reapplied cleanly."
+                  : `Rebased: the writer's tree was rebuilt from your current files, and its changes were reapplied with ${countLabel(conflicts.length, "conflicted file")} the successor was told to resolve first: ${listedPaths(conflicts)}.`,
+              ];
         return result(
-          `Revision requested; successor runId=${run.id}. Prior review and preparation are invalid. Await this run, then review its new immutable revision from the beginning before preparing and testing again.`,
-          { ...receipt, successorRunId: run.id },
+          [
+            `Revision requested; successor runId=${run.id}. Prior review and preparation are invalid. Await this run, then review its new immutable revision from the beginning before preparing and testing again.`,
+            ...rebased,
+          ].join("\n"),
+          {
+            ...receipt,
+            successorRunId: run.id,
+            ...(rebase && { rebased: true, conflictCount: conflicts.length }),
+          },
         );
       }
     }

@@ -77,7 +77,6 @@ export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
   );
 
 const inertDriver: BackendDriver = {
-  host: "local",
   runtime: "pi",
   capabilities: [],
   supportsContext: () => true,
@@ -110,7 +109,6 @@ export const backendHandleFixture = (overrides: Partial<BackendHandle> = {}) =>
         start: () => Effect.void,
         steer: () => Effect.void,
         interrupt: Effect.void,
-        renameDisplay: () => Effect.void,
         reply: () => Effect.void,
         notifyPeers: () => Effect.void,
       },

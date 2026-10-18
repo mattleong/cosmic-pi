@@ -26,6 +26,7 @@ import {
   type SubagentRunView,
   type SubagentSessionEvent,
 } from "../run/model.ts";
+import { skippedCandidateLabel } from "../profiles/model.ts";
 import { steeringDeliveryEvidence } from "../tools/outcome.ts";
 import { cleanupEvidenceText, cleanupRecoveryText } from "../tools/format.ts";
 import { aggregateUsage } from "./metrics.ts";
@@ -284,7 +285,7 @@ function addTechnicalDetails(container: Container, run: SubagentRunView, theme: 
   const process = [
     run.id,
     run.profile ? `profile ${run.profile}` : undefined,
-    `${run.host}/${run.runtime}`,
+    `local/${run.runtime}`,
     run.parentRunId ? `parent ${run.parentRunId}` : undefined,
     run.depth !== undefined
       ? `depth ${run.depth} · children ${run.directChildCount ?? 0}/${run.descendantCount ?? 0}`
@@ -292,7 +293,6 @@ function addTechnicalDetails(container: Container, run: SubagentRunView, theme: 
     run.nativeActivity
       ? `native ${run.nativeActivity.active} active/${run.nativeActivity.total} total`
       : undefined,
-    `closeOnReport=${run.closeOnReport}`,
     run.pid ? `pid ${run.pid}` : undefined,
     `report generation ${run.reportGeneration}`,
   ]
@@ -313,7 +313,7 @@ function addTechnicalDetails(container: Container, run: SubagentRunView, theme: 
     addDetailLine(
       container,
       "skipped  ",
-      `${sanitizeTerminalLine(skipped.candidate)} [${sanitizeTerminalLine(skipped.code)}] · ${sanitizeTerminalLine(skipped.reason)}`,
+      `${sanitizeTerminalLine(skippedCandidateLabel(skipped.candidate))} [${sanitizeTerminalLine(skipped.code)}] · ${sanitizeTerminalLine(skipped.reason)}`,
       theme,
     );
   }

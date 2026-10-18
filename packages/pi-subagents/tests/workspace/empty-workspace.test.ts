@@ -1,6 +1,14 @@
 import { expect } from "vitest";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
-import { io, workspaceTarget, workspaceTests, writeFile } from "./fixtures/repository.ts";
+import { git } from "../../src/boundary/git-worktree-process.ts";
+import {
+  exists,
+  io,
+  readText,
+  workspaceTarget,
+  workspaceTests,
+  writeFile,
+} from "./fixtures/repository.ts";
 
 const test = workspaceTests([
   ["src/main.ts", "baseline\n"],
@@ -13,6 +21,7 @@ test("reports no changes for an untouched worker, ignoring gitignored files", fu
   expect(yield* service.inspectWorkerChanges(workspaceTarget(handle))).toEqual({
     changedPaths: [],
     uncapturedPaths: [],
+    diffStat: [],
   });
 });
 
@@ -23,6 +32,10 @@ test("reports edited and new source files without freezing a revision", function
   const changes = yield* service.inspectWorkerChanges(workspaceTarget(handle));
   expect(changes.changedPaths.toSorted()).toEqual(["src/added.ts", "src/main.ts"]);
   expect(changes.uncapturedPaths).toEqual([]);
+  expect(changes.diffStat).toEqual([
+    { path: "src/added.ts", change: "added", binary: false, addedLines: 1, deletedLines: 0 },
+    { path: "src/main.ts", change: "modified", binary: false, addedLines: 1, deletedLines: 1 },
+  ]);
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.status).toBe("active");
   expect(record.revision).toBeUndefined();
@@ -31,12 +44,51 @@ test("reports edited and new source files without freezing a revision", function
   expect(revision.changedPaths.toSorted()).toEqual(changes.changedPaths.toSorted());
 });
 
-test("reports a writer-created excluded file as uncaptured", function* (service, root) {
+const CREDENTIAL_FILES = [
+  ".env",
+  ".npmrc",
+  "certs/server.pem",
+  "config/credentials.json",
+  "deploy/id_rsa",
+  "secrets.txt",
+];
+const CREDENTIAL_NAMED_SOURCES = ["src/auth/credentials.ts", "src/secrets.ts"];
+
+test("leaves writer-created credential files out, keeping credential-named source", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, ".env"), "TOKEN=local\n");
-  expect(yield* service.inspectWorkerChanges(workspaceTarget(handle))).toEqual({
-    changedPaths: [],
-    uncapturedPaths: [".env"],
+  for (const name of [...CREDENTIAL_FILES, ...CREDENTIAL_NAMED_SOURCES]) {
+    yield* io(() => fs.mkdir(path.dirname(path.join(handle.cwd, name)), { recursive: true }));
+    yield* writeFile(path.join(handle.cwd, name), `${name}\n`);
+  }
+  const changes = yield* service.inspectWorkerChanges(workspaceTarget(handle));
+  expect(changes.changedPaths.toSorted()).toEqual(CREDENTIAL_NAMED_SOURCES);
+  expect(changes.uncapturedPaths.toSorted()).toEqual(CREDENTIAL_FILES.toSorted());
+  // They never block: the revision prepares and integrates without them.
+  const revision = yield* service.freeze(workspaceTarget(handle));
+  expect(revision.changedPaths.toSorted()).toEqual(CREDENTIAL_NAMED_SOURCES);
+  expect(revision.uncapturedPaths?.toSorted()).toEqual(CREDENTIAL_FILES.toSorted());
+  const prepared = yield* service.prepare({
+    ...workspaceTarget(handle),
+    revisionId: revision.revisionId,
+  });
+  yield* service.integrate({
+    ...workspaceTarget(handle),
+    revisionId: revision.revisionId,
+    preparationId: prepared.preparationId,
+  });
+  for (const name of CREDENTIAL_NAMED_SOURCES)
+    expect(yield* readText(root, name)).toBe(`${name}\n`);
+  for (const name of CREDENTIAL_FILES) expect(yield* exists(path.join(root, name))).toBe(false);
+});
+
+test("keeps capturing a credential-named file the baseline tracks", function* (service, root) {
+  yield* writeFile(path.join(root, ".npmrc"), "registry=https://example.invalid\n");
+  yield* git(root, ["add", "--", ".npmrc"]);
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, ".npmrc"), "registry=https://changed.invalid\n");
+  expect(yield* service.inspectWorkerChanges(workspaceTarget(handle))).toMatchObject({
+    changedPaths: [".npmrc"],
+    uncapturedPaths: [],
   });
 });
 
@@ -50,4 +102,24 @@ test("reports dependencies a writer installed as uncaptured", function* (service
   const changes = yield* service.inspectWorkerChanges(workspaceTarget(handle));
   expect(changes.changedPaths).toEqual([]);
   expect(changes.uncapturedPaths).toEqual(["node_modules/left-pad/index.js"]);
+});
+
+test("counts binary, deleted, and mode-only changes", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "image.bin"), new Uint8Array([0, 1, 2, 3]));
+  yield* io(() => fs.chmod(path.join(handle.cwd, "src/main.ts"), 0o755));
+  yield* io(() => fs.unlink(path.join(handle.cwd, ".gitignore")));
+  const changes = yield* service.inspectWorkerChanges(workspaceTarget(handle));
+  expect(changes.diffStat).toEqual([
+    { path: ".gitignore", change: "deleted", binary: false, addedLines: 0, deletedLines: 1 },
+    { path: "image.bin", change: "added", binary: true, addedLines: 0, deletedLines: 0 },
+    {
+      path: "src/main.ts",
+      change: "modified",
+      binary: false,
+      addedLines: 0,
+      deletedLines: 0,
+      modeChange: { from: "100644", to: "100755" },
+    },
+  ]);
 });

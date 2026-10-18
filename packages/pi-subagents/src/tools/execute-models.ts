@@ -22,7 +22,7 @@ const formatProfileDiscovery = (
   [
     "Profile routes · static preflight",
     `Profile omitted → ${fallbackProfile}`,
-    "Each candidate lists host/runtime/model, effort, context, write intent, fast mode, and retention.",
+    "Each candidate lists runtime/model, effort, context, write intent, and fast mode.",
     "Static eligibility only · executable, authentication, integration, and private-harness checks run at launch.",
     "",
     ...profiles.flatMap((profile) => [

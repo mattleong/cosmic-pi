@@ -3,7 +3,6 @@ import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { runCleanupAttention } from "../run/attention.ts";
 import {
   isActiveRunState,
-  isParentActionRequiredRun,
   type SubagentProjection,
   type SubagentRunState,
   type SubagentRunView,
@@ -39,19 +38,6 @@ const RUN_STATUS = {
 } satisfies Readonly<Record<SubagentRunState, ActivityItem["status"]>>;
 
 function activityAttention(run: SubagentRunView) {
-  if (run.writeAdmissionPaused || run.writeViolationOffender) {
-    const blockedReason = run.writeViolationOffender
-      ? isParentActionRequiredRun({
-          ...run,
-          question: undefined,
-          cleanup: undefined,
-          writerCleanupQuarantined: undefined,
-        })
-        ? "file-access-review"
-        : "write-containment"
-      : "file-access";
-    return { status: "blocked", blockedReason } as const;
-  }
   const cleanup = runCleanupAttention(run);
   if (cleanup !== undefined) return { status: "blocked", blockedReason: "parent-review" } as const;
   if (run.state === "waiting_for_parent" && run.question !== undefined)
@@ -69,8 +55,7 @@ const MESSAGE_ACTIONS = {
 } satisfies Readonly<Record<RunMessageMode, ReturnType<typeof handoff>>>;
 
 export function runActions(run: SubagentRunView, title: string) {
-  const mode =
-    run.writeAdmissionPaused || run.writeViolationOffender ? undefined : runMessageMode(run);
+  const mode = run.writeViolationOffender ? undefined : runMessageMode(run);
   return [
     ...(isActiveRunState(run.state) || canStopRun(run)
       ? [
@@ -94,7 +79,7 @@ export function runActions(run: SubagentRunView, title: string) {
           },
         ]
       : []),
-    ...(canResumeRun(run) && !run.writeAdmissionPaused ? [handoff("resume", "Resume")] : []),
+    ...(canResumeRun(run) ? [handoff("resume", "Resume")] : []),
     ...(mode && (mode !== "reply" || run.question) ? [MESSAGE_ACTIONS[mode]] : []),
     ...(canRenameRun(run) ? [handoff("rename", "Rename")] : []),
   ];

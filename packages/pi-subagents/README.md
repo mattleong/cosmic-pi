@@ -7,10 +7,10 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Seven profiles**, from fast read-only `scout`s to `worker`s that edit code, each routed to a model you choose.
 - **Three local runtimes:** Pi, Claude Code, and Codex, with ordered fallback candidates per profile.
 - **Background by default.** Reports and failures arrive automatically; the agent waits only when it needs a result.
-- **Two-way supervision:** children can ask the parent questions and report progress; the parent can guide, interrupt, resume, rename, retry, or stop them.
+- **Two-way supervision:** children can ask the parent questions and report progress; the parent can guide, interrupt, resume, retry, or stop them.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
-- **Safe parallel writes:** writers share the checkout under exact file claims, or work in isolated worktrees, chosen per writer, whose changes the parent applies in one verified step or reviews, tests, and integrates.
-- **Live view:** a run tree above the editor and the shared Activity manager.
+- **Safe parallel writes:** per writer, either share the checkout under exact file claims fixed at launch, or work in an isolated worktree whose proposal the parent applies in one verified step (wholly or file by file), or reviews, tests, and applies as an exact prepared pair. Proposals can also be exported as a patch or branch, or revised onto the parent's current files.
+- **Live view:** a run tree above the editor and the shared Activity manager, where you can also rename runs.
 
 ## Install
 
@@ -65,7 +65,7 @@ Ask for work that splits into independent pieces, and the agent launches subagen
 
 The mode only changes prompt guidance; no tools are restricted, and subagents keep the default guidance. Session is the default scope. `global` and `project` persist for new sessions and apply after `/reload`. The footer shows the current profile set, marked `*` when this session has its own route edits, followed by the mode when it isn't `normal`.
 
-The agent's tools are `subagent_start`, `subagent_await`, `subagent_status`, `subagent_list`, `subagent_send`, `subagent_reply`, `subagent_lifecycle`, `subagent_rename`, `subagent_models`, `subagent_claims`, and `subagent_workspace`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
+The agent's tools are `subagent_start`, `subagent_await`, `subagent_status` (which lists the run tree when called without run IDs), `subagent_send`, `subagent_reply`, `subagent_lifecycle`, `subagent_models`, and `subagent_workspace`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
 
 ## Configuration
 
@@ -109,11 +109,11 @@ If a candidate is unavailable at launch, such as an unauthenticated CLI, the nex
 
 ## How it works
 
-The root Pi session owns the coordinator: configuration, the run tree, backends, writer pools, and completion delivery. Nested Pi sessions use authenticated proxy tools instead of running their own. Pi children talk over an RPC bridge; Claude Code uses its stream-json protocol and Codex its app-server, both reporting through a private loopback MCP supervisor. Writer leases are keyed by directory identity and shared across Pi processes on the same machine. File claims coordinate writers but aren't a sandbox; Claude and Codex runs use their own native sandboxes. Stopping a run stops its subtree, and shutting down the root stops everything.
+The root Pi session owns the coordinator: configuration, the run tree, backends, writer pools, and completion delivery; nested Pi sessions use authenticated proxy tools. Pi children talk over an RPC bridge, while Claude Code (stream-json) and Codex (app-server) report through a private loopback MCP supervisor. Writer leases are shared across Pi processes on the same machine. File claims coordinate writers but aren't a sandbox: a writer seen writing outside its claims is stopped alone, and the parent relaunches it with corrected claims. Claude and Codex runs use their native sandboxes. Stopping a run stops its subtree, and shutting down the root stops everything.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle, and the docs for detail:
 
-- [Reference](docs/reference.md): full behavior, configuration, worktree review, and safety notes
+- [Reference](docs/reference.md): delegation, worktree review and apply, and safety notes
 - [Routing](docs/routing.md), [local backends](docs/local-backends.md), and [completion delivery](docs/completion-delivery.md)
 - [Settings workspace](docs/settings-workspace.md)
 - [Native Pi codemode scripting](docs/native-codemode.md)

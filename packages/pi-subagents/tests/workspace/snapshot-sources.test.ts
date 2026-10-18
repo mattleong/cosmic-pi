@@ -95,7 +95,7 @@ describe("ignore rules", () => {
     yield* service.create({ sourceCwd: root, ownerId: "parent" });
   });
 
-  test("applies the source's info/exclude to worker captures, setup checks, and forks", function* (service, root) {
+  test("applies the source's info/exclude to worker captures and setup checks", function* (service, root) {
     yield* userConfig("");
     const exclude = path.join(root, ".git", "info", "exclude");
     yield* io(() => fs.mkdir(path.dirname(exclude), { recursive: true }));
@@ -109,13 +109,6 @@ describe("ignore rules", () => {
     yield* writeFile(path.join(handle.cwd, "src/main.ts"), "changed\n");
     const revision = yield* service.freeze(workspaceTarget(handle));
     expect(revision.changedPaths).toEqual(["src/main.ts"]);
-
-    // A fork keeps the rules its original baseline was captured with.
-    yield* io(() => fs.unlink(exclude));
-    const forked = yield* service.fork(workspaceTarget(handle));
-    yield* writeFile(path.join(forked.cwd, "scratch.md"), "fork output\n");
-    const forkRevision = yield* service.freeze(workspaceTarget(forked));
-    expect(forkRevision.changedPaths).toEqual([]);
   });
 });
 

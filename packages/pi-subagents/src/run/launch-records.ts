@@ -13,7 +13,6 @@ import {
 import { remainingRouteCandidates } from "./retry.ts";
 import { MAX_TASK_CHARS } from "./state.ts";
 import { childSystemPrompt, isWorkspaceParentRequest } from "./tool-policy.ts";
-import type { WriterPoolLookup } from "./writer-pool.ts";
 import { descendantRunIds } from "./tree.ts";
 
 export interface LaunchPlan {
@@ -47,11 +46,6 @@ export const validateStartRequest = (
       return yield* invalidRequest(
         "write_claims_read_only",
         "writes may be supplied only for a writer subagent.",
-      );
-    if (!request.closeOnReport)
-      return yield* invalidRequest(
-        "retained_report_capability_invalid",
-        "closeOnReport=false is unsupported; local subagents close after reporting.",
       );
     return normalizedClaims?.claims;
   });
@@ -103,9 +97,7 @@ export const initialRunView = (
     },
   }),
   openaiFastMode: request.openaiFastMode,
-  host: request.host,
   runtime: request.runtime,
-  closeOnReport: request.closeOnReport,
   reportGeneration: 0,
   assignmentEpoch: 1,
   capabilities,
@@ -141,17 +133,12 @@ export const backendLaunchRequest = (
 });
 
 export const isEvictionEligible = (
-  {
-    records,
-    writerPools,
-  }: Pick<RunContext, "records"> & { readonly writerPools: WriterPoolLookup },
+  { records }: Pick<RunContext, "records">,
   record: RunRecord,
 ): boolean =>
   !record.cleanupPending &&
   record.process === undefined &&
   descendantRunIds(records, record.view.id).length === 0 &&
-  writerPools.get(record.canonicalWriterCwd?.digest ?? "")?.violationRunIds.has(record.view.id) !==
-    true &&
   record.retryClaim === undefined &&
   record.completionClaims.size === 0 &&
   record.completionGenerations.size === 0 &&

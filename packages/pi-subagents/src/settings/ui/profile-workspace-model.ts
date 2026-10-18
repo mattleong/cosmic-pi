@@ -104,8 +104,7 @@ export const candidateFastModeApplied = (
 ): boolean =>
   candidate.openaiFastMode === true && candidateFastModeAvailable(candidate, parentModel);
 
-export const runWithValue = (candidate: ProfileCandidate): string =>
-  `${candidate.host}/${candidate.runtime}`;
+export const runWithValue = (candidate: ProfileCandidate): string => `local/${candidate.runtime}`;
 
 export const runWithLabel = (candidate: Pick<ProfileCandidate, "runtime">): string =>
   `Local ${runtimeLabel(candidate.runtime)}`;
@@ -270,15 +269,12 @@ const RUN_WITH_CHOICES = (["pi", "claude", "codex"] as const).map((runtime) => (
   value: `local/${runtime}`,
   label: runWithLabel({ runtime }),
   description: `Run ${RUN_WITH_PRODUCTS[runtime]} locally on this computer`,
-  host: "local" as const,
   runtime,
 }));
 
-export const runWithChoice = (
-  value: string,
-): Pick<ProfileCandidate, "host" | "runtime"> | undefined => {
+export const runWithChoice = (value: string): Pick<ProfileCandidate, "runtime"> | undefined => {
   const choice = RUN_WITH_CHOICES.find((entry) => entry.value === value);
-  return choice && { host: choice.host, runtime: choice.runtime };
+  return choice && { runtime: choice.runtime };
 };
 
 export const candidateFieldChoices = (

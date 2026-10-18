@@ -79,13 +79,11 @@ export const PROFILE_DEFINITIONS = {
 export const builtinProfileCandidate = (id: ProfileId): ProfileCandidate => {
   const definition = PROFILE_DEFINITIONS[id];
   return {
-    host: "local",
     runtime: "pi",
     model: "parent",
     effort: "default",
     context: definition.defaultContext,
     writeIntent: definition.defaultWriteIntent,
-    closeOnReport: true,
   };
 };
 

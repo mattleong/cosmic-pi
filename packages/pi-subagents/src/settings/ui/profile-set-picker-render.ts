@@ -130,7 +130,7 @@ const previewRows = (
               "muted",
               candidate.effort === "default" ? "profile default" : candidate.effort,
             ),
-            theme.fg("muted", `${candidate.host}/${candidate.runtime}`),
+            theme.fg("muted", `local/${candidate.runtime}`),
           ])
         : [
             [

@@ -246,7 +246,7 @@ describe("local Pi child bridge", () => {
     const harness = makeHarness();
     yield* settle(() => harness.start("/first"));
     const staleContact = harness.latestTool("contact_parent");
-    const staleProxy = harness.latestTool(SUBAGENT_TOOL_NAME.list);
+    const staleProxy = harness.latestTool(SUBAGENT_TOOL_NAME.status);
     const staleListener = harness.currentListener().handlers;
     const staleInFlight = rejection(execute(staleProxy, {}, undefined));
     const staleRequest = yield* harness.awaitContact("proxy_request");
@@ -292,7 +292,7 @@ describe("local Pi child bridge", () => {
 
     const proxyAbort = new AbortController();
     const proxyOutcome = rejection(
-      execute(harness.latestTool(SUBAGENT_TOOL_NAME.list), {}, proxyAbort.signal),
+      execute(harness.latestTool(SUBAGENT_TOOL_NAME.status), {}, proxyAbort.signal),
     );
     const proxyRequest = yield* harness.awaitContact("proxy_request");
     proxyAbort.abort();
@@ -316,7 +316,7 @@ describe("local Pi child bridge", () => {
       yield* settle(harness.start);
       const questionOutcome = rejection(harness.ask());
       const proxyOutcome = rejection(
-        execute(harness.latestTool(SUBAGENT_TOOL_NAME.list), {}, undefined),
+        execute(harness.latestTool(SUBAGENT_TOOL_NAME.status), {}, undefined),
       );
       yield* harness.awaitContact("contact_parent");
       yield* harness.awaitContact("proxy_request");

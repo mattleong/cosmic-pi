@@ -19,7 +19,6 @@ import {
   UNRESOLVED_OBSERVED_WRITE,
 } from "./claims-observation.ts";
 import { writeClaimContains } from "../domain/write-claims.ts";
-import type { WriteClaimViolationScope } from "./write-claim-containment.ts";
 import {
   appendAssistantSessionEvent,
   appendNoticeSessionEvent,
@@ -41,11 +40,7 @@ const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 export interface RunEventDependencies {
   readonly settlement: RunSettlement;
   readonly queueQuestionLocked: RunNotificationDelivery["queueActionNotificationLocked"];
-  readonly onWriteClaimViolation: (
-    record: RunRecord,
-    message: string,
-    scope: WriteClaimViolationScope,
-  ) => Effect.Effect<void>;
+  readonly onWriteClaimViolation: (record: RunRecord) => Effect.Effect<void>;
   readonly onProxyEvent: RunProxyExecution;
   /** Lexical system temporary roots whose native writes are audited but never violations. */
   readonly temporaryRoots: ReadonlyArray<string>;
@@ -184,21 +179,10 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
                 (write.kind === "workspace" && !writeClaimContains(claims, write.path)),
             );
       const violatingPaths = violatingWrites.map(observedWriteAuditPath);
-      // Workspace and unresolved writes can collide with peers; definite outside writes can't.
-      const violationScope: WriteClaimViolationScope = violatingWrites.every(
-        (write) => write.kind === "outside",
-      )
-        ? "offender"
-        : "pool";
       const bashHint = bashCommandMayMutate(event.toolName, args);
-      // Offender scope may still escalate under the containment lock, so its wording stays neutral.
       const violationMessage =
         violatingPaths.length > 0
-          ? `Writer ${record.view.id} used ${event.toolName} outside its cooperative claims: ${violatingPaths.join(", ")}. ${
-              violationScope === "pool"
-                ? "Containment has started, and new writer admission is paused."
-                : "Containment has started."
-            }`
+          ? `Writer ${record.view.id} used ${event.toolName} outside its write claims: ${violatingPaths.join(", ")}. It is being stopped; its peers continue.`
           : undefined;
       return mutateAt(record, event.assignmentEpoch, (current, now) => {
         if (current.state === "paused") return undefined;
@@ -225,6 +209,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
         return {
           ...current,
           ...(writeAudit && { writeAudit }),
+          ...(violationMessage && { writeViolationOffender: true }),
           ...(violationMessage
             ? recordRunWarning(record, sessionEvents, "system", violationMessage, now)
             : { sessionEvents }),
@@ -234,9 +219,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
         };
       }).pipe(
         Effect.flatMap((updated) =>
-          updated && violationMessage
-            ? onWriteClaimViolation(record, violationMessage, violationScope)
-            : Effect.void,
+          updated && violationMessage ? onWriteClaimViolation(record) : Effect.void,
         ),
       );
     });

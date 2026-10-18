@@ -32,7 +32,6 @@ export const formatSessionActivity = (now: number, earlier: number | undefined):
 
 interface RunRoutePresentationInput {
   readonly profile?: string | undefined;
-  readonly host?: string | undefined;
   readonly runtime?: string | undefined;
   readonly model: string;
   readonly effort: string;
@@ -41,7 +40,7 @@ interface RunRoutePresentationInput {
 
 export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
   const profile = sanitizeTerminalLine(run.profile ?? "generalist");
-  const hostRuntime = `${sanitizeTerminalLine(run.host ?? "local")}/${sanitizeTerminalLine(run.runtime ?? "pi")}`;
+  const hostRuntime = `local/${sanitizeTerminalLine(run.runtime ?? "pi")}`;
   const providerModel = sanitizeTerminalLine(run.model);
   const providerSeparator = providerModel.indexOf("/");
   const modelName =

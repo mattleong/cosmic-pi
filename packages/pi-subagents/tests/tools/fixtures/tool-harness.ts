@@ -98,20 +98,19 @@ export const profileServiceFor = (
 
 export const fallbackProfileService = profileServiceFor(undefined);
 export const testBackendDriver = {
-  host: "local",
   runtime: "pi",
   capabilities: [],
   supportsContext: () => true,
   preflight: () => Effect.void,
   spawn: () => Effect.die("unused"),
 } satisfies BackendDriver;
-const fixtureBackend = (selection: { readonly host: string; readonly runtime: string }) =>
-  selection.host === "local" && selection.runtime === "pi"
+const fixtureBackend = (selection: { readonly runtime: string }) =>
+  selection.runtime === "pi"
     ? Effect.succeed(testBackendDriver)
     : Effect.fail(
         new InvalidSubagentRequestError({
           code: "backend_not_implemented",
-          message: `${selection.host}/${selection.runtime} is unavailable in this fixture.`,
+          message: `local/${selection.runtime} is unavailable in this fixture.`,
         }),
       );
 export const testBackendRegistry = { resolve: fixtureBackend, preflight: fixtureBackend };
@@ -263,9 +262,7 @@ export const startCapturingService = (requests: StartSubagentRequest[]) =>
         requests.push(input);
         return view({
           id: `agent-${requests.length}`,
-          host: input.host,
           runtime: input.runtime,
-          closeOnReport: input.closeOnReport,
           openaiFastMode: input.openaiFastMode,
           context: input.context,
           writeIntent: input.writeIntent,

@@ -9,13 +9,12 @@ import {
 } from "../../src/tools/contract-schema.ts";
 import { containedWriter, view } from "../fixtures/run-view.ts";
 
-const decoded = <Tool extends SubagentContractTool>(
+const decoded = <Tool extends SubagentContractTool, Contract extends SubagentContract<Tool>>(
   tool: Tool,
-  contract: SubagentContract<Tool>,
-): SubagentContract<Tool> => {
-  const result = decodeSubagentContract(tool)(contract);
-  expect(result).toEqual(contract);
-  return result!;
+  contract: Contract,
+): Contract => {
+  expect(decodeSubagentContract(tool)(contract)).toEqual(contract);
+  return contract;
 };
 
 const receipt = (id: string) => ({ id, generation: 1, claimToken: `claim-${id}` });
@@ -54,7 +53,6 @@ describe("start contract", () => {
             },
             resolvedRoute: {
               profile: "reviewer",
-              host: "local",
               runtime: "claude",
               model: "opus",
               effort: "high",
@@ -148,14 +146,14 @@ describe("await contract", () => {
 });
 
 describe("cleanup evidence", () => {
-  it("preserves claim containment and independently redacts bounded cleanup diagnostics", () => {
+  it("preserves a claim violation and independently redacts bounded cleanup diagnostics", () => {
     const target = decoded(
       "subagent_status",
       statusContract({
         observations: [
           {
             run: containedWriter({
-              state: "completed",
+              state: "stopped",
               cleanup: {
                 disposition: "quarantined",
                 recovery: "manual",

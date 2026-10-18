@@ -1,106 +1,98 @@
 # Settings workspace
 
-Custom screens use the shared live viewport: centered at 90% of terminal width and height at 125×30 or larger, otherwise full bounds. Resize keeps the same component lifetime and selection state.
-
-Part of the [pi-subagents](../README.md) architecture documentation. Routing policy is in [routing.md](routing.md).
+Part of the [pi-subagents](../README.md) architecture documentation. Routing policy is in [routing.md](routing.md). `config/store.ts` is the only persistence door; every mutation is an optimistic exact-document write that preserves unrelated sets and routes and rechecks project trust.
 
 ## Current Session
 
-`/subagents profiles` always opens Current Session. It is the only active working set. At session start it is a complete seven-profile snapshot resolved from the trusted Project default, Global default, and built-ins. Editing a profile changes later launches and `subagent_models` immediately. Active runs keep the route captured when they started.
+`/subagents profiles` always opens Current Session, the only active working set.
 
-Current Session is independent of saved sets. Applying a saved set resolves all seven profiles first, rejects any invalid route, previews the complete replacement, and commits it with one expected session revision. The replacement becomes Current Session and clears earlier per-profile changes in one transition. It never changes a Project or Global document.
-
-The header reads `Editing Current Session`, without an origin or change count. Session state survives `/tree` and `/reload` through the bounded application handoff. It clears on `/new`, `/resume`, `/fork`, quit, or process restart. These session snapshots are separate from the editor's visit-only Undo checkpoints.
+- At session start it is a complete seven-profile snapshot resolved from the trusted Project default, Global default, and built-ins. Edits change later launches and `subagent_models` immediately; active runs keep the route captured at launch.
+- Applying a saved set resolves all seven profiles, rejects any invalid route, previews the replacement, and commits it with one expected session revision, clearing earlier per-profile changes. It never changes a Project or Global document.
+- Current Session writes no project, global, or Pi session-history data. It survives `/tree` and `/reload` through the bounded application handoff and clears on `/new`, `/resume`, `/fork`, quit, or restart.
+- If `/reload` finds retired candidates in the handoff, subagents stay inactive rather than inheriting a different route. Start a fresh session after repairing settings.
 
 ## Profile editor
 
-One dashboard contains Current Session and Saved profiles tabs. A continuous outer border encloses the tabs, status, editor, and internal dialogs. Each tab remembers its position. Fixed-target editors retain the selected profile, candidate, field, and Advanced expansion during internal navigation. The shared manager tiers show profiles beside their fields at 100+ columns, stacked at 60–99 when height permits, and the focused pane below 60. Narrow tabs retain the active tab label. Tables measure the full dataset through Cosmic UI's shared priority-based columns; selected identities use its focus treatment without recoloring status or warning cells.
+One dashboard holds Current Session and Saved profiles tabs, each remembering its position. Editors keep the selected profile, candidate, field, and Advanced expansion during internal navigation. The dashboard keeps editors and dialogs in one custom host lifetime, opened on Cosmic UI's shared `screen` surface.
 
-Model and Reasoning appear together. Candidate sections spell out Primary and Fallback order. File access and Run with remain main fields; Advanced exposes applicable Context and OpenAI fast mode controls. Run with offers local Pi, Claude, and Codex only; no remote host or stay-open control exists. Each section ends with Manage Primary or Manage Fallback N. Its menu contains only Duplicate, valid Move up/Move down directions, and Delete. Delete requires confirmation and warns when removing the last model will disable the profile. There is no standalone Disable action.
+- Candidate sections are labelled Primary and Fallback N. Main fields are Model, Reasoning, File access, and Run with (local Pi, Claude, or Codex only); Advanced holds Context and OpenAI fast mode where applicable.
+- Each section's Manage menu has Duplicate, valid Move up/Move down, and Delete. Delete confirms and warns when it would disable the profile; there is no standalone Disable.
+- Add fallback and Undo changes appear under the profile name; disabled profiles show Add model instead.
+- Save these profiles as a set, below the profile list, captures all seven profiles.
 
-Add fallback and Undo changes appear once under Profile: name. Disabled profiles show Add model there instead. Undo is unavailable when there are no own undoable changes. Below the profile list in the left pane, a Current Session section contains Save these profiles as a set, which captures all seven profiles. Up/Down selects it and Enter opens the save dialog; `s` opens the same dialog from either pane. Moving onto this action preserves the selected profile and its field position. Candidate-field memory is separate from profile/session control selection.
+Keys:
 
-Up/k and Down/j navigate rows without writing. Right/l focuses fields; Left/h focuses the profile list. Enter opens the selected editor or picker. Tab and Shift+Tab switch directly between Current Session and Saved profiles, preserving each target's position. Pickers and forms keep their own controls, including j/k row navigation. Esc closes the nearest picker or backs up one level. Persistent footer hints show the other tab's name; `?` opens navigation help. Ordinary cancellation is silent and leaves the route unchanged.
+- Up/k and Down/j move without writing; Right/l focuses fields and Left/h the profile list; Enter opens the selected editor or picker.
+- Tab and Shift+Tab switch tabs; Esc closes the nearest picker or backs up one level; `?` opens help.
+- `m`, `e`, and `r` open Model, Reasoning, and Run with. `a` opens the candidate's Manage menu, and `+` adds a fallback after a model is chosen.
+- `[` and `]` move between candidates, `/` searches profiles, and `s` opens the save dialog.
+- `/subagents profiles worker` opens a profile directly.
 
-- `m`, `e`, and `r` open Model, Reasoning, and Run with.
-- `a` opens the selected candidate's Manage menu. It does nothing while a profile/session control is selected. `+` adds a fallback only after model selection; canceling creates nothing.
-- `[` and `]` move between candidates.
-- `/` searches profiles. `/subagents profiles worker` opens worker directly.
+Behavior:
 
-Runtime changes that require model selection commit both changes together. Pickers distinguish profile-default reasoning from a pinned level and retain unavailable configured models on cancellation. Edits auto-save serially. Pending, saved, failed, and policy-adjustment status remain separate from change markers. Conflicts refresh without retrying; a failed refresh blocks further edits until reopening. Catalog cancellation, disposal, and activation replacement suppress late continuations.
+- A runtime change that needs a model commits both together. Pickers distinguish profile-default reasoning from a pinned level and keep unavailable configured models on cancellation, which is silent and changes nothing.
+- Edits auto-save serially. Conflicts refresh without retrying, and a failed refresh blocks edits until reopening. Catalog cancellation, disposal, and activation replacement suppress late continuations.
 
 ### Undo during an editor visit
 
-`●` marks this editor visit's own changes that Undo can restore. It does not mean a persistent override or an unsaved edit. Undo changes restores the selected profile's opening declaration, in either Current Session or a saved set. Saved declarations preserve absence, disabled state, optional fields, and candidate order rather than replacing inheritance with resolved candidates. Undo does not reset Current Session to its saved default.
-
-Checkpoints survive tab switches, pickers, and internal forms, but not closing the whole dashboard. Renaming a saved set carries its checkpoint; deleting it drops the checkpoint. A new set gets a checkpoint when first opened. A confirmed Use replacement resets the session checkpoint.
-
-Undo uses checked writes and committed receipts to identify owned changes. An external change to the same route withdraws that route's Undo ownership rather than overwriting it. Unsupported invalid raw declarations cannot be restored and fail safely. Exact-document conflicts, project trust, session revisions, and current activation checks still apply.
+- `●` marks this visit's own changes that Undo can restore, not a persistent override or unsaved edit.
+- Undo restores the selected profile's opening declaration in Current Session or a saved set, preserving absence, disabled state, optional fields, and order. It never resets Current Session to its saved default.
+- Checkpoints survive tab switches, pickers, and forms, but not closing the dashboard. Renaming a set carries its checkpoint, deleting drops it, and a confirmed Use resets the session checkpoint.
+- Undo uses checked writes and committed receipts. An external change to the same route withdraws Undo ownership rather than overwriting it, and unrestorable invalid declarations fail safely.
 
 ## Native model discovery
 
-The Claude picker asks the installed CLI for its catalog without inference. Before each lookup it reads only the schema-validated `model` field from the user-level `$HOME/.claude/settings.json`, limited to 64 KiB and regular files. It follows this exact user config path's symlink to support dotfile managers, then reads the canonical target through core `SafeFile`. `HOME` matches the sanitized child environment; stripped `CLAUDE_CONFIG_DIR` overrides and project settings are not consulted. Missing or invalid settings use `default`.
-
-The probe preserves aliases and context suffixes such as `[1m]`. Its selector is part of the session cache key, so changing the user preference updates discovery on the next picker access without reload. When a preference is set, discovery combines the default and preferred-selector catalogs. Both probes must succeed. Exact duplicate selectors use the preferred probe's metadata; distinct aliases and context selectors remain separate choices. Each probe has its own 10-second deadline and confirmed process cleanup. Discovery keeps settings sources disabled, explicitly disables hooks, and uses strict empty MCP configuration. It does not change subagent launch policy.
-
-`native-model-catalog.ts` rereads the preference before each cache lookup and keys Claude discovery by cwd and exact probe selector.
-Each alias target the CLI does not list under its own ID gains an explicit row after the first alias naming it, so the catalog stays CLI-driven with no workspace model list.
-Claude and Codex have no built-in model either: switching a candidate to either runtime opens that runtime's live-catalog picker, which offers only advertised models and commits runtime and model together on selection.
-
-Catalog refresh belongs to the editor's captured activation and cancellation scope. Replacement revokes submission and delayed inspection results. The registry receives an Effect-owned signal, so a noncooperative Promise cannot retain the fiber or publish after interruption. Successful refresh atomically replaces the immutable root Pi-model snapshot; failure or abort retains the prior generation, and each picker captures one generation. The native catalog Layer supplies its `SafeFile` and platform dependencies at construction, keeping catalog methods free of external service requirements.
+- Switching a candidate to Claude or Codex opens that runtime's live-catalog picker, which offers only advertised models and commits runtime and model together. Neither runtime has a built-in model.
+- The Claude picker asks the installed CLI for its catalog without inference. Before each lookup it reads only the validated `model` field of `$HOME/.claude/settings.json` (regular files up to 64 KiB, following that path's symlink for dotfile managers). `CLAUDE_CONFIG_DIR` and project settings are not consulted; missing settings use `default`.
+- With a preference set, discovery combines the default and preferred-selector catalogs, and both probes must succeed. Aliases and context suffixes such as `[1m]` stay separate choices, and an alias target the CLI doesn't list gains its own row.
+- The selector is part of the cache key, keyed by cwd, so changing the preference updates discovery on the next access without reload.
+- Each probe has a 10-second deadline and confirmed process cleanup, with settings sources disabled, hooks disabled, and empty strict MCP. Discovery never changes launch policy.
+- Catalog refresh belongs to the editor's activation and cancellation scope. Success atomically replaces the immutable root Pi-model snapshot; failure keeps the prior generation, and each picker captures one generation.
 
 ## Saved-set library
 
-The Saved profiles tab groups the library by Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration. Selecting a set previews its seven resolved profiles, ordered candidate models and effort, including inherited, disabled, and invalid routes. Wide screens show the preview beside the list; stacked screens show it below when height permits. Narrow screens keep the library visible and Enter opens the editor. Long routes are abbreviated in the preview and remain available in the editor.
+The Saved profiles tab groups sets by Project and Global. Untrusted Project rows stay visible but unavailable, without reading their configuration. Selecting a set previews its seven resolved profiles, including inherited, disabled, and invalid routes.
 
-Enter edits the selected set, `u` opens Use, `a` opens More, and Esc closes the library. Use previews all seven resolved profiles and requires confirmation before replacing Current Session. Success returns to Current Session and resets its visit checkpoint. Opening or editing a set never applies it implicitly or makes it a default.
-
-More is the shared selector and contains Make/clear default, Copy, Rename, and Delete. Delete stays visible but unavailable on a scope default and otherwise opens the dashboard confirmation. Clearing the Project default falls back to Global; clearing Global falls back to built-ins. The dashboard keeps editors and internal forms in one custom host lifetime rather than closing and reopening host screens.
-
-A saved editor reads `Editing name · session not affected`, with Project or Global scope always visible separately. Its edits change only that library value. Making a set default affects new sessions only. Saving and editing do not request reload because saved values are not the active working set.
-
-Invalid saved sets remain visible and cannot be used or made default. Project-set status includes routes inherited from the selected Global set. A set with invalid routes remains editable so explicit routes can repair it. A structurally invalid set must be deleted and recreated. A malformed unnamed default appears as a clearable repair row. A selected default must first be replaced or cleared before deletion. Store mutations retain exact-document optimistic conflict checks and preserve unrelated sets and routes.
-
-Saving is available only from Current Session. The save dialog takes a name and a destination. Project is the default when the project is trusted, and raw ↑/↓ toggle Project and Global; otherwise the destination is fixed to Global. Tab and printable keys stay in the name input. One `createProfileSetFromSnapshot` store action writes all seven effective session routes. Saving changes neither the default nor the editing target. The controller refuses to save fail-closed Project or Global routes. The profile service holds its revision lock through the document transaction, so an interleaved session edit either commits first and rejects the save or waits until the reviewed snapshot has been saved.
+- Enter edits, `u` opens Use, `a` opens More (Make/clear default, Copy, Rename, Delete), and Esc closes the library.
+- Use previews and confirms before replacing Current Session. Opening or editing a set never applies it or makes it a default.
+- A saved editor reads `Editing name · session not affected`. Its edits change only that value, and making a set default affects new sessions only, so no reload is requested.
+- Clearing the Project default falls back to Global; clearing Global falls back to built-ins. A selected default can't be deleted until it is replaced or cleared.
+- Invalid sets stay visible and can't be used or made default. Project-set status includes routes inherited from the selected Global set. Route-invalid sets remain editable; structurally invalid sets must be deleted and recreated; a malformed unnamed default appears as a clearable repair row.
+- Saving is available only from Current Session. The dialog takes a name and a destination (Project by default when trusted, otherwise Global). One store action writes all seven effective routes, and refuses fail-closed routes. The profile service holds its revision lock through the transaction, so an interleaved session edit either commits first and rejects the save, or waits.
 
 ## Explicit configuration repair
 
-Retired `host: "herdr"` and `closeOnReport: false` declarations are rejected, never rewritten. A mixed local/remote route fails closed in full. Repair the source saved set explicitly with reviewed `host: "local"` candidates and omitted/true `closeOnReport`; credentials are not migrated. Partial Project sets can inherit invalid Global routes, so repair Global or explicitly override the affected Project route. Invalid sets cannot be applied, made default, or saved as a valid Current Session snapshot. Route-invalid sets remain editable; structurally invalid sets require deletion and recreation. Replace or clear an invalid default before deleting its set. See the [repair procedure](reference.md#repairing-retired-remote-or-stay-open-configurations).
+Retired `host: "herdr"` and `closeOnReport: false` declarations are rejected, never rewritten, and a mixed local/remote route fails closed in full. These rejections also apply to Global routes inherited by partial Project sets.
+
+- Repair the source saved set explicitly with reviewed `host: "local"` candidates and omitted or `true` `closeOnReport`. Native selectors need not transfer across runtimes, so review model, effort, context, and write intent.
+- For inherited invalid routes, repair Global or override the Project route.
+- Reload or apply a valid saved set afterward. Credentials and standalone `pi-herdr-btw` settings are never changed or migrated, and there is no automatic local fallback.
 
 ## Delegation settings
 
-`/subagents settings` edits the delegation mode in Session, Global, or trusted Project scope with the same precedence and timing as nesting: Session changes apply to the next agent run, persistent changes after `/reload`, and Project wins over Global. `normal` leaves the system prompt unchanged. `encouraged` and `orchestration` replace the `subagent_start` guideline that decides when to delegate, so the prompt never pairs orchestration with the default batch-size advice, and add a `subagent_delegation` prompt section. Pi rebuilds prompt options before every run, so switching modes needs no cleanup. Only the root session applies the mode; nested Pi children keep the default guidance. Neither mode restricts tools.
+`/subagents settings` edits the delegation mode in Session, Global, or trusted Project scope with the same precedence and timing as nesting.
 
-The registered settings command shares one save owner across rows and picker invocations. Rapid choices save in order, including delegation and nesting rows that share a document. Closing does not cancel an admitted save; reopening waits for it before inspecting saved values. Failed writes release the queue, while external document conflicts, session revisions, project trust, and activation retirement remain checked. This does not watch files or change when saved Global/Project settings take effect. [Delegation integration tests](../tests/delegation.test.ts) exercise the registered command and keyboard picker through these races.
-
-The `subagents` footer item shows Current Session's profile set, `*` when the session has its own route edits, and the delegation mode when it is not `normal`. It publishes to the Cosmic UI footer when that is active and to a plain Pi status entry otherwise; hiding the item in Cosmic UI hides both.
+- `normal` leaves the system prompt unchanged. `encouraged` and `orchestration` replace the `subagent_start` guideline that decides when to delegate and add a `subagent_delegation` prompt section.
+- Pi rebuilds prompt options before every run, so switching needs no cleanup. Only the root session applies the mode; nested children keep default guidance, and no mode restricts tools.
+- One save owner serves every row and picker invocation, so rapid choices save in order, including delegation and nesting rows that share a document. Closing doesn't cancel an admitted save, and reopening waits for it. [Delegation integration tests](../tests/delegation.test.ts) cover these races.
+- The `subagents` footer item shows Current Session's profile set, `*` when the session has its own route edits, and the mode when it isn't `normal`. It publishes to the Cosmic UI footer when active and a plain Pi status entry otherwise.
 
 ## Nesting settings
 
-`/subagents settings` still edits nesting policy in Session, Global, or trusted Project scope. Direct children accept integers from 1 through 32 and depth accepts integers from 0 through 8. Direct-child capacity applies separately to each parent; all launches also follow the maximum depth. The controller rejects invalid input instead of clamping it. Session changes apply to later batches immediately. Persistent nesting writes require `/reload`; lowering a limit never stops admitted runs.
+`/subagents settings` edits nesting in Session, Global, or trusted Project scope. Direct children accept integers 1–32 per parent, and depth 0–8. Invalid input is rejected, not clamped. Session changes apply to later batches immediately; persistent changes require `/reload`. Lowering a limit never stops admitted runs.
 
-## Module responsibilities
+## Writer workspace default
 
-- `src/settings/controller.ts` registers the one `/subagents` command through core's `registerExtensionCommand`.
-  Bare `/subagents` opens the shared Activity view focused on Subagents; `profiles` and `settings` are subcommands.
-  It also registers deep links and the nesting and workspace settings.
-  The `/subagents` fleet, nested proxy fleet, and profile dashboard open on Cosmic UI's shared `screen` surface, so closing never pops an overlay stacked above them. Activation retirement closes a fleet and stops its refresh work. Fleet actions carry the assignment epoch, session, state, and pending question identity captured by their prompt or confirmation; the run owner checks them again under its lock before acting.
-  Nested fleets read a private authenticated snapshot of the complete visible subtree rather than persisted tool display cards. This bounded projection preserves exact action identities and capabilities without acquiring completion reports or exposing raw tasks. Its private action envelope preserves those identities across the proxy; public tools keep their existing schemas and latest-target behavior.
-- `src/config/store.ts` is the only persistence door.
-  It owns optimistic exact-document set, default, route, and nesting mutations, exact declaration restoration, committed document receipts, and atomic seven-profile snapshot creation.
-- `subagent-settings.ts` applies delegation and nesting limits through one scoped write: revision-checked for Session, and exact-document and trust-rechecked for Global/Project. The writer workspace default has its own unscoped apply: it changes later launches and new sessions, never running writers or existing workspaces, and the settings show how many workspaces in this checkout remain unresolved. Application services retain session snapshots across allowed replacement paths.
-- `profile-dashboard.ts` owns checked route writes, scoped dialog waits, catalog cancellation, and activation-bound UI cleanup; its runtime finalizer closes the surface through its external close, even before mount. `profile-write-context.ts` shares the exact-document write guard. `profile-dashboard-component.ts` owns the single custom host lifetime, tabs, cached fixed-target editors, and internal forms. Refreshes advance editable drafts with their write guards; owned rename transfers all profile/candidate navigation memory before reconciliation. `profile-set-actions.ts` handles library mutations, confirmed replacement, and confirmed deletion; `profile-dashboard-dialogs.ts` owns the internal confirmation, name, and save-destination dialogs.
-- `profile-edit-visit.ts` owns pure visit checkpoints and receipt-based Undo ownership. `config/store.ts` owns exact declaration restoration and committed document receipts, with optimistic document and trust checks.
-- `profile-workspace.ts` composes fixed-target editing. Its state, save, and picker modules separate navigation, serialized writes, and cancellable selection work. `profile-set-picker.ts` owns library selection and hosts the More menu.
-- `profile-route-editor.ts` owns fixed-target route drafts and canonical validation messages. `profile-model-catalog.ts` owns atomic Pi catalog refresh and runtime-specific picker loading. Picker rows are shared `pi-cosmic-ui` `ModelPickerModel` options that also carry the efforts and fast-mode availability a selection applies; Pi rows use the shared picker's default text.
-- `src/delegation/prompt.ts` owns each mode's guidance. `src/boundary/host-delegation-prompt.ts` applies Current Session's mode to root agent runs; `src/boundary/host-session-footer.ts` publishes the footer item that `src/ui/session-footer.ts` projects from the session snapshot.
-- `src/settings/ui/` contains pure row models, selectors, projections, responsive geometry, and rendering.
-- The dashboard owns one continuous outer frame around its tabs, status, and active child.
-  Framed children share its border and footer; plain dialogs render inside it, with separate height budgets for each form of composition.
-- Editor rows declare candidate or profile scope.
-  Cursor bookkeeping stays pure, and render and action boundaries resolve Undo availability.
-- Profile styling delegates to `pi-cosmic-ui/manager/style` and the shared frame helpers; saved-set previews never acquire focus, and profile detail fields reuse shared alignment and styling.
+The writer workspace default has its own unscoped setting. It changes later launches and new sessions, never running writers or existing workspaces, and the settings show how many workspaces in this checkout remain unresolved.
 
 ## Doctor
 
-`/subagents doctor` reports, each check independently: Pi's version against the 1.2.0 minimum; whether the Node binary Pi started on is still executable; configuration diagnostics and the current profile set; project trust; for every profile, the same readiness preflight a launch runs (CLI version, presence, and sign-in for Claude and Codex, model availability for Pi) against its first eligible route, each distinct route probed once and bounded to 20 seconds; the reported version of each Claude Code or Codex CLI any profile route uses, failed below the supported minimum and a warning when it is missing or its output is unrecognized; whether private agent state is writable; the Git executable and version isolated writers would use; the worktree setup and verification commands; and whether the shared Activity view is installed. A failing first route is a warning when a fallback exists. The report is a user notification and never enters the model's context. It launches nothing.
+`/subagents doctor` checks each item independently and launches nothing:
+
+- Pi's version against the 1.2.0 minimum, and whether Pi's Node binary is still executable;
+- configuration diagnostics, the current profile set, and project trust;
+- for every profile, the launch preflight against its first eligible route (each distinct route probed once, bounded to 20 seconds); a failing first route is a warning when a fallback exists;
+- each Claude Code or Codex CLI version a route uses, failing below the minimum and warning when missing or unrecognized;
+- whether private agent state is writable, the Git version isolated writers would use, the worktree setup and verification commands, and whether the shared Activity view is installed.
+
+The report is a user notification and never enters the model's context.

@@ -51,7 +51,7 @@ describe("explicit profile-route retry", () => {
           ? Layer.effect(
               SubagentBackendRegistry,
               SubagentBackendRegistry.use((backends) =>
-                backends.resolve({ host: "local", runtime: "claude", context: "fresh" }).pipe(
+                backends.resolve({ runtime: "claude", context: "fresh" }).pipe(
                   Effect.map((driver) =>
                     backendRegistryFor([
                       {
@@ -220,7 +220,7 @@ describe("explicit profile-route retry", () => {
           routeContinuation: reviewerContinuation(1, [
             {
               candidateIndex: 0,
-              candidate: "local/pi/openai-codex/gpt-5.6-sol",
+              candidate: { runtime: "pi", model: "openai-codex/gpt-5.6-sol", effort: "high" },
               code: "previous_run_failed",
               reason: "Candidate 1 failed in the predecessor.",
             },

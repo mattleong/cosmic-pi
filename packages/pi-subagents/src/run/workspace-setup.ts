@@ -10,25 +10,21 @@ const MAX_LISTED_CHANGES = 5;
 /**
  * Runs the project's setup command at the root of an isolated tree, then requires that it changed
  * only ignored or excluded files so dependencies never become part of a proposal or test tree.
- * `cleanupPending` stays set until the engine reports its quarantine cleared, so an interrupted
- * setup stays quarantined here exactly when the engine couldn't confirm its cleanup.
+ * Unconfirmed cleanup leaves the engine's durable marker, which keeps the workspace quarantined.
  */
 export const provisionWorkspaceTree = (
   service: WorkspaceServiceContract,
   setup: WorkspaceSetup,
   handle: WorkspaceHandle,
   tree: { readonly preparationId?: string | undefined },
-  cleanupPending: (pending: boolean) => void,
 ): Effect.Effect<void, SubagentError> =>
   Effect.gen(function* () {
-    cleanupPending(true);
     yield* service
       .setup({
         workspaceId: handle.workspaceId,
         ownerId: handle.ownerId,
         preparationId: tree.preparationId,
         setup,
-        onQuarantineCleared: () => cleanupPending(false),
       })
       .pipe(
         Effect.mapError((error) =>

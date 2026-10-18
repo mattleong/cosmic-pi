@@ -69,29 +69,22 @@ const processAlive = (pid: number) => {
   }
 };
 
-// Starts a blocking command, interrupts it once it runs, and returns the command's process ID and
-// how many times the engine reported the quarantine cleared.
+// Starts a blocking command, interrupts it once it runs, and returns the command's process ID.
 const interruptBlocked = (
-  run: (
-    command: ReturnType<typeof blockingSetup>,
-    onQuarantineCleared: () => void,
-  ) => Effect.Effect<unknown, WorkspaceError>,
+  run: (command: ReturnType<typeof blockingSetup>) => Effect.Effect<unknown, WorkspaceError>,
 ) =>
   Effect.gen(function* () {
     const signals = yield* temporaryDirectory("pi-setup-signal-");
     const started = path.join(signals, "started");
-    let cleared = 0;
     const running = yield* Effect.forkChild(
-      run(blockingSetup(started, path.join(signals, "never")), () => {
-        cleared += 1;
-      }),
+      run(blockingSetup(started, path.join(signals, "never"))),
     );
     yield* waitFor(started);
     const pid = Number((yield* readText(started)).trim());
     yield* Fiber.interrupt(running);
     const exit = yield* Fiber.await(running);
     expect(Exit.hasInterrupts(exit)).toBe(true);
-    return { pid, cleared };
+    return { pid };
   });
 
 const freezeAndPrepare = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =>
@@ -146,11 +139,10 @@ test("runs setup without holding the service permit or the checkout lock", funct
 
 test("clears the marker once an interrupted setup's processes are confirmed stopped", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  const { pid, cleared } = yield* interruptBlocked((setup, onQuarantineCleared) =>
-    service.setup({ ...workspaceTarget(handle), setup, onQuarantineCleared }),
+  const { pid } = yield* interruptBlocked((setup) =>
+    service.setup({ ...workspaceTarget(handle), setup }),
   );
   expect(processAlive(pid)).toBe(false);
-  expect(cleared).toBe(1);
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.setupCleanupPending).toBeUndefined();
   expect(record.status).toBe("active");
@@ -174,10 +166,9 @@ test("keeps a workspace quarantined when interrupted setup cleanup is unconfirme
     .mockImplementation((setup, cwd, options) =>
       original(setup, cwd, { ...options, onCleanup: () => options?.onCleanup?.(false) }),
     );
-  const { cleared } = yield* interruptBlocked((setup, onQuarantineCleared) =>
-    service.setup({ ...workspaceTarget(handle), setup, onQuarantineCleared }),
-  ).pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
-  expect(cleared).toBe(0);
+  yield* interruptBlocked((setup) => service.setup({ ...workspaceTarget(handle), setup })).pipe(
+    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
+  );
   const failure = yield* failureOf(service.inspect(workspaceTarget(handle)));
   expect(failure.cleanupUnconfirmed).toBe(true);
   expect(failure.message).toContain("quarantined");
@@ -189,15 +180,9 @@ test("withdraws a preparation whose setup was interrupted", function* (service, 
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   const { prepared, integration } = yield* freezeAndPrepare(service, handle);
-  const { cleared } = yield* interruptBlocked((setup, onQuarantineCleared) =>
-    service.setup({
-      ...workspaceTarget(handle),
-      preparationId: prepared.preparationId,
-      setup,
-      onQuarantineCleared,
-    }),
+  yield* interruptBlocked((setup) =>
+    service.setup({ ...workspaceTarget(handle), preparationId: prepared.preparationId, setup }),
   );
-  expect(cleared).toBe(1);
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.status).toBe("frozen");
   expect(record.setupCleanupPending).toBeUndefined();
@@ -272,19 +257,14 @@ test("a verification command that can't start leaves no quarantine", function* (
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   const { prepared } = yield* freezeAndPrepare(service, handle);
-  let cleared = 0;
   const failure = yield* failureOf(
     service.verify({
       ...workspaceTarget(handle),
       preparationId: prepared.preparationId,
       verify: { command: ["pi-missing-verify-command"] },
-      onQuarantineCleared: () => {
-        cleared += 1;
-      },
     }),
   );
   expect(failure.cleanupUnconfirmed).not.toBe(true);
-  expect(cleared).toBe(1);
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.setupCleanupPending).toBeUndefined();
   yield* service.discard(workspaceTarget(handle));
@@ -294,16 +274,10 @@ test("clears the marker once an interrupted verification is confirmed stopped", 
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   const { prepared, integration } = yield* freezeAndPrepare(service, handle);
-  const { pid, cleared } = yield* interruptBlocked((verify, onQuarantineCleared) =>
-    service.verify({
-      ...workspaceTarget(handle),
-      preparationId: prepared.preparationId,
-      verify,
-      onQuarantineCleared,
-    }),
+  const { pid } = yield* interruptBlocked((verify) =>
+    service.verify({ ...workspaceTarget(handle), preparationId: prepared.preparationId, verify }),
   );
   expect(processAlive(pid)).toBe(false);
-  expect(cleared).toBe(1);
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.setupCleanupPending).toBeUndefined();
   expect(record.status).toBe("prepared");
@@ -356,9 +330,11 @@ test("removes the tree of a preparation that fails to apply", function* (service
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   const revision = yield* service.freeze(workspaceTarget(handle));
   yield* writeFile(path.join(root, "src/main.ts"), "conflicting parent edit\n");
-  expect(
-    yield* fails(service.prepare({ ...workspaceTarget(handle), revisionId: revision.revisionId })),
-  ).toBe(true);
+  const conflict = yield* failureOf(
+    service.prepare({ ...workspaceTarget(handle), revisionId: revision.revisionId }),
+  );
+  expect(conflict.code).toBe("workspace_conflict");
+  expect(conflict.detail).toContain('"src/main.ts"');
   const artifact = path.join(yield* registryOf(agent), handle.workspaceId);
   const names = yield* io(() => fs.readdir(artifact));
   expect(names.filter((name) => name.startsWith("prepare-"))).toEqual([]);
@@ -443,7 +419,9 @@ test("leaves journal evidence when the index changes during publication", functi
   const spy = vi
     .spyOn(files, "publishWorkspaceFile")
     .mockImplementation((request) =>
-      original(request).pipe(Effect.tap(() => git(root, ["add", "--", "src/main.ts"]))),
+      original(request).pipe(
+        Effect.tap(() => git(root, ["add", "--", "src/main.ts"]).pipe(Effect.orDie)),
+      ),
     );
   const failure = yield* failureOf(service.integrate(integration)).pipe(
     Effect.ensuring(Effect.sync(() => spy.mockRestore())),
@@ -457,15 +435,8 @@ test("leaves journal evidence when the index changes during publication", functi
   expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
   const registry = yield* registryOf(agent);
   expect(failure.detail).toContain(path.join(registry, handle.workspaceId, "record.json"));
-});
-
-test("caches the publication helper only in a private registry directory", function* (service, root, agent) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { integration } = yield* freezeAndPrepare(service, handle);
-  yield* service.integrate(integration);
-  const cache = path.join(yield* registryOf(agent), "publication-cache");
-  expect((yield* io(() => fs.lstat(cache))).mode & 0o777).toBe(0o700);
-  expect((yield* io(() => fs.readdir(cache))).length).toBeGreaterThan(0);
-  expect(yield* service.listAll).toMatchObject({ unavailable: [] });
+  // Once the user has dealt with the staged change, discard rolls the publication back.
+  yield* service.discard(workspaceTarget(handle));
+  expect(yield* readText(root, "src/main.ts")).toBe("baseline\n");
+  expect(yield* exists(path.join(root, backup))).toBe(false);
 });

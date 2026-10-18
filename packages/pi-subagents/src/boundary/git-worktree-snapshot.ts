@@ -3,6 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { SafeFile } from "pi-cosmic-core";
 import {
+  capturablePrivatePath,
+  credentialWorkspacePath,
   dependencyWorkspacePath,
   eligibleUntrackedSource,
   MAX_WORKSPACE_BYTES,
@@ -36,14 +38,17 @@ export interface SnapshotEntry {
   readonly permissions: number;
   readonly bytes: Uint8Array;
 }
-export interface WorkspaceSnapshot {
+/** A tree's capturable files, read and checked but not stored; `tree` is their Git tree id. */
+export interface WorkspaceTreeRead {
   readonly entries: ReadonlyArray<SnapshotEntry>;
   readonly tree: string;
-  readonly commit: string;
   /** Every path left out: tracked dependency/build files and ineligible untracked files. */
   readonly excludedPaths: ReadonlyArray<string>;
   /** The tracked subset of excludedPaths. */
   readonly omittedTrackedPaths: ReadonlyArray<string>;
+}
+export interface WorkspaceSnapshot extends WorkspaceTreeRead {
+  readonly commit: string;
 }
 
 const SHARED_CHECKOUT_REMEDY = "or use the shared-checkout writer workspace";
@@ -229,9 +234,9 @@ const readableIgnoreRules = (root: string, privateRepository = false) =>
 
 /**
  * Gives a new private repository the ignore rules Git applies in `origin` (the source checkout,
- * or a predecessor's or source workspace's private repository), so worker and prepared trees
- * ignore what the source ignores: its info/exclude and its effective excludes file, which
- * repository-local config keeps ahead of the user's global configuration.
+ * or a source workspace's worker tree, whose private repository recorded them), so worker and
+ * prepared trees ignore what the source ignores: its info/exclude and its effective excludes
+ * file, which repository-local config keeps ahead of the user's global configuration.
  */
 export const preserveIgnoreRules = (
   repository: string,
@@ -310,19 +315,6 @@ const unstableFileRefusal = (relative: string) =>
     remedy: "Try again once tools stop writing to the file.",
   });
 
-const requireUtf8Text = (relative: string, bytes: Uint8Array) =>
-  bytes.subarray(0, 8000).includes(0)
-    ? Effect.void
-    : Effect.try({
-        try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-        catch: () =>
-          workspaceRefusal("snapshot", "A text file isn't valid UTF-8.", {
-            path: relative,
-            rule: "text must be UTF-8; binary files need a NUL byte in their first 8,000 bytes",
-            remedy: `Convert the file to UTF-8 or add it to .gitignore if it is generated, ${SHARED_CHECKOUT_REMEDY}.`,
-          }),
-      });
-
 export const readWorkspaceFile = (
   root: string,
   relative: string,
@@ -349,7 +341,6 @@ export const readWorkspaceFile = (
       .pipe(Effect.mapError(() => unstableFileRefusal(relative)));
     const after = yield* workspaceIO("snapshot", () => fs.lstat(full));
     if (changedWhileReading(before, after)) return yield* unstableFileRefusal(relative);
-    yield* requireUtf8Text(relative, bytes);
     return {
       bytes,
       mode: (before.mode & 0o111) !== 0 ? "100755" : "100644",
@@ -421,17 +412,32 @@ const stagedContent = (entry: IndexEntry | undefined, bytes: Uint8Array, sha1: s
 
 type CapturedFile = SnapshotEntry & { readonly symlinkTarget?: string };
 
-const credentialRefusal = (relative: string, bytes: Uint8Array) => {
-  const match = sensitiveWorkspaceContent(bytes);
-  return match
-    ? workspaceRefusal("snapshot", "Unstaged content looks like it contains a credential.", {
+/**
+ * Refuses a source file whose lines the index blob doesn't hold include a credential-like
+ * literal; an untracked file is scanned whole. Lines the index already holds are stored in the
+ * user's repository, so an edit near an existing test fixture passes.
+ */
+const credentialRefusal = (
+  root: string,
+  relative: string,
+  bytes: Uint8Array,
+  staged: IndexEntry | undefined,
+) =>
+  Effect.gen(function* () {
+    const previous = staged && (yield* git(root, ["cat-file", "blob", staged.oid]));
+    const match = sensitiveWorkspaceContent(bytes, previous);
+    if (!match) return undefined;
+    return yield* workspaceRefusal(
+      "snapshot",
+      "Unstaged content looks like it contains a credential.",
+      {
         path: relative,
-        rule: `content not in the Git index must not contain ${match.rule} (line ${match.line})`,
+        rule: `lines not in the Git index must not contain ${match.rule} (line ${match.line})`,
         remedy:
           "Remove the credential and keep local secrets in ignored files; stage the file with git add if the value is a deliberate test fixture.",
-      })
-    : undefined;
-};
+      },
+    );
+  });
 
 const quotedImportPath = (name: string) => `"${name.replace(/["\\]/gu, "\\$&")}"`;
 
@@ -501,18 +507,73 @@ const pathWithoutExactName = (root: string, paths: ReadonlyArray<string>) =>
 export interface CaptureOptions {
   /** Paths captured even when untracked here, such as the baseline's files. */
   readonly requiredPaths?: ReadonlyArray<string>;
-  /** Refuse credential-like content the index doesn't already hold (source checkouts only). */
-  readonly scanNewContent?: boolean;
+  /**
+   * `root` is the user's checkout: copy only source-like untracked files without credential-shaped
+   * names, and refuse credential-like content the index doesn't already hold. Private trees hold
+   * only what a worker wrote, so they contribute every capturable file.
+   */
+  readonly userCheckout?: boolean;
   /** `root` is a private workspace tree: apply only the ignore rules its repository records. */
   readonly privateRepository?: boolean;
 }
 
-export const captureSnapshot = (
-  root: string,
-  repository: string,
-  reference: string,
-  options: CaptureOptions = {},
-) =>
+interface TreeNode {
+  readonly files: Map<string, { readonly mode: string; readonly oid: string }>;
+  readonly directories: Map<string, TreeNode>;
+}
+
+const treeNode = (): TreeNode => ({ files: new Map(), directories: new Map() });
+
+// Git orders tree entries by their bytes, comparing a directory as if its name ended in "/".
+const hashTree = (node: TreeNode): Buffer => {
+  const items = [
+    ...[...node.files].map(([name, file]) => ({
+      name,
+      key: Buffer.from(name),
+      mode: file.mode,
+      id: Buffer.from(file.oid, "hex"),
+    })),
+    ...[...node.directories].map(([name, child]) => ({
+      name,
+      key: Buffer.from(`${name}/`),
+      mode: "40000",
+      id: hashTree(child),
+    })),
+  ].toSorted((left, right) => Buffer.compare(left.key, right.key));
+  const body = Buffer.concat(
+    items.flatMap((item) => [Buffer.from(`${item.mode} ${item.name}\0`), item.id]),
+  );
+  return nodeCreateHash("sha1").update(`tree ${body.byteLength}\0`).update(body).digest();
+};
+
+/** The SHA-1 Git tree id of these files, computed without writing any object. */
+export const snapshotTreeId = (
+  entries: ReadonlyArray<Pick<SnapshotEntry, "path" | "mode" | "oid">>,
+): string => {
+  const root = treeNode();
+  for (const entry of entries) {
+    const parts = entry.path.split("/");
+    const name = parts.pop() ?? entry.path;
+    let node = root;
+    for (const part of parts) {
+      let child = node.directories.get(part);
+      if (!child) {
+        child = treeNode();
+        node.directories.set(part, child);
+      }
+      node = child;
+    }
+    node.files.set(name, { mode: entry.mode, oid: entry.oid });
+  }
+  return hashTree(root).toString("hex");
+};
+
+/**
+ * Reads and checks every capturable file in `root` and computes their tree id in-process. A
+ * verification compares that id with a stored tree without writing objects; captureSnapshot
+ * also stores the files.
+ */
+export const readSnapshot = (root: string, options: CaptureOptions = {}) =>
   Effect.gen(function* () {
     const index = yield* readIndex(yield* gitFields(root, ["ls-files", "--stage", "-v", "-z"]));
     const { excludesFile } = yield* readableIgnoreRules(root, options.privateRepository);
@@ -524,20 +585,22 @@ export const captureSnapshot = (
       "--exclude-standard",
       "-z",
     ]);
-    const known = new Set([...index.keys(), ...(options.requiredPaths ?? [])]);
+    const capturable = options.userCheckout ? eligibleUntrackedSource : capturablePrivatePath;
+    // A required path the checkout no longer tracks keeps the credential-name rule there.
+    const required = (options.requiredPaths ?? []).filter(
+      (name) => !options.userCheckout || index.has(name) || !credentialWorkspacePath(name),
+    );
+    const known = new Set([...index.keys(), ...required]);
     const unknown = untracked.filter((name) => !known.has(name));
     // A tracked link may stand in for a whole dependency directory.
     const omitted = (name: string) =>
       dependencyWorkspacePath(name, index.get(name)?.mode === "120000");
-    const candidates = [...new Set([...known, ...unknown.filter(eligibleUntrackedSource)])]
+    const candidates = [...new Set([...known, ...unknown.filter(capturable)])]
       .filter((name) => !omitted(name))
       .toSorted();
     const omittedTrackedPaths = [...known].filter(omitted).toSorted();
     const excludedPaths = [
-      ...new Set([
-        ...omittedTrackedPaths,
-        ...unknown.filter((name) => !eligibleUntrackedSource(name)),
-      ]),
+      ...new Set([...omittedTrackedPaths, ...unknown.filter((name) => !capturable(name))]),
     ].toSorted();
     if (candidates.length > MAX_WORKSPACE_FILES)
       return yield* workspaceRefusal("snapshot", "The checkout has too many files to snapshot.", {
@@ -560,12 +623,9 @@ export const captureSnapshot = (
           remedy: `Add large or generated files to .gitignore, ${SHARED_CHECKOUT_REMEDY}.`,
         });
       const id = blobId(file.bytes);
-      if (options.scanNewContent && file.mode !== "120000") {
-        const refusal = stagedContent(index.get(name), file.bytes, id)
-          ? undefined
-          : credentialRefusal(name, file.bytes);
-        if (refusal) return yield* refusal;
-      }
+      const staged = index.get(name);
+      if (options.userCheckout && file.mode !== "120000" && !stagedContent(staged, file.bytes, id))
+        yield* credentialRefusal(root, name, file.bytes, staged);
       files.push({ path: name, oid: id, ...file });
     }
     const inexact = yield* pathWithoutExactName(
@@ -593,14 +653,90 @@ export const captureSnapshot = (
         rule: "tracked symlinks must point to a regular file captured in the same snapshot",
         remedy: `Point the link at a tracked regular file in the repository, ${SHARED_CHECKOUT_REMEDY}.`,
       });
-    const { commit, tree } = yield* importSnapshot(repository, reference, files);
     return {
       entries: files,
-      tree,
-      commit,
+      tree: snapshotTreeId(files),
       excludedPaths,
       omittedTrackedPaths,
-    } satisfies WorkspaceSnapshot;
+    } satisfies WorkspaceTreeRead;
+  });
+
+/** Stores a tree already read as a parentless commit at `reference`. */
+export const storeSnapshot = (read: WorkspaceTreeRead, repository: string, reference: string) =>
+  Effect.gen(function* () {
+    const { commit, tree } = yield* importSnapshot(repository, reference, read.entries);
+    // Verifications trust the in-process id, so every stored tree confirms it.
+    if (tree !== read.tree)
+      return yield* workspaceFailure(
+        "snapshot",
+        "Git stored a different tree than the snapshot computed; the capture was refused.",
+      );
+    return { ...read, commit } satisfies WorkspaceSnapshot;
+  });
+
+/** Reads `root` like readSnapshot and stores its files as a parentless commit at `reference`. */
+export const captureSnapshot = (
+  root: string,
+  repository: string,
+  reference: string,
+  options: CaptureOptions = {},
+) =>
+  readSnapshot(root, options).pipe(
+    Effect.flatMap((read) => storeSnapshot(read, repository, reference)),
+  );
+
+// `git diff` sections start with this header; diff content lines never do, because each starts
+// with a space, "+", "-", "\\", or (in binary patches) base85, which has no space.
+const DIFF_SECTION = Buffer.from("diff --git ");
+
+const diffSections = (bytes: Uint8Array) => {
+  const buffer = Buffer.from(bytes);
+  const starts: number[] = [];
+  for (let at = buffer.indexOf(DIFF_SECTION); at !== -1; at = buffer.indexOf(DIFF_SECTION, at + 1))
+    if (at === 0 || buffer[at - 1] === 0x0a) starts.push(at);
+  return starts.map((start, index) => buffer.subarray(start, starts[index + 1] ?? buffer.length));
+};
+
+const validUtf8 = (bytes: Uint8Array) => {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Decodes a revision's patch, which reviews page as text. Git treats a file without a NUL in its
+ * first 8,000 bytes as text and copies its bytes into the patch, so a changed file whose old or
+ * new content isn't UTF-8 can't be represented; the refusal names each such file.
+ */
+export const decodeRevisionDiff = (bytes: Uint8Array, changedPaths: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    if (validUtf8(bytes)) return new TextDecoder().decode(bytes);
+    const sections = diffSections(bytes);
+    // `git diff` and `git diff --name-only` list the same paths in the same order.
+    const invalid =
+      sections.length === changedPaths.length
+        ? changedPaths.filter((_name, index) => !validUtf8(sections[index] ?? new Uint8Array()))
+        : [];
+    const listed = invalid.slice(0, 5).map((name) => JSON.stringify(name));
+    return yield* workspaceRefusal(
+      "freeze",
+      invalid.length === 1
+        ? "A changed text file isn't valid UTF-8."
+        : "Changed text files aren't valid UTF-8.",
+      {
+        ...(invalid.length === 1 && { path: invalid[0] }),
+        rule: `the proposal's changed files must be UTF-8 text or binary (a NUL byte in their first 8,000 bytes), before and after the change${
+          invalid.length > 1
+            ? `; affected: ${listed.join(", ")}${invalid.length > 5 ? `, and ${invalid.length - 5} more` : ""}`
+            : ""
+        }`,
+        remedy:
+          "Revise the workspace so the writer restores or converts the file to UTF-8, or discard it and make this change in a shared-checkout writer.",
+      },
+    );
   });
 
 export const sourceIdentity = (root: string) =>

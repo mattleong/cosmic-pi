@@ -48,7 +48,6 @@ export interface LocalCliPreflightRequest {
   readonly runtime: LocalCliRuntime;
   readonly context: "fresh" | "fork";
   readonly writeIntent: SubagentWriteIntent;
-  readonly closeOnReport: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly cwd?: string | undefined;
@@ -80,11 +79,6 @@ const validateLocalPreflightRequest = (
       return yield* preflightError(
         "context_unsupported",
         `local/${request.runtime} supports fresh context only.`,
-      );
-    if (!request.closeOnReport)
-      return yield* preflightError(
-        "local_close_on_report_required",
-        `local/${request.runtime} requires closeOnReport=true.`,
       );
     const claudeSandboxPlatforms: ReadonlyArray<NodeJS.Platform> = ["darwin", "linux"];
     if (request.runtime === "claude" && !claudeSandboxPlatforms.includes(process.platform))

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentConfigScope } from "../src/config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
-import type { DeclaredProfileRoute, ProfileId } from "../src/profiles/model.ts";
+import {
+  declaredProfileCandidate,
+  type DeclaredProfileRoute,
+  type ProfileId,
+} from "../src/profiles/model.ts";
 import {
   declaredRouteForDraft,
   disableRouteDraft,
@@ -41,17 +45,18 @@ const load = (
 
 const threeRoute = [
   candidate("openai/one", { effort: "low" }),
-  candidate("claude-opus-5", { host: "local", runtime: "claude", effort: "medium" }),
+  candidate("claude-opus-5", { runtime: "claude", effort: "medium" }),
   candidate("gpt-5.6-codex", { runtime: "codex", effort: "xhigh", writeIntent: "writer" }),
 ];
+const declaredThreeRoute = threeRoute.map(declaredProfileCandidate);
 
 describe("ordered profile-route editor state", () => {
   it("loads and declares a three-candidate route without collapse or reorder", () => {
-    const value = inspection({ worker: threeRoute });
+    const value = inspection({ worker: declaredThreeRoute });
     const draft = load(value, "worker");
     expect(draft).toEqual({ kind: "explicit", candidates: threeRoute });
     expect(draft.candidates).not.toBe(threeRoute);
-    expect(declaredRouteForDraft(draft)).toEqual({ valid: true, route: threeRoute });
+    expect(declaredRouteForDraft(draft)).toEqual({ valid: true, route: declaredThreeRoute });
     Object.assign(draft.candidates[0]!, { model: "openai/edited" });
     expect(load(value, "worker").candidates).toEqual(threeRoute);
   });
@@ -59,9 +64,9 @@ describe("ordered profile-route editor state", () => {
   it("models reset, inherit, disabled, and invalid fail-closed declarations distinctly", () => {
     const value = inspection(
       {
-        reviewer: threeRoute,
+        reviewer: declaredThreeRoute,
         scout: "disabled",
-        worker: { ...candidate("bare"), model: "bare" },
+        worker: { ...declaredProfileCandidate(candidate("bare")), model: "bare" },
       },
       {},
     );

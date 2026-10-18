@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import * as Predicate from "effect/Predicate";
 import type { SubagentRunView } from "../src/run/model.ts";
-import { awaitDetails, compactToolDetails } from "../src/tools/details.ts";
-import { projectSubagentRunCard } from "../src/tools/details-projection.ts";
+import { awaitDetails, compactToolDetails, startDetails } from "../src/tools/details.ts";
+import { compactRunIssues } from "../src/tools/compact-run-issues.ts";
 import {
   SUBAGENT_CARD_DETAILS_VERSION,
+  type SubagentRunCard,
   type SubagentStartEntry,
 } from "../src/tools/details-schema.ts";
 import {
@@ -24,7 +25,12 @@ const run = (index = 1, cost?: number): SubagentRunView =>
       candidateIndex: 1,
       reason: "Selected in configured order.",
       skippedCandidates: [
-        { candidateIndex: 0, candidate: "first", code: "unavailable", reason: "Unavailable." },
+        {
+          candidateIndex: 0,
+          candidate: { runtime: "pi", model: "first", effort: "high" },
+          code: "unavailable",
+          reason: "Unavailable.",
+        },
       ],
     },
     predecessorRunId: "private-predecessor",
@@ -64,7 +70,6 @@ const startedEntry = (
   profile: "reviewer",
   status: "started",
   routeStatus: "selected",
-  host: "local",
   runtime: "pi",
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
@@ -72,6 +77,32 @@ const startedEntry = (
   candidateIndex: 1,
   runId: `agent-r2-${index + 1}`,
 });
+
+// Long route provenance makes twelve bounded cards exceed the persisted bound before condensing.
+const oversizedBatch = (
+  base: SubagentRunView,
+  overrides: Partial<SubagentRunView> = {},
+): ReadonlyArray<SubagentRunView> =>
+  Array.from({ length: 12 }, (_, index) => ({
+    ...base,
+    ...overrides,
+    id: `${base.id}-${index}`,
+    progress: "p".repeat(600),
+    currentTool: "t".repeat(300),
+    selection: {
+      ...base.selection,
+      skippedCandidates: Array.from({ length: 8 }, (_skipped, skip) => ({
+        candidateIndex: skip,
+        candidate: {
+          runtime: "pi",
+          model: `candidate-${skip}-${"c".repeat(1_000)}`,
+          effort: "high",
+        },
+        code: "unavailable",
+        reason: "r".repeat(1_000),
+      })),
+    },
+  }));
 
 const clone = <Value>(value: Value): Value => structuredClone(value);
 
@@ -118,9 +149,7 @@ describe("persisted subagent details version 2", () => {
     expect(serialized).not.toContain("routeSource");
     expect(serialized).not.toContain('candidateIndex":0');
     expect(details.cards[0]).toMatchObject({
-      host: "local",
       runtime: "claude",
-      closeOnReport: true,
       reportGeneration: 1,
       context: "fresh",
       writeIntent: "read-only",
@@ -137,6 +166,34 @@ describe("persisted subagent details version 2", () => {
     expect(decoded).toEqual(details);
     expect(JSON.stringify(decoded).length).toBeLessThanOrEqual(48_000);
     expect(isDeeplyFrozen(decoded)).toBe(true);
+  });
+
+  it("decodes cards persisted with retired route fields and skipped-candidate labels", () => {
+    const wire = awaitWire();
+    const label = "local/pi/openai/x:high:fresh:read-only:openaiFastMode=false:closeOnReport=true";
+    const legacy = {
+      ...wire,
+      cards: wire.cards.map((card) => ({
+        ...card,
+        host: "local",
+        closeOnReport: true,
+        selection: {
+          ...card.selection,
+          skippedCandidates: [{ candidate: label, code: "pi_model_unknown", reason: "Missing." }],
+        },
+      })),
+    };
+    const decoded = decodeStartAwaitCardDetails(legacy);
+    const card = decoded && "cards" in decoded ? decoded.cards[0] : undefined;
+    expect(card?.runtime).toBe(wire.cards[0]?.runtime);
+    expect(card?.selection.skippedCandidates[0]?.candidate).toBe(label);
+    expect(
+      decodeStartAwaitCardDetails({
+        version: 2,
+        action: "start",
+        startEntries: [{ ...startedEntry(), host: "local" }],
+      }),
+    ).toBeDefined();
   });
 
   it("persists awaited targets with bounded descendant context but never descendant reports", () => {
@@ -238,21 +295,21 @@ describe("persisted subagent details version 2", () => {
       ...run(),
       writeIntent: "writer",
       writeClaims: ["src/a.ts", "src/b.ts"],
-      writeAdmissionPaused: true,
+      writeViolationOffender: true,
       writeAudit: {
         observedFileWrites: ["src/a.ts", "src/outside.ts"],
         violations: [{ path: "src/outside.ts", toolName: "edit", observedAt: 3 }],
         bashWriteHints: 2,
       },
     };
-    const details = compactToolDetails({ action: "claims", runs: [claimed] });
+    const details = compactToolDetails({ action: "status", runs: [claimed] });
     expect(details).toMatchObject({
       version: 2,
-      action: "claims",
+      action: "status",
       cards: [
         {
           writeClaims: ["src/a.ts", "src/b.ts"],
-          writeAdmissionPaused: true,
+          writeViolationOffender: true,
           writeAudit: {
             observedFileWrites: ["src/a.ts", "src/outside.ts"],
             violations: [{ path: "src/outside.ts", toolName: "edit", observedAt: 3 }],
@@ -266,7 +323,21 @@ describe("persisted subagent details version 2", () => {
     expect(Object.isFrozen(decoded)).toBe(true);
   });
 
-  it("persists a worktree writer's workspace outcome at every density", () => {
+  it("still decodes saved cards that list the retired rename capability", () => {
+    const details = compactToolDetails({ action: "status", runs: [run()] });
+    const cards = details.action === "models" ? [] : details.cards;
+    expect(cards[0]?.capabilities).not.toContain("rename-display");
+    const saved = {
+      ...details,
+      cards: cards.map((card) =>
+        Object.assign({}, card, { capabilities: [...card.capabilities, "rename-display"] }),
+      ),
+    };
+    const decoded = decodeCompactToolDetails(saved);
+    expect(decoded).toEqual(details);
+  });
+
+  it("persists a worktree writer's workspace outcome", () => {
     const outcomes = [
       { status: "auto-discarded" },
       { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 },
@@ -279,14 +350,46 @@ describe("persisted subagent details version 2", () => {
         workspaceId: "ws-1",
         workspaceOutcome,
       };
-      for (const density of ["full", "compact", "minimal"] as const)
-        expect(projectSubagentRunCard(writer, density).workspaceOutcome).toEqual(workspaceOutcome);
-      const details = compactToolDetails({ action: "status", runs: [writer] });
-      const decoded = decodeCompactToolDetails(details);
-      expect(
-        decoded?.action === "models" ? undefined : decoded?.cards[0]?.workspaceOutcome,
-      ).toEqual(workspaceOutcome);
+      for (const runs of [[writer], oversizedBatch(writer)]) {
+        const details = compactToolDetails({ action: "status", runs });
+        const decoded = decodeCompactToolDetails(details);
+        expect(
+          decoded?.action === "models" ? undefined : decoded?.cards[0]?.workspaceOutcome,
+        ).toEqual(workspaceOutcome);
+      }
     }
+  });
+});
+
+describe("proposal diffstat evidence", () => {
+  it("persists a proposal's bounded diffstat, keeping its totals when condensed", () => {
+    const workspaceOutcome = {
+      status: "proposal",
+      changedFileCount: 2,
+      diffStat: {
+        addedLines: 5,
+        deletedLines: 1,
+        files: [
+          { path: "src/a.ts", addedLines: 5, deletedLines: 1 },
+          { path: "logo.png", addedLines: 0, deletedLines: 0, binary: true },
+        ],
+      },
+    } as const;
+    const writer: SubagentRunView = {
+      ...run(),
+      writeIntent: "writer",
+      writerWorkspaceMode: "worktree",
+      workspaceId: "ws-1",
+      workspaceOutcome,
+    };
+    const outcomes = [[writer], oversizedBatch(writer)].map((runs) => {
+      const decoded = decodeCompactToolDetails(compactToolDetails({ action: "status", runs }));
+      return decoded?.action === "models" ? undefined : decoded?.cards[0]?.workspaceOutcome;
+    });
+    expect(outcomes).toEqual([
+      workspaceOutcome,
+      { ...workspaceOutcome, diffStat: { addedLines: 5, deletedLines: 1, files: [] } },
+    ]);
   });
 });
 
@@ -304,17 +407,119 @@ const auditedRun = (offender: boolean): SubagentRunView => ({
   },
   writeViolationOffender: offender,
   writeIntent: "writer",
-  writeAdmissionPaused: offender,
 });
 
+const runCards = (details: ReturnType<typeof compactToolDetails>) =>
+  details.action === "models" ? [] : details.cards;
+
+const startRunIds = (items: ReadonlyArray<SubagentStartEntry>) =>
+  items.map((entry) => (entry.status === "started" ? entry.runId : undefined));
+
+const issueMessages = (cards: ReadonlyArray<SubagentRunCard>) =>
+  new Map(
+    compactRunIssues(cards)
+      .filter((issue) => !issue.code.endsWith(":selection-skipped"))
+      .map((issue) => [issue.code, issue.message]),
+  );
+
 describe("persisted subagent detail fitting", () => {
-  it("retains offender evidence and marks omitted claims", () => {
-    for (const density of ["full", "compact", "minimal"] as const) {
-      const card = projectSubagentRunCard(auditedRun(true), density);
-      expect(card.writeClaimCount).toBe(20);
-      expect(card.writeViolationOffender).toBe(true);
-      expect(card.writeAudit?.violations.length).toBeGreaterThan(0);
-      if ((card.writeClaims?.length ?? 0) < 20) expect(card.writeClaimsOmitted).toBe(true);
+  it("fits oversized batches within the bound and keeps IDs and recovery evidence", () => {
+    const runs = oversizedBatch(auditedRun(true), {
+      cleanup: {
+        disposition: "quarantined",
+        recovery: "stop",
+        diagnostic: { phase: "process-group", code: "cleanup_unconfirmed", message: "Unconfirmed" },
+      },
+      writerWorkspaceMode: "worktree",
+      workspaceId: "ws-oversized",
+    });
+    for (const action of ["status", "list"] as const) {
+      const details = compactToolDetails({
+        action,
+        runs,
+        actionFailures: [{ id: "agent-missing", code: "not_found", message: "Run not found." }],
+      });
+      expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+      expect(decodeCompactToolDetails(details)).toEqual(details);
+      expect(details).toMatchObject({
+        contentOmitted: true,
+        runCount: runs.length,
+        actionFailures: [{ id: "agent-missing", code: "not_found", message: "Run not found." }],
+      });
+      const cards = runCards(details);
+      expect(cards.map((card) => card.id).toSorted()).toEqual(
+        runs.map((item) => item.id).toSorted(),
+      );
+      for (const card of cards) {
+        expect(card).toMatchObject({
+          writeClaimCount: 20,
+          writeViolationOffender: true,
+          workspaceId: "ws-oversized",
+          cleanup: {
+            disposition: "quarantined",
+            recovery: "stop",
+            diagnostic: { phase: "process-group", code: "cleanup_unconfirmed" },
+          },
+        });
+        if ((card.writeClaims?.length ?? 0) < 20) expect(card.writeClaimsOmitted).toBe(true);
+        expect(card.writeAudit?.violations.length).toBeGreaterThan(0);
+        expect(card.finalText).toBeUndefined();
+      }
     }
+  });
+
+  it("fits oversized start batches with run IDs and launch recovery intact", () => {
+    const entries = Array.from({ length: 32 }, (_, index): SubagentStartEntry => {
+      const { runId, ...selected } = startedEntry(index, `launch-${index}`);
+      const fields = {
+        ...selected,
+        warning: `Route warning ${index}: ${"w".repeat(1_000)}`,
+        sourceCwd: `/source/${"s".repeat(200)}`,
+      };
+      return index % 2 === 0 ? { ...fields, runId } : { ...fields, status: "failed" };
+    });
+    const failures = entries
+      .filter((entry) => entry.status === "failed")
+      .map((entry) => ({
+        index: entry.index,
+        message: `Launch ${entry.index} failed: ${"m".repeat(500)}`,
+        code: "launch_failed",
+        admittedRun: {
+          runId: `agent-admitted-${entry.index}`,
+          cleanupDisposition: "confirmed" as const,
+          retryDisposition: "eligible" as const,
+          remainingCandidateCount: 1,
+          hasRemainingCandidate: true,
+        },
+      }));
+    const details = startDetails({ startEntries: entries, startFailures: failures });
+    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+    expect(decodeStartAwaitCardDetails(details)).toEqual(details);
+    expect(startRunIds(details.startEntries)).toEqual(startRunIds(entries));
+    expect(details.startFailures?.map((failure) => failure.admittedRun)).toEqual(
+      failures.map((failure) => failure.admittedRun),
+    );
+    for (const entry of details.startEntries)
+      expect(entry.routeStatus === "selected" && entry.warning).toMatch(/^Route warning \d+: w/u);
+  });
+
+  it("keeps collapsed issue messages when cards are condensed", () => {
+    const runs = oversizedBatch(
+      view({
+        id: "agent-heavy",
+        state: "waiting_for_parent",
+        question: { requestId: "question", message: `Proceed? ${"q".repeat(2_000)}` },
+        warning: `Child warning: ${"w".repeat(500)}`,
+        warningSource: "child",
+      }),
+    );
+    const bounded = runs.flatMap((item) =>
+      runCards(compactToolDetails({ action: "status", runs: [item] })),
+    );
+    const details = compactToolDetails({ action: "status", runs });
+    expect(details.contentOmitted).toBe(true);
+    const condensed = issueMessages(runCards(details));
+    expect(condensed).toEqual(issueMessages(bounded));
+    expect(condensed.size).toBeGreaterThanOrEqual(runs.length);
   });
 });

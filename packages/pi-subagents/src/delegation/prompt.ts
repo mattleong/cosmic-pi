@@ -15,8 +15,8 @@ export const NORMAL_START_GUIDELINE =
 export const NESTED_START_GUIDELINE =
   "Your parent assigned you a bounded task. Start subagents only for clearly independent slices that are worth briefing; most assignments need none.";
 
-/** Nested worktree writers may also split implementation into worktree writers they integrate. */
-export const NESTED_WORKSPACE_PARENT_START_GUIDELINE = `${NESTED_START_GUIDELINE} For parallel implementation slices, you may start worktree writers (isolation: worktree); you own their workspaces and must integrate or discard each one with subagent_workspace before you report.`;
+/** Nested worktree writers may also split implementation into worktree writers they apply. */
+export const NESTED_WORKSPACE_PARENT_START_GUIDELINE = `${NESTED_START_GUIDELINE} For parallel implementation slices, you may start worktree writers (isolation: worktree); you own their workspaces and must apply or discard each one with subagent_workspace before you report.`;
 
 export interface DelegationPrompt {
   readonly startGuideline: string;

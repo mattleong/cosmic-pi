@@ -6,7 +6,6 @@ import { invalidRequest, SubagentCapacityError, SubagentWriterConflictError } fr
 import type { RunRecord } from "./internal.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import type { WriterPoolView, WriterPoolLookup } from "./writer-pool.ts";
-import { writerPoolUnavailable } from "./writer-pool.ts";
 
 export const canonicalizeWriterCwd = (writerLeases: WriterLeaseContract, cwd: string) =>
   writerLeases
@@ -80,15 +79,14 @@ export const writerConflictError = (
   additionallyExcluded?: RunRecord,
 ): SubagentWriterConflictError | undefined => {
   const pool = pools.get(canonicalCwd.digest);
-  if (writerPoolUnavailable(pool)) {
-    const activeId =
-      pool?.members.keys().next().value ?? pool?.violationRunIds.values().next().value;
+  const unavailable = pool === undefined ? undefined : writerPoolUnavailableConflict(pool);
+  if (pool && unavailable) {
+    const activeId = pool.members.keys().next().value;
     const active = activeId ? records.get(activeId) : undefined;
     return new SubagentWriterConflictError({
       activeId: active?.view.id ?? "shared-writer-pool",
       activeName: active?.view.name ?? "shared writer pool",
-      message: writerPoolUnavailableMessage(pool),
-      transient: writerPoolSettlesAlone(pool),
+      ...unavailable,
     });
   }
 
@@ -105,26 +103,31 @@ export const writerConflictError = (
   return undefined;
 };
 
-const writerPoolSettlesAlone = (pool: WriterPoolView | undefined): boolean =>
-  pool?.admissionPaused !== true && (pool?.state === "releasing" || pool?.state === "failed");
-
-const writerPoolUnavailableMessage = (pool: WriterPoolView | undefined): string => {
-  const state = pool?.state;
-  switch (state) {
+const writerPoolUnavailableConflict = (pool: WriterPoolView): WriterConflict | undefined => {
+  switch (pool.state) {
     case "quarantined":
-      return "Shared-cwd writer ownership remains quarantined because cleanup could not be confirmed.";
+      return {
+        message:
+          "Shared-cwd writer ownership remains quarantined because cleanup could not be confirmed.",
+        transient: false,
+      };
     case "failed":
-      return "Shared-cwd writer-pool preparation failed and existing members are still cleaning up; retry shortly.";
+      return {
+        message:
+          "Shared-cwd writer-pool preparation failed and existing members are still cleaning up; retry shortly.",
+        transient: true,
+      };
     case "releasing":
-      return "Shared-cwd writer ownership is still being released; retry shortly.";
-    case undefined:
+      return {
+        message: "Shared-cwd writer ownership is still being released; retry shortly.",
+        transient: true,
+      };
     case "held":
-    case "paused":
     case "pending":
     case "preparing":
-      return `New writers are paused for this cwd after a write-claim violation.${pool?.pauseReason ? ` ${pool.pauseReason}` : ""}`;
+      return undefined;
   }
-  return absurd(state);
+  return absurd(pool.state);
 };
 
 interface WriterConflict {

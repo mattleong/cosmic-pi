@@ -34,6 +34,14 @@ const inspect = (
     seed,
   );
 type CandidateFixture = Partial<Record<keyof ProfileCandidate, string | boolean | undefined>>;
+const declared = (fixture: CandidateFixture) => ({
+  host: "local",
+  ...fixture,
+  closeOnReport: true,
+});
+const isCandidateList = (
+  route: CandidateFixture | ReadonlyArray<CandidateFixture>,
+): route is ReadonlyArray<CandidateFixture> => Array.isArray(route);
 const doc = (
   route: CandidateFixture | ReadonlyArray<CandidateFixture> | "disabled" | undefined,
   name = "one",
@@ -41,7 +49,19 @@ const doc = (
   json({
     version: 6,
     profileSets: {
-      [name]: { profiles: route === undefined ? {} : { worker: route } },
+      [name]: {
+        profiles:
+          route === undefined
+            ? {}
+            : {
+                worker:
+                  route === "disabled"
+                    ? route
+                    : isCandidateList(route)
+                      ? route.map(declared)
+                      : declared(route),
+              },
+      },
     },
   });
 

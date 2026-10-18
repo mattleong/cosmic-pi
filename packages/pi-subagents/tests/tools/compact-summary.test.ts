@@ -77,7 +77,6 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
     ).toEqual([]);
     expect(messages(summary?.issues)).not.toContain("Diagnostic evidence sentinel");
     expect(issueDetails(summary?.issues)).toContain("Diagnostic evidence sentinel");
-    expect(issueDetails(summary?.issues)).not.toContain("resume_admission");
   }
   const awaited = summarize(
     "await",
@@ -190,7 +189,7 @@ describe("subagent compact semantic policy", () => {
       for (const state of ["running", "completed"] as const) {
         const run = view({ steeringDelivery, state });
         const status = statusOf(run);
-        const summary = summarize("status", status);
+        const summary = summarize("status", status, "settled", { runIds: [run.id] });
         expect(summary?.outcome).toBe("uncertain");
         expect(compactIssueSeverity(summary?.issues)).toBe("warning");
         expect(issueDetails(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
@@ -199,7 +198,9 @@ describe("subagent compact semantic policy", () => {
       }
     }
     for (const steeringDelivery of ["confirmed", "not-sent", "report-unconfirmed"] as const) {
-      const summary = summarize("status", statusOf({ steeringDelivery }));
+      const summary = summarize("status", statusOf({ steeringDelivery }), "settled", {
+        runIds: ["agent-1"],
+      });
       expect(summary?.outcome).toBe(steeringDelivery === "confirmed" ? "success" : "warning");
       expect(issueDetails(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
     }
@@ -254,15 +255,13 @@ describe("subagent compact semantic policy", () => {
         question: { message: "Should I update db/0007.sql?", requestId: "q" },
       },
       { state: "waiting_for_parent" },
-      ...(["running", "paused", "stopped"] as const).map((state) => ({
+      ...(["stopping", "stopped"] as const).map((state) => ({
         state,
         writeIntent: "writer" as const,
         writeClaims: ["src/a.ts"],
-        writeAdmissionPaused: true,
         writeViolationOffender: true,
         writeAudit: audit,
       })),
-      { writeIntent: "writer", writeClaims: ["src/a.ts"], writeAdmissionPaused: true },
       { writeIntent: "writer", writeClaims: ["src/a.ts"], writeAudit: audit, state: "completed" },
       { warning: "Could not run the integration tests: docker is not available" },
       { warning: "Context window 91% full", warningSource: "system", systemWarning: "Other" },
@@ -270,7 +269,13 @@ describe("subagent compact semantic policy", () => {
       {
         selection: {
           ...view().selection,
-          skippedCandidates: [{ candidate: "alt", code: "pi_model_unknown", reason: "Missing" }],
+          skippedCandidates: [
+            {
+              candidate: { runtime: "pi", model: "alt", effort: "high" },
+              code: "pi_model_unknown",
+              reason: "Missing",
+            },
+          ],
         },
       },
       ...(["pending", "confirmed", "not-sent", "report-unconfirmed", "unresolved"] as const).map(
@@ -287,6 +292,15 @@ describe("subagent compact semantic policy", () => {
           { status: "auto-discarded" },
           { status: "proposal", changedFileCount: 1 },
           { status: "proposal", changedFileCount: 4, uncapturedFileCount: 2 },
+          {
+            status: "proposal",
+            changedFileCount: 2,
+            diffStat: {
+              addedLines: 9,
+              deletedLines: 3,
+              files: [{ path: "src/a.ts", addedLines: 9, deletedLines: 3 }],
+            },
+          },
         ] as const
       ).map((workspaceOutcome) => ({
         state: "completed" as const,
@@ -300,7 +314,7 @@ describe("subagent compact semantic policy", () => {
     const issues = runs.flatMap((overrides) => {
       const run = view({ id, ...overrides });
       return [
-        ...(summarize("status", statusOf(run))?.issues ?? []),
+        ...(summarize("status", statusOf(run), "settled", { runIds: [run.id] })?.issues ?? []),
         ...(summarize("await", awaitReceipt([run], { awaitedRunIds: [id] }))?.issues ?? []),
       ];
     });

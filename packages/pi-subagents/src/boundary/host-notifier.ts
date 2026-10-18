@@ -7,6 +7,7 @@ import {
   sanitizeTerminalLine,
 } from "pi-cosmic-core";
 import type { SubagentWorkspaceOutcome } from "../run/model.ts";
+import { proposalChangeSummary, proposalDiffStatLines } from "../tools/format.ts";
 import type { ArchivedReport, ReportArchive } from "./report-archive.ts";
 
 export interface SubagentCompletionNotification {
@@ -91,11 +92,14 @@ const workspaceOutcomeText = (
   if (outcome === undefined) return undefined;
   if (outcome.status === "auto-discarded")
     return "Workspace: discarded automatically because the writer changed no files; nothing needs review.";
-  const files = `${outcome.changedFileCount} changed file${outcome.changedFileCount === 1 ? "" : "s"}`;
   const uncaptured = outcome.uncapturedFileCount
     ? ` (+${outcome.uncapturedFileCount} uncaptured, which the proposal can't carry)`
     : "";
-  return `Workspace proposal: ${files}${uncaptured}. Apply small or trusted changes with subagent_workspace action=apply; review, prepare, and integrate risky ones. subagent_status shows the workspaceId.`;
+  const files = proposalDiffStatLines(outcome);
+  return [
+    `Workspace proposal: ${proposalChangeSummary(outcome)}${uncaptured}. Apply small or trusted changes with subagent_workspace action=apply; for risky ones, review, prepare, and test, then apply the exact revisionId and preparationId. subagent_status shows the workspaceId.`,
+    ...files.map((line) => `  ${line}`),
+  ].join("\n");
 };
 
 const completionBody = (run: SubagentCompletionNotification, archived?: ArchivedReport): string => {
