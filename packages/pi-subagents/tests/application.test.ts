@@ -166,15 +166,17 @@ describe("subagent Pi registration", () => {
         state: "waiting_for_parent",
         question: { requestId: "current-question", message: "Proceed?" },
       });
-      const reply = vi.fn(() => Effect.succeed(view({ id: pending.id })));
+      const send = vi.fn(() =>
+        Effect.succeed({ delivery: "answered" as const, run: view({ id: pending.id }) }),
+      );
       const service = subagentServiceDouble({
         visibleList: () => Effect.succeed([view({ id: "caller" }), pending]),
         authorizeTargets: () => Effect.void,
-        reply,
+        send,
       });
       const replyRequest = encodeSubagentProxyInput({
-        tool: "subagent_reply",
-        args: { runId: pending.id, message: "Yes" },
+        tool: "subagent_send",
+        args: { runIds: [pending.id], message: "Yes" },
       });
       const dispatch = (options: SubagentLayers.SubagentLayerOptions) =>
         options
@@ -186,9 +188,9 @@ describe("subagent Pi registration", () => {
       expect(yield* dispatch(retired).pipe(Effect.flip, Effect.orDie)).toMatchObject({
         code: "proxy_caller_disconnected",
       });
-      expect(reply).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
       yield* dispatch(current).pipe(Effect.orDie);
-      expect(reply).toHaveBeenCalledWith(pending.id, "Yes", undefined);
+      expect(send).toHaveBeenCalledWith(pending.id, "Yes", undefined);
       current.notify({
         type: "question",
         id: "current",
@@ -707,6 +709,67 @@ describe("subagent Pi registration", () => {
       expect(yield* hasSessionOverride(newSessionContext)).toBe(false);
       yield* settle(() =>
         emit("session_shutdown", newSessionContext, { type: "session_shutdown", reason: "quit" }),
+      );
+    },
+  );
+});
+
+describe("orphaned workspace sweep notice", () => {
+  effectTest(
+    "tells only the user which orphans a session start swept, and reload sweeps nothing",
+    function* () {
+      const makeLayer = SubagentLayers.subagentApplicationLayer;
+      let sweeps = 0;
+      const swept = [
+        {
+          workspaceId: "swept-workspace",
+          sourceRoot: "/repo",
+          changedPathCount: 2,
+          patchPath: "/agent/subagent-worktrees/swept-workspace/revision.diff",
+        },
+      ];
+      const capture = vi
+        .spyOn(SubagentLayers, "subagentApplicationLayer")
+        .mockImplementation((options) =>
+          makeLayer(options).pipe(
+            Layer.merge(
+              Layer.succeed(
+                SubagentService,
+                subagentServiceDouble({
+                  projection: Effect.succeed({ revision: 0, runs: [] }),
+                  deliverPendingCompletions: Effect.void,
+                  sweepOrphanedWorkspaces: Effect.sync(() => {
+                    sweeps += 1;
+                    return swept;
+                  }),
+                }),
+              ),
+            ),
+          ),
+        );
+      yield* Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore()));
+      const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
+      const notify = vi.fn();
+      const ctx = sessionContext({ hasUI: true, mode: "tui", ui: { notify } }, "sweep-session");
+      const { emit } = applicationFixture({ sendMessage });
+      yield* settle(() => emit("session_start", ctx));
+      yield* settle(() => Promise.resolve());
+      expect(sweeps).toBe(1);
+      const notices = notify.mock.calls.filter(([text]) =>
+        String(text).includes("swept-workspace"),
+      );
+      expect(notices).toHaveLength(1);
+      expect(String(notices[0]?.[0])).toContain(swept[0]?.patchPath);
+      expect(sendMessage).not.toHaveBeenCalled();
+
+      yield* settle(() =>
+        emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
+      );
+      yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "reload" }));
+      yield* settle(() => Promise.resolve());
+      expect(sweeps).toBe(1);
+      yield* settle(() =>
+        emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" }),
       );
     },
   );

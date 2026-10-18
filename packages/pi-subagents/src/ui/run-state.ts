@@ -9,6 +9,7 @@ import {
   hasSubagentCapability,
   hasUnresolvedSteeringDelivery,
   isActiveRunState,
+  isResumableRunState,
   type SubagentRunState,
   type SubagentRunView,
 } from "../run/model.ts";
@@ -56,7 +57,8 @@ export const canStopRun = (run: SubagentRunView): boolean =>
   (run.cleanup?.disposition === "quarantined" && run.cleanup.recovery === "stop");
 
 export const canResumeRun = (run: SubagentRunView): boolean =>
-  (run.state === "paused" || run.state === "completed") &&
+  isResumableRunState(run.state) &&
+  run.supersededByRunId === undefined &&
   runCleanupAttention(run) === undefined &&
   hasSubagentCapability(run, "resume");
 

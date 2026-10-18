@@ -12,21 +12,21 @@ These examples are for the root session. Nested Pi children delegate only throug
 - Starts must resolve to read-only intent; by default that is every profile except `worker`. A writer entry becomes a failed receipt before admission without discarding independent successful entries.
 - Script-started runs carry an immutable restriction: descendants at every depth, retry successors, and resumed runs stay read-only, even when their delegation or retry is model-issued. The root main agent may still launch separate writer work outside a script-origin tree.
 - A scripted await or status that meets a question or pause rejects before consuming reports, and await leaves questions unacknowledged. End the script and let the main agent handle the attention; don't catch it to re-await in a loop.
-- Replies, worktree review and integration, interrupt, resume, and retry require the main agent.
+- Messages and answers to questions (`subagent_send`), worktree review and integration, interrupt, resume, and retry require the main agent.
 - A script's stop uses the root's normal target authority, so it can stop any run in the session. Stop only runs the script launched or that the user approved stopping.
 
 These are orchestration safeguards, not capability confinement: read-only Pi agents and native tools keep their cooperative authority.
 
 ## Results and failures
 
-All five script-callable tools expose `outputSchema` and `structuredContent` with `contract: "pi-subagents/orchestration"`, `version: 2`, and the exact `tool` name, so scripts receive objects rather than presentation text. Use `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data, so check the envelope before using a result.
+All five script-callable tools expose `outputSchema` and `structuredContent` with `contract: "pi-subagents/orchestration"`, `version: 3`, and the exact `tool` name, so scripts receive objects rather than presentation text. Use `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data, so check the envelope before using a result.
 
-Version 2 replaced version 1 with breaking changes: status results are a union of `targets` and `runs` (the list tool is gone), the rename envelope was removed, and attention no longer has the `admission-paused` kind. Scripts written for version 1 should check `version` and stop rather than guess.
+Version 3 replaced version 2 with one breaking change: attention no longer has the `containment` kind, because shared-checkout writers no longer carry file claims. Version 2 had replaced version 1: status results are a union of `targets` and `runs` (the list tool is gone), the rename envelope was removed, and attention no longer has the `admission-paused` kind. Scripts written for an earlier version should check `version` and stop rather than guess.
 
 - **Models:** `fallbackProfile` and `profiles`, optionally filtered. Each profile has its `id`, description, source, defaults, and declared-order `candidates` with host, runtime, model, effort, context, write intent, OpenAI fast mode, close-on-report, `status` (`eligible` or `skipped`), and reason. This is static eligibility, not readiness, and doesn't authorize substituting a model.
-- **Start:** `outcome` is `started`, `partial`, or `failed`. Request-ordered `launches` have `index` and `status`; successes add `runId` and the actual `profile`, and failures add `failure` and, after admitted-failure cleanup settles, optional `admittedRun` cleanup and retry facts.
+- **Start:** `outcome` is `started`, `partial`, or `failed`. Request-ordered `launches` have `index` and `status`; successes add `runId`, the actual `profile`, and `modelOverride` when the item set `model`, and failures add `failure` and, after admitted-failure cleanup settles, optional `admittedRun` cleanup and retry facts.
 - **Await:** `outcome` is `finished`, `attention`, `cancelled`, `timed_out` (after `timeoutSeconds`), or `user_input`, with `requestedRunIds` and `targets`. Finished means the assignment settled, not that it succeeded or that cleanup is confirmed. Scripted attention rejects instead. Cancellation keeps observed targets, unobserved IDs, and `cleanup`, and stops only the wait. A late abort during delivery yields `report.status: "unknown"`; recover with opt-in status.
-- **Status:** with `runIds`, `targets` and `missingRunIds`. Without `runIds`, a complete `runs` list in parent-before-child order with `parentRunId` and `depth`, never clipped and never reading or consuming reports; check for `runs` versus `targets`. With `runIds`, `includeDeliveredReports: true` reads the latest retained delivered report without a claim or notification; competing claims still redact it. Compare `reportGeneration` when an assignment may have changed. Eviction or session replacement can make a run unavailable.
+- **Status:** with `runIds`, `targets` and `missingRunIds`. Without `runIds`, a complete `runs` list in parent-before-child order with `parentRunId` and `depth`, never clipped and never reading or consuming reports; check for `runs` versus `targets`. Targets of a run launched on a model override carry `modelOverride`. With `runIds`, `includeDeliveredReports: true` reads the latest retained delivered report without a claim or notification; competing claims still redact it. Compare `reportGeneration` when an assignment may have changed. Eviction or session replacement can make a run unavailable.
 - **Lifecycle:** `outcome` is `succeeded`, `partial`, or `failed`. Ordered `results` keep `requestedRunId` separate from a retry successor's `target.runId`.
 
 Target `report.status` is `delivered` or `read_back` when `text` is present; otherwise `deferred`, `claimed`, `already_delivered`, `missing`, `not_finished`, or `unknown`. A deferred report is not consumed. Don't treat absent text as an empty deliverable, and never treat absent retry facts as permission to retry.
@@ -53,7 +53,7 @@ const started = await tools.subagent_start({
   ],
 });
 text(started); // Preserve successful IDs even if a later step fails.
-if (started?.contract !== "pi-subagents/orchestration" || started.version !== 2)
+if (started?.contract !== "pi-subagents/orchestration" || started.version !== 3)
   throw new Error("Structured orchestration results are unavailable; hand back to the main agent.");
 const ids = started.launches.filter((x) => x.status === "started").map((x) => x.runId);
 store("codemode-demo-ids", ids);
@@ -66,7 +66,7 @@ const ids = load("codemode-demo-ids");
 if (!Array.isArray(ids) || ids.length === 0) return "No launched work to await";
 const result = await tools.subagent_await({ runIds: ids, until: "all_finished" });
 text(result); // Await may consume reports; preserve them before any later call can fail.
-if (result?.contract !== "pi-subagents/orchestration" || result.version !== 2) return result;
+if (result?.contract !== "pi-subagents/orchestration" || result.version !== 3) return result;
 if (
   result.outcome !== "finished" ||
   result.targets.some(
@@ -81,7 +81,7 @@ const missing = targets.filter((t) => !("text" in t.report)).map((t) => t.runId)
 if (missing.length) {
   const recovered = await tools.subagent_status({ runIds: missing, includeDeliveredReports: true });
   text(recovered); // Preserve observed reports even if validation or generation matching fails.
-  if (recovered?.contract !== "pi-subagents/orchestration" || recovered.version !== 2)
+  if (recovered?.contract !== "pi-subagents/orchestration" || recovered.version !== 3)
     return recovered;
   const byId = new Map(recovered.targets.map((t) => [t.runId, t]));
   targets = targets.map((t) => {
@@ -119,7 +119,7 @@ const followup = await tools.subagent_start({
   ],
 });
 text(followup); // Print the receipt and run ID before anything else can fail.
-if (followup?.contract !== "pi-subagents/orchestration" || followup.version !== 2) return followup;
+if (followup?.contract !== "pi-subagents/orchestration" || followup.version !== 3) return followup;
 // Hand failed or partial launches back to the main agent; do not retry from the script.
 if (followup.outcome !== "started")
   return { reports, followup, handoff: "Main-agent judgment needed" };
@@ -144,7 +144,7 @@ const started = await tools.subagent_start({
   })),
 });
 text(started);
-if (started?.contract !== "pi-subagents/orchestration" || started.version !== 2) return started;
+if (started?.contract !== "pi-subagents/orchestration" || started.version !== 3) return started;
 const lanes = new Map(
   started.launches.filter((x) => x.status === "started").map((x) => [x.runId, areas[x.index]]),
 );
@@ -209,9 +209,9 @@ const tests = await tools.background_task({
 text(tests);
 if (
   started?.contract !== "pi-subagents/orchestration" ||
-  started.version !== 2 ||
+  started.version !== 3 ||
   tests?.contract !== "pi-background-task/task" ||
-  tests.version !== 2
+  tests.version !== 1
 )
   throw new Error("Structured orchestration results are unavailable; hand back to the main agent.");
 store("agents-and-tests", {
@@ -235,7 +235,7 @@ try {
 text(current);
 if (
   current?.contract !== "pi-background-task/task" ||
-  current.version !== 2 ||
+  current.version !== 1 ||
   current.tool !== "background_task" ||
   current.action !== "status"
 )
@@ -258,7 +258,7 @@ const waited = await tools.background_task({
 text(waited); // Preserve the receipt even if middleware removed structured data.
 if (
   waited?.contract !== "pi-background-task/task" ||
-  waited.version !== 2 ||
+  waited.version !== 1 ||
   waited.tool !== "background_task" ||
   waited.action !== "wait"
 )

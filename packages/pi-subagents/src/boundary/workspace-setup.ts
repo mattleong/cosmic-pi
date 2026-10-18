@@ -69,6 +69,9 @@ const lastLine = (stdout: string, stderr: string) =>
 export const describeWorkspaceSetup = (setup: { readonly command: ReadonlyArray<string> }) =>
   clipText(setup.command.join(" "), 80);
 
+export const describeWorkspaceInclude = (patterns: ReadonlyArray<string>) =>
+  clipText(patterns.join(", "), 400);
+
 /**
  * Runs a trusted project's command at a tree's root without a shell, in its own process group with
  * the user's environment, minus Git variables that would redirect it to the parent repository.

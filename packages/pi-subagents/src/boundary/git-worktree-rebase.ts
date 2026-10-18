@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import type { SafeFile } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import type { WorkspaceRebase, WorkspaceRecord } from "../workspace/model.ts";
+import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   git,
   gitFailure,
@@ -12,19 +13,27 @@ import {
   gitSucceeded,
   listedPaths,
   workspaceFailure,
+  workspaceIO,
   workspaceRefusal,
 } from "./git-worktree-process.ts";
-import { captureSnapshot, readSnapshot, sourceIdentity } from "./git-worktree-snapshot.ts";
 import { newWorkspaceId, readWorkspaceRecord, saveWorkspaceRecord } from "./git-worktree-store.ts";
 import { patchBytes } from "./git-worktree-patch.ts";
+import { includedLeftOut } from "./git-worktree-include.ts";
 import {
   captureTree,
-  preparationTree,
-  refuseUncaptured,
+  changedPaths as changedBetween,
+  commitTree,
+  setWorkspaceRef,
+  sourceLeftOut,
+  treeHolds,
+  workerLeftOut,
+  workspaceRef,
+} from "./git-capture.ts";
+import { gitPath, headCommit, sourceIdentity } from "./git-repository.ts";
+import {
   removePreparation,
-  sourceCapture,
   withOutcome,
-  workspaceRepository,
+  workspaceArtifact,
   workspaceSubdirectory,
   workspaceWorker,
 } from "./git-worktree-trees.ts";
@@ -52,52 +61,66 @@ const rebaseRefusal = (result: GitResult, changedPaths: ReadonlyArray<string>) =
     detail: [
       ...(paths.length > 0 ? [`Unmergeable: ${listedPaths(paths)}`] : []),
       ...(stderr.length > 0 ? [`Git reported:\n${stderr.join("\n")}`] : []),
-      "Rule: a rebase reapplies every change with a three-way merge, which can't resolve a file the parent deleted, added, or turned binary",
+      "Rule: a rebase reapplies every change with a three-way merge, which can't resolve a file the parent deleted, added, or turned binary, or overwrite an untracked or ignored worker file",
       "Nothing was changed; the workspace keeps its worker tree and revision.",
-      "Remedy: revise without rebase, or apply or export the proposal and start a new writer from the current checkout.",
+      "Remedy: revise without rebase, or apply the proposal and start a new writer from the current checkout.",
     ].join("\n"),
   });
 };
 
-// `git apply --3way` exits nonzero both when it leaves conflicts and when it can't apply at
-// all; only the first leaves unmerged index entries, and the second changes nothing.
-const applyThreeWay = (root: string, patch: Uint8Array, changedPaths: ReadonlyArray<string>) =>
+// A command that refuses changes nothing; any other failure is the caller's to recover from.
+const refusable = (
+  root: string,
+  args: ReadonlyArray<string>,
+  changedPaths: ReadonlyArray<string>,
+) =>
   Effect.gen(function* () {
+    const result = yield* gitResult(root, args);
+    if (gitSucceeded(result)) return undefined;
+    if (result.code === null || result.cleanupUnconfirmed || result.timedOut)
+      return yield* gitFailure(args, result);
+    return yield* rebaseRefusal(result, changedPaths);
+  });
+
+/**
+ * Moves the worker from its captured files to the fresh baseline and reapplies the changes with
+ * a three-way merge against the real merge base, the old baseline. Two-tree read-tree touches
+ * only tracked files and refuses to overwrite untracked or ignored ones, and `git apply --3way`
+ * exits nonzero both when it leaves conflicts and when it can't apply at all; only the first
+ * leaves unmerged entries, and the second changes nothing, so the worker is moved back.
+ */
+const rebuildWorker = (
+  root: string,
+  captured: string,
+  parent: string,
+  patch: Uint8Array,
+  changedPaths: ReadonlyArray<string>,
+) =>
+  Effect.gen(function* () {
+    yield* git(root, ["read-tree", "--reset", "-u", captured]);
+    yield* refusable(root, ["read-tree", "-m", "-u", captured, parent], changedPaths);
+    if (patch.length === 0) return [];
     const args = ["apply", "--3way", "--binary", "--whitespace=nowarn", "-"];
     const result = yield* gitResult(root, args, { stdin: patch });
     if (gitSucceeded(result)) return [];
     if (result.code === null || result.cleanupUnconfirmed || result.timedOut)
       return yield* gitFailure(args, result);
     const conflicted = yield* unmergedPaths(root);
-    if (conflicted.length === 0) return yield* rebaseRefusal(result, changedPaths);
-    return conflicted.toSorted();
+    if (conflicted.length > 0) return conflicted.toSorted();
+    yield* git(root, ["read-tree", "-m", "-u", parent, captured]);
+    return yield* rebaseRefusal(result, changedPaths);
   });
 
-// Rebuilds the worker in place, so its directory keeps the identity its writer lease names.
-const rebuildWorker = (
-  root: string,
-  parent: string,
-  patch: Uint8Array,
-  changedPaths: ReadonlyArray<string>,
-) =>
-  Effect.gen(function* () {
-    yield* git(root, ["reset", "-q", "--hard", parent]);
-    yield* git(root, ["clean", "-ffdxq"]);
-    const conflicted = patch.length === 0 ? [] : yield* applyThreeWay(root, patch, changedPaths);
-    // Like a fresh worker's, the index holds the baseline and the changes stay unstaged.
-    yield* git(root, ["reset", "-q", "--mixed", parent]);
-    return conflicted;
-  });
-
-// Puts back every captured worker file from `captured`, with the index at the baseline.
+// Puts back every captured worker file, with HEAD and the index at the baseline again; files the
+// capture left out, such as ignored ones, stay as they are.
 const restoreWorker = (root: string, captured: string, baseline: string) =>
   Effect.gen(function* () {
-    yield* git(root, ["reset", "-q", "--hard", captured]);
-    yield* git(root, ["clean", "-ffdxq"]);
+    yield* git(root, ["read-tree", "--reset", "-u", captured]);
     yield* git(root, ["reset", "-q", "--mixed", baseline]);
   });
 
-// A nested rebase snapshots its source like a nested create: an active workspace's worker.
+// A nested rebase snapshots its source like a nested create: an active workspace's worker,
+// without the files `workspaceInclude` copied into it.
 const activeSource = (
   registry: string,
   record: WorkspaceRecord,
@@ -105,7 +128,7 @@ const activeSource = (
 ) =>
   Effect.gen(function* () {
     const sourceId = record.handle.sourceWorkspaceId;
-    if (sourceId === undefined) return undefined;
+    if (sourceId === undefined) return [];
     const source = yield* managedRecord(sourceId);
     if (
       source.status !== "active" ||
@@ -116,7 +139,7 @@ const activeSource = (
         rule: "a nested workspace snapshots only an active workspace's worker tree",
         remedy: "Revise without rebase, or discard this workspace.",
       });
-    return undefined;
+    return yield* includedLeftOut(source.repository, source.baseline, source.includedPaths);
   });
 
 /** The baseline record.json names now, or undefined when it can't be read. */
@@ -127,7 +150,7 @@ const savedBaseline = (registry: string, record: WorkspaceRecord) =>
   );
 
 /**
- * Puts the worker back after rebuilding failed past the trial. A save that renamed the rebuilt
+ * Puts the worker back after rebuilding failed past the merge. A save that renamed the rebuilt
  * record into place can still fail syncing its directory, so the record is reread first: the
  * worker is restored only once the record names the previous baseline again, and otherwise kept
  * as rebuilt so the next freeze can't revert parent edits against a baseline it doesn't hold.
@@ -140,8 +163,7 @@ const recoverWorker = (
   error: WorkspaceError,
 ) =>
   Effect.gen(function* () {
-    const repository = workspaceRepository(registry, record);
-    const capturedAt = `refs/pi/rebase-worker (${captured}) in ${repository}`;
+    const capturedAt = `${workspaceRef(record.handle.workspaceId, "rebase-worker")} (${captured}) in ${record.repository}`;
     let named = yield* savedBaseline(registry, record);
     if (named !== record.baseline) {
       yield* saveWorkspaceRecord(registry, record).pipe(Effect.ignore);
@@ -155,14 +177,12 @@ const recoverWorker = (
           : `The workspace record couldn't be read back, so the worker tree was left as rebuilt; the previous captured files are at ${capturedAt}. Discard the workspace if it can't be inspected.`,
       );
     return yield* restoreWorker(workspaceWorker(registry, record), captured, record.baseline).pipe(
+      Effect.andThen(
+        setWorkspaceRef(record.repository, record.handle.workspaceId, "baseline", record.baseline),
+      ),
       Effect.matchEffect({
         onSuccess: () =>
-          Effect.fail(
-            withOutcome(
-              error,
-              "The worker tree was restored from its captured files; ignored and excluded files were removed.",
-            ),
-          ),
+          Effect.fail(withOutcome(error, "The worker tree was restored from its captured files.")),
         onFailure: () =>
           Effect.fail(
             withOutcome(
@@ -175,9 +195,9 @@ const recoverWorker = (
   });
 
 /**
- * Rebuilds the worker tree from a fresh snapshot of its source with the worker's changes
- * reapplied by a three-way merge. A trial in a scratch tree proves the merge can run before
- * the worker changes; the worker is restored from its capture if rebuilding fails after that.
+ * Rebuilds the worker tree in place from a fresh capture of its source with the worker's changes
+ * reapplied by a three-way merge. A merge that can't run puts the worker back and changes
+ * nothing; a later failure restores the worker from its capture.
  */
 export const rebaseWorkspace = (
   registry: string,
@@ -187,40 +207,31 @@ export const rebaseWorkspace = (
   Effect.gen(function* () {
     if (!["active", "frozen", "prepared"].includes(record.status))
       return yield* workspaceFailure("rebase", "Workspace cannot be rebuilt in its current state.");
-    yield* activeSource(registry, record, managedRecord);
-    const repository = workspaceRepository(registry, record);
+    const sourceIncluded = yield* activeSource(registry, record, managedRecord);
+    // The worker's included files stay as they are; no capture takes them.
+    const included = record.includedPaths ?? [];
+    const { repository } = record;
+    const { workspaceId, sourceRoot } = record.handle;
+    const scratch = workspaceArtifact(registry, record);
     const worker = workspaceWorker(registry, record);
-    const current = yield* captureTree(registry, record, worker, "rebase-worker");
-    const changedPaths = yield* gitFields(repository, [
-      "diff",
-      "--name-only",
-      "-z",
-      "--no-renames",
-      record.baseline,
-      current.commit,
-      "--",
-    ]);
-    // Rebuilding removes every file the capture couldn't hold.
-    yield* refuseUncaptured("rebase", {
-      revisionId: current.commit,
-      changedPaths,
-      uncapturedPaths: current.excludedPaths,
-    });
+    const current = yield* captureTree(worker, scratch, workerLeftOut, included);
+    const captured = yield* commitTree(repository, current.tree, [record.baseline], "worker");
+    yield* setWorkspaceRef(repository, workspaceId, "rebase-worker", captured);
+    const changedPaths = yield* changedBetween(repository, record.baseline, captured);
     const patch =
       changedPaths.length === 0
         ? new Uint8Array()
-        : yield* patchBytes(
-            registry,
-            record,
-            { from: record.baseline, to: current.commit },
-            "rebase",
-          );
-    const { sourceRoot } = record.handle;
+        : yield* patchBytes(registry, record, { from: record.baseline, to: captured }, "rebase");
     const identity = yield* sourceIdentity(sourceRoot);
-    const options = sourceCapture(record);
-    const parent = yield* captureSnapshot(sourceRoot, repository, "rebase-parent", options);
+    const source = yield* captureTree(sourceRoot, scratch, sourceLeftOut(record), sourceIncluded);
+    const parent = yield* commitTree(
+      repository,
+      source.tree,
+      [yield* headCommit(sourceRoot)],
+      "baseline",
+    );
     const relative = workspaceSubdirectory(record);
-    if (relative !== "" && !parent.entries.some((entry) => entry.path.startsWith(`${relative}/`)))
+    if (relative !== "" && !(yield* treeHolds(repository, parent, relative)))
       return yield* workspaceRefusal(
         "rebase",
         "The session directory has no files in the parent's current checkout.",
@@ -230,39 +241,45 @@ export const rebaseWorkspace = (
           remedy: "Revise without rebase, or discard this workspace.",
         },
       );
-    const verified = yield* readSnapshot(sourceRoot, options);
     const after = yield* sourceIdentity(sourceRoot);
-    if (
-      verified.tree !== parent.tree ||
-      after.head !== identity.head ||
-      after.index !== identity.index
-    )
+    if (after.head !== identity.head || after.index !== identity.index)
       return yield* workspaceFailure("rebase", "Source changed during snapshot acquisition.");
-    if (patch.length > 0) {
-      const trialId = yield* newWorkspaceId;
-      const trial = preparationTree(registry, record, trialId);
-      yield* git(repository, ["worktree", "add", "--detach", trial, parent.commit]);
-      yield* applyThreeWay(trial, patch, changedPaths).pipe(
-        Effect.ensuring(removePreparation(registry, record, trialId)),
-      );
-    }
     const rebuilt: WorkspaceRecord = {
-      version: 1,
+      version: 2,
       handle: record.handle,
-      baseline: parent.commit,
+      repository,
+      baseline: parent,
       ownerLease: record.ownerLease,
-      excludedPaths: parent.excludedPaths,
       status: "active",
+      ...(record.launch && { launch: record.launch }),
+      ...(record.includedPaths && { includedPaths: record.includedPaths }),
     };
+    // A refused merge puts the worker's files back; its index, staged entries included, is
+    // restored from this copy.
+    const index = yield* gitPath(worker, "index");
+    const savedIndex = path.join(scratch, `${yield* newWorkspaceId}.index`);
+    yield* workspaceIO("rebase", () => fs.copyFile(index, savedIndex));
     const conflictedPaths = yield* Effect.gen(function* () {
-      const conflicted = yield* rebuildWorker(worker, parent.commit, patch, changedPaths);
-      const provisioned = yield* captureTree(registry, rebuilt, worker, "rebased");
+      const conflicted = yield* rebuildWorker(worker, captured, parent, patch, changedPaths).pipe(
+        Effect.tapError((error) =>
+          error.code === "workspace_rebase_refused"
+            ? workspaceIO("rebase", () => fs.copyFile(savedIndex, index))
+            : Effect.void,
+        ),
+      );
+      // Like a fresh worker's, the index holds the baseline and the changes stay unstaged.
+      yield* git(worker, ["reset", "-q", "--mixed", parent]);
+      yield* setWorkspaceRef(repository, workspaceId, "baseline", parent);
+      const provisioned = yield* captureTree(worker, scratch, workerLeftOut, included);
       yield* saveWorkspaceRecord(registry, { ...rebuilt, rebasedTree: provisioned.tree });
       return conflicted;
     }).pipe(
       Effect.catchIf(
-        (error) => !error.cleanupUnconfirmed,
-        (error) => recoverWorker(registry, record, current.commit, parent.commit, error),
+        (error) => !error.cleanupUnconfirmed && error.code !== "workspace_rebase_refused",
+        (error) => recoverWorker(registry, record, captured, parent, error),
+      ),
+      Effect.ensuring(
+        workspaceIO("rebase", () => fs.rm(savedIndex, { force: true })).pipe(Effect.ignore),
       ),
       Effect.uninterruptible,
     );

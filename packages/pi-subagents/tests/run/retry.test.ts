@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { SubagentBackendRegistry, backendRegistryFor } from "../../src/backend/service.ts";
-import { processError, SubagentWriterConflictError } from "../../src/run/errors.ts";
+import { processError } from "../../src/run/errors.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { getFailedStartRecovery } from "../../src/run/launch.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
@@ -22,7 +22,6 @@ import {
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
-import { stringContaining } from "../support/matchers.ts";
 
 const reviewerNative = () =>
   nativeReportRequest({ profile: "reviewer", routeContinuation: reviewerContinuation(0) });
@@ -343,39 +342,42 @@ describe("explicit profile-route retry", () => {
     });
   });
 
-  it.effect("reserves a failed writer's exact claims while retry resolution is in progress", () => {
+  it.effect("admits other writers in the cwd while a retry resolution is in progress", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const failedRun = yield* startFailedReviewer(service, fake, {
         profile: "worker",
         writeIntent: "writer",
-        writes: ["src/retry-owner.ts"],
       });
       const claim = yield* service.claimRetryContinuation(failedRun.id);
 
-      const conflict = yield* service
-        .start(
-          request({
-            name: "retry-claim-collision",
-            writeIntent: "writer",
-            writes: ["src/RETRY-owner.ts"],
-          }),
-        )
-        .pipe(Effect.flip);
-      expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
-      expect(conflict).toMatchObject({
-        activeId: failedRun.id,
-        message: stringContaining("route retry"),
-      });
-      const disjoint = yield* service.start(
-        request({
-          name: "retry-claim-disjoint",
-          writeIntent: "writer",
-          writes: ["src/disjoint.ts"],
-        }),
+      const peer = yield* service.start(
+        request({ name: "retry-claim-peer", writeIntent: "writer" }),
       );
-      expect(disjoint.state).toBe("running");
+      expect(peer.state).toBe("running");
       yield* service.releaseRetryClaim(failedRun.id, claim.claimToken);
+    });
+  });
+
+  it.effect("refuses to retry a model-override run because the override has no fallback", () => {
+    const { fake, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const modelOverride = { runtime: "pi", model: "openai-codex/gpt-5.6-sol" } as const;
+      const failedRun = yield* startFailedReviewer(service, fake, {
+        modelOverride,
+        routeContinuation: {
+          ...reviewerContinuation(0),
+          routeSource: "override",
+          candidates: [reviewerContinuation(0).candidates[0]!],
+        },
+      });
+      expect(yield* service.status(failedRun.id)).toMatchObject({
+        state: "failed",
+        modelOverride,
+        remainingCandidateCount: 0,
+      });
+      const refused = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);
+      expect(refused).toMatchObject({ code: "retry_route_exhausted" });
     });
   });
 

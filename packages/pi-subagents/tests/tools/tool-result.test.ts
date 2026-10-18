@@ -250,7 +250,7 @@ effectTest(
       subagentServiceDouble({
         send: (id) =>
           id === "good"
-            ? Effect.succeed(view({ id }))
+            ? Effect.succeed({ delivery: "guided" as const, run: view({ id }) })
             : Effect.fail(
                 new InvalidSubagentRequestError(
                   failure(
@@ -308,7 +308,7 @@ effectTest(
     expect(
       (yield* h.result(event({ ...response, details: structuredClone(response.details) }))).isError,
     ).toBe(false);
-    expect((yield* h.result(event(response, "subagent_reply"))).isError).toBe(false);
+    expect((yield* h.result(event(response, "subagent_status"))).isError).toBe(false);
     expect((yield* h.result(event(response, "subagent_send", "wrong"))).isError).toBe(false);
     expect((yield* h.result(event(response))).isError).toBe(true);
     retain();

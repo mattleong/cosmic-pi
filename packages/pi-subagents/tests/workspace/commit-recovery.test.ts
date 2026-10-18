@@ -4,13 +4,14 @@ import * as files from "../../src/boundary/git-worktree-publish.ts";
 import * as gitProcess from "../../src/boundary/git-worktree-process.ts";
 import * as store from "../../src/boundary/git-worktree-store.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
-import type { WorkspaceHandle } from "../../src/workspace/model.ts";
+import type { WorkspaceHandle, WorkspaceRecord } from "../../src/workspace/model.ts";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
 import {
   exists,
   failureOf,
   io,
   readText,
+  registryOf,
   workspaceTarget,
   workspaceTests,
   writeFile,
@@ -23,7 +24,7 @@ const test = workspaceTests([
 ]);
 
 const artifactOf = (agent: string, handle: WorkspaceHandle) =>
-  path.join(agent, "git-workspaces", handle.workspaceId);
+  path.join(registryOf(agent), handle.workspaceId);
 
 const editWorker = (handle: WorkspaceHandle) =>
   Effect.gen(function* () {
@@ -118,9 +119,12 @@ const rebaseScenario = (service: WorkspaceServiceContract, root: string) =>
     yield* editWorker(handle);
     const revision = yield* service.freeze(workspaceTarget(handle));
     yield* writeFile(path.join(root, "src/b.ts"), "parent b\n");
-    const before = yield* service.inspect(workspaceTarget(handle));
+    const before = unstamped(yield* service.inspect(workspaceTarget(handle)));
     return { handle, revision, before };
   });
+
+// Putting a record back saves it again, which stamps a new change time.
+const unstamped = ({ lastChangedAt: _changed, ...record }: WorkspaceRecord) => record;
 
 const expectWorkerRestored = (handle: WorkspaceHandle) =>
   Effect.gen(function* () {
@@ -138,7 +142,7 @@ test("restores the worker when saving the rebuilt record fails past the trial", 
   );
   yield* expectWorkerRestored(handle);
   const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record).toEqual(before);
+  expect(unstamped(record)).toEqual(before);
   expect(record.revision?.revisionId).toBe(revision.revisionId);
 });
 
@@ -150,7 +154,7 @@ test("puts the previous record back before restoring when the rebuilt one landed
   );
   expect(failure.operation).toBe("registry");
   yield* expectWorkerRestored(handle);
-  expect(yield* service.inspect(workspaceTarget(handle))).toEqual(before);
+  expect(unstamped(yield* service.inspect(workspaceTarget(handle)))).toEqual(before);
 });
 
 test("keeps the rebuilt worker when its record landed and the previous one can't be put back", function* (service, root, agent) {
@@ -173,16 +177,16 @@ test("keeps the rebuilt worker when its record landed and the previous one can't
   expect(revision.changedPaths).toEqual(["src/a.ts", "src/gone.ts", "src/new.ts"]);
 });
 
-test("names refs/pi/rebase-worker when restoring the worker fails, and it holds the worker's files", function* (service, root, agent) {
+test("names the rebase-worker ref when restoring the worker fails, and it holds the worker's files", function* (service, root, agent) {
   const { handle } = yield* rebaseScenario(service, root);
   const artifact = artifactOf(agent, handle);
   const original = gitProcess.git;
-  let hardResets = 0;
+  let resets = 0;
   const gitSpy = vi.spyOn(gitProcess, "git").mockImplementation((cwd, args, options) => {
-    if (cwd === handle.cwd && args[0] === "reset" && args[2] === "--hard") {
-      hardResets += 1;
-      // The first rebuilds the worker; the second would restore it.
-      if (hardResets === 2) return Effect.fail(gitProcess.workspaceFailure("git", "injected"));
+    if (cwd === handle.cwd && args[0] === "read-tree" && args[1] === "--reset") {
+      resets += 1;
+      // The first moves the worker to its captured files; the second would restore it.
+      if (resets === 2) return Effect.fail(gitProcess.workspaceFailure("git", "injected"));
     }
     return original(cwd, args, options);
   });
@@ -193,15 +197,11 @@ test("names refs/pi/rebase-worker when restoring the worker fails, and it holds 
       failureOf(service.rebase(workspaceTarget(handle))),
     ),
   );
-  expect(hardResets).toBe(2);
-  expect(failure.detail).toContain("refs/pi/rebase-worker");
-  const repository = path.join(artifact, "repo.git");
-  expect(yield* gitProcess.git(repository, ["show", "refs/pi/rebase-worker:src/a.ts"])).toBe(
-    "a\nworker\nc\n",
-  );
-  expect(yield* gitProcess.git(repository, ["show", "refs/pi/rebase-worker:src/new.ts"])).toBe(
-    "new\n",
-  );
+  expect(resets).toBe(2);
+  const ref = `refs/pi/workspaces/${handle.workspaceId}/rebase-worker`;
+  expect(failure.detail).toContain(ref);
+  expect(yield* gitProcess.git(root, ["show", `${ref}:src/a.ts`])).toBe("a\nworker\nc\n");
+  expect(yield* gitProcess.git(root, ["show", `${ref}:src/new.ts`])).toBe("new\n");
 });
 
 const isReopened = (text: string) =>
@@ -316,32 +316,4 @@ test("resets leftover publication progress before saving a new publication's jou
   yield* service.discard(workspaceTarget(handle));
   expect(yield* readText(root, "src/a.ts")).toBe("a\nb\nc\n");
   expect(yield* exists(path.join(root, "src/new.ts"))).toBe(false);
-});
-
-test("regenerates and keeps the patch of a revision frozen before patches had their own file", function* (service, root, agent) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* editWorker(handle);
-  const revision = yield* service.freeze(workspaceTarget(handle));
-  const artifact = artifactOf(agent, handle);
-  const recordFile = path.join(artifact, "record.json");
-  const patchFile = path.join(artifact, "revision.diff");
-  const patch = yield* io(() => fs.readFile(patchFile));
-  // Earlier versions kept the patch inline in the record.
-  const saved = yield* readText(recordFile);
-  expect(saved.split('"revision":{')).toHaveLength(2);
-  yield* writeFile(
-    recordFile,
-    saved.replace('"revision":{', `"revision":{"diff":${JSON.stringify(revision.diff)},`),
-  );
-  yield* io(() => fs.unlink(patchFile));
-  expect(yield* service.revision(workspaceTarget(handle))).toEqual(revision);
-  expect(yield* io(() => fs.readFile(patchFile))).toEqual(patch);
-  const exported = yield* service.exportRevision({
-    ...workspaceTarget(handle),
-    revisionId: revision.revisionId,
-    export: { format: "patch" },
-  });
-  expect(exported.format).toBe("patch");
-  if (exported.format === "patch")
-    expect(yield* io(() => fs.readFile(exported.path))).toEqual(patch);
 });

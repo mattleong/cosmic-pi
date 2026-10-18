@@ -49,7 +49,11 @@ import {
   SubagentProcessError,
   UnsupportedSubagentCapabilityError,
 } from "../src/run/errors.ts";
-import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
+import type {
+  StartSubagentRequest,
+  SubagentRunView,
+  SubagentSendDelivery,
+} from "../src/run/model.ts";
 import { scriptedWriterAdmissionError } from "../src/run/launch-policy.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { awaitDetails, compactToolDetails, startDetails } from "../src/tools/details.ts";
@@ -67,7 +71,7 @@ import { registerSubagentTools } from "../src/tools/subagent.ts";
 import { revisionReviewText } from "../src/run/workspace-review.ts";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
 import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
-import { containedWriter, view } from "./fixtures/run-view.ts";
+import { view } from "./fixtures/run-view.ts";
 import {
   subagentServiceDouble,
   type SubagentServiceDoubleInput,
@@ -180,7 +184,6 @@ const dbMigration = view({
   task: "Implement the 0007 migration",
   profile: "worker",
   writeIntent: "writer",
-  writeClaims: ["db/0007.sql", "src/db/schema.ts"],
   state: "waiting_for_parent",
   question: {
     requestId: "q-1",
@@ -188,10 +191,11 @@ const dbMigration = view({
   },
   ...timing(5),
 });
-const apiWriter = containedWriter({
+const apiWriter = view({
   id: "agent-9",
   name: "api-writer",
   profile: "worker",
+  writeIntent: "writer",
   state: "stopped",
 });
 
@@ -267,6 +271,8 @@ const launched = (request: StartSubagentRequest, id: string) =>
     writeIntent: request.writeIntent,
     openaiFastMode: request.openaiFastMode,
     selection: request.selection ?? view().selection,
+    ...(request.modelOverride && { modelOverride: request.modelOverride }),
+    ...(request.agent && { agent: request.agent }),
     ...timing(0),
   });
 
@@ -326,6 +332,45 @@ const startScenarios = Effect.gen(function* () {
     },
     { service: { startSessionOwned: () => Effect.fail(scriptedWriterAdmissionError()) } },
   );
+  const modelOverride = yield* scenario(
+    "one launch on a model override, one override unavailable",
+    {
+      tool: "subagent_start",
+      args: {
+        agents: [
+          {
+            name: "auth-review",
+            profile: "reviewer",
+            task: "Review the session refresh flow",
+            model: { runtime: "pi", model: "openai-codex/gpt-5.6-sol", effort: "xhigh" },
+          },
+          {
+            name: "docs-sweep",
+            profile: "scout",
+            task: "Find stale refreshToken references",
+            model: { runtime: "claude", model: "opus" },
+          },
+        ],
+      },
+    },
+    { service: { startSessionOwned: (request) => Effect.succeed(launched(request, "agent-1")) } },
+  );
+  const customAgents = yield* scenario(
+    "one custom agent launch, one unknown agent",
+    {
+      tool: "subagent_start",
+      args: {
+        agents: [
+          { name: "auth-review", agent: "auth-reviewer", task: "Review the session refresh flow" },
+          { name: "docs-sweep", agent: "docs-writer", task: "Find stale refreshToken references" },
+        ],
+      },
+    },
+    {
+      profiles: agentRoutes,
+      service: { startSessionOwned: (request) => Effect.succeed(launched(request, "agent-1")) },
+    },
+  );
   const promptFailures: ToolScenario[] = [];
   for (const uncertain of [false, true]) {
     promptFailures.push(
@@ -354,7 +399,15 @@ const startScenarios = Effect.gen(function* () {
       ),
     );
   }
-  return [settled, still, blockedWriter, blockedDescendant, ...promptFailures];
+  return [
+    settled,
+    still,
+    modelOverride,
+    customAgents,
+    blockedWriter,
+    blockedDescendant,
+    ...promptFailures,
+  ];
 });
 
 const awaitInput: SubagentToolInput<"subagent_await"> = {
@@ -443,6 +496,22 @@ const configuredRoutes = profileServiceFor({
   },
 });
 
+const agentRoutes = profileServiceFor({
+  profiles: {
+    reviewer: [candidate({ runtime: "claude", model: "opus" }), candidate()],
+  },
+  agents: {
+    "auth-reviewer": {
+      description: "Reviews authentication changes against the threat model.",
+      instructions: "Review only authentication code and cite file and line for every finding.",
+      profile: "reviewer",
+      effort: "xhigh",
+      tools: { deny: ["bash"] },
+    },
+    broken: { description: "Missing its instructions." },
+  },
+});
+
 const modelScenarios = Effect.all([
   scenario(
     "all profile routes",
@@ -453,6 +522,11 @@ const modelScenarios = Effect.all([
     "one profile route",
     { tool: "subagent_models", args: { profile: "reviewer" } },
     { profiles: configuredRoutes },
+  ),
+  scenario(
+    "profile routes with custom agents",
+    { tool: "subagent_models", args: {} },
+    { profiles: agentRoutes },
   ),
 ]);
 
@@ -484,16 +558,26 @@ const inspectionScenarios = Effect.all([
 ]);
 
 const guidance = "Also check the refresh-token rotation path.";
+const delivered =
+  (delivery: SubagentSendDelivery) =>
+  <E>(effect: Effect.Effect<SubagentRunView, E>) =>
+    Effect.map(effect, (run) => ({ delivery, run }));
+const guided = delivered("guided");
+const answered = delivered("answered");
 const messagingScenarios = Effect.all([
   scenario(
     "guidance delivered",
     { tool: "subagent_send", args: { runIds: ["agent-1"], message: guidance } },
-    { service: { send: (id) => lookup(id) } },
+    { service: { send: (id) => guided(lookup(id)) } },
   ),
   scenario(
     "guidance for a native worker",
     { tool: "subagent_send", args: { runIds: ["agent-3"], message: "Now audit the CLI flags." } },
-    { service: { send: (id) => updated(id, { state: "running", finalText: undefined }) } },
+    {
+      service: {
+        send: (id) => guided(updated(id, { state: "running", finalText: undefined })),
+      },
+    },
   ),
   scenario(
     "delivery awaiting confirmation",
@@ -514,37 +598,32 @@ const messagingScenarios = Effect.all([
     },
   ),
   scenario(
-    "worker waiting for a reply",
+    "reply delivered",
+    { tool: "subagent_send", args: { runIds: ["agent-6"], message: "Yes, claim src/db/seed.ts." } },
+    { service: { send: (id) => answered(updated(id, { state: "running", question: undefined })) } },
+  ),
+  scenario(
+    "reply and guidance together",
     { tool: "subagent_send", args: { runIds: ["agent-6", "agent-1"], message: guidance } },
     {
       service: {
         send: (id) =>
           id === "agent-6"
-            ? Effect.fail(
-                new InvalidSubagentRequestError({
-                  code: "run_waiting_for_parent",
-                  message: `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
-                }),
-              )
-            : lookup(id),
+            ? answered(updated(id, { state: "running", question: undefined }))
+            : guided(lookup(id)),
       },
     },
   ),
   scenario(
-    "reply delivered",
-    { tool: "subagent_reply", args: { runId: "agent-6", message: "Yes, claim src/db/seed.ts." } },
-    { service: { reply: (id) => updated(id, { state: "running", question: undefined }) } },
-  ),
-  scenario(
-    "no pending question",
-    { tool: "subagent_reply", args: { runId: "agent-1", message: "Yes, go ahead." } },
+    "reply already in flight",
+    { tool: "subagent_send", args: { runIds: ["agent-6"], message: "Yes, go ahead." } },
     {
       service: {
-        reply: (id) =>
+        send: (id) =>
           Effect.fail(
             new InvalidSubagentRequestError({
-              code: "parent_question_missing",
-              message: `Subagent ${id} has no pending parent question.`,
+              code: "reply_in_flight",
+              message: `Subagent ${id} already has a parent reply in flight; inspect it with subagent_status before sending again.`,
             }),
           ),
       },
@@ -552,10 +631,10 @@ const messagingScenarios = Effect.all([
   ),
   scenario(
     "reply unconfirmed",
-    { tool: "subagent_reply", args: { runId: "agent-6", message: "Yes, claim src/db/seed.ts." } },
+    { tool: "subagent_send", args: { runIds: ["agent-6"], message: "Yes, claim src/db/seed.ts." } },
     {
       service: {
-        reply: (id) =>
+        send: (id) =>
           Effect.fail(
             new SubagentProcessError({
               operation: "reply",
@@ -682,11 +761,12 @@ const reviewedPatch = [
 const reviewPage = revisionReviewText({
   revisionId: "rev-1",
   changedPaths: ["db/0007.sql"],
-  uncapturedPaths: ["node_modules/.pnpm/lock.yaml"],
+  uncapturedPaths: [".env.local"],
   diff: reviewedPatch,
 });
 const workspaceRecord: WorkspaceRecord = {
-  version: 1,
+  version: 2,
+  repository: "/project/.git",
   handle: {
     workspaceId: "ws-1",
     ownerId: "root",
@@ -719,7 +799,7 @@ const appliedWorkspace = {
   changedPaths: ["db/0007.sql", "src/db/schema.ts"],
   changedPathCount: 2,
   leftOutPaths: [],
-  workerRoot: "/agent/git-workspaces/ws-1/worker",
+  workerRoot: "/agent/subagent-worktrees/ws-1/worker",
   untouchedDriftPaths: [],
   treeRemovalFailed: false,
   remainingBackupPaths: [],
@@ -792,7 +872,7 @@ const unverifiedApply: SubagentServiceDoubleInput = {
       ...appliedWorkspace,
       reviewed: false,
       verification: { status: "not-configured" },
-      leftOutPaths: ["node_modules/.pnpm/lock.yaml", "dist/index.js"],
+      leftOutPaths: [".env.local", "certs/dev.pem"],
     }),
 };
 const failedApply: SubagentServiceDoubleInput = {
@@ -839,6 +919,24 @@ const nestedWorkspaces: SubagentServiceDoubleInput = {
       unavailable: [
         { workspaceId: "ws-8", status: "unavailable", reason: "source-workspace-unavailable" },
       ],
+    }),
+};
+const orphanedWorkspaces: SubagentServiceDoubleInput = {
+  workspaceList: () =>
+    Effect.succeed({
+      records: [
+        { ...workspaceRecord, handle: { ...workspaceRecord.handle, ownerId: "ended/root" } },
+        {
+          ...workspaceRecord,
+          status: "integrating",
+          handle: { ...workspaceRecord.handle, workspaceId: "ws-3", ownerId: "ended/root" },
+        },
+      ],
+      unavailable: [],
+      orphans: new Map([
+        ["ws-1", "adoptable" as const],
+        ["ws-3", "discard-only" as const],
+      ]),
     }),
 };
 const staleWorkspace: SubagentServiceDoubleInput = {
@@ -957,68 +1055,14 @@ const workspaceScenarios = Effect.all([
     },
   ),
   scenario(
-    "export a proposal as a patch",
-    { tool: "subagent_workspace", args: { action: "export", workspaceId: "ws-1" } },
-    {
-      service: {
-        workspaceExport: () =>
-          Effect.succeed({
-            format: "patch",
-            path: "/project/.git/pi-subagents/ws-1-rev-1.patch",
-            revisionId: "rev-1",
-            changedPaths: ["db/0007.sql", "src/db/schema.ts"],
-            uncapturedPaths: [],
-            orphan: false,
-          }),
-      },
-    },
-  ),
-  scenario(
-    "export an orphaned proposal to a branch",
-    {
-      tool: "subagent_workspace",
-      args: { action: "export", workspaceId: "ws-7", format: "branch" },
-    },
-    {
-      service: {
-        workspaceExport: () =>
-          Effect.succeed({
-            format: "branch",
-            branch: "pi-subagent/db-migration",
-            commit: "9c1e4b7d2a6f08e35b1c4d7e9f0a2b3c4d5e6f70",
-            base: "4f2a9c1b8e7d6c5b4a3928170f6e5d4c3b2a1908",
-            identity: "user",
-            revisionId: "rev-3",
-            changedPaths: ["db/0007.sql"],
-            uncapturedPaths: [],
-            orphan: true,
-          }),
-      },
-    },
-  ),
-  scenario(
-    "export refused because the branch exists",
-    {
-      tool: "subagent_workspace",
-      args: { action: "export", workspaceId: "ws-1", format: "branch" },
-    },
-    {
-      service: {
-        workspaceExport: () =>
-          Effect.fail(
-            new InvalidSubagentRequestError({
-              code: "workspace_branch_exists",
-              message:
-                "Branch pi-subagent/db-migration already exists, so nothing was exported.\nRemedy: delete or rename that branch (git branch -D pi-subagent/db-migration) and export again, or export with format patch.",
-            }),
-          ),
-      },
-    },
-  ),
-  scenario(
     "list nested workspaces",
     { tool: "subagent_workspace", args: { action: "list" } },
     { service: nestedWorkspaces },
+  ),
+  scenario(
+    "list workspaces left by an ended session",
+    { tool: "subagent_workspace", args: { action: "list" } },
+    { service: orphanedWorkspaces },
   ),
   scenario(
     "request a revision",
@@ -1070,7 +1114,7 @@ const workspaceScenarios = Effect.all([
             new InvalidSubagentRequestError({
               code: "workspace_rebase_refused",
               message:
-                "The previous changes can't be reapplied to the parent's current files.\nUnmergeable: \"src/db/legacy.ts\"\nNothing was changed; the workspace keeps its worker tree and revision.\nRemedy: revise without rebase, or apply or export the proposal and start a new writer from the current checkout.",
+                "The previous changes can't be reapplied to the parent's current files.\nUnmergeable: \"src/db/legacy.ts\"\nNothing was changed; the workspace keeps its worker tree and revision.\nRemedy: revise without rebase, or apply the proposal and start a new writer from the current checkout.",
             }),
           ),
       },
@@ -1178,8 +1222,32 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     },
   },
   {
+    tool: "subagent_workspace",
+    title: "export saved by an earlier version",
+    args: { action: "export", workspaceId: "ws-1" },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "Exported workspace ws-1, revision rev-1, with 2 changed files.\nPatch: /project/.git/pi-subagents/ws-1-rev-1.patch",
+        },
+      ],
+      details: {
+        version: 1,
+        action: "workspace",
+        operation: "export",
+        workspaceId: "ws-1",
+        revisionId: "rev-1",
+        changedPathCount: 2,
+        exportFormat: "patch",
+        exportPath: "/project/.git/pi-subagents/ws-1-rev-1.patch",
+        displayContent: { offset: 63, length: 50 },
+      },
+    },
+  },
+  {
     tool: "subagent_start",
-    title: "expanded writer task and exact file claims",
+    title: "expanded writer task",
     args: {
       agents: [
         {
@@ -1189,9 +1257,8 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
             "Fix the session refresh timeout handling.",
             "Preserve the caller's cancellation and keep late responses from updating a newer session.",
             "Add a regression for a refresh response arriving after a session switch.",
-            "Only change the files claimed below; report any other required changes to the parent.",
+            "Keep changes to src/auth/session.ts and tests/auth/session.test.ts; report any other required changes to the parent.",
           ].join("\n"),
-          writes: ["src/auth/session.ts", "tests/auth/session.test.ts"],
         },
       ],
     },
@@ -1219,19 +1286,6 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     ],
     { attentionRequired: true },
   ),
-  awaited("writer stopping after writing outside its claims", [
-    containedWriter({ state: "stopping" }),
-  ]),
-  awaited("writer stopped after an outside-workspace write", [
-    containedWriter({
-      state: "stopped",
-      writeAudit: {
-        observedFileWrites: ["src/a.ts", "<temporary directory>", "<outside workspace>"],
-        violations: [{ path: "<outside workspace>", toolName: "write", observedAt: 2 }],
-        bashWriteHints: 0,
-      },
-    }),
-  ]),
   awaited("worker and system warnings", [
     view({
       state: "completed",
@@ -1241,15 +1295,13 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     }),
   ]),
   awaited(
-    "completed writer with zero violations and cleanup quarantine",
+    "completed writer with cleanup quarantine",
     [
       view({
         name: "cleanup-worker",
         state: "completed",
         finalText: "Finished the requested changes; focused tests passed.",
         writeIntent: "writer",
-        writeClaims: ["src/cleanup.ts"],
-        writeAudit: { observedFileWrites: ["src/cleanup.ts"], violations: [], bashWriteHints: 0 },
         cleanup: {
           disposition: "quarantined",
           recovery: "stop",
@@ -1266,9 +1318,10 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     { attentionRequired: true },
   ),
   awaited(
-    "claim violation coexists with manual cleanup quarantine",
+    "stopped writer with manual cleanup quarantine",
     [
-      containedWriter({
+      view({
+        writeIntent: "writer",
         state: "stopped",
         finalText: "Completed report retained for review.",
         cleanup: {
@@ -1536,9 +1589,9 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
         "",
         "You share this working directory with 1 other active subagent:",
         "",
-        "- db-migration (agent-6): writer claims db/0007.sql, src/db/schema.ts; running; task: Implement the 0007 migration",
+        "- db-migration (agent-6): shared-checkout writer; running; task: Implement the 0007 migration",
         "",
-        "The parent owns coordination, and claims stay fixed for each run. Writers may run concurrently only with disjoint exact-file claims. Never edit a peer's claimed file; contact the parent and wait before work that could overlap another task.",
+        "The parent owns coordination. Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task, and contact the parent and wait before work that could overlap another task.",
       ].join("\n"),
     },
   },
@@ -1567,7 +1620,7 @@ const activityScenarios: ReadonlyArray<ActivityScenario> = [
     details: [authReview.id, docsSweep.id, schemaCheck.id],
   },
   {
-    title: "a writer question and file-claim recovery",
+    title: "a writer question and a stopped writer",
     runs: [dbMigration, apiWriter],
     details: [dbMigration.id, apiWriter.id],
   },

@@ -1,3 +1,4 @@
+import { isCustomAgentName } from "../profiles/agents.ts";
 import {
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
@@ -38,7 +39,11 @@ import {
   type SubagentStartContract,
   type SubagentStatusContract,
 } from "./contract-schema.ts";
-import { nonNegativeInteger, projectRunCleanup } from "./details-projection.ts";
+import {
+  nonNegativeInteger,
+  projectModelOverride,
+  projectRunCleanup,
+} from "./details-projection.ts";
 import { MAX_FAILURE_CODE_CHARS } from "./details-schema.ts";
 import type { SubagentActionFailure, SubagentStartFailure, SubagentStartOutcome } from "./model.ts";
 import { actionFailureDisposition } from "./outcome.ts";
@@ -59,6 +64,9 @@ const projectName = (value: string): string => sanitizeName(metadata(value, MAX_
 
 const knownProfile = (profile: string | undefined): ProfileId | undefined =>
   PROFILE_IDS.find((id) => id === profile);
+
+const knownAgent = (agent: string | undefined): { readonly agent?: string } =>
+  agent !== undefined && isCustomAgentName(agent) ? { agent } : {};
 
 const hasId = (id: string | undefined): id is string => id !== undefined && id.length > 0;
 
@@ -154,10 +162,12 @@ const targetFields = (
     runId: run.id,
     name: projectName(run.name) || "subagent",
     ...(profile !== undefined && { profile }),
+    ...knownAgent(run.agent),
     state: run.state,
     finished: isAssignmentFinishedRunState(run.state),
     reportGeneration: nonNegativeInteger(run.reportGeneration),
     writeIntent: run.writeIntent,
+    ...projectModelOverride(run.modelOverride),
     capabilities: [...new Set(run.capabilities)],
     ...(hasId(run.predecessorRunId) && { predecessorRunId: run.predecessorRunId }),
     ...(hasId(run.supersededByRunId) && { successorRunId: run.supersededByRunId }),
@@ -200,8 +210,10 @@ const startedLaunch = (
     runId: run.id,
     name: projectName(run.name) || projectName(spec.name ?? "") || `launch ${index + 1}`,
     ...(profile !== undefined && { profile }),
+    ...knownAgent(run.agent ?? spec.agent),
     state: run.state,
     writeIntent: run.writeIntent,
+    ...projectModelOverride(run.modelOverride),
   };
 };
 
@@ -219,6 +231,7 @@ const failedLaunch = (
     status: "failed",
     ...(name && { name }),
     ...(profile !== undefined && { profile }),
+    ...knownAgent(outcome?.resolvedRoute?.agent ?? spec.agent),
     failure: projectFailure("start", failure),
     ...(admitted !== undefined && {
       admittedRun: { runId: admitted.runId, ...projectRecovery(admitted) },

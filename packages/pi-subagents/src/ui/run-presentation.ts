@@ -36,6 +36,7 @@ interface RunRoutePresentationInput {
   readonly model: string;
   readonly effort: string;
   readonly openaiFastMode?: boolean | undefined;
+  readonly modelOverride?: object | undefined;
 }
 
 export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
@@ -47,11 +48,12 @@ export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
     providerSeparator < 0 ? providerModel : providerModel.slice(providerSeparator + 1);
   const effort = sanitizeTerminalLine(run.effort);
   const fast = run.openaiFastMode ? " ⚡" : "";
+  const override = run.modelOverride ? " · override" : "";
   return {
     profile,
     hostRuntime,
-    model: `${providerModel}:${effort}${fast}`,
-    narrowModel: `${modelName}:${effort}${fast}`,
+    model: `${providerModel}:${effort}${fast}${override}`,
+    narrowModel: `${modelName}:${effort}${fast}${override}`,
   };
 };
 

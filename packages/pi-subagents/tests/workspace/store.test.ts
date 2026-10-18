@@ -1,4 +1,5 @@
 import { it, expect } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import * as Schema from "effect/Schema";
@@ -17,7 +18,8 @@ it.live(
       const directory = path.join(root, workspaceId);
       yield* Effect.promise(() => fs.mkdir(directory, { mode: 0o700 }));
       const record: WorkspaceRecord = {
-        version: 1,
+        version: 2,
+        repository: "/source/.git",
         handle: {
           workspaceId,
           ownerId: "parent",
@@ -28,6 +30,8 @@ it.live(
         status: "frozen",
         baseline: "baseline",
         revision: { revisionId: "revision", changedPaths: [""] },
+        // Saving stamps the current time, which has as many digits as this one.
+        lastChangedAt: yield* Clock.currentTimeMillis,
       };
       const cap = 64 * 1024 * 1024;
       const overhead = Buffer.byteLength(

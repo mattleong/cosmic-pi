@@ -7,7 +7,6 @@ import { workspaceOrphanOperations } from "../../src/run/workspace-orphan.ts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { CrossProcessLock } from "pi-cosmic-core";
 import {
@@ -15,8 +14,8 @@ import {
   withFreeLock,
   workspaceLockDirectory,
 } from "../../src/boundary/git-worktree-store.ts";
+import { git } from "../../src/boundary/git-worktree-process.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
-import { WorkspaceRecordSchema } from "../../src/workspace/model.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import {
   commitRepository,
@@ -24,7 +23,7 @@ import {
   failureOf,
   io,
   openWorkspaceService,
-  readText,
+  registryOf,
   temporaryDirectory,
   workspaceTarget,
   workspaceTests,
@@ -109,7 +108,7 @@ it.live(
       });
       yield* creator.close;
       const successor = yield* openWorkspaceService(agent);
-      const registry = path.join(agent, "git-workspaces");
+      const registry = path.join(agent, "subagent-worktrees");
       const lockDirectory = workspaceLockDirectory(registry);
       const verified = yield* Deferred.make<void>();
       const leases = yield* WriterLeaseService.pipe(
@@ -199,6 +198,41 @@ it.live(
   60_000,
 );
 
+it.live(
+  "removes the worktree and refs a create left when its session ended mid-create",
+  () =>
+    Effect.gen(function* () {
+      const temporary = yield* temporaryDirectory("pi-abandoned-create-");
+      const source = path.join(temporary, "source");
+      const agent = path.join(temporary, "agent");
+      yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
+      yield* commitRepository(source, [["main.ts", "baseline\n"]]);
+      const creator = yield* openWorkspaceService(agent);
+      const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
+      // As if the session crashed after adding the worker, before the record said active.
+      const recordFile = path.join(registryOf(agent), handle.workspaceId, "record.json");
+      const saved = yield* io(() => fs.readFile(recordFile, "utf8"));
+      yield* writeFile(recordFile, saved.replace('"status":"active"', '"status":"creating"'));
+      const worktrees = git(source, ["worktree", "list", "--porcelain"]);
+      const refs = git(source, ["for-each-ref", "--format=%(refname)", "refs/pi"]);
+
+      // While the creating session runs, its create is left alone.
+      const bystander = yield* openWorkspaceService(agent);
+      expect((yield* bystander.service.listAll).records[0]?.status).toBe("creating");
+      yield* bystander.close;
+      expect(yield* worktrees).toContain(path.dirname(handle.cwd));
+
+      yield* creator.close;
+      const successor = yield* openWorkspaceService(agent);
+      expect((yield* successor.service.listAll).records[0]?.status).toBe("discarded");
+      expect(yield* worktrees).not.toContain(path.dirname(handle.cwd));
+      expect(yield* refs).toBe("");
+      expect(yield* exists(handle.cwd)).toBe(false);
+      yield* successor.close;
+    }),
+  60_000,
+);
+
 const test = workspaceTests([
   ["src/main.ts", "baseline\n"],
   [".gitignore", "ignored.ts\n"],
@@ -208,7 +242,11 @@ const age = (agent: string, workspaceId: string, days: number) =>
   Effect.gen(function* () {
     const seconds = (yield* Clock.currentTimeMillis) / 1000 - days * 24 * 60 * 60;
     yield* io(() =>
-      fs.utimes(path.join(agent, "git-workspaces", workspaceId, "record.json"), seconds, seconds),
+      fs.utimes(
+        path.join(agent, "subagent-worktrees", workspaceId, "record.json"),
+        seconds,
+        seconds,
+      ),
     );
   });
 
@@ -233,37 +271,15 @@ test("collects week-old finished records but keeps unintegrated work", function*
   });
   expect(yield* exists(kept.cwd)).toBe(true);
   const active = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  // A record saved by an earlier version may still name a fork predecessor and carry its patch
-  // inline; it stays readable and discardable, and the name no longer keeps that record.
-  const legacy = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  const legacyFile = path.join(agent, "git-workspaces", legacy.workspaceId, "record.json");
-  const saved = yield* Schema.decodeEffect(Schema.fromJsonString(WorkspaceRecordSchema))(
-    yield* readText(legacyFile),
-  );
-  yield* writeFile(
-    legacyFile,
-    JSON.stringify({
-      ...saved,
-      predecessorWorkspaceId: expired.workspaceId,
-      revision: { revisionId: "legacy", diff: "inline patch", changedPaths: [] },
-    }),
-  );
-  expect(
-    (yield* service.listAll).records.find(
-      (record) => record.handle.workspaceId === legacy.workspaceId,
-    )?.revision,
-  ).toEqual({ revisionId: "legacy", changedPaths: [] });
-  yield* service.discard(workspaceTarget(legacy));
   for (const handle of [expired, kept, active]) yield* age(agent, handle.workspaceId, 8);
 
-  const registry = path.join(agent, "git-workspaces");
+  const registry = path.join(agent, "subagent-worktrees");
   const remaining = yield* Effect.gen(function* () {
     const restarted = yield* WorkspaceService;
     return (yield* restarted.listAll).records.map((record) => record.handle.workspaceId);
   }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: agent })));
   expect(remaining).not.toContain(expired.workspaceId);
-  for (const handle of [recent, kept, active, legacy])
-    expect(remaining).toContain(handle.workspaceId);
+  for (const handle of [recent, kept, active]) expect(remaining).toContain(handle.workspaceId);
   expect(yield* exists(path.join(registry, expired.workspaceId))).toBe(false);
   expect((yield* io(() => fs.readdir(registry))).some((name) => name.startsWith("."))).toBe(false);
 });

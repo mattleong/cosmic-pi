@@ -5,11 +5,12 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 ## Features
 
 - **Seven profiles**, from fast read-only `scout`s to `worker`s that edit code, each routed to a model you choose.
+- **Custom agents** you define in `pi-subagents.json`: named roles with their own instructions, effort, and tool lists, routed through a profile.
 - **Three local runtimes:** Pi, Claude Code, and Codex, with ordered fallback candidates per profile.
 - **Background by default.** Reports and failures arrive automatically; the agent waits only when it needs a result.
 - **Two-way supervision:** children can ask the parent questions and report progress; the parent can guide, interrupt, resume, retry, or stop them.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
-- **Safe parallel writes:** per writer, either share the checkout under exact file claims fixed at launch, or work in an isolated worktree whose proposal the parent applies in one verified step (wholly or file by file), or reviews, tests, and applies as an exact prepared pair. Proposals can also be exported as a patch or branch, or revised onto the parent's current files.
+- **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one verified step (wholly or file by file), or reviews, tests, and applies as an exact prepared pair. Proposals can also be revised onto the parent's current files.
 - **Live view:** a run tree above the editor and the shared Activity manager, where you can also rename runs.
 
 ## Install
@@ -65,7 +66,7 @@ Ask for work that splits into independent pieces, and the agent launches subagen
 
 The mode only changes prompt guidance; no tools are restricted, and subagents keep the default guidance. Session is the default scope. `global` and `project` persist for new sessions and apply after `/reload`. The footer shows the current profile set, marked `*` when this session has its own route edits, followed by the mode when it isn't `normal`.
 
-The agent's tools are `subagent_start`, `subagent_await`, `subagent_status` (which lists the run tree when called without run IDs), `subagent_send`, `subagent_reply`, `subagent_lifecycle`, `subagent_models`, and `subagent_workspace`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
+The agent's tools are `subagent_start`, `subagent_await`, `subagent_status` (which lists the run tree when called without run IDs), `subagent_send` (which answers a waiting subagent's question or steers a running one), `subagent_lifecycle`, `subagent_models`, and `subagent_workspace`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
 
 ## Configuration
 
@@ -107,9 +108,28 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
 
 If a candidate is unavailable at launch, such as an unauthenticated CLI, the next one is tried. After a run has started, fallback happens only through an explicit `retry`.
 
+Custom agents add named roles to the same files. Each one routes through a profile, replaces that profile's guidance with its instructions, and can pin effort, context, write intent, and the Pi tools its child inherits; tool lists skip Claude and Codex candidates. Launch one with `"agent": "auth-reviewer"` instead of a profile. See [Custom agents](docs/routing.md#custom-agents).
+
+```json
+{
+  "version": 6,
+  "agents": {
+    "auth-reviewer": {
+      "description": "Reviews authentication changes against the threat model.",
+      "instructions": "Review only authentication code. Cite file and line for every finding.",
+      "profile": "reviewer",
+      "effort": "xhigh",
+      "tools": { "deny": ["bash"] }
+    }
+  }
+}
+```
+
+When you ask for a specific model, the agent can set it on one launch with `"model": { "runtime": "claude", "model": "opus" }`. The profile still sets the role, context, and write intent, but that launch tries only the named model: if it's unavailable the launch fails, and a failed run can't be retried onto another candidate. See [Per-launch model override](docs/routing.md#per-launch-model-override).
+
 ## How it works
 
-The root Pi session owns the coordinator: configuration, the run tree, backends, writer pools, and completion delivery; nested Pi sessions use authenticated proxy tools. Pi children talk over an RPC bridge, while Claude Code (stream-json) and Codex (app-server) report through a private loopback MCP supervisor. Writer leases are shared across Pi processes on the same machine. File claims coordinate writers but aren't a sandbox: a writer seen writing outside its claims is stopped alone, and the parent relaunches it with corrected claims. Claude and Codex runs use their native sandboxes. Stopping a run stops its subtree, and shutting down the root stops everything.
+The root Pi session owns the coordinator: configuration, the run tree, backends, writer pools, and completion delivery; nested Pi sessions use authenticated proxy tools. Pi children talk over an RPC bridge, while Claude Code (stream-json) and Codex (app-server) report through a private loopback MCP supervisor. Writer leases are shared across Pi processes on the same machine. Shared-checkout writers in one directory coordinate by task scope and aren't isolated from each other; worktree writers edit a private Git worktree whose changes the parent applies. Claude and Codex runs use their native sandboxes. Stopping a run stops its subtree, and shutting down the root stops everything.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle, and the docs for detail:
 

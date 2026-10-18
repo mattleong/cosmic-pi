@@ -117,31 +117,6 @@ const addInternalAliases = (root: string) =>
     yield* git(root, ["add", "--", "AGENTS.md", "CLAUDE.md", "src/alias.md"]);
   });
 
-for (const linkTarget of ["/etc/passwd", "../outside.txt", ".git/config"]) {
-  test(`rejects unsafe tracked alias target ${linkTarget} before retaining a workspace`, function* (service, root) {
-    yield* addInternalAliases(root);
-    yield* io(() => fs.unlink(path.join(root, "CLAUDE.md")));
-    yield* io(() => fs.symlink(linkTarget, path.join(root, "CLAUDE.md")));
-    const index = yield* io(() => fs.readFile(path.join(root, ".git/index")));
-    expect(yield* fails(service.create({ sourceCwd: root, ownerId: "parent" }))).toBe(true);
-    expect(yield* service.listAll).toEqual({ records: [], unavailable: [] });
-    expect(yield* io(() => fs.readFile(path.join(root, ".git/index")))).toEqual(index);
-  });
-}
-
-test("does not normalize traversal through an excluded external directory symlink", function* (service, root) {
-  yield* addInternalAliases(root);
-  const outside = path.join(path.dirname(root), "external");
-  yield* io(() => fs.mkdir(path.join(outside, "nested"), { recursive: true }));
-  yield* writeFile(path.join(outside, "AGENTS.md"), "outside instructions\n");
-  yield* io(() => fs.symlink(path.join(outside, "nested"), path.join(root, "node_modules")));
-  yield* io(() => fs.unlink(path.join(root, "CLAUDE.md")));
-  yield* io(() => fs.symlink("node_modules/../AGENTS.md", path.join(root, "CLAUDE.md")));
-  expect(yield* fails(service.create({ sourceCwd: root, ownerId: "parent" }))).toBe(true);
-  expect(yield* service.listAll).toEqual({ records: [], unavailable: [] });
-  expect(yield* readText(outside, "AGENTS.md")).toBe("outside instructions\n");
-});
-
 for (const change of ["remove", "retarget", "regular", "add"] as const) {
   test(`rejects worker symlink ${change} without publishing earlier regular-file edits`, function* (service, root) {
     yield* addInternalAliases(root);
@@ -182,7 +157,6 @@ test("snapshots current edits without HEAD secrets and publishes binary/mode/del
   const worker = path.dirname(handle.cwd);
   expect(yield* exists(path.join(worker, ".env"))).toBe(false);
   expect(yield* exists(path.join(worker, "ignored.ts"))).toBe(false);
-  expect(yield* git(worker, ["log", "--all", "--format=", "--name-only"])).not.toContain(".env");
   yield* writeFile(path.join(handle.cwd, "main.ts"), "worker\n");
   yield* writeFile(path.join(worker, "binary.dat"), new Uint8Array([0, 250, 1, 2]));
   yield* io(() => fs.chmod(path.join(handle.cwd, "main.ts"), 0o755));
@@ -302,7 +276,7 @@ test("keeps a frozen revision's patch out of its record and reads it back", func
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker change\n");
   const { revision, integration } = yield* prepareIntegration(handle);
   expect(revision.diff).toContain("+worker change");
-  const record = yield* readText(agent, "git-workspaces", handle.workspaceId, "record.json");
+  const record = yield* readText(agent, "subagent-worktrees", handle.workspaceId, "record.json");
   expect(record).not.toContain("worker change");
   expect(yield* service.revision(workspaceTarget(handle))).toEqual(revision);
   yield* service.integrate(integration);
@@ -363,50 +337,44 @@ test("carries every new worker file, whatever its name or extension", function* 
   expect(yield* exists(prepared.cwd)).toBe(false);
 });
 
-test("refuses to prepare a revision that leaves an unsafely named worker file behind", function* (service, root) {
+test("carries worker files Git can name, such as one starting with a dash", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   yield* writeFile(path.join(handle.cwd, "-draft.ts"), "draft\n");
-  const revision = yield* service.freeze(workspaceTarget(handle));
-  expect(revision.uncapturedPaths).toEqual(["-draft.ts"]);
-  const refused = yield* failureOf(
-    service.prepare({ ...workspaceTarget(handle), revisionId: revision.revisionId }),
-  );
-  expect(refused.code).toBe("workspace_uncaptured_files");
-  expect(refused.detail).toContain('"-draft.ts"');
-  expect(yield* readText(root, "src/main.ts")).toBe("baseline\n");
+  yield* writeFile(path.join(handle.cwd, "notes: today.md"), "notes\n");
+  const { revision, integration } = yield* prepareIntegration(handle);
+  expect(revision.changedPaths).toEqual(["-draft.ts", "notes: today.md"]);
+  expect(revision.uncapturedPaths).toBeUndefined();
+  yield* service.integrate(integration);
+  expect(yield* readText(root, "-draft.ts")).toBe("draft\n");
+  expect(yield* readText(root, "notes: today.md")).toBe("notes\n");
 });
 
-test("integrates a revision whose only uncaptured files sit in dependency or build directories", function* (service, root) {
+test("leaves ignored dependencies out and carries unignored ones like any other file", function* (service, root) {
+  yield* writeFile(path.join(root, ".gitignore"), "ignored.ts\nnode_modules/\n");
+  yield* git(root, ["add", "--", ".gitignore"]);
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  for (const directory of ["vendor", "node_modules/left-pad", ".pi"])
+  for (const directory of ["vendor", "node_modules/left-pad"])
     yield* io(() => fs.mkdir(path.join(handle.cwd, directory), { recursive: true }));
   yield* writeFile(path.join(handle.cwd, "vendor/lib.js"), "vendored\n");
   yield* writeFile(path.join(handle.cwd, "node_modules/left-pad/index.js"), "pad\n");
-  yield* writeFile(path.join(handle.cwd, ".pi/state.json"), "{}\n");
   const { revision, integration } = yield* prepareIntegration(handle);
-  expect(revision.uncapturedPaths).toEqual([
-    ".pi/state.json",
-    "node_modules/left-pad/index.js",
-    "vendor/lib.js",
-  ]);
+  expect(revision.changedPaths).toEqual(["vendor/lib.js"]);
+  expect(revision.uncapturedPaths).toBeUndefined();
   yield* service.integrate(integration);
-  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
-  expect(yield* exists(path.join(root, "vendor/lib.js"))).toBe(false);
+  expect(yield* readText(root, "vendor/lib.js")).toBe("vendored\n");
+  expect(yield* exists(path.join(root, "node_modules"))).toBe(false);
 });
 
-test("rejects source symlinks, hardlinks and sensitive literals before copying", function* (service, root) {
-  yield* io(() => fs.symlink("main.ts", path.join(root, "src/link.ts")));
-  expect(yield* fails(service.create({ sourceCwd: root, ownerId: "parent" }))).toBe(true);
-  yield* io(() => fs.unlink(path.join(root, "src/link.ts")));
-  yield* io(() => fs.link(path.join(root, "src/main.ts"), path.join(root, "src/link.ts")));
-  expect(yield* fails(service.create({ sourceCwd: root, ownerId: "parent" }))).toBe(true);
-  yield* io(() => fs.unlink(path.join(root, "src/link.ts")));
-  yield* writeFile(
-    path.join(root, "src/main.ts"),
-    `const apiKey = "${"ghp_" + "A".repeat(36)}";\n`,
-  );
-  expect(yield* fails(service.create({ sourceCwd: root, ownerId: "parent" }))).toBe(true);
-  expect(yield* service.listAll).toEqual({ records: [], unavailable: [] });
+test("refuses to replace a parent file the capture left out", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  // The worker stops ignoring ignored.ts and adds one; the parent's own ignored copy stays.
+  yield* writeFile(path.join(handle.cwd, ".gitignore"), "\n");
+  yield* writeFile(path.join(handle.cwd, "ignored.ts"), "worker\n");
+  const { integration } = yield* prepareIntegration(handle);
+  yield* writeFile(path.join(root, "ignored.ts"), "parent's ignored file\n");
+  const refused = yield* failureOf(service.integrate(integration));
+  expect(refused.code).toBe("workspace_parent_changed");
+  expect(refused.detail).toContain('"ignored.ts"');
+  expect(yield* readText(root, "ignored.ts")).toBe("parent's ignored file\n");
+  expect(yield* readText(root, ".gitignore")).toBe("ignored.ts\n");
 });

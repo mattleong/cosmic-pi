@@ -32,7 +32,8 @@ const record = (
   sourceRoot: string,
   status: WorkspaceRecord["status"],
 ): WorkspaceRecord => ({
-  version: 1,
+  version: 2,
+  repository: "/repo/.git",
   handle: {
     workspaceId,
     ownerId,

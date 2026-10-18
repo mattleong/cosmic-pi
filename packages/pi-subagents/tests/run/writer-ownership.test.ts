@@ -19,7 +19,6 @@ import {
   request,
   withService,
 } from "./fixtures/service-harness.ts";
-import { stringContaining } from "../support/matchers.ts";
 
 const leaseFixture = (
   leases: Parameters<typeof fakeWriterLeaseLayer>[0],
@@ -28,9 +27,6 @@ const leaseFixture = (
 
 const writer = (name: string, overrides: Partial<StartSubagentRequest> = {}) =>
   request({ name, writeIntent: "writer", ...overrides });
-
-const claimedWriter = (name: string, writes: ReadonlyArray<string>) =>
-  writer(name, { writes: [...writes] });
 
 describe("SubagentService", () => {
   it.effect(
@@ -158,16 +154,17 @@ describe("SubagentService", () => {
     }),
   );
 
-  it.effect("does not resume a completed writer while another writer owns the cwd", () => {
+  it.effect("resumes a completed writer while another writer shares the cwd", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const first = yield* service.start(writer("writer-one", { task: "Implement auth" }));
       fake.controls[0]?.settle();
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      yield* service.start(writer("writer-two", { task: "Implement tests" }));
+      const second = yield* service.start(writer("writer-two", { task: "Implement tests" }));
 
-      const conflict = yield* Effect.flip(service.resume(first.id, "Make another edit"));
-      expect(conflict._tag).toBe("SubagentWriterConflictError");
+      const resumed = yield* service.resume(first.id, "Make another edit");
+      expect(resumed.state).toBe("running");
+      expect((yield* service.status(second.id)).state).toBe("running");
     });
   });
 
@@ -271,14 +268,14 @@ describe("SubagentService", () => {
   });
 
   it.effect(
-    "shares one cwd lease across disjoint writers, resumes included, until the last",
+    "shares one cwd lease across shared-checkout writers, resumes included, until the last",
     () => {
       const counts = leaseCounts();
       const { fake, layer } = leaseFixture({ counts });
       return withService(layer, function* (service) {
-        const first = yield* service.start(claimedWriter("claimed-first", ["src/first.ts"]));
-        const second = yield* service.start(claimedWriter("claimed-peer", ["src/peer.ts"]));
-        expect(second.writeClaims).toEqual(["src/peer.ts"]);
+        const first = yield* service.start(writer("shared-first"));
+        const second = yield* service.start(writer("shared-peer"));
+        expect(second.state).toBe("running");
         yield* completeLocalRun(service, fake.controls[0]!, first.id);
         expect(counts.release).toBe(0);
 
@@ -295,24 +292,31 @@ describe("SubagentService", () => {
     },
   );
 
-  it.effect("rejects overlapping claimed writers while admitting another exact file", () => {
+  it.effect("admits several shared-checkout writers in one cwd without file claims", () => {
     const { layer } = localServiceFixture();
     return withService(layer, function* (service) {
-      const first = yield* service.start(
-        claimedWriter("claim-owner", ["packages/auth/src/token.ts"]),
-      );
-      const conflict = yield* service
-        .start(claimedWriter("claim-collision", ["packages/auth/src/TOKEN.ts"]))
-        .pipe(Effect.flip);
+      const runs = [
+        yield* service.start(writer("shared-auth", { task: "Implement auth" })),
+        yield* service.start(writer("shared-tests", { task: "Implement auth tests" })),
+        yield* service.start(writer("shared-docs", { task: "Document auth" })),
+      ];
+      expect(runs.map((run) => run.state)).toEqual(["running", "running", "running"]);
+      expect(new Set(runs.map((run) => run.cwd)).size).toBe(1);
+    });
+  });
+
+  it.effect("refuses a writer when another process holds the cwd's writer lease", () => {
+    const counts = leaseCounts();
+    const { fake, layer } = leaseFixture({ counts, failAcquire: true });
+    return withService(layer, function* (service) {
+      const conflict = yield* service.start(writer("cross-process-blocked")).pipe(Effect.flip);
       expect(conflict).toBeInstanceOf(SubagentWriterConflictError);
-      expect(conflict).toMatchObject({
-        activeId: first.id,
-        message: stringContaining("already claims"),
-      });
-      const disjoint = yield* service.start(
-        claimedWriter("claim-disjoint", ["packages/auth/src/errors.ts"]),
-      );
-      expect(disjoint.state).toBe("running");
+      expect(fake.controls).toHaveLength(0);
+      expect(counts.acquire).toBe(0);
+      // Once the other process lets go, writers in this process are admitted again.
+      const admitted = yield* service.start(writer("cross-process-admitted"));
+      expect(admitted.state).toBe("running");
+      expect(counts.acquire).toBe(1);
     });
   });
 });

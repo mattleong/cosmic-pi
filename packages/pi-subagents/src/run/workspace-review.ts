@@ -6,7 +6,6 @@ import type {
   WorkspaceRevisionMetadata,
   WorkspaceSettledTarget,
 } from "../workspace/model.ts";
-import { leftOutUncapturedPaths } from "../workspace/policy.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
@@ -45,7 +44,7 @@ export const revisionReviewText = (revision: WorkspaceRevision) =>
   `${revisionSummary(revision)}${revision.diff}`;
 
 export interface WorkspacePrepared extends WorkspacePreparation {
-  /** Worker files left out on purpose because they sit in dependency, build, or Pi state directories. */
+  /** Credential files the worker created, which the revision leaves out on purpose. */
   readonly leftOutPaths: ReadonlyArray<string>;
 }
 
@@ -407,7 +406,7 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
           // here; setup does, so the parent can test the prepared tree.
           const preparation = yield* prepareHeld(service, held, revisionId, true);
           yield* withLock(markPrepared(held, preparation, "tested"));
-          return { ...preparation, leftOutPaths: leftOutUncapturedPaths(revision.uncapturedPaths) };
+          return { ...preparation, leftOutPaths: revision.uncapturedPaths ?? [] };
         }),
       );
     });

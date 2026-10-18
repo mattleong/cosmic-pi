@@ -265,6 +265,49 @@ describe("SubagentConfigStore profile writes", () => {
   );
 });
 
+describe("SubagentConfigStore custom agents", () => {
+  it.effect("activates agents and keeps them byte-for-byte through settings writes", () =>
+    Effect.gen(function* () {
+      const agents = {
+        "auth-reviewer": {
+          description: "Reviews auth changes.",
+          instructions: "Review only authentication code.\nCite file and line.",
+          profile: "reviewer",
+          effort: "xhigh",
+          tools: { allow: ["read", "grep"], deny: [] },
+        },
+      };
+      const initial = v6({ scout: declaredCandidate("parent", { effort: "default" }) }, { agents });
+      const { memory, store } = yield* setup({ [GLOBAL]: initial });
+      const loaded = yield* store.inspect(CWD, AGENT, true);
+      expect(loaded.config.agents.map((agent) => agent.name)).toEqual(["auth-reviewer"]);
+
+      yield* store.patchProfile(CWD, AGENT, {
+        ...at("global", initial),
+        profileSet: "default",
+        profile: "worker",
+        route: "disabled",
+      });
+      const patched = memory.documents.get(GLOBAL);
+      yield* store.patchDelegation(CWD, AGENT, {
+        ...at("global", patched),
+        delegation: "encouraged",
+      });
+      const delegated = memory.documents.get(GLOBAL);
+      yield* store.createProfileSetFromSnapshot(CWD, AGENT, {
+        ...at("global", delegated),
+        profileSet: "copy",
+        profiles: BUILTIN_PROFILE_ROUTES,
+      });
+      const saved = memory.documents.get(GLOBAL)?.agents;
+      expect(saved).toStrictEqual(agents);
+      expect(
+        isRecord(saved) && isRecord(saved["auth-reviewer"]) && Object.keys(saved["auth-reviewer"]),
+      ).toEqual(Object.keys(agents["auth-reviewer"]));
+    }),
+  );
+});
+
 describe("SubagentConfigStore profile sets", () => {
   it.effect("creates, copies, renames, selects, and safely deletes scope-local sets", () =>
     Effect.gen(function* () {

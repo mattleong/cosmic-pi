@@ -5,7 +5,13 @@ import { ACTIVITY_HOST } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { captureSubagentControlExpectation, type SubagentRunView } from "../src/run/model.ts";
-import { registerSubagentActivity } from "../src/boundary/host-activity.ts";
+import * as Effect from "effect/Effect";
+import {
+  registerSubagentActivity,
+  runSubagentActivityAction,
+} from "../src/boundary/host-activity.ts";
+import { SubagentProcessError } from "../src/run/errors.ts";
+import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
 import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { view } from "./fixtures/run-view.ts";
@@ -169,7 +175,11 @@ describe("subagent activity provider", () => {
               ...(changed === "question" && {
                 question: { requestId: "q-new", message: "Another question" },
               }),
-              ...(changed === "policy" && { writeViolationOffender: true }),
+              ...(changed === "policy" && {
+                capabilities: selected.capabilities.filter(
+                  (capability) => capability !== "parent-contact",
+                ),
+              }),
             },
           ],
         });
@@ -260,4 +270,36 @@ describe("subagent activity provider", () => {
       expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(false);
     },
   );
+
+  effectTest("sends reply and message actions through the shared send path", function* () {
+    const selected = view({ id: "selected", state: "waiting_for_parent", question });
+    const expected = captureSubagentControlExpectation(selected);
+    const send = vi.fn((id: string) =>
+      id === "pending"
+        ? Effect.fail(
+            new SubagentProcessError({
+              operation: "steer",
+              code: "steer_outcome_uncertain",
+              pendingDelivery: true,
+              message: "Guidance is awaiting confirmation.",
+            }),
+          )
+        : Effect.succeed({ delivery: "answered" as const, run: view({ id }) }),
+    );
+    const service = subagentServiceDouble({ send });
+    const pendingNotices = vi.fn();
+    const act = (id: string, action: "reply" | "message", input: string) =>
+      runSubagentActivityAction(service, id, action, input, expected, pendingNotices).pipe(
+        Effect.orDie,
+      );
+    yield* act("selected", "reply", "Yes");
+    yield* act("selected", "message", "Go");
+    expect(send.mock.calls).toEqual([
+      ["selected", "Yes", expected],
+      ["selected", "Go", expected],
+    ]);
+    expect(pendingNotices).not.toHaveBeenCalled();
+    yield* act("pending", "message", "Go");
+    expect(pendingNotices).toHaveBeenCalledTimes(1);
+  });
 });

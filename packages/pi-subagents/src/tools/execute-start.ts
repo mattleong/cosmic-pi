@@ -27,6 +27,7 @@ import {
   firstDisallowedLaunchOverride,
 } from "../run/launch-validation.ts";
 import { startDetails } from "./details.ts";
+import { projectModelOverride } from "./details-projection.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import type {
   SubagentStartFailure,
@@ -34,6 +35,7 @@ import type {
   SubagentStartResolvedRoute,
 } from "./model.ts";
 import type { SubagentStartSpec } from "./schema.ts";
+import type { WorkspaceLaunch } from "../workspace/model.ts";
 
 export interface StartBatchInput {
   readonly agents: ReadonlyArray<SubagentStartSpec>;
@@ -71,19 +73,24 @@ const entryName = (spec: SubagentStartSpec, index: number): string =>
   sanitizeTerminalLine((spec.name?.trim() ?? "") || `launch ${index + 1}`);
 
 const routeFields = (
-  source: Pick<StartSubagentRequest, "runtime" | "model" | "effort" | "openaiFastMode">,
+  source: Pick<
+    StartSubagentRequest,
+    "runtime" | "model" | "effort" | "openaiFastMode" | "modelOverride"
+  >,
   selection?: Pick<SubagentSelectionProvenance, "candidateIndex" | "warning">,
 ) => ({
   runtime: source.runtime,
   model: source.model,
   effort: source.effort,
   openaiFastMode: source.openaiFastMode,
+  ...projectModelOverride(source.modelOverride),
   ...(selection?.candidateIndex !== undefined && { candidateIndex: selection.candidateIndex }),
   ...(selection?.warning && { warning: selection.warning }),
 });
 
 const routeForRequest = (request: StartSubagentRequest): SubagentStartResolvedRoute => ({
   profile: request.profile ?? "generalist",
+  ...(request.agent && { agent: request.agent }),
   ...routeFields(request, request.selection),
 });
 
@@ -92,10 +99,12 @@ const startEntriesFor = (
   outcomes: ReadonlyMap<number, SubagentStartOutcome>,
 ): ReadonlyArray<SubagentStartEntry> =>
   specs.map((spec, index): SubagentStartEntry => {
+    const agent = spec.agent?.trim();
     const base = {
       index,
       name: entryName(spec, index),
       profile: sanitizeTerminalLine((spec.profile?.trim() ?? "") || "generalist"),
+      ...(agent && { agent: sanitizeTerminalLine(agent) }),
     } as const;
     const outcome = outcomes.get(index);
     if (!outcome) return { ...base, status: "pending", routeStatus: "resolving" };
@@ -234,4 +243,48 @@ export const executeStartBatch = (
       startEntries: startEntriesFor(specs, partialOutcomes),
       startOutcomes: ordered,
     };
+  });
+
+/**
+ * Resolves an adopted workspace's recorded launch like a worktree writer start item with `task`,
+ * so its revision successor runs the profile or custom agent its original writer did. An agent
+ * this session no longer configures, or that fails closed, can't be relaunched.
+ */
+export const resolveRecordedLaunch = (
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  environment: SubagentSessionEnvironment,
+  launch: WorkspaceLaunch,
+  task: string,
+): Effect.Effect<
+  StartSubagentRequest,
+  InvalidSubagentRequestError,
+  SubagentProfileService | SubagentBackendRegistry
+> =>
+  Effect.gen(function* () {
+    const profileSnapshot = yield* (yield* SubagentProfileService).capture;
+    const route =
+      launch.agent === undefined ? { profile: launch.profile } : { agent: launch.agent };
+    const request = yield* resolveProfileStart(
+      pi,
+      { task, ...route, name: launch.name, isolation: "worktree" },
+      ctx,
+      {
+        ...environment,
+        parentContext: environment.parentContext ?? capturePiParentContext(pi, ctx),
+      },
+      profileSnapshot,
+    ).pipe(
+      Effect.catchIf(
+        (error) => error.code === "agent_unknown" || error.code === "agent_invalid",
+        () =>
+          Effect.fail(
+            invalidRequest(
+              "workspace_launch_unavailable",
+              `This workspace's writer was started as custom agent ${sanitizeTerminalLine(launch.agent ?? "")}, which this session no longer configures. Apply or discard the workspace, or start a new writer.`,
+            ),
+          ),
+      ),
+    );
+    return { ...request, nestingPolicy: profileSnapshot.effectiveConfig.nesting };
   });

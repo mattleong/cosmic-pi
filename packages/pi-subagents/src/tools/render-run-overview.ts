@@ -81,6 +81,7 @@ const GENERIC_SELECTION_REASON = /^Profile (?:model|route) selection\.?$/u;
 const runSelectionSummary = (run: SubagentRunCard): string => {
   const { source, candidateIndex, reason } = run.selection;
   const parts = [
+    run.agent ? `${run.agent} agent` : undefined,
     run.profile ? `${run.profile} profile` : undefined,
     source === "profile-parent-candidate"
       ? "parent's model"
@@ -110,10 +111,7 @@ const runControls = (run: SubagentRunCard): string => {
 
 const runWriterSummary = (run: SubagentRunCard): string | undefined => {
   if (run.writeIntent !== "writer") return undefined;
-  if (!run.writeClaims) return "Writer · exclusive cwd";
-  const claimCount = run.writeClaimCount ?? run.writeClaims.length;
-  const omitted = Math.max(0, claimCount - run.writeClaims.length);
-  return `Writer claims · ${run.writeClaims.join(", ")}${omitted > 0 ? ` · ${omitted} omitted` : ""}`;
+  return run.workspaceId ? "Writer · isolated workspace" : "Writer · shared cwd";
 };
 
 const dimLines = (text: string, width: number, theme: Theme): string[] =>
@@ -148,9 +146,6 @@ const runStateDiagnostics = (run: SubagentRunCard, width: number, theme: Theme):
       .split("\n")
       .filter(Boolean)
       .flatMap((line) => dimLines(line, width, theme)),
-    ...(run.writeAudit?.violations ?? []).flatMap((violation) =>
-      dimLines(`Outside claims · ${violation.path} · ${violation.toolName}`, width, theme),
-    ),
     ...(run.warning ? dimLines(`Warning: ${run.warning}`, width, theme) : []),
   ];
 };

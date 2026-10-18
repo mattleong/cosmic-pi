@@ -1,5 +1,17 @@
-import type { ProfileCandidate, ProfileId, ProfileRouteSource } from "../profiles/model.ts";
-import type { SubagentEffort, SubagentRuntime, SubagentWriteIntent } from "../domain/routing.ts";
+import type {
+  ProfileCandidate,
+  ProfileId,
+  ProfileRouteSource,
+  SubagentModelOverride,
+} from "../profiles/model.ts";
+import type {
+  SubagentContextMode,
+  SubagentEffort,
+  SubagentRuntime,
+  SubagentWriteIntent,
+} from "../domain/routing.ts";
+import type { WriterWorkspaceMode } from "../config/schema.ts";
+import type { CustomAgentScope, CustomAgentTools, InvalidCustomAgent } from "../profiles/agents.ts";
 import type { FailedStartRecovery, SubagentRunView } from "../run/model.ts";
 
 export interface SubagentStartFailure {
@@ -12,12 +24,14 @@ export interface SubagentStartFailure {
 
 export interface SubagentStartResolvedRoute {
   readonly profile: string;
+  readonly agent?: string | undefined;
   readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly openaiFastMode: boolean;
   readonly candidateIndex?: number | undefined;
   readonly warning?: string | undefined;
+  readonly modelOverride?: SubagentModelOverride | undefined;
 }
 
 export type SubagentStartOutcome =
@@ -53,3 +67,19 @@ export interface SubagentProfileView {
   readonly defaultEffort?: SubagentEffort | undefined;
   readonly candidates: ReadonlyArray<ProfileCandidateDiscovery>;
 }
+
+/** A custom agent's declaration and its routed profile's candidates after its overrides. */
+export interface SubagentAgentView {
+  readonly name: string;
+  readonly description: string;
+  readonly profile: ProfileId;
+  readonly source: CustomAgentScope;
+  readonly effort?: SubagentEffort | undefined;
+  readonly context?: SubagentContextMode | undefined;
+  readonly writeIntent?: SubagentWriteIntent | undefined;
+  readonly isolation?: WriterWorkspaceMode | undefined;
+  readonly tools?: CustomAgentTools | undefined;
+  readonly candidates: ReadonlyArray<ProfileCandidateDiscovery>;
+}
+
+export type SubagentInvalidAgentView = InvalidCustomAgent;

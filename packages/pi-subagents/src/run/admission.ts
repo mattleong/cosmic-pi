@@ -1,10 +1,9 @@
 import { absurd } from "effect/Function";
 import * as Effect from "effect/Effect";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
-import { firstWriteClaimConflict } from "../domain/write-claims.ts";
 import { invalidRequest, SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
-import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
+import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import type { WriterPoolView, WriterPoolLookup } from "./writer-pool.ts";
 
 export const canonicalizeWriterCwd = (writerLeases: WriterLeaseContract, cwd: string) =>
@@ -21,10 +20,6 @@ const ownsProcessSlot = (record: RunRecord): boolean =>
   record.process !== undefined ||
   record.view.state === "starting" ||
   record.evictionClaim !== undefined;
-
-const ownsWriterSlot = (record: RunRecord): boolean =>
-  record.view.writeIntent === "writer" &&
-  (record.cleanupPending || isActiveRunState(record.view.state));
 
 const holdsChildSlot = (record: RunRecord, parentRunId: string): boolean => {
   const claim = record.evictionClaim;
@@ -74,7 +69,6 @@ export const writerConflictError = (
   records: ReadonlyMap<string, RunRecord>,
   pools: WriterPoolLookup,
   canonicalCwd: CanonicalWriterCwd,
-  writeClaims: ReadonlyArray<string> | undefined,
   excluded?: RunRecord,
   additionallyExcluded?: RunRecord,
 ): SubagentWriterConflictError | undefined => {
@@ -92,7 +86,7 @@ export const writerConflictError = (
 
   for (const record of records.values()) {
     if (record === excluded || record === additionallyExcluded) continue;
-    const conflict = writerConflict(record, canonicalCwd, writeClaims);
+    const conflict = writerConflict(record, canonicalCwd);
     if (conflict === undefined) continue;
     return new SubagentWriterConflictError({
       activeId: record.view.id,
@@ -135,43 +129,19 @@ interface WriterConflict {
   readonly transient: boolean;
 }
 
+// Any number of in-process writers share a pool; only a member whose cleanup is still
+// unconfirmed keeps new writers out of its cwd.
 const writerConflict = (
   record: RunRecord,
   canonicalCwd: CanonicalWriterCwd,
-  writeClaims: ReadonlyArray<string> | undefined,
 ): WriterConflict | undefined => {
-  if (record.evictionClaim?.writerCwdDigest === canonicalCwd.digest)
-    return firstWriteClaimConflict(writeClaims, record.evictionClaim.writeClaims)
-      ? {
-          message:
-            "Overlapping writer start admission is already reserved while subagent history is reclaimed.",
-          transient: true,
-        }
-      : undefined;
   if (record.canonicalWriterCwd?.digest !== canonicalCwd.digest) return undefined;
+  if (!record.cleanupPending || record.view.writeIntent !== "writer") return undefined;
   const writer = `Writer ${record.view.name} (${record.view.id})`;
-  if (record.retryClaim)
-    return firstWriteClaimConflict(writeClaims, record.view.writeClaims)
-      ? {
-          message: `${writer} reserves overlapping claims for an explicit route retry.`,
-          transient: true,
-        }
-      : undefined;
-  if (!ownsWriterSlot(record)) return undefined;
-  if (record.cleanupPending)
-    return record.cleanupDisposition === "quarantined"
-      ? {
-          message: `${writer} remains quarantined because cleanup could not be confirmed.`,
-          transient: false,
-        }
-      : { message: `${writer} is still cleaning up; retry shortly.`, transient: true };
-  const conflict = firstWriteClaimConflict(writeClaims, record.view.writeClaims);
-  if (conflict === undefined) return undefined;
-  return {
-    message:
-      conflict.left === "<exclusive>" || conflict.right === "<exclusive>"
-        ? `${writer} owns the shared cwd exclusively.`
-        : `${writer} already claims ${conflict.right ?? "the requested file"}.`,
-    transient: true,
-  };
+  return record.cleanupDisposition === "quarantined"
+    ? {
+        message: `${writer} remains quarantined because cleanup could not be confirmed.`,
+        transient: false,
+      }
+    : { message: `${writer} is still cleaning up; retry shortly.`, transient: true };
 };

@@ -2,7 +2,6 @@ import * as Predicate from "effect/Predicate";
 import { type CompactIssue } from "pi-code-previews";
 import { skippedCandidateLabel } from "../profiles/model.ts";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
-import { isTerminalRunState } from "../run/model.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 import { cleanupRecoveryText, proposalChangeSummary, proposalDiffStatLines } from "./format.ts";
@@ -145,39 +144,6 @@ function quote(add: AddIssue, label: string, code: string, text: string, fallbac
   add("warning", code, message, detail);
 }
 
-function outsideClaims(card: SubagentRunCard): string {
-  const paths = [...new Set(card.writeAudit?.violations.map((violation) => violation.path))];
-  const first = paths[0];
-  if (first === undefined) return "outside its file claims";
-  const shown = first.length > 60 ? `…${first.slice(-59)}` : first;
-  return `${shown}${paths.length > 1 ? ` and ${paths.length - 1} more` : ""} outside its file claims`;
-}
-
-function claimViolationIssues(
-  card: SubagentRunCard,
-  label: string,
-  id: string,
-  add: AddIssue,
-): void {
-  const terminal = isTerminalRunState(card.state);
-  add(
-    "warning",
-    "claim-violation",
-    `${label} wrote to ${outsideClaims(card)}${terminal ? "; stopped" : card.state === "stopping" ? "; stopping" : ""}`,
-    [
-      "Only this writer is stopped; its peers continue, and new writers are still admitted. Review the full write audit with subagent_status; projected paths may be omitted.",
-      ...(terminal
-        ? []
-        : [
-            `Wait for it to stop with subagent_await({ runIds: [${id}], until: "all_finished" }); don't issue a duplicate stop.`,
-          ]),
-      runCleanupAttention(card) === undefined
-        ? "If the work is still needed, review what it changed, then relaunch it with subagent_start and corrected exact workspace-relative writes. Never claim outside-workspace or absolute paths."
-        : "Relaunch only after its cleanup is confirmed.",
-    ].join("\n"),
-  );
-}
-
 function attentionIssues(
   card: SubagentRunCard,
   label: string,
@@ -188,9 +154,6 @@ function attentionIssues(
   const attention = runAttention(card);
   switch (attention?.kind) {
     case undefined:
-      return;
-    case "containment":
-      claimViolationIssues(card, label, id, add);
       return;
     case "paused":
       if (runCleanupAttention(card) !== undefined) return;
@@ -208,7 +171,7 @@ function attentionIssues(
         "warning",
         "parent-question",
         `${label} asks: ${firstLineMessage(attention.message, "a question", QUOTED_TEXT_LIMIT)}`,
-        `Question: ${attention.message}\nRead the full question in expanded details if omitted. Reply with subagent_reply({ runId: ${id}, message: "..." }), then subagent_await again.`,
+        `Question: ${attention.message}\nRead the full question in expanded details if omitted. Answer with subagent_send({ runIds: [${id}], message: "..." }), then subagent_await again.`,
       );
       return;
     case "question-unavailable":
@@ -317,18 +280,11 @@ function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssu
   const clipped =
     (card.finalTextTruncated === true && card.finalText !== undefined) ||
     (card.errorTruncated === true && card.error !== undefined);
-  if (card.writeClaimsOmitted || clipped)
+  if (clipped)
     add(
       "warning",
       "evidence-omitted",
       `${label}: some details are unavailable in this view`,
       "Details are bounded; inspect full subagent_status for omitted evidence.",
-    );
-  if (card.writeAudit?.violations.length && !card.writeViolationOffender)
-    add(
-      "warning",
-      "write-audit",
-      `${label} wrote to ${outsideClaims(card)}`,
-      "Recorded write violations are available in expanded details. Inspect the full audit with subagent_status before recovery.",
     );
 }

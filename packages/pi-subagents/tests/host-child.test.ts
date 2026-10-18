@@ -418,7 +418,6 @@ const childWorkspaceMarker = (overrides: Partial<StartSubagentRequest>) => {
       request: startRequest(overrides),
       parentRunId: "root",
       cwd: "/project",
-      writeClaims: undefined,
     },
     { id: "child-1", name: "child" },
   );

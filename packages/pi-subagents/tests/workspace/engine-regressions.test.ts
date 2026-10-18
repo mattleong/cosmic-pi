@@ -19,6 +19,7 @@ import {
   fails,
   io,
   readText,
+  registryOf as registryPath,
   temporaryDirectory,
   workspaceTarget,
   workspaceTests,
@@ -32,10 +33,10 @@ const test = workspaceTests([
   ["shared/keep.ts", "keep\n"],
   ["shared/drop.ts", "drop\n"],
   ["dist/bundle.js", "bundle\n"],
+  [".gitignore", "coverage/\nscratch/\n"],
 ]);
 
-const registryOf = (agent: string) =>
-  io(() => fs.realpath(agent)).pipe(Effect.map((root) => path.join(root, "git-workspaces")));
+const registryOf = (agent: string) => io(() => fs.realpath(agent)).pipe(Effect.map(registryPath));
 
 const waitFor = (file: string, attempts = 400): Effect.Effect<void, WorkspaceError> =>
   exists(file).pipe(
@@ -370,20 +371,24 @@ test("removes what an interrupted create made before acquiring the workspace", f
   const registry = yield* registryOf(agent);
   const names = yield* io(() => fs.readdir(registry));
   expect(names.filter((name) => /^[a-f0-9-]{36}$/u.test(name))).toEqual([]);
+  expect(yield* git(root, ["worktree", "list", "--porcelain"])).not.toContain(registry);
+  expect(yield* git(root, ["for-each-ref", "refs/pi"])).toBe("");
 });
 
-test("refuses an excluded session directory, naming it, and keeps nothing", function* (service, root) {
-  const failure = yield* failureOf(
-    service.create({ sourceCwd: path.join(root, "dist"), ownerId: "parent" }),
-  );
-  expect(failure.detail).toContain('"dist"');
-  expect(failure.detail).toContain("Remedy:");
+test("refuses a session directory the worker wouldn't hold, naming it, and keeps nothing", function* (service, root) {
+  yield* io(() => fs.mkdir(path.join(root, "scratch")));
+  yield* writeFile(path.join(root, "scratch/notes.txt"), "ignored\n");
   yield* io(() => fs.mkdir(path.join(root, "empty")));
-  const empty = yield* failureOf(
-    service.create({ sourceCwd: path.join(root, "empty"), ownerId: "parent" }),
-  );
-  expect(empty.detail).toContain('"empty"');
+  for (const name of ["scratch", "empty"]) {
+    const refused = yield* failureOf(
+      service.create({ sourceCwd: path.join(root, name), ownerId: "parent" }),
+    );
+    expect(refused.detail).toContain(`"${name}"`);
+    expect(refused.detail).toContain("Remedy:");
+  }
   expect(yield* service.listAll).toEqual({ records: [], unavailable: [] });
+  expect(yield* git(root, ["worktree", "list", "--porcelain"])).not.toContain("subagent-worktrees");
+  expect(yield* git(root, ["for-each-ref", "refs/pi"])).toBe("");
 });
 
 test("removes directories that deleting their last file left empty", function* (service, root) {

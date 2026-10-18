@@ -29,7 +29,7 @@ const child = (fake: ReturnType<typeof fakeChildLayer>, index = 0) => {
   return control;
 };
 const writer = (name: string, path: string) =>
-  request({ name, writeIntent: "writer", writes: [path] });
+  request({ name, task: `Edit ${path}`, writeIntent: "writer" });
 
 describe("explicit cleanup verification", () => {
   it.effect("singleflights concurrent stops after one waiter is cancelled", () =>

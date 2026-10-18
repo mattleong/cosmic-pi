@@ -75,7 +75,8 @@ const nestedRecord = (
   },
   status: WorkspaceRecord["status"] = "active",
 ): WorkspaceRecord => ({
-  version: 1,
+  version: 2,
+  repository: "/repo/.git",
   handle: {
     workspaceId,
     ownerId,
@@ -200,7 +201,7 @@ describe("nested worktree writers", () => {
   it.effect("a worktree writer's writers default to worktrees and may still share its tree", () => {
     const f = fixture();
     return withService(f.layer, function* (service) {
-      const parent = yield* service.start(repoWriter({ writes: ["a.ts"] }));
+      const parent = yield* service.start(repoWriter());
       // The session default applies only to writers started without a worktree-writer parent.
       yield* service.setWriterWorkspaceMode("shared-checkout", Effect.void);
       const isolated = yield* service.startSessionOwnedFrom(parent.id, repoWriter());
@@ -210,7 +211,7 @@ describe("nested worktree writers", () => {
       );
       const shared = yield* service.startSessionOwnedFrom(
         parent.id,
-        repoWriter({ writerWorkspaceModeOverride: "shared-checkout", writes: ["b.ts"] }),
+        repoWriter({ writerWorkspaceModeOverride: "shared-checkout" }),
       );
       expect(shared).toMatchObject({ writerWorkspaceMode: "shared-checkout", cwd: parent.cwd });
       expect(shared.workspaceId).toBeUndefined();
@@ -223,10 +224,10 @@ describe("nested worktree writers", () => {
     () => {
       const f = fixture();
       return withService(f.layer, function* (service) {
-        const parent = yield* service.start(repoWriter({ writes: ["a.ts"] }));
+        const parent = yield* service.start(repoWriter());
         const shared = yield* service.startSessionOwnedFrom(
           parent.id,
-          repoWriter({ writerWorkspaceModeOverride: "shared-checkout", writes: ["b.ts"] }),
+          repoWriter({ writerWorkspaceModeOverride: "shared-checkout" }),
         );
         // Natural completion leaves the shared writer running in the parent's worker tree.
         yield* completeLocalRun(service, f.children.controls[0]!, parent.id, "Done.");

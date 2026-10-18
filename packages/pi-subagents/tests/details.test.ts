@@ -290,25 +290,20 @@ describe("persisted subagent details version 2", () => {
     expect(decodeStartAwaitCardDetails([])).toBeUndefined();
   });
 
-  it("persists bounded optional write claims and audit data in version 2 cards", () => {
-    const claimed: SubagentRunView = {
-      ...run(),
-      writeIntent: "writer",
-      writeClaims: ["src/a.ts", "src/b.ts"],
-      writeViolationOffender: true,
-      writeAudit: {
-        observedFileWrites: ["src/a.ts", "src/outside.ts"],
-        violations: [{ path: "src/outside.ts", toolName: "edit", observedAt: 3 }],
-        bashWriteHints: 2,
-      },
-    };
-    const details = compactToolDetails({ action: "status", runs: [claimed] });
-    expect(details).toMatchObject({
-      version: 2,
+  it("still decodes saved cards that carry retired write-claim fields", () => {
+    const details = compactToolDetails({
       action: "status",
+      runs: [{ ...run(), writeIntent: "writer" }],
+    });
+    const card = details.action === "models" ? undefined : details.cards[0];
+    expect(card).not.toHaveProperty("writeClaims");
+    const saved = {
+      ...details,
       cards: [
         {
+          ...card,
           writeClaims: ["src/a.ts", "src/b.ts"],
+          writeClaimCount: 2,
           writeViolationOffender: true,
           writeAudit: {
             observedFileWrites: ["src/a.ts", "src/outside.ts"],
@@ -317,10 +312,8 @@ describe("persisted subagent details version 2", () => {
           },
         },
       ],
-    });
-    const decoded = decodeCompactToolDetails(details);
-    expect(decoded).toEqual(details);
-    expect(Object.isFrozen(decoded)).toBe(true);
+    };
+    expect(decodeCompactToolDetails(saved)).toEqual(saved);
   });
 
   it("still decodes saved cards that list the retired rename capability", () => {
@@ -393,21 +386,7 @@ describe("proposal diffstat evidence", () => {
   });
 });
 
-const auditedRun = (offender: boolean): SubagentRunView => ({
-  ...run(),
-  writeClaims: Array.from({ length: 20 }, (_, index) => `/repo/claim-${index}.ts`),
-  writeAudit: {
-    observedFileWrites: Array.from({ length: 20 }, (_, index) => `/repo/written-${index}.ts`),
-    violations: Array.from({ length: 20 }, (_, index) => ({
-      path: `/repo/violation-${index}.ts`,
-      toolName: "write",
-      observedAt: index,
-    })),
-    bashWriteHints: 3,
-  },
-  writeViolationOffender: offender,
-  writeIntent: "writer",
-});
+const writerRun = (): SubagentRunView => ({ ...run(), writeIntent: "writer" });
 
 const runCards = (details: ReturnType<typeof compactToolDetails>) =>
   details.action === "models" ? [] : details.cards;
@@ -424,7 +403,7 @@ const issueMessages = (cards: ReadonlyArray<SubagentRunCard>) =>
 
 describe("persisted subagent detail fitting", () => {
   it("fits oversized batches within the bound and keeps IDs and recovery evidence", () => {
-    const runs = oversizedBatch(auditedRun(true), {
+    const runs = oversizedBatch(writerRun(), {
       cleanup: {
         disposition: "quarantined",
         recovery: "stop",
@@ -452,8 +431,6 @@ describe("persisted subagent detail fitting", () => {
       );
       for (const card of cards) {
         expect(card).toMatchObject({
-          writeClaimCount: 20,
-          writeViolationOffender: true,
           workspaceId: "ws-oversized",
           cleanup: {
             disposition: "quarantined",
@@ -461,8 +438,6 @@ describe("persisted subagent detail fitting", () => {
             diagnostic: { phase: "process-group", code: "cleanup_unconfirmed" },
           },
         });
-        if ((card.writeClaims?.length ?? 0) < 20) expect(card.writeClaimsOmitted).toBe(true);
-        expect(card.writeAudit?.violations.length).toBeGreaterThan(0);
         expect(card.finalText).toBeUndefined();
       }
     }

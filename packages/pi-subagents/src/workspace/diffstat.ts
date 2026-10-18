@@ -1,6 +1,5 @@
 import { countLabel } from "pi-cosmic-core";
 import type { WorkspaceRevision } from "./model.ts";
-import { blockingUncapturedPath, leftOutReason } from "./policy.ts";
 
 /** One changed file of a proposal with Git's line counts; binary files count no lines. */
 export interface WorkspaceDiffStatFile {
@@ -84,29 +83,16 @@ const pathList = (paths: ReadonlyArray<string>, limit = paths.length) =>
 
 /**
  * The deterministic summary that leads a revision's review text: its diffstat and changed files,
- * then the worker files it can't carry. Paging covers the summary and patch as one text.
+ * then the credential files it leaves out. Paging covers the summary and patch as one text.
  */
 export const revisionSummary = (revision: WorkspaceRevision): string => {
   const stats = patchDiffStat(revision.diff, revision.changedPaths);
   const files = countLabel(revision.changedPaths.length, "file");
   const totals = stats && diffStatTotals(stats);
-  const uncaptured = revision.uncapturedPaths ?? [];
-  const blocking = uncaptured.filter(blockingUncapturedPath);
-  const leftOut = uncaptured.filter((path) => leftOutReason(path) === "dependency");
-  const credentials = uncaptured.filter((path) => leftOutReason(path) === "credential");
+  const credentials = revision.uncapturedPaths ?? [];
   return [
     `SUMMARY: ${files} changed${totals ? `, +${totals.addedLines} -${totals.deletedLines}` : ""}`,
     ...(stats?.map(statLine) ?? revision.changedPaths.map((path) => `  changed ${path}`)),
-    ...(blocking.length > 0
-      ? [
-          `Uncaptured worker files, absent from the diff (prepare and apply refuse until a revision leaves none): ${pathList(blocking)}`,
-        ]
-      : []),
-    ...(leftOut.length > 0
-      ? [
-          `Left out on purpose (dependency, build, or Pi state directories; not part of the proposal): ${pathList(leftOut, MAX_SUMMARY_LEFT_OUT_PATHS)}`,
-        ]
-      : []),
     ...(credentials.length > 0
       ? [
           `Left out on purpose (credential files the worker created; not part of the proposal): ${pathList(credentials, MAX_SUMMARY_LEFT_OUT_PATHS)}`,

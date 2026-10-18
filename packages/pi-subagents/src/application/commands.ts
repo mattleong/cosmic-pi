@@ -111,7 +111,6 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
           ),
         ),
       ),
-    reply: (id, message, expected) => runAction((service) => service.reply(id, message, expected)),
     rename: (id, name, expected) => runAction((service) => service.rename(id, name, expected)),
     inspectProfiles: (projectTrusted) =>
       withCurrentActivation((activation) =>

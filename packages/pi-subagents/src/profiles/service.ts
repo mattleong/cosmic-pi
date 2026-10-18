@@ -5,6 +5,7 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { SubagentConfigStore } from "../config/store.ts";
+import type { CustomAgent } from "./agents.ts";
 import { PROFILE_DEFINITIONS } from "./definitions.ts";
 import { isProfileId, type ProfileDefinition } from "./model.ts";
 import {
@@ -35,6 +36,8 @@ export interface SubagentProfileServiceContract {
     snapshot: SessionProfileSnapshot,
     profile: string,
     environment: ProfileResolutionEnvironment,
+    /** An agent routed to `profile`, whose overrides apply to every candidate. */
+    agent?: CustomAgent,
   ) => ProfileResolution;
   readonly withSnapshotAtRevision: <A, E, R>(
     expectedRevision: number,
@@ -99,8 +102,8 @@ export const makeSubagentProfileService = (
     return SubagentProfileService.of({
       capture: Ref.get(state),
       definition: (profile) => (isProfileId(profile) ? PROFILE_DEFINITIONS[profile] : undefined),
-      resolve: (snapshot, profile, environment) =>
-        resolveProfilePlan(profile, snapshot.effectiveConfig, environment),
+      resolve: (snapshot, profile, environment, agent) =>
+        resolveProfilePlan(profile, snapshot.effectiveConfig, environment, agent),
       withSnapshotAtRevision: <A, E, R>(
         expectedRevision: number,
         operation: (snapshot: SessionProfileSnapshot) => Effect.Effect<A, E, R>,

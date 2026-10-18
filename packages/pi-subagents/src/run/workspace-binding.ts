@@ -1,9 +1,14 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
-import type { WorkspaceSetup, WorkspaceVerify, WriterWorkspaceMode } from "../config/schema.ts";
+import type {
+  WorkspaceInclude,
+  WorkspaceSetup,
+  WorkspaceVerify,
+  WriterWorkspaceMode,
+} from "../config/schema.ts";
 import type { WriterLease } from "../boundary/writer-lease.ts";
-import type { WorkspaceHandle } from "../workspace/model.ts";
+import type { WorkspaceHandle, WorkspaceLaunch } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
@@ -97,8 +102,13 @@ export type WorkspaceBindingState =
 
 export interface WorkspaceBinding {
   readonly handle: WorkspaceHandle;
-  /** The request a revision successor extends; a successor's admission replaces it. */
-  request: StartSubagentRequest;
+  /**
+   * The request a revision successor extends; a successor's admission replaces it. An adopted
+   * orphan has none until its first successor: revise then launches its recorded `launch` afresh.
+   */
+  request?: StartSubagentRequest;
+  /** An adopted orphan's recorded launch, which its first revision successor is resolved from. */
+  readonly launch?: WorkspaceLaunch | undefined;
   /** The admitted writer; a successor's admission replaces it. */
   record?: RunRecord;
   state: WorkspaceBindingState;
@@ -164,6 +174,7 @@ export type WorkspaceControlDependencies = Pick<
   readonly engine: WorkspaceServiceContract | undefined;
   readonly initialMode: WriterWorkspaceMode;
   readonly workspaceSetup?: WorkspaceSetup | undefined;
+  readonly workspaceInclude?: WorkspaceInclude | undefined;
   readonly workspaceVerify?: WorkspaceVerify | undefined;
   readonly ownerId: string;
   readonly sourceCwd?: string;

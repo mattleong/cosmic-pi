@@ -85,7 +85,6 @@ export const fleetManagerActionsFixture = (
     interrupt: unexpectedAction,
     resume: unexpectedAction,
     send: unexpectedAction,
-    reply: unexpectedAction,
     rename: unexpectedAction,
     inspectProfiles: unexpectedAction,
     patchProfile: unexpectedAction,

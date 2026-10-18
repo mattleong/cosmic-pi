@@ -24,6 +24,8 @@ export interface SubagentExecutionResult {
   readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
   readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
   readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
+  /** Send targets whose pending question the message answered. */
+  readonly answeredRunIds?: ReadonlyArray<string>;
   readonly attentionRequired?: boolean;
   readonly text?: string;
   readonly contract?: SubagentContract;
@@ -37,6 +39,7 @@ export const presentSubagentResult = (
   const { runs, awaitContextRuns, attentionRequired, text: formattedText } = executionResult;
   const startFailures = executionResult.startFailures ?? [];
   const actionFailures = executionResult.actionFailures ?? [];
+  const answeredRunIds = executionResult.answeredRunIds ?? [];
   const details: unknown =
     input.tool === SUBAGENT_TOOL_NAME.start
       ? startDetails({
@@ -55,12 +58,14 @@ export const presentSubagentResult = (
             action: subagentToolAction(input),
             runs,
             ...(actionFailures.length > 0 && { actionFailures }),
+            ...(answeredRunIds.length > 0 && { answeredRunIds }),
           });
   const detailedText = () => formattedText ?? formatDetailedRuns(runs).text;
   const resultText = (): string => {
     if (input.tool === SUBAGENT_TOOL_NAME.start)
       return formattedText ?? formatStartResult(runs, startFailures);
-    const acknowledgement = () => managementAcknowledgement(subagentToolAction(input), runs);
+    const acknowledgement = () =>
+      managementAcknowledgement(subagentToolAction(input), runs, new Set(answeredRunIds));
     if (actionFailures.length > 0)
       return input.tool === SUBAGENT_TOOL_NAME.status
         ? detailedText()
@@ -79,7 +84,6 @@ export const presentSubagentResult = (
       case SUBAGENT_TOOL_NAME.await:
         return detailedText();
       case SUBAGENT_TOOL_NAME.send:
-      case SUBAGENT_TOOL_NAME.reply:
       case SUBAGENT_TOOL_NAME.lifecycle:
         return acknowledgement();
     }

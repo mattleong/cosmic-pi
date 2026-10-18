@@ -52,7 +52,50 @@ Only the seven declared profile IDs are accepted. An explicit launch profile alw
 - That cost includes evicted runs and earlier runtimes: each run's usage is appended as a `pi-subagents-usage` custom session entry (never sent to the model) when its assignment settles and when the runtime ends. `/reload`, `/tree`, and resume restore the sum across every branch, because navigating back refunds nothing. A fork keeps the entries on its path.
 - Usage since a run last settled is lost if Pi crashes, and Codex reports no cost, so the total is a lower bound.
 
-Optional root `delegation` follows the same precedence ([Delegation settings](settings-workspace.md#delegation-settings)). Root `workspaceSetup` and `workspaceVerify` are allowed only in a trusted project document ([Setup and verification commands](local-backends.md#setup-and-verification-commands)).
+Optional root `agents` declares [custom agents](#custom-agents) in global and trusted-project documents.
+
+Optional root `delegation` follows the same precedence ([Delegation settings](settings-workspace.md#delegation-settings)). Root `workspaceSetup` and `workspaceVerify` are allowed only in a trusted project document ([Setup and verification commands](local-backends.md#setup-and-verification-commands)), and so is `workspaceInclude` ([Included files](local-backends.md#included-files)).
+
+## Custom agents
+
+A custom agent is a named role the user declares in a configuration document's root `agents` object. It routes through one profile's configured route but replaces that profile's guidance with its own instructions. Agents live only in `pi-subagents.json`; there are no agent files, no session scope, and no settings editor.
+
+```json
+"agents": {
+  "auth-reviewer": {
+    "description": "Reviews authentication changes against the threat model.",
+    "instructions": "Review only authentication code. Cite file and line for every finding.",
+    "profile": "reviewer",
+    "effort": "xhigh",
+    "tools": { "deny": ["bash"] }
+  }
+}
+```
+
+### Declaration
+
+- Names match `^[a-z][a-z0-9-]{0,47}$` and can't be a profile ID. A document holds at most 32 agents.
+- `description` (1–200 characters) and `instructions` (up to 16 KiB of UTF-8) are required and nonblank.
+- `profile` selects the route and defaults to `generalist`. Optional `effort` (a concrete level, not `default`), `context`, and `writeIntent` override every candidate of that route; `isolation` is the agent's writer workspace mode.
+- `tools: { allow?, deny? }` lists root tool names. `allow` keeps only those tools and `deny` removes tools, applied to the Pi child's inherited active-tool snapshot. The child's `contact_parent` and `subagent_*` tools are always kept.
+- Unknown keys are rejected. Diagnostics identify entries by position, like profile sets.
+
+### Layering and failure
+
+- A trusted-project entry replaces the same-named global entry wholesale; fields never merge. An untrusted project's agents are ignored.
+- An entry with a valid name that fails to decode fails that name closed (`agent_invalid`) instead of revealing a lower entry. A malformed name is ignored with a diagnostic.
+- An `agents` value that is not an object of at most 32 entries fails its document's agents closed. A malformed project `agents` object also hides every global agent, since it could have replaced any of them.
+
+### Launch planning
+
+- `subagent_start` items take `agent` instead of `profile`; setting both fails with `agent_profile_conflict`. Unknown names fail with `agent_unknown`.
+- The start item's `agent` choices and their descriptions are generated when the root registers its tools, and the field is absent when no agents are configured. Nested Pi children accept any agent name and the root resolves it.
+- Planning applies the agent's overrides to each candidate before the usual checks. A candidate the overrides don't fit, such as fork context or an unsupported explicit effort on Claude or Codex, is skipped with `agent_candidate_incompatible`.
+- Tool lists can only be enforced on a Pi child, so Claude and Codex candidates are skipped with `agent_tools_unsupported` whenever an agent sets `allow` or `deny`. There is no unfiltered fallback.
+- An item's `isolation` wins over the agent's; the agent's wins over nested and session defaults.
+- A [model override](#per-launch-model-override) launched with an agent takes the agent's effort, context, and write intent defaults, and fails with `model_override_invalid` when the agent's tool lists need Pi.
+- The child's system prompt names the agent and carries its instructions in place of the profile guidance. Run cards, start entries, status, and the orchestration contract report `agent` alongside the routed `profile`.
+- The launch freezes the resolved agent into its route continuation, so [retry](#explicit-route-continuation) keeps its instructions, overrides, and tool lists even after the configuration changes or drops the agent.
 
 ## Candidate planning and host resolution
 
@@ -71,17 +114,27 @@ Optional root `delegation` follows the same precedence ([Delegation settings](se
 
 ### Provenance and start details
 
-- Selection provenance records the route source; the actual runtime and `openaiFastMode` stay in the request and run view.
+- Selection provenance records the route source (`override` for a [model override](#per-launch-model-override)); the actual runtime and `openaiFastMode` stay in the request and run view.
 - Run cards keep the direct runtime, model, and effort, and record each skipped candidate's runtime, model, and effort as structured fields. Older cards with `host`, `closeOnReport`, or label strings still decode; retired fields are ignored and labels display verbatim.
 - Start details contain one request-ordered entry per input: the requested profile with the actual route for success, the attempted route after post-selection failure, or an explicit resolving or no-eligible-route state. They contain no cards.
 - When a start admitted a run and then failed, compensation crosses the full process, backend, harness, supervisor, and writer cleanup barrier before returning. Its `admittedRun` projection reports the run ID, cleanup disposition, retry disposition, and remaining candidate count, taken from settled facts rather than error text.
 - Each start batch captures one immutable profile snapshot, so concurrent edits can't split a batch across revisions.
 
+## Per-launch model override
+
+A start item's optional `model: { runtime, model, effort? }` replaces the profile's route for that launch with one candidate. It is always available; there is no configuration switch.
+
+- The profile still supplies the role guidance, context, and write intent, or a [custom agent](#custom-agents) its instructions and overrides. Fast mode is off. An omitted `effort` is `default`, resolved like a route candidate's ([Effort](#effort)).
+- Before any readiness check or service ownership, the override is checked with the shared selector grammar and candidate cross-field policy. A malformed selector, `parent` outside Pi, a runtime-incompatible explicit effort, or a forking profile such as `oracle` on Claude or Codex fails with `model_override_invalid`.
+- Planning and the full host preflight then run as for any candidate. Any skip fails the launch with `model_override_unavailable`; the profile's route is never tried.
+- Selection provenance records route source `override`, and the frozen continuation holds only the override, so lifecycle `retry` fails with `retry_route_exhausted`.
+- Start entries, run cards, and status show the requested override as `modelOverride` alongside the actual route.
+
 ## Explicit route continuation
 
-`subagent_lifecycle({ action: "retry", runIds })` continues a failed run on its next configured candidate. It is a new launch and run ID, never implicit fallthrough or resurrection.
+`subagent_lifecycle({ action: "retry", runIds })` continues a failed run on its next configured candidate. It is a new launch and run ID, never implicit fallthrough or resurrection. Resume, by contrast, continues the failed run's own session on the same candidate ([resume admission](#resume-admission)).
 
-- It keeps the original task, profile guidance, route source, and a deeply frozen copy of the launch-time route; later edits don't alter it. Planning starts strictly after the predecessor's selected candidate, keeps the original candidate indexes, and repeats the full preflight.
+- It keeps the original task, profile guidance or custom agent, route source, and a deeply frozen copy of the launch-time route; later edits don't alter it. Planning starts strictly after the predecessor's selected candidate, keeps the original candidate indexes, and repeats the full preflight.
 - Retry claims the predecessor exclusively. Exact claims travel with the frozen continuation and are rechecked against current pools. After cleanup is confirmed, admission atomically revalidates, marks the predecessor with its successor ID, and admits the linked run. Concurrent retries have one winner, and retry-claimed records can't be evicted.
 - A plan with no remaining candidate records every skip and marks the route exhausted (`retry_route_exhausted`); only then should the parent choose a `generalist` replacement.
 - Retry refuses non-failed, later-assignment, already-superseded, exhausted, outcome-uncertain, cleanup-quarantined, eviction-claimed, and concurrently claimed records, so no uncertainty launches duplicate work automatically.
@@ -91,8 +144,14 @@ Optional root `delegation` follows the same precedence ([Delegation settings](se
 
 ## Resume admission
 
-- Completed respawn checks direct-child policy, including held worktree launch slots, under the admission lock. In-place paused resume keeps its slot and is allowed at capacity.
-- Writer respawn recanonicalizes the cwd before taking the lock. One locked claim then validates the run, assignment, process, cwd identity, stop state, report backlog, writer conflict, capacity, and workspace binding before rollover. Refusal leaves the workspace unchanged ([binding rules](local-backends.md#binding-states-and-resume)).
+`subagent_lifecycle({ action: "resume", runIds })` continues a run's own session as its next assignment. Only local Pi advertises resume.
+
+- Paused runs resume in place. Completed, failed, and stopped runs respawn from their session file once cleanup is confirmed (`resume_cleanup_unsettled` otherwise). A run without continuation state fails with `backend_resume_unavailable`; for a failed run the recovery points to retry or a new run.
+- An explicit resume overrides an earlier stop; descendants a stop closed stay stopped. Resume refuses a run whose private state was reclaimed or is being evicted, a run a retry has claimed (`resume_retry_claimed`) or superseded (`resume_superseded`), and a run with a full report-delivery backlog.
+- A resumed failed run is active, so retry refuses it (`retry_source_not_failed`). If it fails again, the later assignment still blocks replaying the launch task (`retry_assignment_not_initial`). Resuming a deterministic failure repeats it; guidance points to retry instead.
+- A worktree writer resumes in its own workspace and reopens its review; a workspace that was integrated, discarded (including automatically), or left mid-integration refuses with `workspace_finished`.
+- Respawn checks direct-child policy, including held worktree launch slots, under the admission lock. In-place paused resume keeps its slot and is allowed at capacity.
+- Writer respawn recanonicalizes the cwd before taking the lock. One locked claim then validates the run, assignment, process, cwd identity, retry state, report backlog, writer conflict, capacity, and workspace binding before rollover. Refusal leaves the workspace unchanged ([binding rules](local-backends.md#binding-states-and-resume)).
 
 ## Public launch contract
 
@@ -100,13 +159,14 @@ Optional root `delegation` follows the same precedence ([Delegation settings](se
 
 - `task`, required;
 - `profile`, optional, defaulting to `generalist`;
+- `agent`, optional: a [custom agent](#custom-agents), never combined with `profile`;
 - `name`, optional;
-- `writes`, optional: 1–64 exact, normalized, workspace-relative POSIX file paths. It requires writer intent; read-only candidates are skipped, and the launch fails before ownership when no writer candidate remains. Omission gives a shared-checkout writer exclusive ownership of the cwd. Claims are fixed for the run ([Writer pools](local-backends.md#writer-pools-cooperative-claims-and-cross-process-safety));
-- `isolation`, optional: `shared-checkout` or `worktree`. Read-only candidates ignore it.
+- `isolation`, optional: `shared-checkout` or `worktree`. Read-only candidates ignore it;
+- `model`, optional: a [per-launch model override](#per-launch-model-override).
 
-The schema is strict, and the service independently rejects unknown launch overrides with `launch_override_not_allowed`. Model-facing schemas declare no `pattern` keyword, which some providers reject. Task-tool-shaped top-level fields fail with `[invalid_start_shape]` instead of being renamed.
+The schema is strict, and the service independently rejects other launch overrides, such as a top-level `effort`, `context`, or `writeIntent`, with `launch_override_not_allowed`. Model-facing schemas declare no `pattern` keyword, which some providers reject. Task-tool-shaped top-level fields fail with `[invalid_start_shape]` instead of being renamed.
 
-A writer's workspace mode is, in order: a retry predecessor's recorded mode, the item's `isolation`, `worktree` when the caller is an active Pi worktree writer, then the session's `writerWorkspaceMode` (default `shared-checkout`). Admission records the mode. The root and active Pi worktree writers may start worktree writers; other nested callers fail with `workspace_nested_writer_unsupported` ([Nested worktree writers](local-backends.md#nested-worktree-writers)). Launch and status projections include the mode, workspace identity, actual cwd, and source cwd.
+A writer's workspace mode is, in order: a retry predecessor's recorded mode, the item's `isolation`, a custom agent's `isolation`, `worktree` when the caller is an active Pi worktree writer, then the session's `writerWorkspaceMode` (default `shared-checkout`). Admission records the mode. The root and active Pi worktree writers may start worktree writers; other nested callers fail with `workspace_nested_writer_unsupported` ([Nested worktree writers](local-backends.md#nested-worktree-writers)). Launch and status projections include the mode, workspace identity, actual cwd, and source cwd.
 
 Start is always background and nonblocking. `subagent_await` supports `all_finished` and `any_finished`. Lifecycle `retry` accepts only failed run IDs, never task, model, candidate, or route overrides.
 
@@ -119,4 +179,4 @@ Start is always background and nonblocking. `subagent_await` supports `all_finis
 
 ### Model discovery
 
-`subagent_models` projects every resolved candidate as a structured card with `runtime`, `model`, `effort`, `context`, `writeIntent`, `openaiFastMode`, `status`, and `reason`. Its version-2 orchestration contract also reports `host: "local"` and `closeOnReport: true`. Discovery is static: executable, auth, catalog, service-tier, and harness readiness are checked at launch.
+`subagent_models` projects every resolved candidate as a structured card with `runtime`, `model`, `effort`, `context`, `writeIntent`, `openaiFastMode`, `status`, and `reason`. It also lists each custom agent with its routed profile, overrides, tool lists, and that profile's candidates after the agent's overrides, plus the agents that fail closed. A `profile` filter keeps only agents routed to that profile. Its version-2 orchestration contract also reports `host: "local"` and `closeOnReport: true`. Discovery is static: executable, auth, catalog, service-tier, and harness readiness are checked at launch.

@@ -116,16 +116,9 @@ export interface RunRecord {
   stoppedByParent: boolean;
   cleanupPending: boolean;
   runStateReclaimState: "pending" | "running" | "reclaimed";
-  evictionClaim?:
-    | {
-        readonly parentRunId?: string | undefined;
-        readonly writerCwdDigest?: string | undefined;
-        readonly writeClaims?: ReadonlyArray<string> | undefined;
-      }
-    | undefined;
+  evictionClaim?: { readonly parentRunId?: string | undefined } | undefined;
   readonly canonicalWriterCwd?: CanonicalWriterCwd | undefined;
   writerPool?: WriterPoolEntry | undefined;
-  writeViolationContainmentStarted: boolean;
   closingScope?: Scope.Closeable | undefined;
   closingScopeSettled?: Deferred.Deferred<void> | undefined;
   initializationPending: boolean;
@@ -208,7 +201,7 @@ const unsupportedCapabilityMessage = (
     case "interrupt":
       return `${backend} subagents do not support interruption. Stop with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with subagent_await.`;
     case "parent-contact":
-      return `${backend} subagents do not support parent questions or subagent_reply; use subagent_await or subagent_status instead.`;
+      return `${backend} subagents do not support parent questions; use subagent_await or subagent_status instead.`;
     case "native-fork":
     case "peer-notice":
     case "resume":

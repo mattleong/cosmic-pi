@@ -31,6 +31,7 @@ import {
   type RunRecord,
 } from "./internal.ts";
 import {
+  isResumableRunState,
   isTerminalRunState,
   SUBAGENT_ROOT_RUN_ID,
   type SubagentRunView,
@@ -59,16 +60,45 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
       "resume_state_reclaimed",
       `Subagent ${id} cannot resume because its private continuation state was already reclaimed.`,
     );
-  if (state !== "paused" && state !== "completed")
+  if (!isResumableRunState(state))
     return invalidRequest("resume_state_invalid", `Subagent ${id} cannot resume while ${state}.`);
-  if (record.stoppedByParent)
-    return invalidRequest("resume_cancelled", `Subagent ${id} was stopped and cannot resume.`);
+  if (record.view.supersededByRunId)
+    return invalidRequest(
+      "resume_superseded",
+      `Subagent ${id} was already continued as ${record.view.supersededByRunId}; follow that run instead.`,
+    );
+  if (record.retryClaim)
+    return invalidRequest(
+      "resume_retry_claimed",
+      `Subagent ${id} has a next-candidate retry in progress and cannot resume.`,
+    );
+  // A finished run respawns from its session file only after its last process is gone.
+  if (
+    isTerminalRunState(state) &&
+    (record.process !== undefined || record.cleanupDisposition !== "confirmed")
+  )
+    return invalidRequest(
+      "resume_cleanup_unsettled",
+      `Subagent ${id} cleanup is not confirmed; inspect it with subagent_status before resuming.`,
+    );
   if (!hasCompletionGenerationCapacity(record))
     return invalidRequest(
       "report_delivery_backlog",
       `Subagent ${id} has ${record.completionGenerations.size} unresolved outcome generations; wait for parent delivery or claim the latest outcome before resuming.`,
     );
   return undefined;
+};
+
+const resumeUnavailableError = (record: RunRecord): InvalidSubagentRequestError => {
+  const { id, runtime, state } = record.view;
+  const recovery =
+    state === "failed"
+      ? ` Retry it on its next candidate with subagent_lifecycle({ action: "retry", runIds: ["${id}"] }) or start a new run.`
+      : " Start a new run instead.";
+  return invalidRequest(
+    "backend_resume_unavailable",
+    `Subagent ${id} cannot resume because local/${runtime} did not provide continuation state.${recovery}`,
+  );
 };
 
 interface ClaimedResume {
@@ -194,7 +224,6 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             record.closingScope = undefined;
             record.closingScopeSettled = undefined;
             record.writerPool = writerPool;
-            record.writeViolationContainmentStarted = false;
             record.launch = {
               ...record.launch,
               resumeToken: record.resumeToken,
@@ -298,7 +327,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
               validateCwd:
                 record.view.writeIntent === "writer" &&
                 record.process === undefined &&
-                (record.view.state === "paused" || record.view.state === "completed"),
+                isResumableRunState(record.view.state),
             };
           }),
         ),
@@ -334,19 +363,13 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                 records,
                 writerPools,
                 canonicalCwd,
-                selected.view.writeClaims,
                 selected,
               );
               if (writerFailure) return yield* writerFailure;
               return undefined;
             });
-          const respawnFailureLocked = (selected: RunRecord) =>
+          const respawnCapacityFailureLocked = (selected: RunRecord) =>
             Effect.gen(function* () {
-              if (!selected.resumeToken)
-                return yield* invalidRequest(
-                  "backend_resume_unavailable",
-                  `Subagent ${id} cannot resume because local/${selected.view.runtime} did not provide continuation state.`,
-                );
               const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
               const nesting = yield* dependencies.currentNesting;
               const capacityFailure =
@@ -378,12 +401,14 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             const stateFailure = resumeStateError(selected);
             if (stateFailure) return yield* stateFailure;
             const needsRespawn = selected.process === undefined;
+            if (needsRespawn && !selected.resumeToken)
+              return yield* resumeUnavailableError(selected);
             // Ownership first: a revision successor in this workspace would otherwise surface as a
             // transient writer conflict.
             const invalidateWorkspace = yield* workspaces.invalidateForResume(selected);
             if (selected.view.writeIntent === "writer")
               yield* writerFailureLocked(selected, needsRespawn);
-            if (needsRespawn) yield* respawnFailureLocked(selected);
+            if (needsRespawn) yield* respawnCapacityFailureLocked(selected);
             return { selected, needsRespawn, invalidateWorkspace };
           });
           const prompt = message?.trim()
@@ -397,6 +422,9 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                 Effect.gen(function* () {
                   const { selected, needsRespawn, invalidateWorkspace } = yield* admitLocked;
                   const attemptToken = allocateAssignmentAttemptToken();
+                  // An explicit resume supersedes an earlier stop or failure of this run.
+                  selected.stoppedByParent = false;
+                  selected.backendFailure = undefined;
                   selected.pauseRequested = false;
                   selected.pauseOutcome = undefined;
                   clearRunActivity(selected);
@@ -408,11 +436,9 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                     ? Deferred.makeUnsafe<void>()
                     : undefined;
                   selected.pendingInitializationSettlement = undefined;
-                  selected.writeViolationContainmentStarted = false;
                   beginNextAssignmentLocked(selected, attemptToken, now, {
                     question: undefined,
                     currentTool: undefined,
-                    writeViolationOffender: undefined,
                   });
                   invalidateWorkspace();
                   yield* publish;

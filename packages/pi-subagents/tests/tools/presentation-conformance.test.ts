@@ -31,7 +31,7 @@ function registered(panel = false, runtime: Partial<SubagentToolRuntime> = {}) {
 }
 
 it.each(["compact", "preview"] as const)(
-  "preserves complete launch tasks and file claims in %s expansion",
+  "preserves complete launch tasks in %s expansion",
   (style) => {
     const tool = withPresentationSettings(
       { toolCallCollapsedStyle: style },
@@ -39,14 +39,14 @@ it.each(["compact", "preview"] as const)(
     );
     const task = `${"Task context. ".repeat(60)}\nTASK_TAIL\n\u009dCONTROL_ADJACENT_EVIDENCE`;
     const input = {
-      agents: [{ name: "Worker", profile: "worker", task, writes: ["src/claimed-file.ts"] }],
+      agents: [{ name: "Worker", profile: "worker", task, isolation: "worktree" }],
     };
     const original = structuredClone(input);
     const harness = createToolPresentationHarness(tool, { width: 120 });
     for (const expanded of [false, true, false, true]) {
       harness.call(input, { expanded });
       const text = harness.render().join("\n");
-      for (const evidence of ["TASK_TAIL", "CONTROL_ADJACENT_EVIDENCE", "src/claimed-file.ts"])
+      for (const evidence of ["TASK_TAIL", "CONTROL_ADJACENT_EVIDENCE"])
         expect(text.includes(evidence)).toBe(expanded);
       expect(text).not.toContain("\u009d");
     }

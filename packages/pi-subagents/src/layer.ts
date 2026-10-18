@@ -9,7 +9,6 @@ import { backendRegistryFor, SubagentBackendRegistry } from "./backend/service.t
 import { ChildProcess } from "./boundary/child-process.ts";
 import { LocalCliProcess } from "./boundary/local-cli-process.ts";
 import { NativeModelCatalog } from "./boundary/native-model-catalog.ts";
-import { nodeTmpdir } from "./boundary/node-builtins.ts";
 import { sweepAbandonedPrivateState } from "./boundary/private-state.ts";
 import { pruneReportArchive } from "./boundary/report-archive.ts";
 import { SupervisorChannel } from "./boundary/supervisor-channel.ts";
@@ -21,7 +20,6 @@ import {
   subagentProfileServiceLayer,
   type SubagentProfileLayerOptions,
 } from "./profiles/service.ts";
-import { systemTemporaryRoots } from "./run/claims-observation.ts";
 import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
 
@@ -85,13 +83,13 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         workspaceSourceCwd: options.cwd,
         ...(options.sessionKey && { workspaceOwnerId: options.sessionKey }),
         publish: options.publish,
-        temporaryRoots: systemTemporaryRoots(nodeTmpdir()),
         restoredSessionUsage: options.restoredSessionUsage,
         recordSessionUsage: options.recordSessionUsage,
         notify: options.notify,
         questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: inspection.config.writerWorkspaceMode,
         workspaceSetup: inspection.config.workspaceSetup,
+        workspaceInclude: inspection.config.workspaceInclude,
         workspaceVerify: inspection.config.workspaceVerify,
         proxyHandler: options.proxyHandler,
       });

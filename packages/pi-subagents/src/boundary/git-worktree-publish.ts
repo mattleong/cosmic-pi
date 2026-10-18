@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
-import { MAX_WORKSPACE_FILE_BYTES } from "../workspace/policy.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 import {
+  nodeCreateHash,
   nodeFsConstants as constants,
   nodeFsPromises as fs,
   nodePath as path,
@@ -12,7 +12,13 @@ import {
   workspaceIO,
   workspaceIOIfPresent,
 } from "./git-worktree-process.ts";
-import { blobId } from "./git-worktree-snapshot.ts";
+
+/** The largest file publication reads into memory, on either side of a change. */
+export const MAX_PUBLISHED_FILE_BYTES = 512 * 1024 * 1024;
+
+/** The journal's content identity for a file, the same in SHA-1 and SHA-256 repositories. */
+export const contentDigest = (bytes: Uint8Array) =>
+  nodeCreateHash("sha256").update(bytes).digest("hex");
 
 export const publicationBackupPrefix = ".pi-workspace-old-";
 export const publicationTemporaryPrefix = ".pi-workspace-new-";
@@ -72,7 +78,7 @@ const ignoreMissing = (cause: unknown) => {
 };
 
 /** Every ancestor is still a real directory and the directory is the one publication saw. */
-export const anchorHolds = (anchor: AnchoredDirectory) =>
+const anchorHolds = (anchor: AnchoredDirectory) =>
   Effect.gen(function* () {
     yield* checkDirectory(anchor.directory);
     const stat = yield* io(() => fs.lstat(anchor.directory));
@@ -289,13 +295,13 @@ export const removeEmptyWorkspaceDirectory = (request: WorkspaceDirectoryRemoval
     return true;
   }).pipe(Effect.orElseSucceed(() => false));
 
-/** A journal path's current state: absent, a regular file with its blob id, or something else. */
+/** A journal path's current state: absent, a regular file with its digest, or something else. */
 export type PublishedFileState =
   | { readonly kind: "absent" }
   | { readonly kind: "other" }
   | {
       readonly kind: "file";
-      readonly oid: string;
+      readonly digest: string;
       readonly dev: number;
       readonly ino: number;
     };
@@ -304,7 +310,7 @@ export const inspectPublishedFile = (file: string) =>
   Effect.gen(function* () {
     const stat = yield* lstatIfPresent(file);
     if (stat === undefined) return { kind: "absent" } satisfies PublishedFileState;
-    if (!stat.isFile() || stat.size > MAX_WORKSPACE_FILE_BYTES)
+    if (!stat.isFile() || stat.size > MAX_PUBLISHED_FILE_BYTES)
       return { kind: "other" } satisfies PublishedFileState;
     return yield* Effect.acquireUseRelease(
       openNoFollow(file),
@@ -318,7 +324,7 @@ export const inspectPublishedFile = (file: string) =>
           if (bytesRead !== bytes.length) return { kind: "other" } satisfies PublishedFileState;
           return {
             kind: "file",
-            oid: blobId(bytes),
+            digest: contentDigest(bytes),
             dev: opened.dev,
             ino: opened.ino,
           } satisfies PublishedFileState;

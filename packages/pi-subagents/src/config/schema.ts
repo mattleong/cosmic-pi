@@ -2,6 +2,16 @@ import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
+import {
+  isCustomAgentName,
+  MAX_CUSTOM_AGENT_DESCRIPTION_CHARS,
+  MAX_CUSTOM_AGENT_INSTRUCTIONS_BYTES,
+  MAX_CUSTOM_AGENT_TOOL_NAME_CHARS,
+  MAX_CUSTOM_AGENT_TOOL_NAMES,
+  MAX_CUSTOM_AGENTS,
+  type CustomAgentDefinition,
+} from "../profiles/agents.ts";
 import {
   cloneProfileCandidates,
   MAX_PROFILE_CANDIDATES,
@@ -71,6 +81,22 @@ export const WorkspaceVerifySchema = Schema.Struct({
 });
 export type WorkspaceVerify = typeof WorkspaceVerifySchema.Type;
 
+export const MAX_WORKSPACE_INCLUDE_PATTERNS = 64;
+export const MAX_WORKSPACE_INCLUDE_PATTERN_CHARS = 1_024;
+/**
+ * A trusted project's gitignore-syntax patterns naming untracked local files, such as `.env`,
+ * that isolated writer and test trees receive copies of. Git matches them; one pattern per line,
+ * so no pattern may hold a control character.
+ */
+export const WorkspaceIncludeSchema = Schema.Array(
+  Schema.String.check(
+    Schema.isBetweenLength(1, MAX_WORKSPACE_INCLUDE_PATTERN_CHARS),
+    Schema.isPattern(/\S/u),
+    Schema.isPattern(/^\P{Cc}*$/u),
+  ),
+).check(Schema.isMaxLength(MAX_WORKSPACE_INCLUDE_PATTERNS));
+export type WorkspaceInclude = typeof WorkspaceIncludeSchema.Type;
+
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
 /** Optional cap, in US dollars, on what one session's subagents may spend before new starts stop. */
@@ -107,7 +133,9 @@ export interface SubagentConfigFile {
   readonly delegation?: DelegationMode | undefined;
   readonly workspaceSetup?: WorkspaceSetup | undefined;
   readonly workspaceVerify?: WorkspaceVerify | undefined;
+  readonly workspaceInclude?: WorkspaceInclude | undefined;
   readonly sessionSpendLimit?: number | undefined;
+  readonly agents?: Readonly<Record<string, CustomAgentDefinition>> | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -116,6 +144,10 @@ export interface DecodedSubagentConfig {
   readonly invalidProfileSetRoutes: Readonly<Record<string, ReadonlyArray<ProfileId>>>;
   readonly invalidProfileSets: ReadonlyArray<string>;
   readonly invalidDefaultProfileSet: boolean;
+  /** Agent entries with a valid name that failed to decode; they fail closed. */
+  readonly invalidAgents: ReadonlyArray<string>;
+  /** The document's `agents` value is not an object of at most 32 entries. */
+  readonly invalidAgentsContainer: boolean;
   readonly unsupportedVersion: boolean;
 }
 
@@ -282,6 +314,8 @@ interface DecodedBody {
   readonly invalidProfileSetRoutes: Readonly<Record<string, ReadonlyArray<ProfileId>>>;
   readonly invalidProfileSets: ReadonlyArray<string>;
   readonly invalidDefaultProfileSet: boolean;
+  readonly invalidAgents: ReadonlyArray<string>;
+  readonly invalidAgentsContainer: boolean;
 }
 
 const EMPTY_BODY: DecodedBody = Object.freeze({
@@ -289,6 +323,8 @@ const EMPTY_BODY: DecodedBody = Object.freeze({
   invalidProfileSetRoutes: Object.freeze({}),
   invalidProfileSets: Object.freeze([]),
   invalidDefaultProfileSet: false,
+  invalidAgents: Object.freeze([]),
+  invalidAgentsContainer: false,
 });
 
 const decodeProfileSet = (
@@ -340,6 +376,81 @@ const decodeProfileSets = (
   return { sets, invalidProfileSetRoutes, invalidProfileSets };
 };
 
+const utf8 = new TextEncoder();
+const nonblankText = (maxLength: number) =>
+  Schema.String.check(Schema.isBetweenLength(1, maxLength), Schema.isPattern(/\S/u));
+// Tool names reach the Pi child's comma-separated tool argument, as the root's own names do.
+const CustomAgentToolNamesSchema = Schema.Array(
+  Schema.String.check(
+    Schema.isBetweenLength(1, MAX_CUSTOM_AGENT_TOOL_NAME_CHARS),
+    Schema.isPattern(/^[^\s,\p{Cc}](?:[^,\p{Cc}]*[^\s,\p{Cc}])?$/u),
+  ),
+).check(Schema.isMaxLength(MAX_CUSTOM_AGENT_TOOL_NAMES));
+const CustomAgentSchema = Schema.Struct({
+  description: nonblankText(MAX_CUSTOM_AGENT_DESCRIPTION_CHARS),
+  instructions: Schema.String.check(
+    Schema.isPattern(/\S/u),
+    Schema.makeFilter((instructions: string) =>
+      utf8.encode(instructions).length <= MAX_CUSTOM_AGENT_INSTRUCTIONS_BYTES
+        ? true
+        : "Agent instructions exceed 16 KiB.",
+    ),
+  ),
+  profile: Schema.optionalKey(Schema.Literals(PROFILE_IDS)),
+  effort: Schema.optionalKey(Schema.Literals(SUBAGENT_EFFORTS)),
+  context: Schema.optionalKey(Schema.Literals(PROFILE_CANDIDATE_CONTEXTS)),
+  writeIntent: Schema.optionalKey(Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS)),
+  isolation: Schema.optionalKey(WriterWorkspaceModeSchema),
+  tools: Schema.optionalKey(
+    Schema.Struct({
+      allow: Schema.optionalKey(CustomAgentToolNamesSchema),
+      deny: Schema.optionalKey(CustomAgentToolNamesSchema),
+    }),
+  ),
+});
+export const decodeCustomAgentDefinition = flow(
+  decodeUnknownOrUndefined(CustomAgentSchema, EXACT_FIELDS),
+  (agent): CustomAgentDefinition | undefined => agent,
+);
+
+interface DecodedCustomAgents {
+  readonly agents: Record<string, CustomAgentDefinition>;
+  readonly invalidAgents: ReadonlyArray<string>;
+  readonly containerInvalid: boolean;
+}
+
+const decodeCustomAgents = (
+  value: FieldValue,
+  path: string,
+  diagnostics: string[],
+): DecodedCustomAgents => {
+  const record = decodeUnknownRecord(value);
+  const names = record && Object.keys(record);
+  if (!record || !names || names.length > MAX_CUSTOM_AGENTS) {
+    diagnostics.push(
+      names && names.length > MAX_CUSTOM_AGENTS ? `${path}[${MAX_CUSTOM_AGENTS}+]` : path,
+    );
+    return { agents: {}, invalidAgents: [], containerInvalid: true };
+  }
+  const agents = nullPrototypeRecord<CustomAgentDefinition>();
+  const invalidAgents: string[] = [];
+  // Like set names, agent names are identified by position in diagnostics.
+  names.forEach((name, index) => {
+    const entryPath = `${path}[${index}]`;
+    if (!isCustomAgentName(name)) {
+      diagnostics.push(`${entryPath}.name`);
+      return;
+    }
+    const agent = decodeCustomAgentDefinition(record[name]);
+    if (agent) agents[name] = agent;
+    else {
+      diagnostics.push(entryPath);
+      invalidAgents.push(name);
+    }
+  });
+  return { agents, invalidAgents, containerInvalid: false };
+};
+
 export const isSupportedConfigVersion = Schema.is(Schema.Literal(SUBAGENT_CONFIG_VERSION));
 
 const ROOT_KEYS: ReadonlySet<string> = new Set([
@@ -351,7 +462,9 @@ const ROOT_KEYS: ReadonlySet<string> = new Set([
   "delegation",
   "workspaceSetup",
   "workspaceVerify",
+  "workspaceInclude",
   "sessionSpendLimit",
+  "agents",
 ]);
 
 const decodeRootField = <S extends Schema.ConstraintDecoder<unknown>>(
@@ -397,6 +510,21 @@ const decodeWorkspaceCommand = (
   return Object.freeze({ ...command, command: Object.freeze([...command.command]) });
 };
 
+// Like setup commands, included files are repository-specific; an empty list includes nothing.
+const decodeWorkspaceInclude = (
+  root: UnknownRecord,
+  scope: string,
+  diagnostics: string[],
+): WorkspaceInclude | undefined => {
+  if (!Object.hasOwn(root, "workspaceInclude")) return undefined;
+  const patterns =
+    scope === "project"
+      ? decodeUnknownOrUndefined(WorkspaceIncludeSchema)(root.workspaceInclude)
+      : undefined;
+  if (patterns === undefined) diagnostics.push(`${scope}.workspaceInclude`);
+  return patterns && patterns.length > 0 ? Object.freeze([...patterns]) : undefined;
+};
+
 const decodeCurrentBody = (
   root: UnknownRecord,
   scope: string,
@@ -424,6 +552,7 @@ const decodeCurrentBody = (
     scope,
     diagnostics,
   );
+  const workspaceInclude = decodeWorkspaceInclude(root, scope, diagnostics);
   const sessionSpendLimit = decodeRootField(
     root,
     "sessionSpendLimit",
@@ -433,6 +562,9 @@ const decodeCurrentBody = (
   );
   const decoded = Object.hasOwn(root, "profileSets")
     ? decodeProfileSets(root.profileSets, `${scope}.profileSets`, diagnostics)
+    : undefined;
+  const agents = Object.hasOwn(root, "agents")
+    ? decodeCustomAgents(root.agents, `${scope}.agents`, diagnostics)
     : undefined;
   const { defaultProfileSet, invalidDefaultProfileSet } = decodeDefaultProfileSet(
     root,
@@ -447,11 +579,15 @@ const decodeCurrentBody = (
       ...(delegation !== undefined && { delegation }),
       ...(workspaceSetup !== undefined && { workspaceSetup }),
       ...(workspaceVerify !== undefined && { workspaceVerify }),
+      ...(workspaceInclude !== undefined && { workspaceInclude }),
       ...(sessionSpendLimit !== undefined && { sessionSpendLimit }),
+      ...(agents && Object.keys(agents.agents).length > 0 && { agents: agents.agents }),
     },
     invalidProfileSetRoutes: decoded?.invalidProfileSetRoutes ?? {},
     invalidProfileSets: decoded?.invalidProfileSets ?? [],
     invalidDefaultProfileSet,
+    invalidAgents: agents?.invalidAgents ?? [],
+    invalidAgentsContainer: agents?.containerInvalid ?? false,
   };
 };
 
@@ -497,6 +633,8 @@ const decodeConfigRoot = (
     ),
     invalidProfileSets: body.invalidProfileSets,
     invalidDefaultProfileSet: body.invalidDefaultProfileSet || missingDefault,
+    invalidAgents: body.invalidAgents,
+    invalidAgentsContainer: body.invalidAgentsContainer,
     unsupportedVersion,
   };
 };

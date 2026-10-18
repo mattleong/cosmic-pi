@@ -60,6 +60,7 @@ interface ProfileDocumentInput {
     >
   >;
   readonly nesting?: SubagentNestingPolicy;
+  readonly agents?: JsonValue;
 }
 
 const profileDocument = (input: ProfileDocumentInput | undefined) => {
@@ -160,6 +161,7 @@ export const captureSubagentTools = (
     startUiTicker,
     toolPresentation,
     environment,
+    agents: Effect.runSync(profiles.capture).effectiveConfig.agents,
     run: (effect, signal) =>
       Effect.runPromise(
         effect.pipe(
@@ -269,8 +271,10 @@ export const startCapturingService = (requests: StartSubagentRequest[]) =>
           model: input.model,
           effort: input.effort,
           selection: input.selection ?? view().selection,
+          ...(input.modelOverride && { modelOverride: input.modelOverride }),
           ...(input.name !== undefined && { name: input.name }),
           ...(input.profile && { profile: input.profile }),
+          ...(input.agent && { agent: input.agent }),
         });
       }),
   });

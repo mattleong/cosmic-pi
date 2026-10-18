@@ -2,6 +2,12 @@ import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
+  CUSTOM_AGENT_SCOPES,
+  MAX_CUSTOM_AGENT_DESCRIPTION_CHARS,
+  MAX_CUSTOM_AGENT_NAME_CHARS,
+  MAX_CUSTOM_AGENTS,
+} from "../profiles/agents.ts";
+import {
   MAX_PROFILE_CANDIDATES,
   MAX_PROFILE_MODEL_SELECTOR_CHARS,
   PROFILE_CANDIDATE_CONTEXTS,
@@ -15,8 +21,6 @@ import {
   type ProfileCandidate,
 } from "../profiles/model.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
-import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
-import { MAX_OBSERVED_WRITE_PATHS, MAX_WRITE_CLAIM_VIOLATIONS } from "../run/claims-observation.ts";
 import {
   MAX_OUTCOME_DIFFSTAT_FILES,
   FAILED_START_CLEANUP_DISPOSITIONS,
@@ -28,7 +32,6 @@ import {
 } from "../run/model.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
 import { WriterWorkspaceModeSchema } from "../config/schema.ts";
-import { WORKSPACE_EXPORT_FORMATS } from "../run/workspace-export.ts";
 import { AWAIT_UNTIL } from "./schema.ts";
 
 export const SUBAGENT_CARD_DETAILS_VERSION = 2;
@@ -108,8 +111,9 @@ const MAX_EXPORT_BRANCH_CHARS = 128;
 export const WorkspaceToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
   action: Schema.Literal("workspace"),
-  // `integrate` is no longer produced; version-1 workspace details saved in session history
-  // before apply took over integrating a prepared pair still carry it and keep rendering.
+  // `integrate` and `export` are no longer produced; version-1 workspace details saved in session
+  // history before apply took over integrating a prepared pair, or before export was retired,
+  // still carry them and keep rendering.
   operation: Schema.Literals([
     "list",
     "review",
@@ -131,6 +135,8 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   listedCount: Schema.optionalKey(nonNegativeInteger),
   /** Listed entries whose nested source workspace chain can't be resolved; within `unavailableCount`. */
   sourceUnavailableCount: Schema.optionalKey(nonNegativeInteger),
+  /** Listed workspaces of sessions that have ended which the root may adopt. */
+  adoptableCount: Schema.optionalKey(nonNegativeInteger),
   changedPathCount: Schema.optionalKey(nonNegativeInteger),
   /** A partial apply's changed paths left in the workspace as its proposal. */
   remainingPathCount: Schema.optionalKey(nonNegativeInteger),
@@ -144,7 +150,8 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   /** A rebasing revise rebuilt the successor's tree; `conflictCount` files kept conflicts. */
   rebased: Schema.optionalKey(Schema.Boolean),
   conflictCount: Schema.optionalKey(nonNegativeInteger),
-  exportFormat: Schema.optionalKey(Schema.Literals(WORKSPACE_EXPORT_FORMATS)),
+  // Decode-only: retired `export` receipts in session history carry these and keep rendering.
+  exportFormat: Schema.optionalKey(Schema.Literals(["patch", "branch"])),
   /** The exported patch file, or the exported branch's name. */
   exportPath: Schema.optionalKey(NonEmptyText(1_024)),
   exportBranch: Schema.optionalKey(NonEmptyText(MAX_EXPORT_BRANCH_CHARS)),
@@ -177,6 +184,13 @@ const CandidateEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
 const ContextSchema = Schema.Literals(PROFILE_CANDIDATE_CONTEXTS);
 const WriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
 const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
+export const AgentNameSchema = NonEmptyText(MAX_CUSTOM_AGENT_NAME_CHARS);
+/** Each document fails at most every entry and its whole `agents` object closed. */
+export const MAX_INVALID_AGENT_ENTRIES = CUSTOM_AGENT_SCOPES.length * (MAX_CUSTOM_AGENTS + 1);
+export const InvalidAgentCardSchema = Schema.Struct({
+  scope: Schema.Literals(CUSTOM_AGENT_SCOPES),
+  name: Schema.optionalKey(AgentNameSchema),
+});
 const ProfileSourceSchema = Schema.Literals(PROFILE_ROUTE_SOURCES);
 
 const UsageSchema = Schema.Struct({
@@ -193,6 +207,14 @@ export const SkippedCandidateRouteSchema = Schema.Struct({
   model: NonEmptyText(MAX_CARD_MODEL_CHARS),
   effort: CandidateEffortSchema,
 });
+
+/** The requested per-launch model override; the actual route stays in the card's route fields. */
+export const ModelOverrideCardSchema = Schema.Struct({
+  runtime: RuntimeSchema,
+  model: NonEmptyText(MAX_CARD_MODEL_CHARS),
+  effort: Schema.optionalKey(CandidateEffortSchema),
+});
+export type ModelOverrideCard = typeof ModelOverrideCardSchema.Type;
 
 const skippedCandidateSchema = <Candidate extends Schema.Constraint>(candidate: Candidate) =>
   Schema.Struct({
@@ -217,15 +239,25 @@ const SelectionSchema = selectionSchema(
   Schema.Union([SkippedCandidateRouteSchema, NonEmptyText(MAX_CARD_PROVENANCE_CHARS)]),
 );
 
-const WriteClaimViolationSchema = Schema.Struct({
-  path: NonEmptyText(MAX_WRITE_CLAIM_CHARS),
+// Cards persisted before contract version 3 may carry write-claim fields. They still decode so
+// history replays, but nothing produces or renders them.
+export const MAX_LEGACY_WRITE_CLAIMS = 64;
+const MAX_LEGACY_WRITE_CLAIM_CHARS = 512;
+export const MAX_LEGACY_OBSERVED_WRITE_PATHS = 64;
+export const MAX_LEGACY_WRITE_CLAIM_VIOLATIONS = 16;
+
+const LegacyWriteClaimViolationSchema = Schema.Struct({
+  path: NonEmptyText(MAX_LEGACY_WRITE_CLAIM_CHARS),
   toolName: NonEmptyText(200),
   observedAt: nonNegativeNumber,
 });
 
-const WriteAuditSchema = Schema.Struct({
-  observedFileWrites: boundedArray(NonEmptyText(MAX_WRITE_CLAIM_CHARS), MAX_OBSERVED_WRITE_PATHS),
-  violations: boundedArray(WriteClaimViolationSchema, MAX_WRITE_CLAIM_VIOLATIONS),
+const LegacyWriteAuditSchema = Schema.Struct({
+  observedFileWrites: boundedArray(
+    NonEmptyText(MAX_LEGACY_WRITE_CLAIM_CHARS),
+    MAX_LEGACY_OBSERVED_WRITE_PATHS,
+  ),
+  violations: boundedArray(LegacyWriteClaimViolationSchema, MAX_LEGACY_WRITE_CLAIM_VIOLATIONS),
   bashWriteHints: nonNegativeInteger,
 });
 
@@ -292,6 +324,7 @@ export const SubagentRunCardSchema = Schema.Struct({
   state: Schema.Literals(SUBAGENT_RUN_STATES),
   steeringDelivery: Schema.optionalKey(Schema.Literals(STEERING_DELIVERY_STATES)),
   profile: Schema.optionalKey(ProfileIdSchema),
+  agent: Schema.optionalKey(AgentNameSchema),
   ...RetiredCardRouteFields,
   runtime: RuntimeSchema,
   reportGeneration: nonNegativeInteger,
@@ -328,13 +361,13 @@ export const SubagentRunCardSchema = Schema.Struct({
   context: ContextSchema,
   writeIntent: WriteIntentSchema,
   writeClaims: Schema.optionalKey(
-    boundedArray(NonEmptyText(MAX_WRITE_CLAIM_CHARS), MAX_WRITE_CLAIMS).check(
+    boundedArray(NonEmptyText(MAX_LEGACY_WRITE_CLAIM_CHARS), MAX_LEGACY_WRITE_CLAIMS).check(
       Schema.isMinLength(1),
     ),
   ),
   writeClaimCount: Schema.optionalKey(nonNegativeInteger),
   writeClaimsOmitted: Schema.optionalKey(Schema.Literal(true)),
-  writeAudit: Schema.optionalKey(WriteAuditSchema),
+  writeAudit: Schema.optionalKey(LegacyWriteAuditSchema),
   writeViolationOffender: Schema.optionalKey(Schema.Literal(true)),
   ...RetiredCardAttentionFields,
   cleanup: Schema.optionalKey(RunCleanupSchema),
@@ -344,6 +377,7 @@ export const SubagentRunCardSchema = Schema.Struct({
   lastActivityAt: nonNegativeNumber,
   usage: UsageSchema,
   selection: SelectionSchema,
+  modelOverride: Schema.optionalKey(ModelOverrideCardSchema),
   currentTool: Schema.optionalKey(NonEmptyText(MAX_CURRENT_TOOL_CHARS)),
   progress: Schema.optionalKey(NonEmptyText(MAX_PROGRESS_CHARS)),
   warning: Schema.optionalKey(NonEmptyText(MAX_WARNING_CHARS)),
@@ -361,6 +395,7 @@ const StartEntryIdentityFields = {
   index: nonNegativeInteger,
   name: NonEmptyText(MAX_NAME_CHARS),
   profile: NonEmptyText(MAX_PROFILE_CHARS),
+  agent: Schema.optionalKey(AgentNameSchema),
 };
 const SelectedStartEntryFields = {
   ...WorkspaceCardFields,
@@ -372,6 +407,7 @@ const SelectedStartEntryFields = {
   openaiFastMode: Schema.Boolean,
   candidateIndex: Schema.optionalKey(nonNegativeInteger),
   warning: Schema.optionalKey(NonEmptyText(MAX_CARD_PROVENANCE_CHARS)),
+  modelOverride: Schema.optionalKey(ModelOverrideCardSchema),
 };
 const PendingStartEntrySchema = Schema.Struct({
   ...StartEntryIdentityFields,
@@ -444,6 +480,21 @@ export const SubagentProfileRouteCardSchema = Schema.Struct({
   candidates: boundedArray(ProfileCandidateCardSchema, MAX_PROFILE_CANDIDATES),
 });
 
+/** An agent's route after its overrides; tool lists appear only as counts. */
+export const SubagentAgentRouteCardSchema = Schema.Struct({
+  name: AgentNameSchema,
+  description: NonEmptyText(MAX_CUSTOM_AGENT_DESCRIPTION_CHARS),
+  profile: ProfileIdSchema,
+  source: Schema.Literals(CUSTOM_AGENT_SCOPES),
+  effort: Schema.optionalKey(EffortSchema),
+  context: Schema.optionalKey(ContextSchema),
+  writeIntent: Schema.optionalKey(WriteIntentSchema),
+  isolation: Schema.optionalKey(WriterWorkspaceModeSchema),
+  allowedToolCount: Schema.optionalKey(nonNegativeInteger),
+  deniedToolCount: Schema.optionalKey(nonNegativeInteger),
+  candidates: boundedArray(ProfileCandidateCardSchema, MAX_PROFILE_CANDIDATES),
+});
+
 export const PENDING_DELIVERY_FAILURE_CODE = "steer_outcome_uncertain";
 
 export const CompactToolActionFailureSchema = Schema.Struct({
@@ -484,7 +535,6 @@ export const RUN_DETAILS_ACTIONS = [
   "list",
   "status",
   "send",
-  "reply",
   "retry",
   "interrupt",
   "resume",
@@ -519,6 +569,10 @@ export const RunActionDetailsSchema = Schema.Struct({
   actionFailures: Schema.optionalKey(boundedArray(CompactToolActionFailureSchema, MAX_TARGET_RUNS)),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
   reportsOnlyOmitted: Schema.optionalKey(Schema.Literal(true)),
+  /** Send targets whose pending question this message answered; the others were guided. */
+  answeredRunIds: Schema.optionalKey(
+    boundedArray(NonEmptyText(MAX_PROTOCOL_ID_CHARS), MAX_TARGET_RUNS),
+  ),
   action: RunDetailsActionSchema,
 });
 
@@ -526,6 +580,10 @@ export const SubagentModelsDetailsSchema = Schema.Struct({
   version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
   action: Schema.Literal("models"),
   profiles: boundedArray(SubagentProfileRouteCardSchema, PROFILE_IDS.length),
+  agents: Schema.optionalKey(boundedArray(SubagentAgentRouteCardSchema, MAX_CUSTOM_AGENTS)),
+  invalidAgents: Schema.optionalKey(
+    boundedArray(InvalidAgentCardSchema, MAX_INVALID_AGENT_ENTRIES),
+  ),
   fallbackProfile: ProfileIdSchema,
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
 });
@@ -544,6 +602,8 @@ export type SubagentStartEntry = typeof SubagentStartEntrySchema.Type;
 export type SubagentCardFailure = typeof SubagentCardFailureSchema.Type;
 export type SubagentProfileCandidateCard = typeof ProfileCandidateCardSchema.Type;
 export type SubagentProfileRouteCard = typeof SubagentProfileRouteCardSchema.Type;
+export type SubagentAgentRouteCard = typeof SubagentAgentRouteCardSchema.Type;
+export type InvalidAgentCard = typeof InvalidAgentCardSchema.Type;
 export type CompactToolActionFailure = typeof CompactToolActionFailureSchema.Type;
 export type SubagentStartDetails = typeof SubagentStartDetailsSchema.Type;
 export type SubagentAwaitDetails = typeof SubagentAwaitDetailsSchema.Type;

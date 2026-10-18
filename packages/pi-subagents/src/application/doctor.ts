@@ -9,16 +9,20 @@ import {
 } from "../backend/local-cli-version.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
-import { nodeFsConstants, nodeFsPromises as fs } from "../boundary/node-builtins.ts";
+import {
+  nodeFsConstants,
+  nodeFsPromises as fs,
+  nodePath as path,
+} from "../boundary/node-builtins.ts";
 import { nodeExecutableProblem } from "../boundary/node-executable.ts";
-import { describeWorkspaceSetup } from "../boundary/workspace-setup.ts";
+import { describeWorkspaceInclude, describeWorkspaceSetup } from "../boundary/workspace-setup.ts";
 import {
   gitInstallation,
   gitVersionSupported,
   MINIMUM_GIT_VERSION,
 } from "../boundary/git-installation.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
-import type { ProfileCandidateAttempt } from "../profiles/resolve.ts";
+import type { ProfileCandidateAttempt, ProfileResolution } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 
 export type DoctorStatus = "ok" | "warning" | "failed";
@@ -119,39 +123,55 @@ export const runSubagentDoctor = (
     // Profiles often share a route; each distinct route is probed once.
     const outcomes = new Map<string, string | undefined>();
     const cliRuntimes = new Set<LocalCliRuntime>();
-    for (const id of PROFILE_IDS) {
-      const plan = profiles.resolve(snapshot, id, environment);
-      if (plan.kind === "failed") {
-        checks.push(check(`Profile ${id}`, "failed", plan.message));
-        continue;
-      }
-      for (const attempt of plan.attempts)
-        if (attempt.runtime !== "pi") cliRuntimes.add(attempt.runtime);
-      const [first] = plan.attempts;
-      if (!first) {
-        checks.push(check(`Profile ${id}`, "failed", "no eligible route"));
-        continue;
-      }
-      const key = attemptKey(first);
-      const failure = outcomes.has(key)
-        ? outcomes.get(key)
-        : yield* readinessFailure(backends, first, input.ctx.cwd);
-      outcomes.set(key, failure);
-      const fallbacks = plan.attempts.length - 1;
-      checks.push(
-        failure === undefined
+    const routeCheck = (label: string, plan: ProfileResolution, prefix = "") =>
+      Effect.gen(function* () {
+        if (plan.kind === "failed") return check(label, "failed", plan.message);
+        for (const attempt of plan.attempts)
+          if (attempt.runtime !== "pi") cliRuntimes.add(attempt.runtime);
+        const [first] = plan.attempts;
+        if (!first) return check(label, "failed", "no eligible route");
+        const key = attemptKey(first);
+        const failure = outcomes.has(key)
+          ? outcomes.get(key)
+          : yield* readinessFailure(backends, first, input.ctx.cwd);
+        outcomes.set(key, failure);
+        const fallbacks = plan.attempts.length - 1;
+        return failure === undefined
           ? check(
-              `Profile ${id}`,
+              label,
               "ok",
-              `${routeLabel(first)}${fallbacks > 0 ? ` (+${fallbacks} fallback${fallbacks === 1 ? "" : "s"})` : ""}`,
+              `${prefix}${routeLabel(first)}${fallbacks > 0 ? ` (+${fallbacks} fallback${fallbacks === 1 ? "" : "s"})` : ""}`,
             )
           : check(
-              `Profile ${id}`,
+              label,
               fallbacks > 0 ? "warning" : "failed",
-              `${routeLabel(first)}: ${failure}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
+              `${prefix}${routeLabel(first)}: ${failure}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
+            );
+      });
+    for (const id of PROFILE_IDS)
+      checks.push(yield* routeCheck(`Profile ${id}`, profiles.resolve(snapshot, id, environment)));
+    for (const agent of config.agents)
+      checks.push(
+        yield* routeCheck(
+          `Agent ${agent.name}`,
+          profiles.resolve(snapshot, agent.profile, environment, agent),
+          `${agent.source} · profile ${agent.profile} · `,
+        ),
+      );
+    for (const invalid of config.invalidAgents)
+      checks.push(
+        invalid.name === undefined
+          ? check(
+              `Agents (${invalid.scope})`,
+              "failed",
+              `the ${invalid.scope} agents object is invalid, so every agent it could declare fails closed`,
+            )
+          : check(
+              `Agent ${invalid.name}`,
+              "failed",
+              `invalid ${invalid.scope} entry; it fails closed until repaired`,
             ),
       );
-    }
 
     for (const runtime of cliRuntimes) {
       const version = yield* cliVersionCheck(backends, runtime);
@@ -174,8 +194,17 @@ export const runSubagentDoctor = (
       config.workspaceVerify
         ? check("Worktree verification", "ok", describeWorkspaceSetup(config.workspaceVerify))
         : check("Worktree verification", "ok", "none; isolated changes apply without a check"),
+      config.workspaceInclude
+        ? check("Worktree included files", "ok", describeWorkspaceInclude(config.workspaceInclude))
+        : check(
+            "Worktree included files",
+            "ok",
+            "none; isolated trees get no ignored or credential files",
+          ),
     );
     checks.push(yield* gitCheck);
+    const legacy = yield* legacyWorkspacesCheck(input.agentDirectory);
+    if (legacy) checks.push(legacy);
     if (input.activityViewAvailable !== undefined)
       checks.push(
         input.activityViewAvailable
@@ -202,6 +231,49 @@ const gitCheck: Effect.Effect<DoctorCheck> = gitInstallation.pipe(
     ),
   ),
 );
+
+const MAX_LISTED_LEGACY_WORKSPACES = 20;
+
+const shellQuoted = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+// Earlier versions kept each isolated workspace as a private repository under `git-workspaces`.
+// This version never reads them, so the user saves any work there and removes the directory.
+const legacyWorkspacesCheck = (agentDirectory: string): Effect.Effect<DoctorCheck | undefined> =>
+  Effect.gen(function* () {
+    const directory = path.join(agentDirectory, "git-workspaces");
+    const entries = yield* Effect.promise(() =>
+      fs.readdir(directory, { withFileTypes: true }).catch(() => undefined),
+    );
+    if (!entries) return undefined;
+    const workers: string[] = [];
+    for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+      const worker = path.join(directory, entry.name, "worker");
+      const isWorker = yield* Effect.promise(() =>
+        fs.stat(worker).then(
+          (stat) => stat.isDirectory(),
+          () => false,
+        ),
+      );
+      if (entry.isDirectory() && isWorker) workers.push(entry.name);
+    }
+    const listed = workers.slice(0, MAX_LISTED_LEGACY_WORKSPACES);
+    return check(
+      "Legacy workspaces",
+      "warning",
+      [
+        `${directory} holds isolated workspaces from an earlier pi-subagents version, which this version doesn't read. Once no Pi session runs that version, save any work you want to keep, then remove the directory:`,
+        ...listed.map(
+          (id) =>
+            `  git -C ${shellQuoted(path.join(directory, id, "worker"))} diff HEAD > ${shellQuoted(`${id}.patch`)}`,
+        ),
+        ...(workers.length > listed.length
+          ? [`  (and ${workers.length - listed.length} more workspaces in that directory)`]
+          : []),
+        `  rm -rf ${shellQuoted(directory)}`,
+        "A patch holds tracked changes only; copy any untracked files you need from the worker first.",
+      ].join("\n"),
+    );
+  });
 
 // Readiness runs the same preflight a launch does, bounded so a hung CLI can't stall the report.
 const readinessFailure = (

@@ -18,6 +18,10 @@ export const NESTED_START_GUIDELINE =
 /** Nested worktree writers may also split implementation into worktree writers they apply. */
 export const NESTED_WORKSPACE_PARENT_START_GUIDELINE = `${NESTED_START_GUIDELINE} For parallel implementation slices, you may start worktree writers (isolation: worktree); you own their workspaces and must apply or discard each one with subagent_workspace before you report.`;
 
+/** Added to the root's start guidelines when the user configured custom agents. */
+export const CUSTOM_AGENT_START_GUIDELINE =
+  "The user configured custom agents, listed under the agent parameter. When the user names one, or a slice matches an agent's description, set agent instead of profile; the agent supplies its own instructions and route.";
+
 export interface DelegationPrompt {
   readonly startGuideline: string;
   readonly section?: string | undefined;
@@ -39,6 +43,7 @@ const DELEGATION_PROMPTS = {
       "- Answer quick questions yourself: if a search and a read or two will answer it, don't delegate.",
       "- Read only enough to write precise, self-contained tasks; let subagents explore in depth.",
       "- Use worker for implementation. Use a reviewer only for substantial or risky changes.",
+      "- Give parallel shared-checkout workers disjoint task scopes; nothing enforces file ownership between them. Use isolation: worktree when slices may overlap.",
       "- Act directly for trivial steps, such as a one-line fix, or when briefing would cost more than doing.",
       "- Check results in proportion to their risk: spot-check the key claims of an investigation instead of redoing it, and read the diff and run the tests for a change.",
     ].join("\n"),

@@ -32,8 +32,11 @@ import type { SubagentStartSpec } from "./schema.ts";
 const requestedName = (agent: SubagentStartSpec, index: number): string =>
   sanitizeTerminalLine((agent.name?.trim() ?? "") || `launch ${index + 1}`);
 
+// A custom agent names its own role; its profile is resolved at launch.
 const requestedProfile = (agent: SubagentStartSpec): string =>
-  sanitizeTerminalLine((agent.profile?.trim() ?? "") || "generalist");
+  sanitizeTerminalLine(
+    (agent.agent?.trim() ?? "") || (agent.profile?.trim() ?? "") || "generalist",
+  );
 
 export const renderSubagentStartCall = (
   agents: ReadonlyArray<SubagentStartSpec>,
@@ -59,7 +62,10 @@ export const renderSubagentStartCall = (
     return container;
   }
   for (const [index, agent] of agents.entries()) {
-    const request = `${requestedName(agent, index)} · ${requestedProfile(agent)} · route/model selected at launch`;
+    const route = agent.model
+      ? `model override ${sanitizeTerminalLine(`${agent.model.runtime}/${agent.model.model}${agent.model.effort === undefined ? "" : `:${agent.model.effort}`}`)}`
+      : "route/model selected at launch";
+    const request = `${requestedName(agent, index)} · ${requestedProfile(agent)} · ${route}`;
     container.addChild(new Text(theme.fg("toolOutput", request), 0, 0));
     container.addChild(
       new Text(theme.fg("dim", `  Task: ${escapeControlChars(agent.task)}`), 0, 0),
@@ -67,14 +73,6 @@ export const renderSubagentStartCall = (
     if (agent.isolation !== undefined)
       container.addChild(
         new Text(theme.fg("dim", `  Isolation: ${escapeControlChars(agent.isolation)}`), 0, 0),
-      );
-    if (agent.writes !== undefined)
-      container.addChild(
-        new Text(
-          theme.fg("dim", `  File claims:\n${escapeControlChars(agent.writes.join("\n"))}`),
-          0,
-          0,
-        ),
       );
   }
   return container;
@@ -128,7 +126,14 @@ const receiptRow = (
   const safeWidth = Math.max(1, width);
   const { glyph, color } = receiptPresentation(entry);
   const name = sanitizeTerminalLine(entry.name);
-  const profile = sanitizeTerminalLine(entry.profile || "generalist");
+  // An agent's routed profile is known only once its route is selected.
+  const profile = sanitizeTerminalLine(
+    entry.agent
+      ? entry.routeStatus === "selected"
+        ? `${entry.agent} (${entry.profile})`
+        : entry.agent
+      : entry.profile || "generalist",
+  );
   const route = routeLabel(entry);
   const id = receiptRunId(entry, options);
   const raw = `${glyph} ${name} · ${profile} · ${route}${id ? ` · ${id}` : ""}`;

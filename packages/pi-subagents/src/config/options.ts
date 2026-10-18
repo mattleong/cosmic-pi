@@ -1,4 +1,9 @@
 import { freezeSnapshot } from "pi-cosmic-core";
+import {
+  resolveCustomAgents,
+  type CustomAgent,
+  type InvalidCustomAgent,
+} from "../profiles/agents.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import {
   mapProfileIds,
@@ -15,6 +20,7 @@ import {
   type DelegationMode,
   type WriterWorkspaceMode,
   type WorkspaceSetup,
+  type WorkspaceInclude,
   type WorkspaceVerify,
   type DecodedSubagentConfig,
   type SubagentNestingPolicy,
@@ -40,9 +46,14 @@ export interface ResolvedSubagentConfig {
   readonly workspaceSetup?: WorkspaceSetup | undefined;
   /** Only a trusted project document can declare a verification command. */
   readonly workspaceVerify?: WorkspaceVerify | undefined;
+  /** Only a trusted project document can name untracked files isolated trees receive. */
+  readonly workspaceInclude?: WorkspaceInclude | undefined;
   readonly sessionSpendLimit?: number | undefined;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
+  /** Global agents overlaid by trusted-project agents of the same name. */
+  readonly agents: ReadonlyArray<CustomAgent>;
+  readonly invalidAgents: ReadonlyArray<InvalidCustomAgent>;
   readonly diagnostics: ReadonlyArray<string>;
 }
 
@@ -192,11 +203,22 @@ const layeredPolicy = (
   delegation: project?.file.delegation ?? global.file.delegation ?? DEFAULT_DELEGATION_MODE,
 });
 
+const agentLayer = (scope: NamedProfileSetScope, decoded: DecodedSubagentConfig) => ({
+  scope,
+  agents: decoded.file.agents,
+  invalidNames: decoded.invalidAgents,
+  containerInvalid: decoded.invalidAgentsContainer,
+});
+
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
   const global = resolveProfileSetLayer(input.global, "global", BUILTIN_PROFILE_LAYER);
   const effective = project ? resolveProfileSetLayer(project, "project", global) : global;
   const policy = layeredPolicy(project, input.global);
+  const agents = resolveCustomAgents([
+    agentLayer("global", input.global),
+    ...(project ? [agentLayer("project", project)] : []),
+  ]);
   return freezeSnapshot({
     globalConfigPath: input.globalConfigPath,
     projectConfigPath: input.projectConfigPath,
@@ -207,11 +229,14 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     delegation: policy.delegation,
     ...(project?.file.workspaceSetup && { workspaceSetup: project.file.workspaceSetup }),
     ...(project?.file.workspaceVerify && { workspaceVerify: project.file.workspaceVerify }),
+    ...(project?.file.workspaceInclude && { workspaceInclude: project.file.workspaceInclude }),
     ...((project?.file.sessionSpendLimit ?? input.global.file.sessionSpendLimit) !== undefined && {
       sessionSpendLimit: project?.file.sessionSpendLimit ?? input.global.file.sessionSpendLimit,
     }),
     profiles: effective.profiles,
     profileSources: effective.profileSources,
+    agents: agents.agents,
+    invalidAgents: agents.invalidAgents,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],
   });
 }

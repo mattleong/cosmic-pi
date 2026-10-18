@@ -134,9 +134,13 @@ const primaryCount = (details: RunToolDetails, count: number): string => {
       return count > 0 ? countLabel(count, "subagent") : "No subagents";
     case "status":
       return `${count} found`;
-    case "send":
-    case "reply":
-      return `${count} delivered`;
+    case "send": {
+      const answered = details.answeredRunIds?.length ?? 0;
+      if (answered === 0) return `${count} delivered`;
+      return count > answered
+        ? `${answered} answered · ${count - answered} guided`
+        : `${answered} answered`;
+    }
     case "interrupt":
       return `${count} paused`;
     case "retry":

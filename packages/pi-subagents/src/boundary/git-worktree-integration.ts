@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import { SafeFile } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import type { WorkspacePreparation, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
@@ -10,9 +11,12 @@ import {
   workspaceFailure,
   workspaceIO,
   workspaceIOIfPresent,
+  workspaceRefusal,
 } from "./git-worktree-process.ts";
 import {
+  contentDigest,
   createWorkspaceDirectory,
+  MAX_PUBLISHED_FILE_BYTES,
   inspectPublishedFile,
   publicationBackupPrefix,
   publicationTemporaryPrefix,
@@ -26,7 +30,6 @@ import {
   type WorkspaceBackupRemovalRequest,
   type WorkspaceDirectoryRemovalRequest,
 } from "./git-worktree-publish.ts";
-import { blobId, readWorkspaceFile, type SnapshotEntry } from "./git-worktree-snapshot.ts";
 import {
   newWorkspaceId,
   readPublicationProgress,
@@ -38,8 +41,85 @@ import {
 } from "./git-worktree-store.ts";
 
 type JournalEntry = NonNullable<WorkspaceRecord["journal"]>[number];
-const EMPTY_BLOB = blobId(new Uint8Array());
-type SnapshotEntries = ReadonlyMap<string, SnapshotEntry>;
+const EMPTY_DIGEST = contentDigest(new Uint8Array());
+
+/** A regular file's content as publication reads, installs, and backs it up. */
+export interface PublishedFile {
+  readonly digest: string;
+  readonly mode: "100644" | "100755";
+  readonly permissions: number;
+  readonly bytes: Uint8Array;
+}
+/** Files by path relative to their tree's root; a missing path is absent there. */
+export type PublishedFiles = ReadonlyMap<string, PublishedFile>;
+
+const unpublishable = (relative: string, message: string, rule: string) =>
+  workspaceRefusal("integrate", message, {
+    path: relative,
+    rule,
+    remedy:
+      "Replace it with a regular file, or revise the workspace so the writer leaves that path alone.",
+  });
+
+/**
+ * The regular file at `relative` in `root`, or undefined when nothing is there. Publication
+ * moves files aside and installs regular files only, so anything else at a changed path refuses.
+ */
+const readPublishedFile = (root: string, relative: string) =>
+  Effect.gen(function* () {
+    const full = path.join(root, relative);
+    yield* checkDirectory(path.dirname(full), true);
+    const before = yield* workspaceIOIfPresent("integrate", () => fs.lstat(full));
+    if (!before) return undefined;
+    if (!before.isFile())
+      return yield* unpublishable(
+        relative,
+        "A changed path isn't a regular file.",
+        "integration publishes and backs up regular files only, never symlinks, directories, or special files",
+      );
+    if (before.nlink !== 1)
+      return yield* unpublishable(
+        relative,
+        "A changed file is hard-linked.",
+        "integration replaces a file only while it has exactly one link, so its backup stays the only copy",
+      );
+    const unstable = () =>
+      workspaceRefusal("integrate", "A changed file changed while it was being read.", {
+        path: relative,
+        rule: `files must stay unchanged while integration reads them, and be at most ${MAX_PUBLISHED_FILE_BYTES / 1024 / 1024} MiB`,
+        remedy: "Try again once tools stop writing to the file.",
+      });
+    const safe = yield* SafeFile;
+    const { bytes } = yield* safe
+      .readContainedRegularFile(full, root, MAX_PUBLISHED_FILE_BYTES)
+      .pipe(Effect.mapError(unstable));
+    const after = yield* workspaceIO("integrate", () => fs.lstat(full));
+    if (
+      after.ino !== before.ino ||
+      after.dev !== before.dev ||
+      after.mtimeMs !== before.mtimeMs ||
+      after.ctimeMs !== before.ctimeMs ||
+      after.mode !== before.mode
+    )
+      return yield* unstable();
+    return {
+      digest: contentDigest(bytes),
+      mode: (before.mode & 0o111) !== 0 ? "100755" : "100644",
+      permissions: before.mode & 0o777,
+      bytes,
+    } satisfies PublishedFile;
+  });
+
+/** The files at `paths` in `root`, absent ones left out. */
+export const readPublishedFiles = (root: string, paths: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const files = new Map<string, PublishedFile>();
+    for (const name of paths) {
+      const file = yield* readPublishedFile(root, name);
+      if (file) files.set(name, file);
+    }
+    return files satisfies PublishedFiles;
+  });
 
 const directoryIdentity = (directory: string) =>
   Effect.gen(function* () {
@@ -51,16 +131,14 @@ const directoryIdentity = (directory: string) =>
   });
 
 /** Whether the parent file still holds exactly the content the integration captured. */
-const preimageHolds = (root: string, name: string, expected: SnapshotEntry | undefined) =>
-  readWorkspaceFile(root, name).pipe(
+const preimageHolds = (root: string, name: string, expected: PublishedFile | undefined) =>
+  readPublishedFile(root, name).pipe(
     Effect.map(
       (visible) =>
         (visible === undefined) === (expected === undefined) &&
         (visible === undefined ||
           expected === undefined ||
-          (visible.mode === expected.mode &&
-            visible.permissions === expected.permissions &&
-            Buffer.compare(visible.bytes, expected.bytes) === 0)),
+          (visible.permissions === expected.permissions && visible.digest === expected.digest)),
     ),
     Effect.orElseSucceed(() => false),
   );
@@ -77,7 +155,7 @@ export const touchedParentDrift = (paths: ReadonlyArray<string>) =>
     detail: [
       `Changed: ${listedPaths(paths)}`,
       "Nothing was published.",
-      "Remedy: prepare again so the proposal is tested against the current files, then integrate the new preparation. A parent file that captures skip, such as an untracked credential file, never matches: move it aside, or revise the workspace so the writer leaves that path alone.",
+      "Remedy: prepare again so the proposal is tested against the current files, then integrate the new preparation. A parent file captures skip, such as an ignored or untracked credential file, never matches: move it aside, or revise the workspace so the writer leaves that path alone.",
     ].join("\n"),
   });
 
@@ -138,8 +216,8 @@ const emptiedDirectoryCandidates = (
 };
 
 const publishedPermissions = (
-  expected: SnapshotEntry | undefined,
-  content: SnapshotEntry | undefined,
+  expected: PublishedFile | undefined,
+  content: PublishedFile | undefined,
 ) => {
   if (!expected) return content?.mode === "100755" ? 0o755 : 0o644;
   if (expected.mode === content?.mode) return expected.permissions;
@@ -174,8 +252,8 @@ const checkAncestors = (
 
 const journalEntry = (
   name: string,
-  expected: SnapshotEntry | undefined,
-  content: SnapshotEntry | undefined,
+  expected: PublishedFile | undefined,
+  content: PublishedFile | undefined,
 ) =>
   Effect.gen(function* () {
     const token = yield* newWorkspaceId;
@@ -184,12 +262,12 @@ const journalEntry = (
       temporaryPath: path.join(path.dirname(name), `${publicationTemporaryPrefix}${token}`),
       backupPath: path.join(path.dirname(name), `${publicationBackupPrefix}${token}`),
       before: expected && {
-        oid: expected.oid,
+        digest: expected.digest,
         mode: expected.mode,
         permissions: expected.permissions,
       },
       after: content && {
-        oid: content.oid,
+        digest: content.digest,
         mode: content.mode,
         permissions: publishedPermissions(expected, content),
       },
@@ -258,8 +336,8 @@ const publishEntries = (
   journal: WorkspaceRecord,
   createdDirectories: number,
   directories: ReadonlyMap<string, DirectoryIdentity>,
-  previous: SnapshotEntries,
-  next: SnapshotEntries,
+  previous: PublishedFiles,
+  next: PublishedFiles,
 ) =>
   Effect.gen(function* () {
     const root = journal.handle.sourceRoot;
@@ -347,21 +425,12 @@ export const removeEmptiedDirectories = (
 export const publishWorkspace = (
   registry: string,
   record: WorkspaceRecord,
-  previous: SnapshotEntries,
-  next: SnapshotEntries,
+  previous: PublishedFiles,
+  next: PublishedFiles,
   changed: ReadonlyArray<string>,
   preparation: Pick<WorkspacePreparation, "leaseDirectories">,
 ) =>
   Effect.gen(function* () {
-    if (
-      changed.some(
-        (name) => previous.get(name)?.mode === "120000" || next.get(name)?.mode === "120000",
-      )
-    )
-      return yield* workspaceFailure(
-        "integrate",
-        "Symlink changes cannot be published; source files were not modified.",
-      );
     const root = record.handle.sourceRoot;
     const directories = new Map([[root, yield* directoryIdentity(root)]]);
     const missingDirectories = new Set<string>();
@@ -502,7 +571,7 @@ const rollbackStep = (root: string, entry: JournalEntry) =>
     const staged = yield* workspaceIOIfPresent("rollback", () => fs.lstat(temporary));
     if (staged && !staged.isFile()) return refuse("its temporary path holds something else");
     const installed =
-      entry.after !== undefined && current.kind === "file" && current.oid === entry.after.oid;
+      entry.after !== undefined && current.kind === "file" && current.digest === entry.after.digest;
     const steps: Array<Effect.Effect<void, WorkspaceError>> = staged
       ? [workspaceIO("rollback", () => fs.unlink(temporary))]
       : [];
@@ -511,14 +580,14 @@ const rollbackStep = (root: string, entry: JournalEntry) =>
     const reservation =
       entry.before !== undefined &&
       saved.kind === "file" &&
-      saved.oid === EMPTY_BLOB &&
+      saved.digest === EMPTY_DIGEST &&
       current.kind === "file" &&
-      current.oid === entry.before.oid &&
+      current.digest === entry.before.digest &&
       (current.dev !== saved.dev || current.ino !== saved.ino);
     if (reservation) steps.push(unlinkIdentified(backup, saved));
     else if (entry.before === undefined) {
       if (installed) steps.push(unlinkIdentified(target, current));
-    } else if (saved.kind === "file" && saved.oid === entry.before.oid) {
+    } else if (saved.kind === "file" && saved.digest === entry.before.digest) {
       if (current.kind === "file" && current.dev === saved.dev && current.ino === saved.ino)
         steps.push(workspaceIO("rollback", () => fs.unlink(backup)));
       else if (current.kind === "absent") steps.push(restoreBackup(backup, target));
@@ -526,7 +595,7 @@ const rollbackStep = (root: string, entry: JournalEntry) =>
         steps.push(unlinkIdentified(target, current), restoreBackup(backup, target));
       else return refuse("it changed after publication replaced it");
     } else if (saved.kind !== "absent") return refuse("its backup no longer holds the original");
-    else if (installed && entry.after?.oid !== entry.before.oid)
+    else if (installed && entry.after?.digest !== entry.before.digest)
       return refuse("its backup is missing");
     if (steps.length === 0) return keep;
     return {

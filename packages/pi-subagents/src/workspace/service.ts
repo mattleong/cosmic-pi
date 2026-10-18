@@ -3,19 +3,19 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import { CrossProcessLock, nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
-import type { WorkspaceSetup } from "../config/schema.ts";
+import type { WorkspaceInclude, WorkspaceSetup } from "../config/schema.ts";
 import { gitWorkspaceEngine, workspaceRegistry } from "../boundary/git-worktree.ts";
 import { workspaceLockDirectory } from "../boundary/git-worktree-store.ts";
 import type {
   WorkspaceAcquired,
+  WorkspaceAdoptTarget,
   WorkspaceError,
-  WorkspaceExport,
-  WorkspaceExportTarget,
   WorkspaceHandle,
   WorkspaceIntegration,
   WorkspaceIntegrationTarget,
+  WorkspaceLaunch,
   WorkspaceListing,
-  WorkspaceOrphanExportTarget,
+  WorkspaceOrphanDiscardTarget,
   WorkspaceOrphanTarget,
   WorkspacePreparation,
   WorkspacePreparationTarget,
@@ -24,6 +24,8 @@ import type {
   WorkspaceRevision,
   WorkspaceSettledTarget,
   WorkspaceSetupTarget,
+  WorkspaceSweepTarget,
+  WorkspaceSwept,
   WorkspaceTarget,
   WorkspaceTreeCommand,
   WorkspaceVerification,
@@ -41,6 +43,13 @@ export interface WorkspaceServiceContract {
     readonly sourceCwd: string;
     readonly ownerId: string;
     readonly sourceWorkspace?: WorkspaceTarget | undefined;
+    /** Recorded so a session that adopts the workspace can revise it with the same launch. */
+    readonly launch?: WorkspaceLaunch | undefined;
+    /**
+     * A trusted project's `workspaceInclude` patterns: matching untracked files the baseline
+     * doesn't carry are copied into the worker tree and every test tree, never into revisions.
+     */
+    readonly include?: WorkspaceInclude | undefined;
     readonly onAcquired?: WorkspaceAcquired | undefined;
   }) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly freeze: (
@@ -68,20 +77,32 @@ export interface WorkspaceServiceContract {
   readonly rebase: (
     target: WorkspaceSettledTarget,
   ) => Effect.Effect<WorkspaceRebase, WorkspaceError>;
-  /** Writes the frozen revision as a patch file or branch in the source repository. */
-  readonly exportRevision: (
-    target: WorkspaceExportTarget,
-  ) => Effect.Effect<WorkspaceExport, WorkspaceError>;
-  /**
-   * Exports a workspace whose creating session provably ended, without changing it; the caller
-   * proves its writer stopped.
-   */
-  readonly exportOrphan: (
-    target: WorkspaceOrphanExportTarget,
-  ) => Effect.Effect<WorkspaceExport, WorkspaceError>;
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
-  /** Discards a workspace whose creating session provably ended; the caller proves its writer stopped. */
-  readonly discardOrphan: (target: WorkspaceOrphanTarget) => Effect.Effect<void, WorkspaceError>;
+  /**
+   * Discards a workspace whose creating session provably ended; the caller proves its writer
+   * stopped. A mid-integration orphan is rolled back first, only once the caller holds fresh
+   * writer leases on its lease directories.
+   */
+  readonly discardOrphan: (
+    target: WorkspaceOrphanDiscardTarget,
+  ) => Effect.Effect<void, WorkspaceError>;
+  /**
+   * Takes over an active, frozen, or prepared top-level orphan whose creating session provably
+   * ended and that has no unresolved children; the caller proves its writer stopped. Returns the
+   * handle naming the new owner.
+   */
+  readonly adopt: (target: WorkspaceAdoptTarget) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
+  /** Orphans unchanged for the minimum age that the sweep may discard, children first. */
+  readonly sweepCandidates: (input: {
+    readonly minimumAgeMillis: number;
+  }) => Effect.Effect<ReadonlyArray<WorkspaceRecord>, WorkspaceError>;
+  /**
+   * Freezes and discards one old orphan, keeping its revision patch until collection; undefined
+   * when it is no longer eligible. The caller proves its writer stopped.
+   */
+  readonly sweepOrphan: (
+    target: WorkspaceSweepTarget,
+  ) => Effect.Effect<WorkspaceSwept | undefined, WorkspaceError>;
   /**
    * Runs setup with durable process-cleanup quarantine, including across owner shutdown. A failure
    * without `cleanupUnconfirmed` leaves no quarantine; a failed or interrupted preparation setup
@@ -92,7 +113,7 @@ export interface WorkspaceServiceContract {
   ) => Effect.Effect<void, WorkspaceError>;
   /**
    * Runs a verification command in a prepared tree under the same quarantine as setup, then
-   * requires the tree unchanged apart from ignored or excluded files. Failure keeps the
+   * requires the tree unchanged apart from ignored or credential files. Failure keeps the
    * preparation and carries the output tail in `detail`.
    */
   readonly verify: (
@@ -125,6 +146,9 @@ export interface WorkspaceServiceContract {
   readonly list: (input: {
     readonly ownerId: string;
   }) => Effect.Effect<ReadonlyArray<WorkspaceRecord>, WorkspaceError>;
+  /** Every session's records, without probing their owner leases. */
+  readonly listRecords: Effect.Effect<WorkspaceListing, WorkspaceError>;
+  /** Every session's records, naming those whose owner lease is free (`endedOwners`). */
   readonly listAll: Effect.Effect<WorkspaceListing, WorkspaceError>;
 }
 
@@ -172,10 +196,11 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           integrate: (input) => run(engine.integrate(input)),
           revise: (input) => run(engine.revise(input)),
           rebase: (input) => run(engine.rebase(input)),
-          exportRevision: (input) => run(engine.exportRevision(input)),
-          exportOrphan: (input) => run(engine.exportOrphan(input)),
           discard: (input) => run(engine.discard(input)),
           discardOrphan: (input) => run(engine.discardOrphan(input)),
+          adopt: (input) => run(engine.adopt(input)),
+          sweepCandidates: (input) => run(engine.sweepCandidates(input)),
+          sweepOrphan: (input) => run(engine.sweepOrphan(input)),
           // Setup and verify take the permit only around their record changes, never while their
           // command runs.
           setup: (input) => provided(engine.setup(input)),
@@ -189,6 +214,7 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           unresolvedChildren: (input) => provided(engine.unresolvedChildren(input)),
           commandCleanupPending: (input) => provided(engine.commandCleanupPending(input)),
           list: (input) => run(engine.list(input)),
+          listRecords: run(engine.listRecords),
           listAll: run(engine.listAll),
         });
       }),

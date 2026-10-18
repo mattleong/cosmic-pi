@@ -51,7 +51,6 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
     state: "completed",
     finalText: "Accepted report sentinel",
     writeIntent: "writer",
-    writeAudit: { observedFileWrites: [], violations: [], bashWriteHints: 0 },
     cleanup: {
       disposition: "quarantined",
       recovery: "stop",
@@ -238,11 +237,6 @@ describe("subagent compact semantic policy", () => {
 
   it("writes every issue message in the shared style, without run IDs", () => {
     const id = "run-7f3a";
-    const audit = {
-      observedFileWrites: ["src/b.ts"],
-      violations: [{ path: "src/b.ts", toolName: "edit", observedAt: 2 }],
-      bashWriteHints: 0,
-    };
     const runs: Partial<SubagentRunView>[] = [
       { state: "failed", error: "Error: 429 Too Many Requests: rate limit exceeded\n  at stack" },
       { state: "failed", error: "Inspect subagent status before retrying." },
@@ -255,14 +249,6 @@ describe("subagent compact semantic policy", () => {
         question: { message: "Should I update db/0007.sql?", requestId: "q" },
       },
       { state: "waiting_for_parent" },
-      ...(["stopping", "stopped"] as const).map((state) => ({
-        state,
-        writeIntent: "writer" as const,
-        writeClaims: ["src/a.ts"],
-        writeViolationOffender: true,
-        writeAudit: audit,
-      })),
-      { writeIntent: "writer", writeClaims: ["src/a.ts"], writeAudit: audit, state: "completed" },
       { warning: "Could not run the integration tests: docker is not available" },
       { warning: "Context window 91% full", warningSource: "system", systemWarning: "Other" },
       { selection: { ...view().selection, warning: "Protocol 21 is unsupported. Fell back." } },

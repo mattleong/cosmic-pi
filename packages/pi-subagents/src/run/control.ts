@@ -1,12 +1,14 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Predicate from "effect/Predicate";
 import {
   hasSubagentCapability,
   isTerminalRunState,
   type SubagentRunView,
   type SubagentControlExpectation,
+  type SubagentSendOutcome,
 } from "./model.ts";
 import {
   clearRunActivity,
@@ -111,182 +113,196 @@ export function controlOperations(dependencies: RunControlDependencies) {
       );
     });
 
+  // Both claims run under the run lock that claimDelivery holds.
+  const claimAnswerLocked = (record: RunRecord) =>
+    Effect.gen(function* () {
+      const id = record.view.id;
+      yield* requireCapability(record, "parent-contact");
+      const question = record.view.question;
+      if (!question)
+        return yield* invalidRequest(
+          "parent_question_missing",
+          `Subagent ${id} has no pending parent question.`,
+        );
+      if (record.pauseRequested)
+        return yield* invalidRequest(
+          "interrupt_in_flight",
+          `Subagent ${id} already has an interrupt pending and cannot receive a parent reply.`,
+        );
+      const process = record.process;
+      if (!process)
+        return yield* new SubagentProcessError({
+          operation: "reply to",
+          message: `Subagent ${id} has no active process.`,
+        });
+      admitTurnInput(record);
+      record.replyPendingRequestId = question.requestId;
+      record.view = { ...record.view, state: "running", question: undefined };
+      yield* publish;
+      return { delivery: "answered" as const, record, process, question };
+    });
+
+  const claimGuidanceLocked = (record: RunRecord) =>
+    Effect.gen(function* () {
+      const id = record.view.id;
+      yield* requireCapability(record, "steer");
+      if (record.view.state === "paused" || record.view.state === "completed") {
+        const recovery = hasSubagentCapability(record.view, "resume")
+          ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
+          : `this backend cannot resume it; stop it with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
+        return yield* invalidRequest(
+          "run_not_running",
+          `Subagent ${id} is ${record.view.state}; ${recovery}.`,
+        );
+      }
+      if (record.view.state === "starting")
+        return yield* invalidRequest(
+          "run_starting",
+          `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
+        );
+      if (record.view.state !== "running")
+        return yield* invalidRequest(
+          "run_not_running",
+          `Subagent ${id} is ${record.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
+        );
+      if (record.pauseRequested)
+        return yield* invalidRequest(
+          "interrupt_in_flight",
+          `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
+        );
+      admitTurnInput(record);
+      return { delivery: "guided" as const, record };
+    });
+
+  const claimDelivery = (id: string, expected: SubagentControlExpectation | undefined) =>
+    withLock(
+      Effect.gen(function* () {
+        const record = yield* requireRecord(id);
+        yield* requireControlExpectation(record, expected);
+        if (record.replyPendingRequestId)
+          return yield* invalidRequest(
+            "reply_in_flight",
+            `Subagent ${id} already has a parent reply in flight; inspect it with subagent_status before sending again.`,
+          );
+        return record.view.state === "waiting_for_parent"
+          ? yield* claimAnswerLocked(record)
+          : yield* claimGuidanceLocked(record);
+      }),
+    );
+
+  const guide = (
+    record: RunRecord,
+    message: string,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
+    processControls.steer(record, message).pipe(
+      Effect.tapError((error) =>
+        Predicate.isTagged(error, "SubagentProcessError") &&
+        isOutcomeUncertain(error) &&
+        !error.pendingDelivery
+          ? retainControlWarning(record, error.message)
+          : Effect.void,
+      ),
+      Effect.andThen(finalizeGuidance(record, message)),
+    );
+
+  const answer = (
+    claimed: Extract<Effect.Success<ReturnType<typeof claimDelivery>>, { delivery: "answered" }>,
+    message: string,
+  ): Effect.Effect<SubagentRunView, SubagentError> => {
+    const id = claimed.record.view.id;
+    return claimed.process.controls.reply(claimed.question.requestId, message).pipe(
+      Effect.catchTag("SubagentProcessError", (error) => {
+        if (error.code === "transport_not_sent")
+          return Effect.fail(
+            processError(
+              "reply",
+              "reply_send_failed",
+              `The reply to subagent ${id} was not sent; the question remains open for a retry. (${error.message})`,
+            ),
+          );
+        return Effect.fail(
+          error.code === "transport_outcome_uncertain"
+            ? processError(
+                "reply",
+                "reply_outcome_uncertain",
+                `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (${error.message})`,
+              )
+            : error,
+        );
+      }),
+      Effect.andThen(Clock.currentTimeMillis),
+      Effect.flatMap((now) =>
+        withLock(
+          Effect.gen(function* () {
+            if (claimed.record.replyPendingRequestId === claimed.question.requestId)
+              claimed.record.replyPendingRequestId = undefined;
+            recordParentNoticeLocked(claimed.record, `Reply: ${message}`, now);
+            yield* publish;
+            return snapshotView(claimed.record.view);
+          }),
+        ),
+      ),
+      Effect.tapError((error) => {
+        if (
+          Predicate.isTagged(error, "SubagentProcessError") &&
+          error.code === "reply_outcome_uncertain"
+        )
+          return retainControlWarning(claimed.record, error.message);
+        const questionClosed =
+          Predicate.isTagged(error, "SubagentProcessError") &&
+          (error.code === "question_transport_closed" ||
+            error.code === "question_ownership_mismatch");
+        return withLock(
+          Effect.gen(function* () {
+            if (claimed.record.replyPendingRequestId !== claimed.question.requestId) return;
+            claimed.record.replyPendingRequestId = undefined;
+            if (
+              !questionClosed &&
+              claimed.record.view.state === "running" &&
+              claimed.record.view.question === undefined
+            ) {
+              claimed.record.view = {
+                ...claimed.record.view,
+                state: "waiting_for_parent",
+                question: claimed.question,
+              };
+              yield* publish;
+            }
+          }),
+        );
+      }),
+      Effect.ensuring(releaseTurnInput(claimed.record)),
+    );
+  };
+
+  // One locked claim decides whether the message answers a pending question or steers the turn.
+  // An answer commits in the owner scope so a cancelled caller never abandons the claimed
+  // question; guidance stays caller-scoped and releases its turn-input admission on exit.
   const send = (
     id: string,
     message: string,
     expected?: SubagentControlExpectation,
-  ): Effect.Effect<SubagentRunView, SubagentError> =>
+  ): Effect.Effect<SubagentSendOutcome, SubagentError> =>
     Effect.gen(function* () {
-      const normalized = yield* validateParentMessage(message, "Guidance message is required.");
-      return yield* Effect.acquireUseRelease(
-        withLock(
-          Effect.gen(function* () {
-            const selected = yield* requireRecord(id);
-            yield* requireControlExpectation(selected, expected);
-            if (selected.view.state === "waiting_for_parent")
-              return yield* invalidRequest(
-                "run_waiting_for_parent",
-                `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
-              );
-            if (selected.replyPendingRequestId)
-              return yield* invalidRequest(
-                "reply_in_flight",
-                `Subagent ${id} already has a parent reply in flight.`,
-              );
-            yield* requireCapability(selected, "steer");
-            if (selected.view.state === "paused" || selected.view.state === "completed") {
-              const recovery = hasSubagentCapability(selected.view, "resume")
-                ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
-                : `this backend cannot resume it; stop it with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
-              return yield* invalidRequest(
-                "run_not_running",
-                `Subagent ${id} is ${selected.view.state}; ${recovery}.`,
-              );
-            }
-            if (selected.view.state === "starting")
-              return yield* invalidRequest(
-                "run_starting",
-                `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
-              );
-            if (selected.view.state !== "running")
-              return yield* invalidRequest(
-                "run_not_running",
-                `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
-              );
-            if (selected.pauseRequested)
-              return yield* invalidRequest(
-                "interrupt_in_flight",
-                `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
-              );
-            admitTurnInput(selected);
-            return selected;
-          }),
+      const normalized = yield* validateParentMessage(message, "Message is required.");
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.flatMap(
+          claimDelivery(id, expected),
+          (claimed): Effect.Effect<SubagentSendOutcome, SubagentError> =>
+            claimed.delivery === "answered"
+              ? Effect.flatMap(
+                  Effect.forkIn(answer(claimed, normalized), ownerScope, {
+                    startImmediately: true,
+                  }),
+                  (fiber) => restore(Fiber.join(fiber)),
+                ).pipe(Effect.map((run) => ({ delivery: claimed.delivery, run })))
+              : restore(guide(claimed.record, normalized)).pipe(
+                  Effect.ensuring(releaseTurnInput(claimed.record)),
+                  Effect.map((run) => ({ delivery: claimed.delivery, run })),
+                ),
         ),
-        (admitted) =>
-          processControls.steer(admitted, normalized).pipe(
-            Effect.tapError((error) =>
-              Predicate.isTagged(error, "SubagentProcessError") &&
-              isOutcomeUncertain(error) &&
-              !error.pendingDelivery
-                ? retainControlWarning(admitted, error.message)
-                : Effect.void,
-            ),
-            Effect.andThen(finalizeGuidance(admitted, normalized)),
-          ),
-        releaseTurnInput,
       );
     });
-
-  const reply = (
-    id: string,
-    message: string,
-    expected?: SubagentControlExpectation,
-  ): Effect.Effect<SubagentRunView, SubagentError> =>
-    runSessionOwned(
-      ownerScope,
-      Effect.gen(function* () {
-        const normalized = yield* validateParentMessage(message, "Reply message is required.");
-        const claimed = yield* withLock(
-          Effect.gen(function* () {
-            const record = yield* requireRecord(id);
-            yield* requireControlExpectation(record, expected);
-            yield* requireCapability(record, "parent-contact");
-            const question = record.view.question;
-            if (record.view.state !== "waiting_for_parent" || !question)
-              return yield* invalidRequest(
-                "parent_question_missing",
-                `Subagent ${id} has no pending parent question.`,
-              );
-            if (record.replyPendingRequestId)
-              return yield* invalidRequest(
-                "reply_in_flight",
-                `Subagent ${id} already has a reply in flight.`,
-              );
-            if (record.pauseRequested)
-              return yield* invalidRequest(
-                "interrupt_in_flight",
-                `Subagent ${id} already has an interrupt pending and cannot receive a parent reply.`,
-              );
-            const process = record.process;
-            if (!process)
-              return yield* new SubagentProcessError({
-                operation: "reply to",
-                message: `Subagent ${id} has no active process.`,
-              });
-            admitTurnInput(record);
-            record.replyPendingRequestId = question.requestId;
-            record.view = { ...record.view, state: "running", question: undefined };
-            yield* publish;
-            return { record, process, question };
-          }),
-        );
-        return { ...claimed, normalized };
-      }),
-      ({ normalized, ...claimed }) =>
-        claimed.process.controls.reply(claimed.question.requestId, normalized).pipe(
-          Effect.catchTag("SubagentProcessError", (error) => {
-            if (error.code === "transport_not_sent")
-              return Effect.fail(
-                processError(
-                  "reply",
-                  "reply_send_failed",
-                  `The reply to subagent ${id} was not sent; the question remains open for a retry. (${error.message})`,
-                ),
-              );
-            return Effect.fail(
-              error.code === "transport_outcome_uncertain"
-                ? processError(
-                    "reply",
-                    "reply_outcome_uncertain",
-                    `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (${error.message})`,
-                  )
-                : error,
-            );
-          }),
-          Effect.andThen(Clock.currentTimeMillis),
-          Effect.flatMap((now) =>
-            withLock(
-              Effect.gen(function* () {
-                if (claimed.record.replyPendingRequestId === claimed.question.requestId)
-                  claimed.record.replyPendingRequestId = undefined;
-                recordParentNoticeLocked(claimed.record, `Reply: ${normalized}`, now);
-                yield* publish;
-                return snapshotView(claimed.record.view);
-              }),
-            ),
-          ),
-          Effect.tapError((error) => {
-            if (
-              Predicate.isTagged(error, "SubagentProcessError") &&
-              error.code === "reply_outcome_uncertain"
-            )
-              return retainControlWarning(claimed.record, error.message);
-            const questionClosed =
-              Predicate.isTagged(error, "SubagentProcessError") &&
-              (error.code === "question_transport_closed" ||
-                error.code === "question_ownership_mismatch");
-            return withLock(
-              Effect.gen(function* () {
-                if (claimed.record.replyPendingRequestId !== claimed.question.requestId) return;
-                claimed.record.replyPendingRequestId = undefined;
-                if (
-                  !questionClosed &&
-                  claimed.record.view.state === "running" &&
-                  claimed.record.view.question === undefined
-                ) {
-                  claimed.record.view = {
-                    ...claimed.record.view,
-                    state: "waiting_for_parent",
-                    question: claimed.question,
-                  };
-                  yield* publish;
-                }
-              }),
-            );
-          }),
-          Effect.ensuring(releaseTurnInput(claimed.record)),
-        ),
-    );
 
   const interrupt = (
     id: string,
@@ -440,5 +456,5 @@ export function controlOperations(dependencies: RunControlDependencies) {
           : Effect.succeed(snapshotView(record.view)),
     );
 
-  return { send, reply, interrupt, rename, stop };
+  return { send, interrupt, rename, stop };
 }

@@ -96,9 +96,7 @@ describe("report ownership at assignment activation", () => {
           const handleEvent = backendEventHandler({
             settlement,
             queueQuestionLocked: () => undefined,
-            onWriteClaimViolation: () => Effect.void,
             onProxyEvent: () => Effect.void,
-            temporaryRoots: [],
           });
           yield* settlement.acceptBackendReport(record, {
             runId: record.view.id,

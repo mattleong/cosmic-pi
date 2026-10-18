@@ -208,7 +208,7 @@ const completionChunks = (
 const questionContent = (
   notification: Extract<SubagentNotification, { readonly type: "question" }>,
 ): string => {
-  const reply = `subagent_reply({ runId: "${notification.id}", message: "..." })`;
+  const reply = `subagent_send({ runIds: ["${notification.id}"], message: "..." })`;
   return `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with ${reply}, then call subagent_await again.`;
 };
 

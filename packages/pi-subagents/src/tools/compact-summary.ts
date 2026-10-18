@@ -170,7 +170,6 @@ function awaitIssues(
     !cards.some(
       (card) =>
         card.question !== undefined ||
-        card.writeViolationOffender === true ||
         runCleanupAttention(card) !== undefined ||
         card.state === "paused" ||
         card.state === "waiting_for_parent",
@@ -181,7 +180,7 @@ function awaitIssues(
       code: "parent-action",
       message: "A subagent needs attention before it can continue",
       detail:
-        "Parent action required; inspect full target subagent_status for the question, pause capabilities, or claim violation before acting.",
+        "Parent action required; inspect full target subagent_status for the question or pause capabilities before acting.",
     });
   if (details.attentionRequired && !details.cancelled) summary.outcome = "warning";
 }
@@ -234,10 +233,29 @@ function summarizeModels(
       });
     } else if (profile.candidates.length === 0) disabled++;
   }
+  const agents = details.agents ?? [];
+  for (const agent of agents)
+    if (agent.candidates.every((candidate) => candidate.status !== "eligible"))
+      issues.push({
+        severity: "warning",
+        code: `agent:${agent.name}:unavailable`,
+        message: `${agent.name} agent has no eligible options`,
+        detail:
+          "No statically eligible candidates after the agent's overrides; inspect expanded discovery.",
+      });
+  const invalidAgents = details.invalidAgents ?? [];
+  if (invalidAgents.length > 0)
+    issues.push({
+      severity: "warning",
+      code: "agents:invalid",
+      message: "Some custom agents are invalid",
+      detail: `${countLabel(invalidAgents.length, "invalid agent entry", "invalid agent entries")} fail closed; /subagents doctor lists the invalid fields.`,
+    });
   const counters = [`${eligibleOptions} statically eligible`];
 
   if (disabled) counters.push(countLabel(disabled, "disabled profile"));
   if (unavailable) counters.push(countLabel(unavailable, "unavailable profile"));
+  if (agents.length > 0) counters.push(countLabel(agents.length, "agent"));
   summary.counters = [counters.join(", ")];
   if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
     summary.outcome = "warning";
@@ -285,7 +303,6 @@ function cardOutcome(
   if (
     cards.some(
       (card) =>
-        card.writeViolationOffender === true ||
         runCleanupAttention(card) !== undefined ||
         card.question !== undefined ||
         (card.state === "paused" && action !== "interrupt") ||

@@ -92,16 +92,20 @@ test("keeps capturing a credential-named file the baseline tracks", function* (s
   });
 });
 
-test("reports dependencies a writer installed as uncaptured", function* (service, root) {
+test("ignores dependencies a writer installed in an ignored directory", function* (service, root) {
+  yield* writeFile(path.join(root, ".gitignore"), "ignored.log\nnode_modules/\n");
+  yield* git(root, ["add", "--", ".gitignore"]);
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* io(() => fs.mkdir(path.join(handle.cwd, "node_modules/left-pad"), { recursive: true }));
   yield* writeFile(
     path.join(handle.cwd, "node_modules/left-pad/index.js"),
     "module.exports = 1;\n",
   );
-  const changes = yield* service.inspectWorkerChanges(workspaceTarget(handle));
-  expect(changes.changedPaths).toEqual([]);
-  expect(changes.uncapturedPaths).toEqual(["node_modules/left-pad/index.js"]);
+  expect(yield* service.inspectWorkerChanges(workspaceTarget(handle))).toEqual({
+    changedPaths: [],
+    uncapturedPaths: [],
+    diffStat: [],
+  });
 });
 
 test("counts binary, deleted, and mode-only changes", function* (service, root) {

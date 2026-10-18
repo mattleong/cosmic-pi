@@ -4,16 +4,19 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core";
+import { MAX_CUSTOM_AGENTS } from "../profiles/agents.ts";
 import { MAX_PROFILE_CANDIDATES, PROFILE_IDS } from "../profiles/model.ts";
 import { MAX_START_BATCH, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { MAX_WRITE_CLAIMS } from "../domain/write-claims.ts";
-import { MAX_OBSERVED_WRITE_PATHS, MAX_WRITE_CLAIM_VIOLATIONS } from "../run/claims-observation.ts";
 import {
   CompactSubagentToolDetailsSchema,
   DETAILS_PARSE_OPTIONS,
   HISTORICAL_RUN_DETAILS_ACTIONS,
   MAX_CARD_CAPABILITIES,
   MAX_CARD_SKIPS,
+  MAX_INVALID_AGENT_ENTRIES,
+  MAX_LEGACY_OBSERVED_WRITE_PATHS,
+  MAX_LEGACY_WRITE_CLAIM_VIOLATIONS,
+  MAX_LEGACY_WRITE_CLAIMS,
   RunActionDetailsSchema,
   SubagentAwaitDetailsSchema,
   SubagentModelsDetailsSchema,
@@ -65,13 +68,13 @@ const preflightArray = (
 const preflightCard: FieldsVisitor = (card) => {
   if (!card) return true;
   if (!preflightArray(card, "capabilities", MAX_CARD_CAPABILITIES)) return false;
-  if (!preflightArray(card, "writeClaims", MAX_WRITE_CLAIMS)) return false;
+  if (!preflightArray(card, "writeClaims", MAX_LEGACY_WRITE_CLAIMS)) return false;
   if (Object.hasOwn(card, "writeAudit")) {
     const audit = card.writeAudit;
     if (
       Predicate.isObject(audit) &&
-      (!preflightArray(audit, "observedFileWrites", MAX_OBSERVED_WRITE_PATHS) ||
-        !preflightArray(audit, "violations", MAX_WRITE_CLAIM_VIOLATIONS))
+      (!preflightArray(audit, "observedFileWrites", MAX_LEGACY_OBSERVED_WRITE_PATHS) ||
+        !preflightArray(audit, "violations", MAX_LEGACY_WRITE_CLAIM_VIOLATIONS))
     )
       return false;
   }
@@ -102,7 +105,9 @@ const preflightRecord = (record: DetailsFields): boolean => {
   if (action === "models")
     return (
       rootKeysAllowed(record, MODELS_KEYS) &&
-      preflightArray(record, "profiles", PROFILE_IDS.length, preflightProfile)
+      preflightArray(record, "profiles", PROFILE_IDS.length, preflightProfile) &&
+      preflightArray(record, "agents", MAX_CUSTOM_AGENTS, preflightProfile) &&
+      preflightArray(record, "invalidAgents", MAX_INVALID_AGENT_ENTRIES)
     );
   if (Predicate.isString(action) && RUN_ACTION_SET.has(action))
     return (
@@ -191,7 +196,7 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
   return true;
 };
 
-// Only writers can break their write claims.
+// Legacy cards name a write-claim offender only for writers.
 const validRunCardRelationships = (card: SubagentRunCard): boolean =>
   card.writeViolationOffender !== true || card.writeIntent === "writer";
 

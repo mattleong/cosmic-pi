@@ -136,7 +136,6 @@ export const runRecordFixture = (overrides: Partial<RunRecord> = {}) =>
       stoppedByParent: false,
       cleanupPending: false,
       runStateReclaimState: "pending",
-      writeViolationContainmentStarted: false,
       initializationPending: false,
       notificationGeneration: 0,
       completionGeneration: 0,

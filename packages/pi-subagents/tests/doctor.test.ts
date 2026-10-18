@@ -9,6 +9,7 @@ import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
 import { profileLayerFor } from "./run/fixtures/service-harness.ts";
 import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../src/boundary/node-builtins.ts";
 
 const claude = (model: string) => ({
   host: "local",
@@ -79,7 +80,31 @@ describe("subagents doctor", () => {
       expect(byLabel.get("Git")?.status).toBe("ok");
       expect(byLabel.get("Activity view")?.status).toBe("warning");
       expect(byLabel.get("Worktree verification")?.detail).toContain("none");
+      expect(byLabel.has("Legacy workspaces")).toBe(false);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "warns while an earlier version's workspace registry exists, naming recovery commands",
+    () =>
+      Effect.gen(function* () {
+        const agentDirectory = yield* temporaryDirectory("doctor-");
+        const legacy = path.join(agentDirectory, "git-workspaces");
+        yield* Effect.promise(() =>
+          fs.mkdir(path.join(legacy, "ws-a", "worker"), { recursive: true }),
+        );
+        const checks = yield* runSubagentDoctor({
+          pi: extensionApiFixture(),
+          ctx: extensionContextFixture(),
+          agentDirectory,
+          activityViewAvailable: true,
+          projectTrusted: true,
+        }).pipe(Effect.provide(Layer.merge(profileLayerFor(config), registry([]))));
+        const warning = checks.find((item) => item.label === "Legacy workspaces");
+        expect(warning?.status).toBe("warning");
+        expect(warning?.detail).toContain(`git -C '${path.join(legacy, "ws-a", "worker")}' diff`);
+        expect(warning?.detail).toContain(`rm -rf '${legacy}'`);
+      }).pipe(Effect.scoped),
   );
 
   it.effect("reports a trusted project's worktree verification command", () =>
@@ -102,6 +127,66 @@ describe("subagents doctor", () => {
         status: "ok",
         detail: "pnpm validate",
       });
+    }).pipe(Effect.scoped),
+  );
+  it.effect("lists a trusted project's workspaceInclude patterns", () =>
+    Effect.gen(function* () {
+      const agentDirectory = yield* temporaryDirectory("doctor-");
+      const profiles = subagentProfileServiceLayerFor(
+        resolveTestConfig(config, { version: 6, workspaceInclude: [".env", "config/*.local"] }),
+      );
+      const checks = yield* runSubagentDoctor({
+        pi: extensionApiFixture(),
+        ctx: extensionContextFixture(),
+        agentDirectory,
+        activityViewAvailable: true,
+        projectTrusted: true,
+      }).pipe(Effect.provide(Layer.merge(profiles, registry([]))));
+      const included = checks.find((item) => item.label === "Worktree included files");
+      expect(included?.status).toBe("ok");
+      expect(included?.detail).toContain(".env");
+      expect(included?.detail).toContain("config/*.local");
+    }).pipe(Effect.scoped),
+  );
+  it.effect("checks each custom agent's route and reports invalid agents", () =>
+    Effect.gen(function* () {
+      const agentDirectory = yield* temporaryDirectory("doctor-");
+      const probed: string[] = [];
+      const checks = yield* runSubagentDoctor({
+        pi: extensionApiFixture(),
+        ctx: extensionContextFixture(),
+        agentDirectory,
+        activityViewAvailable: undefined,
+        projectTrusted: true,
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            profileLayerFor({
+              ...config,
+              agents: {
+                "fast-review": {
+                  description: "Reviews quickly.",
+                  instructions: "Review the diff.",
+                  profile: "scout",
+                },
+                "strict-review": {
+                  description: "Reviews strictly.",
+                  instructions: "Review everything.",
+                  profile: "reviewer",
+                },
+                broken: { description: "Missing instructions." },
+              },
+            }),
+            registry(probed),
+          ),
+        ),
+      );
+      const byLabel = new Map(checks.map((item) => [item.label, item]));
+      expect(byLabel.get("Agent fast-review")?.status).toBe("ok");
+      expect(byLabel.get("Agent strict-review")?.status).toBe("warning");
+      expect(byLabel.get("Agent broken")?.status).toBe("failed");
+      // Agents share routes with their profiles, which are probed once.
+      expect(probed.filter((model) => model === "haiku")).toHaveLength(1);
     }).pipe(Effect.scoped),
   );
 });

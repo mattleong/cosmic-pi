@@ -70,11 +70,6 @@ export interface FleetManagerActions {
     message: string,
     expected: SubagentControlExpectation,
   ) => Promise<FleetMessageDelivery>;
-  readonly reply: (
-    id: string,
-    message: string,
-    expected: SubagentControlExpectation,
-  ) => Promise<void>;
   readonly rename: (
     id: string,
     name: string,
@@ -157,10 +152,8 @@ function openFleetManager(
             stop: actions.stop,
             interrupt: actions.interrupt,
             resume: actions.resume,
-            message: (id, mode, message, expected) =>
-              mode === "reply"
-                ? actions.reply(id, message, expected).then(() => "delivered" as const)
-                : actions.send(id, message, expected),
+            // Both modes share the send path, which answers a pending question or steers.
+            message: (id, _mode, message, expected) => actions.send(id, message, expected),
             rename: actions.rename,
           },
         });

@@ -35,7 +35,6 @@ describe("subagent detail evidence", () => {
       state: "completed",
       finalText: "Accepted work report",
       writeIntent: "writer",
-      writeAudit: { observedFileWrites: [], violations: [], bashWriteHints: 0 },
       cleanup: {
         disposition: "quarantined",
         recovery: "stop",
@@ -72,7 +71,6 @@ describe("subagent detail evidence", () => {
         });
         expect(card.cleanup?.diagnostic?.message.length).toBeLessThanOrEqual(1_024);
         expect(JSON.stringify(card.cleanup)).not.toContain("cleanup-secret");
-        expect(card).not.toHaveProperty("writeViolationOffender");
       }
     }
     const details = compactToolDetails({ action: "status", runs: [run] });

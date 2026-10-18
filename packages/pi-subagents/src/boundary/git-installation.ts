@@ -59,17 +59,11 @@ const userEnvironment = (environment: NodeJS.ProcessEnv) =>
     ),
   );
 
-const runGit = (
-  executable: string,
-  args: ReadonlyArray<string>,
-  environment: NodeJS.ProcessEnv,
-  cwd?: string,
-) =>
+const runGit = (executable: string, args: ReadonlyArray<string>, environment: NodeJS.ProcessEnv) =>
   runBoundedProcessNode({
     executable,
     args,
     environment: userEnvironment(environment),
-    ...(cwd !== undefined && { cwd }),
     stdoutLimitBytes: 8192,
     stderrLimitBytes: 8192,
     timeoutMillis: 10_000,
@@ -86,50 +80,7 @@ export const gitVersionSupported = (version: string): boolean => {
   return major > requiredMajor || (major === requiredMajor && minor >= requiredMinor);
 };
 
-// Git's own resolution: core.excludesFile from the user's configuration (following include and
-// includeIf, and with `repository` the repository's own config, which outranks the global one),
-// else $XDG_CONFIG_HOME/git/ignore, else ~/.config/git/ignore.
-const userExcludesFile = (
-  executable: string,
-  environment: NodeJS.ProcessEnv,
-  repository?: string,
-) =>
-  Effect.gen(function* () {
-    const refusal = () =>
-      unavailable(
-        "Git's ignore configuration couldn't be preserved.",
-        `Check core.excludesFile in your ${repository === undefined ? "global" : "global and repository"} Git configuration, then retry. Isolated workspaces must retain your ignore rules before copying untracked files.`,
-      );
-    const result = yield* runGit(
-      executable,
-      [
-        "config",
-        ...(repository === undefined ? ["--global"] : []),
-        "--includes",
-        "--path",
-        "--get",
-        "core.excludesFile",
-      ],
-      environment,
-      repository,
-    ).pipe(Effect.mapError(refusal));
-    if (result.timedOut || result.overflowed || result.cleanupUnconfirmed) return yield* refusal();
-    if (result.code === 0) {
-      const configured = result.stdout.replace(/\n$/u, "");
-      if (configured.length > 4096 || hasControlCharacter(configured)) return yield* refusal();
-      // Git resolves relative excludes paths from the repository, not the config file or Pi's
-      // cwd. Preserve that context by passing the value unchanged to each isolated Git call.
-      // An explicitly empty value also overrides Git's default ignore file.
-      return configured;
-    }
-    if (result.code !== 1) return yield* refusal();
-    const xdg = environment.XDG_CONFIG_HOME;
-    if (usablePath(xdg)) return path.join(xdg, "git", "ignore");
-    const home = environment.HOME;
-    return usablePath(home) ? path.join(home, ".config", "git", "ignore") : undefined;
-  });
-
-export const resolveGitInstallation = (
+const resolveGitInstallation = (
   environment: NodeJS.ProcessEnv,
 ): Effect.Effect<GitInstallation, WorkspaceError> =>
   Effect.gen(function* () {
@@ -144,11 +95,7 @@ export const resolveGitInstallation = (
         "Git didn't report its version, so isolated writer workspaces are unavailable.",
         `Executable: ${executable}`,
       );
-    const version = match.slice(1).filter(Boolean).join(".");
-    // Each capture resolves its repository's excludes file; checking the global configuration
-    // here reports a broken one before any workspace exists.
-    yield* userExcludesFile(executable, environment);
-    return { executable, version };
+    return { executable, version: match.slice(1).filter(Boolean).join(".") };
   });
 
 let resolved: GitInstallation | undefined;
@@ -165,91 +112,6 @@ export const gitInstallation: Effect.Effect<GitInstallation, WorkspaceError> = E
         ),
       ),
 );
-
-/**
- * The excludes file Git applies in `repository` for this user: its own core.excludesFile
- * outranks the global one, and includeIf conditions are evaluated against it.
- */
-export const repositoryExcludesFile = (
-  repository: string,
-): Effect.Effect<string | undefined, WorkspaceError> =>
-  gitInstallation.pipe(
-    Effect.flatMap((installation) =>
-      userExcludesFile(installation.executable, process.env, repository),
-    ),
-  );
-
-export interface GitIdentity {
-  readonly name: string;
-  readonly email: string;
-}
-/** A commit role is undefined when neither the environment nor configuration names it fully. */
-export interface UserCommitIdentity {
-  readonly author?: GitIdentity | undefined;
-  readonly committer?: GitIdentity | undefined;
-}
-
-const MAX_IDENTITY_CHARS = 256;
-const identityPart = (value: string | undefined) => {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length <= MAX_IDENTITY_CHARS && !hasControlCharacter(trimmed)
-    ? trimmed
-    : undefined;
-};
-
-const configuredValue = (
-  executable: string,
-  environment: NodeJS.ProcessEnv,
-  repository: string,
-  key: string,
-) =>
-  runGit(executable, ["config", "--includes", "--get", key], environment, repository).pipe(
-    Effect.map((result) =>
-      result.code === 0 && !result.timedOut && !result.overflowed && !result.cleanupUnconfirmed
-        ? identityPart(result.stdout)
-        : undefined,
-    ),
-    Effect.orElseSucceed(() => undefined),
-  );
-
-/**
- * The identity this user's own commit in `repository` would carry: GIT_AUTHOR_* and
- * GIT_COMMITTER_* from the environment, else user.name and user.email from the user's Git
- * configuration as the repository sees it. Isolated workspace Git reads no user configuration.
- */
-export const userCommitIdentity = (
-  repository: string,
-): Effect.Effect<UserCommitIdentity, WorkspaceError> =>
-  gitInstallation.pipe(
-    Effect.flatMap((installation) =>
-      Effect.gen(function* () {
-        const environment = process.env;
-        const name = yield* configuredValue(
-          installation.executable,
-          environment,
-          repository,
-          "user.name",
-        );
-        const email = yield* configuredValue(
-          installation.executable,
-          environment,
-          repository,
-          "user.email",
-        );
-        const role = (nameKey: string, emailKey: string): GitIdentity | undefined => {
-          const resolvedName = identityPart(environment[nameKey]) ?? name;
-          const resolvedEmail = identityPart(environment[emailKey]) ?? email;
-          return resolvedName && resolvedEmail
-            ? { name: resolvedName, email: resolvedEmail }
-            : undefined;
-        };
-        return {
-          author: role("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"),
-          committer: role("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"),
-        };
-      }),
-    ),
-  );
 
 export const supportedGitInstallation = gitInstallation.pipe(
   Effect.filterOrFail(

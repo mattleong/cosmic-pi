@@ -5,7 +5,12 @@ import {
   DEFAULT_SUBAGENT_NESTING_POLICY,
   type WriterWorkspaceMode,
 } from "../config/schema.ts";
-import type { WorkspaceHandle, WorkspaceRebase, WorkspaceTarget } from "../workspace/model.ts";
+import type {
+  WorkspaceHandle,
+  WorkspaceLaunch,
+  WorkspaceRebase,
+  WorkspaceTarget,
+} from "../workspace/model.ts";
 import { processCapacityError, treeCapacityError } from "./admission.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
@@ -44,6 +49,16 @@ type WorkspaceStart = (
 export interface WorkspaceReviseOptions {
   /** Rebuild the worker from current parent files and reapply its changes before the pass. */
   readonly rebase?: boolean | undefined;
+  /**
+   * Resolves an adopted orphan's recorded launch into a new writer request with `task`, the way
+   * a start item naming that launch would; required to revise a workspace this session adopted.
+   */
+  readonly resolveLaunch?:
+    | ((
+        launch: WorkspaceLaunch,
+        task: string,
+      ) => Effect.Effect<StartSubagentRequest, SubagentError>)
+    | undefined;
 }
 
 export interface WorkspaceRevised {
@@ -76,10 +91,30 @@ const bindingRequest = (
   writerWorkspaceModeOverride: mode,
 });
 
-const successorRequest = (binding: WorkspaceBinding, message: string): StartSubagentRequest => ({
-  ...binding.request,
-  task: `${binding.request.task}\n\nParent revision request:\n${message}`,
+const successorRequest = (
+  request: StartSubagentRequest,
+  message: string,
+): StartSubagentRequest => ({
+  ...request,
+  task: `${request.task}\n\nParent revision request:\n${message}`,
   supersedes: undefined,
+});
+
+/** An adopted workspace's first successor: a new run with the parent's message as its task. */
+const adoptedSuccessor = (
+  resolved: StartSubagentRequest,
+  binding: WorkspaceBinding,
+  message: string,
+): StartSubagentRequest => ({
+  ...bindingRequest(resolved, binding.handle, "worktree"),
+  task: message,
+  supersedes: undefined,
+});
+
+const launchFacts = (request: StartSubagentRequest): WorkspaceLaunch => ({
+  ...(request.profile !== undefined && { profile: request.profile }),
+  ...(request.agent !== undefined && { agent: request.agent }),
+  ...(request.name !== undefined && { name: request.name }),
 });
 
 const MAX_PROMPT_CONFLICTS = 50;
@@ -110,6 +145,12 @@ const rebasedSuccessor = (
   return { ...request, task: `${request.task}\n\nParent rebase:\n${note}` };
 };
 
+const workspaceOwnerChanged = () =>
+  invalid(
+    "workspace_owner_unavailable",
+    "Workspace ownership changed while its revision was being prepared. Retry the revision.",
+  );
+
 const integrationQuarantinedError = () =>
   invalid(
     "workspace_integration_quarantined",
@@ -128,7 +169,7 @@ const releaseRevisionLocked = ({ binding, revision }: Succession) => {
 export function workspaceLaunchOperations(context: WorkspaceControlContext) {
   const { records, withLock, isClosed, state, ownerFor, requireEngine, requireBinding } = context;
   const { engine } = context;
-  const { workspaceSetup, requireChildrenResolved } = context;
+  const { workspaceSetup, workspaceInclude, requireChildrenResolved } = context;
   const { operations, ownerScope } = context;
   const releaseSlotLocked = (slot: LaunchSlot | undefined) => {
     if (!slot || !state.launchSlots.delete(slot)) return;
@@ -312,6 +353,8 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
                 sourceCwd: request.cwd,
                 ownerId: ownerFor(caller),
                 sourceWorkspace,
+                launch: launchFacts(request),
+                include: workspaceInclude,
                 onAcquired,
               })
               .pipe(Effect.mapError(mapWorkspaceError)),
@@ -451,36 +494,70 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       message: string,
       caller = SUBAGENT_ROOT_RUN_ID,
       options: WorkspaceReviseOptions = {},
-    ): Effect.Effect<WorkspaceRevised, SubagentError> =>
-      Effect.uninterruptibleMask((restore) => {
+    ): Effect.Effect<WorkspaceRevised, SubagentError> => {
+      const resolveAdopted = (launch: WorkspaceLaunch, task: string) =>
+        Effect.gen(function* () {
+          const { resolveLaunch } = options;
+          if (!resolveLaunch)
+            return yield* invalid(
+              "workspace_launch_unavailable",
+              "This adopted workspace has no writer request to extend; revise it through subagent_workspace.",
+            );
+          const resolved = yield* resolveLaunch(launch, task);
+          if (resolved.writeIntent !== "writer")
+            return yield* invalid(
+              "workspace_launch_unavailable",
+              `The recorded launch profile ${resolved.profile ?? "generalist"} no longer starts writers. Apply or discard this workspace, or start a new writer.`,
+            );
+          return resolved;
+        });
+      return Effect.uninterruptibleMask((restore) => {
         let held: Succession | undefined;
         return Effect.gen(function* () {
           if (!message.trim())
             return yield* invalid("message_required", "A revision request is required.");
           const reserved = yield* restore(
             operations.withPermits(1)(
-              withLock(
-                Effect.gen(function* () {
-                  const binding = yield* requireBinding(workspaceId, caller);
-                  const { state: current } = binding;
-                  if (current.phase !== "idle") return yield* workspaceFinishedError();
-                  yield* requireChildrenResolved(binding);
-                  const revision: RevisionHold = {
-                    successor: successorRequest(binding, message),
-                    rebase: options.rebase === true,
-                    launched: false,
-                  };
-                  yield* checkLaunchLocked(revision.successor);
-                  binding.state = {
-                    phase: "revising",
-                    hold: revision,
-                    slot: undefined,
-                    knowledge: current.knowledge,
-                  };
-                  held = { binding, revision };
-                  return held;
-                }),
-              ),
+              Effect.gen(function* () {
+                // An adopted workspace's successor is resolved from its recorded launch first,
+                // outside the run lock; the binding is rechecked under it.
+                const adopted = yield* withLock(
+                  Effect.sync(() => {
+                    const binding = state.bindings.get(workspaceId);
+                    return binding && binding.request === undefined
+                      ? (binding.launch ?? {})
+                      : undefined;
+                  }),
+                );
+                const resolved =
+                  adopted === undefined ? undefined : yield* resolveAdopted(adopted, message);
+                return yield* withLock(
+                  Effect.gen(function* () {
+                    const binding = yield* requireBinding(workspaceId, caller);
+                    const { state: current } = binding;
+                    if (current.phase !== "idle") return yield* workspaceFinishedError();
+                    yield* requireChildrenResolved(binding);
+                    const successor = binding.request
+                      ? successorRequest(binding.request, message)
+                      : resolved && adoptedSuccessor(resolved, binding, message);
+                    if (!successor) return yield* workspaceOwnerChanged();
+                    const revision: RevisionHold = {
+                      successor,
+                      rebase: options.rebase === true,
+                      launched: false,
+                    };
+                    yield* checkLaunchLocked(revision.successor);
+                    binding.state = {
+                      phase: "revising",
+                      hold: revision,
+                      slot: undefined,
+                      knowledge: current.knowledge,
+                    };
+                    held = { binding, revision };
+                    return held;
+                  }),
+                );
+              }),
             ),
           );
           return yield* restore(
@@ -496,5 +573,6 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           ),
         );
       });
+    };
   return { bind, heldLaunchSlots, withLaunch, invalidateForResume, revise };
 }

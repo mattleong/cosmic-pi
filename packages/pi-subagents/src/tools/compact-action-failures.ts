@@ -26,6 +26,10 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   [["node_executable"], "Restart Pi so it runs on the installed Node, then retry the launch."],
   [NO_ELIGIBLE_ROUTE_CODES, noEligibleRouteRecovery],
   [
+    ["model_override"],
+    "Fix the model override, or omit it to use the profile's route; an override never falls back.",
+  ],
+  [
     ["pi_model_not_found"],
     "Install the extension that provides the model with pi install, or choose another route in /subagents profiles.",
   ],
@@ -54,7 +58,7 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     "The original profile route is exhausted; only now consider a generalist replacement.",
   ],
   [
-    ["retry_claim", "retry_already"],
+    ["retry_claim", "retry_already", "resume_superseded"],
     "Inspect the predecessor and its linked successor with subagent_status.",
   ],
   [
@@ -63,9 +67,13 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   ],
   [
     ["reply_send_failed"],
-    "The reply was never delivered and the question is still pending; resend it with subagent_reply.",
+    "The reply was never delivered and the question is still pending; resend it with subagent_send.",
   ],
-  [["reply_too_large"], "The question is still pending; send a shorter reply with subagent_reply."],
+  [["reply_too_large"], "The question is still pending; send a shorter reply with subagent_send."],
+  [
+    ["reply_in_flight"],
+    "An earlier reply is still being delivered; await the run or inspect subagent_status before sending again.",
+  ],
   [
     ["question_transport_closed"],
     "The helper connection closed and the question was cancelled; inspect subagent_status before taking another action.",
@@ -76,7 +84,7 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   ],
   [
     ["waiting_for_parent", "parent_question"],
-    "Reply with subagent_reply, then await the run again.",
+    "Answer with subagent_send, then await the run again.",
     ["waiting for a parent reply"],
   ],
   [["capability", "unsupported"], "Inspect the run's capabilities with subagent_status."],
@@ -131,7 +139,6 @@ type Phrase = (subject: string) => string;
 
 const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> = [
   [["notfound", "not_found"], () => "A requested subagent was not found"],
-  [["run_waiting_for_parent"], (subject) => `${subject} is waiting for a reply`],
   [["parent_question_missing"], (subject) => `${subject} has no question waiting for a reply`],
   [["question_ownership_mismatch"], (subject) => `${subject}'s question is no longer waiting`],
   [["question_transport_closed"], (subject) => `${subject}'s question was cancelled`],
@@ -139,14 +146,15 @@ const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> =
   [["too_large"], () => "The message is too long"],
   [["retry_route_exhausted"], (subject) => `${subject} has no profile options left to retry`],
   [["retry_claim", "retry_already"], (subject) => `${subject} is already being retried`],
+  [["resume_superseded"], (subject) => `${subject} was already replaced by a retry`],
   [["completion_claim_conflict"], (subject) => `${subject}'s outcome is claimed by another wait`],
   [
     ["report_delivery_backlog"],
     (subject) => `${subject}'s earlier outcome is still being delivered`,
   ],
-  [["write_claim"], () => "A requested file claim is invalid"],
   [["not_running"], (subject) => `${subject} isn't running`],
   [["run_starting"], (subject) => `${subject} is still starting`],
+  [["reply_in_flight"], (subject) => `${subject} is still receiving an earlier reply`],
   [["in_flight"], (subject) => `${subject} is already handling a request`],
   [["state_invalid", "state_reclaimed"], (subject) => `${subject} can't do that right now`],
   [["resume_unavailable"], (subject) => `${subject} can't be resumed`],
@@ -156,8 +164,7 @@ const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> =
 ];
 
 const VERBS = new Map([
-  ["send", "send guidance to"],
-  ["reply", "reply to"],
+  ["send", "send a message to"],
   ["interrupt", "interrupt"],
   ["resume", "resume"],
   ["stop", "stop"],
@@ -186,8 +193,7 @@ const readableFailure = (text: string, forbidden: readonly string[]): string | u
 };
 
 const NOUNS = new Map([
-  ["send", "guidance"],
-  ["reply", "reply"],
+  ["send", "message"],
   ["interrupt", "interrupt"],
   ["resume", "resume"],
   ["stop", "stop"],

@@ -9,17 +9,6 @@ import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProxyExecution } from "./proxy-execution.ts";
 import type { RunSettlement } from "./settlement.ts";
 import {
-  bashCommandMayMutate,
-  classifyObservedWrite,
-  decodeToolArguments,
-  MAX_OBSERVED_WRITE_PATHS,
-  MAX_WRITE_CLAIM_VIOLATIONS,
-  observedWriteAuditPath,
-  observeFileWrite,
-  UNRESOLVED_OBSERVED_WRITE,
-} from "./claims-observation.ts";
-import { writeClaimContains } from "../domain/write-claims.ts";
-import {
   appendAssistantSessionEvent,
   appendNoticeSessionEvent,
   finishToolSessionEvent,
@@ -40,10 +29,7 @@ const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 export interface RunEventDependencies {
   readonly settlement: RunSettlement;
   readonly queueQuestionLocked: RunNotificationDelivery["queueActionNotificationLocked"];
-  readonly onWriteClaimViolation: (record: RunRecord) => Effect.Effect<void>;
   readonly onProxyEvent: RunProxyExecution;
-  /** Lexical system temporary roots whose native writes are audited but never violations. */
-  readonly temporaryRoots: ReadonlyArray<string>;
 }
 
 type HandledBackendEvent = Exclude<
@@ -74,8 +60,7 @@ const isDelegatedEvent = (event: HandledBackendEvent): event is DelegatedBackend
   DELEGATED_EVENT_TYPES.some((type) => type === event.type);
 
 export function backendEventHandler(dependencies: RunEventDependencies) {
-  const { settlement, queueQuestionLocked, onWriteClaimViolation, onProxyEvent, temporaryRoots } =
-    dependencies;
+  const { settlement, queueQuestionLocked, onProxyEvent } = dependencies;
 
   const mutateAt = (
     record: RunRecord,
@@ -158,71 +143,22 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     record: RunRecord,
     event: Extract<BackendEvent, { readonly type: "tool_started" }>,
   ) =>
-    Effect.suspend(() => {
-      const args = decodeToolArguments(event.args);
-      const observed = observeFileWrite(event.toolName, args);
-      const observedWrites =
-        observed === undefined
-          ? []
-          : observed.length === 0
-            ? [UNRESOLVED_OBSERVED_WRITE]
-            : observed.map((path) => classifyObservedWrite(record.view.cwd, path, temporaryRoots));
-      const observedPaths = observedWrites.map(observedWriteAuditPath);
-      const claims = record.view.writeClaims;
-      const violatingWrites =
-        claims === undefined
-          ? []
-          : observedWrites.filter(
-              (write) =>
-                write.kind === "outside" ||
-                write.kind === "unresolved" ||
-                (write.kind === "workspace" && !writeClaimContains(claims, write.path)),
-            );
-      const violatingPaths = violatingWrites.map(observedWriteAuditPath);
-      const bashHint = bashCommandMayMutate(event.toolName, args);
-      const violationMessage =
-        violatingPaths.length > 0
-          ? `Writer ${record.view.id} used ${event.toolName} outside its write claims: ${violatingPaths.join(", ")}. It is being stopped; its peers continue.`
-          : undefined;
-      return mutateAt(record, event.assignmentEpoch, (current, now) => {
-        if (current.state === "paused") return undefined;
-        record.activeTools.set(event.toolCallId, event.toolName);
-        const writeAudit = current.writeAudit && {
-          observedFileWrites: [
-            ...new Set([...current.writeAudit.observedFileWrites, ...observedPaths]),
-          ].slice(-MAX_OBSERVED_WRITE_PATHS),
-          violations: [
-            ...current.writeAudit.violations,
-            ...violatingPaths.map((path) => ({ path, toolName: event.toolName, observedAt: now })),
-          ].slice(-MAX_WRITE_CLAIM_VIOLATIONS),
-          bashWriteHints: Math.min(
-            Number.MAX_SAFE_INTEGER,
-            current.writeAudit.bashWriteHints + (bashHint ? 1 : 0),
-          ),
-        };
-        const sessionEvents = startToolSessionEvent(current.sessionEvents, {
+    mutateAt(record, event.assignmentEpoch, (current, now) => {
+      if (current.state === "paused") return undefined;
+      record.activeTools.set(event.toolCallId, event.toolName);
+      return {
+        ...current,
+        sessionEvents: startToolSessionEvent(current.sessionEvents, {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: event.args,
           startedAt: now,
-        });
-        return {
-          ...current,
-          ...(writeAudit && { writeAudit }),
-          ...(violationMessage && { writeViolationOffender: true }),
-          ...(violationMessage
-            ? recordRunWarning(record, sessionEvents, "system", violationMessage, now)
-            : { sessionEvents }),
-          currentTool: [...record.activeTools.values()].at(-1),
-          toolUses: Math.min(Number.MAX_SAFE_INTEGER, (current.toolUses ?? 0) + 1),
-          lastActivityAt: now,
-        };
-      }).pipe(
-        Effect.flatMap((updated) =>
-          updated && violationMessage ? onWriteClaimViolation(record) : Effect.void,
-        ),
-      );
-    });
+        }),
+        currentTool: [...record.activeTools.values()].at(-1),
+        toolUses: Math.min(Number.MAX_SAFE_INTEGER, (current.toolUses ?? 0) + 1),
+        lastActivityAt: now,
+      };
+    }).pipe(Effect.asVoid);
 
   const handleExit = (
     record: RunRecord,

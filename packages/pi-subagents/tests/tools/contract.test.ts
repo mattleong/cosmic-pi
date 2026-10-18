@@ -7,7 +7,7 @@ import {
   type SubagentContract,
   type SubagentContractTool,
 } from "../../src/tools/contract-schema.ts";
-import { containedWriter, view } from "../fixtures/run-view.ts";
+import { view } from "../fixtures/run-view.ts";
 
 const decoded = <Tool extends SubagentContractTool, Contract extends SubagentContract<Tool>>(
   tool: Tool,
@@ -146,13 +146,14 @@ describe("await contract", () => {
 });
 
 describe("cleanup evidence", () => {
-  it("preserves a claim violation and independently redacts bounded cleanup diagnostics", () => {
+  it("redacts bounded cleanup diagnostics", () => {
     const target = decoded(
       "subagent_status",
       statusContract({
         observations: [
           {
-            run: containedWriter({
+            run: view({
+              writeIntent: "writer",
               state: "stopped",
               cleanup: {
                 disposition: "quarantined",
@@ -170,7 +171,6 @@ describe("cleanup evidence", () => {
         missingRunIds: [],
       }),
     ).targets[0]!;
-    expect(target.attention).toMatchObject({ kind: "containment" });
     expect(target.cleanup?.diagnostic?.code?.length).toBeLessThanOrEqual(80);
     expect(target.cleanup?.diagnostic?.message.length).toBeLessThanOrEqual(1_024);
     expect(JSON.stringify(target)).not.toContain("lease-secret");

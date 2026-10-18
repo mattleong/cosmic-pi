@@ -29,6 +29,7 @@ import {
 } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
 import {
+  startToolParameters,
   subagentArgumentPreparer,
   subagentToolAction,
   SUBAGENT_TOOL_SCHEMAS,
@@ -38,6 +39,7 @@ import {
 import { countLabel, invokeHostCallback, toPiToolOutputSchema } from "pi-cosmic-core";
 import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
 import {
+  CUSTOM_AGENT_START_GUIDELINE,
   NESTED_START_GUIDELINE,
   NESTED_WORKSPACE_PARENT_START_GUIDELINE,
   NORMAL_START_GUIDELINE,
@@ -72,9 +74,12 @@ const TOOL_INPUTS: SubagentToolInputs = {
   [SUBAGENT_TOOL_NAME.status]: (args) => ({ tool: SUBAGENT_TOOL_NAME.status, args }),
   [SUBAGENT_TOOL_NAME.await]: (args) => ({ tool: SUBAGENT_TOOL_NAME.await, args }),
   [SUBAGENT_TOOL_NAME.send]: (args) => ({ tool: SUBAGENT_TOOL_NAME.send, args }),
-  [SUBAGENT_TOOL_NAME.reply]: (args) => ({ tool: SUBAGENT_TOOL_NAME.reply, args }),
   [SUBAGENT_TOOL_NAME.lifecycle]: (args) => ({ tool: SUBAGENT_TOOL_NAME.lifecycle, args }),
   [SUBAGENT_TOOL_NAME.workspace]: (args) => ({ tool: SUBAGENT_TOOL_NAME.workspace, args }),
+};
+
+type SubagentToolParameterSet = {
+  readonly [N in SubagentToolName]: SubagentToolParameters<N>;
 };
 
 type SubagentArgumentPreparers = {
@@ -89,18 +94,17 @@ const ARGUMENT_PREPARERS: SubagentArgumentPreparers = {
   [SUBAGENT_TOOL_NAME.status]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.status),
   [SUBAGENT_TOOL_NAME.await]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.await),
   [SUBAGENT_TOOL_NAME.send]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.send),
-  [SUBAGENT_TOOL_NAME.reply]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.reply),
   [SUBAGENT_TOOL_NAME.lifecycle]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.lifecycle),
   [SUBAGENT_TOOL_NAME.workspace]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.workspace),
 };
 
 const SCRIPTED_SUBAGENT_GUIDELINE =
-  "Native codemode can script read-only delegation with subagent_start, subagent_await, subagent_status, subagent_models, and lifecycle stop, which return version-2 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
+  "Native codemode can script read-only delegation with subagent_start, subagent_await, subagent_status, subagent_models, and lifecycle stop, which return version-3 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
 
 // The audience-specific delegation rule from delegation/prompt.ts is prepended at registration.
 const START_GUIDELINES = [
   "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.",
-  "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Set isolation: worktree for writers whose change you'll review and apply as a diff or that run while you edit. Run several shared-checkout writers only with pairwise-disjoint `writes` claims, fixed at launch; a writer that writes outside them is stopped, and you relaunch it with corrected claims.",
+  "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Set isolation: worktree for writers whose change you'll review and apply as a diff or that run while you edit. Shared-checkout writers in one cwd share it without file claims: give each a disjoint task scope and name the files or areas it owns.",
   "If a start fails, follow its Next step or tell the user; don't run claude, codex, or pi from the shell instead.",
 ];
 
@@ -108,14 +112,14 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.models]: {
     label: "Inspect Profile Routes",
     description:
-      "Show each profile's configured route: its model candidates in fallback order, with runtime, effort, context, write intent, and fast mode. The user configures routes; you can't pick a model. Authentication is checked only at launch.",
+      "Show each profile's configured route: its model candidates in fallback order, with runtime, effort, context, write intent, and fast mode, plus the user's custom agents and the candidates their overrides leave eligible. The user configures routes; you can't pick a model. Authentication is checked only at launch.",
     renderCall: (args, theme) =>
       renderSubagentCall("Inspect profile routes", args.profile ?? "all profiles", theme),
   },
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Start 1–32 background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: set isolation per agent, or omit it for the session default; only the main session and worktree writers can start worktree writers. A shared-checkout writer without `writes` claims has the checkout to itself; parallel writers need disjoint exact claims. Subagents started from a codemode script, and their descendants, stay read-only. A start that fails after launch reports whether cleanup finished and whether retry is available.",
+      "Start 1–32 background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: set isolation per agent, or omit it for the session default; only the main session and worktree writers can start worktree writers. Several shared-checkout writers may run in one cwd; give them disjoint task scopes because nothing enforces file ownership. Subagents started from a codemode script, and their descendants, stay read-only. A start that fails after launch reports whether cleanup finished and whether retry is available.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     promptGuidelines: START_GUIDELINES,
     renderCall: (args, theme, context) =>
@@ -146,7 +150,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     promptSnippet: "Wait for subagent reports when your next step depends on them",
     promptGuidelines: [
       "After starting subagents, keep working on parts you didn't delegate; don't redo a subagent's slice while it runs. Call subagent_await only when your next step depends on a report; reports arrive on their own, so don't poll subagent_status.",
-      "When a subagent tool result lists next steps, follow them in order before continuing. Use subagent_reply only for a real parent question.",
+      "When a subagent tool result lists next steps, follow them in order before continuing. Answer a real parent question with subagent_send.",
     ],
     renderCall: (args, theme) =>
       renderSubagentCall(
@@ -157,25 +161,20 @@ const TOOL_SPECS: SubagentToolSpecs = {
     lease: (presentation, args) => presentation.beginAwait(requestedRunIds(args) ?? [], args.until),
   },
   [SUBAGENT_TOOL_NAME.send]: {
-    label: "Send Subagent Guidance",
+    label: "Message Subagents",
     description:
-      "Send the same guidance to one or more running subagents. Each target's result is reported separately.",
+      "Send the same message to one or more subagents. A target waiting on your question receives it as the answer; a running target receives it as guidance for its current turn. Each target's result says whether it was answered or guided and is reported separately.",
     renderCall: (args, theme) =>
-      renderSubagentCall(`Guide ${targetsLabel(args)}`, quoted(args.message), theme),
-  },
-  [SUBAGENT_TOOL_NAME.reply]: {
-    label: "Reply to Subagent",
-    description: "Answer a subagent's blocking question.",
-    renderCall: (args, theme) =>
-      renderSubagentCall("Reply to subagent", quoted(args.message), theme),
+      renderSubagentCall(`Message ${targetsLabel(args)}`, quoted(args.message), theme),
   },
   [SUBAGENT_TOOL_NAME.lifecycle]: {
     label: "Manage Subagents",
     description:
-      "Interrupt, resume, or stop subagents, or retry a failed run on its profile's next configured candidate. Retry starts a new linked run, never reuses the failed candidate, and refuses when execution or cleanup is uncertain. Each target's result is reported separately.",
+      "Interrupt, resume, or stop subagents, or retry a failed run on its profile's next configured candidate. Resume continues a paused, completed, failed, or stopped run's own session when its backend kept one; a worktree writer resumes in its workspace and reopens its review. Retry starts a new linked run, never reuses the failed candidate, and refuses when execution or cleanup is uncertain. Each target's result is reported separately.",
     promptSnippet: "Interrupt, resume, stop, or retry subagents",
     promptGuidelines: [
       "If a profiled run fails with route candidates left, retry it with action=retry before starting a generalist replacement, and don't replace a profile the user disabled. Never retry when execution or cleanup is uncertain; retry a writer only when a fresh run is still what the user wants.",
+      "Resume a failed run only when its session is worth continuing, such as after a transient error; a deterministic failure repeats, so retry or start a new run instead.",
     ],
     renderCall: (args, theme) => {
       const verb = args.action ?? "manage";
@@ -187,12 +186,11 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.workspace]: {
     label: "Manage Writer Workspace",
     description:
-      "Apply worktree writers' proposals as their direct parent. apply with just workspaceId freezes, prepares, runs the project's configured verification, and integrates in one call, without requiring the diff to be read; its result says whether the diff was reviewed and whether it was verified, and failed verification applies nothing. The careful path: review freezes a finished writer's changes and returns pages that start with a summary of changed files and line counts, then the diff; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. apply with that revisionId and preparationId integrates exactly that pair as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. apply with paths integrates only those changed files and keeps the rest as the proposal. export writes the proposal as a patch file or branch in your repository without resolving it, including an orphaned workspace whose session has ended. revise asks the writer for another pass, and rebase first rebuilds its tree from your current files; discard deletes a rejected proposal, or an orphan.",
+      "Apply worktree writers' proposals as their direct parent. apply with just workspaceId freezes, prepares, runs the project's configured verification, and integrates in one call, without requiring the diff to be read; its result says whether the diff was reviewed and whether it was verified, and failed verification applies nothing. The careful path: review freezes a finished writer's changes and returns pages that start with a summary of changed files and line counts, then the diff; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. apply with that revisionId and preparationId integrates exactly that pair as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. apply with paths integrates only those changed files and keeps the rest as the proposal. revise asks the writer for another pass, and rebase first rebuilds its tree from your current files; discard deletes a rejected proposal. list marks workspaces left by an ended session: review, prepare, apply, or revise takes over an adoptable one, and discard deletes any of them.",
     promptSnippet: "Apply, or review, test, and apply, worktree writers' proposals",
     promptGuidelines: [
       "A worktree writer's report is a proposal, not approval, and nothing applies it automatically. For small or trusted changes, call apply with the workspaceId; for risky changes, review every page, prepare that revision, run the relevant tests in the prepared cwd without editing it, then apply that exact revisionId and preparationId. Either path needs no user confirmation. Don't stage or commit parent changes.",
       "Failed verification blocks the proposal: inspect the prepared tree, then revise or discard it, or review every page and apply a fresh preparation after its tests pass. If review or tests fail, revise with concrete feedback, await the successor, and review or apply its new revision. A stale preparation needs a fresh prepare and test run; when your files moved on under the proposal, revise with rebase. Discard only proposals you mean to delete.",
-      "To keep a proposal you can't apply now, such as one left by a session that ended, export it as a patch (or a branch) and tell the user where it is; export never applies or resolves the workspace.",
     ],
     renderCall: (args, theme) => renderSubagentCall("Writer workspace", args.action ?? "", theme),
   },
@@ -234,6 +232,21 @@ export function registerSubagentTools(
   };
 
   const nested = runtime.proxyCall !== undefined;
+  const agents = nested ? undefined : (runtime.agents ?? []);
+  const startParameters = startToolParameters(agents);
+  const toolParameters: SubagentToolParameterSet = {
+    [SUBAGENT_TOOL_NAME.models]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.models].parameters,
+    [SUBAGENT_TOOL_NAME.start]: startParameters,
+    [SUBAGENT_TOOL_NAME.status]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.status].parameters,
+    [SUBAGENT_TOOL_NAME.await]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.await].parameters,
+    [SUBAGENT_TOOL_NAME.send]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.send].parameters,
+    [SUBAGENT_TOOL_NAME.lifecycle]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.lifecycle].parameters,
+    [SUBAGENT_TOOL_NAME.workspace]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.workspace].parameters,
+  };
+  const argumentPreparers: SubagentArgumentPreparers = {
+    ...ARGUMENT_PREPARERS,
+    [SUBAGENT_TOOL_NAME.start]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.start, startParameters),
+  };
   const buildTool = <N extends SubagentToolName>(name: N) => {
     const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
     const rootContract = !nested && isSubagentContractTool(name);
@@ -248,6 +261,7 @@ export function registerSubagentTools(
               : NESTED_START_GUIDELINE
             : NORMAL_START_GUIDELINE,
           ...(spec.promptGuidelines ?? []),
+          ...(agents && agents.length > 0 ? [CUSTOM_AGENT_START_GUIDELINE] : []),
           ...(scriptable ? [SCRIPTED_SUBAGENT_GUIDELINE] : []),
         ],
       }),
@@ -260,8 +274,8 @@ export function registerSubagentTools(
           description: "Root-session read-only subagent orchestration",
         },
       }),
-      parameters: SUBAGENT_TOOL_SCHEMAS[name].parameters,
-      prepareArguments: ARGUMENT_PREPARERS[name],
+      parameters: toolParameters[name],
+      prepareArguments: argumentPreparers[name],
       execute: (id, args, ...rest) => {
         const input = TOOL_INPUTS[name](args);
         return settlePresentation(

@@ -56,7 +56,7 @@ describe("native scripted subagent workflows", () => {
           expect(result.isError).toBe(false);
           expect(output(result.text), result.text).toMatchObject({
             contract: "pi-subagents/orchestration",
-            version: 2,
+            version: 3,
             outcome: "partial",
             launches: [
               { index: 0, status: "failed", failure: { code: "scripted_writer_not_supported" } },
@@ -87,10 +87,10 @@ describe("native scripted subagent workflows", () => {
             interrupt: (id) => Effect.succeed(view({ id, state: "paused" })),
           });
           const h = yield* nativeCodemodeSession(service);
-          for (const name of ["subagent_send", "subagent_reply", "subagent_workspace"])
+          for (const name of ["subagent_send", "subagent_workspace"])
             expect(h.session.getCallableToolNames()).not.toContain(name);
           expect(h.session.getActiveToolNames()).toEqual(
-            expect.arrayContaining(["subagent_reply", "subagent_workspace"]),
+            expect.arrayContaining(["subagent_send", "subagent_workspace"]),
           );
           const result = yield* h.run(
             `

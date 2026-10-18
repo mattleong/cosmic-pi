@@ -82,7 +82,7 @@ const exitedProcessId = Effect.gen(function* () {
 const test = workspaceTests([["src/main.ts", "baseline\n"]]);
 
 test("reclaims a lock left by a process that exited and ignores the old global lock", function* (service, root, agent) {
-  const registry = path.join(agent, "git-workspaces");
+  const registry = path.join(agent, "subagent-worktrees");
   const directory = workspaceLockDirectory(registry);
   yield* io(() => fs.mkdir(path.join(registry, "operation.lock"), { recursive: true }));
   yield* io(() => fs.chmod(registry, 0o700));
@@ -117,7 +117,7 @@ it.live(
       yield* Effect.gen(function* () {
         const service = yield* WorkspaceService;
         const handle = yield* service.create({ sourceCwd: source, ownerId: "parent" });
-        expect(handle.cwd.startsWith(path.join(real, "git-workspaces"))).toBe(true);
+        expect(handle.cwd.startsWith(path.join(real, "subagent-worktrees"))).toBe(true);
         expect(yield* service.list({ ownerId: "parent" })).toHaveLength(1);
       }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: linked })));
 
@@ -125,7 +125,7 @@ it.live(
       yield* io(() => fs.mkdir(redirected, { mode: 0o700 }));
       yield* io(() => fs.mkdir(path.join(temporary, "elsewhere"), { mode: 0o700 }));
       yield* io(() =>
-        fs.symlink(path.join(temporary, "elsewhere"), path.join(redirected, "git-workspaces")),
+        fs.symlink(path.join(temporary, "elsewhere"), path.join(redirected, "subagent-worktrees")),
       );
       yield* writeFile(path.join(temporary, "elsewhere", "marker"), "outside\n");
       yield* Effect.gen(function* () {

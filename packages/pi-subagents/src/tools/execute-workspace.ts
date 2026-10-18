@@ -8,14 +8,9 @@ import { invalidRequest } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import type { WorkspaceApplyResult } from "../run/workspace-apply.ts";
-import type { WorkspaceExportResult } from "../run/workspace-export.ts";
+import type { WorkspaceReviseOptions } from "../run/workspace-launch.ts";
 import type { WorkspaceIntegrationOutcome } from "../run/workspace-integration.ts";
 import { UnavailableWorkspaceArtifactSchema, WorkspaceRecordSchema } from "../workspace/model.ts";
-import {
-  blockingUncapturedPath,
-  leftOutReason,
-  leftOutUncapturedPaths,
-} from "../workspace/policy.ts";
 import {
   MAX_WORKSPACE_VERIFICATION_TEXT_CHARS,
   type WorkspaceToolDetails,
@@ -111,34 +106,17 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
   return warnings;
 }
 
-function leftOutWarnings(leftOut: ReadonlyArray<string>): WorkspaceWarning[] {
-  const paths = leftOut.filter((path) => leftOutReason(path) === "dependency");
-  const credentials = leftOut.filter((path) => leftOutReason(path) === "credential");
+function leftOutWarnings(credentials: ReadonlyArray<string>): WorkspaceWarning[] {
+  if (credentials.length === 0) return [];
   return [
-    ...(paths.length > 0
-      ? [
-          {
-            code: "worker-files-left-out",
-            message:
-              paths.length === 1
-                ? "A worker file in a dependency or build directory was left out"
-                : `${countLabel(paths.length, "worker file")} in dependency or build directories were left out`,
-            detail: `Proposals leave out files in dependency, build, and Pi state directories (node_modules, vendor, dist, build, coverage, .pi) on purpose, so these never reach the parent checkout: ${listedPaths(paths)}. Regenerate them there, for example by installing dependencies or rebuilding, if the change needs them.`,
-          },
-        ]
-      : []),
-    ...(credentials.length > 0
-      ? [
-          {
-            code: "credential-files-left-out",
-            message:
-              credentials.length === 1
-                ? "A credential file the worker created was left out"
-                : `${countLabel(credentials.length, "credential file")} the worker created were left out`,
-            detail: `Proposals leave out worker-created files with credential names that aren't source code (such as .env, .npmrc, keys, and credentials or secrets files), so local secrets never reach the parent checkout: ${listedPaths(credentials)}. Create them in the parent checkout yourself if the change needs them.`,
-          },
-        ]
-      : []),
+    {
+      code: "credential-files-left-out",
+      message:
+        credentials.length === 1
+          ? "A credential file the worker created was left out"
+          : `${countLabel(credentials.length, "credential file")} the worker created were left out`,
+      detail: `Proposals leave out worker-created files with credential names that aren't source code (such as .env, .npmrc, keys, and credentials or secrets files), so local secrets never reach the parent checkout: ${listedPaths(credentials)}. Create them in the parent checkout yourself if the change needs them.`,
+    },
   ];
 }
 
@@ -151,12 +129,17 @@ const WorkspaceMetadataSchema = Schema.Struct({
   sourceWorkspaceId: Schema.optional(Schema.String),
   revisionId: Schema.optional(Schema.String),
   preparationId: Schema.optional(Schema.String),
+  /** Set on another session's workspace once that session ended. */
+  orphan: Schema.optional(Schema.Literals(["adoptable", "discard-only"])),
 });
 const encodeWorkspaceMetadata = Schema.encodeEffect(
   Schema.fromJsonString(
     Schema.Union([WorkspaceMetadataSchema, UnavailableWorkspaceArtifactSchema]),
   ),
 );
+
+const ORPHAN_GUIDANCE =
+  "Metadata visibility does not authorize recovery. An entry with orphan=adoptable belongs to a session that has ended: review, prepare, apply, or revise takes it over for this session; orphan=discard-only entries (nested or left mid-integration) can only be discarded, which rolls back an interrupted integration. Adopt or discard another session's workspace only when the user asks. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the worker tree and recovery record before manual repair.";
 
 const executeWorkspaceList = (
   service: SubagentServiceContract,
@@ -177,6 +160,9 @@ const executeWorkspaceList = (
         }),
         ...(record.revision && { revisionId: record.revision.revisionId }),
         ...(record.preparation && { preparationId: record.preparation.preparationId }),
+        ...(listing.orphans?.has(record.handle.workspaceId) && {
+          orphan: listing.orphans.get(record.handle.workspaceId),
+        }),
       })),
       ...listing.unavailable,
     ].toSorted((a, b) => a.workspaceId.localeCompare(b.workspaceId));
@@ -201,6 +187,9 @@ const executeWorkspaceList = (
       lines.push(line);
     }
     const nextOffset = offset + lines.length < entries.length ? offset + lines.length : undefined;
+    const adoptableCount = [...(listing.orphans?.values() ?? [])].filter(
+      (disposition) => disposition === "adoptable",
+    ).length;
     const sourceUnavailableCount = listing.unavailable.filter(
       (entry) => entry.reason === "source-workspace-unavailable",
     ).length;
@@ -220,12 +209,13 @@ const executeWorkspaceList = (
         nextOffset === undefined
           ? "End of workspace list."
           : `More workspaces: call list with offset=${nextOffset}.`,
-        "Metadata visibility does not authorize recovery. If ownership/cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan. Once its creating session has ended and no writer holds it, export saves its proposal as a patch without changing it, and, when the user asks, discard deletes it.",
+        ORPHAN_GUIDANCE,
       ].join("\n"),
       {
         operation: "list",
         offset,
         workspaceCount: entries.length,
+        ...(adoptableCount > 0 && { adoptableCount }),
         unavailableCount: listing.unavailable.length,
         ...(sourceUnavailableCount > 0 && { sourceUnavailableCount }),
         listedCount: lines.length,
@@ -254,18 +244,12 @@ const executeWorkspaceReview = (
       },
       callerRunId,
     );
-    const blocking = (review.uncapturedPaths ?? []).filter(blockingUncapturedPath);
     const prefix = [
       `Workspace ${workspaceId}; immutable revision ${review.revisionId}.`,
       `Review characters ${review.offset}..${review.offset + review.text.length} of ${review.totalChars}: a summary of changed files and line counts, then the diff.`,
       review.nextOffset !== undefined
         ? `Incomplete review. Call review with workspaceId=${workspaceId}, revisionId=${review.revisionId}, offset=${review.nextOffset}. Read ALL pages before prepare.`
         : "End of review. After reading every page, prepare this exact revision, run relevant tests in the returned combined cwd, then apply that revisionId and preparationId.",
-      ...(blocking.length > 0
-        ? [
-            `Uncaptured worker files, absent from this diff: ${listedPaths(blocking)}. Prepare and apply refuse (workspace_uncaptured_files) until a revision no longer leaves them; revise so the writer renames, removes, or gitignores them, or copy them from the worker tree and discard.`,
-          ]
-        : []),
       "BEGIN IMMUTABLE REVIEW PAGE",
     ].join("\n");
     return result([prefix, review.text, "END IMMUTABLE REVIEW PAGE"].join("\n"), {
@@ -382,7 +366,7 @@ const executeWorkspaceApply = (
       remainingCount === undefined
         ? []
         : [
-            `Partial apply: ${countLabel(remainingCount, "other changed file")} ${applied.integrated ? (remainingCount === 1 ? "stays" : "stay") : "would stay"} in workspace ${workspaceId} as an unreviewed proposal: ${listedPaths(applied.remainingPaths ?? [])}${remainingCount > (applied.remainingPaths ?? []).length ? ` (${remainingCount - (applied.remainingPaths ?? []).length} not listed)` : ""}. Apply, review, export, revise, or discard them later.`,
+            `Partial apply: ${countLabel(remainingCount, "other changed file")} ${applied.integrated ? (remainingCount === 1 ? "stays" : "stay") : "would stay"} in workspace ${workspaceId} as an unreviewed proposal: ${listedPaths(applied.remainingPaths ?? [])}${remainingCount > (applied.remainingPaths ?? []).length ? ` (${remainingCount - (applied.remainingPaths ?? []).length} not listed)` : ""}. Apply, review, revise, or discard them later.`,
           ];
     const command =
       "command" in applied.verification
@@ -435,101 +419,14 @@ const executeWorkspaceApply = (
     );
   });
 
-const shortId = (id: string) => sanitizeTerminalLine(id.slice(0, 12));
-
-/** How to use what export wrote, and that the workspace is still a proposal. */
-const exportLines = (workspaceId: string, exported: WorkspaceExportResult) => {
-  const unchanged = exported.orphan
-    ? "The orphaned workspace was read without changing it; discard it once the export is safe."
-    : `Workspace ${workspaceId} is unchanged and still a proposal; apply, revise, or discard it as before, and discard it once the export is all you need.`;
-  if (exported.format === "patch")
-    return {
-      location: `Patch: ${exported.path}`,
-      steps: [
-        `Apply it from the repository root with: git apply ${JSON.stringify(exported.path)} (run with --check first; --3way merges it with local edits). It is outside the working tree, so it is never committed by accident.`,
-        unchanged,
-      ],
-    };
-  return {
-    location: `Branch: ${exported.branch}`,
-    steps: [
-      `Its commit ${shortId(exported.commit)} adds the changes to HEAD ${shortId(exported.base)}; your index, HEAD, and files are unchanged. Inspect it with: git diff HEAD...${exported.branch}; merge it with: git merge ${exported.branch}.`,
-      unchanged,
-    ],
-  };
-};
-
-function exportWarnings(exported: WorkspaceExportResult): WorkspaceWarning[] {
-  const paths = exported.uncapturedPaths;
-  const blocking = paths.filter(blockingUncapturedPath);
-  return [
-    ...(exported.format === "branch" && exported.identity === "placeholder"
-      ? [
-          {
-            code: "export-placeholder-identity",
-            message: "The branch commit uses a placeholder identity",
-            detail: `Git user.name and user.email aren't configured for this repository, so the commit on ${exported.branch} names Pi workspace <workspace@invalid> as its author or committer. Configure your identity, then fix the commit with: git commit --amend --reset-author after checking out the branch.`,
-          },
-        ]
-      : []),
-    ...leftOutWarnings(leftOutUncapturedPaths(paths)),
-    ...(blocking.length > 0
-      ? [
-          {
-            code: "uncaptured-files-not-exported",
-            message:
-              blocking.length === 1
-                ? "A worker file the proposal can't carry isn't in the export"
-                : `${countLabel(blocking.length, "worker file")} the proposal can't carry aren't in the export`,
-            detail: `These worker files have names no proposal can hold, so the export leaves them out: ${listedPaths(blocking)}. Copy what you need from the worker tree before discarding the workspace.`,
-          },
-        ]
-      : []),
-  ];
-}
-
-const executeWorkspaceExport = (
-  service: SubagentServiceContract,
-  operation: SubagentWorkspaceInput,
-  receipt: WorkspaceReceipt,
-  callerRunId: string,
-) =>
-  Effect.gen(function* () {
-    const workspaceId = operation.workspaceId ?? "";
-    const exported = yield* service.workspaceExport(
-      workspaceId,
-      { revisionId: operation.revisionId, format: operation.format },
-      callerRunId,
-    );
-    const heading = `Exported workspace ${workspaceId}, revision ${exported.revisionId}, with ${countLabel(exported.changedPaths.length, "changed file")}.`;
-    const { location, steps } = exportLines(workspaceId, exported);
-    const warnings = exportWarnings(exported);
-    const target =
-      exported.format === "patch"
-        ? exported.path.length <= 1_024 && { exportPath: exported.path }
-        : { exportBranch: exported.branch };
-    return result(
-      [
-        heading,
-        location,
-        ...steps,
-        ...warnings.map((warning) => `Warning: ${warning.detail}`),
-      ].join("\n"),
-      {
-        ...receipt,
-        revisionId: exported.revisionId,
-        changedPathCount: exported.changedPaths.length,
-        exportFormat: exported.format,
-        ...target,
-        ...(warnings.length > 0 && { warnings }),
-        displayContent: { offset: heading.length + 1, length: location.length },
-      },
-    );
-  });
-
+/**
+ * `resolveLaunch` resolves an adopted workspace's recorded launch for its first revision; the
+ * host supplies it with its profiles and parent context.
+ */
 export const executeWorkspaceAction = (
   operation: SubagentWorkspaceInput,
   callerRunId = SUBAGENT_ROOT_RUN_ID,
+  resolveLaunch?: WorkspaceReviseOptions["resolveLaunch"],
 ) =>
   Effect.gen(function* () {
     const error = Check(WorkspaceParameters, operation)
@@ -548,8 +445,6 @@ export const executeWorkspaceAction = (
         return yield* executeWorkspacePrepare(service, operation, receipt, callerRunId);
       case "apply":
         return yield* executeWorkspaceApply(service, operation, receipt, callerRunId);
-      case "export":
-        return yield* executeWorkspaceExport(service, operation, receipt, callerRunId);
       case "discard":
         yield* service.workspaceDiscard(workspaceId, callerRunId);
         return result(
@@ -561,7 +456,7 @@ export const executeWorkspaceAction = (
           workspaceId,
           operation.message ?? "",
           callerRunId,
-          { rebase: operation.rebase },
+          { rebase: operation.rebase, resolveLaunch },
         );
         const conflicts = rebase?.conflictedPaths ?? [];
         const rebased =

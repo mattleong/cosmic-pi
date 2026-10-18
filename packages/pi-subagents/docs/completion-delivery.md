@@ -12,6 +12,15 @@ Every assignment has a monotonic, never-reused epoch and a `preparing`/`issuing`
 - Child instructions escalate risks that could invalidate current parent work into questions. One question may be used per assignment and one may block per run at a time.
 - Reply, MCP cancellation, socket loss, adapter cancellation, and scope close settle the exact owned question. Every definite question-death path emits a correlated cancellation, for which the channel reserves queue capacity, so `waiting_for_parent` never outlives its question.
 - A reply timeout after transmission returns `reply_outcome_uncertain`, closes the question without retry, and keeps a system warning.
+
+### Parent messages
+
+`subagent_send` is the one parent-message path; there is no separate reply tool. Each target is claimed under the run lock, which decides its delivery:
+
+- A target in `waiting_for_parent` is **answered**: the claim marks the reply in flight, clears the question, and commits in the owner scope, so cancelling the caller never abandons the claimed question. A definitely unsent reply (`reply_send_failed`) restores the question for another send.
+- Any other target is **guided**: the message steers its running turn under the existing steer admission, and the turn-input claim is released when the caller finishes.
+- A target with a reply already in flight refuses with `reply_in_flight` rather than steering; uncertain-delivery codes keep their meaning.
+- Each target's result is separate. Cards list answered targets in `answeredRunIds`; the others were guided. Activity and fleet reply and message actions use the same path.
 - Report `deliveryId` retries with identical text return the original sequence without a second event; conflicting reuse fails.
 
 ### Start confirmation and report commit
@@ -29,10 +38,10 @@ Local Claude guidance has a separate optional `steeringDelivery` fact: `pending`
 
 - Every supported candidate closes after reporting. `closeOnReport` may be omitted or `true`; `false` is rejected at decode.
 - Completion payloads and exclusive await claims survive process cleanup.
-- `subagent_send` steers active assignments and never starts an idle session. Local Pi supports paused in-place resume and completed-session respawn; Claude and Codex do not advertise resume. Each resume is a new epoch with session-owned admission.
+- `subagent_send` answers or steers active assignments and never starts an idle session. Local Pi supports paused in-place resume and respawn of completed, failed, and stopped sessions; Claude and Codex do not advertise resume. Each resume is a new epoch with session-owned admission.
 - Natural completion or failure closes only that run's backend scope; descendants stay attached to their original run nodes. Cleanup interrupts the run's proxy waits and joins finalizers that release their completion claims, so descendant reports reach a surviving ancestor or the root.
 - Explicit stop marks the subtree against new admission and closes it leaf-first. Root shutdown, replacement, tree navigation, and reload close all children leaf-first, detach confirmed pool members, then release each safely releasable final lease.
-- Local Pi run directories, transcripts included, stay until eviction or runtime end, so a stopped run's `Session:` link keeps working. Only paused or completed runs that were not stopped can resume.
+- Local Pi run directories, transcripts included, stay until eviction or runtime end, so a stopped run's `Session:` link keeps working. A paused, completed, failed, or stopped run can resume until its state is reclaimed or a retry claims or supersedes it ([resume admission](routing.md#resume-admission)).
 - Graceful shutdown is not crash recovery: parent death after `spawn-started` leaves a manual-recovery lock.
 
 ## Projection and delivery
@@ -118,7 +127,7 @@ Each tool completion carries a bounded output preview (seven lines, at most 1,00
 
 The script-facing contract is in [Native Pi codemode scripting](native-codemode.md). Service rules:
 
-- Root models, start, await, status, and lifecycle declare version-2 orchestration results from Effect Schema, separate from persisted details. The contract is encoded inside the claim scope before consumption, and only completely returned reports are consumed.
+- Root models, start, await, status, and lifecycle declare version-3 orchestration results from Effect Schema, separate from persisted details. The contract is encoded inside the claim scope before consumption, and only completely returned reports are consumed.
 - Scripted execution is identified from native `parentToolCallId` provenance on execution-start and admission events. Script evidence cannot be downgraded, model origin requires both observations, and missing evidence fails closed.
 - Scripted starts enforce read-only intent after route resolution and before admission; lifecycle permits only stop. Scripted await and status reject parent attention before consumption, and await leaves questions unacknowledged.
 - Scripted root starts seed an immutable, record-only `scriptOrigin`, inherited by descendants and retry successors. Validation rejects such writers before workspace acquisition, admission rechecks before eviction or pool creation, resume keeps it, and revise cannot admit a script-origin writer.
@@ -153,16 +162,17 @@ The decoder accepts the flag on any action failure, so a misplaced flag keeps it
 
 ## Run cancellation and cleanup
 
-Cleanup evidence is independent of task state, accepted reports, and claim violations; its fields are described in [Cleanup ordering and quarantine](local-backends.md#cleanup-ordering-and-quarantine).
+Cleanup evidence is independent of task state and accepted reports; its fields are described in [Cleanup ordering and quarantine](local-backends.md#cleanup-ordering-and-quarantine).
 
-- `cleanup` and `writerCleanupQuarantined` are optional additive fields in version-2 cards and version-2 orchestration targets. Absence is unknown, not confirmed cleanup.
+- `cleanup` and `writerCleanupQuarantined` are optional additive fields in version-2 cards and orchestration targets. Absence is unknown, not confirmed cleanup.
 - Native lifecycle `status: "succeeded"` acknowledges the operation, not cleanup. Compact stop results stay warnings while cleanup is pending or quarantined.
 - Explicit stop may reverify transport cleanup only when `cleanup.recovery` is `stop`, including on terminal runs; Activity and the fleet expose this without restarting the task. Manual recovery covers unknown finalizers, incomplete descendant snapshots, and uncertain lease failures.
-- `writeViolationOffender` marks a writer stopped for writing outside its claims; recovery is a relaunch with corrected claims, which waits for cleanup confirmation. Cleanup quarantine never recommends stopping healthy pool peers.
+- Cleanup quarantine never recommends stopping healthy pool peers.
+- Cards saved before orchestration contract version 3 may carry `writeClaims`, `writeClaimCount`, `writeClaimsOmitted`, `writeAudit`, and `writeViolationOffender`. They still decode so history replays, but nothing produces or renders them.
 
 Cancellation and ownership:
 
-- `session-owned.ts` owns the one claim-then-owner-scoped-commit mask shared by launch, retry, reply, interrupt, stop, and resume, so cancelling a waiter never abandons ownership while owner-scope closure still interrupts the commit.
+- `session-owned.ts` owns the one claim-then-owner-scoped-commit mask shared by launch, retry, interrupt, stop, and resume (a send that answers a question uses the same owner-scoped commit), so cancelling a waiter never abandons ownership while owner-scope closure still interrupts the commit.
 - Subtree stop claims every target and its parent-stop flag, then forks the leaf-first traversal into the session scope. It joins descendant cleanup, including already-stopping and terminal descendants, before closing ancestors, and leaves terminal outcomes unchanged.
 - Writer lease preparation masks its shared ownership claim through finalizer installation; pre-ownership checks stay interruptible.
 - Process lifecycle installs its settlement handler before spawn admission, so unclaimed cancellation is a no-op and claimed cleanup settles its latch.

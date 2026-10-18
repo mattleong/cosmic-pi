@@ -103,7 +103,9 @@ const retryRouteFailure = (
   if (record.view.retryExhausted === true || remainingRouteCandidates(continuation) === 0)
     return invalid(
       "retry_route_exhausted",
-      `Profile ${continuation.profile} has no configured candidate after candidate ${continuation.selectedCandidateIndex + 1}. Only now may the parent choose a generalist replacement.`,
+      continuation.routeSource === "override"
+        ? `Subagent ${id} ran on a model override, which has no fallback candidate. Start a new run with the profile's route or another override.`
+        : `Profile ${continuation.profile} has no configured candidate after candidate ${continuation.selectedCandidateIndex + 1}. Only now may the parent choose a generalist replacement.`,
     );
   if (record.view.supersededByRunId)
     return invalid(

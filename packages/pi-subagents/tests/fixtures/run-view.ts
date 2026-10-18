@@ -30,18 +30,3 @@ export const projectionOf = (runs: ReadonlyArray<SubagentRunView>): SubagentProj
   revision: 1,
   runs,
 });
-
-export const violationAudit = (path: string, observedAt = 2) => ({
-  observedFileWrites: [path],
-  violations: [{ path, toolName: "edit", observedAt }],
-  bashWriteHints: 0,
-});
-
-export const containedWriter = (overrides: Partial<SubagentRunView> = {}) =>
-  view({
-    writeIntent: "writer",
-    writeClaims: ["src/a.ts"],
-    writeViolationOffender: true,
-    writeAudit: violationAudit("src/b.ts"),
-    ...overrides,
-  });

@@ -68,7 +68,7 @@ test.each(["compact"] as const)(
           ),
         ).toBe(expanded);
         if (!expanded)
-          expect(text).not.toMatch(/subagent_reply|subagent_lifecycle|subagent_workspace/);
+          expect(text).not.toMatch(/subagent_send|subagent_lifecycle|subagent_workspace/);
         expect(JSON.stringify(message)).toBe(before);
       }
       const history = render(

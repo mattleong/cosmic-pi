@@ -73,3 +73,36 @@ describe("workspace verification configuration", () => {
       ).toContain("project.workspaceVerify");
   });
 });
+
+describe("workspace include configuration", () => {
+  const workspaceInclude = [".env", "config/*.local", "!config/shared.local"];
+
+  it("takes include patterns only from a trusted project document", () => {
+    expect(resolve({ version: 6 }, { version: 6, workspaceInclude }).workspaceInclude).toEqual(
+      workspaceInclude,
+    );
+    expect(
+      resolve({ version: 6 }, { version: 6, workspaceInclude }, false).workspaceInclude,
+    ).toBeUndefined();
+    expect(
+      resolve({ version: 6 }, { version: 6, workspaceInclude: [] }).workspaceInclude,
+    ).toBeUndefined();
+  });
+
+  it("rejects global patterns and malformed project patterns", () => {
+    const global = subagentConfigDecoder("global")({ version: 6, workspaceInclude });
+    expect(global.diagnostics).toContain("global.workspaceInclude");
+    expect(global.file.workspaceInclude).toBeUndefined();
+    for (const patterns of [
+      ".env",
+      [""],
+      ["   "],
+      [".env\nsecrets"],
+      [42],
+      Array.from({ length: 65 }, (_, index) => `file-${index}`),
+    ])
+      expect(
+        subagentConfigDecoder("project")({ version: 6, workspaceInclude: patterns }).diagnostics,
+      ).toContain("project.workspaceInclude");
+  });
+});

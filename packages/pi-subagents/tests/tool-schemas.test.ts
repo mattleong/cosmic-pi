@@ -67,6 +67,13 @@ describe("subagent argument preparation", () => {
     );
   });
 
+  it("rejects retired write claims on a start entry", () => {
+    const rejected = () =>
+      prepareStart({ agents: [{ task: "Edit", profile: "worker", writes: ["src/a.ts"] }] });
+    expect(rejected).toThrow(/\[invalid_arguments\]/u);
+    expect(rejected).toThrow(/writes/u);
+  });
+
   it("suggests isolation for workspace-style start keys", () => {
     const accepted = Object.keys(
       SUBAGENT_TOOL_SCHEMAS.subagent_start.parameters.properties.agents.items.properties,

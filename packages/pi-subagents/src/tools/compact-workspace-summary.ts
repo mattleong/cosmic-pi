@@ -58,10 +58,12 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
           : countLabel(details.listedCount, "workspace");
       const sourceless = details.sourceUnavailableCount ?? 0;
       const unreadable = (details.unavailableCount ?? 0) - sourceless;
+      const adoptable = details.adoptableCount ?? 0;
       return [
         listed,
         ...(unreadable > 0 ? [`${unreadable} unreadable`] : []),
         ...(sourceless > 0 ? [`${sourceless} missing their source`] : []),
+        ...(adoptable > 0 ? [`${adoptable} adoptable`] : []),
       ].join(", ");
     }
     case "review":
@@ -73,6 +75,7 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
       return "integrated";
     case "apply":
       return applyCounters(details)[0];
+    // Saved by versions before export was retired.
     case "export":
       return details.exportFormat === "branch" ? "exported to a branch" : "exported as a patch";
     case "revise":
@@ -93,6 +96,11 @@ function validListCounts(details: WorkspaceToolDetails): boolean {
   if (
     details.sourceUnavailableCount !== undefined &&
     details.sourceUnavailableCount > (details.unavailableCount ?? 0)
+  )
+    return false;
+  if (
+    details.adoptableCount !== undefined &&
+    (details.workspaceCount === undefined || details.adoptableCount > details.workspaceCount)
   )
     return false;
   return (
@@ -216,12 +224,23 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
       detail:
         "These nested workspaces name a source workspace whose record is missing or unreadable (source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
     });
+  const adoptable = details.adoptableCount ?? 0;
+  if (adoptable > 0)
+    issues.push(
+      step(
+        "orphans-adoptable",
+        adoptable === 1
+          ? "A workspace from an ended session can be adopted"
+          : `${adoptable} workspaces from ended sessions can be adopted`,
+        "Entries marked orphan=adoptable belong to sessions that have ended. Review, prepare, apply, or revise takes one over for this session; discard deletes it. Do either only when the user asks.",
+      ),
+    );
   if (!isEmptyList(details))
     issues.push(
       step(
         "orphan-recovery",
         "Listing a workspace does not authorize its recovery",
-        "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan. Once its creating session has ended and no writer holds it, export saves its proposal as a patch without changing it, and, when the user asks, discard deletes it.",
+        "Metadata visibility does not authorize recovery. Adopt or discard another session's workspace only when the user asks; orphan=discard-only entries (nested or left mid-integration) can only be discarded. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the worker tree and recovery record before manual repair.",
       ),
     );
   if (details.nextOffset !== undefined)
@@ -313,7 +332,7 @@ function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
             remaining === 1
               ? "One changed file stays in the workspace"
               : `${remaining} changed files stay in the workspace`,
-            `Partial apply integrated only the chosen paths. The revision's ${countLabel(remaining, "other changed file")} ${remaining === 1 ? "stays" : "stay"} in workspace ${details.workspaceId} as an unreviewed proposal; apply, review, export, revise, or discard ${remaining === 1 ? "it" : "them"} later.`,
+            `Partial apply integrated only the chosen paths. The revision's ${countLabel(remaining, "other changed file")} ${remaining === 1 ? "stays" : "stay"} in workspace ${details.workspaceId} as an unreviewed proposal; apply, review, revise, or discard ${remaining === 1 ? "it" : "them"} later.`,
           ),
         ]),
     ...(details.reviewed
@@ -326,32 +345,6 @@ function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
           ),
         ]),
     verificationStep(details, command),
-  ];
-}
-
-type WorkspaceExportReceipt = Extract<WorkspaceOperationReceipt, { readonly operation: "export" }>;
-
-function exportIssues(details: WorkspaceExportReceipt): CompactIssue[] {
-  const branch = details.exportBranch ?? "<branch>";
-  const patch = details.exportPath ?? "<patch>";
-  const location =
-    details.exportFormat === "branch"
-      ? `Branch ${branch}: its commit adds the proposal to HEAD; inspect it with git diff HEAD...${branch} and merge it with git merge ${branch}. The index, HEAD, and files are unchanged.`
-      : `Patch ${patch}, in the repository's Git directory: apply it from the repository root with git apply ${patch}, adding --3way to merge with local edits.`;
-  return [
-    step(
-      details.exportFormat === "branch" ? "use-export-branch" : "use-export-patch",
-      details.exportFormat === "branch"
-        ? "The proposal is on a branch to merge by hand"
-        : "The proposal is in a patch file to apply by hand",
-      location,
-    ),
-    step(
-      "export-proposal-kept",
-      "The workspace is unchanged and still a proposal",
-      `Export applied nothing and resolved nothing. Workspace ${details.workspaceId} stays until it is applied or discarded; discard it once the export is all that's needed.`,
-    ),
-    ...asWarnings(details),
   ];
 }
 
@@ -404,7 +397,6 @@ function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
     case "revise":
       return reviseIssues(details);
     case "export":
-      return exportIssues(details);
     case "integrate":
       return asWarnings(details);
     case "apply":

@@ -21,17 +21,32 @@ const stopAcknowledgement = (run: SubagentRunView): string => {
   return absurd(disposition);
 };
 
+const sendAcknowledgement = (
+  runs: ReadonlyArray<SubagentRunView>,
+  answeredRunIds: ReadonlySet<string>,
+): string => {
+  const answered = runs.flatMap((run) => (answeredRunIds.has(run.id) ? [run.id] : []));
+  const guided = runs.flatMap((run) => (answeredRunIds.has(run.id) ? [] : [run.id]));
+  return [
+    ...(answered.length > 0
+      ? [`Answered ${countLabel(answered.length, "question")} from ${answered.join(", ")}.`]
+      : []),
+    ...(guided.length > 0
+      ? [`Guidance delivered to ${countLabel(guided.length, "subagent")}: ${guided.join(", ")}.`]
+      : []),
+  ].join("\n");
+};
+
 export const managementAcknowledgement = (
   action: Exclude<SubagentToolAction, "models" | "start">,
   runs: ReadonlyArray<SubagentRunView>,
+  answeredRunIds: ReadonlySet<string> = new Set(),
 ): string => {
   if (runs.length === 0) return "";
   const ids = runs.map((run) => run.id).join(", ");
   switch (action) {
     case "send":
-      return `Guidance delivered to ${countLabel(runs.length, "subagent")}: ${ids}.`;
-    case "reply":
-      return `Reply delivered to ${ids}.`;
+      return sendAcknowledgement(runs, answeredRunIds);
     case "retry":
       return runs
         .map((run) =>

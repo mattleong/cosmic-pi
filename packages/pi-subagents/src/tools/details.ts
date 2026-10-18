@@ -15,6 +15,7 @@ import {
 } from "./details-schema.ts";
 import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 import {
+  condenseAgentRoute,
   condenseFailure,
   condenseProfileRoute,
   condenseRunCard,
@@ -22,11 +23,13 @@ import {
   omitReports,
   projectActionFailures,
   projectFailure,
+  projectInvalidAgents,
   projectStartEntry,
+  projectSubagentAgentRoutes,
   projectSubagentProfileRoutes,
   projectSubagentRunCard,
 } from "./details-projection.ts";
-import type { SubagentProfileView } from "./model.ts";
+import type { SubagentAgentView, SubagentInvalidAgentView, SubagentProfileView } from "./model.ts";
 
 export interface StartDetailsInput {
   readonly startEntries: ReadonlyArray<SubagentStartEntry>;
@@ -49,12 +52,15 @@ export type CompactToolDetailsInput =
   | {
       readonly action: "models";
       readonly profiles: ReadonlyArray<SubagentProfileView>;
+      readonly agents?: ReadonlyArray<SubagentAgentView> | undefined;
+      readonly invalidAgents?: ReadonlyArray<SubagentInvalidAgentView> | undefined;
       readonly fallbackProfile: ProfileId;
     }
   | {
       readonly action: RunDetailsAction;
       readonly runs: ReadonlyArray<SubagentRunView>;
       readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
+      readonly answeredRunIds?: ReadonlyArray<string> | undefined;
     };
 
 /**
@@ -182,11 +188,13 @@ const runDetailsCandidate = (
   const cards = projectedCards(source, stage);
   const failures = projectActionFailures(input.action, input.actionFailures);
   const reportsOmitted = stage === "report-free" && reportsWereOmitted(source);
+  const answeredRunIds = (input.answeredRunIds ?? []).slice(0, MAX_TARGET_RUNS);
   return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: input.action,
     cards,
     runCount: input.runs.length,
+    ...(answeredRunIds.length > 0 && { answeredRunIds }),
     ...(failures !== undefined && failures.length > 0 && { actionFailures: failures }),
     ...((reportsOmitted || stage === "condensed") && { contentOmitted: true as const }),
     ...(reportsOmitted &&
@@ -200,10 +208,16 @@ const modelDetailsCandidate = (
   stage: FitStage,
 ): Extract<CompactSubagentToolDetails, { readonly action: "models" }> => {
   const profiles = projectSubagentProfileRoutes(input.profiles);
+  const agents = projectSubagentAgentRoutes(input.agents ?? []);
+  const invalidAgents = projectInvalidAgents(input.invalidAgents ?? []);
   const base: Extract<CompactSubagentToolDetails, { readonly action: "models" }> = {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "models",
     profiles: stage === "condensed" ? profiles.map(condenseProfileRoute) : profiles,
+    ...(agents.length > 0 && {
+      agents: stage === "condensed" ? agents.map(condenseAgentRoute) : agents,
+    }),
+    ...(invalidAgents.length > 0 && { invalidAgents }),
     fallbackProfile: input.fallbackProfile,
   };
   return stage === "condensed" ? { ...base, contentOmitted: true as const } : base;

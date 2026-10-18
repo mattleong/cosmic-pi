@@ -32,7 +32,6 @@ const unexpectedService: SubagentServiceContract = {
   consumeCompletions: (receipts) =>
     receipts.length === 0 ? Effect.void : unexpected("consumeCompletions"),
   send: () => unexpected("send"),
-  reply: () => unexpected("reply"),
   interrupt: () => unexpected("interrupt"),
   resume: () => unexpected("resume"),
   rename: () => unexpected("rename"),
@@ -41,9 +40,9 @@ const unexpectedService: SubagentServiceContract = {
   workspaceReview: () => unexpected("workspaceReview"),
   workspacePrepare: () => unexpected("workspacePrepare"),
   workspaceDiscard: () => unexpected("workspaceDiscard"),
-  workspaceExport: () => unexpected("workspaceExport"),
   workspaceApply: () => unexpected("workspaceApply"),
   workspaceRevise: () => unexpected("workspaceRevise"),
+  sweepOrphanedWorkspaces: Effect.succeed([]),
   inspectWriterWorkspace: unexpected("inspectWriterWorkspace"),
   setWriterWorkspaceMode: () => unexpected("setWriterWorkspaceMode"),
   projection: unexpected("projection"),

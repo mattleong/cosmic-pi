@@ -10,6 +10,7 @@ import type { WorkspaceHandle } from "../workspace/model.ts";
 import type {
   ProfileId,
   ProfileRouteContinuation,
+  SubagentModelOverride,
   SubagentSelectionProvenance,
 } from "../profiles/model.ts";
 
@@ -77,12 +78,6 @@ interface PendingParentQuestion {
   readonly message: string;
 }
 
-interface WriteClaimViolation {
-  readonly path: string;
-  readonly toolName: string;
-  readonly observedAt: number;
-}
-
 interface SubagentNativeActivity {
   readonly active: number;
   readonly total: number;
@@ -94,12 +89,6 @@ interface SubagentNativeActivity {
         readonly updatedAt: number;
       }
     | undefined;
-}
-
-interface SubagentWriteAudit {
-  readonly observedFileWrites: ReadonlyArray<string>;
-  readonly violations: ReadonlyArray<WriteClaimViolation>;
-  readonly bashWriteHints: number;
 }
 
 export const STEERING_DELIVERY_STATES = [
@@ -170,7 +159,10 @@ export interface SubagentRunView {
   readonly name: string;
   readonly task: string;
   readonly profile?: ProfileId | undefined;
+  /** The custom agent launched; `profile` is the profile it routes through. */
+  readonly agent?: string | undefined;
   readonly selection: SubagentSelectionProvenance;
+  readonly modelOverride?: SubagentModelOverride | undefined;
   readonly parentRunId?: string | undefined;
   readonly depth?: number | undefined;
   readonly directChildCount?: number | undefined;
@@ -189,10 +181,6 @@ export interface SubagentRunView {
   readonly state: SubagentRunState;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  readonly writeClaims?: ReadonlyArray<string> | undefined;
-  readonly writeAudit?: SubagentWriteAudit | undefined;
-  /** Stopped after a native write outside its fixed claims; the write audit names the paths. */
-  readonly writeViolationOffender?: boolean | undefined;
   readonly openaiFastMode: boolean;
   readonly runtime: SubagentRuntime;
   readonly reportGeneration: number;
@@ -233,6 +221,14 @@ export const captureSubagentControlExpectation = (
   state: run.state,
   questionRequestId: run.question?.requestId,
 });
+
+/** A parent message answers the target's pending question, or otherwise steers its turn. */
+export type SubagentSendDelivery = "answered" | "guided";
+
+export interface SubagentSendOutcome {
+  readonly delivery: SubagentSendDelivery;
+  readonly run: SubagentRunView;
+}
 
 export const SUBAGENT_ROOT_RUN_ID = "root";
 
@@ -290,9 +286,11 @@ export interface StartSubagentRequest {
   readonly runtime: SubagentRuntime;
   readonly task: string;
   readonly profile?: ProfileId | undefined;
+  /** A custom agent's name; its instructions arrive as `profileGuidance`. */
+  readonly agent?: string | undefined;
   readonly profileGuidance?: string | undefined;
-  readonly writes?: ReadonlyArray<string> | undefined;
   readonly selection?: SubagentSelectionProvenance | undefined;
+  readonly modelOverride?: SubagentModelOverride | undefined;
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
   readonly supersedes?: SubagentRetrySupersession | undefined;
   readonly workspace?: WorkspaceHandle | undefined;
@@ -349,6 +347,17 @@ const TERMINAL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
 
 export const isTerminalRunState = (state: SubagentRunState): boolean =>
   TERMINAL_RUN_STATES.has(state);
+
+/** A run in one of these states may resume when its backend kept continuation state. */
+const RESUMABLE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
+  "paused",
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+export const isResumableRunState = (state: SubagentRunState): boolean =>
+  RESUMABLE_RUN_STATES.has(state);
 
 export const isAssignmentFinishedRunState = (state: SubagentRunState): boolean =>
   state === "reported" || isTerminalRunState(state);

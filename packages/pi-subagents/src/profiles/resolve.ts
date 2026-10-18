@@ -8,18 +8,19 @@ import {
   type SubagentRuntime,
   type SubagentWriteIntent,
 } from "../domain/routing.ts";
+import { customAgentCandidate, type CustomAgent } from "./agents.ts";
 import { PROFILE_DEFINITIONS } from "./definitions.ts";
 import {
   isLocalPiProfileCandidate,
   isProfileId,
   skippedCandidateRoute,
   supportsSubagentFastMode,
+  type LaunchRouteSource,
   type ProfileCandidate,
   type ProfileDefinition,
   type ProfileId,
   type ProfileRoute,
   type ProfileRouteContinuation,
-  type ProfileRouteSource,
   type SkippedProfileCandidate,
   type SubagentSelectionSource,
 } from "./model.ts";
@@ -44,7 +45,7 @@ const FORK_CONTEXT_HEADROOM = 0.8;
 
 export interface ProfileCandidateAttempt {
   readonly source: SubagentSelectionSource;
-  readonly routeSource: ProfileRouteSource;
+  readonly routeSource: LaunchRouteSource;
   readonly candidateIndex: number;
   readonly runtime: SubagentRuntime;
   readonly model: string;
@@ -202,17 +203,42 @@ const resolveCandidate = (
   return resolvePiModel(candidate.model, LOCAL_PI_MODEL_SKIPS);
 };
 
+/** An agent's overrides apply to each candidate before planning; a misfit skips it. */
+const resolveRouteCandidate = (
+  candidate: ProfileCandidate,
+  candidateIndex: number,
+  environment: ProfileResolutionEnvironment,
+  profileDefaultEffort: SubagentEffort | undefined,
+  agent: CustomAgent | undefined,
+): CandidateResult => {
+  if (!agent) return resolveCandidate(candidate, candidateIndex, environment, profileDefaultEffort);
+  const applied = customAgentCandidate(candidate, agent);
+  if (applied.kind === "skipped")
+    return {
+      skipped: {
+        candidateIndex,
+        candidate: skippedCandidateRoute(candidate),
+        code: applied.code,
+        reason: applied.reason,
+      },
+    };
+  return resolveCandidate(applied.candidate, candidateIndex, environment, profileDefaultEffort);
+};
+
 const resolveKnownProfileRoute = (
   profile: ProfileId,
   route: ProfileRoute,
-  routeSource: ProfileRouteSource,
+  routeSource: LaunchRouteSource,
   environment: ProfileResolutionEnvironment,
   startCandidateIndex: number,
+  agent?: CustomAgent,
 ): ProfileResolution => {
   const { defaultEffort }: ProfileDefinition = PROFILE_DEFINITIONS[profile];
+  const subject = agent ? `Agent ${agent.name} (profile ${profile})` : `Profile ${profile}`;
   const routeLabel = Match.value(routeSource).pipe(
     Match.when("builtin", () => "built-in route"),
     Match.when("session", () => "session override"),
+    Match.when("override", () => "model override"),
     Match.orElse((source) => `${source} route`),
   );
   const attempts: ProfileCandidateAttempt[] = [];
@@ -220,11 +246,17 @@ const resolveKnownProfileRoute = (
   let pendingSkipped: SkippedProfileCandidate[] = [];
   route.candidates.forEach((candidate, candidateIndex) => {
     if (candidateIndex < startCandidateIndex) return;
-    const result = resolveCandidate(candidate, candidateIndex, environment, defaultEffort);
+    const result = resolveRouteCandidate(
+      candidate,
+      candidateIndex,
+      environment,
+      defaultEffort,
+      agent,
+    );
     if (result.attempt) {
       attempts.push({
         ...result.attempt,
-        reason: `Profile ${profile} selected ${routeLabel} candidate ${result.attempt.candidateIndex + 1} (local/${result.attempt.runtime}).`,
+        reason: `${subject} selected ${routeLabel} candidate ${result.attempt.candidateIndex + 1} (local/${result.attempt.runtime}).`,
         routeSource,
         skippedBefore: pendingSkipped,
       });
@@ -247,7 +279,7 @@ const resolveKnownProfileRoute = (
     return {
       kind: "failed",
       code: "retry_route_exhausted",
-      message: `Profile ${profile} has no eligible remaining candidate after candidate ${startCandidateIndex}.${skippedReasons}`,
+      message: `${subject} has no eligible remaining candidate after candidate ${startCandidateIndex}.${skippedReasons}`,
       skippedCandidates,
     };
   const forkUnavailable =
@@ -257,8 +289,8 @@ const resolveKnownProfileRoute = (
     kind: "failed",
     code: forkUnavailable ? "fork_context_unavailable" : "profile_no_eligible_model",
     message: forkUnavailable
-      ? `Profile ${profile} requires forked context, but the parent session has no stable persisted leaf.`
-      : `Profile ${profile} has no eligible candidate.${skippedReasons}`,
+      ? `${subject} requires forked context, but the parent session has no stable persisted leaf.`
+      : `${subject} has no eligible candidate.${skippedReasons}`,
     skippedCandidates,
   };
 };
@@ -267,6 +299,7 @@ export function resolveProfilePlan(
   profile: string,
   config: ResolvedSubagentConfig,
   environment: ProfileResolutionEnvironment,
+  agent?: CustomAgent,
 ): ProfileResolution {
   if (!isProfileId(profile))
     return {
@@ -278,12 +311,15 @@ export function resolveProfilePlan(
   const route = config.profiles[profile];
   if (route.candidates.length === 0) {
     const source = config.profileSources[profile];
-    const message =
+    const profileMessage =
       source === "global-invalid" || source === "project-invalid"
         ? `Profile ${profile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
         : source === "session"
           ? `Profile ${profile} is temporarily disabled by a session override; clear it in /subagents profiles to reveal the loaded persistent route.`
           : `Profile ${profile} is disabled and has no eligible candidate.`;
+    const message = agent
+      ? `Agent ${agent.name} routes to profile ${profile}. ${profileMessage}`
+      : profileMessage;
     return {
       kind: "failed",
       code: "profile_no_eligible_model",
@@ -291,7 +327,14 @@ export function resolveProfilePlan(
       skippedCandidates: [],
     };
   }
-  return resolveKnownProfileRoute(profile, route, config.profileSources[profile], environment, 0);
+  return resolveKnownProfileRoute(
+    profile,
+    route,
+    config.profileSources[profile],
+    environment,
+    0,
+    agent,
+  );
 }
 
 export const resolveProfileContinuationPlan = (
@@ -304,4 +347,16 @@ export const resolveProfileContinuationPlan = (
     continuation.routeSource,
     environment,
     continuation.selectedCandidateIndex + 1,
+    continuation.agent,
   );
+
+/**
+ * Plans a launch whose only candidate is its per-launch model override, which already carries any
+ * agent's defaults.
+ */
+export const resolveProfileOverridePlan = (
+  profile: ProfileId,
+  candidate: ProfileCandidate,
+  environment: ProfileResolutionEnvironment,
+): ProfileResolution =>
+  resolveKnownProfileRoute(profile, { candidates: [candidate] }, "override", environment, 0);

@@ -77,11 +77,11 @@ After `pauseRequested`, new guidance, replies, and ancestor notifications are re
 
 ### Tool snapshot and read-only semantics
 
-- At every launch the root snapshots its current active tool names and project-trust decision. `writeIntent` does not filter them; only competing coordinator and orchestrator tools are denied.
+- At every launch the root snapshots its current active tool names and project-trust decision. `writeIntent` does not filter them. Competing coordinator and orchestrator tools are always denied, and a [custom agent](routing.md#declaration)'s `tools.allow` and `tools.deny` filter the snapshot further, always keeping the child's `contact_parent` and `subagent_*` tools.
 - The public extension returns before importing the root application when `PI_SUBAGENT_CHILD === "1"`; a packaged private extension registers authenticated `subagent_*` proxies. Nested children have no `/subagents` command; the root fleet shows every descendant.
 - An active name is not an implementation transfer: the child can use it only when its trust mode discovers the provider. A nested start returns to the root for a fresh snapshot, so child-local toggles do not control grandchildren. The snapshot's count, names, and size are validated before ownership.
 - Proxy requests cannot carry ancestry. The root binds them to the channel's run and authorizes targets against that subtree; workspace mutations use the stricter direct-parent check, apart from the ancestor discard in [Nested worktree writers](#nested-worktree-writers).
-- Pi read-only is a no-mutation prompt and writer-lease policy, not a sandbox or confidentiality boundary. It receives the same tool snapshot as a writer, so native codemode is available to either intent; codemode's nested tool events participate in claim observation.
+- Pi read-only is a no-mutation prompt and writer-lease policy, not a sandbox or confidentiality boundary. It receives the same tool snapshot as a writer, so native codemode is available to either intent; codemode's nested tool events surface as activity.
 - Native Claude and Codex launches keep their fixed tools and sandboxes and do not consume the snapshot.
 
 ### Child bridge
@@ -106,27 +106,18 @@ Each question and proxy call owns one exact Deferred entry through `acquireUseRe
 - Pause, stop, settlement, and assignment replacement revoke queued, visible, or hidden waits; process cleanup joins their finalizers outside the service lock, and shutdown revokes before leaf-first release. A stalled owned cleanup keeps stop and shutdown waiting.
 - Deliberate cancellation remains a cancelled outcome, not an invitation to retry through another UI.
 
-## Writer pools, cooperative claims, and cross-process safety
+## Writer pools and cross-process safety
 
-The root `SubagentService` owns one writer pool per directory. Nested Pi writer requests enter the same admission path, so leases and disjoint claims are tree-wide. Pools are keyed by a SHA-256 digest of the directory's device and inode, so relative and symlink aliases collide and renaming does not change ownership. Read-only runs never join a pool.
+The root `SubagentService` owns one writer pool per directory. Nested Pi writer requests enter the same admission path, so pools and leases are tree-wide. Pools are keyed by a SHA-256 digest of the directory's device and inode, so relative and symlink aliases collide and renaming does not change ownership. Read-only runs never join a pool.
 
 The first member acquires and durably marks the cross-process lease before any member spawns; concurrent members wait for that preparation. The lease is held until the last member confirms backend cleanup.
 
-### Claims
+### Shared-checkout writers
 
-- A writer without `writes` owns the whole cwd exclusively. A writer with `writes` owns exact normalized paths, and admission rejects case-insensitive overlap with active members and reservations.
-- Claims are fixed at launch; nothing grants or revokes them while the writer runs. To change files, relaunch with corrected claims.
-- Absolute paths and the `<outside workspace>` and `<temporary directory>` audit markers can't be claimed.
-
-Each observed native write path is resolved lexically against the cwd and classified:
-
-- **Workspace:** under the cwd or its macOS `/private` alias, compared case-insensitively and checked against claims in workspace-relative form (`./src/a.ts` matches `src/a.ts`).
-- **Temporary:** strictly under `os.tmpdir()`, `/tmp`, or `/var/tmp` (and their `/private` spellings), unless that root equals or contains the cwd. Not a violation; audited as `<temporary directory>`.
-- **Outside or unresolved:** anything else, empty observations, the change-set overflow sentinel, and invalid in-workspace paths. Audited as `<outside workspace>`; these are violations.
-
-An out-of-claim native file-tool write marks the writer `writeViolationOffender`, records the paths in its write audit and a system warning, and stops only that writer through the normal subtree stop. Peers keep running, admission continues, and its claims are freed once cleanup is confirmed. A likely mutating Bash command only increments a bounded heuristic count.
-
-Claims are cooperative, not filesystem isolation. Comparison is lexical after NFC normalization and case folding, so symlinks and hard links are not resolved. Native edit, write, and Bash can modify the whole cwd, and observation is post-hoc: a violating write may land before the stop, and nothing rolls it back.
+- Any number of in-process shared-checkout writers may join one pool. Admission has no file claims: writers coordinate by task scope, and the parent assigns disjoint scopes.
+- Admission still refuses a writer while the pool is releasing, failed, or quarantined, or while a member in the same cwd is still confirming cleanup. A worktree writer's pool is its private worker directory.
+- Another Pi process holding the cwd's lease refuses the whole pool. Applying a worktree proposal into a checkout where a shared-checkout writer is active or launching fails with `workspace_target_busy`.
+- Shared-checkout writers are not isolated. Their tools can modify the whole cwd, and nothing observes or stops a write outside the assigned task. Writer guidance and the peer notice tell each writer which peers share the cwd and their tasks, and to contact the parent before work that could overlap another task.
 
 ### Leases
 
@@ -142,7 +133,7 @@ Writer leases use pi-cosmic-core's `CrossProcessLock` under `<agent-dir>/subagen
 
 - Stop and shutdown wait for every admitted spawn attempt to settle, close the backend scope once, and only then detach pool membership.
 - Non-final members detach only after confirmed cleanup; only the final member authorizes lease release. A failed cleanup keeps the member attached, and an unconfirmed release keeps the whole pool quarantined with its process capacity and writer ownership.
-- Cleanup quarantine is tracked per member, independently of claim violations; recovering one member never frees another, and healthy peers keep the lease.
+- Cleanup quarantine is tracked per member; recovering one member never frees another, and healthy peers keep the lease.
 - `cleanup` is absent until cleanup starts, then `pending`, `confirmed`, or `quarantined`, with a bounded redacted phase, reason, and `stop` or `manual` recovery policy.
 - Stop verification is session-owned and single-flight. Only failures attested by the exact process transport are eligible; mixed finalizer failures, incomplete descendant evidence, and uncertain lease commits stay manual. Recovery never closes a closed scope, signals retained PIDs, rediscovers reparented descendants, or retries an uncertain lease commit. Confirmation requires the exact child's exit and absence of every recorded process group.
 
@@ -153,57 +144,79 @@ The parent's review and apply procedure is in the [reference](reference.md#revie
 ### Mode and admission
 
 - A writer's mode is chosen at admission ([Public launch contract](routing.md#public-launch-contract)) and recorded; retries and revision successors keep it. Changing the session default affects only later launches, and settings show how many workspaces in this checkout remain unresolved.
-- A `worktree` writer launches in a detached worktree in package-private state. Its cwd lease protects that directory, not the parent checkout.
+- A `worktree` writer launches in a detached, locked linked worktree of the user's repository at `<agent-dir>/subagent-worktrees/<id>/worker`. Its cwd lease protects that directory, not the parent checkout.
 - The root and active Pi worktree writers may start worktree writers ([Nested worktree writers](#nested-worktree-writers)); any other nested caller whose writer resolves to `worktree` fails with `workspace_nested_writer_unsupported`.
 - Read-only runs never acquire workspaces, and nested readers inherit their parent's effective cwd, including a worktree.
 - A worktree launch checks retry claim, parent, spend limit, and tree and direct-child capacity first, then holds one parent direct-child slot until admission or failure. Held slots count toward direct-child and tree limits. If running runs alone fill a limit, the launch fails at once; if only creating launches fill it, it waits interruptibly, holding nothing.
 - The binding is recorded as soon as the engine acquires the workspace. A start that is never admitted frees its slot and discards the workspace; if that discard fails, the binding remains for the parent to discard. Admitted starts that fail keep their workspace as an ordinary proposal.
 - A route retry of a worktree writer acquires a fresh workspace from its parent's current tree and never touches the failed writer's workspace.
 
-### Snapshots
+### Worktrees and captures
 
-The engine (`workspace/service.ts` over `boundary/git-worktree*.ts`) keeps a standalone private bare repository holding a bounded snapshot of current source files. It never borrows the source object database or imports source history.
+The engine (`workspace/service.ts` over `boundary/git-*.ts`) makes every tree a workspace needs a linked worktree of the source repository, and keeps its commits there under `refs/pi/workspaces/<id>/` (baseline, revision, prepared, rebase-worker). Git lists the trees in `git worktree list`, locked with the reason `pi-subagents workspace <id>`.
 
-- **Captured:** every tracked file with its staged and unstaged contents, and untracked files with a source-like extension and a name that isn't credential-shaped (`.env*`, `.npmrc`, `secrets*`, `credentials*`, `*.pem`, SSH keys).
-- **Excluded:** `node_modules`, `vendor`, `dist`, `build`, `coverage`, and `.pi` directories even when tracked (a file merely named `build` is captured), ignored files, and the excluded tracked paths, which the writer's task names.
-- **Worker, prepared, and nested-source trees** hold only what a writer made, so their captures take every untracked file except excluded directories, unsafe names (control characters, `\`, `:`, `.git` components), and credential-shaped names without a source-code extension (`.env*`, `.npmrc`, `*.pem`, `*.key`, SSH keys, `credentials.json`, `secrets.txt`). `src/auth/credentials.ts` and other credential-named source stay captured, as does any file the baseline tracks.
-- **Uncaptured worker files** are listed as `uncapturedPaths`. Those in excluded directories and credential files are left out on purpose: review lists them and prepare, apply, and export warn (`worker-files-left-out`, `credential-files-left-out`). Any other makes prepare and apply refuse with `workspace_uncaptured_files` until a revision leaves none.
-- **Ignore rules** are the excludes file Git would use (repository-local `core.excludesFile`, followed includes, else the XDG default) plus `.git/info/exclude`, recorded in the private repository at creation. An unreadable excludes file or unrepresentable ignore configuration refuses the capture.
-- **Credentials:** source captures (create, prepare, integrate) refuse a file whose new lines, compared against its stage-0 blob as a multiset, contain a private key block, AWS access key ID, GitHub token, or `sk-` key, naming the line. Untracked files are scanned whole; committed or staged content passes, and worker captures are not scanned. This guards against durable copies of uncommitted secrets; it is not a general detector.
-- **Refused states:** bare repositories, repositories without a commit, sessions inside Git metadata, sparse checkouts, symlinked path components, case-mismatched on-disk names, skip-worktree or assume-unchanged entries, unmerged indexes, submodules inside the repository, hardlinks, special files, and oversized files. Each refusal names the path, rule, and remedy. Linked worktrees and submodule checkouts work as sources.
-- **Symlinks** are preserved only when tracked, canonical, relative, and pointing directly at a separately captured regular file in the repository (such as `CLAUDE.md -> AGENTS.md`). Workers may change the target file, but symlink changes are rejected before integration.
-- **Limits:** 4,000 files, 4 MiB per file, 32 MiB total, and 48 MiB per revision patch. Non-UTF-8 text is copied byte-exactly, but freeze refuses a revision that changes one, since review pages are text.
-- **Byte exactness:** the private repository's `info/attributes` unsets `text`, `eol`, `crlf`, `filter`, `ident`, `working-tree-encoding`, `diff`, and `merge`, so no filter or driver runs.
-- Captures hash files in-process and compute the Git tree ID themselves. Captures later operations need as objects go through one `git fast-import` stream and must match that ID; verification captures only compare it.
+- **Captures** never touch a real index. A copy of the tree's index (keeping skip-worktree and assume-unchanged bits, and its timestamp, so racily clean files are rehashed) takes `git add --update` and the untracked files Git's ignore rules leave eligible, then `git write-tree`. Commits are unsigned, with a placeholder identity, parented on the tree's HEAD or the previous baseline.
+- **Baseline:** tracked files with their staged and unstaged content, and untracked files Git doesn't ignore, except credential-shaped names (`.env*`, `.npmrc`, `secrets*`, `credentials*`, `*.pem`, SSH keys) and untracked nested repositories. The worker is checked out from it, so its index holds the baseline.
+- **Worker, prepared, and nested-source trees** leave out untracked credential files a writer created (`.env*`, `.npmrc`, `*.pem`, `*.key`, SSH keys, `credentials.json`, `secrets.txt`) but keep credential-named source such as `src/auth/credentials.ts`. The revision records them as `uncapturedPaths`; review lists them, prepare and apply warn (`credential-files-left-out`), and none of them blocks. Ignored files never enter a revision. A writer's own `git add` counts as tracked, except for [included files](#included-files), which no capture ever takes.
+- **Git configuration** is the user's, system and global included, so filters such as Git LFS, line-ending rules, and ignore files behave as in a normal checkout. Every call forces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `core.splitIndex=false` (so temporary indexes never write a shared index into the user's Git directory), `commit.gpgSign=false`, `submodule.recurse=false`, and `gc.auto=0`, sets `GIT_OPTIONAL_LOCKS=0`, and drops repository-local variables such as `GIT_DIR` and `GIT_INDEX_FILE`. Patches use plumbing with explicit prefixes, without external diff or textconv.
+- **Refused states:** bare repositories, repositories without a commit, sessions inside Git metadata, sparse checkouts, and unmerged indexes; at freeze, any change to a symlink or submodule entry, because publication handles regular files only. Each refusal names the path, rule, and remedy. Main and linked worktrees, submodule checkouts, and SHA-1 or SHA-256 repositories work as sources.
+- **Limits:** 48 MiB per revision patch; publication reads changed files of up to 512 MiB.
+- Review pages are text: bytes that aren't UTF-8 show as replacement characters there, while preparation applies the stored patch's exact bytes.
 
-Native Pi tools keep local-user authority, so isolation is not a confidentiality boundary or sandbox. Excluded dependencies are absent unless the project declares a setup command.
+The worktrees share the user's object database, refs, and configuration, so `git log --all` shows workspace commits and a mirror push would publish `refs/pi/*`. Native Pi tools keep local-user authority, so isolation is not a confidentiality boundary or sandbox. Ignored dependencies are absent unless the project declares a setup command, and ignored local files such as `.env` unless it names them in `workspaceInclude`.
+
+### Writer guidance
+
+A worktree writer's Git commands reach the user's repository, and only guidance keeps them apart. The writer's system prompt says its workspace is a worktree on a detached HEAD shared with the parent's repository, and tells it to:
+
+- stay on that detached HEAD, without creating or switching branches;
+- leave its changes unstaged and uncommitted, as a proposal for the parent;
+- not use `git stash`, whose stack every worktree of the repository shares;
+- not change Git configuration, which the user's checkout reads too;
+- not run `git worktree` commands, which could unlock, move, or remove the workspace's own trees.
+
+Captures read the worker's index and files rather than its HEAD, so changes a writer commits anyway still appear in its proposal.
+
+### Earlier workspace registry
+
+Earlier versions kept each isolated workspace as a private repository under `<agent-dir>/git-workspaces/<id>/`. This version neither reads nor removes that registry. While the directory exists, `/subagents doctor` warns and prints, for each workspace, `git -C <dir>/<id>/worker diff HEAD > <id>.patch` to save its tracked changes (untracked files must be copied by hand), then `rm -rf <dir>`. Run those only once no Pi session uses the earlier version.
 
 ### Setup and verification commands
 
 A trusted project's `.pi/pi-subagents.json` may declare `workspaceSetup` and `workspaceVerify`, each `{ "command": [argv...], "timeoutSeconds"?: 1-3600 }` with a 600-second default. Global documents reject both. Changes apply after `/reload`.
 
 - Both run without a shell, with the user's environment minus Git's repository-local variables, in their own process group with bounded output.
-- **Setup** runs at the root of each new worker tree before the worker starts, again in the combined tree after `prepare` or before `apply`'s verification, and in a tree rebuilt by `revise` with `rebase`. Afterwards the tree must match its baseline apart from ignored or excluded files. Changed files, a non-zero exit, or a timeout fail with `workspace_setup_failed`; a failed preparation is withdrawn.
+- **Setup** runs at the root of each new worker tree before the worker starts, again in the combined tree after `prepare` or before `apply`'s verification, and in a tree rebuilt by `revise` with `rebase`. Afterwards the tree must match its baseline apart from ignored and credential files. Changed files, a non-zero exit, or a timeout fail with `workspace_setup_failed`; a failed preparation is withdrawn.
 - **Verify** runs only during an `apply` without a preparation, after setup, and returns the last 40 lines (at most 4,000 characters). A tracked change fails verification and names the files. Manual `prepare` and applying a prepared pair never run it.
 - The engine durably marks the tree before the command starts and clears the mark once its process group is confirmed stopped, including after interruption. Other operations refuse that workspace meanwhile; unrelated workspaces proceed, because the engine holds its locks only around marker writes.
 - Unconfirmed cleanup (`workspace_verify_cleanup_unconfirmed` for verification) or a failed marker commit quarantines the artifact across runtime replacement until manual recovery.
 
 For pnpm, `["pnpm", "install", "--offline", "--frozen-lockfile"]` installs from the local store, and workspace links resolve to the isolated tree's own packages.
 
-### Review, apply, export, and revise
+### Included files
+
+A trusted project's `.pi/pi-subagents.json` may declare `workspaceInclude`, up to 64 gitignore-syntax patterns (each 1-1,024 characters without control characters) naming untracked local files isolated trees need, such as `.env`. Global documents reject it; an empty list includes nothing. Changes apply after `/reload`, and `/subagents doctor` lists the patterns.
+
+- **Matching:** at creation, Git matches the patterns against the source tree's untracked files from its top (`git ls-files --others --ignored --exclude=<pattern>...`). Only files the baseline doesn't carry, ignored or credential-named ones, qualify; tracked files and untracked files the baseline already holds are unaffected. Symlinks, nested repositories, and other non-regular files are skipped.
+- **Limits:** at most 256 files and 64 MiB per tree. More fails creation before the worker is checked out, naming the counts; install dependencies with `workspaceSetup` instead.
+- **Copies:** each match is copied with its permission bits into the worker tree, and the record lists them as `includedPaths`. Every prepared tree receives the parent's current copies of those paths, skipping any that are gone, no longer regular files, or tracked in that tree. A nested writer matches against its source workspace's worker tree, so it receives that writer's copies. A rebase leaves the worker's copies as they are.
+- **Never captured:** every capture of a worker, prepared, or nested-source tree drops the included paths from its scratch index before Git hashes anything, so they never enter Git objects, revisions, review, or publication, even after the writer edits them, un-ignores them, or stages them. They are not reported as left-out credential files.
+
+### Review, apply, and revise
 
 A final report changes no parent files and grants no approval. Only the authenticated direct parent integrates, and only through `subagent_workspace apply`. Both paths write uncommitted edits without changing the parent index, branch, or commits.
 
 - **Quick path:** `apply` with only `workspaceId` freezes the current revision (an optional `revisionId` must match, else `workspace_revision_stale`), prepares it against current parent work, runs setup and verification when `workspaceVerify` is configured, and integrates that pair. Its result reports whether every review page was read (`reviewed`) and whether verification passed, failed, or isn't configured.
-- **Careful path:** `review` freezes a cleaned-up proposal and pages its immutable text: a summary (diffstat, changed files, uncaptured paths) then the patch, never splitting a character. `prepare` builds the combined cwd; the parent tests there; `apply` with `revisionId` and `preparationId` integrates exactly that pair without preparing or verifying again, reporting `parent-tested`.
+- **Careful path:** `review` freezes a cleaned-up proposal and pages its immutable text: a summary (diffstat, changed files, left-out credential files) then the patch, never splitting a character. `prepare` builds the combined cwd; the parent tests there; `apply` with `revisionId` and `preparationId` integrates exactly that pair without preparing or verifying again, reporting `parent-tested`.
 - **Partial apply:** `paths` limits the quick path to a subset of changed paths (`workspace_paths_unknown` names others). The engine keeps the worker tree and advances the baseline, so the next freeze proposes exactly the rest, and the binding returns to unreviewed. `paths` can't be combined with `preparationId`.
 - **Failed verification** applies nothing. The preparation stays for inspection, but applying it as a prepared pair refuses with `workspace_verification_failed`.
-- **Conflicts:** a patch that doesn't apply to current parent files fails `prepare` with `workspace_conflict`, naming the files, and removes the preparation tree. Integration refuses parent edits to proposal files (`workspace_parent_changed`), a changed branch or staged entries, a changed worker or test tree, and uncertain cleanup; parent edits to other files are kept and named in a warning.
-- **Export** writes the current revision without resolving it: a binary patch under the source's common Git directory, or a branch built with plumbing through a temporary index (`read-tree HEAD`, `apply --cached`, `write-tree`, `commit-tree`, `update-ref` with an all-zero old value). The user's index, `HEAD`, and working tree never change. The branch commit carries the user's identity: `GIT_AUTHOR_*` and `GIT_COMMITTER_*`, else `user.name` and `user.email` read with the user's Git configuration in the source repository. Only when neither names a role does it use `Pi workspace <workspace@invalid>`, and the result warns (`export-placeholder-identity`). Nested workspaces can't be exported.
-- **Revise** starts a backend-neutral successor assignment whose admission makes the old review and preparation stale. With `rebase`, the engine first captures the worker, snapshots the source like a new launch, proves in a scratch tree that `git apply --3way` can run, then resets the worker in place (keeping its directory identity) and reapplies the changes. Conflicted files keep markers and are listed in the successor's task; a merge that can't run refuses with `workspace_rebase_refused` and changes nothing. A later failure restores the worker from its capture once the record names the previous baseline again (a rebuilt record whose save failed after landing is first replaced by the previous one); if the previous record can't be put back, the rebuilt worker is kept with its record, and either failure names `refs/pi/rebase-worker`, which holds the captured files.
+- **Preparation** captures the parent's current files, applies the revision's patch to that capture as Git objects (so filters and line endings never disturb it), and checks the result out as a locked worktree.
+- **Conflicts:** a patch that doesn't apply to current parent files fails `prepare` with `workspace_conflict`, naming the files, before any tree is made. Integration refuses parent edits to proposal files (`workspace_parent_changed`), a changed branch or staged entries, a changed worker or test tree, and uncertain cleanup; parent edits to other files are kept and named in a warning.
+- **Hidden local edits:** prepare and integration refuse with `workspace_local_override`, naming the files, while the parent index marks a file the proposal changes skip-worktree or assume-unchanged (`git ls-files -v` tags `S` or lowercase). Git reads the indexed blob for such a file, so captures can't see its local edit and publication would overwrite it. Clear the bit with `git update-index --no-skip-worktree` or `--no-assume-unchanged`, or revise the workspace so it leaves the file alone.
+- **Revise** starts a backend-neutral successor assignment whose admission makes the old review and preparation stale. With `rebase`, the engine first commits a capture of the worker, captures the source like a new launch, then moves the worker in place (keeping its directory identity) to the new baseline with a two-tree `read-tree`, which touches only tracked files, and reapplies the changes with `git apply --3way` against the old baseline as the real merge base. Conflicted files keep markers and are listed in the successor's task. A merge that can't run, or would overwrite an untracked or ignored worker file, refuses with `workspace_rebase_refused`, moves the worker's files back, and restores its index. A later failure restores the worker from its capture once the record names the previous baseline again (a rebuilt record whose save failed after landing is first replaced by the previous one); if the previous record can't be put back, the rebuilt worker is kept with its record, and either failure names `refs/pi/workspaces/<id>/rebase-worker`, which holds the captured files.
 - **Discard** deletes an unwanted proposal after cleanup.
-- A frozen revision's patch lives in `revision.diff` beside the record. A record frozen by an earlier version kept it inline instead; the first read regenerates it from the private repository with freeze's diff options and saves it, under the checkout's store lock.
-- Persisted details keep IDs, counts, paging metadata, verification status, and bounded command and failure text, never whole patches or command output.
+- A frozen revision's patch lives in `revision.diff` beside the record.
+- Persisted details keep IDs, counts, paging metadata, verification status, and bounded command and failure text, never whole patches or command output. Details saved by the retired `integrate` and `export` operations still decode and render.
 
 ### Binding states and resume
 
@@ -228,8 +241,8 @@ Resume and revise never change the workspace before the writer is admitted.
 - Apply keeps the binding busy throughout but releases the operation lock while verification runs.
 - Integration refuses with `workspace_target_busy` only while a shared-checkout writer is active, cleaning up, or launching in an overlapping cwd. Worktree launches don't block it, because the engine's checkout lock orders their snapshots.
 - Discard refuses while any run holds a directory within the artifact.
-- Every mutating engine operation holds a `CrossProcessLock` keyed by the real checkout root at the top of the record's nested chain, under `<agent-dir>/git-workspaces/locks`. Waits poll interruptibly for up to two minutes, then fail naming the owner process; a dead owner's lock is reclaimed. Listing takes no lock.
-- Git is resolved once per process (`/usr/bin/git`, else the first absolute `git` on `PATH`), must be 2.31 or later, and runs isolated calls without global or system configuration.
+- Every mutating engine operation holds a `CrossProcessLock` keyed by the real checkout root at the top of the record's nested chain, under `<agent-dir>/subagent-worktrees/locks`. Waits poll interruptibly for up to two minutes, then fail naming the owner process; a dead owner's lock is reclaimed. Listing takes no lock.
+- Git is resolved once per process (`/usr/bin/git`, else the first absolute `git` on `PATH`) and must be 2.31 or later.
 
 ### Publication and rollback
 
@@ -239,45 +252,49 @@ Integration leases every existing ancestor of each touched file, rechecks source
 - Before each change it rechecks with `lstat` that every ancestor is still a real directory with the device and inode it saw.
 - New files are written to a `.pi-workspace-new-<id>` sibling. A replaced or deleted file moves to a `.pi-workspace-old-<id>` backup checked against the reviewed preimage. Installation uses an exclusive link, so a competing destination is never clobbered.
 - Publication is not an atomic multi-file transaction. Backups stay until the record says integrated (or, after a partial apply, active again), then are deleted; an undeletable backup is a warning. Both records keep the journal. If that save fails, the record is reread: one that landed despite a failed directory sync commits the publication, and otherwise the workspace stays mid-integration with every backup in its journal. Directories that deletions left empty are removed, never the source root or session directory.
-- The source index identity is a digest of staged entries, so `git status` stat refreshes don't count as changes.
+- The journal records each file's SHA-256 content digest, so it reads the same in SHA-1 and SHA-256 repositories. Published bytes are the tested tree's checkout of each changed path; a parent file at a changed path that captures leave out, such as an ignored one, refuses with `workspace_parent_changed`.
+- The source index identity is a digest of staged entries, so `git status` stat refreshes don't count as changes. The parent index is never written.
 
 A conflict, failure, or crash leaves the workspace mid-integration with its journal, backups, and temporary files, holding its source leases so no shared-checkout writer edits those directories. Other writers and integrations proceed.
 
-The owning session's `discard` rolls it back from disk: for every started entry it deletes the temporary file, removes an installed file that still holds the published content, restores a backup that still holds the preimage, drops an empty backup reservation whose file never moved there, then removes created directories once empty. If any started entry matches neither side, rollback changes nothing and refuses with `workspace_rollback_refused`, naming each file. Another session's discard refuses a mid-integration workspace; recover it manually from the journal.
+The owning session's `discard` rolls it back from disk: for every started entry it deletes the temporary file, removes an installed file that still holds the published content, restores a backup that still holds the preimage, drops an empty backup reservation whose file never moved there, then removes created directories once empty. If any started entry matches neither side, rollback changes nothing and refuses with `workspace_rollback_refused`, naming each file. Once that session has ended, another session's root may roll it back the same way after taking fresh leases on its directories ([Orphans, takeover, and collection](#orphans-takeover-and-collection)).
 
 `workspace_integration_quarantined` refuses integration only while the session is quarantined, after a failed source-lease release or an unreadable integration outcome. Writer admission and integration then stay quarantined until Pi restarts.
 
-After a committed integration the engine removes the proposal's `prepare-*` trees and worker tree, keeping trees a live run still uses. The worker tree also stays, with a `worker-retained-for-children` warning, while workspaces created from it are unresolved. A failed removal is a warning.
+After a committed integration the engine removes the proposal's `prepare-*` trees and worker tree, keeping trees a live run still uses, and deletes its refs. Each tree goes with `git worktree unlock` and `git worktree remove --force`, which also removes Git's entry when the tree's directory is already gone; the engine never runs `git worktree prune`, which would also drop the user's own entries whose directories are missing. The worker tree also stays, with a `worker-retained-for-children` warning, while workspaces created from it are unresolved. Trees kept this way go at a later startup's collection ([Orphans, takeover, and collection](#orphans-takeover-and-collection)). A failed removal is a warning.
 
 ### Automatic cleanup
 
 After a `completed` worktree writer's cleanup is confirmed, a session-owned fiber compares its worker tree with the baseline.
 
-- With no changed or uncaptured files and no unresolved child workspaces, it discards the workspace and records `workspaceOutcome: auto-discarded`. Resuming that writer fails with `workspace_finished`.
-- Otherwise it records a `proposal` with changed and uncaptured counts and a bounded diffstat: line totals and the first 20 files (paths clipped to 256 characters; condensed cards keep only totals).
+- With no changed files, no left-out credential files, and no unresolved child workspaces, it discards the workspace and records `workspaceOutcome: auto-discarded`. Resuming that writer fails with `workspace_finished`.
+- Otherwise it records a `proposal` with changed and left-out (`uncapturedFileCount`) counts and a bounded diffstat: line totals and the first 20 files (paths clipped to 256 characters; condensed cards keep only totals).
 - Failed and stopped writers, and workspaces that are busy, resumed, revised, reviewed, prepared, in use, or fail inspection, are kept.
 - This never delays report delivery or `subagent_await`. Resume or revision admission clears a recorded outcome.
 
-### Orphans and collection
+### Orphans, takeover, and collection
 
-Crash or reload artifacts are never adopted. Each record names the owner lease its creating engine holds until its runtime closes; a free lease proves that session ended.
+Each record names the owner lease its creating engine holds until its runtime closes; a free lease proves that session ended. Its other unfinished workspaces are then orphans, which another session's root may take over, discard, or, after a month, sweep.
 
-- Another session's root may then `export` the orphan read-only, or `discard` it. Discard first takes the original writer lease whose filesystem identity the workspace saved, and requires the worker path to still resolve to that directory, rechecked immediately before each removal.
-- Preparation trees are removed before the worker, and discard is recorded only after editable trees are gone.
-- Mid-integration workspaces, records without owner or writer-identity evidence, records with pending setup or verification cleanup, records with unresolved children, and unreadable records are never discarded this way.
-- At startup each runtime collects discarded and integrated records a week after their last change, under their checkout's lock, unless an editable tree remains or a nested record names it as its source. Unreadable records block collection.
+- **Listing.** The root's `list` probes each other session's owner lease and marks an orphan `adoptable` (active, frozen, or prepared, top-level, no unresolved children) or `discard-only` (nested or mid-integration). The mark is advisory; every operation rechecks under the checkout's lock.
+- **Takeover.** When the root calls `review`, `prepare`, `apply`, or `revise` on a workspace no live binding owns, the coordinator first adopts it: it takes the original writer lease and requires the worker path to still resolve to its saved filesystem identity, then the engine, under the checkout's store lock, refuses pending setup or verification cleanup, unresolved children, nested or mid-integration records, and a held owner lease, rechecks the worker identity, and rewrites the record's owner and owner lease to this session. The coordinator then holds a run-less, unreviewed binding owned by the root, and the operation runs as on its own workspace.
+- **Revising an adopted workspace.** Its first `revise` resolves the recorded launch (profile or custom agent, and name, saved at creation) like a start item with this session's configuration, and launches a new run with `message` as its task and the worker tree as its cwd; it has none of the original writer's conversation. A recorded custom agent runs with its current route and instructions. A recorded profile or agent that no longer starts writers, or an agent that is no longer configured or fails closed, refuses with `workspace_launch_unavailable`. Later revisions extend that successor's request as usual.
+- **Discard.** The root may discard any orphan, nested ones children first. Discard takes the original writer lease with the same identity check, rechecked immediately before each removal. A mid-integration orphan is rolled back first: the coordinator acquires fresh writer leases on the preparation's lease directories (`workspace_target_busy` while a writer holds one), and the engine runs the same rollback as the owning session's discard, then releases them. Preparation trees are removed before the worker, and discard is recorded only after editable trees, their worktree entries, and the workspace's refs are gone.
+- **Sweep.** Once per root session start, in the background, orphans of the session's checkout (the records its `list` shows, by the real checkout at the top of each nested chain) unchanged for 30 days (`lastChangedAt`, or the record file's mtime for records saved without it) are discarded, children before their source workspaces, skipping any a takeover would refuse and any whose children remain. Each is frozen first unless its revision still matches the worker, so `revision.diff` holds its changes; then its trees and refs are removed and the record is saved `discarded` with `disposition: "orphan-swept"`. One user notification lists each swept workspace's ID, changed-file count, and patch path; it never enters model context. Collection then keeps the record and patch for 7 more days.
+- Records without owner or writer-identity evidence, records with pending setup or verification cleanup, and unreadable records are never adopted, discarded, or swept this way.
+- **Collection.** At startup each runtime collects discarded and integrated records a week after their last change, under their checkout's lock, unless an editable tree remains or a nested record names it as its source. First, under the same lock, it removes the trees and refs integration kept for a live run or for unresolved children, once every workspace created from the worker is integrated or discarded and the record's owner lease is free, so no run can still use them. It also discards a record its create left `creating` once that session's owner lease is free, removing the worktree and refs a crash left in the user's repository. Unreadable records block collection.
 - Listing separates valid records from fixed-size unavailable-artifact diagnostics; one unreadable record never hides healthy neighbors. Root listings keep unknown artifacts without inferred metadata; nested listings show only exact-owner records. Visibility grants no mutation authority.
 
-For manual recovery, confirm every writer process and descendant is dead, preserve the proposal and journal, and compare partially published paths against the journal and local work. Never remove a private Git directory or lease solely because the parent PID exited.
+For manual recovery, confirm every writer process and descendant is dead, preserve the proposal and journal, and compare partially published paths against the journal and local work. Remove a worktree with `git worktree unlock` and `git worktree remove`, never by deleting its directory alone, and never remove a tree or lease solely because the parent PID exited.
 
 ### Nested worktree writers
 
 An active local Pi worktree writer may start worktree writers of its own. The coordinator judges this only from the caller's authenticated run record: an active Pi writer in worktree mode with an unfinished binding.
 
 - Its writer children default to `worktree`; explicit `isolation: "shared-checkout"` starts an ordinary writer in the caller's worker tree.
-- A nested workspace snapshots the caller's worker tree, uncommitted work included, and belongs to the caller, which applies it into its own worker tree. Integration skips the lease the caller's pool already holds.
+- A nested workspace captures the caller's worker tree, uncommitted work included, and belongs to the caller, which applies it into its own worker tree. Integration skips the lease the caller's pool already holds.
 - Only such workspace parents receive `subagent_workspace` and guidance to resolve every child workspace before reporting. `PI_SUBAGENT_WORKSPACE_PARENT=1` is a tool-surface hint, not authority; every proxied call is rechecked.
-- A private source must be exactly an active workspace's worker tree or a directory in it; prepare trees, private repositories, other workspaces, and chains deeper than eight are refused. Private sources use only their recorded ignore rules and aren't credential-scanned. A child prepares and integrates only while its source is active, frozen, or prepared.
+- A private source must be exactly an active workspace's worker tree or a directory in it; prepare trees, workspace directories, other workspaces, and chains deeper than eight are refused. The source worker is a linked worktree of the same repository, captured like any private tree. A child prepares and integrates only while its source is active, frozen, or prepared.
 - While a workspace has unresolved or creating children, its review, prepare, apply, revise, and discard fail with `workspace_children_unresolved`.
 - Once a child's direct parent is terminal with confirmed cleanup, the root or an ancestor of that parent may discard the child, but never review, apply, or revise it; if the parent's record is gone, only the root may. Nothing cascades.
 - Listing attributes nested records to their real checkout, and collection keeps records a nested record names as its source.
@@ -355,7 +372,7 @@ Claude Code keeps temp files in `$CLAUDE_CODE_TMPDIR/claude-<uid>`, which defaul
 
 - Startup sends the initialize control, then one `shouldQuery:false` input to obtain `system/init` without inference. It validates cwd, session, resolved model, MCP errors, and a connected `pi_subagents_supervisor` inventory with all four tools. Initialization and start have 60-second deadlines, and initialization failure is post-spawn, never candidate fallback.
 - Every outbound input carries a fresh UUID, and acknowledgement requires native replay of exactly that UUID from the active session. Delayed duplicates of confirmed UUIDs are acknowledged silently from the same session only.
-- User frames with a non-null `parent_tool_use_id` are native-agent forwarding: their text becomes activity, and forwarded tool results keep the nested lifecycle used by claim observation.
+- User frames with a non-null `parent_tool_use_id` are native-agent forwarding: their text becomes activity, and forwarded tool results keep their nested tool lifecycle.
 - Claude-owned synthetic `task-notification`, `auto-continuation`, and `peer` messages own a subturn inside the active assignment. Replayed `<task-notification>` commands are accepted only as complete same-session, active-assignment, text-only envelopes; near misses, qualified subkinds, channel or peer origins, and cross-session delivery fail closed.
 - An unexplained top-level replay before report acceptance is a protocol error. After an accepted report, it instead emits a bounded metadata-only warning and reprojects the report so completed work is preserved.
 
@@ -416,7 +433,7 @@ Scenarios are `tool` (default, foreground `sleep 25`), `generation`, and `native
 ### Protocol
 
 - The accepted v2 subset is `initialize`, `thread/start`, `turn/start`, `turn/steer`, `turn/interrupt`, their responses, and relevant bounded notifications.
-- Only `commandExecution`, `fileChange`, `mcpToolCall`, and `webSearch` items own a tool lifecycle. `fileChange` entries keep every source path and move destination for claim observation, and a claimed writer's file mutation without a path fails closed as a violation.
+- Only `commandExecution`, `fileChange`, `mcpToolCall`, and `webSearch` items own a tool lifecycle. `fileChange` entries keep every source path and move destination in their tool activity.
 - `agentMessage`, `reasoning`, `collabAgentToolCall`, `subAgentActivity`, and unknown informational items surface as activity; unrecognized fields and kinds there are ignored, but an item without an ID fails the protocol. Turn, usage, report, and tool notifications decode strictly.
 - An uncertain interrupt keeps its exact turn and epoch; a second interrupt is rejected, and a late interrupted completion settles through `run_settled` as a pause.
 - `thread/tokenUsage/updated` reports only its own thread, and native sub-agents run in their own threads, so the adapter keeps a running-total watermark for up to 64 threads. Codex reports no cost, so cost stays unknown rather than `$0`.

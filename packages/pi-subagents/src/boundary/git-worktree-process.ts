@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import { runBoundedProcessNode, type BoundedProcessResult } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import { gitInstallation } from "./git-installation.ts";
+import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 
@@ -55,11 +56,14 @@ export const gitStderrLines = (stderr: string) =>
     .slice(-MAX_GIT_DETAIL_LINES)
     .map((line) => line.slice(0, MAX_GIT_DETAIL_CHARS));
 
-// The subcommand, past any leading `-c name=value` overrides.
+// The subcommand, past any leading `-c name=value` overrides and repository selection.
 const gitSubcommand = (args: ReadonlyArray<string>) => {
   let index = 0;
-  while (args[index] === "-c") index += 2;
-  return args[index] ?? "";
+  for (;;) {
+    if (args[index] === "-c") index += 2;
+    else if (args[index]?.startsWith("--git-dir=")) index += 1;
+    else return args[index] ?? "";
+  }
 };
 
 export type GitResult = BoundedProcessResult;
@@ -68,7 +72,40 @@ export interface GitOptions {
   readonly stdin?: Uint8Array;
   /** Extra variables, such as a temporary `GIT_INDEX_FILE` that keeps the real index untouched. */
   readonly environment?: Readonly<Record<string, string>>;
+  /** Defaults to two minutes; checkouts of large trees may need longer. */
+  readonly timeoutMillis?: number;
 }
+
+// Workspaces run in the user's repository with the user's system and global configuration, so
+// filters such as Git LFS behave like a normal checkout. Only what could run user code
+// unexpectedly, sign, rewrite the repository in the background, or recurse into submodules is
+// switched off; repository-local variables never aim a call elsewhere. A split index would write
+// a shared index for each temporary index into the user's Git directory.
+const HARDENED_CONFIG = [
+  "core.hooksPath=/dev/null",
+  "core.fsmonitor=false",
+  "core.splitIndex=false",
+  "commit.gpgSign=false",
+  "submodule.recurse=false",
+  "gc.auto=0",
+  "diff.external=",
+];
+
+const gitEnvironment = (options: GitOptions | undefined) => ({
+  ...Object.fromEntries(
+    Object.entries(process.env).flatMap(([key, value]) =>
+      value === undefined || isGitLocalEnvironmentKey(key) ? [] : [[key, value] as const],
+    ),
+  ),
+  LC_ALL: "C",
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_OPTIONAL_LOCKS: "0",
+  GIT_AUTHOR_NAME: "Pi workspace",
+  GIT_AUTHOR_EMAIL: "workspace@invalid",
+  GIT_COMMITTER_NAME: "Pi workspace",
+  GIT_COMMITTER_EMAIL: "workspace@invalid",
+  ...options?.environment,
+});
 
 /** Runs Git and returns its result whatever its exit status; fails only when Git can't run. */
 export const gitResult = (cwd: string, args: ReadonlyArray<string>, options?: GitOptions) =>
@@ -76,49 +113,13 @@ export const gitResult = (cwd: string, args: ReadonlyArray<string>, options?: Gi
     Effect.flatMap((installation) =>
       runBoundedProcessNode({
         executable: installation.executable,
-        args: [
-          "--no-pager",
-          "-c",
-          "core.hooksPath=/dev/null",
-          "-c",
-          "core.fsmonitor=false",
-          "-c",
-          "core.untrackedCache=false",
-          "-c",
-          "core.autocrlf=false",
-          "-c",
-          "core.attributesFile=/dev/null",
-          "-c",
-          "diff.external=",
-          "-c",
-          "protocol.allow=never",
-          "-c",
-          "core.fsync=all",
-          "-c",
-          "core.fsyncMethod=fsync",
-          ...args,
-        ],
+        args: ["--no-pager", ...HARDENED_CONFIG.flatMap((setting) => ["-c", setting]), ...args],
         cwd,
-        environment: {
-          PATH: [...new Set([path.dirname(installation.executable), "/usr/bin", "/bin"])].join(
-            path.delimiter,
-          ),
-          LC_ALL: "C",
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          GIT_TERMINAL_PROMPT: "0",
-          GIT_OPTIONAL_LOCKS: "0",
-          GIT_ATTR_NOSYSTEM: "1",
-          GIT_AUTHOR_NAME: "Pi workspace",
-          GIT_AUTHOR_EMAIL: "workspace@invalid",
-          GIT_COMMITTER_NAME: "Pi workspace",
-          GIT_COMMITTER_EMAIL: "workspace@invalid",
-          ...options?.environment,
-        },
+        environment: gitEnvironment(options),
         ...(options?.stdin && { stdin: options.stdin }),
         stdoutLimitBytes: 48 * 1024 * 1024,
         stderrLimitBytes: 8192,
-        timeoutMillis: 30_000,
+        timeoutMillis: options?.timeoutMillis ?? 120_000,
         cleanupTimeoutMillis: 2000,
         detached: true,
         sweepProcessTreeOnExit: true,
@@ -175,7 +176,7 @@ export const listedPaths = (paths: ReadonlyArray<string>) =>
  * The changed paths `git apply --check` reported conflicts for. Git names each in an `error:`
  * line, such as `patch failed: <path>:<line>` or `<path>: already exists in working directory`.
  */
-export const applyConflictPaths = (stderr: string, changedPaths: ReadonlyArray<string>) => {
+const applyConflictPaths = (stderr: string, changedPaths: ReadonlyArray<string>) => {
   const errors = stderr.split("\n").filter((line) => line.startsWith("error: "));
   return changedPaths.filter((name) =>
     errors.some(
@@ -214,8 +215,37 @@ export const git = (cwd: string, args: ReadonlyArray<string>, options?: GitOptio
     ),
   );
 
-export const gitFields = (cwd: string, args: ReadonlyArray<string>) =>
-  git(cwd, args).pipe(Effect.map((output) => output.split("\0").filter(Boolean)));
+export const gitFields = (cwd: string, args: ReadonlyArray<string>, options?: GitOptions) =>
+  git(cwd, args, options).pipe(Effect.map((output) => output.split("\0").filter(Boolean)));
+
+// As a bare repository, so a command that would touch a working tree fails instead of treating
+// the Git directory as one.
+const inRepository = (repository: string, args: ReadonlyArray<string>) => [
+  "-c",
+  "core.bare=true",
+  `--git-dir=${repository}`,
+  ...args,
+];
+
+/** Runs Git on the repository's common directory alone, never on a working tree. */
+export const repositoryGit = (
+  repository: string,
+  args: ReadonlyArray<string>,
+  options?: GitOptions,
+) => git(repository, inRepository(repository, args), options);
+export const repositoryGitResult = (
+  repository: string,
+  args: ReadonlyArray<string>,
+  options?: GitOptions,
+) => gitResult(repository, inRepository(repository, args), options);
+export const repositoryGitFields = (
+  repository: string,
+  args: ReadonlyArray<string>,
+  options?: GitOptions,
+) =>
+  repositoryGit(repository, args, options).pipe(
+    Effect.map((output) => output.split("\0").filter(Boolean)),
+  );
 
 export const isSharedOrForeign = (stat: { readonly mode: number; readonly uid: number }) =>
   (stat.mode & 0o077) !== 0 || (process.getuid !== undefined && stat.uid !== process.getuid());

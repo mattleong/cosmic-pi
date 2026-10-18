@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import { hasControlCharacter } from "pi-cosmic-core";
+import type { CustomAgentTools } from "../profiles/agents.ts";
 import { type InvalidSubagentRequestError, invalidRequest } from "./errors.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import type { StartSubagentRequest } from "./model.ts";
@@ -10,7 +11,6 @@ export const SUBAGENT_TOOL_NAME = Object.freeze({
   status: "subagent_status",
   await: "subagent_await",
   send: "subagent_send",
-  reply: "subagent_reply",
   lifecycle: "subagent_lifecycle",
   workspace: "subagent_workspace",
 } as const);
@@ -93,6 +93,23 @@ export const piRootActiveToolSnapshot = (
   return Effect.succeed(Object.freeze(inherited));
 };
 
+// The child registers its supervision tools itself; no agent tool list can remove them.
+const isSupervisionTool = (name: string): boolean =>
+  name === "contact_parent" || name.startsWith("subagent_");
+
+/** Narrows a Pi child's inherited tools by a custom agent's allow and deny lists. */
+export const customAgentToolSnapshot = (
+  inherited: ReadonlyArray<string>,
+  tools: CustomAgentTools | undefined,
+): ReadonlyArray<string> =>
+  Object.freeze(
+    inherited.filter(
+      (name) =>
+        isSupervisionTool(name) ||
+        ((tools?.allow?.includes(name) ?? true) && !(tools?.deny?.includes(name) ?? false)),
+    ),
+  );
+
 export const validateParentMessage = (
   message: string,
   emptyMessage: string,
@@ -113,7 +130,11 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
   [
     "You are a subagent of a supervising Pi session. Complete the assigned task yourself; the parent owns planning across tasks and final decisions.",
     ...(request.profile && request.profileGuidance
-      ? [`Your assigned profile is ${request.profile}.\n\n${request.profileGuidance}`]
+      ? [
+          request.agent
+            ? `Your assigned agent is ${request.agent}.\n\n${request.profileGuidance}`
+            : `Your assigned profile is ${request.profile}.\n\n${request.profileGuidance}`,
+        ]
       : []),
     "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",
     "Search scoped first: start from the paths and symbols the task names, and use repository-wide searches only to confirm an exact string after a scoped pass.",
@@ -123,48 +144,29 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
       ? [
           "You work in an isolated workspace, named with your task. Work only there; don't write into the source checkout or another worker's directory.",
           "Your changes are a proposal: don't stage, commit, merge, or integrate them. Your parent reviews or tests them before applying them. The isolation is not a security sandbox.",
+          "The workspace is a Git worktree on a detached HEAD that shares its repository with the parent's checkout. Stay on that detached HEAD: don't create or switch branches, use git stash, change Git config, or run git worktree commands, because each would change the parent's repository.",
         ]
       : []),
     ...(isWorkspaceParentRequest(request)
       ? [
-          `You may start worktree writer children (isolation: worktree) for parallel slices of your task. Their workspaces are yours: apply each one into your own workspace with subagent_workspace, or discard it.${request.writes ? " Their changes count against your own write claims." : ""} Apply or discard every child workspace before you report, because unresolved child workspaces block your parent's integration.`,
+          "You may start worktree writer children (isolation: worktree) for parallel slices of your task. Their workspaces are yours: apply each one into your own workspace with subagent_workspace, or discard it. Apply or discard every child workspace before you report, because unresolved child workspaces block your parent's integration.",
         ]
       : []),
     request.writeIntent === "writer"
-      ? request.writes
-        ? [
-            request.workspace
-              ? "Your exact write claims still limit what you change in the isolated workspace."
-              : "You share the working directory with other writers. Your tools can reach any file; the claims below are coordination rules, not isolation.",
-            "Your exact write claims are listed with your task.",
-            request.workspace
-              ? "Read repository files as needed, but modify only the claimed paths inside your isolated cwd."
-              : "Read any repository file, but modify only the claimed paths. Re-read a file immediately before editing because peers may change the checkout concurrently. Don't write outside the working directory, except for scratch files in the system temporary directory such as /tmp.",
-            "Use Bash for targeted validation and ordinary work, but don't mutate files outside your claims. Don't run Git mutations, package installation, broad formatting, snapshot updates, or broad code generation unless every affected file is claimed.",
-            "Your claims are fixed for this run, and a native write outside them stops you. If the task needs another file, don't edit it: finish what you can within your claims and name the exact workspace-relative paths in your final report, so the parent can relaunch with corrected claims.",
-            "Report every changed file, validation command, and any possible out-of-claim side effect in the final report.",
+      ? request.workspace
+        ? "You are the writer in an isolated working directory. Keep edits narrowly within the assigned task and report changed files and validation."
+        : [
+            "You may share the working directory with other writers; the workspace coordination notice lists active peers and their tasks. Your tools can reach any file, so coordinate by task scope rather than isolation.",
+            "Keep edits narrowly within the assigned task. Re-read a file immediately before editing because peers may change the checkout concurrently. Don't write outside the working directory, except for scratch files in the system temporary directory such as /tmp.",
+            "Don't edit files that belong to a peer's task, and don't run Git mutations, package installation, broad formatting, snapshot updates, or broad code generation that could change other writers' files. Contact the parent and wait before work that could overlap another task.",
+            "Report every changed file, validation command, and any side effect that may have reached files outside your task in the final report.",
           ].join("\n\n")
-        : request.workspace
-          ? "You are the writer in an isolated working directory. Keep edits narrowly within the assigned task and report changed files and validation."
-          : "You are the only writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
       : "You are read-only. Your tools can still modify files, so use them only to inspect and validate; don't edit, write, generate, or otherwise change project files. If the task needs changes, say what should change in your report or ask the parent.",
   ].join("\n\n");
 
 // Shown to a forked child before its task so it doesn't continue the inherited conversation.
 const FORK_PREAMBLE =
   "You start from a copy of your parent's conversation. Treat it as reference only: don't continue it or answer earlier messages. Do only the assigned task below.";
-
-const MAX_LISTED_OMISSIONS = 8;
-
-const omittedTrackedNotice = (paths: ReadonlyArray<string>): ReadonlyArray<string> => {
-  if (paths.length === 0) return [];
-  const listed = paths.slice(0, MAX_LISTED_OMISSIONS).join(", ");
-  const more =
-    paths.length > MAX_LISTED_OMISSIONS ? `, and ${paths.length - MAX_LISTED_OMISSIONS} more` : "";
-  return [
-    `Tracked files in dependency or build directories are not in this workspace, and changes to them can't be integrated: ${listed}${more}.`,
-  ];
-};
 
 // Per-run details live in the task message rather than the system prompt, so siblings with the
 // same profile share a cached system prompt.
@@ -175,11 +177,7 @@ export const taskPrompt = (request: StartSubagentRequest, peerNotice: string): s
     ...(request.workspace
       ? [
           `Isolated workspace: ${request.workspace.cwd} (created from ${request.workspace.sourceCwd}).`,
-          ...omittedTrackedNotice(request.workspace.omittedTrackedPaths ?? []),
         ]
-      : []),
-    ...(request.writeIntent === "writer" && request.writes
-      ? [`Your exact write claims:\n${request.writes.map((path) => `- ${path}`).join("\n")}`]
       : []),
     `Workspace coordination:\n${peerNotice}`,
   ].join("\n\n");

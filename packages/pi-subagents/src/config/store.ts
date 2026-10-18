@@ -178,6 +178,7 @@ const decodeDocument = (
     `${scope}.delegation`,
     `${scope}.workspaceSetup`,
     `${scope}.workspaceVerify`,
+    `${scope}.workspaceInclude`,
     `${scope}.sessionSpendLimit`,
   ]);
   return decoded.diagnostics.some((diagnostic) => fatal.has(diagnostic))

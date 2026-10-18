@@ -4,9 +4,14 @@ import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 import { WRITER_WORKSPACE_MODES } from "../config/schema.ts";
+import { MAX_CUSTOM_AGENT_NAME_CHARS, type CustomAgent } from "../profiles/agents.ts";
 import { PROFILE_DEFINITIONS } from "../profiles/definitions.ts";
-import { PROFILE_IDS } from "../profiles/model.ts";
-import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
+import {
+  MAX_PROFILE_MODEL_SELECTOR_CHARS,
+  PROFILE_CANDIDATE_EFFORTS,
+  PROFILE_CANDIDATE_RUNTIMES,
+  PROFILE_IDS,
+} from "../profiles/model.ts";
 import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
@@ -19,7 +24,6 @@ import {
 } from "../run/limits.ts";
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME, type SubagentToolName } from "../run/tool-policy.ts";
-import { WORKSPACE_EXPORT_FORMATS } from "../run/workspace-export.ts";
 import { MAX_WORKSPACE_FILES } from "../workspace/policy.ts";
 import { decodeArgumentsObject, replacementField, toolArgumentPreparer } from "./arguments.ts";
 
@@ -29,14 +33,6 @@ const nonblank = (maxLength: number) => ({ minLength: 1, maxLength }) as const;
 const nonblankString = (maxLength: number, description?: string) =>
   Type.String({ ...(description !== undefined && { description }), ...nonblank(maxLength) });
 const RunIdParameter = Type.String(nonblank(MAX_PROTOCOL_ID_CHARS));
-const writePaths = (itemDescription?: string, description?: string) =>
-  Type.Array(nonblankString(MAX_WRITE_CLAIM_CHARS, itemDescription), {
-    ...(description !== undefined && { description }),
-    minItems: 1,
-    maxItems: MAX_WRITE_CLAIMS,
-    uniqueItems: true,
-  });
-
 export const AWAIT_UNTIL = ["all_finished", "any_finished"] as const;
 
 const PROFILE_PARAMETER_DESCRIPTION = [
@@ -44,28 +40,74 @@ const PROFILE_PARAMETER_DESCRIPTION = [
   ...PROFILE_IDS.map((id) => `${id}: ${PROFILE_DEFINITIONS[id].description}`),
 ].join(" ");
 
-const StartSpecFields = {
+const ModelOverrideParameters = Type.Object(
+  {
+    runtime: StringEnum(PROFILE_CANDIDATE_RUNTIMES, { description: "Local runtime." }),
+    model: nonblankString(
+      MAX_PROFILE_MODEL_SELECTOR_CHARS,
+      "Native model selector: provider/model or parent for pi, a Claude Code or Codex model name otherwise.",
+    ),
+    effort: Type.Optional(
+      StringEnum(PROFILE_CANDIDATE_EFFORTS, {
+        description: "Reasoning effort; omit for the profile default.",
+      }),
+    ),
+  },
+  {
+    ...strictObjectOptions,
+    description:
+      "Run this launch on exactly this model instead of the profile's route, only when the user asks for a specific model. No fallback: an unavailable model fails the launch and retry. The profile still sets role, context, and write intent.",
+  },
+);
+
+// Nested children don't know the root's agents, so their schema accepts any name and the root
+// checks it; the root registers the configured names as an enum instead.
+const NESTED_AGENT_DESCRIPTION =
+  "Optional custom agent the user configured, instead of profile; call subagent_models to list them.";
+const nestedAgentParameter = () =>
+  Type.Unsafe<string>({
+    type: "string",
+    description: NESTED_AGENT_DESCRIPTION,
+    ...nonblank(MAX_CUSTOM_AGENT_NAME_CHARS),
+  });
+
+const agentParameterDescription = (agents: ReadonlyArray<CustomAgent>): string =>
+  [
+    "Custom agent the user configured, instead of profile; it sets its own instructions and routes through its profile.",
+    ...agents.map((agent) => `${agent.name}: ${agent.description} (profile ${agent.profile})`),
+  ].join(" ");
+
+const StartSpecBaseFields = {
   task: nonblankString(
     MAX_TASK_CHARS,
     "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
   ),
   name: Type.Optional(nonblankString(MAX_NAME_CHARS, "Optional nonblank display name.")),
   profile: Type.Optional(StringEnum(PROFILE_IDS, { description: PROFILE_PARAMETER_DESCRIPTION })),
-  writes: Type.Optional(
-    writePaths(
-      "Exact workspace-relative POSIX file path assigned to this writer.",
-      "Cooperative exact-file claims for writer profiles. Omit for exclusive whole-workspace writer ownership.",
-    ),
-  ),
+} as const;
+
+const StartSpecOptionFields = {
   isolation: Type.Optional(
     StringEnum(WRITER_WORKSPACE_MODES, {
       description:
         "Where a writer works: shared-checkout edits your checkout; worktree edits a private copy whose proposal you apply. Omit for the session default; read-only profiles ignore it.",
     }),
   ),
+  model: Type.Optional(ModelOverrideParameters),
 } as const;
 
+const startSpecFields = (agent: ReturnType<typeof nestedAgentParameter>) => ({
+  ...StartSpecBaseFields,
+  agent: Type.Optional(agent),
+  ...StartSpecOptionFields,
+});
+
+const StartSpecFields = startSpecFields(nestedAgentParameter());
 const StartSpecParameters = Type.Object(StartSpecFields, strictObjectOptions);
+const StartSpecWithoutAgentParameters = Type.Object(
+  { ...StartSpecBaseFields, ...StartSpecOptionFields },
+  strictObjectOptions,
+);
 
 const RunIdsParameters = Type.Array(RunIdParameter, {
   description: "Target run IDs.",
@@ -89,17 +131,50 @@ const ModelsParameters = Type.Object(
   strictObjectOptions,
 );
 
-const StartParameters = Type.Object(
-  {
-    agents: Type.Array(StartSpecParameters, {
-      description:
-        "One to thirty-two independent subagents to launch, subject to the caller's configured direct-child capacity.",
-      minItems: 1,
-      maxItems: MAX_START_BATCH,
-    }),
-  },
-  strictObjectOptions,
-);
+const startParameters = <
+  Spec extends typeof StartSpecParameters | typeof StartSpecWithoutAgentParameters,
+>(
+  spec: Spec,
+) =>
+  Type.Object(
+    {
+      agents: Type.Array(spec, {
+        description:
+          "One to thirty-two independent subagents to launch, subject to the caller's configured direct-child capacity.",
+        minItems: 1,
+        maxItems: MAX_START_BATCH,
+      }),
+    },
+    strictObjectOptions,
+  );
+
+const StartParameters = startParameters(StartSpecParameters);
+const StartWithoutAgentParameters = startParameters(StartSpecWithoutAgentParameters);
+type StartToolParameters = typeof StartParameters | typeof StartWithoutAgentParameters;
+const NESTED_START_PARAMETERS: StartToolParameters = StartParameters;
+
+/**
+ * The root's start schema: configured agents become an enum with their descriptions, and the
+ * field is absent when there are none. `undefined` keeps the nested schema, which accepts any name.
+ */
+export const startToolParameters = (
+  agents: ReadonlyArray<CustomAgent> | undefined,
+): StartToolParameters => {
+  if (agents === undefined) return NESTED_START_PARAMETERS;
+  if (agents.length === 0) return StartWithoutAgentParameters;
+  return startParameters(
+    Type.Object(
+      startSpecFields(
+        Type.Unsafe<string>({
+          type: "string",
+          enum: agents.map((agent) => agent.name),
+          description: agentParameterDescription(agents),
+        }),
+      ),
+      strictObjectOptions,
+    ),
+  );
+};
 
 const StatusParameters = Type.Object(
   {
@@ -149,22 +224,11 @@ const SendParameters = Type.Object(
   strictObjectOptions,
 );
 
-const ReplyParameters = Type.Object(
-  {
-    runId: Type.String({
-      ...nonblank(MAX_PROTOCOL_ID_CHARS),
-      description: "Run ID waiting for a parent reply.",
-    }),
-    message: MessageParameters,
-  },
-  strictObjectOptions,
-);
-
 const LifecycleParameters = Type.Object(
   {
     action: StringEnum(["resume", "interrupt", "stop", "retry"] as const, {
       description:
-        "resume and interrupt need the run to support them; stop works on any active run; retry continues a failed run on its next route candidate. message applies only to resume.",
+        "resume and interrupt need the run to support them; resume accepts paused, completed, failed, and stopped runs; stop works on any active run; retry continues a failed run on its next route candidate. message applies only to resume.",
     }),
     runIds: RunIdsParameters,
     message: Type.Optional(MessageParameters),
@@ -174,13 +238,10 @@ const LifecycleParameters = Type.Object(
 
 export const WorkspaceParameters = Type.Object(
   {
-    action: StringEnum(
-      ["list", "review", "prepare", "apply", "export", "discard", "revise"] as const,
-      {
-        description:
-          "list needs no target. apply needs workspaceId: alone it freezes, prepares, runs the configured verification, and integrates in one call; revisionId optionally pins the revision and paths limits it to those changed files, keeping the rest as the proposal; with revisionId and preparationId it integrates exactly that reviewed and prepared pair. review freezes a cleaned-up workspace or pages an exact revision, starting with a summary. prepare needs revisionId. export writes the proposal as a patch file or branch in your repository without applying or resolving it. revise needs message and invalidates prior review/preparation; rebase first rebuilds the writer's tree from your current files. discard needs workspaceId only.",
-      },
-    ),
+    action: StringEnum(["list", "review", "prepare", "apply", "discard", "revise"] as const, {
+      description:
+        "list needs no target. apply needs workspaceId: alone it freezes, prepares, runs the configured verification, and integrates in one call; revisionId optionally pins the revision and paths limits it to those changed files, keeping the rest as the proposal; with revisionId and preparationId it integrates exactly that reviewed and prepared pair. review freezes a cleaned-up workspace or pages an exact revision, starting with a summary. prepare needs revisionId. revise needs message and invalidates prior review/preparation; rebase first rebuilds the writer's tree from your current files. discard needs workspaceId only.",
+    }),
     workspaceId: Type.Optional(RunIdParameter),
     revisionId: Type.Optional(RunIdParameter),
     preparationId: Type.Optional(RunIdParameter),
@@ -191,12 +252,6 @@ export const WorkspaceParameters = Type.Object(
         minItems: 1,
         maxItems: MAX_WORKSPACE_FILES,
         uniqueItems: true,
-      }),
-    ),
-    format: Type.Optional(
-      StringEnum(WORKSPACE_EXPORT_FORMATS, {
-        description:
-          "export only. patch (default) writes a git apply-able file in the repository's Git directory; branch creates pi-subagent/<name> whose commit adds the changes to HEAD.",
       }),
     ),
     rebase: Type.Optional(
@@ -233,7 +288,6 @@ const WORKSPACE_ACTION_FIELDS = {
   review: { required: ["workspaceId"], optional: ["revisionId", "offset", "limit"] },
   prepare: { required: ["workspaceId", "revisionId"], optional: [] },
   apply: { required: ["workspaceId"], optional: ["revisionId", "preparationId", "paths"] },
-  export: { required: ["workspaceId"], optional: ["revisionId", "format"] },
   discard: { required: ["workspaceId"], optional: [] },
   revise: { required: ["workspaceId", "message"], optional: ["rebase"] },
 } satisfies Record<
@@ -295,11 +349,10 @@ export const statusOperationError = (input: SubagentStatusInput): string | undef
 
 export const SUBAGENT_TOOL_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.models]: { parameters: ModelsParameters },
-  [SUBAGENT_TOOL_NAME.start]: { parameters: StartParameters },
+  [SUBAGENT_TOOL_NAME.start]: { parameters: NESTED_START_PARAMETERS },
   [SUBAGENT_TOOL_NAME.status]: { parameters: StatusParameters, validate: statusOperationError },
   [SUBAGENT_TOOL_NAME.await]: { parameters: AwaitParameters },
   [SUBAGENT_TOOL_NAME.send]: { parameters: SendParameters },
-  [SUBAGENT_TOOL_NAME.reply]: { parameters: ReplyParameters },
   [SUBAGENT_TOOL_NAME.lifecycle]: {
     parameters: LifecycleParameters,
     validate: lifecycleMessageError,
@@ -341,7 +394,6 @@ const TOOL_ACTIONS: ToolActionResolvers = {
   [SUBAGENT_TOOL_NAME.status]: (args) => (args.runIds === undefined ? "list" : "status"),
   [SUBAGENT_TOOL_NAME.await]: () => "await",
   [SUBAGENT_TOOL_NAME.send]: () => "send",
-  [SUBAGENT_TOOL_NAME.reply]: () => "reply",
   [SUBAGENT_TOOL_NAME.lifecycle]: (args) => args.action,
   [SUBAGENT_TOOL_NAME.workspace]: () => "workspace",
 };
@@ -360,6 +412,10 @@ const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
     if (disallowedField)
       throw new Error(
         disallowedLaunchOverrideMessage(disallowedField, `subagent_start agents[${index}]`),
+      );
+    if (Object.hasOwn(agent, "agent") && Object.hasOwn(agent, "profile"))
+      throw new Error(
+        `[agent_profile_conflict] subagent_start agents[${index}] sets both agent and profile; an agent routes through its own profile, so set only one.`,
       );
   });
 
@@ -384,8 +440,10 @@ const inspectStartArguments = (args: JsonObject): void => {
  * Pi `prepareArguments` hook for one tool: precise argument errors and nonblank text, plus the
  * launch-shape checks for subagent_start.
  */
-export const subagentArgumentPreparer = <N extends SubagentToolName>(name: N) => {
-  const parameters: SubagentToolParameters<N> = SUBAGENT_TOOL_SCHEMAS[name].parameters;
+export const subagentArgumentPreparer = <N extends SubagentToolName>(
+  name: N,
+  parameters: SubagentToolParameters<N> = SUBAGENT_TOOL_SCHEMAS[name].parameters,
+) => {
   return toolArgumentPreparer(
     name,
     parameters,

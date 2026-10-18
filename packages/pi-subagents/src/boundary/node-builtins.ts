@@ -18,4 +18,3 @@ export const nodeCreateHash = cryptoModule.createHash;
 export const nodePath = pathModule;
 export const nodeAvailableParallelism = osModule.availableParallelism;
 export const nodeUptime = osModule.uptime;
-export const nodeTmpdir = osModule.tmpdir;

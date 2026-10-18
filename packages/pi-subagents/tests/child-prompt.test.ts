@@ -11,12 +11,12 @@ const workspace = (cwd: string) => ({
   cwd,
 });
 
-const writer = (writes: ReadonlyArray<string>, cwd: string) =>
+const writer = (task: string, cwd: string) =>
   request({
+    task,
     profile: "worker",
     profileGuidance: "Act as a worker.",
     writeIntent: "writer",
-    writes,
     writerWorkspaceMode: "worktree",
     workspace: workspace(cwd),
   });
@@ -26,8 +26,8 @@ const ownsChildWorkspaces = (overrides: Partial<StartSubagentRequest>) =>
 
 describe("child prompts", () => {
   it("keeps per-run paths out of the system prompt so sibling writers share it", () => {
-    const first = writer(["src/a.ts"], "/private/ws-1");
-    const second = writer(["src/b.ts"], "/private/ws-2");
+    const first = writer("Edit src/a.ts", "/private/ws-1");
+    const second = writer("Edit src/b.ts", "/private/ws-2");
     expect(childSystemPrompt(first)).toBe(childSystemPrompt(second));
     expect(childSystemPrompt(first)).not.toContain("src/a.ts");
     const task = taskPrompt(first, "No peers.");

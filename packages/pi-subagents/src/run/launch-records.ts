@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import type { BackendLaunchRequest } from "../backend/model.ts";
-import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import { invalidRequest, type SubagentError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import {
@@ -19,7 +18,6 @@ export interface LaunchPlan {
   readonly request: StartSubagentRequest;
   readonly parentRunId: string;
   readonly cwd: string;
-  readonly writeClaims: ReadonlyArray<string> | undefined;
 }
 
 export interface LaunchIdentity {
@@ -29,34 +27,21 @@ export interface LaunchIdentity {
 
 export const validateStartRequest = (
   request: StartSubagentRequest,
-): Effect.Effect<ReadonlyArray<string> | undefined, SubagentError> =>
-  Effect.gen(function* () {
-    if (!request.task.trim())
-      return yield* invalidRequest("task_required", "Subagent task is required.");
-    if (request.task.length > MAX_TASK_CHARS)
-      return yield* invalidRequest(
+): Effect.Effect<void, SubagentError> => {
+  if (!request.task.trim())
+    return Effect.fail(invalidRequest("task_required", "Subagent task is required."));
+  if (request.task.length > MAX_TASK_CHARS)
+    return Effect.fail(
+      invalidRequest(
         "task_too_large",
         `Subagent task is too large: ${request.task.length.toLocaleString("en-US")} characters, over the ${MAX_TASK_CHARS.toLocaleString("en-US")}-character limit.`,
-      );
-    const normalizedClaims =
-      request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
-    if (normalizedClaims && !normalizedClaims.ok)
-      return yield* invalidRequest(normalizedClaims.code, normalizedClaims.message);
-    if (normalizedClaims && request.writeIntent !== "writer")
-      return yield* invalidRequest(
-        "write_claims_read_only",
-        "writes may be supplied only for a writer subagent.",
-      );
-    return normalizedClaims?.claims;
-  });
-
-export const withWriteClaims = (
-  base: StartSubagentRequest,
-  writeClaims: ReadonlyArray<string> | undefined,
-): StartSubagentRequest => (writeClaims === undefined ? base : { ...base, writes: writeClaims });
+      ),
+    );
+  return Effect.void;
+};
 
 export const initialRunView = (
-  { request, parentRunId, cwd, writeClaims }: LaunchPlan,
+  { request, parentRunId, cwd }: LaunchPlan,
   parent: RunRecord | undefined,
   { id, name }: LaunchIdentity,
   capabilities: ReadonlyArray<SubagentCapability>,
@@ -66,6 +51,7 @@ export const initialRunView = (
   name,
   task: request.task.trim(),
   ...(request.profile && { profile: request.profile }),
+  ...(request.agent && { agent: request.agent }),
   ...(request.supersedes && { predecessorRunId: request.supersedes.runId }),
   ...(request.routeContinuation && {
     remainingCandidateCount: remainingRouteCandidates(request.routeContinuation),
@@ -77,6 +63,7 @@ export const initialRunView = (
     reason: "Profile route selection.",
     skippedCandidates: [],
   },
+  ...(request.modelOverride && { modelOverride: request.modelOverride }),
   cwd,
   ...(request.writerWorkspaceMode && {
     writerWorkspaceMode: request.writerWorkspaceMode,
@@ -88,14 +75,6 @@ export const initialRunView = (
   state: "starting",
   context: request.context,
   writeIntent: request.writeIntent,
-  ...(writeClaims !== undefined && {
-    writeClaims,
-    writeAudit: {
-      observedFileWrites: [],
-      violations: [],
-      bashWriteHints: 0,
-    },
-  }),
   openaiFastMode: request.openaiFastMode,
   runtime: request.runtime,
   reportGeneration: 0,
@@ -110,7 +89,7 @@ export const initialRunView = (
 });
 
 export const backendLaunchRequest = (
-  { request, cwd, writeClaims }: LaunchPlan,
+  { request, cwd }: LaunchPlan,
   { id, name }: LaunchIdentity,
 ): BackendLaunchRequest => ({
   runId: id,
@@ -129,7 +108,7 @@ export const backendLaunchRequest = (
   ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
   ...(request.sharesParentPromptCache && { sharesParentPromptCache: true }),
   ...(isWorkspaceParentRequest(request) && { workspaceParent: true }),
-  systemPrompt: childSystemPrompt(withWriteClaims(request, writeClaims)),
+  systemPrompt: childSystemPrompt(request),
 });
 
 export const isEvictionEligible = (

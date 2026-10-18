@@ -95,6 +95,21 @@ describe("writer workspace lifecycle", () => {
     },
   );
 
+  it.effect("counts unresolved workspaces without probing other sessions' owner leases", () => {
+    const f = workspaceFixture();
+    return withService(f.layer, function* (service) {
+      yield* service.start(repoWriter());
+      f.hooks.ownerProbeFailure = new WorkspaceError({
+        operation: "lock",
+        message: "Owner leases are unreadable.",
+      });
+      expect(yield* service.inspectWriterWorkspace).toEqual({
+        mode: "worktree",
+        unresolvedWorkspaceCount: 1,
+      });
+    });
+  });
+
   it.effect("a mode switch leaves existing writers' revisions and retries in worktrees", () => {
     const f = workspaceFixture();
     return withService(f.layer, function* (service) {
@@ -154,6 +169,43 @@ describe("writer workspace lifecycle", () => {
       const failed = yield* failedWriter(service, f);
       expect(yield* retryWith(service, failed, "stale-claim").pipe(Effect.flip)).toMatchObject({
         code: "retry_claim_stale",
+      });
+      expect(f.entries.size).toBe(1);
+    });
+  });
+
+  it.effect("a failed writer resumes in its own workspace and reopens its review", () => {
+    const f = workspaceFixture();
+    return withService(f.layer, function* (service) {
+      const failed = yield* failedWriter(service, f);
+      const id = failed.workspaceId!;
+      const reviewed = yield* service.workspaceReview(id);
+      const resumed = yield* service.resume(failed.id, "Finish the change.");
+      expect(resumed).toMatchObject({ state: "running", workspaceId: id, cwd: failed.cwd });
+      expect(f.children.controls.at(-1)!.launch.cwd).toBe(failed.cwd);
+      expect(f.entries.size).toBe(1);
+      expect(yield* listed(service, id)).toMatchObject({ status: "active" });
+      expect(yield* service.workspaceReview(id).pipe(Effect.flip)).toMatchObject({
+        code: "workspace_process_unsettled",
+      });
+      yield* completeLocalRun(service, f.children.controls.at(-1)!, failed.id, "Finished.");
+      expect(
+        yield* service.workspaceReview(id, { revisionId: reviewed.revisionId }).pipe(Effect.flip),
+      ).toMatchObject({ code: "workspace_revision_stale" });
+      expect((yield* service.workspaceReview(id)).revisionId).not.toBe(reviewed.revisionId);
+    });
+  });
+
+  it.effect("a stopped writer resumes in its own workspace", () => {
+    const f = workspaceFixture();
+    return withService(f.layer, function* (service) {
+      const stopped = yield* stoppedWriter(service);
+      yield* yieldUntil(() => f.children.controls[0]!.released() === 1);
+      const resumed = yield* service.resume(stopped.id, "Continue where you stopped.");
+      expect(resumed).toMatchObject({
+        state: "running",
+        workspaceId: stopped.workspaceId,
+        cwd: stopped.cwd,
       });
       expect(f.entries.size).toBe(1);
     });
@@ -303,6 +355,14 @@ describe("writer workspace lifecycle", () => {
         revisionId: tested.revisionId,
         preparationId: tested.preparationId,
       });
+    });
+  });
+
+  it.effect("creates writer workspaces with the project's include patterns", () => {
+    const f = workspaceFixture({ serviceOptions: { workspaceInclude: [".env", "*.local"] } });
+    return withService(f.layer, function* (service) {
+      yield* stoppedWriter(service);
+      expect(f.includes).toEqual([[".env", "*.local"]]);
     });
   });
 

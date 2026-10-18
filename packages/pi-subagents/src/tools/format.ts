@@ -7,10 +7,8 @@ import {
   synchronousNow,
   countLabel,
 } from "pi-cosmic-core";
-import { normalizeWriteClaim, writeClaimContains } from "../domain/write-claims.ts";
 import {
   isParentActionRequiredRun,
-  isTerminalRunState,
   hasUnresolvedSteeringDelivery,
   type SubagentRunView,
   type SubagentWorkspaceOutcome,
@@ -49,21 +47,6 @@ export const boundedLine = (value: string, maximum: number): string =>
 const runTarget = (run: AttentionRun): string =>
   `${sanitizeTerminalLine(run.name)} (${sanitizeTerminalLine(run.id)})`;
 
-const claimViolationPaths = (run: AttentionRun): ReadonlyArray<string> => [
-  ...new Set(run.writeAudit?.violations.map((violation) => violation.path)),
-];
-
-const grantableClaimPath = (path: string): string | undefined => {
-  const normalized = normalizeWriteClaim(path);
-  return normalized.ok ? normalized.claims[0] : undefined;
-};
-
-const safeMissingClaimPaths = (run: AttentionRun): ReadonlyArray<string> =>
-  claimViolationPaths(run).flatMap((path) => {
-    const claim = grantableClaimPath(path);
-    return claim && !writeClaimContains(run.writeClaims ?? [], claim) ? [claim] : [];
-  });
-
 type ProposalDiffStat = Pick<
   Extract<SubagentWorkspaceOutcome, { readonly status: "proposal" }>,
   "changedFileCount" | "diffStat"
@@ -94,29 +77,6 @@ export const workspaceOutcomeLabel = (outcome: SubagentWorkspaceOutcome): string
     ? ` (+${outcome.uncapturedFileCount} uncaptured)`
     : "";
   return `proposal: ${proposalChangeSummary(outcome)}${uncaptured}; apply or review`;
-};
-
-const claimViolationRecovery = (run: AttentionRun): ReadonlyArray<string> => {
-  const id = JSON.stringify(run.id);
-  const paths = claimViolationPaths(run);
-  const audit = paths.map((path) => sanitizeTerminalLine(path)).join(", ");
-  const terminal = isTerminalRunState(run.state);
-  const header = `${runTarget(run)} wrote outside its claims: ${audit || "an unclaimed path"}. Only this writer ${terminal ? "was stopped" : "is being stopped"}; its peers continue, and new writers are still admitted.`;
-  if (runCleanupAttention(run) !== undefined)
-    return [header, "Relaunch only after its cleanup is confirmed."];
-  const replacementClaims = [
-    ...new Set([...(run.writeClaims ?? []), ...safeMissingClaimPaths(run)]),
-  ];
-  const relaunch = paths.some((path) => grantableClaimPath(path) === undefined)
-    ? "If the work is still needed, review what it changed, then relaunch with subagent_start, narrowing the task to workspace-relative files with exact writes. Never claim outside-workspace or absolute paths."
-    : `If the work is still needed, review what it changed, then relaunch with subagent_start and corrected exact writes${replacementClaims.length > 0 ? ` such as ${JSON.stringify(replacementClaims)}` : ""}.`;
-  return terminal
-    ? [header, relaunch]
-    : [
-        header,
-        `1. Wait for it to stop: subagent_await({ runIds: [${id}], until: "all_finished" }). Don't issue a duplicate stop.`,
-        `2. ${relaunch}`,
-      ];
 };
 
 const ordinaryPauseRecovery = (run: AttentionRun): ReadonlyArray<string> => {
@@ -188,31 +148,24 @@ export const cleanupRecoveryText = (run: AttentionRun): ReadonlyArray<string> =>
 
 export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string => {
   const attention = runs.filter(
-    (run) =>
-      isParentActionRequiredRun(run) ||
-      run.writeViolationOffender === true ||
-      runCleanupAttention(run) !== undefined,
+    (run) => isParentActionRequiredRun(run) || runCleanupAttention(run) !== undefined,
   );
   if (attention.length === 0) return "";
   return [
     attention.some(isParentActionRequiredRun)
       ? "Parent action required; other unfinished subagents continue independently."
-      : attention.some((run) => runCleanupAttention(run) !== undefined)
-        ? "Recovery verification is still in progress; other unfinished subagents continue independently."
-        : "A writer broke its claims; other unfinished subagents continue independently.",
+      : "Recovery verification is still in progress; other unfinished subagents continue independently.",
     ...attention.flatMap((run) => {
       const state = runAttention(run);
       const cleanup = cleanupRecoveryText(run);
       const claim = ((): ReadonlyArray<string> => {
         switch (state?.kind) {
-          case "containment":
-            return claimViolationRecovery(run);
           case "paused":
             return runCleanupAttention(run) === undefined ? ordinaryPauseRecovery(run) : [];
           case "question":
             return [
               `Question from ${sanitizeTerminalLine(run.name)}: ${boundedLine(state.message, 512)}`,
-              `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
+              `Answer with subagent_send({ runIds: [${JSON.stringify(run.id)}], message: "..." }), then call subagent_await again.`,
             ];
           case "question-unavailable":
           case undefined:
@@ -232,7 +185,7 @@ const optionalStatusField = (label: string, value: string | undefined): string |
   value ? statusField(label, value) : undefined;
 
 const formatRunHeader = (run: SubagentRunView, route: string): string => {
-  const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
+  const profile = `${run.agent ? ` · agent=${sanitizeTerminalLine(run.agent)}` : ""}${run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : ""}`;
   const tree = run.depth
     ? ` · depth=${run.depth} · children=${run.directChildCount ?? 0}/${run.descendantCount ?? 0}`
     : "";
@@ -262,6 +215,7 @@ const identityStatusFields = (
         "Tree",
         `depth ${run.depth} · ${run.directChildCount ?? 0} direct · ${run.descendantCount ?? 0} descendants`,
       ),
+  optionalStatusField("Agent", run.agent),
   optionalStatusField("Profile", run.profile),
   statusField("Route", route),
   statusField("Retention", `close after report · assignment ${run.reportGeneration || 1}`),
@@ -294,6 +248,12 @@ const selectionStatusFields = (run: SubagentRunView): ReadonlyArray<string | und
     `${run.selection.source}${run.selection.candidateIndex === undefined ? "" : ` candidate ${run.selection.candidateIndex + 1}`}`,
   ),
   optionalStatusField("Route source", run.selection.routeSource),
+  run.modelOverride
+    ? statusField(
+        "Model override",
+        `${run.modelOverride.runtime}/${run.modelOverride.model}:${run.modelOverride.effort ?? "profile default"}; no fallback or retry candidate`,
+      )
+    : undefined,
   statusField("Reason", run.selection.reason),
   optionalStatusField("Predecessor", run.predecessorRunId),
   optionalStatusField("Superseded by", run.supersededByRunId),
@@ -321,7 +281,6 @@ const workspaceStatusField = (run: SubagentRunView): string | undefined => {
 };
 
 const writeStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
-  const audit = run.writeAudit;
   return [
     statusField("Context", run.context),
     statusField("Intent", run.writeIntent),
@@ -330,18 +289,6 @@ const writeStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefin
     statusField("Cwd", run.cwd),
     optionalStatusField("Source cwd", run.sourceCwd),
     workspaceStatusField(run),
-    run.writeIntent === "writer"
-      ? statusField("Writes", (run.writeClaims?.join(", ") ?? "") || "exclusive whole cwd")
-      : undefined,
-    run.writeViolationOffender
-      ? statusField("Violation", "stopped after writing outside its claims")
-      : undefined,
-    audit
-      ? statusField(
-          "Write audit",
-          `${countLabel(audit.observedFileWrites.length, "native file path")} observed · ${countLabel(audit.violations.length, "violation")} · ${countLabel(audit.bashWriteHints, "Bash heuristic notice")}`,
-        )
-      : undefined,
     statusField(
       "Capabilities",
       `${run.capabilities.join(", ") || "none"}; stop/await always available`,

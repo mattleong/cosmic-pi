@@ -112,34 +112,6 @@ describe("subagent tool", () => {
     expect(decodeSubagentProxyResult(encodeSubagentProxyPayload(proxied) ?? "")).toBeDefined();
   });
 
-  effectTest("threads exact writes claims only through writer profiles", function* () {
-    const requests: StartSubagentRequest[] = [];
-    const start = startTool(requests);
-
-    const result = yield* invokeOptionalTool(start, {
-      agents: [
-        {
-          task: "Implement token parsing",
-          profile: "worker",
-          writes: ["packages/auth/src/token.ts", "packages/auth/tests/token.test.ts"],
-        },
-      ],
-    });
-    expect(result?.content[0]?.text).toContain("agent-1");
-    expect(requests[0]).toMatchObject({
-      writeIntent: "writer",
-      writes: ["packages/auth/src/token.ts", "packages/auth/tests/token.test.ts"],
-    });
-
-    const rejected = yield* invokeOptionalTool(start, {
-      agents: [{ task: "Inspect auth", profile: "scout", writes: ["packages/auth/src/token.ts"] }],
-    });
-    expect(rejected?.content[0]?.text).toContain(
-      "writes may be supplied only for a writer profile",
-    );
-    expect(requests).toHaveLength(1);
-  });
-
   effectTest("threads isolation to writer launches and ignores it for readers", function* () {
     const requests: StartSubagentRequest[] = [];
     const result = yield* invokeOptionalTool(startTool(requests), {
@@ -270,7 +242,7 @@ describe("subagent tool", () => {
       );
 
     for (const forged of [
-      { model: "pi/openai/other" },
+      { effort: "high" },
       { backend: "claude-cli" },
       { routeContinuation: {} },
       { supersedes: {} },

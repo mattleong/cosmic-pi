@@ -3,6 +3,7 @@ import type { WriterWorkspaceMode } from "../config/schema.ts";
 import {
   type WorkspaceListing,
   type WorkspaceRecord,
+  type WorkspaceSwept,
   workspaceCheckoutRoot,
 } from "../workspace/model.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
@@ -20,18 +21,17 @@ import {
   type WorkspaceApplyOptions,
   type WorkspaceApplyResult,
 } from "./workspace-apply.ts";
-import {
-  workspaceExportOperations,
-  type WorkspaceExportOptions,
-  type WorkspaceExportResult,
-} from "./workspace-export.ts";
 import { workspaceIntegrationOperations } from "./workspace-integration.ts";
 import {
   workspaceLaunchOperations,
   type WorkspaceReviseOptions,
   type WorkspaceRevised,
 } from "./workspace-launch.ts";
-import { workspaceOrphanOperations } from "./workspace-orphan.ts";
+import {
+  type OrphanDisposition,
+  orphanDisposition,
+  workspaceOrphanOperations,
+} from "./workspace-orphan.ts";
 import {
   workspaceReviewOperations,
   type WorkspacePrepared,
@@ -47,8 +47,15 @@ export interface WriterWorkspaceInspection {
   readonly unresolvedWorkspaceCount?: number;
 }
 
+export interface WorkspaceCoordinatorListing extends WorkspaceListing {
+  /** The root's listing marks other sessions' workspaces it may adopt or only discard. */
+  readonly orphans?: ReadonlyMap<string, OrphanDisposition> | undefined;
+}
+
 export interface WorkspaceCoordinatorContract {
-  readonly workspaceList: (callerRunId?: string) => Effect.Effect<WorkspaceListing, SubagentError>;
+  readonly workspaceList: (
+    callerRunId?: string,
+  ) => Effect.Effect<WorkspaceCoordinatorListing, SubagentError>;
   readonly workspaceReview: (
     workspaceId: string,
     options?: WorkspaceReviewOptions,
@@ -75,15 +82,6 @@ export interface WorkspaceCoordinatorContract {
     workspaceId: string,
     callerRunId?: string,
   ) => Effect.Effect<void, SubagentError>;
-  /**
-   * Writes the proposal out as a patch file or branch in the source repository without resolving
-   * it. The root may also export an orphan whose session has ended.
-   */
-  readonly workspaceExport: (
-    workspaceId: string,
-    options?: WorkspaceExportOptions,
-    callerRunId?: string,
-  ) => Effect.Effect<WorkspaceExportResult, SubagentError>;
   /** Starts a successor writer; `rebase` first rebuilds its tree from current parent files. */
   readonly workspaceRevise: (
     workspaceId: string,
@@ -92,6 +90,11 @@ export interface WorkspaceCoordinatorContract {
     options?: WorkspaceReviseOptions,
   ) => Effect.Effect<WorkspaceRevised, SubagentError>;
   readonly inspectWriterWorkspace: Effect.Effect<WriterWorkspaceInspection, SubagentError>;
+  /**
+   * Discards this checkout's orphans unchanged for 30 days, keeping each one's revision patch
+   * until collection; the root runs it once at session start.
+   */
+  readonly sweepOrphanedWorkspaces: Effect.Effect<ReadonlyArray<WorkspaceSwept>, SubagentError>;
   readonly setWriterWorkspaceMode: <A, E, R>(
     mode: WriterWorkspaceMode,
     persist: Effect.Effect<A, E, R>,
@@ -115,6 +118,7 @@ export function workspaceControl(
           : undefined;
       return {
         unavailable: listing.unavailable,
+        endedOwners: listing.endedOwners,
         // A nested workspace belongs to the real checkout at the top of its chain.
         records: entries.filter(
           (record) =>
@@ -123,9 +127,10 @@ export function workspaceControl(
         ),
       };
     });
+  // A count needs no orphan verdicts, so it never probes other sessions' owner leases.
   const unresolvedWorkspaceCount = Effect.gen(function* () {
     if (!engine) return 0;
-    const listing = yield* engine.listAll.pipe(Effect.mapError(mapWorkspaceError));
+    const listing = yield* engine.listRecords.pipe(Effect.mapError(mapWorkspaceError));
     return (yield* sourceRecords(listing)).records.filter(
       (record) => record.status !== "integrated" && record.status !== "discarded",
     ).length;
@@ -168,9 +173,9 @@ export function workspaceControl(
       return {
         version: record.version,
         handle: record.handle,
+        repository: record.repository,
         status: "active",
         baseline: record.baseline,
-        ...(record.excludedPaths !== undefined && { excludedPaths: record.excludedPaths }),
       };
     // A preparation whose setup failed or is still running cannot be integrated. One that
     // failed verification stays listed for inspection, and integration refuses it.
@@ -192,7 +197,7 @@ export function workspaceControl(
   ) =>
     Effect.gen(function* () {
       const service = yield* requireEngine;
-      const listing: WorkspaceListing =
+      const listing: WorkspaceCoordinatorListing =
         caller === SUBAGENT_ROOT_RUN_ID
           ? yield* service.listAll.pipe(
               Effect.mapError(mapWorkspaceError),
@@ -205,29 +210,71 @@ export function workspaceControl(
               unavailable: [],
             };
       return yield* withLock(
-        Effect.sync(() => ({ ...listing, records: listing.records.map(currentRecord) })),
+        Effect.sync(() => {
+          const orphans = new Map(
+            caller === SUBAGENT_ROOT_RUN_ID
+              ? listing.records.flatMap((record) => {
+                  const { workspaceId } = record.handle;
+                  const disposition = state.bindings.has(workspaceId)
+                    ? undefined
+                    : orphanDisposition(record, listing);
+                  return disposition ? [[workspaceId, disposition] as const] : [];
+                })
+              : [],
+          );
+          return {
+            ...listing,
+            records: listing.records.map(currentRecord),
+            ...(orphans.size > 0 && { orphans }),
+          };
+        }),
       );
     });
   const review = workspaceReviewOperations(context);
   const integrateLocked = workspaceIntegrationOperations(context);
   const orphans = workspaceOrphanOperations(context, sourceRecords);
-  // The root may discard a workspace no live binding owns once its creating session has ended.
+  const isOrphan = (workspaceId: string, caller: string) =>
+    caller === SUBAGENT_ROOT_RUN_ID && !state.bindings.has(workspaceId);
+  /**
+   * The root takes over a workspace no live binding owns, once its creating session has ended,
+   * before the operation runs as on its own.
+   */
+  const adopting = <A>(
+    workspaceId: string,
+    caller: string,
+    operation: Effect.Effect<A, SubagentError>,
+  ): Effect.Effect<A, SubagentError> =>
+    Effect.suspend(() =>
+      isOrphan(workspaceId, caller)
+        ? orphans.adopt(workspaceId).pipe(Effect.andThen(operation))
+        : operation,
+    );
+  // An orphan is discarded without adoption, so nested and mid-integration orphans can go too.
   const workspaceDiscard: WorkspaceCoordinatorContract["workspaceDiscard"] = (
     workspaceId,
     caller = SUBAGENT_ROOT_RUN_ID,
   ) =>
     Effect.suspend(() =>
-      caller === SUBAGENT_ROOT_RUN_ID && !state.bindings.has(workspaceId)
+      isOrphan(workspaceId, caller)
         ? orphans.discardOrphan(workspaceId)
         : review.workspaceDiscard(workspaceId, caller),
     );
+  const launch = workspaceLaunchOperations(context);
+  const apply = workspaceApplyOperations(context, review.held, integrateLocked);
   return {
-    ...workspaceLaunchOperations(context),
-    workspaceReview: review.workspaceReview,
-    workspacePrepare: review.workspacePrepare,
+    ...launch,
+    revise:
+      (start: Parameters<typeof launch.revise>[0]) =>
+      (...args: Parameters<ReturnType<typeof launch.revise>>) =>
+        adopting(args[0], args[2] ?? SUBAGENT_ROOT_RUN_ID, launch.revise(start)(...args)),
+    workspaceReview: (...args: Parameters<typeof review.workspaceReview>) =>
+      adopting(args[0], args[2] ?? SUBAGENT_ROOT_RUN_ID, review.workspaceReview(...args)),
+    workspacePrepare: (...args: Parameters<typeof review.workspacePrepare>) =>
+      adopting(args[0], args[2] ?? SUBAGENT_ROOT_RUN_ID, review.workspacePrepare(...args)),
     workspaceDiscard,
-    workspaceExport: workspaceExportOperations(context, review.held, orphans),
-    workspaceApply: workspaceApplyOperations(context, review.held, integrateLocked),
+    workspaceApply: (...args: Parameters<typeof apply>) =>
+      adopting(args[0], args[2] ?? SUBAGENT_ROOT_RUN_ID, apply(...args)),
+    sweepOrphanedWorkspaces: orphans.sweepOrphans,
     /** Forked once a worktree writer completes; see `workspaceSettleOperations`. */
     settleCompletedWorkspace: workspaceSettleOperations(
       context,

@@ -2,12 +2,16 @@ import { registerRevisionedActivityProvider, type ActivityEvents } from "pi-cosm
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { absurd } from "effect/Function";
 import * as Schema from "effect/Schema";
 import {
   captureSubagentControlExpectation,
   type SubagentControlExpectation,
   type SubagentRunView,
 } from "../run/model.ts";
+import type { SubagentError } from "../run/errors.ts";
+import type { SubagentServiceContract } from "../run/service.ts";
+import { isPendingDeliveryError } from "../tools/outcome.ts";
 import type { SubagentProjectionBridge } from "./host-ui.ts";
 import { MAX_NAME_CHARS } from "../run/state.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
@@ -18,7 +22,13 @@ import {
   subagentActivityItems,
 } from "../ui/run-activity.ts";
 
-type SubagentActivityAction = "stop" | "interrupt" | "resume" | "message" | "reply" | "rename";
+export type SubagentActivityAction =
+  | "stop"
+  | "interrupt"
+  | "resume"
+  | "message"
+  | "reply"
+  | "rename";
 type SubagentActivityInput = "resume" | "message" | "reply" | "rename";
 
 class SubagentActivityInputError extends Schema.TaggedError<SubagentActivityInputError>()(
@@ -49,6 +59,40 @@ export const promptSubagentActivityInput = (
     },
     catch: () => new SubagentActivityInputError({ message: "Subagent input isn't available" }),
   });
+
+const missingActivityInput = (action: string): Error =>
+  new Error(`The ${action} activity action needs text input.`);
+
+/**
+ * Runs an admitted Activity action. Reply and message share subagent_send's path, which answers
+ * a pending question or steers by the target's locked state.
+ */
+export const runSubagentActivityAction = (
+  service: Pick<SubagentServiceContract, "stop" | "interrupt" | "resume" | "send" | "rename">,
+  id: string,
+  action: SubagentActivityAction,
+  input: string | undefined,
+  expected: SubagentControlExpectation,
+  onPendingGuidance: () => void,
+): Effect.Effect<void, SubagentError> => {
+  switch (action) {
+    case "stop":
+    case "interrupt":
+      return service[action](id, expected).pipe(Effect.asVoid);
+    case "resume":
+      return service.resume(id, input, expected).pipe(Effect.asVoid);
+    case "rename":
+    case "message":
+    case "reply":
+      if (input === undefined) return Effect.die(missingActivityInput(action));
+      if (action === "rename") return service.rename(id, input, expected).pipe(Effect.asVoid);
+      return service.send(id, input, expected).pipe(
+        Effect.asVoid,
+        Effect.catchIf(isPendingDeliveryError, () => Effect.sync(onPendingGuidance)),
+      );
+  }
+  return absurd(action);
+};
 
 const sameAssignment = (before: SubagentRunView, after: SubagentRunView): boolean =>
   before.assignmentEpoch === after.assignmentEpoch &&

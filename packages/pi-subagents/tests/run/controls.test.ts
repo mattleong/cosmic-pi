@@ -77,12 +77,8 @@ describe("SubagentService", () => {
 
       const waiting = yield* service.status(first.id);
       expect(waiting.question?.message).toBe("Which API should I use?");
-      const guidanceFailure = yield* Effect.flip(service.send(first.id, "Use the public API."));
-      expect(guidanceFailure.message).toContain(
-        `subagent_reply({ runId: "${first.id}", message: "..." })`,
-      );
-      const replied = yield* service.reply(first.id, "Use the public API.");
-      expect(replied.state).toBe("running");
+      const replied = yield* service.send(first.id, "Use the public API.");
+      expect(replied).toMatchObject({ delivery: "answered", run: { state: "running" } });
       expect(fake.controls[0]?.ipc).toContainEqual({
         channel: "pi-subagents",
         type: "parent_reply",
@@ -95,6 +91,55 @@ describe("SubagentService", () => {
       expect(
         fake.controls[0]?.sentIpc("peer_notice", (notice) => notice.message.includes("reader-two")),
       ).toBe(true);
+    });
+  });
+
+  it.effect("answers a waiting child and steers a running sibling with one message", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const asking = yield* service.start(request({ name: "asking" }));
+      const working = yield* service.start(request({ name: "working", task: "Review tests" }));
+      yield* askParent(fake.controls[0]!, projections, "question-1");
+      expect((yield* service.status(working.id)).state).toBe("running");
+
+      const outcomes = yield* Effect.forEach(
+        [asking.id, working.id],
+        (id) => service.send(id, "Use the public API."),
+        { concurrency: 2 },
+      );
+      expect(outcomes).toMatchObject([
+        { delivery: "answered", run: { id: asking.id, state: "running" } },
+        { delivery: "guided", run: { id: working.id, state: "running" } },
+      ]);
+      expect(fake.controls[0]?.sentIpc("parent_reply")).toBe(true);
+      expect(fake.controls[0]?.sent("steer")).toBe(false);
+      expect(fake.controls[1]?.sentIpc("parent_reply")).toBe(false);
+      expect(fake.controls[1]?.sent("steer")).toBe(true);
+    });
+  });
+
+  it.effect("refuses another message while a parent reply is in flight", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "reply-in-flight" }));
+      yield* askParent(fake.controls[0]!, projections, "question-in-flight");
+      const replyGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextIpcType("parent_reply", replyGate);
+      const replying = yield* service
+        .send(run.id, "Proceed.")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* yieldUntil(() => fake.controls[0]?.sentIpc("parent_reply") === true);
+
+      expect(yield* service.send(run.id, "Proceed again.").pipe(Effect.flip)).toMatchObject({
+        code: "reply_in_flight",
+      });
+      expect(fake.controls[0]?.sent("steer")).toBe(false);
+
+      yield* Deferred.succeed(replyGate, undefined);
+      expect(yield* Fiber.join(replying)).toMatchObject({ delivery: "answered" });
+      expect(
+        fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply"),
+      ).toHaveLength(1);
     });
   });
 
@@ -127,8 +172,14 @@ describe("SubagentService", () => {
         expect(fake.controls[0]?.sent("clear_queue")).toBe(false);
 
         yield* Deferred.succeed(steerGate, undefined);
-        expect((yield* Fiber.join(sending)).state).toBe("running");
-        expect((yield* Fiber.join(sendingSecond)).state).toBe("running");
+        expect(yield* Fiber.join(sending)).toMatchObject({
+          delivery: "guided",
+          run: { state: "running" },
+        });
+        expect(yield* Fiber.join(sendingSecond)).toMatchObject({
+          delivery: "guided",
+          run: { state: "running" },
+        });
         yield* yieldUntil(() => fake.controls[0]?.sent("clear_queue") === true);
         expect(fake.controls[0]?.commandTypes("steer", "clear_queue", "abort")).toEqual([
           "steer",
@@ -211,7 +262,7 @@ describe("SubagentService", () => {
         .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* yieldUntil(() => fake.controls[0]?.sentIpc("turn_input_barrier") === true);
 
-      const rejected = yield* service.reply(run.id, "Continue.").pipe(Effect.flip);
+      const rejected = yield* service.send(run.id, "Continue.").pipe(Effect.flip);
       expect(rejected).toBeInstanceOf(InvalidSubagentRequestError);
       expect(rejected).toMatchObject({ code: "interrupt_in_flight" });
 
@@ -228,7 +279,7 @@ describe("SubagentService", () => {
       yield* askParent(fake.controls[0]!, projections, "unsent-question");
 
       fake.controls[0]?.failNextIpc("transport_not_sent");
-      expect(yield* service.reply(run.id, "Proceed.").pipe(Effect.flip)).toMatchObject({
+      expect(yield* service.send(run.id, "Proceed.").pipe(Effect.flip)).toMatchObject({
         code: "reply_send_failed",
       });
       const status = yield* service.status(run.id);
@@ -236,7 +287,10 @@ describe("SubagentService", () => {
       expect(status.question).toMatchObject({ requestId: "unsent-question" });
       expect(status.warning).toBeUndefined();
 
-      expect((yield* service.reply(run.id, "Proceed.")).state).toBe("running");
+      expect(yield* service.send(run.id, "Proceed.")).toMatchObject({
+        delivery: "answered",
+        run: { state: "running" },
+      });
       expect(fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply")).toEqual([
         {
           channel: "pi-subagents",

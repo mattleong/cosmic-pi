@@ -62,7 +62,6 @@ import {
   initialRunView,
   isEvictionEligible,
   validateStartRequest,
-  withWriteClaims,
   type LaunchPlan,
 } from "./launch-records.ts";
 
@@ -213,7 +212,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const writeClaims = yield* validate(request, scriptedRoot);
+        yield* validate(request, scriptedRoot);
         const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
         const nestingPolicy: SubagentNestingPolicy =
           request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
@@ -284,7 +283,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               records,
               writerPools,
               canonicalWriterCwd,
-              writeClaims,
               ownReservation,
               predecessor,
             );
@@ -301,8 +299,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             return { parent, predecessor };
           });
 
-        const plan: LaunchPlan = { request, parentRunId, cwd, writeClaims };
-        const promptRequest = (base: StartSubagentRequest) => withWriteClaims(base, writeClaims);
+        const plan: LaunchPlan = { request, parentRunId, cwd };
         const evictionEligible = (record: RunRecord) => isEvictionEligible({ records }, record);
 
         const admitLocked = (
@@ -339,7 +336,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               stoppedByParent: false,
               cleanupPending: false,
               runStateReclaimState: "pending",
-              writeViolationContainmentStarted: false,
               ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
               initializationPending: true,
               initializationSettled,
@@ -391,13 +387,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                           (right.view.endedAt ?? right.view.startedAt),
                       )[0];
               if (candidate && candidate.runStateReclaimState !== "reclaimed") {
-                candidate.evictionClaim = {
-                  parentRunId,
-                  ...(canonicalWriterCwd && {
-                    writerCwdDigest: canonicalWriterCwd.digest,
-                    writeClaims,
-                  }),
-                };
+                candidate.evictionClaim = { parentRunId };
                 workspaces.bind(request);
                 return { kind: "reclaim" as const, candidate };
               }
@@ -443,7 +433,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                 ),
               );
         const peerNotice = peerNoticeText(records.values(), reserved.view.id);
-        const initialPrompt = taskPrompt(promptRequest(request), peerNotice);
+        const initialPrompt = taskPrompt(request, peerNotice);
         const initialize = Effect.gen(function* () {
           const state = yield* initializeProcess(reserved);
           yield* Effect.yieldNow;

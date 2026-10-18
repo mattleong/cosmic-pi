@@ -12,6 +12,7 @@ import {
   withFreeLock,
   workspaceLockDirectory,
 } from "../../src/boundary/git-worktree-store.ts";
+import { git } from "../../src/boundary/git-worktree-process.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { workspaceCheckoutRoot, type WorkspaceHandle } from "../../src/workspace/model.ts";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
@@ -68,7 +69,7 @@ const integrate = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =
   });
 
 describe("nested workspace sources", () => {
-  test("snapshots the source worker's uncommitted work with the rules its repository recorded", function* (service, root) {
+  test("snapshots the source worker's uncommitted work with the repository's ignore rules", function* (service, root) {
     const globalIgnore = path.join(home, "global-ignore");
     yield* writeFile(globalIgnore, "global-only.ts\n");
     yield* writeFile(globalConfig, `[core]\n\texcludesFile = ${globalIgnore}\n`);
@@ -79,11 +80,8 @@ describe("nested workspace sources", () => {
     yield* writeFile(path.join(parent.cwd, "src/added.ts"), "parent addition\n");
     yield* writeFile(path.join(parent.cwd, "global-only.ts"), "ignored\n");
     yield* writeFile(path.join(parent.cwd, "scratch.ts"), "ignored\n");
-    // The user's configuration is no longer consulted for the private source, even when broken.
-    yield* writeFile(globalConfig, "[core\n");
 
     const child = yield* nested(service, parent);
-    yield* writeFile(globalConfig, "");
     expect(child.sourceWorkspaceId).toBe(parent.workspaceId);
     expect(child.sourceRoot).toBe(parent.cwd);
     expect(workspaceCheckoutRoot(child)).toBe(root);
@@ -92,11 +90,12 @@ describe("nested workspace sources", () => {
     expect(yield* exists(path.join(child.cwd, "global-only.ts"))).toBe(false);
     expect(yield* exists(path.join(child.cwd, "scratch.ts"))).toBe(false);
 
-    // The child's own captures keep ignoring what the parent ignored.
+    // The child's own captures keep ignoring what the repository ignores.
     yield* writeFile(path.join(child.cwd, "global-only.ts"), "child output\n");
     yield* writeFile(path.join(child.cwd, "scratch.ts"), "child output\n");
     yield* writeFile(path.join(child.cwd, "src/util.ts"), "child edit\n");
     expect((yield* service.freeze(workspaceTarget(child))).changedPaths).toEqual(["src/util.ts"]);
+    yield* writeFile(globalConfig, "");
   });
 
   test("starts from a subdirectory of the source worker", function* (service, root) {
@@ -162,11 +161,9 @@ describe("nested workspace sources", () => {
     const refusals = [
       // A private tree without a named source.
       yield* failureOf(service.create({ sourceCwd: parent.cwd, ownerId: "parent/child" })),
-      yield* failureOf(
-        service.create({ sourceCwd: path.join(directory, "repo.git"), ownerId: "parent/child" }),
-      ),
+      yield* failureOf(service.create({ sourceCwd: directory, ownerId: "parent/child" })),
       // A named source with a tree that isn't its worker.
-      yield* failureOf(nested(service, parent, path.join(directory, "repo.git"))),
+      yield* failureOf(nested(service, parent, directory)),
       yield* failureOf(nested(service, parent, other.cwd)),
       yield* failureOf(nested(service, other, preparation.cwd)),
       yield* failureOf(nested(service, parent, root)),
@@ -222,7 +219,7 @@ describe("child guards", () => {
     const seconds = (yield* Clock.currentTimeMillis) / 1000 - 8 * 24 * 60 * 60;
     yield* io(() =>
       fs.utimes(
-        path.join(agent, "git-workspaces", parent.workspaceId, "record.json"),
+        path.join(agent, "subagent-worktrees", parent.workspaceId, "record.json"),
         seconds,
         seconds,
       ),
@@ -278,17 +275,84 @@ describe("child guards", () => {
     60_000,
   );
 
+  it.live(
+    "removes a worker kept for children once they resolve and its session has ended",
+    () =>
+      Effect.gen(function* () {
+        const temporary = yield* temporaryDirectory("pi-retained-worker-");
+        const source = path.join(temporary, "source");
+        const agent = path.join(temporary, "agent");
+        yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
+        yield* commitRepository(source, [["main.ts", "baseline\n"]]);
+        const trees = git(source, ["worktree", "list", "--porcelain"]).pipe(
+          Effect.map((output) => output.split("\n").filter((line) => line.startsWith("worktree "))),
+        );
+        const refs = (handle: WorkspaceHandle) =>
+          git(source, [
+            "for-each-ref",
+            "--format=%(refname)",
+            `refs/pi/workspaces/${handle.workspaceId}`,
+          ]);
+        // Opening a service collects; its first operation waits for collection to finish.
+        const restart = Effect.gen(function* () {
+          const session = yield* openWorkspaceService(agent);
+          yield* session.service.listAll;
+          return session;
+        });
+
+        const creator = yield* openWorkspaceService(agent);
+        const retainedWorker = Effect.gen(function* () {
+          const parent = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
+          const child = yield* nested(creator.service, parent);
+          yield* writeFile(path.join(parent.cwd, "main.ts"), `${parent.workspaceId}\n`);
+          expect((yield* integrate(creator.service, parent)).retainedForChildren).toEqual([
+            child.workspaceId,
+          ]);
+          return { parent, child };
+        });
+        const resolved = yield* retainedWorker;
+        yield* creator.service.discard(workspaceTarget(resolved.child));
+        const unresolved = yield* retainedWorker;
+
+        // The creating session may still run something in its kept worker.
+        const bystander = yield* restart;
+        expect(yield* exists(resolved.parent.cwd)).toBe(true);
+        yield* bystander.close;
+        yield* creator.close;
+
+        const successor = yield* restart;
+        expect(yield* exists(resolved.parent.cwd)).toBe(false);
+        expect(yield* refs(resolved.parent)).toBe("");
+        expect(yield* exists(unresolved.parent.cwd)).toBe(true);
+        yield* successor.service.discardOrphan({ workspaceId: unresolved.child.workspaceId });
+        yield* successor.close;
+
+        const later = yield* restart;
+        expect(yield* exists(unresolved.parent.cwd)).toBe(false);
+        expect(yield* refs(unresolved.parent)).toBe("");
+        expect(yield* trees).toEqual([`worktree ${source}`]);
+        const statuses = (yield* later.service.listAll).records.map((record) => [
+          record.handle.workspaceId,
+          record.status,
+        ]);
+        expect(statuses).toContainEqual([resolved.parent.workspaceId, "integrated"]);
+        expect(statuses).toContainEqual([unresolved.parent.workspaceId, "integrated"]);
+        yield* later.close;
+      }),
+    90_000,
+  );
+
   test("lists a nested record whose source chain is broken as unavailable", function* (service, root, agent) {
     // Root reads files regardless of their mode.
     if (process.getuid?.() === 0) return;
     const parent = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     const child = yield* nested(service, parent);
     yield* io(() =>
-      fs.chmod(path.join(agent, "git-workspaces", parent.workspaceId, "record.json"), 0o000),
+      fs.chmod(path.join(agent, "subagent-worktrees", parent.workspaceId, "record.json"), 0o000),
     );
     const listing = yield* service.listAll;
     yield* io(() =>
-      fs.chmod(path.join(agent, "git-workspaces", parent.workspaceId, "record.json"), 0o600),
+      fs.chmod(path.join(agent, "subagent-worktrees", parent.workspaceId, "record.json"), 0o600),
     );
     expect(listing.records).toEqual([]);
     expect(listing.unavailable.map((entry) => [entry.workspaceId, entry.reason])).toEqual([
@@ -307,7 +371,7 @@ describe("chain locking", () => {
     const revision = yield* service.freeze(childTarget);
     const preparation = yield* service.prepare({ ...childTarget, revisionId: revision.revisionId });
 
-    const lockDirectory = workspaceLockDirectory(path.join(agent, "git-workspaces"));
+    const lockDirectory = workspaceLockDirectory(path.join(agent, "subagent-worktrees"));
     const held = yield* Effect.gen(function* () {
       const locks = yield* CrossProcessLock;
       // Another session holding the real checkout's lock holds up the whole chain.

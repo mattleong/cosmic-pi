@@ -43,6 +43,7 @@ function startSubject(input: SummaryArguments): string {
   const agent: unknown = input.agents[0];
   if (!Predicate.isObject(agent)) return "";
   if ("name" in agent && Predicate.isString(agent.name)) return agent.name;
+  if ("agent" in agent && Predicate.isString(agent.agent)) return agent.agent;
   return "profile" in agent && Predicate.isString(agent.profile) ? agent.profile : "";
 }
 
@@ -103,9 +104,20 @@ export function projectedSubject(
   return listedSubject(details) || subject;
 }
 
+type Receipt = readonly [count: number, word: string];
+
+const sendReceipts = (
+  details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
+): ReadonlyArray<Receipt> => {
+  const answered = details.answeredRunIds?.length ?? 0;
+  if (answered === 0) return [[details.runCount, "sent"]];
+  const guided = details.runCount - answered;
+  return [[answered, "answered"], ...(guided > 0 ? [[guided, "guided"] as const] : [])];
+};
+
 function receiptCounter(
   details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
-  receipt: string,
+  receipts: ReadonlyArray<Receipt>,
 ): string {
   const failures = countActionFailures(details.action, details.actionFailures);
   const exceptional = [
@@ -114,9 +126,9 @@ function receiptCounter(
     [failures.failed, "failed"],
   ] as const;
   const problems = exceptional.filter(([count]) => count > 0);
-  if (problems.length === 0)
-    return details.runCount === 1 ? receipt : `${details.runCount} ${receipt}`;
-  return [...(details.runCount > 0 ? [[details.runCount, receipt] as const] : []), ...problems]
+  const [single] = receipts;
+  if (problems.length === 0 && receipts.length === 1 && single?.[0] === 1) return single[1];
+  return [...receipts.filter(([count]) => count > 0 || problems.length === 0), ...problems]
     .map(([count, word]) => `${count} ${word}`)
     .join(", ");
 }
@@ -127,8 +139,8 @@ export function applyArgumentLanes(
   phase: CompactPhase,
   lanes: CompactSummary,
 ): void {
-  if (phase === "settled" && (details.action === "send" || details.action === "reply")) {
-    const count = receiptCounter(details, details.action === "send" ? "sent" : "replied");
+  if (phase === "settled" && details.action === "send") {
+    const count = receiptCounter(details, sendReceipts(details));
     summary.counters = [
       details.runCount > details.cards.length
         ? `${count}, ${details.cards.length}/${details.runCount} shown`

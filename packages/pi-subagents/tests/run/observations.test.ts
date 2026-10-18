@@ -219,31 +219,24 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("returns an offender's await once it stops while its peer keeps working", () => {
+  it.effect("returns a pool writer's await once it stops while its peer keeps working", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {
-      const offender = yield* service.start(
-        request({ name: "pool-offender", writeIntent: "writer", writes: ["src/a.ts"] }),
+      const stopped = yield* service.start(
+        request({ name: "pool-stopped", writeIntent: "writer" }),
       );
       const peer = yield* service.start(
-        request({ name: "awaited-pool-peer", writeIntent: "writer", writes: ["src/b.ts"] }),
+        request({ name: "awaited-pool-peer", writeIntent: "writer" }),
       );
-      const offenderAwait = yield* awaitRuns(service, [offender.id], "all_finished").pipe(
+      const stoppedAwait = yield* awaitRuns(service, [stopped.id], "all_finished").pipe(
         Effect.forkScoped,
       );
       const peerAwait = yield* awaitRuns(service, [peer.id], "all_finished").pipe(
         Effect.forkScoped,
       );
 
-      fake.controls[0]?.offer({
-        type: "tool_execution_start",
-        toolCallId: "pool-violation",
-        toolName: "edit",
-        args: { path: "src/c.ts", edits: [] },
-      });
-      expect(yield* Fiber.join(offenderAwait)).toMatchObject([
-        { id: offender.id, state: "stopped", writeViolationOffender: true },
-      ]);
+      yield* service.stop(stopped.id);
+      expect(yield* Fiber.join(stoppedAwait)).toMatchObject([{ id: stopped.id, state: "stopped" }]);
       expect(peerAwait.pollUnsafe()).toBeUndefined();
 
       fake.controls[1]?.settle();

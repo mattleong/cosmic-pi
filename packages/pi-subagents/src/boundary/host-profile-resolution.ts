@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import { SubagentBackendRegistry } from "../backend/service.ts";
-import { piRootActiveToolSnapshot } from "../run/tool-policy.ts";
+import { customAgentToolSnapshot, piRootActiveToolSnapshot } from "../run/tool-policy.ts";
 import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
@@ -21,20 +21,28 @@ import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
 import type { RuntimeApiKey, StartSubagentRequest, SubagentParentContext } from "../run/model.ts";
-import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import type { SubagentRetryClaim } from "../run/retry.ts";
 import {
+  hasCustomAgentToolPolicy,
+  lookupCustomAgent,
+  type CustomAgent,
+} from "../profiles/agents.ts";
+import {
+  modelOverrideCandidate,
   PROFILE_IDS,
+  profileCandidateValidationIssues,
   skippedCandidateRoute,
   supportsSubagentFastMode,
+  type LaunchRouteSource,
   type ProfileCandidate,
   type ProfileDefinition,
-  type ProfileRouteSource,
   type SkippedProfileCandidate,
+  type SubagentModelOverride,
   type SubagentSelectionProvenance,
 } from "../profiles/model.ts";
 import {
   resolveProfileContinuationPlan,
+  resolveProfileOverridePlan,
   type ProfileCandidateAttempt,
   type ProfileResolutionEnvironment,
   type ProfileResolutionPlan,
@@ -48,8 +56,9 @@ export interface SubagentProfileStartSpec {
   readonly task: string;
   readonly name?: string | undefined;
   readonly profile?: string | undefined;
-  readonly writes?: ReadonlyArray<string> | undefined;
+  readonly agent?: string | undefined;
   readonly isolation?: WriterWorkspaceMode | undefined;
+  readonly model?: SubagentModelOverride | undefined;
 }
 
 export interface SubagentSessionEnvironment {
@@ -200,9 +209,10 @@ const dynamicCandidateSkip = (
 interface PlannedStartInput {
   readonly rawInput: SubagentProfileStartSpec;
   readonly definition: ProfileDefinition;
+  readonly agent?: CustomAgent | undefined;
   readonly plan: ProfileResolutionPlan;
   readonly routeCandidates: ReadonlyArray<ProfileCandidate>;
-  readonly routeSource: ProfileRouteSource;
+  readonly routeSource: LaunchRouteSource;
   readonly priorSkippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
   readonly retry?:
     | {
@@ -212,10 +222,57 @@ interface PlannedStartInput {
     | undefined;
 }
 
+const modelOverrideLabel = ({ runtime, model, effort }: SubagentModelOverride): string =>
+  `${runtime}/${model}${effort === undefined ? "" : `:${effort}`}`;
+
+const routeSubject = (definition: ProfileDefinition, agent: CustomAgent | undefined): string =>
+  agent ? `agent ${agent.name}` : `profile ${definition.id}`;
+
+const planSubject = (definition: ProfileDefinition, agent: CustomAgent | undefined): string =>
+  agent ? `Agent ${agent.name} (profile ${definition.id})` : `Profile ${definition.id}`;
+
+const modelOverrideUnavailable = (
+  definition: ProfileDefinition,
+  override: SubagentModelOverride,
+  skipped: ReadonlyArray<SkippedProfileCandidate>,
+  agent?: CustomAgent,
+): InvalidSubagentRequestError =>
+  new InvalidSubagentRequestError({
+    code: "model_override_unavailable",
+    message: `Model override ${modelOverrideLabel(override)} is unavailable\n\nAn override never falls back to the profile route.${skipped.map((skip) => ` [${skip.code}] ${skip.reason}`).join("")} Fix the override, or omit it to use ${routeSubject(definition, agent)}'s route.`,
+  });
+
+/**
+ * Static override checks share the configuration's selector grammar and cross-field policy. An
+ * agent supplies its defaults, and its tool lists need a Pi child.
+ */
+const validatedModelOverride = (
+  definition: ProfileDefinition,
+  override: SubagentModelOverride,
+  agent: CustomAgent | undefined,
+): Effect.Effect<ProfileCandidate, InvalidSubagentRequestError> => {
+  const candidate = modelOverrideCandidate(override, definition, agent);
+  const issues = [
+    ...profileCandidateValidationIssues(candidate).map((issue) => issue.code),
+    ...(agent && hasCustomAgentToolPolicy(agent) && candidate.runtime !== "pi"
+      ? ["agent_tools_unsupported"]
+      : []),
+  ];
+  if (issues.length === 0) return Effect.succeed(candidate);
+  return Effect.fail(
+    new InvalidSubagentRequestError({
+      code: "model_override_invalid",
+      message: `Model override ${modelOverrideLabel(override)} is invalid for ${routeSubject(definition, agent)}\n\nViolations: ${issues.join(", ")}. Use a native selector the runtime accepts. This launch uses ${candidate.context} context; forked context, the parent model, and agent tool lists need runtime pi.`,
+    }),
+  );
+};
+
 const exhaustedRoute = (
   input: PlannedStartInput,
   exhausted: ReadonlyArray<SkippedProfileCandidate>,
 ): InvalidSubagentRequestError => {
+  if (input.routeSource === "override" && input.rawInput.model && !input.retry)
+    return modelOverrideUnavailable(input.definition, input.rawInput.model, exhausted, input.agent);
   const allUnsupported =
     exhausted.length > 0 &&
     exhausted.every((candidate) => candidate.code === "backend_not_implemented");
@@ -231,30 +288,15 @@ const exhaustedRoute = (
       : allUnsupported
         ? "backend_not_implemented"
         : "profile_no_eligible_model",
-    message: `Profile ${input.definition.id} has no eligible ${input.retry ? "remaining candidate" : "implemented backend"} after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+    message: `${planSubject(input.definition, input.agent)} has no eligible ${input.retry ? "remaining candidate" : "implemented backend"} after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
   });
 };
 
-const selectCandidate = (
-  input: PlannedStartInput,
-  writesClaimed: boolean,
-  ctx: ExtensionContext,
-  cwd: string,
-) =>
+const selectCandidate = (input: PlannedStartInput, ctx: ExtensionContext, cwd: string) =>
   Effect.gen(function* () {
     const skipped = [...input.priorSkippedCandidates];
     for (const attempt of input.plan.attempts) {
       skipped.push(...(attempt.skippedBefore ?? []));
-      if (writesClaimed && attempt.writeIntent !== "writer") {
-        const configuredCandidate = input.routeCandidates[attempt.candidateIndex];
-        skipped.push({
-          candidateIndex: attempt.candidateIndex,
-          candidate: skippedCandidateRoute(configuredCandidate ?? attempt),
-          code: "write_claims_read_only",
-          reason: "writes may be supplied only for a writer profile candidate.",
-        });
-        continue;
-      }
       const outcome = yield* Effect.result(resolveConcreteModel(attempt, ctx, cwd));
       if (Result.isSuccess(outcome)) return { attempt, resolved: outcome.success, skipped };
       if (isCleanupUnconfirmed(outcome.failure) || isOutcomeUncertain(outcome.failure))
@@ -278,13 +320,7 @@ const validatedStartInput = (rawInput: SubagentProfileStartSpec) =>
         code: "launch_override_not_allowed",
         message: disallowedLaunchOverrideMessage(disallowedField),
       });
-    const normalizedClaims = rawInput.writes ? normalizeWriteClaims(rawInput.writes) : undefined;
-    if (normalizedClaims && !normalizedClaims.ok)
-      return yield* new InvalidSubagentRequestError({
-        code: normalizedClaims.code,
-        message: normalizedClaims.message,
-      });
-    return { task, normalizedClaims };
+    return task;
   });
 
 const resolvePlannedStart = (
@@ -295,19 +331,15 @@ const resolvePlannedStart = (
   parent: SubagentParentContext,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentBackendRegistry> =>
   Effect.gen(function* () {
-    const { task, normalizedClaims } = yield* validatedStartInput(input.rawInput);
-    const { attempt, resolved, skipped } = yield* selectCandidate(
-      input,
-      normalizedClaims !== undefined,
-      ctx,
-      environment.cwd,
-    );
+    const task = yield* validatedStartInput(input.rawInput);
+    const { attempt, resolved, skipped } = yield* selectCandidate(input, ctx, environment.cwd);
+    const modelOverride = input.routeSource === "override" ? input.rawInput.model : undefined;
     const selection: SubagentSelectionProvenance = {
       source: attempt.source,
       routeSource: attempt.routeSource,
       candidateIndex: attempt.candidateIndex,
       reason: input.retry
-        ? `Profile ${input.definition.id} continued failed run ${input.retry.sourceRunId} with frozen route candidate ${attempt.candidateIndex + 1} (local/${attempt.runtime}).`
+        ? `${planSubject(input.definition, input.agent)} continued failed run ${input.retry.sourceRunId} with frozen route candidate ${attempt.candidateIndex + 1} (local/${attempt.runtime}).`
         : attempt.reason,
       skippedCandidates: skipped,
     };
@@ -320,25 +352,36 @@ const resolvePlannedStart = (
       });
     const routeContinuation = freezeSnapshot({
       profile: input.definition.id,
+      ...(input.agent && { agent: input.agent }),
       routeSource: input.routeSource,
       candidates: input.routeCandidates,
       selectedCandidateIndex: attempt.candidateIndex,
       skippedCandidates: skipped,
     });
     const activeTools =
-      attempt.runtime === "pi" ? yield* piRootActiveToolSnapshot(pi.getActiveTools()) : [];
+      attempt.runtime === "pi"
+        ? customAgentToolSnapshot(
+            yield* piRootActiveToolSnapshot(pi.getActiveTools()),
+            input.agent?.tools,
+          )
+        : [];
     const name = input.rawInput.name?.trim();
-    const isolation = attempt.writeIntent === "writer" ? input.rawInput.isolation : undefined;
+    const isolation =
+      attempt.writeIntent === "writer"
+        ? (input.rawInput.isolation ?? input.agent?.isolation)
+        : undefined;
     const request: StartSubagentRequest = {
       ...(name && { name }),
-      ...(normalizedClaims && { writes: normalizedClaims.claims }),
       ...(isolation && { writerWorkspaceModeOverride: isolation }),
       runtime: attempt.runtime,
       openaiFastMode: attempt.openaiFastMode,
       task,
       profile: input.definition.id,
-      profileGuidance: input.definition.guidance,
+      ...(input.agent && { agent: input.agent.name }),
+      // An agent's instructions replace its routed profile's guidance.
+      profileGuidance: input.agent?.instructions ?? input.definition.guidance,
       selection,
+      ...(modelOverride && { modelOverride }),
       routeContinuation,
       cwd: environment.cwd,
       context: attempt.effectiveContext,
@@ -365,6 +408,37 @@ const resolvePlannedStart = (
     return request;
   });
 
+/** The agent a start item names, from the batch's captured configuration. */
+const launchedAgent = (
+  rawInput: SubagentProfileStartSpec,
+  profileSnapshot: SessionProfileSnapshot,
+): Effect.Effect<CustomAgent | undefined, InvalidSubagentRequestError> => {
+  const name = rawInput.agent?.trim();
+  if (!name) return Effect.succeed(undefined);
+  if (rawInput.profile !== undefined)
+    return Effect.fail(
+      new InvalidSubagentRequestError({
+        code: "agent_profile_conflict",
+        message: `Agent ${name} can't be combined with a profile\n\nAn agent already routes through its configured profile. Set either agent or profile on the start item, not both.`,
+      }),
+    );
+  const config = profileSnapshot.effectiveConfig;
+  const lookup = lookupCustomAgent(config, name);
+  if (lookup.kind === "found") return Effect.succeed(lookup.agent);
+  const available = config.agents.map((agent) => agent.name).join(", ") || "none";
+  return Effect.fail(
+    lookup.kind === "invalid"
+      ? new InvalidSubagentRequestError({
+          code: "agent_invalid",
+          message: `Agent ${name} is invalid and fails closed\n\nRepair its entry under agents in ${lookup.scope === "project" ? config.projectConfigPath : config.globalConfigPath}, then reload. /subagents doctor lists the invalid fields.`,
+        })
+      : new InvalidSubagentRequestError({
+          code: "agent_unknown",
+          message: `Unknown agent ${name}\n\nConfigured agents: ${available}. Call subagent_models to list them, or launch a profile instead.`,
+        }),
+  );
+};
+
 export const resolveProfileStart = (
   pi: ExtensionAPI,
   rawInput: SubagentProfileStartSpec,
@@ -379,7 +453,8 @@ export const resolveProfileStart = (
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
     const profileSnapshot = capturedProfiles ?? (yield* profiles.capture);
-    const selectedProfile = (rawInput.profile?.trim() ?? "") || "generalist";
+    const agent = yield* launchedAgent(rawInput, profileSnapshot);
+    const selectedProfile = agent?.profile ?? ((rawInput.profile?.trim() ?? "") || "generalist");
     const definition = profiles.definition(selectedProfile);
     if (!definition)
       return yield* new InvalidSubagentRequestError({
@@ -387,10 +462,41 @@ export const resolveProfileStart = (
         message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
       });
     const parent = environment.parentContext ?? capturePiParentContext(pi, ctx);
+    if (rawInput.model) {
+      const candidate = yield* validatedModelOverride(definition, rawInput.model, agent);
+      const plan = resolveProfileOverridePlan(
+        definition.id,
+        candidate,
+        hostProfileEnvironment(pi, ctx, parent),
+      );
+      if (plan.kind === "failed")
+        return yield* modelOverrideUnavailable(
+          definition,
+          rawInput.model,
+          plan.skippedCandidates,
+          agent,
+        );
+      return yield* resolvePlannedStart(
+        pi,
+        {
+          rawInput,
+          definition,
+          ...(agent && { agent }),
+          plan,
+          routeCandidates: [candidate],
+          routeSource: "override",
+          priorSkippedCandidates: [],
+        },
+        ctx,
+        environment,
+        parent,
+      );
+    }
     const plan = profiles.resolve(
       profileSnapshot,
       definition.id,
       hostProfileEnvironment(pi, ctx, parent),
+      agent,
     );
     if (plan.kind === "failed")
       return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
@@ -400,6 +506,7 @@ export const resolveProfileStart = (
       {
         rawInput,
         definition,
+        ...(agent && { agent }),
         plan,
         routeCandidates: route.candidates,
         routeSource: profileSnapshot.effectiveConfig.profileSources[definition.id],
@@ -453,9 +560,9 @@ export const resolveProfileRetry = (
           task: claim.source.task,
           name: claim.source.name,
           profile: claim.continuation.profile,
-          writes: claim.source.writeClaims,
         },
         definition,
+        ...(claim.continuation.agent && { agent: claim.continuation.agent }),
         plan,
         routeCandidates: claim.continuation.candidates,
         routeSource: claim.continuation.routeSource,

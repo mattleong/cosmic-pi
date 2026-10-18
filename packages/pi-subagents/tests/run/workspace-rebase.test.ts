@@ -1,80 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { WorkspaceError, type WorkspaceRecord } from "../../src/workspace/model.ts";
+import { WorkspaceError } from "../../src/workspace/model.ts";
 import { request, withService } from "./fixtures/service-harness.ts";
 import { reviewAndPrepare, stoppedWriter, workspaceFixture } from "./fixtures/workspace-engine.ts";
-
-const orphanRecord = (workspaceId: string): WorkspaceRecord => ({
-  version: 1,
-  handle: {
-    workspaceId,
-    ownerId: "ended-session/root",
-    sourceRoot: "/repo",
-    sourceCwd: "/repo",
-    cwd: `/private/${workspaceId}`,
-    writerCwd: {
-      path: `/private/${workspaceId}`,
-      filesystemIdentity: `dev:1;ino:/private/${workspaceId}`,
-      digest: "1".padStart(64, "0"),
-    },
-  },
-  status: "active",
-  baseline: "baseline",
-});
-
-describe("workspace export", () => {
-  it.effect("exports the current revision for its direct parent and keeps the proposal", () => {
-    const f = workspaceFixture();
-    return withService(f.layer, function* (service) {
-      const id = (yield* stoppedWriter(service, { name: "Token parser" })).workspaceId!;
-      const patch = yield* service.workspaceExport(id);
-      expect(patch).toMatchObject({ format: "patch", orphan: false, changedPaths: ["file.ts"] });
-      // Export froze the workspace like review, and the proposal is still applicable.
-      expect(f.entries.get(id)).toMatchObject({
-        status: "frozen",
-        revision: { revisionId: patch.revisionId },
-      });
-      const branch = yield* service.workspaceExport(id, {
-        revisionId: patch.revisionId,
-        format: "branch",
-      });
-      expect(branch).toMatchObject({ format: "branch", branch: "pi-subagent/token-parser" });
-      expect(f.exports).toEqual([
-        { workspaceId: id, request: { format: "patch" } },
-        { workspaceId: id, request: { format: "branch", branch: "pi-subagent/token-parser" } },
-      ]);
-      expect(
-        yield* service.workspaceExport(id, { revisionId: "revision-9" }).pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_revision_stale" });
-      const applied = yield* service.workspaceApply(id, { revisionId: patch.revisionId });
-      expect(applied.integrated).toBe(true);
-      expect(yield* service.workspaceExport(id).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_finished",
-      });
-    });
-  });
-
-  it.effect("lets the root export an orphan only once its session ended, read-only", () => {
-    const f = workspaceFixture();
-    f.entries.set("orphan", orphanRecord("orphan"));
-    return withService(f.layer, function* (service) {
-      expect(yield* service.workspaceExport("orphan").pipe(Effect.flip)).toMatchObject({
-        code: "workspace_owner_unavailable",
-      });
-      f.hooks.orphanOwnerEnded = true;
-      const exported = yield* service.workspaceExport("orphan");
-      expect(exported).toMatchObject({ orphan: true, format: "patch" });
-      expect(f.entries.get("orphan")?.status).toBe("active");
-      // Like orphan discard, export first proves no writer holds the worker tree.
-      expect(f.acquired).toContain("/private/orphan");
-      expect(f.released).toContain("/private/orphan");
-      const writer = yield* stoppedWriter(service);
-      expect(
-        yield* service.workspaceExport("orphan", undefined, writer.id).pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_owner_unavailable" });
-    });
-  });
-});
 
 describe("partial apply", () => {
   it.effect("integrates the chosen paths and keeps the rest as an unreviewed proposal", () => {

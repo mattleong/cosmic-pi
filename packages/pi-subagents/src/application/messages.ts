@@ -1,7 +1,9 @@
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { captureCodePreviewPresentationPolicy } from "pi-code-previews";
+import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
 import { STOPPED_RUNS_MESSAGE_TYPE } from "../boundary/host-stopped-runs.ts";
 import { renderSubagentNotification } from "../ui/notification.ts";
+import type { WorkspaceSwept } from "../workspace/model.ts";
 
 export const renderSubagentMessage: MessageRenderer = (message, options, theme) =>
   renderSubagentNotification(
@@ -20,4 +22,21 @@ export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
     STOPPED_RUNS_MESSAGE_TYPE,
   ])
     pi.registerMessageRenderer(type, renderSubagentMessage);
+}
+
+const MAX_LISTED_SWEPT = 10;
+
+/** The user-only notice naming the orphaned workspaces the startup sweep discarded. */
+export function orphanSweepNotice(swept: ReadonlyArray<WorkspaceSwept>): string {
+  const listed = swept
+    .slice(0, MAX_LISTED_SWEPT)
+    .map(
+      (entry) =>
+        `- ${entry.workspaceId} (${countLabel(entry.changedPathCount, "changed file")}): ${sanitizeTerminalLine(entry.patchPath)}`,
+    );
+  return [
+    `Discarded ${countLabel(swept.length, "orphaned subagent workspace")} unchanged for 30 days. Each patch is kept for 7 days; apply one with git apply in its checkout.`,
+    ...listed,
+    ...(swept.length > MAX_LISTED_SWEPT ? [`- and ${swept.length - MAX_LISTED_SWEPT} more`] : []),
+  ].join("\n");
 }

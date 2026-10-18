@@ -4,11 +4,10 @@ import type { WorkspaceDiffStatFile } from "./diffstat.ts";
 /** Failures a caller can act on specifically; others surface as a generic workspace failure. */
 export const WORKSPACE_ERROR_CODES = [
   "workspace_conflict",
-  "workspace_uncaptured_files",
   "workspace_parent_changed",
   "workspace_rollback_refused",
-  "workspace_branch_exists",
   "workspace_rebase_refused",
+  "workspace_local_override",
 ] as const;
 
 export class WorkspaceError extends Schema.TaggedError<WorkspaceError>()("WorkspaceError", {
@@ -34,8 +33,6 @@ export const WorkspaceHandleSchema = Schema.Struct({
       digest: Schema.String,
     }),
   ),
-  /** Tracked files the snapshot left out because they sit in dependency or build directories. */
-  omittedTrackedPaths: Schema.optional(Schema.Array(Schema.String)),
   /** The workspace whose worker tree is this one's source; absent for a real checkout. */
   sourceWorkspaceId: Schema.optional(Schema.String),
   /** The real checkout at the top of a nested chain; absent when `sourceRoot` is that checkout. */
@@ -49,10 +46,7 @@ export const workspaceCheckoutRoot = (handle: WorkspaceHandle) =>
 export const WorkspaceRevisionMetadataSchema = Schema.Struct({
   revisionId: Schema.String,
   changedPaths: Schema.Array(Schema.String),
-  /**
-   * Worker files the revision can't carry. Files in dependency, build, or Pi state directories
-   * are left out on purpose; any other, such as an unsafe name, refuses preparation and integration.
-   */
+  /** Untracked worker files left out on purpose because their names look like credentials. */
   uncapturedPaths: Schema.optional(Schema.Array(Schema.String)),
 });
 export type WorkspaceRevisionMetadata = typeof WorkspaceRevisionMetadataSchema.Type;
@@ -69,15 +63,26 @@ export const WorkspacePreparationSchema = Schema.Struct({
 });
 export type WorkspacePreparation = typeof WorkspacePreparationSchema.Type;
 const WorkspaceJournalFileSchema = Schema.Struct({
-  oid: Schema.String,
+  /** SHA-256 of the file's bytes. */
+  digest: Schema.String,
   mode: Schema.String,
   permissions: Schema.Finite,
 });
-// Decoding ignores fields that records saved by earlier versions may still carry, such as a fork's
-// `predecessorWorkspaceId` or an inline revision `diff`.
+/** What the writer that created a workspace was launched as, so an adopting session can revise it. */
+export const WorkspaceLaunchSchema = Schema.Struct({
+  profile: Schema.optional(Schema.String),
+  agent: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
+});
+export type WorkspaceLaunch = typeof WorkspaceLaunchSchema.Type;
 export const WorkspaceRecordSchema = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   handle: WorkspaceHandleSchema,
+  /**
+   * The source repository's common Git directory. The worker and prepared trees are its linked
+   * worktrees, and the workspace's commits live there under `refs/pi/workspaces/<id>/`.
+   */
+  repository: Schema.String,
   status: Schema.Literals([
     "creating",
     "active",
@@ -92,7 +97,6 @@ export const WorkspaceRecordSchema = Schema.Struct({
   ownerLease: Schema.optional(Schema.String),
   /** Setup may still own processes in this tree. Cleared only after confirmed cleanup. */
   setupCleanupPending: Schema.optional(Schema.String),
-  excludedPaths: Schema.optional(Schema.Array(Schema.String)),
   revision: Schema.optional(WorkspaceRevisionMetadataSchema),
   preparation: Schema.optional(WorkspacePreparationSchema),
   preparedTree: Schema.optional(Schema.String),
@@ -117,6 +121,16 @@ export const WorkspaceRecordSchema = Schema.Struct({
    * setup run in it may change nothing else. Freeze and revise drop it.
    */
   rebasedTree: Schema.optional(Schema.String),
+  /** Epoch milliseconds of the last record save; absent records use the record file's mtime. */
+  lastChangedAt: Schema.optional(Schema.Finite),
+  launch: Schema.optional(WorkspaceLaunchSchema),
+  /**
+   * Untracked files `workspaceInclude` copied into the worker tree, relative to its root. Every
+   * capture leaves them out, so they never reach a revision or publication.
+   */
+  includedPaths: Schema.optional(Schema.Array(Schema.String)),
+  /** Set on a record the orphan sweep discarded, which keeps its revision patch until collection. */
+  disposition: Schema.optional(Schema.Literal("orphan-swept")),
 });
 export type WorkspaceRecord = typeof WorkspaceRecordSchema.Type;
 
@@ -130,6 +144,11 @@ export type UnavailableWorkspaceArtifact = typeof UnavailableWorkspaceArtifactSc
 export interface WorkspaceListing {
   readonly records: ReadonlyArray<WorkspaceRecord>;
   readonly unavailable: ReadonlyArray<UnavailableWorkspaceArtifact>;
+  /**
+   * Unfinished records another session created whose owner lease was free when listed, so that
+   * session has ended. Advisory: adoption and discard recheck it under the checkout's lock.
+   */
+  readonly endedOwners?: ReadonlyArray<string> | undefined;
 }
 export interface WorkspaceTarget {
   readonly workspaceId: string;
@@ -154,13 +173,35 @@ export interface WorkspaceVerification {
 export interface WorkspaceWorkerChanges {
   /** Captured paths whose content differs from the baseline. */
   readonly changedPaths: ReadonlyArray<string>;
-  /** Writer-created files no capture can hold, such as vendored or built code; gitignored files don't count. */
+  /** Writer-created credential files left out of every capture; gitignored files don't count. */
   readonly uncapturedPaths: ReadonlyArray<string>;
   /** Git's line counts for each changed path. */
   readonly diffStat: ReadonlyArray<WorkspaceDiffStatFile>;
 }
 export interface WorkspaceOrphanTarget {
   readonly workspaceId: string;
+}
+export interface WorkspaceOrphanDiscardTarget extends WorkspaceOrphanTarget {
+  /**
+   * The caller holds fresh writer leases on a mid-integration record's lease directories, so
+   * discard may roll its publication back.
+   */
+  readonly sourceLeasesHeld?: true | undefined;
+}
+/** Takes over an orphan whose creating session ended; the caller proves its writer stopped. */
+export interface WorkspaceAdoptTarget extends WorkspaceOrphanTarget {
+  readonly ownerId: string;
+}
+export interface WorkspaceSweepTarget extends WorkspaceOrphanTarget {
+  /** Records changed more recently than this many milliseconds ago are kept. */
+  readonly minimumAgeMillis: number;
+}
+/** An orphan the sweep discarded, with the revision patch kept beside its record. */
+export interface WorkspaceSwept {
+  readonly workspaceId: string;
+  readonly sourceRoot: string;
+  readonly changedPathCount: number;
+  readonly patchPath: string;
 }
 export interface WorkspaceSettledTarget extends WorkspaceTarget {
   readonly processCleanupConfirmed: true;
@@ -172,40 +213,6 @@ export interface WorkspacePreparationTarget extends WorkspaceRevisionTarget {
   /** A strict, nonempty subset of the revision's changed paths to prepare alone. */
   readonly paths?: ReadonlyArray<string> | undefined;
 }
-/** A patch file in the source checkout's Git directory, or a branch in its repository. */
-export type WorkspaceExportRequest =
-  | { readonly format: "patch" }
-  | { readonly format: "branch"; readonly branch: string };
-export interface WorkspaceExportTarget extends WorkspaceRevisionTarget {
-  readonly export: WorkspaceExportRequest;
-}
-export interface WorkspaceOrphanExportTarget extends WorkspaceOrphanTarget {
-  /** Must match the record's frozen revision; omit to export an unfrozen worker tree. */
-  readonly revisionId?: string | undefined;
-  readonly export: WorkspaceExportRequest;
-}
-interface WorkspaceExportCommon {
-  readonly revisionId: string;
-  readonly changedPaths: ReadonlyArray<string>;
-  /** Worker files absent from the export, as a revision lists them. */
-  readonly uncapturedPaths: ReadonlyArray<string>;
-}
-export type WorkspaceExport = WorkspaceExportCommon &
-  (
-    | { readonly format: "patch"; readonly path: string }
-    | {
-        readonly format: "branch";
-        readonly branch: string;
-        readonly commit: string;
-        /** The source HEAD commit the branch's commit extends. */
-        readonly base: string;
-        /**
-         * `user`: the commit carries the user's Git identity; `placeholder`: it isn't configured,
-         * so the author or committer is Pi's placeholder identity.
-         */
-        readonly identity: "user" | "placeholder";
-      }
-  );
 export interface WorkspaceRebase {
   /** The previous changes reapplied onto the fresh snapshot. */
   readonly reappliedPaths: ReadonlyArray<string>;

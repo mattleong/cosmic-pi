@@ -62,7 +62,7 @@ describe("captured fleet control authority", () => {
       const pending = yield* context.withLock(
         Effect.gen(function* () {
           const replying = yield* controls
-            .reply(record.view.id, "Yes", expected)
+            .send(record.view.id, "Yes", expected)
             .pipe(Effect.flip, Effect.forkScoped);
           yield* Deferred.await(waiting);
           record.view = {
@@ -77,7 +77,7 @@ describe("captured fleet control authority", () => {
       expect(record.replyPendingRequestId).toBeUndefined();
       expect(record.view.question?.requestId).toBe("new-question");
 
-      yield* controls.reply(record.view.id, "No", captureSubagentControlExpectation(record.view));
+      yield* controls.send(record.view.id, "No", captureSubagentControlExpectation(record.view));
       expect(deliveries).toEqual(["new-question: No"]);
     }).pipe(Effect.scoped),
   );

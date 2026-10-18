@@ -61,16 +61,16 @@ describe("revision diffstat", () => {
     expect(patchDiffStat(patch, ["src/main.ts"])).toBeUndefined();
   });
 
-  it("leads the review text with every changed and uncaptured path before the diff", () => {
+  it("leads the review text with every changed and left-out credential path before the diff", () => {
     const text = revisionReviewText({
       revisionId: "rev",
       changedPaths,
-      uncapturedPaths: ["-draft.ts", "node_modules/pad/index.js", ".env"],
+      uncapturedPaths: [".env", "keys/deploy.pem"],
       diff: patch,
     });
     const diffStart = text.indexOf("diff --git ");
     expect(text.endsWith(patch)).toBe(true);
-    for (const path of [...changedPaths, "-draft.ts", "node_modules/pad/index.js", ".env"]) {
+    for (const path of [...changedPaths, ".env", "keys/deploy.pem"]) {
       const at = text.indexOf(path);
       expect(at, path).toBeGreaterThanOrEqual(0);
       expect(at, path).toBeLessThan(diffStart);

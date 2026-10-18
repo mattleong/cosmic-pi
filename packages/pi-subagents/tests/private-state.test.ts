@@ -188,6 +188,7 @@ describe("private state sweep", () => {
         path.join(root, "workflow-runs", "wf-1"),
         path.join(root, SESSION, "notes"),
         path.join(agent, "git-workspaces", "workspace-1"),
+        path.join(agent, "subagent-worktrees", "workspace-1"),
       ];
       for (const directory of kept) {
         yield* entry(directory, { "file.txt": "kept" }, reusedPid);

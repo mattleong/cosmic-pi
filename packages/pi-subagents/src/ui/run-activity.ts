@@ -55,7 +55,7 @@ const MESSAGE_ACTIONS = {
 } satisfies Readonly<Record<RunMessageMode, ReturnType<typeof handoff>>>;
 
 export function runActions(run: SubagentRunView, title: string) {
-  const mode = run.writeViolationOffender ? undefined : runMessageMode(run);
+  const mode = runMessageMode(run);
   return [
     ...(isActiveRunState(run.state) || canStopRun(run)
       ? [

@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { WriterLease } from "../boundary/writer-lease.ts";
-import { leftOutUncapturedPaths } from "../workspace/policy.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isActiveRunState } from "./model.ts";
 import { fullyReviewed } from "./workspace-review.ts";
@@ -37,7 +36,7 @@ export interface WorkspaceIntegrationOutcome {
 export interface WorkspaceIntegrationResult extends WorkspaceIntegrationOutcome {
   /** Every path the integration published: the revision's, or a partial preparation's subset. */
   readonly changedPaths: ReadonlyArray<string>;
-  /** Worker files left out on purpose because they sit in dependency, build, or Pi state directories. */
+  /** Credential files the worker created, which the revision leaves out on purpose. */
   readonly leftOutPaths: ReadonlyArray<string>;
   readonly preparedCwd: string;
   /** Whether the parent had read every page of the revision's review text. */
@@ -120,7 +119,7 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
         );
       const known = {
         changedPaths: artifact.preparation.paths ?? artifact.revision.changedPaths,
-        leftOutPaths: leftOutUncapturedPaths(artifact.revision.uncapturedPaths),
+        leftOutPaths: artifact.revision.uncapturedPaths ?? [],
         preparedCwd: artifact.preparation.cwd,
         reviewed: fullyReviewed(knowledge, revisionId),
       };

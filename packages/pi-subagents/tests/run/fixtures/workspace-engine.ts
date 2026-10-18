@@ -1,3 +1,4 @@
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -10,8 +11,6 @@ import {
   WorkspaceError,
   workspaceCheckoutRoot,
   type UnavailableWorkspaceArtifact,
-  type WorkspaceExport,
-  type WorkspaceExportRequest,
   type WorkspaceIntegrationTarget,
   type WorkspaceRebase,
   type WorkspaceRecord,
@@ -68,7 +67,10 @@ type GatedOperation =
 
 interface EngineHooks {
   afterCreate: Effect.Effect<void>;
+  /** Every session but this fixture's has ended, so their owner leases are free. */
   orphanOwnerEnded?: boolean;
+  /** Probing other sessions' owner leases fails, so a listing that probes them fails. */
+  ownerProbeFailure?: WorkspaceError;
   createFailure?: WorkspaceError;
   setupFailure?: WorkspaceError | undefined;
   verifyFailure?: WorkspaceError | undefined;
@@ -103,6 +105,17 @@ export const gateCreate = (f: ReturnType<typeof workspaceFixture>) =>
 
 const finished = (entry: WorkspaceRecord) =>
   entry.status === "integrated" || entry.status === "discarded";
+
+const ownerRunning = () =>
+  Effect.fail(
+    new WorkspaceError({
+      operation: "authorization",
+      message: "The session that created this workspace is still running.",
+    }),
+  );
+
+const isOpen = (entry: WorkspaceRecord) =>
+  entry.status === "active" || entry.status === "frozen" || entry.status === "prepared";
 
 const refuse = (operation: string, message: string) =>
   Effect.fail(new WorkspaceError({ operation, message }));
@@ -143,10 +156,12 @@ export function workspaceFixture({
   const gated = <A, E>(operation: GatedOperation, effect: Effect.Effect<A, E>) =>
     Effect.suspend(() => hooks.before[operation] ?? Effect.void).pipe(Effect.andThen(effect));
   const integrations: WorkspaceIntegrationTarget[] = [];
-  const exports: Array<{ readonly workspaceId: string; readonly request: WorkspaceExportRequest }> =
-    [];
+  /** Each mid-integration orphan whose publication discard rolled back. */
+  const rollbacks: string[] = [];
   /** Each rebase's workspace, in order. */
   const rebases: string[] = [];
+  /** The workspaceInclude patterns each create received, in order. */
+  const includes: Array<ReadonlyArray<string> | undefined> = [];
   const verifications: WorkspaceVerifyTarget[] = [];
   /** Each setup's tree: a preparation id, or "worker" for the worker tree. */
   const setups: string[] = [];
@@ -236,41 +251,20 @@ export function workspaceFixture({
         checkoutRoot: workspaceCheckoutRoot(parent.handle),
       };
     });
-  // Like the real engine, export writes a frozen revision without changing the record.
-  const exported = (
-    entry: WorkspaceRecord,
-    requested: WorkspaceExportRequest,
-    revisionId: string | undefined,
-  ): Effect.Effect<WorkspaceExport, WorkspaceError> => {
-    const { revision } = entry;
-    if (
-      !revision ||
-      (entry.status !== "frozen" && entry.status !== "prepared") ||
-      (revisionId !== undefined && revision.revisionId !== revisionId)
-    )
-      return refuse("revision", "Reviewed revision is stale or unknown.");
-    exports.push({ workspaceId: entry.handle.workspaceId, request: requested });
-    const common = {
-      revisionId: revision.revisionId,
-      changedPaths: revision.changedPaths,
-      uncapturedPaths: [],
-    };
-    return Effect.succeed(
-      requested.format === "patch"
-        ? {
-            ...common,
-            format: "patch",
-            path: `/repo/.git/pi-subagents/${entry.handle.workspaceId}-${revision.revisionId}.patch`,
-          }
-        : {
-            ...common,
-            format: "branch",
-            branch: requested.branch,
-            commit: "commit-1",
-            base: "head-1",
-            identity: "user",
-          },
-    );
+  // Like the real engine, a record another session created whose owner lease is free.
+  const orphaned = (entry: WorkspaceRecord) =>
+    hooks.orphanOwnerEnded === true &&
+    !finished(entry) &&
+    !entry.handle.ownerId.startsWith("session-1/");
+  const sweepable = (entry: WorkspaceRecord, minimumAgeMillis: number, now: number) =>
+    orphaned(entry) &&
+    isOpen(entry) &&
+    entry.setupCleanupPending === undefined &&
+    now - (entry.lastChangedAt ?? now) >= minimumAgeMillis;
+  const depth = (entry: WorkspaceRecord): number => {
+    const source = entry.handle.sourceWorkspaceId;
+    const parent = source === undefined ? undefined : entries.get(source);
+    return parent ? depth(parent) + 1 : 0;
   };
   let ordinal = 0;
   let revisions = 0;
@@ -286,6 +280,7 @@ export function workspaceFixture({
         Effect.andThen(nestedSource(input)),
         Effect.flatMap((source) =>
           Effect.gen(function* () {
+            includes.push(input.include);
             const workspaceId = `workspace-${++ordinal}`;
             const handle = {
               workspaceId,
@@ -302,10 +297,12 @@ export function workspaceFixture({
                 ),
             };
             entries.set(workspaceId, {
-              version: 1,
+              version: 2,
+              repository: "/repo/.git",
               handle,
               status: "active",
               baseline: "original-base",
+              ...(input.launch && { launch: input.launch }),
             });
             input.onAcquired?.(handle);
             return handle;
@@ -373,7 +370,18 @@ export function workspaceFixture({
         Effect.sync(() =>
           [...entries.values()].filter((entry) => entry.handle.ownerId === ownerId),
         ),
-      listAll: Effect.sync(() => ({ records: [...entries.values()], unavailable })),
+      listRecords: Effect.sync(() => ({ records: [...entries.values()], unavailable })),
+      listAll: Effect.suspend(() =>
+        hooks.ownerProbeFailure
+          ? Effect.fail(hooks.ownerProbeFailure)
+          : Effect.succeed({
+              records: [...entries.values()],
+              unavailable,
+              endedOwners: [...entries.values()].flatMap((entry) =>
+                orphaned(entry) ? [entry.handle.workspaceId] : [],
+              ),
+            }),
+      ),
       // Like the real engine, only an active workspace may be frozen.
       freeze: (target) =>
         gated("freeze", requireEntry(target)).pipe(
@@ -469,48 +477,63 @@ export function workspaceFixture({
             return Effect.succeed(hooks.rebase);
           }),
         ),
-      exportRevision: (target) =>
-        requireEntry(target).pipe(
-          Effect.flatMap((entry) => exported(entry, target.export, target.revisionId)),
-        ),
-      exportOrphan: ({ workspaceId, revisionId, export: requested }) =>
+      discardOrphan: ({ workspaceId, sourceLeasesHeld }) =>
         Effect.suspend(() => {
           const entry = entries.get(workspaceId);
-          if (!entry || !hooks.orphanOwnerEnded)
-            return Effect.fail(
-              new WorkspaceError({
-                operation: "authorization",
-                message: "The session that created this workspace is still running.",
-              }),
-            );
-          // Like the real engine, an unfrozen orphan's worker is captured without freezing it.
-          return entry.status === "active" && revisionId === undefined
-            ? exported(
-                {
-                  ...entry,
-                  status: "frozen",
-                  revision: { revisionId: "worker-capture", changedPaths: [...hooks.changedPaths] },
-                },
-                requested,
-                undefined,
-              )
-            : exported(entry, requested, revisionId);
-        }),
-      discardOrphan: ({ workspaceId }) =>
-        Effect.suspend(() => {
-          const entry = entries.get(workspaceId);
+          if (entry?.status === "integrating" && !sourceLeasesHeld)
+            return refuse("discard", "The workspace was left mid-integration.");
           if (childrenOf(workspaceId).length > 0)
             return refuse("discard", "Unresolved child workspaces use this worker tree.");
-          if (!entry || !hooks.orphanOwnerEnded)
-            return Effect.fail(
-              new WorkspaceError({
-                operation: "authorization",
-                message: "The session that created this workspace is still running.",
-              }),
-            );
+          if (!entry || !hooks.orphanOwnerEnded) return ownerRunning();
+          if (entry.status === "integrating") rollbacks.push(workspaceId);
           entries.set(workspaceId, { ...entry, status: "discarded" });
           return Effect.void;
         }),
+      // Like the real engine, only an open top-level orphan without children is adopted.
+      adopt: ({ workspaceId, ownerId }) =>
+        Effect.suspend(() => {
+          const entry = entries.get(workspaceId);
+          if (!entry || !hooks.orphanOwnerEnded) return ownerRunning();
+          if (entry.handle.sourceWorkspaceId !== undefined || !isOpen(entry))
+            return refuse("adopt", "The orphan can only be discarded.");
+          if (childrenOf(workspaceId).length > 0)
+            return refuse("discard", "Unresolved child workspaces use this worker tree.");
+          const handle = { ...entry.handle, ownerId };
+          entries.set(workspaceId, { ...entry, handle });
+          return Effect.succeed(handle);
+        }),
+      sweepCandidates: ({ minimumAgeMillis }) =>
+        Clock.currentTimeMillis.pipe(
+          Effect.map((now) =>
+            [...entries.values()]
+              .filter((entry) => sweepable(entry, minimumAgeMillis, now))
+              .toSorted((left, right) => depth(right) - depth(left)),
+          ),
+        ),
+      sweepOrphan: ({ workspaceId, minimumAgeMillis }) =>
+        Clock.currentTimeMillis.pipe(
+          Effect.map((now) => {
+            const entry = entries.get(workspaceId);
+            if (
+              !entry ||
+              !sweepable(entry, minimumAgeMillis, now) ||
+              childrenOf(workspaceId).length > 0
+            )
+              return undefined;
+            entries.set(workspaceId, {
+              ...entry,
+              status: "discarded",
+              disposition: "orphan-swept",
+              revision: entry.revision ?? { revisionId: `swept-${workspaceId}`, changedPaths: [] },
+            });
+            return {
+              workspaceId,
+              sourceRoot: workspaceCheckoutRoot(entry.handle),
+              changedPathCount: entry.revision?.changedPaths.length ?? 0,
+              patchPath: `/private/${workspaceId}/revision.diff`,
+            };
+          }),
+        ),
       discard: (target) =>
         gated("discard", requireEntry(target)).pipe(
           Effect.flatMap((entry) =>
@@ -568,8 +591,9 @@ export function workspaceFixture({
     canonicalized,
     hooks,
     integrations,
-    exports,
+    rollbacks,
     rebases,
+    includes,
     verifications,
     setups,
     statuses,

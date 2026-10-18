@@ -85,6 +85,14 @@ Retired `host: "herdr"` and `closeOnReport: false` declarations are rejected, ne
 
 The writer workspace default has its own unscoped setting. It changes later launches and new sessions, never running writers or existing workspaces, and the settings show how many workspaces in this checkout remain unresolved.
 
+## Custom agents
+
+Custom agents are edited by hand in the root `agents` object of `~/.pi/agent/pi-subagents.json` or a trusted project's `.pi/pi-subagents.json`; [Custom agents](routing.md#custom-agents) defines the fields and launch rules. The settings editors don't change them.
+
+- Agents load with the rest of the document at activation, so edits apply after `/reload`. Current Session has no agent layer, and `/tree` keeps the activation's agents.
+- Profile, default-set, nesting, delegation, and writer-workspace writes replace only their own keys, so a document's `agents` object is preserved byte for byte.
+- `subagent_models` and `/subagents doctor` list the loaded agents and the ones that fail closed.
+
 ## Doctor
 
 `/subagents doctor` checks each item independently and launches nothing:
@@ -92,7 +100,9 @@ The writer workspace default has its own unscoped setting. It changes later laun
 - Pi's version against the 1.2.0 minimum, and whether Pi's Node binary is still executable;
 - configuration diagnostics, the current profile set, and project trust;
 - for every profile, the launch preflight against its first eligible route (each distinct route probed once, bounded to 20 seconds); a failing first route is a warning when a fallback exists;
+- the same route check for every custom agent after its overrides, and a failure for each agent entry or `agents` object that fails closed;
 - each Claude Code or Codex CLI version a route uses, failing below the minimum and warning when missing or unrecognized;
-- whether private agent state is writable, the Git version isolated writers would use, the worktree setup and verification commands, and whether the shared Activity view is installed.
+- whether private agent state is writable, the Git version isolated writers would use, the worktree setup and verification commands and `workspaceInclude` patterns, and whether the shared Activity view is installed;
+- while `<agent-dir>/git-workspaces` exists, a warning that it holds workspaces from an earlier version ([Earlier workspace registry](local-backends.md#earlier-workspace-registry)).
 
 The report is a user notification and never enters the model's context.

@@ -48,6 +48,7 @@ import {
   type SubagentProjection,
   type SubagentRunView,
   type SubagentControlExpectation,
+  type SubagentSendOutcome,
   type SubagentUsage,
 } from "./model.ts";
 import { sortRuns } from "./projection.ts";
@@ -65,27 +66,28 @@ import { sessionStartOperations } from "./session-starts.ts";
 import { subtreeStopper } from "./subtree-stop.ts";
 import { turnInputGates } from "./turn-input.ts";
 import { visibilityOperations } from "./visibility.ts";
-import { writeClaimContainment } from "./write-claim-containment.ts";
 import { proxyExecutionHandler } from "./proxy-execution.ts";
 import { writerSpawnPreparation } from "./writer-preparation.ts";
 import { WriterPools } from "./writer-pool.ts";
 import { workspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
 import { WorkspaceService } from "../workspace/service.ts";
-import type { WorkspaceSetup, WorkspaceVerify, WriterWorkspaceMode } from "../config/schema.ts";
+import type {
+  WorkspaceInclude,
+  WorkspaceSetup,
+  WorkspaceVerify,
+  WriterWorkspaceMode,
+} from "../config/schema.ts";
 
 export interface SubagentServiceOptions {
   readonly writerWorkspaceMode?: WriterWorkspaceMode;
   readonly workspaceSetup?: WorkspaceSetup | undefined;
+  /** A trusted project's patterns for untracked files isolated writer trees receive copies of. */
+  readonly workspaceInclude?: WorkspaceInclude | undefined;
   /** A trusted project's check that isolated writer trees must pass before their changes apply. */
   readonly workspaceVerify?: WorkspaceVerify | undefined;
   readonly workspaceOwnerId?: string;
   readonly workspaceSourceCwd?: string;
   readonly publish?: (projection: SubagentProjection) => void;
-  /**
-   * Lexical system temporary roots where claimed writers' native writes are not claim
-   * violations. Omitted means none, so every outside-workspace write is a violation.
-   */
-  readonly temporaryRoots?: ReadonlyArray<string> | undefined;
   /** Subagent usage that earlier runtimes recorded in this session. */
   readonly restoredSessionUsage?: SubagentUsage | undefined;
   /** Records usage in the session once a run's assignment settles, and at shutdown. */
@@ -197,16 +199,12 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly consumeCompletions: (
     receipts: ReadonlyArray<SubagentCompletionReceipt>,
   ) => Effect.Effect<void>;
+  /** Answers the target's pending question, or otherwise steers its running turn. */
   readonly send: (
     id: string,
     message: string,
     expected?: SubagentControlExpectation,
-  ) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly reply: (
-    id: string,
-    message: string,
-    expected?: SubagentControlExpectation,
-  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  ) => Effect.Effect<SubagentSendOutcome, SubagentError>;
   readonly interrupt: (
     id: string,
     expected?: SubagentControlExpectation,
@@ -336,6 +334,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     engine: Option.getOrUndefined(workspaceEngine),
     initialMode: options.writerWorkspaceMode ?? initialProfiles.effectiveConfig.writerWorkspaceMode,
     workspaceSetup: options.workspaceSetup,
+    workspaceInclude: options.workspaceInclude,
     workspaceVerify: options.workspaceVerify,
     ownerId: options.workspaceOwnerId ?? runtimeNamespace,
     ...(options.workspaceSourceCwd && { sourceCwd: options.workspaceSourceCwd }),
@@ -403,7 +402,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   });
 
   const stop = subtreeStopper({ ...runContext, stopRun: controls.stop });
-  const containWriteClaimViolation = writeClaimContainment({ ...runContext, stop });
 
   const { proxyHandler, questionnaireHandler } = options;
   const handleProxyEvent = proxyExecutionHandler({
@@ -425,9 +423,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const handleWireEvent = backendEventHandler({
     settlement,
     queueQuestionLocked: delivery.queueActionNotificationLocked,
-    onWriteClaimViolation: containWriteClaimViolation,
     onProxyEvent: handleProxyEvent,
-    temporaryRoots: options.temporaryRoots ?? [],
   });
 
   const initializeProcess = processInitializer({
@@ -504,10 +500,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     workspaceReview: workspaces.workspaceReview,
     workspacePrepare: workspaces.workspacePrepare,
     workspaceDiscard: workspaces.workspaceDiscard,
-    workspaceExport: workspaces.workspaceExport,
     workspaceApply: workspaces.workspaceApply,
     workspaceRevise: workspaces.revise(launch.start),
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
+    sweepOrphanedWorkspaces: workspaces.sweepOrphanedWorkspaces,
     setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,
     startSessionOwnedFrom: starts.startSessionOwnedFrom,
     captureLaunchParent: starts.captureLaunchParent,
@@ -516,7 +512,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     list,
     status,
     send: controls.send,
-    reply: controls.reply,
     interrupt: controls.interrupt,
     resume: resume.resume,
     rename: controls.rename,

@@ -18,7 +18,8 @@ const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSc
 const id = (ordinal: number) =>
   `${ordinal.toString(16).padStart(8, "0")}-1111-1111-1111-111111111111`;
 const record = (workspaceId: string): WorkspaceRecord => ({
-  version: 1,
+  version: 2,
+  repository: "/source/.git",
   handle: {
     workspaceId,
     ownerId: "parent",
@@ -32,7 +33,7 @@ const record = (workspaceId: string): WorkspaceRecord => ({
 const fixture = <A, E, R>(test: (root: string, registry: string) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const root = yield* temporaryDirectory("workspace-listing-");
-    const registry = path.join(root, "git-workspaces");
+    const registry = path.join(root, "subagent-worktrees");
     yield* io(() => fs.mkdir(registry, { mode: 0o700 }));
     return yield* test(root, registry);
   }).pipe(Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));
@@ -78,7 +79,9 @@ it.live(
         yield* io(() => fs.writeFile(path.join(registry, id(11)), "not a directory"));
         const before = yield* io(() => fs.readdir(registry));
         const listing = yield* listWorkspaceRecords(registry);
-        expect(listing.records).toEqual([healthy]);
+        expect(listing.records.map(({ lastChangedAt: _changed, ...saved }) => saved)).toEqual([
+          healthy,
+        ]);
         expect(listing.unavailable).toEqual(
           Array.from({ length: 10 }, (_, index) => ({
             workspaceId: id(index + 2),
@@ -114,7 +117,7 @@ for (const unsafe of [
         if (unsafe === "permissions") yield* io(() => fs.chmod(registry, 0o777));
         else if (unsafe === "ancestor symlink") {
           yield* io(() => fs.symlink(root, path.join(root, "alias")));
-          target = path.join(root, "alias", "git-workspaces");
+          target = path.join(root, "alias", "subagent-worktrees");
         } else {
           yield* io(() => fs.rename(registry, `${registry}-saved`));
           if (unsafe === "registry symlink")

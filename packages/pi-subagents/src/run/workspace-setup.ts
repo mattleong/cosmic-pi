@@ -9,7 +9,7 @@ const MAX_LISTED_CHANGES = 5;
 
 /**
  * Runs the project's setup command at the root of an isolated tree, then requires that it changed
- * only ignored or excluded files so dependencies never become part of a proposal or test tree.
+ * only ignored or credential files so dependencies never become part of a proposal or test tree.
  * Unconfirmed cleanup leaves the engine's durable marker, which keeps the workspace quarantined.
  */
 export const provisionWorkspaceTree = (

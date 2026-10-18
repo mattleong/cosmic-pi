@@ -83,7 +83,8 @@ export const saveWorkspaceRecord = (
     yield* checkDirectory(directory);
     const id = yield* newWorkspaceId;
     const temporary = path.join(directory, `${id}.tmp`);
-    const data = yield* encodeRecord(record).pipe(
+    const lastChangedAt = yield* Clock.currentTimeMillis;
+    const data = yield* encodeRecord({ ...record, lastChangedAt }).pipe(
       Effect.mapError(() => workspaceFailure("registry", "Invalid workspace record.")),
     );
     if (Buffer.byteLength(data, "utf8") > MAX_RECORD_BYTES)
@@ -104,7 +105,7 @@ export const saveWorkspaceRecord = (
 
 // Git's own stdout bound for workspace commands.
 export const MAX_REVISION_DIFF_BYTES = 48 * 1024 * 1024;
-const revisionDiffFile = (root: string, id: string) =>
+export const revisionDiffFile = (root: string, id: string) =>
   path.join(workspaceDirectory(root, id), "revision.diff");
 
 /**
@@ -116,12 +117,6 @@ export const commitRevisionDiff = (root: string, id: string, file: string) =>
     yield* workspaceIO("freeze", () => fs.rename(file, revisionDiffFile(root, id)));
     yield* syncWorkspaceDirectory(workspaceDirectory(root, id));
   }).pipe(Effect.uninterruptible);
-
-/** Whether the workspace holds a revision patch file; records frozen by earlier versions don't. */
-export const revisionDiffExists = (root: string, id: string) =>
-  workspaceIOIfPresent("revision", () => fs.lstat(revisionDiffFile(root, id))).pipe(
-    Effect.map((stat) => stat !== undefined),
-  );
 
 /** The current revision patch's bytes, kept out of the record so listings stay small. */
 export const readRevisionDiff = (root: string, id: string) =>
@@ -214,8 +209,16 @@ export const readWorkspaceRecord = (root: string, id: string) =>
     return record;
   });
 
+/** When the record last changed; records saved without the field use the record file's mtime. */
+export const recordChangedAt = (root: string, record: WorkspaceRecord) =>
+  record.lastChangedAt !== undefined
+    ? Effect.succeed(record.lastChangedAt)
+    : workspaceIO("registry", () =>
+        fs.stat(path.join(workspaceDirectory(root, record.handle.workspaceId), "record.json")),
+      ).pipe(Effect.map((stat) => stat.mtimeMs));
+
 /** How long a workspace operation waits for another session's operation on the same checkout. */
-export const WORKSPACE_LOCK_WAIT = Duration.minutes(2);
+const WORKSPACE_LOCK_WAIT = Duration.minutes(2);
 const WORKSPACE_LOCK_POLL = Duration.millis(200);
 
 export const workspaceLockDirectory = (registry: string) => path.join(registry, "locks");

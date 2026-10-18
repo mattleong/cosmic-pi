@@ -12,15 +12,14 @@ Procedures and safety notes behind the [README](../README.md). [ARCHITECTURE.md]
 
 Good delegation candidates include reconnaissance of unfamiliar or multi-package code, external research beside local inspection, implementation planning, and independent review. Nested Pi children may select any configured profile.
 
-For scoped parallel implementation, give shared-checkout writers exact claims, or isolate a writer with `isolation`:
+For scoped parallel implementation, give shared-checkout writers disjoint task scopes, or isolate a writer with `isolation`:
 
 ```json
 {
   "agents": [
     {
-      "task": "Implement token parsing in the assigned source and test files.",
-      "profile": "worker",
-      "writes": ["packages/auth/src/token.ts", "packages/auth/tests/token.test.ts"]
+      "task": "Implement token parsing in packages/auth/src/token.ts and its tests; leave other auth files to peers.",
+      "profile": "worker"
     },
     {
       "task": "Implement typed authentication errors in packages/auth/src/errors.ts.",
@@ -32,9 +31,10 @@ For scoped parallel implementation, give shared-checkout writers exact claims, o
 ```
 
 - Use `subagent_await` rather than polling status. "Finished" means completed, failed, or stopped.
-- A question returns the wait early so the parent can call `subagent_reply` and await again.
+- A question returns the wait early so the parent can answer it with `subagent_send` and await again.
 - Retry only a failed run, and repeat retry only on a failed successor. Use `generalist` only after `retry_route_exhausted`.
-- A writer stopped for writing outside its claims is relaunched by the parent with corrected claims.
+- Set an item's `model` only when the user asks for a specific model. That launch tries only that model, so a failed run has nothing to retry.
+- Shared-checkout writers in one cwd have no file claims and are not isolated from each other; scope their tasks so they don't overlap.
 
 ## Reviewing and applying worktree proposals
 
@@ -52,32 +52,47 @@ To take only part of a proposal, pass `paths` (exact changed paths from the revi
 
 For risky changes:
 
-1. Call `review` with the workspace ID after process cleanup. Keep the returned `revisionId` and read every page, passing it with each `nextOffset`. Each page holds up to 16,000 characters: first a summary (per-file line counts, binary, added, deleted, and mode markers, and uncaptured worker files), then the full diff.
+1. Call `review` with the workspace ID after process cleanup. Keep the returned `revisionId` and read every page, passing it with each `nextOffset`. Each page holds up to 16,000 characters: first a summary (per-file line counts, binary, added, deleted, and mode markers, and credential files the worker left out), then the full diff.
 2. Call `prepare` with the workspace ID and reviewed `revisionId`. This creates a separate cwd combining the proposal with current parent edits.
 3. Run relevant tests in that cwd without editing it. Worker-only tests don't replace this pass.
 4. Call `apply` with `workspaceId`, `revisionId`, and `preparationId`. It integrates exactly that pair as uncommitted edits, without preparing or verifying again, and reports `parent-tested`. It never merges, stages, or commits.
 
+### What a worktree writer shares
+
+A worktree writer's workspace is a locked, detached linked worktree of your repository under `<agent-dir>/subagent-worktrees/`, so `git worktree list` shows it and its commits live under `refs/pi/workspaces/`. Discard and integration remove both. The writer's prompt tells it to stay on the detached HEAD and not to create branches, use `git stash`, change Git config, or run `git worktree` commands, because each would reach your repository ([Writer guidance](local-backends.md#writer-guidance)). If `/subagents doctor` reports legacy workspaces, follow its commands to save and remove the earlier version's registry ([Earlier workspace registry](local-backends.md#earlier-workspace-registry)).
+
+Ignored and untracked credential files stay in your checkout. When writers need some of them, such as `.env`, a trusted project's `.pi/pi-subagents.json` can name them with gitignore-syntax patterns; matching files are copied into each worker and test tree, but never into a proposal ([Included files](local-backends.md#included-files)). Run `/reload` after changing it.
+
+```json
+{
+  "version": 6,
+  "workspaceSetup": { "command": ["pnpm", "install", "--offline", "--frozen-lockfile"] },
+  "workspaceInclude": [".env", ".env.local", "config/*.local.json"]
+}
+```
+
 ### Failures and recovery
 
-- Worker files in `node_modules`, `vendor`, `dist`, `build`, `coverage`, and `.pi` are left out on purpose; review lists them and prepare and apply warn. Any other uncaptured file makes prepare and apply refuse with `workspace_uncaptured_files`.
+- Ignored worker files never enter a proposal. Untracked credential files a writer created (`.env*`, `.npmrc`, `*.pem`, SSH keys) are left out on purpose; review lists them and prepare and apply warn.
 - A conflicting patch fails prepare with `workspace_conflict`; a parent edit to a proposal file fails apply with `workspace_parent_changed`. Both name the files.
+- A proposal file the parent index marks skip-worktree or assume-unchanged fails prepare and apply with `workspace_local_override`, naming the files; clear the bit with `git update-index` or revise the workspace.
 - If integration stops partway, `discard` rolls back what it published.
-- A snapshot refusal names the file, rule, and remedy. Only lines the source index doesn't already hold are scanned for credentials, so staging a deliberate new fixture lets the snapshot proceed.
+- A refusal names the file, rule, and remedy.
 
-### Revise, export, and discard
+### Revise and discard
 
 - `revise` takes the workspace ID and concrete feedback in `message`, and starts a successor writer; await it, then apply or review the new revision.
 - When parent files moved on under the proposal (a stale preparation or `workspace_conflict`), add `"rebase": true`. The writer's tree is rebuilt from the parent's current files with its changes reapplied by three-way merge, and the successor's task lists conflicted files. A rebase that can't run refuses with `workspace_rebase_refused` and changes nothing.
-- `export` keeps a proposal outside private storage. `"format": "patch"` (default) writes a `git apply`-able patch to `<git-dir>/pi-subagents/<workspaceId>-<revision>.patch`. `"format": "branch"` creates `pi-subagent/<writer-name>`, one commit on `HEAD`, without touching the index, `HEAD`, or files; it is refused if the branch exists, or with `workspace_conflict` when the proposal doesn't apply to `HEAD` (use the patch then). Export freezes like `review` and leaves the workspace unresolved.
 - `list` pages workspace metadata with an optional `offset`.
-- A later session's root may export or discard an orphaned workspace once the creating session has ended and no writer holds its worker tree. This recovers proposals stranded by `/reload` or a crash. Nested workspaces can't be exported.
+- Workspaces stranded by `/reload` or a crash become orphans once their session has ended, and `list` marks them `adoptable` or `discard-only`. From a later session's root, `review`, `prepare`, `apply`, or `revise` on an adoptable one takes it over, provided no writer holds its worker tree and no child workspace is unresolved; its first `revise` starts a new writer with the original profile or custom agent and your `message` as the task; if that agent is no longer configured, revise fails with `workspace_launch_unavailable`, and you can still apply or discard it. Nested and mid-integration orphans can only be discarded, which rolls back an interrupted integration.
+- Orphans unchanged for 30 days are discarded when a root session starts in their checkout. Their patch stays at the path the start-up notice names for 7 days; apply it with `git apply` in its checkout to recover the work.
 
 ## Tool access and sandboxing
 
 - Pi children receive the root's active tool snapshot; Pi read-only is a prompt and lease policy, not a sandbox ([Local Pi](local-backends.md#local-pi-ownership-and-safety)).
 - Claude and Codex children run under their native sandboxes, which fail startup rather than run unsandboxed ([Local Claude](local-backends.md#local-claude), [Local Codex](local-backends.md#local-codex)).
 - Allowed reads, model network access, runtime defects, and external services may still disclose data or have side effects.
-- Writer leases are shared across Pi processes on the same machine; a refusal that requires manual recovery names the lock directory to inspect ([Writer pools](local-backends.md#writer-pools-cooperative-claims-and-cross-process-safety)).
+- Writer leases are shared across Pi processes on the same machine; a refusal that requires manual recovery names the lock directory to inspect ([Writer pools](local-backends.md#writer-pools-and-cross-process-safety)).
 
 ## See also
 

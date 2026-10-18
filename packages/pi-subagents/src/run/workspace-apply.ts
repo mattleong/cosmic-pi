@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import type { WorkspaceVerify } from "../config/schema.ts";
 import type { WorkspacePreparation, WorkspaceRevisionMetadata } from "../workspace/model.ts";
-import { leftOutUncapturedPaths, partialSelection } from "../workspace/policy.ts";
+import { partialSelection } from "../workspace/policy.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
@@ -70,7 +70,7 @@ interface WorkspaceApplyCommon {
    */
   readonly remainingPaths?: ReadonlyArray<string> | undefined;
   readonly remainingPathCount?: number | undefined;
-  /** Worker files left out on purpose because they sit in dependency, build, or Pi state directories. */
+  /** Credential files the worker created, which the revision leaves out on purpose. */
   readonly leftOutPaths: ReadonlyArray<string>;
   /** Whether the parent had read every page of this revision; apply never requires it. */
   readonly reviewed: boolean;
@@ -246,7 +246,7 @@ export function workspaceApplyOperations(
                 paths ?? revision.changedPaths,
                 paths && revision.changedPaths.filter((name) => !paths.includes(name)),
               ),
-              leftOutPaths: leftOutUncapturedPaths(revision.uncapturedPaths),
+              leftOutPaths: revision.uncapturedPaths ?? [],
               reviewed,
               integrated: false as const,
               verification,

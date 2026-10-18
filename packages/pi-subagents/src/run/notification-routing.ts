@@ -21,7 +21,7 @@ interface RunNotificationRoutingDependencies extends Pick<RunContext, "records" 
 const ancestorMessage = (notification: SubagentNotification): string => {
   if (notification.type === "question")
     return sanitizeOutputText(
-      `Descendant ${notification.name} (${notification.id}) is waiting for a reply.\n\nQuestion: ${notification.message}\n\nUse subagent_reply for ${notification.id}.`,
+      `Descendant ${notification.name} (${notification.id}) is waiting for a reply.\n\nQuestion: ${notification.message}\n\nAnswer with subagent_send({ runIds: ["${notification.id}"], message: "..." }).`,
       32 * 1024,
     );
   const run = notification.runs[0];

@@ -1,9 +1,15 @@
 import { safeTextPrefix, sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
+  MAX_CUSTOM_AGENT_DESCRIPTION_CHARS,
+  MAX_CUSTOM_AGENT_NAME_CHARS,
+  MAX_CUSTOM_AGENTS,
+} from "../profiles/agents.ts";
+import {
   MAX_PROFILE_CANDIDATES,
   MAX_PROFILE_MODEL_SELECTOR_CHARS,
   PROFILE_IDS,
+  type SubagentModelOverride,
 } from "../profiles/model.ts";
 import {
   MAX_OUTCOME_DIFFSTAT_FILES,
@@ -11,9 +17,7 @@ import {
   type SubagentUsage,
   type SubagentWorkspaceDiffStat,
 } from "../run/model.ts";
-import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
-import { MAX_OBSERVED_WRITE_PATHS, MAX_WRITE_CLAIM_VIOLATIONS } from "../run/claims-observation.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
@@ -38,16 +42,25 @@ import {
   MAX_PROFILE_CHARS,
   MAX_PROFILE_DESCRIPTION_CHARS,
   MAX_PROGRESS_CHARS,
+  MAX_INVALID_AGENT_ENTRIES,
   MAX_WARNING_CHARS,
   type CompactToolActionFailure,
+  type InvalidAgentCard,
+  type ModelOverrideCard,
   type RunDetailsAction,
+  type SubagentAgentRouteCard,
   type SubagentCardFailure,
   type SubagentProfileRouteCard,
   type SubagentRunCard,
   type SubagentStartEntry,
   type WorkspaceDiffStatCard,
 } from "./details-schema.ts";
-import type { SubagentProfileView } from "./model.ts";
+import type {
+  ProfileCandidateDiscovery,
+  SubagentAgentView,
+  SubagentInvalidAgentView,
+  SubagentProfileView,
+} from "./model.ts";
 import { actionFailureDisposition } from "./outcome.ts";
 
 // Collapsed issue messages quote at most 120 characters, so condensed text keeps them complete.
@@ -105,6 +118,19 @@ const projectSelection = (
     ...(warning !== undefined && { warning }),
   };
 };
+
+export const projectModelOverride = (
+  override: SubagentModelOverride | undefined,
+): { readonly modelOverride?: ModelOverrideCard } =>
+  override === undefined
+    ? {}
+    : {
+        modelOverride: {
+          runtime: override.runtime,
+          model: requiredText(override.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
+          ...(override.effort !== undefined && { effort: override.effort }),
+        },
+      };
 
 const projectWorkspaceFields = (value: {
   readonly writerWorkspaceMode?: "worktree" | "shared-checkout" | undefined;
@@ -193,29 +219,6 @@ const projectWriteCardFields = (run: SubagentRunView): Partial<SubagentRunCard> 
       writerCleanupQuarantined: run.writerCleanupQuarantined,
     }),
     ...projectWorkspaceFields(run),
-    ...(run.writeClaims !== undefined && {
-      writeClaims: run.writeClaims
-        .slice(0, MAX_WRITE_CLAIMS)
-        .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
-      writeClaimCount: run.writeClaims.length,
-      ...(run.writeClaims.length > MAX_WRITE_CLAIMS && { writeClaimsOmitted: true as const }),
-    }),
-    ...(run.writeAudit !== undefined && {
-      writeAudit: {
-        observedFileWrites: run.writeAudit.observedFileWrites
-          .slice(-MAX_OBSERVED_WRITE_PATHS)
-          .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
-        violations: run.writeAudit.violations
-          .slice(-MAX_WRITE_CLAIM_VIOLATIONS)
-          .map((violation) => ({
-            path: requiredText(violation.path, MAX_WRITE_CLAIM_CHARS, "unknown-file"),
-            toolName: requiredText(violation.toolName, 200, "unknown-tool"),
-            observedAt: nonNegative(violation.observedAt),
-          })),
-        bashWriteHints: nonNegativeInteger(run.writeAudit.bashWriteHints),
-      },
-    }),
-    ...(run.writeViolationOffender === true && { writeViolationOffender: true as const }),
   };
 };
 
@@ -277,6 +280,7 @@ const projectReportCardFields = (run: SubagentRunView): Partial<SubagentRunCard>
 
 export const projectSubagentRunCard = (run: SubagentRunView): SubagentRunCard => {
   const profile = run.profile && PROFILE_IDS.includes(run.profile) ? run.profile : undefined;
+  const agent = optionalText(run.agent, MAX_CUSTOM_AGENT_NAME_CHARS);
   const parentRunId = optionalText(run.parentRunId, MAX_PROTOCOL_ID_CHARS);
   const nativeActivity = projectNativeActivity(run.nativeActivity);
   return {
@@ -296,6 +300,7 @@ export const projectSubagentRunCard = (run: SubagentRunView): SubagentRunCard =>
     lastActivityAt: nonNegative(run.lastActivityAt),
     usage: projectUsage(run.usage),
     selection: projectSelection(run.selection),
+    ...projectModelOverride(run.modelOverride),
     ...projectWriteCardFields(run),
     ...projectOptionalCardFields(run),
     ...(parentRunId !== undefined && {
@@ -306,6 +311,7 @@ export const projectSubagentRunCard = (run: SubagentRunView): SubagentRunCard =>
     }),
     ...(nativeActivity !== undefined && { nativeActivity }),
     ...(profile !== undefined && { profile }),
+    ...(agent !== undefined && { agent }),
     ...projectReportCardFields(run),
   };
 };
@@ -323,15 +329,18 @@ const condensed = (text: string): string => safeTextPrefix(text, CONDENSED_TEXT_
 
 /**
  * The report-free fallback when bounded cards still do not fit: drops live activity, skipped
- * route candidates, and write and diffstat path lists, and shortens issue text. IDs, counts,
- * offender and admission evidence, cleanup, and workspace recovery fields stay complete.
+ * route candidates, diffstat path lists, and legacy write-claim fields, and shortens issue text.
+ * IDs, counts, admission evidence, cleanup, and workspace recovery fields stay complete.
  */
 export const condenseRunCard = (card: SubagentRunCard): SubagentRunCard => {
   const {
     currentTool: _currentTool,
     progress: _progress,
-    writeClaims,
-    writeAudit,
+    writeClaims: _writeClaims,
+    writeClaimCount: _writeClaimCount,
+    writeClaimsOmitted: _writeClaimsOmitted,
+    writeAudit: _writeAudit,
+    writeViolationOffender: _writeViolationOffender,
     selection,
     warning,
     systemWarning,
@@ -354,16 +363,6 @@ export const condenseRunCard = (card: SubagentRunCard): SubagentRunCard => {
       ...(selection.candidateIndex !== undefined && { candidateIndex: selection.candidateIndex }),
       ...(selection.warning !== undefined && { warning: condensed(selection.warning) }),
     },
-    ...(writeClaims !== undefined &&
-      writeClaims.length > 0 && { writeClaimsOmitted: true as const }),
-    ...(writeAudit !== undefined && {
-      writeAudit: {
-        observedFileWrites: [],
-        // An offender keeps its latest violation as containment evidence.
-        violations: card.writeViolationOffender === true ? writeAudit.violations.slice(-1) : [],
-        bashWriteHints: writeAudit.bashWriteHints,
-      },
-    }),
     ...(warning !== undefined && { warning: condensed(warning) }),
     ...(systemWarning !== undefined && { systemWarning: condensed(systemWarning) }),
     ...(question !== undefined && { question: { message: condensed(question.message) } }),
@@ -399,10 +398,12 @@ export const condenseFailure = (failure: SubagentCardFailure): SubagentCardFailu
 });
 
 export const projectStartEntry = (entry: SubagentStartEntry): SubagentStartEntry => {
+  const agent = optionalText(entry.agent, MAX_CUSTOM_AGENT_NAME_CHARS);
   const identity = {
     index: nonNegativeInteger(entry.index),
     name: requiredText(entry.name, MAX_NAME_CHARS, "launch"),
     profile: requiredText(entry.profile, MAX_PROFILE_CHARS, "generalist"),
+    ...(agent !== undefined && { agent }),
   };
   if (entry.status === "pending")
     return { ...identity, status: "pending", routeStatus: "resolving" };
@@ -420,6 +421,7 @@ export const projectStartEntry = (entry: SubagentStartEntry): SubagentStartEntry
       candidateIndex: nonNegativeInteger(entry.candidateIndex),
     }),
     ...(warning !== undefined && { warning }),
+    ...projectModelOverride(entry.modelOverride),
   };
   return entry.status === "started"
     ? {
@@ -436,14 +438,8 @@ export const condenseStartEntry = (entry: SubagentStartEntry): SubagentStartEntr
     ? { ...entry, warning: condensed(entry.warning) }
     : entry;
 
-const projectProfileRouteCard = (profile: SubagentProfileView): SubagentProfileRouteCard => ({
-  id: profile.id,
-  description: requiredText(profile.description, MAX_PROFILE_DESCRIPTION_CHARS, "Profile route."),
-  source: profile.source,
-  isDefault: profile.isDefault,
-  defaultContext: profile.defaultContext,
-  defaultWriteIntent: profile.defaultWriteIntent,
-  candidates: profile.candidates.slice(0, MAX_PROFILE_CANDIDATES).map((candidate) => ({
+const projectCandidateCards = (candidates: ReadonlyArray<ProfileCandidateDiscovery>) =>
+  candidates.slice(0, MAX_PROFILE_CANDIDATES).map((candidate) => ({
     runtime: candidate.runtime,
     model: requiredText(candidate.model, MAX_PROFILE_MODEL_SELECTOR_CHARS, "omitted-model"),
     effort: candidate.effort,
@@ -456,8 +452,53 @@ const projectProfileRouteCard = (profile: SubagentProfileView): SubagentProfileR
       MAX_PROFILE_CANDIDATE_REASON_CHARS,
       "Route detail omitted.",
     ),
-  })),
+  }));
+
+const projectProfileRouteCard = (profile: SubagentProfileView): SubagentProfileRouteCard => ({
+  id: profile.id,
+  description: requiredText(profile.description, MAX_PROFILE_DESCRIPTION_CHARS, "Profile route."),
+  source: profile.source,
+  isDefault: profile.isDefault,
+  defaultContext: profile.defaultContext,
+  defaultWriteIntent: profile.defaultWriteIntent,
+  candidates: projectCandidateCards(profile.candidates),
   ...(profile.defaultEffort !== undefined && { defaultEffort: profile.defaultEffort }),
+});
+
+const projectAgentRouteCard = (agent: SubagentAgentView): SubagentAgentRouteCard => ({
+  name: requiredText(agent.name, MAX_CUSTOM_AGENT_NAME_CHARS, "agent"),
+  description: requiredText(agent.description, MAX_CUSTOM_AGENT_DESCRIPTION_CHARS, "Custom agent."),
+  profile: agent.profile,
+  source: agent.source,
+  ...(agent.effort !== undefined && { effort: agent.effort }),
+  ...(agent.context !== undefined && { context: agent.context }),
+  ...(agent.writeIntent !== undefined && { writeIntent: agent.writeIntent }),
+  ...(agent.isolation !== undefined && { isolation: agent.isolation }),
+  ...(agent.tools?.allow !== undefined && { allowedToolCount: agent.tools.allow.length }),
+  ...(agent.tools?.deny !== undefined && { deniedToolCount: agent.tools.deny.length }),
+  candidates: projectCandidateCards(agent.candidates),
+});
+
+export const projectSubagentAgentRoutes = (
+  agents: ReadonlyArray<SubagentAgentView>,
+): ReadonlyArray<SubagentAgentRouteCard> =>
+  agents.slice(0, MAX_CUSTOM_AGENTS).map(projectAgentRouteCard);
+
+export const projectInvalidAgents = (
+  invalid: ReadonlyArray<SubagentInvalidAgentView>,
+): ReadonlyArray<InvalidAgentCard> =>
+  invalid.slice(0, MAX_INVALID_AGENT_ENTRIES).map((entry) => {
+    const name = optionalText(entry.name, MAX_CUSTOM_AGENT_NAME_CHARS);
+    return name === undefined ? { scope: entry.scope } : { scope: entry.scope, name };
+  });
+
+export const condenseAgentRoute = (agent: SubagentAgentRouteCard): SubagentAgentRouteCard => ({
+  ...agent,
+  description: condensed(agent.description),
+  candidates: agent.candidates.map((candidate) => ({
+    ...candidate,
+    reason: condensed(candidate.reason),
+  })),
 });
 
 export const projectSubagentProfileRoutes = (

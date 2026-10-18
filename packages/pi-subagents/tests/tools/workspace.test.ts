@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Effect from "effect/Effect";
+import { Check } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { effectTest } from "../support/effect-test.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
@@ -9,6 +10,7 @@ import type { WorkspaceApplyResult } from "../../src/run/workspace-apply.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import type { WorkspaceToolDetails } from "../../src/tools/details-schema.ts";
 import { executeWorkspaceAction } from "../../src/tools/execute-workspace.ts";
+import { WorkspaceParameters } from "../../src/tools/schema.ts";
 import {
   subagentServiceDouble,
   type SubagentServiceDoubleInput,
@@ -152,8 +154,8 @@ describe("workspace apply", () => {
     expectStyledIssues(summary);
   });
 
-  effectTest("warns about worker files left out of the proposal on purpose", function* () {
-    const leftOut = ["node_modules/left-pad/index.js", "dist/app.js", ".env", "certs/dev.pem"];
+  effectTest("warns about credential files left out of the proposal on purpose", function* () {
+    const leftOut = [".env", "certs/dev.pem"];
     const applyArgs = { action: "apply", workspaceId: "ws-1" } as const;
     const prepareArgs = { action: "prepare", workspaceId: "ws-1", revisionId: "rev-1" } as const;
     const service: SubagentServiceDoubleInput = {
@@ -174,7 +176,7 @@ describe("workspace apply", () => {
       expect(summary?.outcome).toBe("warning");
       expect(
         summary?.issues?.filter((issue) => issue.severity === "warning").map((issue) => issue.code),
-      ).toEqual(["worker-files-left-out", "credential-files-left-out"]);
+      ).toEqual(["credential-files-left-out"]);
       expectStyledIssues(summary);
     }
   });
@@ -276,6 +278,21 @@ describe("workspace refusals", () => {
   });
 });
 
+const orphan = (workspaceId: string, sourceWorkspaceId?: string) => ({
+  version: 2 as const,
+  repository: "/repo/.git",
+  handle: {
+    workspaceId,
+    ownerId: "ended-session/root",
+    sourceCwd: "/project",
+    sourceRoot: "/project",
+    cwd: `/agent/${workspaceId}/worker`,
+    ...(sourceWorkspaceId !== undefined && { sourceWorkspaceId, checkoutRoot: "/project" }),
+  },
+  status: "active" as const,
+  baseline: "abc",
+});
+
 describe("workspace prepared-pair apply and list", () => {
   it("still renders integrate results saved by earlier versions", () => {
     const args = {
@@ -311,6 +328,38 @@ describe("workspace prepared-pair apply and list", () => {
     expect(summary?.counters).toEqual(["integrated"]);
   });
 
+  it("rejects the retired export action but still renders export results saved earlier", () => {
+    expect(Check(WorkspaceParameters, { action: "export", workspaceId: "ws-1" })).toBe(false);
+    const summary = createSubagentCompactSummary("subagent_workspace")({
+      phase: "settled",
+      args: { action: "export", workspaceId: "ws-1", format: "branch" },
+      result: {
+        content: [{ type: "text", text: "Exported workspace ws-1, revision rev-1." }],
+        details: {
+          version: 1,
+          action: "workspace",
+          operation: "export",
+          workspaceId: "ws-1",
+          revisionId: "rev-1",
+          changedPathCount: 2,
+          exportFormat: "branch",
+          exportBranch: "pi-subagent/db-migration",
+          warnings: [
+            {
+              code: "export-placeholder-identity",
+              message: "The branch commit uses a placeholder identity",
+              detail: "Configure your identity, then amend the commit.",
+            },
+          ],
+          displayContent: { offset: 0, length: 0 },
+        },
+      },
+      context: renderContextFixture({ isError: false }),
+    });
+    expect(summary?.outcome).toBe("warning");
+    expect(summary?.issues?.map((issue) => issue.code)).toEqual(["export-placeholder-identity"]);
+  });
+
   effectTest("warns when unresolved child workspaces keep the worker tree", function* () {
     const args = {
       action: "apply",
@@ -342,7 +391,8 @@ describe("workspace prepared-pair apply and list", () => {
         Effect.succeed({
           records: [
             {
-              version: 1,
+              version: 2,
+              repository: "/repo/.git",
               handle: {
                 workspaceId: "ws-2",
                 ownerId: "root",
@@ -370,6 +420,29 @@ describe("workspace prepared-pair apply and list", () => {
     expect(summary?.issues?.map((issue) => issue.code)).not.toContain(
       "workspace-records-unavailable",
     );
+    expectStyledIssues(summary);
+  });
+
+  effectTest("marks orphans the root may adopt or only discard", function* () {
+    const args = { action: "list" } as const;
+    const result = yield* run(args, undefined, {
+      workspaceList: () =>
+        Effect.succeed({
+          records: [orphan("ws-1"), orphan("ws-2", "ws-1")],
+          unavailable: [],
+          orphans: new Map([
+            ["ws-1", "adoptable" as const],
+            ["ws-2", "discard-only" as const],
+          ]),
+        }),
+    }).pipe(Effect.orDie);
+    const text = resultText(result);
+    expect(text).toContain('"workspaceId":"ws-1"');
+    expect(text).toContain('"orphan":"adoptable"');
+    expect(text).toContain('"orphan":"discard-only"');
+    expect(result.details).toMatchObject({ adoptableCount: 1 });
+    const summary = summarize(args, result);
+    expect(summary?.issues?.map((issue) => issue.code)).toContain("orphans-adoptable");
     expectStyledIssues(summary);
   });
 });

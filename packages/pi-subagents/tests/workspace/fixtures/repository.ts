@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest";
+import { vi } from "vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -10,7 +11,15 @@ import { nodeFsPromises as fs, nodePath as path } from "../../../src/boundary/no
 import type { WorkspaceHandle } from "../../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/workspace/service.ts";
 
+// Workspaces run Git with the user's system and global configuration. Tests use none, unless a
+// test file points these at a configuration of its own.
+vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
+
 export const io = <A>(run: () => PromiseLike<A>) => workspaceIO("fixture", run);
+
+/** Where the engine keeps its records and linked worktrees for an agent directory. */
+export const registryOf = (agent: string) => path.join(agent, "subagent-worktrees");
 
 export const temporaryDirectory = (prefix: string) =>
   Effect.acquireRelease(

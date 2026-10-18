@@ -9,9 +9,10 @@ import {
   type WorkspaceRecord,
 } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
+import { deleteWorkspaceRefs } from "./git-capture.ts";
+import { listedWorkspaceTrees, removeWorkspaceTree } from "./git-worktree-trees.ts";
 import {
   checkDirectory,
-  git,
   isSharedOrForeign,
   workspaceFailure,
   workspaceIO,
@@ -21,28 +22,44 @@ import {
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";
 import {
   readWorkspaceRecord,
+  saveWorkspaceRecord,
   syncWorkspaceDirectory,
   validWorkspaceId,
   workspaceDirectory,
 } from "./git-worktree-store.ts";
 
+const editableTreeName = (name: string) =>
+  name === "worker" || /^prepare-[a-f0-9-]{36}$/u.test(name);
+
+/**
+ * Removes the workspace's linked worktrees (prepared trees first, then the worker unless kept)
+ * and Git's entries for them; with the worker gone, its refs go too. Proves the removal complete.
+ */
 export const removeWorkspaceTrees = (
   registry: string,
   record: WorkspaceRecord,
   options: { readonly keepWorker?: boolean; readonly requireOriginalWorker?: boolean } = {},
 ) =>
   Effect.gen(function* () {
-    const removedWorker = (name: string) => name === "worker" && !options.keepWorker;
     const directory = workspaceDirectory(registry, record.handle.workspaceId);
-    const repository = path.join(directory, "repo.git");
-    const names = yield* workspaceIO("discard", () => fs.readdir(directory));
+    const worker = path.join(directory, "worker");
+    const kept = (tree: string) => tree === worker && options.keepWorker === true;
+    const remaining = Effect.gen(function* () {
+      const listed = yield* listedWorkspaceTrees(registry, record);
+      const names = yield* workspaceIO("discard", () => fs.readdir(directory));
+      const trees = [
+        ...new Set([
+          ...listed.map((tree) => tree.path),
+          ...names.filter(editableTreeName).map((name) => path.join(directory, name)),
+        ]),
+      ].filter((tree) => !kept(tree));
+      return { listed, trees };
+    });
+    const { listed, trees } = yield* remaining;
     // Keep the worker available for identity checks until every preparation is gone.
-    const trees = names
-      .filter((entry) => removedWorker(entry) || /^prepare-[a-f0-9-]{36}$/u.test(entry))
-      .toSorted((left, right) => Number(left === "worker") - Number(right === "worker"));
-    for (const name of trees) {
-      const tree = path.join(directory, name);
-      yield* checkDirectory(tree);
+    for (const tree of trees.toSorted(
+      (left, right) => Number(left === worker) - Number(right === worker),
+    )) {
       if (options.requireOriginalWorker) {
         const refusal = () =>
           workspaceRefusal("discard", "The original worker directory changed; discard is unsafe.", {
@@ -60,14 +77,15 @@ export const removeWorkspaceTrees = (
         );
         if (current.filesystemIdentity !== original.filesystemIdentity) return yield* refusal();
       }
-      yield* git(repository, ["worktree", "remove", "--force", tree]);
+      yield* removeWorkspaceTree(registry, record, tree, listed);
     }
-    const remaining = yield* workspaceIO("discard", () => fs.readdir(directory));
-    if (remaining.some((name) => removedWorker(name) || name.startsWith("prepare-")))
+    if ((yield* remaining).trees.length > 0)
       return yield* workspaceFailure(
         "recovery",
         "Editable workspace trees remain; discard is incomplete.",
       );
+    if (!options.keepWorker)
+      yield* deleteWorkspaceRefs(record.repository, record.handle.workspaceId);
     return undefined;
   });
 
@@ -169,7 +187,7 @@ export const unresolvedChildWorkspaces = (registry: string, workspaceId: string)
   });
 
 /** Discarded and integrated records stay this long for inspection, like delivered reports. */
-export const WORKSPACE_RECORD_RETENTION = Duration.days(7);
+const WORKSPACE_RECORD_RETENTION = Duration.days(7);
 
 const COLLECTED_PREFIX = ".collected-";
 
@@ -177,8 +195,6 @@ const COLLECTED_PREFIX = ".collected-";
 // the nested record is collected too.
 const references = (record: WorkspaceRecord) =>
   record.handle.sourceWorkspaceId === undefined ? [] : [record.handle.sourceWorkspaceId];
-
-const editableTree = (name: string) => name === "worker" || name.startsWith("prepare-");
 
 // Renaming first keeps a half-removed directory out of every listing.
 const removeCollected = (registry: string, workspaceId: string) =>
@@ -210,7 +226,9 @@ const collectRecord = (registry: string, workspaceId: string, now: number) =>
     const saved = yield* workspaceIO("collect", () => fs.stat(path.join(directory, "record.json")));
     if (now - saved.mtimeMs < Duration.toMillis(WORKSPACE_RECORD_RETENTION)) return false;
     const names = yield* workspaceIO("collect", () => fs.readdir(directory));
-    if (names.some(editableTree)) return false;
+    if (names.some(editableTreeName)) return false;
+    // Discard already deleted them; a repository that is gone has none left to delete.
+    yield* deleteWorkspaceRefs(record.repository, workspaceId).pipe(Effect.ignore);
     yield* removeCollected(registry, workspaceId);
     return true;
   });
@@ -224,12 +242,69 @@ export interface WorkspaceCollection {
     checkoutRoot: string,
     effect: Effect.Effect<boolean, WorkspaceError, SafeFile>,
   ) => Effect.Effect<Option.Option<boolean>, WorkspaceError, SafeFile>;
+  /** Runs while holding the free owner lease, or returns none while its session still runs. */
+  readonly whenOwnerEnded: (
+    ownerLease: string,
+    effect: Effect.Effect<boolean, WorkspaceError, SafeFile>,
+  ) => Effect.Effect<Option.Option<boolean>, WorkspaceError, SafeFile>;
 }
+
+// A create that crashed after adding its worker left a locked worktree in the user's repository
+// that no run was ever given; once its session has provably ended, its trees and refs go.
+const abandonCreate = (registry: string, workspaceId: string, collection: WorkspaceCollection) =>
+  Effect.gen(function* () {
+    const record = yield* readWorkspaceRecord(registry, workspaceId);
+    if (record.status !== "creating" || record.ownerLease === undefined) return false;
+    const removed = yield* collection.whenOwnerEnded(
+      record.ownerLease,
+      Effect.gen(function* () {
+        yield* removeWorkspaceTrees(registry, record);
+        yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
+        return false;
+      }),
+    );
+    return Option.getOrElse(removed, () => false);
+  });
+
+const hasEditableTree = (registry: string, workspaceId: string) =>
+  workspaceIOIfPresent("collect", () => fs.readdir(workspaceDirectory(registry, workspaceId))).pipe(
+    Effect.map((names) => (names ?? []).some(editableTreeName)),
+  );
+
+// Integration keeps trees a run still uses and a worker its unresolved children were created from.
+// Once every workspace created from it is resolved and its session has provably ended, so no run
+// can still use them, its trees and refs go; the record stays for collection.
+const removeRetainedTrees = (
+  registry: string,
+  workspaceId: string,
+  collection: WorkspaceCollection,
+) =>
+  Effect.gen(function* () {
+    const record = yield* readWorkspaceRecord(registry, workspaceId);
+    if (!finished(record) || record.ownerLease === undefined) return false;
+    yield* checkDirectory(workspaceDirectory(registry, workspaceId));
+    if (!(yield* hasEditableTree(registry, workspaceId))) return false;
+    // Rechecked under the checkout's lock; an unreadable record might be an unresolved child.
+    const current = yield* listWorkspaceRecords(registry);
+    if (
+      current.unavailable.length > 0 ||
+      current.records.some(
+        (entry) => entry.handle.sourceWorkspaceId === workspaceId && !finished(entry),
+      )
+    )
+      return false;
+    const removed = yield* collection.whenOwnerEnded(
+      record.ownerLease,
+      removeWorkspaceTrees(registry, record).pipe(Effect.as(true)),
+    );
+    return Option.getOrElse(removed, () => false);
+  });
 
 /**
  * Deletes discarded and integrated records once they are a week old, unless an editable tree
- * remains (such as a worker kept for a reader or an unresolved child) or a nested workspace names
- * it as its source. Unreadable artifacts are never touched.
+ * remains or a nested workspace names it as its source, and discards creates whose session ended
+ * before they finished. Trees integration kept go first, once nothing can still use them.
+ * Unreadable artifacts are never touched.
  */
 export const collectWorkspaceRecords = (registry: string, collection: WorkspaceCollection) =>
   Effect.gen(function* () {
@@ -238,8 +313,34 @@ export const collectWorkspaceRecords = (registry: string, collection: WorkspaceC
     const collected: string[] = [];
     for (const record of records) {
       const workspaceId = record.handle.workspaceId;
-      if (!finished(record) || referenced.has(workspaceId) || collection.owned(workspaceId))
-        continue;
+      if (record.status === "creating" && !collection.owned(workspaceId))
+        yield* collection
+          .whenSourceFree(
+            workspaceCheckoutRoot(record.handle),
+            abandonCreate(registry, workspaceId, collection),
+          )
+          .pipe(
+            Effect.catchTag("WorkspaceError", (error) =>
+              Effect.logWarning(`Abandoned workspace was not removed: ${error.message}`).pipe(
+                Effect.annotateLogs("workspaceId", workspaceId),
+              ),
+            ),
+          );
+      if (!finished(record) || collection.owned(workspaceId)) continue;
+      if (yield* hasEditableTree(registry, workspaceId).pipe(Effect.orElseSucceed(() => false)))
+        yield* collection
+          .whenSourceFree(
+            workspaceCheckoutRoot(record.handle),
+            removeRetainedTrees(registry, workspaceId, collection),
+          )
+          .pipe(
+            Effect.catchTag("WorkspaceError", (error) =>
+              Effect.logWarning(`Retained workspace trees were not removed: ${error.message}`).pipe(
+                Effect.annotateLogs("workspaceId", workspaceId),
+              ),
+            ),
+          );
+      if (referenced.has(workspaceId)) continue;
       const removed = yield* collection
         .whenSourceFree(
           workspaceCheckoutRoot(record.handle),

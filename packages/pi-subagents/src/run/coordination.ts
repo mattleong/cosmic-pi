@@ -3,19 +3,12 @@ import type { RunRecord } from "./internal.ts";
 import { hasSubagentCapability, isActiveRunState } from "./model.ts";
 import { countLabel, safeTextPrefix } from "pi-cosmic-core";
 
-const MAX_NOTICE_CLAIMS_PER_RUN = 8;
-const MAX_NOTICE_CLAIM_CHARS = 512;
-
-const ownershipSummary = (record: RunRecord): string => {
-  if (record.view.writeIntent !== "writer") return "read-only";
-  const claims = record.view.writeClaims;
-  if (!claims) return "exclusive writer";
-  const shown = claims
-    .slice(0, MAX_NOTICE_CLAIMS_PER_RUN)
-    .map((claim) => safeTextPrefix(claim, MAX_NOTICE_CLAIM_CHARS));
-  const omitted = claims.length - shown.length;
-  return `writer claims: ${shown.join(", ")}${omitted > 0 ? ` (+${omitted} more)` : ""}`;
-};
+const ownershipSummary = (record: RunRecord): string =>
+  record.view.writeIntent === "writer"
+    ? record.view.workspaceId !== undefined
+      ? "isolated writer"
+      : "shared-checkout writer"
+    : "read-only";
 
 const activePeerLines = (records: ReadonlyArray<RunRecord>, selfId?: string): string[] =>
   records.flatMap((record) =>
@@ -43,7 +36,7 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
     "",
     ...peers,
     "",
-    "The parent owns coordination, and claims stay fixed for each run. Writers may run concurrently only with disjoint exact-file claims. Never edit a peer's claimed file; contact the parent and wait before work that could overlap another task.",
+    "The parent owns coordination. Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task, and contact the parent and wait before work that could overlap another task.",
   ].join("\n");
 };
 

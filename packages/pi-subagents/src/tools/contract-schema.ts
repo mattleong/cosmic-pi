@@ -17,8 +17,10 @@ import {
 import { MAX_NAME_CHARS } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
+  AgentNameSchema,
   MAX_CARD_QUESTION_CHARS,
   MAX_FAILURE_CODE_CHARS,
+  ModelOverrideCardSchema,
   NonEmptyText,
   RunCleanupSchema,
 } from "./details-schema.ts";
@@ -27,7 +29,7 @@ import type { ActionFailureDisposition } from "./outcome.ts";
 import { AWAIT_UNTIL, type SubagentLifecycleInput } from "./schema.ts";
 
 export const SUBAGENT_CONTRACT_ID = "pi-subagents/orchestration";
-export const SUBAGENT_CONTRACT_VERSION = 2;
+export const SUBAGENT_CONTRACT_VERSION = 3;
 export const MAX_CONTRACT_REPORT_CHARS = MAX_TOOL_OUTPUT_CHARS;
 export const MAX_CONTRACT_MESSAGE_CHARS = 1_024;
 export const MAX_CONTRACT_ERROR_CHARS = 2_048;
@@ -80,9 +82,7 @@ const ReportSchema = Schema.Union([
 ]);
 
 const AttentionSchema = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literals(["containment", "question-unavailable"]),
-  }),
+  Schema.Struct({ kind: Schema.Literal("question-unavailable") }),
   Schema.Struct({ kind: Schema.Literal("paused"), canResume: Schema.Boolean }),
   Schema.Struct({
     kind: Schema.Literal("question"),
@@ -107,10 +107,12 @@ const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
     runId: RunIdSchema,
     name: NameSchema,
     profile: Schema.optionalKey(ProfileSchema),
+    agent: Schema.optionalKey(AgentNameSchema),
     state: StateSchema,
     finished: Schema.Boolean,
     reportGeneration: count,
     writeIntent: WriteIntentSchema,
+    modelOverride: Schema.optionalKey(ModelOverrideCardSchema),
     capabilities: Schema.Array(Schema.Literals(PI_SUBAGENT_CAPABILITIES)).check(
       Schema.isMaxLength(PI_SUBAGENT_CAPABILITIES.length),
     ),
@@ -146,14 +148,17 @@ const StartContractSchema = Schema.Struct({
         runId: RunIdSchema,
         name: NameSchema,
         profile: Schema.optionalKey(ProfileSchema),
+        agent: Schema.optionalKey(AgentNameSchema),
         state: StateSchema,
         writeIntent: WriteIntentSchema,
+        modelOverride: Schema.optionalKey(ModelOverrideCardSchema),
       }),
       Schema.Struct({
         index: count,
         status: Schema.Literal("failed"),
         name: Schema.optionalKey(NameSchema),
         profile: Schema.optionalKey(ProfileSchema),
+        agent: Schema.optionalKey(AgentNameSchema),
         failure: FailureSchema,
         admittedRun: Schema.optionalKey(Schema.Struct({ runId: RunIdSchema, ...RecoveryFields })),
       }),

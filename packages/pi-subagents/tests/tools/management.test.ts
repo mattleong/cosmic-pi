@@ -5,11 +5,7 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
-import {
-  STEERING_DELIVERY_STATES,
-  hasUnresolvedSteeringDelivery,
-  type SubagentRunView,
-} from "../../src/run/model.ts";
+import { STEERING_DELIVERY_STATES, hasUnresolvedSteeringDelivery } from "../../src/run/model.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
@@ -17,22 +13,11 @@ import {
   invokeOptionalTool,
   view,
 } from "./fixtures/tool-harness.ts";
-import { containedWriter, violationAudit } from "../fixtures/run-view.ts";
 
 const resultText = (result: {
   readonly content: ReadonlyArray<AgentToolResult<unknown>["content"][number]>;
 }): string =>
   result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
-
-const awaitSingle = (run: SubagentRunView) =>
-  invokeOptionalTool(
-    captureSubagentTools(
-      subagentServiceDouble({
-        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run }]),
-      }),
-    ).get("subagent_await"),
-    { runIds: [run.id], until: "all_finished" },
-  );
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -169,7 +154,9 @@ describe("subagent tool", () => {
                   message: "agent-2 is paused",
                 }),
               )
-            : Effect.sync(() => (sent.push(id), view({ id }))),
+            : Effect.sync(
+                () => (sent.push(id), { delivery: "guided" as const, run: view({ id }) }),
+              ),
         interrupt: (id) =>
           id === "agent-2"
             ? Effect.fail(
@@ -210,6 +197,36 @@ describe("subagent tool", () => {
       });
     },
   );
+
+  effectTest("reports which send targets were answered and which were guided", function* () {
+    const service = subagentServiceDouble({
+      send: (id) =>
+        Effect.succeed({
+          delivery: id === "agent-2" ? ("answered" as const) : ("guided" as const),
+          run: view({ id }),
+        }),
+    });
+    const tools = captureSubagentTools(service);
+    // Questions are answered through subagent_send; no separate reply tool is registered.
+    expect([...tools.keys()].toSorted()).toEqual([
+      "subagent_await",
+      "subagent_lifecycle",
+      "subagent_models",
+      "subagent_send",
+      "subagent_start",
+      "subagent_status",
+      "subagent_workspace",
+    ]);
+    const result = yield* invokeOptionalTool(tools.get("subagent_send"), {
+      runIds: ["agent-1", "agent-2", "agent-3"],
+      message: "Yes, go ahead.",
+    });
+    expect(result?.details).toMatchObject({
+      action: "send",
+      runCount: 3,
+      answeredRunIds: ["agent-2"],
+    });
+  });
 
   effectTest("propagates defects instead of reporting them as target failures", function* () {
     const service = subagentServiceDouble({
@@ -304,29 +321,6 @@ describe("subagent tool", () => {
     expect(delivered?.details).toMatchObject({ action: "await", cards: [{ id: completed.id }] });
     expect(consumed).toEqual([receipt]);
   });
-
-  effectTest(
-    "recommends relaunching an outside-workspace violation without claiming it",
-    function* () {
-      const result = yield* awaitSingle(
-        containedWriter({
-          id: "agent-outside",
-          name: "outside-writer",
-          state: "stopped",
-          capabilities: ["interrupt"],
-          writeAudit: violationAudit("<outside workspace>"),
-        }),
-      );
-      const text = result?.content[0]?.text ?? "";
-
-      expect(text).toContain("<outside workspace>");
-      expect(text).toContain("Only this writer was stopped");
-      expect(text).toContain("subagent_start");
-      expect(text).toContain("Never claim outside-workspace or absolute paths");
-      expect(result?.details).toMatchObject({ action: "await" });
-      expect(result?.details).not.toHaveProperty("attentionRequired");
-    },
-  );
 
   effectTest(
     "enforces the combined target count and aggregate detailed-output budget",

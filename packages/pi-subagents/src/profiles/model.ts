@@ -8,6 +8,7 @@ import {
   type SubagentRuntime,
   type SubagentWriteIntent,
 } from "../domain/routing.ts";
+import type { CustomAgent } from "./agents.ts";
 
 export const PROFILE_IDS = [
   "scout",
@@ -210,6 +211,31 @@ export const PROFILE_ROUTE_SOURCES = [
 ] as const;
 export type ProfileRouteSource = (typeof PROFILE_ROUTE_SOURCES)[number];
 
+/** A launch routes through its profile's configured route or a per-launch model override. */
+export type LaunchRouteSource = ProfileRouteSource | "override";
+
+/**
+ * A per-launch model override: the only candidate a launch tries, with no fallback. Context and
+ * write intent still come from the profile, or the agent when one is launched; fast mode is off.
+ */
+export interface SubagentModelOverride {
+  readonly runtime: SubagentRuntime;
+  readonly model: string;
+  readonly effort?: ProfileCandidateEffort | undefined;
+}
+
+export const modelOverrideCandidate = (
+  override: SubagentModelOverride,
+  definition: Pick<ProfileDefinition, "defaultContext" | "defaultWriteIntent">,
+  agent?: Pick<CustomAgent, "effort" | "context" | "writeIntent">,
+): ProfileCandidate => ({
+  runtime: override.runtime,
+  model: override.model,
+  effort: override.effort ?? agent?.effort ?? "default",
+  context: agent?.context ?? definition.defaultContext,
+  writeIntent: agent?.writeIntent ?? definition.defaultWriteIntent,
+});
+
 export interface ProfileDefinition {
   readonly id: ProfileId;
   readonly description: string;
@@ -240,7 +266,9 @@ export interface SkippedProfileCandidate {
 
 export interface ProfileRouteContinuation {
   readonly profile: ProfileId;
-  readonly routeSource: ProfileRouteSource;
+  /** The launch-time agent, so a retry keeps its instructions and overrides despite later edits. */
+  readonly agent?: CustomAgent | undefined;
+  readonly routeSource: LaunchRouteSource;
   readonly candidates: ReadonlyArray<ProfileCandidate>;
   readonly selectedCandidateIndex: number;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
@@ -250,7 +278,7 @@ export type SubagentSelectionSource = "profile-candidate" | "profile-parent-cand
 
 export interface SubagentSelectionProvenance {
   readonly source: SubagentSelectionSource;
-  readonly routeSource?: ProfileRouteSource | undefined;
+  readonly routeSource?: LaunchRouteSource | undefined;
   readonly candidateIndex?: number | undefined;
   readonly reason: string;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;

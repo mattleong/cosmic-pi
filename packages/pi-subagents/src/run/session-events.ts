@@ -1,4 +1,7 @@
-import { decodeToolArguments, stringField, type ToolArguments } from "./claims-observation.ts";
+import { flow } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import type { SubagentSessionEvent } from "./model.ts";
 import { MAX_PROTOCOL_ID_CHARS } from "./limits.ts";
 import { sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
@@ -9,6 +12,18 @@ const MAX_TOOL_TARGET_CHARS = 500;
 const MAX_ASSISTANT_TEXT_CHARS = 16 * 1024;
 const MAX_NOTICE_CHARS = 4 * 1024;
 const MAX_TOOL_PREVIEW_CHARS = 1_200;
+
+const ToolArgumentsSchema = Schema.Record(Schema.String, Schema.Unknown);
+type ToolArguments = typeof ToolArgumentsSchema.Type;
+const decodeToolArguments = flow(
+  Schema.decodeUnknownOption(ToolArgumentsSchema),
+  Option.getOrUndefined,
+);
+
+const stringField = (value: ToolArguments | undefined, key: string): string | undefined => {
+  const field = value?.[key];
+  return Predicate.isString(field) && field.trim() ? field.trim() : undefined;
+};
 
 const eventBytes = new WeakMap<SubagentSessionEvent, number>();
 

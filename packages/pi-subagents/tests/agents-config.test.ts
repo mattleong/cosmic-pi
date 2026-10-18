@@ -1,0 +1,151 @@
+import { describe, expect, it } from "vitest";
+import { subagentConfigDecoder } from "../src/config/schema.ts";
+import { lookupCustomAgent } from "../src/profiles/agents.ts";
+import {
+  resolveTestConfig as resolve,
+  type ConfigDocumentValue,
+} from "./fixtures/profile-settings-inspection.ts";
+
+const agent = (fields: Readonly<Record<string, ConfigDocumentValue>> = {}) => ({
+  description: "Reviews auth changes.",
+  instructions: "Review only authentication code.",
+  ...fields,
+});
+
+const document = (agents: ConfigDocumentValue) => ({ version: 6, agents });
+
+const names = (config: ReturnType<typeof resolve>) => config.agents.map((entry) => entry.name);
+
+describe("custom agent configuration", () => {
+  it("decodes agents with their routed profile and overrides", () => {
+    const config = resolve(
+      document({
+        "auth-reviewer": agent({
+          profile: "reviewer",
+          effort: "xhigh",
+          context: "fresh",
+          writeIntent: "read-only",
+          isolation: "worktree",
+          tools: { allow: ["read", "grep"], deny: ["bash"] },
+        }),
+        helper: agent(),
+      }),
+    );
+    expect(config.diagnostics).toEqual([]);
+    expect(config.agents).toEqual([
+      {
+        name: "auth-reviewer",
+        source: "global",
+        description: "Reviews auth changes.",
+        instructions: "Review only authentication code.",
+        profile: "reviewer",
+        effort: "xhigh",
+        context: "fresh",
+        writeIntent: "read-only",
+        isolation: "worktree",
+        tools: { allow: ["read", "grep"], deny: ["bash"] },
+      },
+      expect.objectContaining({ name: "helper", profile: "generalist" }),
+    ]);
+  });
+
+  it("rejects names outside the grammar and names that collide with profile IDs", () => {
+    const decoded = subagentConfigDecoder("global")(
+      document({
+        Upper: agent(),
+        "1st": agent(),
+        "-dash": agent(),
+        [`a${"b".repeat(48)}`]: agent(),
+        worker: agent(),
+        fine: agent(),
+      }),
+    );
+    expect(decoded.diagnostics).toEqual([
+      "global.agents[0].name",
+      "global.agents[1].name",
+      "global.agents[2].name",
+      "global.agents[3].name",
+      "global.agents[4].name",
+    ]);
+    expect(Object.keys(decoded.file.agents ?? {})).toEqual(["fine"]);
+  });
+
+  it("fails entries with unknown keys or out-of-bounds fields closed by name", () => {
+    const invalid = [
+      agent({ model: "opus" }),
+      agent({ tools: { allow: ["read"], only: ["grep"] } }),
+      agent({ description: "" }),
+      agent({ description: "d".repeat(201) }),
+      agent({ instructions: "   " }),
+      agent({ instructions: "é".repeat(8_193) }),
+      agent({ profile: "designer" }),
+      agent({ effort: "default" }),
+      agent({ tools: { deny: ["bad,name"] } }),
+      { description: "Missing instructions." },
+    ];
+    const entries = Object.fromEntries(invalid.map((entry, index) => [`bad-${index}`, entry]));
+    const config = resolve(document({ ...entries, good: agent() }));
+    expect(config.diagnostics).toEqual(invalid.map((_, index) => `global.agents[${index}]`));
+    expect(names(config)).toEqual(["good"]);
+    for (const name of Object.keys(entries))
+      expect(lookupCustomAgent(config, name)).toEqual({ kind: "invalid", scope: "global" });
+    expect(lookupCustomAgent(config, "missing")).toEqual({ kind: "unknown" });
+  });
+
+  it("accepts instructions up to 16 KiB of UTF-8", () => {
+    const config = resolve(document({ big: agent({ instructions: "é".repeat(8_192) }) }));
+    expect(names(config)).toEqual(["big"]);
+  });
+
+  it("allows at most 32 agents per document", () => {
+    const many = (count: number) =>
+      Object.fromEntries(Array.from({ length: count }, (_, index) => [`agent-${index}`, agent()]));
+    expect(names(resolve(document(many(32))))).toHaveLength(32);
+    const tooMany = resolve(document(many(33)));
+    expect(tooMany.diagnostics).toEqual(["global.agents[32+]"]);
+    expect(tooMany.agents).toEqual([]);
+    expect(lookupCustomAgent(tooMany, "agent-0")).toEqual({ kind: "invalid", scope: "global" });
+  });
+
+  it("replaces a same-named global agent wholesale with the trusted project's entry", () => {
+    const global = document({
+      shared: agent({ profile: "reviewer", tools: { deny: ["bash"] } }),
+      "global-only": agent(),
+    });
+    const project = document({
+      shared: agent({ description: "Project reviewer.", instructions: "Project rules." }),
+      "project-only": agent(),
+    });
+    const config = resolve(global, project);
+    expect(names(config)).toEqual(["shared", "global-only", "project-only"]);
+    expect(config.agents[0]).toEqual({
+      name: "shared",
+      source: "project",
+      description: "Project reviewer.",
+      instructions: "Project rules.",
+      profile: "generalist",
+    });
+  });
+
+  it("ignores an untrusted project's agents", () => {
+    const config = resolve(document({ mine: agent() }), document({ theirs: agent() }), false);
+    expect(names(config)).toEqual(["mine"]);
+    expect(config.agents[0]?.source).toBe("global");
+  });
+
+  it("fails a name closed when the project's same-named entry is invalid", () => {
+    const config = resolve(
+      document({ shared: agent(), other: agent() }),
+      document({ shared: agent({ unknown: true }) }),
+    );
+    expect(names(config)).toEqual(["other"]);
+    expect(lookupCustomAgent(config, "shared")).toEqual({ kind: "invalid", scope: "project" });
+  });
+
+  it("hides every global agent behind an invalid project agents object", () => {
+    const config = resolve(document({ shared: agent() }), document(["not", "an", "object"]));
+    expect(config.diagnostics).toContain("project.agents");
+    expect(config.agents).toEqual([]);
+    expect(lookupCustomAgent(config, "shared")).toEqual({ kind: "invalid", scope: "project" });
+  });
+});

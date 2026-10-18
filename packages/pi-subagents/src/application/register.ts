@@ -26,6 +26,7 @@ import {
 import {
   promptSubagentActivityInput,
   registerSubagentActivity,
+  runSubagentActivityAction,
 } from "../boundary/host-activity.ts";
 import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
 import { registerActiveRunsPrompt } from "../boundary/host-active-runs-prompt.ts";
@@ -52,14 +53,14 @@ import {
 } from "../layer.ts";
 import type { SubagentProjection } from "../run/model.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { SubagentProfileService } from "../profiles/service.ts";
 import { SubagentService } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
-import { isPendingDeliveryError } from "../tools/outcome.ts";
 import { decodeSubagentProxyParent, decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerApplicationCommands } from "./commands.ts";
-import { registerSubagentMessageRenderers } from "./messages.ts";
+import { orphanSweepNotice, registerSubagentMessageRenderers } from "./messages.ts";
 import { createProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import {
   IncompatibleProfileReloadHandoffError,
@@ -100,9 +101,6 @@ interface PreparedActivation {
   readonly projection: SubagentProjection;
   readonly toolRuntime: SubagentToolRuntime;
 }
-
-const missingActivityInput = (action: string): Error =>
-  new Error(`The ${action} activity action needs text input.`);
 
 const deactivateSubagentTools = (
   pi: ExtensionAPI,
@@ -322,6 +320,8 @@ export function registerSubagentApplication(
           );
           const projection = yield* SubagentService.use((service) => service.projection);
           const scheduler = yield* CodePreviewSchedulerService;
+          // The start schema lists the agents this activation's configuration declares.
+          const profiles = yield* SubagentProfileService.use((service) => service.capture);
           return {
             scheduler,
             projection,
@@ -330,6 +330,7 @@ export function registerSubagentApplication(
                 cwd: activation.cwd,
                 projectTrusted: activation.projectTrusted,
               },
+              agents: profiles.effectiveConfig.agents,
               toolPresentation: bridge.bindToolPresentation(),
               run: slot.run,
             },
@@ -382,6 +383,19 @@ export function registerSubagentApplication(
         reactivateSubagentTools(pi, startupFailureTools);
         startupFailureTools = [];
         const isCurrent = () => slot.isCurrent(token) && currentActivation === activation;
+        // Once per session start, in the background; the notice reaches only the user.
+        if (activation.trigger === "start")
+          run(SubagentService.use((service) => service.sweepOrphanedWorkspaces))
+            .then((swept) => {
+              if (
+                swept.length > 0 &&
+                isCurrent() &&
+                invokeHostCallback(() => activation.ctx.hasUI, false)
+              )
+                notifyAtHostBoundary(activation.ctx, orphanSweepNotice(swept), "info");
+              return undefined;
+            })
+            .catch(() => undefined);
         if (activation.sessionKey && slot.isCurrent(token))
           releaseActivity = registerSubagentActivity({
             events: pi.events,
@@ -392,28 +406,16 @@ export function registerSubagentApplication(
               slot.run(promptSubagentActivityInput(activation.ctx, selected, action), signal),
             act: (id, action, signal, input, expected) =>
               slot.run(
-                SubagentService.use((service) => {
-                  if (action === "resume")
-                    return service.resume(id, input, expected).pipe(Effect.asVoid);
-                  if (action !== "message" && action !== "reply" && action !== "rename")
-                    return service[action](id, expected).pipe(Effect.asVoid);
-                  if (input === undefined) return Effect.die(missingActivityInput(action));
-                  if (action !== "message")
-                    return service[action](id, input, expected).pipe(Effect.asVoid);
-                  return service.send(id, input, expected).pipe(
-                    Effect.catchIf(isPendingDeliveryError, () =>
-                      Effect.sync(() => {
-                        if (isCurrent())
-                          notifyAtHostBoundary(
-                            activation.ctx,
-                            "Guidance delivery is still pending",
-                            "warning",
-                          );
-                      }),
-                    ),
-                    Effect.asVoid,
-                  );
-                }),
+                SubagentService.use((service) =>
+                  runSubagentActivityAction(service, id, action, input, expected, () => {
+                    if (isCurrent())
+                      notifyAtHostBoundary(
+                        activation.ctx,
+                        "Guidance delivery is still pending",
+                        "warning",
+                      );
+                  }),
+                ),
                 signal,
               ),
           });

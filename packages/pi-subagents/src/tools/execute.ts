@@ -1,3 +1,4 @@
+import type { CustomAgent } from "../profiles/agents.ts";
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -33,7 +34,7 @@ import {
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
-import { executeStartBatch } from "./execute-start.ts";
+import { executeStartBatch, resolveRecordedLaunch } from "./execute-start.ts";
 import { presentSubagentResult, type SubagentExecutionResult } from "./execute-result.ts";
 import { awaitContract, statusContract, startContract, lifecycleContract } from "./contract.ts";
 import { statusListContract } from "./discovery-contract.ts";
@@ -65,6 +66,8 @@ import {
 export interface SubagentToolRuntime {
   readonly scheduleAnimation?: CompactAnimationScheduler | undefined;
   readonly environment: SubagentSessionEnvironment;
+  /** The root's configured agents, which its start schema lists; nested children omit them. */
+  readonly agents?: ReadonlyArray<CustomAgent> | undefined;
   readonly proxyCall?:
     | ((
         input: SubagentToolInput,
@@ -128,20 +131,14 @@ const withQuestionRuns = (
 
 type AwaitedLifecycleResult = Effect.Success<ReturnType<typeof forEachOutcome>>;
 
-const required = (
+const requiredMessage = (
   action: SubagentToolAction,
-  field: "runId" | "message",
   value: string,
 ): Effect.Effect<string, InvalidSubagentRequestError> => {
   const trimmed = value.trim();
   return trimmed
     ? Effect.succeed(trimmed)
-    : Effect.fail(
-        invalidRequest(
-          field === "runId" ? "run_id_required" : "message_required",
-          `${action} requires ${field}.`,
-        ),
-      );
+    : Effect.fail(invalidRequest("message_required", `${action} requires message.`));
 };
 
 const requiredTargetIds = (
@@ -189,8 +186,19 @@ export const executeSubagentActionEffect = (
           ),
         )
       : executeModelsAction(input.args, pi, ctx, environment.parentContext);
+  // Only the root adopts orphans, so only its revisions resolve a recorded launch.
   if (input.tool === SUBAGENT_TOOL_NAME.workspace)
-    return executeWorkspaceAction(input.args, callerRunId);
+    return callerRunId
+      ? executeWorkspaceAction(input.args, callerRunId)
+      : Effect.context<SubagentProfileService | SubagentBackendRegistry>().pipe(
+          Effect.flatMap((services) =>
+            executeWorkspaceAction(input.args, callerRunId, (launch, task) =>
+              resolveRecordedLaunch(pi, ctx, environment, launch, task).pipe(
+                Effect.provideContext(services),
+              ),
+            ),
+          ),
+        );
 
   const action = subagentToolAction(input);
   const awaitState =
@@ -418,19 +426,24 @@ export const executeSubagentActionEffect = (
       }
       case SUBAGENT_TOOL_NAME.send: {
         const ids = yield* requiredTargetIds(action, input.args.runIds);
-        const message = yield* required(action, "message", input.args.message);
+        const message = yield* requiredMessage(action, input.args.message);
         yield* authorize(ids);
-        return present(
-          yield* forEachOutcome(ids, (id) => service.send(id, message, expected), true),
+        const answeredRunIds = new Set<string>();
+        const result = yield* forEachOutcome(
+          ids,
+          (id) =>
+            service.send(id, message, expected).pipe(
+              Effect.map(({ delivery, run }) => {
+                if (delivery === "answered") answeredRunIds.add(id);
+                return run;
+              }),
+            ),
+          true,
         );
-      }
-      case SUBAGENT_TOOL_NAME.reply: {
-        const id = yield* required(action, "runId", input.args.runId);
-        const message = yield* required(action, "message", input.args.message);
-        yield* authorize([id]);
-        return present(
-          yield* forEachOutcome([id], (runId) => service.reply(runId, message, expected)),
-        );
+        return present({
+          ...result,
+          answeredRunIds: ids.filter((id) => answeredRunIds.has(id)),
+        });
       }
       case SUBAGENT_TOOL_NAME.lifecycle:
         return yield* executeLifecycle(input.args);
