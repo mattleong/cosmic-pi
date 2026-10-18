@@ -51,11 +51,11 @@ export interface SupervisorToolClient {
   readonly closed: Deferred.Deferred<void>;
 }
 
-export type SupervisorToolCall =
+type SupervisorToolCall =
   | { readonly kind: (typeof MESSAGE_KINDS)[number]; readonly message: string }
   | { readonly kind: "report"; readonly deliveryId: SupervisorDeliveryId; readonly report: string };
 
-export interface SupervisorToolResult {
+interface SupervisorToolResult {
   readonly text: string;
   readonly isError: boolean;
 }
@@ -162,7 +162,7 @@ const uncertain = () =>
 
 const ok = (text: string, isError = false): SupervisorToolResult => ({ text, isError });
 
-export interface SupervisorToolCaller {
+interface SupervisorToolCaller {
   readonly nativeThreadId?: string | undefined;
 }
 

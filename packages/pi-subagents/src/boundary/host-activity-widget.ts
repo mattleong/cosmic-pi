@@ -36,7 +36,7 @@ export interface SubagentToolPresentation {
   readonly isLiveHierarchyAvailable: () => boolean;
 }
 
-export interface SubagentActivityPresentationController {
+interface SubagentActivityPresentationController {
   readonly get: () => SubagentActivityPresentationSnapshot;
   readonly subscribe: (listener: () => void) => () => void;
   readonly bindToolPresentation: () => SubagentToolPresentation;
@@ -218,12 +218,12 @@ class SubagentActivityWidgetComponent implements Component {
 
 const emptyActivityWidget = (): Component => ({ render: () => [], invalidate: () => undefined });
 
-export interface SubagentActivityWidgetHost {
+interface SubagentActivityWidgetHost {
   readonly setContext: (ctx: ExtensionContext | undefined) => void;
   readonly clear: () => void;
 }
 
-export interface SubagentActivityWidgetHostOptions {
+interface SubagentActivityWidgetHostOptions {
   readonly getProjection: () => SubagentProjection;
   readonly subscribeProjection: (listener: () => void) => () => void;
   readonly presentation: SubagentActivityPresentationController;

@@ -17,7 +17,7 @@ export const SUBAGENT_EFFORTS = [
 ] as const;
 export type SubagentEffort = (typeof SUBAGENT_EFFORTS)[number];
 
-export const SUBAGENT_RUNTIME_EFFORTS = {
+const SUBAGENT_RUNTIME_EFFORTS = {
   pi: SUBAGENT_EFFORTS,
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["minimal", "low", "medium", "high", "xhigh", "max"],

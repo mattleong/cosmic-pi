@@ -20,7 +20,7 @@ export interface LaunchPlan {
   readonly cwd: string;
 }
 
-export interface LaunchIdentity {
+interface LaunchIdentity {
   readonly id: string;
   readonly name: string;
 }

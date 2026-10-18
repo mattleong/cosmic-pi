@@ -24,10 +24,7 @@ import { ProfileDashboardComponent } from "./profile-dashboard-component.ts";
 import type { ProfileEditRestore, ProfileEditCommitReceipt } from "./profile-edit-visit.ts";
 import type { FleetManagerActions } from "./controller.ts";
 
-export type ProfileEditorPosition = Pick<
-  ProfileWorkspaceOptions,
-  "initialProfile" | "initialFocus"
->;
+type ProfileEditorPosition = Pick<ProfileWorkspaceOptions, "initialProfile" | "initialFocus">;
 
 export function openProfileDashboard(
   pi: ExtensionAPI,

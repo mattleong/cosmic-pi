@@ -22,7 +22,7 @@ export const NESTED_WORKSPACE_PARENT_START_GUIDELINE = `${NESTED_START_GUIDELINE
 export const CUSTOM_AGENT_START_GUIDELINE =
   "The user configured custom agents, listed under the agent parameter. When the user names one, or a slice matches an agent's description, set agent instead of profile; the agent supplies its own instructions and route.";
 
-export interface DelegationPrompt {
+interface DelegationPrompt {
   readonly startGuideline: string;
   readonly section?: string | undefined;
 }

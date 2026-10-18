@@ -28,10 +28,10 @@ export interface DirectoryIdentity {
   readonly directoryIno: number;
 }
 /** An absolute directory and the identity publication saw, rechecked before each change in it. */
-export interface AnchoredDirectory extends DirectoryIdentity {
+interface AnchoredDirectory extends DirectoryIdentity {
   readonly directory: string;
 }
-export interface WorkspaceDirectoryRequest extends AnchoredDirectory {
+interface WorkspaceDirectoryRequest extends AnchoredDirectory {
   readonly name: string;
 }
 export interface WorkspaceBackupRemovalRequest extends AnchoredDirectory {
@@ -41,17 +41,17 @@ export interface WorkspaceDirectoryRemovalRequest extends WorkspaceDirectoryRequ
   readonly targetDev: number;
   readonly targetIno: number;
 }
-export interface PublicationImage {
+interface PublicationImage {
   readonly bytes: Uint8Array;
   readonly mode: number;
 }
-export interface WorkspacePublicationRequest extends WorkspaceDirectoryRequest {
+interface WorkspacePublicationRequest extends WorkspaceDirectoryRequest {
   readonly backupName: string;
   readonly temporaryName: string;
   readonly before?: PublicationImage | undefined;
   readonly after?: PublicationImage | undefined;
 }
-export interface PublicationResult {
+interface PublicationResult {
   /**
    * `conflict`: something else changed the target or its directory; `uncertain`: the outcome is
    * unknown. Either may leave the journal's backup or temporary file for rollback.
@@ -65,7 +65,7 @@ export interface PublicationResult {
     | "io-failure";
 }
 /** Test seams that run between publication steps. */
-export interface PublicationHooks {
+interface PublicationHooks {
   readonly anchored?: Effect.Effect<void> | undefined;
   readonly captured?: Effect.Effect<void> | undefined;
 }
@@ -296,7 +296,7 @@ export const removeEmptyWorkspaceDirectory = (request: WorkspaceDirectoryRemoval
   }).pipe(Effect.orElseSucceed(() => false));
 
 /** A journal path's current state: absent, a regular file with its digest, or something else. */
-export type PublishedFileState =
+type PublishedFileState =
   | { readonly kind: "absent" }
   | { readonly kind: "other" }
   | {

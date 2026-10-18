@@ -25,7 +25,7 @@ import {
 } from "./profile-set-picker-model.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 
-export interface ProfileSetPickerRenderState {
+interface ProfileSetPickerRenderState {
   readonly entries: ReadonlyArray<ProfileSetPickerEntry>;
   readonly selectedIndex: number;
   readonly query: string;

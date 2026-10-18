@@ -3,7 +3,7 @@ import type { SubagentRunView } from "./model.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 
-export type RunWarningSource = "child" | "system";
+type RunWarningSource = "child" | "system";
 
 export interface RunWarningSlots {
   readonly child?: string | undefined;

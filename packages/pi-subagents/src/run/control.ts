@@ -35,7 +35,7 @@ import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } f
 import { recordRunWarning } from "./warnings.ts";
 import { requireControlExpectation } from "./control-admission.ts";
 
-export interface RunControlDependencies extends Pick<
+interface RunControlDependencies extends Pick<
   RunContext,
   "ownerScope" | "withLock" | "requireRecord" | "publish" | "sendPeerNotices"
 > {

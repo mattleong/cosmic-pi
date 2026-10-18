@@ -27,8 +27,8 @@ import {
   type ProfileRouteSource,
 } from "./model.ts";
 
-export type SessionProfileOverrides = Partial<Readonly<Record<ProfileId, ProfileRoute>>>;
-export const MAX_SESSION_PROFILE_REVISION = Number.MAX_SAFE_INTEGER;
+type SessionProfileOverrides = Partial<Readonly<Record<ProfileId, ProfileRoute>>>;
+const MAX_SESSION_PROFILE_REVISION = Number.MAX_SAFE_INTEGER;
 
 export interface SessionProfileBaseline {
   readonly origin: ResolvedProfileSetSelection;

@@ -2,8 +2,8 @@ import { flow } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-export const TOOL_PREVIEW_LINES = 7;
-export const TOOL_PREVIEW_CHARS = 1_000;
+const TOOL_PREVIEW_LINES = 7;
+const TOOL_PREVIEW_CHARS = 1_000;
 
 const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const isTextPart = Schema.is(TextPart);

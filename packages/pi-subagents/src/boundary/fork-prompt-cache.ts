@@ -18,7 +18,7 @@ type RequestMessage = ContextWithSystemEvent["messages"][number];
  * - `declared`: requests keep the parent's tool declarations and anchor the child's new tools
  *   in place (OpenAI Responses additional tools or tool search).
  */
-export type ForkPromptCacheRoute = "native" | "declared";
+type ForkPromptCacheRoute = "native" | "declared";
 
 /**
  * Codex is excluded: Pi derives its `session-id` header from the child's own session after

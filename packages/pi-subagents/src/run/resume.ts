@@ -107,7 +107,7 @@ interface ClaimedResume {
   readonly attemptToken: string;
 }
 
-export interface RunResumeDependencies extends Pick<
+interface RunResumeDependencies extends Pick<
   RunContext,
   | "ownerScope"
   | "records"

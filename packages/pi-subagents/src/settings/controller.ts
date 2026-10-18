@@ -44,7 +44,7 @@ import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 import { openProfileDashboard } from "./profile-dashboard.ts";
 import { subagentSettingsSubcommand } from "./subagent-settings.ts";
 
-export interface SessionProfileSetSnapshotWrite extends Omit<
+interface SessionProfileSetSnapshotWrite extends Omit<
   SubagentCreateProfileSetFromSnapshotPatch,
   "profiles"
 > {

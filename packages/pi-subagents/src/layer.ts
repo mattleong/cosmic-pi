@@ -110,6 +110,6 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
   );
 };
 
-export type SubagentApplicationLayer = ReturnType<typeof subagentApplicationLayer>;
+type SubagentApplicationLayer = ReturnType<typeof subagentApplicationLayer>;
 export type SubagentApplication = Layer.Success<SubagentApplicationLayer>;
 export type SubagentRuntimeError = Layer.Error<SubagentApplicationLayer>;

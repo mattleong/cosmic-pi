@@ -3,8 +3,8 @@ import { skippedCandidateLabel } from "../profiles/model.ts";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
-import { cleanupRecoveryText, proposalChangeSummary, proposalDiffStatLines } from "./format.ts";
-import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
+import { cleanupRecoveryText, proposalDiffStatLines, proposalGuidance } from "./format.ts";
+import { countLabel, failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
 
 type AddIssue = (
   severity: CompactIssue["severity"],
@@ -156,7 +156,7 @@ function attentionIssues(
         `${label} is paused`,
         attention.canResume
           ? `Paused. Review subagent_status, then subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue with reviewed guidance." }), then subagent_await again.`
-          : `Paused; this backend cannot resume. Stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }), confirm cleanup, then launch a corrected replacement and await its run ID.`,
+          : `Paused; this backend cannot resume. Stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }), then launch a corrected replacement and await its run ID.`,
       );
       return;
     case "question":
@@ -181,7 +181,6 @@ function cleanupIssues(card: SubagentRunCard, label: string, add: AddIssue): voi
   const attention = runCleanupAttention(card);
   if (attention === undefined) return;
   const messages = {
-    pending: "cleanup verification is pending",
     quarantined: "cleanup remains unconfirmed",
     "pool-quarantined": "writer admission is blocked by cleanup quarantine",
   };
@@ -195,7 +194,7 @@ function cleanupIssues(card: SubagentRunCard, label: string, add: AddIssue): voi
 
 function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
   const retryGuidance =
-    "Inspect expanded details and full subagent_status for cleanup and retry disposition. Do not retry when execution is uncertain or cleanup is unconfirmed; missing projected retry data does not establish eligibility.";
+    "Inspect full subagent_status for retry disposition; don't retry when execution is uncertain.";
   if (card.error) {
     const { line, detail } = quoteText(card.error, { limit: QUOTED_TEXT_LIMIT, failure: true });
     add(
@@ -210,22 +209,6 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
       "run-failed",
       `${label} failed`,
       `Run failed; inspect full status.\n${retryGuidance}`,
-    );
-  if (card.state === "stopping" && card.cleanup === undefined)
-    add(
-      "warning",
-      "cleanup-pending",
-      `${label} is stopping; cleanup isn't confirmed yet`,
-      "Stopping; cleanup is not yet confirmed. Inspect status before replacement or recovery.",
-    );
-  if (card.state === "stopped")
-    add(
-      "info",
-      "stopped-cleanup",
-      `${label} stopped`,
-      card.cleanup?.disposition === "confirmed"
-        ? "This run’s process cleanup and writer ownership release are confirmed; a shared pool may still hold other members."
-        : "Task state is stopped; inspect full status for cleanup verification before replacement or recovery.",
     );
   const systemSourced = card.warningSource === "system";
   const fallback = systemSourced ? "reported a system warning" : "reported a warning";
@@ -243,22 +226,23 @@ function workspaceOutcomeIssue(card: SubagentRunCard, label: string, add: AddIss
     add(
       "info",
       "workspace-outcome",
-      `${label}: workspace discarded automatically, no changes`,
-      "The writer changed no files, so its workspace was discarded after cleanup. Nothing needs review.",
+      `${label}: no changes; workspace discarded`,
+      "The writer changed no files, so its workspace was discarded. Nothing needs review.",
     );
     return;
   }
   if (outcome === undefined && !hasChangesToReview(card)) return;
-  const workspace = card.workspaceId ? ` workspaceId=${card.workspaceId}` : "";
   add(
     "info",
-    outcome ? "workspace-outcome" : "workspace-approval",
+    "workspace-outcome",
     outcome
-      ? `${label}: ${proposalChangeSummary(outcome)}${outcome.uncapturedFileCount ? ` (+${outcome.uncapturedFileCount} uncaptured)` : ""} proposed; apply or review`
-      : `${label}: changes are ready for review`,
+      ? `${label}: ready to apply (${countLabel(outcome.changedFileCount, "file")})`
+      : `${label}: ready to apply`,
     [
       ...(outcome ? proposalDiffStatLines(outcome) : []),
-      `Apply small or trusted changes with subagent_workspace action=apply${workspace}; for risky ones, review every page, prepare, test, then apply the exact revisionId and preparationId. A report does not approve workspace integration.`,
+      card.workspaceId
+        ? proposalGuidance(card.workspaceId, outcome)
+        : "Apply it with subagent_workspace apply and its workspaceId from subagent_status.",
       ...(outcome?.uncapturedFileCount
         ? [
             "Uncaptured files, such as .env or vendored code, are not part of the proposal and stay in the worker tree.",

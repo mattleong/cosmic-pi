@@ -11,17 +11,20 @@ export interface AttentionRun {
   readonly capabilities: SubagentRunView["capabilities"];
 }
 
-/** Cleanup is independent of the run state; both may need attention. */
+/**
+ * Cleanup is independent of the run state; both may need attention. Pending cleanup settles on
+ * its own, so only quarantine needs the parent.
+ */
 export const runCleanupAttention = (
   run: Pick<AttentionRun, "cleanup" | "writerCleanupQuarantined">,
-): "pending" | "quarantined" | "pool-quarantined" | undefined =>
-  run.cleanup?.disposition === "pending" || run.cleanup?.disposition === "quarantined"
-    ? run.cleanup.disposition
+): "quarantined" | "pool-quarantined" | undefined =>
+  run.cleanup?.disposition === "quarantined"
+    ? "quarantined"
     : run.writerCleanupQuarantined === true
       ? "pool-quarantined"
       : undefined;
 
-export type RunAttention =
+type RunAttention =
   | { readonly kind: "paused"; readonly canResume: boolean }
   | { readonly kind: "question"; readonly message: string }
   | { readonly kind: "question-unavailable" };

@@ -180,7 +180,7 @@ const clippedStrings = (value: Schema.Json): Schema.Json => {
     : value;
 };
 
-export const invalidArgumentsError = (
+const invalidArgumentsError = (
   toolName: string,
   issues: ReadonlyArray<string>,
   args?: JsonObject,

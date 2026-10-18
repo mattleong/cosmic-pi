@@ -111,12 +111,6 @@ function validPagination(details: WorkspaceToolDetails): boolean {
   );
 }
 
-function isEmptyList(details: WorkspaceToolDetails): boolean {
-  return (
-    details.workspaceCount === 0 && details.listedCount === 0 && details.nextOffset === undefined
-  );
-}
-
 type WorkspaceOperationReceipt = WorkspaceToolDetails &
   (
     | { readonly operation: "list" }
@@ -207,15 +201,7 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
         adoptable === 1
           ? "A workspace from an ended session can be adopted"
           : `${adoptable} workspaces from ended sessions can be adopted`,
-        "Entries marked orphan=adoptable belong to sessions that have ended. Review, prepare, apply, or revise takes one over for this session; discard deletes it. Do either only when the user asks.",
-      ),
-    );
-  if (!isEmptyList(details))
-    issues.push(
-      step(
-        "orphan-recovery",
-        "Listing a workspace does not authorize its recovery",
-        "Metadata visibility does not authorize recovery. Adopt or discard another session's workspace only when the user asks; orphan=discard-only entries (nested or left mid-integration) can only be discarded. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the worker tree and recovery record before manual repair.",
+        "Entries marked orphan=adoptable belong to sessions that have ended. Review, prepare, apply, or revise takes one over for this session; discard deletes it.",
       ),
     );
   if (details.nextOffset !== undefined)
@@ -230,32 +216,15 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
 }
 
 function reviewIssues(details: WorkspaceReviewReceipt): CompactIssue[] {
-  const next =
-    details.nextOffset === undefined
-      ? " End of review does not prove earlier pages were read."
-      : ` Next: review workspaceId=${details.workspaceId}, revisionId=${details.revisionId}, offset=${details.nextOffset}.`;
-  return [
-    step(
-      "read-revision",
-      "Read every review page before preparing",
-      `Review page available in expanded details; the first page summarizes changed files and line counts. Read ALL pages of exact revisionId=${details.revisionId} before prepare.${next}`,
-    ),
-    step(
-      "prepare-revision",
-      "Prepare this exact revision after review",
-      "After complete review, prepare this exact revision.",
-    ),
-    step(
-      "test-preparation",
-      "Test the prepared tree without editing it",
-      "Run relevant tests in the returned combined cwd; do not edit the prepared tree.",
-    ),
-    step(
-      "apply-preparation",
-      "Apply only after tests pass",
-      "Only after passing tests, apply the exact revisionId and preparationId.",
-    ),
-  ];
+  return details.nextOffset === undefined
+    ? []
+    : [
+        step(
+          "read-revision",
+          "More review pages to read",
+          `Next: review workspaceId=${details.workspaceId} offset=${details.nextOffset}.`,
+        ),
+      ];
 }
 
 function testingStep(details: WorkspaceApplyReceipt): CompactIssue {
@@ -264,7 +233,7 @@ function testingStep(details: WorkspaceApplyReceipt): CompactIssue {
       return step(
         "applied-parent-tested",
         "Applied the preparation you tested",
-        "Apply integrated the exact revisionId and preparationId you prepared; the tests you ran in the prepared cwd are the evidence.",
+        "Apply integrated the preparation you prepared; the tests you ran in its cwd are the evidence.",
       );
     case "untested":
       return step(
@@ -307,12 +276,11 @@ function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
 function reviseIssues(details: WorkspaceToolDetails): CompactIssue[] {
   const conflicts = details.conflictCount ?? 0;
   return [
-    {
-      severity: "warning",
-      code: "revision-invalidated",
-      message: "Earlier review and test preparation no longer apply",
-      detail: `Prior review and preparation are invalid. Await successor ${details.successorRunId ?? "shown in expanded details"}, then review its new immutable revision from the beginning before preparing and testing again.`,
-    },
+    step(
+      "await-successor",
+      "Await the revising writer",
+      `Await successor ${details.successorRunId ?? "shown in expanded details"}, then apply or review its new revision; earlier review and preparation no longer apply.`,
+    ),
     ...(details.rebased && conflicts > 0
       ? [
           {
@@ -340,13 +308,8 @@ function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
       return [
         step(
           "test-preparation",
-          "Test the prepared tree without editing it",
-          `Combined test cwd: ${details.preparedCwd ?? "see expanded details"}. Run relevant tests there; do not edit this prepared tree.`,
-        ),
-        step(
-          "apply-preparation",
-          "Apply only after tests pass",
-          "After passing tests and complete review, apply this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
+          "Test the prepared tree, then apply",
+          `Combined test cwd: ${details.preparedCwd ?? "see expanded details"}. Run relevant tests there without editing it, then apply workspaceId=${details.workspaceId}.`,
         ),
         ...asWarnings(details),
       ];

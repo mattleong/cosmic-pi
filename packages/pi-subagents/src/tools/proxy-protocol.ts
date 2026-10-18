@@ -107,7 +107,7 @@ export const decodeQuestionnaireProxyRequest = (
   return value ?? invalid("Nested questionnaire arguments failed strict validation.");
 };
 
-export type SubagentProxyPayload =
+type SubagentProxyPayload =
   | BackendProxyResult
   | { readonly code: string; readonly message: string };
 

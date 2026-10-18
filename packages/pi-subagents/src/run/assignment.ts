@@ -8,13 +8,13 @@ import type { RunSettlement } from "./settlement.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 
-export interface RunAssignmentDependencies extends Pick<RunContext, "withLock" | "publish"> {
+interface RunAssignmentDependencies extends Pick<RunContext, "withLock" | "publish"> {
   readonly startPrompt: RunProcessControls["startPrompt"];
   readonly activateAssignmentLocked: RunSettlement["activateAssignmentLocked"];
   readonly replayAssignmentActivation: RunSettlement["replayAssignmentActivation"];
 }
 
-export const isCurrentIssuingAssignment = (record: RunRecord, attemptToken: string): boolean =>
+const isCurrentIssuingAssignment = (record: RunRecord, attemptToken: string): boolean =>
   record.assignment.attemptToken === attemptToken &&
   record.assignment.phase === "issuing" &&
   !isInactiveRunRecord(record);

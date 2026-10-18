@@ -26,7 +26,7 @@ import {
 } from "./model.ts";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
 
-export interface ParentProfileModel {
+interface ParentProfileModel {
   readonly model: string;
   readonly effort: SubagentEffort;
 }
@@ -65,7 +65,7 @@ export interface ProfileResolutionPlan {
   readonly trailingSkippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
 
-export interface ProfileResolutionFailure {
+interface ProfileResolutionFailure {
   readonly kind: "failed";
   readonly code:
     | "profile_unknown"

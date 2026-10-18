@@ -69,12 +69,12 @@ const attachListeners = <Outbound, Inbound>(
   };
 };
 
-export interface LocalPiParentIpcHandlers {
+interface LocalPiParentIpcHandlers {
   readonly onContact: (contact: LocalPiContact) => void;
   readonly onProtocolError: (message: string) => void;
 }
 
-export interface LocalPiParentIpcChannel {
+interface LocalPiParentIpcChannel {
   readonly sendControl: (
     control: LocalPiParentControl,
   ) => Effect.Effect<void, SubagentProcessError>;
@@ -126,7 +126,7 @@ export interface LocalPiChildIpcChannel {
   readonly listen: (handlers: LocalPiChildIpcHandlers) => () => void;
 }
 
-export const makeLocalPiChildIpcChannel = (
+const makeLocalPiChildIpcChannel = (
   port: LocalPiIpcPort<LocalPiContact>,
 ): LocalPiChildIpcChannel => ({
   sendContact: (contact) =>

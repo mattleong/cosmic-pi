@@ -16,14 +16,14 @@ import {
 import { isPendingDeliveryError } from "../tools/outcome.ts";
 import type { FleetMessageDelivery } from "../ui/fleet.ts";
 
-export interface CommandActivation {
+interface CommandActivation {
   readonly ctx: ExtensionContext;
   readonly cwd: string;
   readonly agentDirectory: string;
   readonly sessionKey?: string | undefined;
 }
 
-export interface ApplicationCommandHost {
+interface ApplicationCommandHost {
   readonly bridge: SubagentProjectionBridge;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SubagentApplication>,

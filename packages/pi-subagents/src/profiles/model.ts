@@ -41,7 +41,7 @@ export const PROFILE_CANDIDATE_RUNTIMES = ["pi", "claude", "codex"] as const;
 export const PROFILE_CANDIDATE_CONTEXTS = ["fresh", "fork"] as const;
 export const PROFILE_CANDIDATE_WRITE_INTENTS = ["read-only", "writer"] as const;
 export const PROFILE_CANDIDATE_EFFORTS = ["default", ...SUBAGENT_EFFORTS] as const;
-export type ProfileCandidateEffort = (typeof PROFILE_CANDIDATE_EFFORTS)[number];
+type ProfileCandidateEffort = (typeof PROFILE_CANDIDATE_EFFORTS)[number];
 
 const SAFE_NATIVE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*(?:\[[1-9][0-9]*[kKmM]\])?$/;
 
@@ -130,7 +130,7 @@ export const supportsSubagentFastMode = (runtime: SubagentRuntime, model: string
   return selected ? supportsFastModel(selected.provider, selected.model) : false;
 };
 
-export const PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES = [
+const PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES = [
   "model_selector_invalid",
   "parent_requires_local_pi",
   "fork_requires_local_pi",
@@ -139,7 +139,7 @@ export const PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES = [
 ] as const;
 export type ProfileCandidateValidationIssueCode =
   (typeof PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES)[number];
-export interface ProfileCandidateValidationIssue {
+interface ProfileCandidateValidationIssue {
   readonly code: ProfileCandidateValidationIssueCode;
 }
 
@@ -225,7 +225,7 @@ export interface ProfileDefinition {
 }
 
 /** The route fields that identify a skipped candidate; effort may already be resolved. */
-export type SkippedCandidateRoute = Pick<ProfileCandidate, "runtime" | "model" | "effort">;
+type SkippedCandidateRoute = Pick<ProfileCandidate, "runtime" | "model" | "effort">;
 
 export const skippedCandidateRoute = ({
   runtime,

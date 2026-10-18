@@ -81,7 +81,7 @@ export interface LocalCliHarnessRequest {
   readonly supervisor: SupervisorConnectionMetadata;
 }
 
-export interface LocalCliHarness {
+interface LocalCliHarness {
   readonly directory: string;
   readonly executable: string;
   readonly args: ReadonlyArray<string>;
@@ -98,7 +98,7 @@ interface OwnedHarnessDirectories {
   readonly temporaryDirectory?: string | undefined;
 }
 
-export class LocalCliHarnessError extends Schema.TaggedError<LocalCliHarnessError>()(
+class LocalCliHarnessError extends Schema.TaggedError<LocalCliHarnessError>()(
   "LocalCliHarnessError",
   {
     reason: Schema.Literals(["prepare_failed", "cleanup_unconfirmed"]),
@@ -448,7 +448,7 @@ export const prepareLocalCliHarness = (
         : removeLocalCliHarness({ directory }),
   );
 
-export interface CodexCatalogHarness {
+interface CodexCatalogHarness {
   readonly env: NodeJS.ProcessEnv;
   readonly release: Effect.Effect<void, LocalCliHarnessError>;
 }

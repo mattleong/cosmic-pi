@@ -33,11 +33,11 @@ export type ResolvedProfileSetSelection =
       readonly invalid?: boolean | undefined;
     };
 
-export interface ConfiguredWorktreeHook extends WorktreeHook {
+interface ConfiguredWorktreeHook extends WorktreeHook {
   readonly scope: "global" | "project";
 }
 /** Each event's hooks in run order: global ones first, then a trusted project's. */
-export type ResolvedWorktreeHooks = Readonly<
+type ResolvedWorktreeHooks = Readonly<
   Record<WorktreeHookEvent, ReadonlyArray<ConfiguredWorktreeHook>>
 >;
 
@@ -60,7 +60,7 @@ export interface ResolvedSubagentConfig {
   readonly diagnostics: ReadonlyArray<string>;
 }
 
-export interface ResolveSubagentConfigInput {
+interface ResolveSubagentConfigInput {
   readonly globalConfigPath: string;
   readonly projectConfigPath: string;
   readonly projectTrusted: boolean;
@@ -68,8 +68,8 @@ export interface ResolveSubagentConfigInput {
   readonly project?: DecodedSubagentConfig | undefined;
 }
 
-export type NamedProfileSetScope = "global" | "project";
-export type ResolvedNamedProfileSetStatus =
+type NamedProfileSetScope = "global" | "project";
+type ResolvedNamedProfileSetStatus =
   | "resolved"
   | "invalid-routes"
   | "missing"
@@ -77,7 +77,7 @@ export type ResolvedNamedProfileSetStatus =
 
 type ResolvedProfileLayer = Pick<ResolvedSubagentConfig, "profiles" | "profileSources">;
 
-export interface ResolvedNamedProfileSet extends ResolvedProfileLayer {
+interface ResolvedNamedProfileSet extends ResolvedProfileLayer {
   readonly origin: {
     readonly scope: NamedProfileSetScope;
     readonly name: string;
@@ -86,7 +86,7 @@ export interface ResolvedNamedProfileSet extends ResolvedProfileLayer {
   readonly invalidProfiles: ReadonlyArray<ProfileId>;
 }
 
-export interface ResolveNamedProfileSetInput {
+interface ResolveNamedProfileSetInput {
   readonly scope: NamedProfileSetScope;
   readonly name: string;
   readonly global: DecodedSubagentConfig;

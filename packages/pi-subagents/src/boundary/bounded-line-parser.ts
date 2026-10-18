@@ -1,4 +1,4 @@
-export interface BoundedLineInput {
+interface BoundedLineInput {
   on(event: "data", listener: (value: Buffer | string) => void): void;
   once(event: "end" | "close", listener: () => void): void;
   off(
@@ -14,7 +14,7 @@ export interface OversizedLine {
   readonly bytes: number;
 }
 
-export interface BoundedLineParserOptions {
+interface BoundedLineParserOptions {
   readonly maxLineBytes: number;
   readonly maxQueuedBytes: number;
   readonly onLine: (line: string) => void;

@@ -112,14 +112,14 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.models]: {
     label: "Inspect Profile Routes",
     description:
-      "Show each profile's configured route: its model candidates in fallback order, with runtime, effort, context, write intent, and fast mode, plus the user's custom agents and the candidates their overrides leave eligible. The user configures routes; you can't pick a model. Authentication is checked only at launch.",
+      "Show each profile's configured route: its model candidates in fallback order, with runtime, effort, context, write intent, and fast mode, plus the user's custom agents and the candidates their overrides leave eligible. Launches use these routes by default; a start item's model overrides one launch, only when the user asks for a specific model. Authentication is checked only at launch.",
     renderCall: (args, theme) =>
       renderSubagentCall("Inspect profile routes", args.profile ?? "all profiles", theme),
   },
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Start 1–32 background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: set isolation per agent, or omit it for the session default; only the main session and worktree writers can start worktree writers. Several shared-checkout writers may run in one cwd; give them disjoint task scopes because nothing enforces file ownership. Subagents started from a codemode script, and their descendants, stay read-only. A start that fails after launch reports whether cleanup finished and whether retry is available.",
+      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: set isolation per writer, or omit it for the session default; only the main session and worktree writers can start worktree writers. Several shared-checkout writers may run in one cwd; give them disjoint task scopes because nothing enforces file ownership. Subagents started from a codemode script, and their descendants, stay read-only. A failed start says whether retry is available.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     promptGuidelines: START_GUIDELINES,
     renderCall: (args, theme, context) =>
@@ -135,7 +135,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.status]: {
     label: "Subagent Status",
     description:
-      "Inspect up to 12 subagent runs, including their claims and which controls each one supports; set includeDeliveredReports to reread a report you already received. Omit runIds to list your visible runs as a parent-before-child tree, without reports.",
+      "Inspect up to 12 subagent runs: state, warnings, failure, workspace proposal, and final report. Set verbose for route, capability, process, and timing details, or includeDeliveredReports to reread a report you already received. Omit runIds to list your visible runs as a parent-before-child tree, without reports.",
     renderCall: (args, theme) =>
       renderSubagentCall(
         args.runIds === undefined ? "List subagents" : `Inspect ${targetsLabel(args)}`,
@@ -152,9 +152,15 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "After starting subagents, keep working on parts you didn't delegate; don't redo a subagent's slice while it runs. Call subagent_await only when your next step depends on a report; reports arrive on their own, so don't poll subagent_status.",
       "When a subagent tool result lists next steps, follow them in order before continuing. Answer a real parent question with subagent_send.",
     ],
-    renderCall: (args, theme) =>
+    renderCall: (args, theme, context) =>
       renderSubagentCall(
-        args.until === "all_finished" ? "Waiting for subagents" : "Waiting for first subagent",
+        context.isPartial
+          ? args.until === "all_finished"
+            ? "Waiting for subagents"
+            : "Waiting for first subagent"
+          : args.until === "all_finished"
+            ? "Waited for subagents"
+            : "Waited for first subagent",
         "",
         theme,
       ),
@@ -173,7 +179,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Interrupt, resume, or stop subagents, or retry a failed run on its profile's next configured candidate. Resume continues a paused, completed, failed, or stopped run's own session when its backend kept one; a worktree writer resumes in its workspace and reopens its review. Retry starts a new linked run, never reuses the failed candidate, and refuses when execution or cleanup is uncertain. Each target's result is reported separately.",
     promptSnippet: "Interrupt, resume, stop, or retry subagents",
     promptGuidelines: [
-      "If a profiled run fails with route candidates left, retry it with action=retry before starting a generalist replacement, and don't replace a profile the user disabled. Never retry when execution or cleanup is uncertain; retry a writer only when a fresh run is still what the user wants.",
+      "If a profiled run fails with route candidates left, retry it with action=retry before starting a generalist replacement, and don't replace a profile the user disabled. Never retry when execution is uncertain.",
       "Resume a failed run only when its session is worth continuing, such as after a transient error; a deterministic failure repeats, so retry or start a new run instead.",
     ],
     renderCall: (args, theme) => {
@@ -186,11 +192,11 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.workspace]: {
     label: "Manage Writer Workspace",
     description:
-      "Apply worktree writers' proposals as their direct parent. apply with just workspaceId freezes, prepares, and integrates in one call, without requiring the diff to be read or anything to be tested; its result says whether the diff was reviewed. The careful path: review freezes a finished writer's changes and returns pages that start with a summary of changed files and line counts, then the diff; read every page of one revisionId. prepare builds a separate cwd that combines that revision with your current edits, for testing. apply with that revisionId and preparationId integrates exactly that pair as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. apply with paths integrates only those changed files and keeps the rest as the proposal. revise asks the writer for another pass, and rebase first rebuilds its tree from your current files; discard deletes a rejected proposal. list marks workspaces left by an ended session: review, prepare, apply, or revise takes over an adoptable one, and discard deletes any of them.",
+      "Apply worktree writers' proposals as their direct parent. apply integrates the current proposal as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts; paths limits it to those files and keeps the rest as the proposal. To check first, review pages a summary and the diff, prepare builds a cwd combining it with your current edits for testing, and apply then integrates that preparation. revise asks the writer for another pass, rebase first rebuilding its tree from your current files; discard deletes a proposal. list marks workspaces left by ended sessions; any other action takes over an adoptable one.",
     promptSnippet: "Apply, or review, test, and apply, worktree writers' proposals",
     promptGuidelines: [
-      "A worktree writer's report is a proposal, not approval, and nothing applies it automatically. For small or trusted changes, call apply with the workspaceId; for risky changes, review every page, prepare that revision, run the relevant tests in the prepared cwd without editing it, then apply that exact revisionId and preparationId. Either path needs no user confirmation. Don't stage or commit parent changes.",
-      "If review or tests fail, revise with concrete feedback, await the successor, and review or apply its new revision. A stale preparation needs a fresh prepare and test run; when your files moved on under the proposal, revise with rebase. Discard only proposals you mean to delete.",
+      "Nothing applies a worktree writer's proposal automatically, and neither path needs user confirmation: apply small or trusted changes directly; for risky ones, review every page, prepare, run the relevant tests in the prepared cwd without editing it, then apply. Don't stage or commit parent changes.",
+      "If review or tests fail, revise with concrete feedback and await the successor. If your files moved on under the proposal, revise with rebase.",
     ],
     renderCall: (args, theme) => renderSubagentCall("Writer workspace", args.action ?? "", theme),
   },

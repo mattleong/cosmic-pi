@@ -106,7 +106,7 @@ export interface SubagentServiceOptions {
 
 export type SubagentAwaitUntil = "all_finished" | "any_finished";
 
-export interface SubagentCompletionReceipt {
+interface SubagentCompletionReceipt {
   readonly id: string;
   readonly generation: number;
   readonly claimToken: string;
@@ -119,7 +119,7 @@ export interface SubagentRunObservation {
   readonly recovery?: FailedStartRecovery | undefined;
 }
 
-export interface SubagentStatusObservations {
+interface SubagentStatusObservations {
   readonly observations: ReadonlyArray<SubagentRunObservation>;
   readonly missingIds: ReadonlyArray<string>;
 }

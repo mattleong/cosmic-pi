@@ -16,7 +16,7 @@ import {
 import { gitPath } from "./git-repository.ts";
 import { newWorkspaceId } from "./git-worktree-store.ts";
 
-export interface TreeCapture {
+interface TreeCapture {
   /** The Git tree the captured files make. */
   readonly tree: string;
   /** Untracked files left out by name, such as credential files. */
@@ -173,11 +173,11 @@ export const treeHolds = (repository: string, tree: string, name: string) =>
     Effect.map((output) => output !== ""),
   );
 
-export interface TreeEntry {
+interface TreeEntry {
   readonly mode: string;
   readonly oid: string;
 }
-export type TreeEntries = ReadonlyMap<string, TreeEntry>;
+type TreeEntries = ReadonlyMap<string, TreeEntry>;
 
 /** Every entry a stored tree or commit holds, by path. */
 export const treeEntries = (repository: string, tree: string) =>
@@ -194,7 +194,7 @@ export const treeEntries = (repository: string, tree: string) =>
     ),
   );
 
-export interface ChangedEntry {
+interface ChangedEntry {
   readonly path: string;
   /** `000000` where the path is absent on that side. */
   readonly from: string;

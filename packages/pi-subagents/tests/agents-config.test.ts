@@ -24,7 +24,7 @@ describe("custom agent configuration", () => {
           profile: "reviewer",
           effort: "xhigh",
           context: "fresh",
-          writeIntent: "read-only",
+          writeIntent: "writer",
           isolation: "worktree",
           tools: { allow: ["read", "grep"], deny: ["bash"] },
         }),
@@ -41,7 +41,7 @@ describe("custom agent configuration", () => {
         profile: "reviewer",
         effort: "xhigh",
         context: "fresh",
-        writeIntent: "read-only",
+        writeIntent: "writer",
         isolation: "worktree",
         tools: { allow: ["read", "grep"], deny: ["bash"] },
       },
@@ -68,6 +68,17 @@ describe("custom agent configuration", () => {
       "global.agents[4].name",
     ]);
     expect(Object.keys(decoded.file.agents ?? {})).toEqual(["fine"]);
+  });
+
+  it("fails a read-only agent that sets isolation closed by name", () => {
+    const config = resolve(
+      document({
+        reader: agent({ writeIntent: "read-only", isolation: "worktree" }),
+        good: agent({ isolation: "worktree" }),
+      }),
+    );
+    expect(config.diagnostics).toEqual(["global.agents[0].isolation"]);
+    expect(names(config)).toEqual(["good"]);
   });
 
   it("fails entries with unknown keys or out-of-bounds fields closed by name", () => {

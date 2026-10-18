@@ -70,7 +70,7 @@ const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
 export const getFailedStartRecovery = (error: SubagentError): FailedStartRecovery | undefined =>
   failedStartRecoveries.get(error);
 
-export interface RunLaunchDependencies extends Pick<
+interface RunLaunchDependencies extends Pick<
   RunContext,
   "writerLeases" | "withLock" | "publish" | "allocateAssignmentAttemptToken" | "sendPeerNotices"
 > {

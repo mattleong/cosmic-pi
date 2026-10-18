@@ -43,7 +43,7 @@ export interface ProfileWorkspaceConfirmation {
   readonly title: string;
   readonly detail: string;
 }
-export interface ProfileWorkspaceRenderState {
+interface ProfileWorkspaceRenderState {
   readonly inspection: ProfileSettingsInspection;
   readonly target: ProfileWorkspaceTarget;
   readonly parentEffort: SubagentEffort;
@@ -65,7 +65,7 @@ export interface ProfileWorkspaceRenderState {
     | undefined;
   readonly pendingConfirmation?: ProfileWorkspaceConfirmation | undefined;
 }
-export interface ProfileWorkspaceRenderOptions {
+interface ProfileWorkspaceRenderOptions {
   readonly theme: Theme;
   readonly width: number;
   readonly height: number;
@@ -91,7 +91,7 @@ const destination = (target: ProfileWorkspaceTarget): string =>
     ? "Changes affect later launches. Active runs are unchanged."
     : `Saving to ${qualifiedProfileSetLabel(target.set)} · session not affected`;
 
-export const workspaceCandidateSummary = (
+const workspaceCandidateSummary = (
   candidate: ProfileCandidate,
   profile: ProfileId,
   parentEffort: SubagentEffort,

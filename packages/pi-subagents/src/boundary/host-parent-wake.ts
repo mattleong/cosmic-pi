@@ -21,7 +21,7 @@ import {
 } from "./host-notifier.ts";
 import { hasUnansweredNotice } from "./notice-wake.ts";
 
-export const QUESTION_REMINDER_MESSAGE_TYPE = "pi-subagents-question-reminder";
+const QUESTION_REMINDER_MESSAGE_TYPE = "pi-subagents-question-reminder";
 export const WAKE_MESSAGE_TYPE = "pi-subagents-wake";
 
 const ROOT_NOTICE_TYPES: ReadonlySet<string> = new Set([
@@ -35,7 +35,7 @@ const IDLE_CHECK_LIMIT = 40;
 const WAKE_TEXT =
   "Subagent updates arrived while you were busy and are shown above. Act on them now: answer any question with subagent_send, review reports, and continue the task.";
 
-export interface ParentWakeHost {
+interface ParentWakeHost {
   readonly projection: () => SubagentProjection;
   /** Waits for headless work to drain; undefined when subagents are inactive. */
   readonly drain: () => Promise<void> | undefined;
@@ -45,7 +45,7 @@ export interface ParentWakeHost {
   readonly later: (check: () => void) => void;
 }
 
-export interface ParentWake extends NoticeDelivery {
+interface ParentWake extends NoticeDelivery {
   /** Holds wakes for the rest of this session, as it shuts down. */
   readonly hold: () => void;
 }

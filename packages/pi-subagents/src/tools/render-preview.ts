@@ -8,7 +8,7 @@ import {
   type ToolHeader,
 } from "pi-cosmic-ui/tool";
 
-export interface PreviewRenderContext {
+interface PreviewRenderContext {
   readonly expanded: boolean;
   readonly executionStarted: boolean;
   readonly isPartial: boolean;

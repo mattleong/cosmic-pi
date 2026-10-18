@@ -161,7 +161,7 @@ function awaitIssues(
         : "Waiting was cancelled; subagents were not stopped",
       detail: unconfirmed
         ? "Local await cancelled; child runs were NOT stopped. Root completion-claim cleanup is unconfirmed; claims may remain and an immediate replacement await may fail with completion_claim_conflict."
-        : "Await cancelled; child runs were NOT stopped. Wait cleanup is complete; await the requested targets again when needed.",
+        : "Await cancelled; child runs were NOT stopped. Await the requested targets again when needed.",
     });
   }
   if (
@@ -279,9 +279,7 @@ function labelChangesToReview(summary: CompactSummary, cards: readonly SubagentR
   const reviewable = cards.filter(hasChangesToReview).length;
   if (reviewable === 0) return;
   const label =
-    reviewable === 1 && cards.length === 1
-      ? "changes ready for review"
-      : `${reviewable} with changes to review`;
+    reviewable === 1 && cards.length === 1 ? "ready to apply" : `${reviewable} ready to apply`;
   const [counter, ...fallbacks] = summary.counters ?? [];
   if (counter === undefined) summary.metadata = [...(summary.metadata ?? []), label];
   else summary.counters = [`${counter} · ${label}`, counter, ...fallbacks];
@@ -291,14 +289,7 @@ function cardOutcome(
   action: string,
   cards: readonly SubagentRunCard[],
 ): NonNullable<CompactSummary["outcome"]> {
-  if (
-    cards.some(
-      (card) =>
-        card.state === "stopping" ||
-        card.cleanup?.disposition === "pending" ||
-        hasUnresolvedSteeringDelivery(card),
-    )
-  )
+  if (cards.some((card) => card.state === "stopping" || hasUnresolvedSteeringDelivery(card)))
     return "uncertain";
   if (
     cards.some(

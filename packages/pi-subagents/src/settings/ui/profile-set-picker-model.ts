@@ -13,7 +13,7 @@ import {
 } from "../profile-route-editor.ts";
 import { countLabel } from "pi-cosmic-core";
 
-export interface ProfileSetPreviewProfile {
+interface ProfileSetPreviewProfile {
   readonly id: ProfileId;
   readonly source: ProfileRouteSource;
   readonly inherited: boolean;

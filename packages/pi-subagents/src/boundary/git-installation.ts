@@ -7,7 +7,7 @@ import { nodeFsConstants, nodeFsPromises as fs, nodePath as path } from "./node-
 /** Oldest Git with every option isolated workspaces use (`rev-parse --path-format`). */
 export const MINIMUM_GIT_VERSION = [2, 31] as const;
 
-export interface GitInstallation {
+interface GitInstallation {
   readonly executable: string;
   readonly version: string;
 }

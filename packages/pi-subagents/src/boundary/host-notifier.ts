@@ -7,7 +7,7 @@ import {
   sanitizeTerminalLine,
 } from "pi-cosmic-core";
 import type { SubagentWorkspaceOutcome } from "../run/model.ts";
-import { proposalChangeSummary, proposalDiffStatLines } from "../tools/format.ts";
+import { proposalDiffStatLines, proposalGuidance } from "../tools/format.ts";
 import type { ArchivedReport, ReportArchive } from "./report-archive.ts";
 
 export interface SubagentCompletionNotification {
@@ -21,6 +21,8 @@ export interface SubagentCompletionNotification {
   readonly retryAvailable?: boolean | undefined;
   readonly profile?: string | undefined;
   readonly remainingCandidateCount?: number | undefined;
+  /** A worktree writer's workspace; its outcome is known once the writer's cleanup settled. */
+  readonly workspaceId?: string | undefined;
   readonly workspaceOutcome?: SubagentWorkspaceOutcome | undefined;
 }
 
@@ -49,7 +51,7 @@ export type SubagentNotifier = (
 
 const MAX_NOTIFICATION_CHARS = 32 * 1024;
 
-export const sanitizeNotificationContent = (
+const sanitizeNotificationContent = (
   value: string,
   maximumLength = Number.POSITIVE_INFINITY,
 ): string => sanitizeDiagnosticContent(value, { maximumLength }).trim();
@@ -86,20 +88,12 @@ const reportText = (report: string, archived: ArchivedReport | undefined): strin
   return `${preview}\n\n[Preview: ${preview.length.toLocaleString("en-US")} of ${report.length.toLocaleString("en-US")} characters. Full report (${archived.lines} lines): ${archived.path}]`;
 };
 
-const workspaceOutcomeText = (
-  outcome: SubagentWorkspaceOutcome | undefined,
-): string | undefined => {
-  if (outcome === undefined) return undefined;
-  if (outcome.status === "auto-discarded")
-    return "Workspace: discarded automatically because the writer changed no files; nothing needs review.";
-  const uncaptured = outcome.uncapturedFileCount
-    ? ` (+${outcome.uncapturedFileCount} uncaptured, which the proposal can't carry)`
-    : "";
-  const files = proposalDiffStatLines(outcome);
-  return [
-    `Workspace proposal: ${proposalChangeSummary(outcome)}${uncaptured}. Apply small or trusted changes with subagent_workspace action=apply; for risky ones, review, prepare, and test, then apply the exact revisionId and preparationId. subagent_status shows the workspaceId.`,
-    ...files.map((line) => `  ${line}`),
-  ].join("\n");
+const workspaceText = (run: SubagentCompletionNotification): string | undefined => {
+  const { workspaceId, workspaceOutcome: outcome } = run;
+  if (workspaceId === undefined) return undefined;
+  if (run.outcome === "failed") return `Workspace ${workspaceId} is kept.`;
+  const files = outcome?.status === "proposal" ? proposalDiffStatLines(outcome) : [];
+  return [proposalGuidance(workspaceId, outcome), ...files.map((line) => `  ${line}`)].join("\n");
 };
 
 const completionBody = (run: SubagentCompletionNotification, archived?: ArchivedReport): string => {
@@ -116,7 +110,7 @@ const completionBody = (run: SubagentCompletionNotification, archived?: Archived
     : undefined;
   // The workspace outcome leads so that truncating a long report can't drop it.
   return [
-    workspaceOutcomeText(run.workspaceOutcome),
+    workspaceText(run),
     primary,
     warning && warning !== run.error?.trim() ? `Warning: ${warning}` : undefined,
     retry,
@@ -235,7 +229,7 @@ export interface NoticeDelivery {
 
 const STARTS_TURN: NoticeDelivery = { deliver: (send) => send(true) };
 
-export interface HostNotifierOptions {
+interface HostNotifierOptions {
   /** The parent wake policy; without one every notice starts or steers a turn. */
   readonly delivery?: NoticeDelivery;
   /** The current session's report archive, if subagents are active. */

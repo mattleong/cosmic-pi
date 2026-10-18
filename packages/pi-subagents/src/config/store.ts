@@ -100,7 +100,7 @@ export interface SubagentNestingPatch extends SubagentConfigPatchBase {
   readonly nesting?: SubagentNestingPolicy | undefined;
 }
 
-export interface SubagentWriterWorkspacePatch extends SubagentConfigPatchBase {
+interface SubagentWriterWorkspacePatch extends SubagentConfigPatchBase {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
 }
 

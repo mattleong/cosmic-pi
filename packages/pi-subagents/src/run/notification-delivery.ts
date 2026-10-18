@@ -15,12 +15,9 @@ import {
 import type { CompletionGenerationRecord, RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import { COMPLETION_RETRY_INITIAL_MILLIS, COMPLETION_RETRY_MAX_MILLIS } from "./limits.ts";
 
-export type SubagentQuestionNotification = Extract<
-  SubagentNotification,
-  { readonly type: "question" }
->;
+type SubagentQuestionNotification = Extract<SubagentNotification, { readonly type: "question" }>;
 
-export interface RunNotificationDeliveryDependencies extends Pick<
+interface RunNotificationDeliveryDependencies extends Pick<
   RunContext,
   "ownerScope" | "records" | "withLock"
 > {

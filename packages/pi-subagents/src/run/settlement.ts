@@ -38,7 +38,7 @@ import {
 } from "./settlement-outcome.ts";
 import { foldRunWarnings, recordRunWarning } from "./warnings.ts";
 
-export interface RunSettlementDependencies extends Pick<
+interface RunSettlementDependencies extends Pick<
   RunContext,
   "ownerScope" | "withLock" | "publish" | "sendPeerNotices"
 > {
@@ -51,7 +51,7 @@ export interface RunSettlementDependencies extends Pick<
     | undefined;
 }
 
-export type AssignmentActivationReplay =
+type AssignmentActivationReplay =
   | { readonly kind: "running"; readonly view: SubagentRunView }
   | {
       readonly kind: "committed-report";

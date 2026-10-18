@@ -6,7 +6,7 @@ import { MAX_SUPERVISOR_CHANNEL_LINE_BYTES } from "../supervisor/protocol.ts";
 
 const MAX_PENDING_WRITES = 64;
 
-export class McpWriteFailure extends Schema.TaggedError<McpWriteFailure>()("McpWriteFailure", {
+class McpWriteFailure extends Schema.TaggedError<McpWriteFailure>()("McpWriteFailure", {
   reason: Schema.Literals(["capacity", "closed", "size", "stream"]),
 }) {}
 

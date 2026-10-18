@@ -45,7 +45,7 @@ export type ProfileSetPickerAction =
   | { readonly action: "delete"; readonly target: PersistentProfileSetRef }
   | { readonly action: "save-session" };
 
-export interface ProfileSetPickerOptions extends Pick<
+interface ProfileSetPickerOptions extends Pick<
   SearchableSelectHostOptions,
   "getHeight" | "requestRender" | "matchesKeybinding" | "keybindingLabel"
 > {
@@ -70,7 +70,7 @@ const menuChoice = (
   ...(disabledHint && { enabled: false, disabledReason: description, disabledHint }),
 });
 
-export const savedSetMenuChoices = (
+const savedSetMenuChoices = (
   entry: SavedSetMenuEntry,
 ): ReadonlyArray<SearchableSelectPageChoice<ProfileSetPickerAction>> => {
   const project = entry.scope === "project";

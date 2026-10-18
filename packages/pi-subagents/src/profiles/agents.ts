@@ -64,14 +64,14 @@ export interface InvalidCustomAgent {
 }
 
 /** A document's decoded agents and the entries that failed to decode. */
-export interface DeclaredCustomAgentLayer {
+interface DeclaredCustomAgentLayer {
   readonly scope: CustomAgentScope;
   readonly agents?: Readonly<Record<string, CustomAgentDefinition>> | undefined;
   readonly invalidNames: ReadonlyArray<string>;
   readonly containerInvalid: boolean;
 }
 
-export interface ResolvedCustomAgents {
+interface ResolvedCustomAgents {
   readonly agents: ReadonlyArray<CustomAgent>;
   readonly invalidAgents: ReadonlyArray<InvalidCustomAgent>;
 }
@@ -113,7 +113,7 @@ export const resolveCustomAgents = (
   };
 };
 
-export type CustomAgentLookup =
+type CustomAgentLookup =
   | { readonly kind: "found"; readonly agent: CustomAgent }
   | { readonly kind: "invalid"; readonly scope: CustomAgentScope }
   | { readonly kind: "unknown" };
@@ -134,12 +134,12 @@ export const lookupCustomAgent = (
 export const hasCustomAgentToolPolicy = (agent: Pick<CustomAgent, "tools">): boolean =>
   agent.tools?.allow !== undefined || agent.tools?.deny !== undefined;
 
-export const CUSTOM_AGENT_SKIP_CODES = {
+const CUSTOM_AGENT_SKIP_CODES = {
   toolsUnsupported: "agent_tools_unsupported",
   candidateIncompatible: "agent_candidate_incompatible",
 } as const;
 
-export type CustomAgentCandidate =
+type CustomAgentCandidate =
   | { readonly kind: "eligible"; readonly candidate: ProfileCandidate }
   | {
       readonly kind: "skipped";

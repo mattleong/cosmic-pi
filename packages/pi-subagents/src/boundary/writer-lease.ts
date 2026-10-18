@@ -16,7 +16,7 @@ const MAX_FILESYSTEM_IDENTITY_CHARS = 256;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 const FILESYSTEM_IDENTITY_PATTERN = /^dev:[a-f0-9]+;ino:[a-f0-9]+$/;
 
-export class WriterCwdCanonicalizationError extends Schema.TaggedError<WriterCwdCanonicalizationError>()(
+class WriterCwdCanonicalizationError extends Schema.TaggedError<WriterCwdCanonicalizationError>()(
   "WriterCwdCanonicalizationError",
   { message: Schema.String },
 ) {}
@@ -53,7 +53,7 @@ export interface WriterLease {
   readonly runId: string;
 }
 
-export interface WriterLeaseAcquireRequest {
+interface WriterLeaseAcquireRequest {
   readonly cwd: CanonicalWriterCwd;
   readonly runId: string;
 }

@@ -67,7 +67,7 @@ import {
 } from "./run-state.ts";
 import { duplicateRunNames } from "./run-presentation.ts";
 
-export type FleetMessageMode = RunMessageMode;
+type FleetMessageMode = RunMessageMode;
 
 export type FleetMessageDelivery = "delivered" | "pending";
 
@@ -110,7 +110,7 @@ interface FleetOptions {
   readonly isCurrent?: (() => boolean) | undefined;
 }
 
-export type FleetNoticeKind = "info" | "success" | "warning" | "error";
+type FleetNoticeKind = "info" | "success" | "warning" | "error";
 type FleetNotice = { readonly kind: FleetNoticeKind; readonly text: string };
 
 export class SubagentFleetComponent implements Component, Focusable {

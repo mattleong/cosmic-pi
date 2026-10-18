@@ -116,7 +116,7 @@ export interface SubagentCleanupDiagnostic {
   readonly message: string;
 }
 
-export interface SubagentCleanup {
+interface SubagentCleanup {
   readonly disposition: "pending" | "confirmed" | "quarantined";
   readonly recovery?: "stop" | "manual" | undefined;
   readonly diagnostic?: SubagentCleanupDiagnostic | undefined;

@@ -111,7 +111,7 @@ describe("subagent tool", () => {
     expect(decodeSubagentProxyResult(encodeSubagentProxyPayload(proxied) ?? "")).toBeDefined();
   });
 
-  effectTest("threads isolation to writer launches and ignores it for readers", function* () {
+  effectTest("threads isolation to writer launches and rejects it for readers", function* () {
     const requests: StartSubagentRequest[] = [];
     const result = yield* invokeOptionalTool(startTool(requests), {
       agents: [
@@ -120,17 +120,14 @@ describe("subagent tool", () => {
         { task: "Map the auth flow", profile: "scout", isolation: "worktree" },
       ],
     });
-    expect(result?.details).not.toHaveProperty("startFailures");
+    expect(result?.details).toMatchObject({
+      startFailures: [{ index: 2, code: "isolation_requires_writer" }],
+    });
     expect(requests.map((request) => request.writerWorkspaceModeOverride)).toEqual([
       "worktree",
       undefined,
-      undefined,
     ]);
-    expect(requests.map((request) => request.writeIntent)).toEqual([
-      "writer",
-      "writer",
-      "read-only",
-    ]);
+    expect(requests.map((request) => request.writeIntent)).toEqual(["writer", "writer"]);
   });
 
   effectTest("rejects an invalid route before readiness or service start", function* () {

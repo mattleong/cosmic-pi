@@ -41,7 +41,7 @@ export type DecodedMcpMessage =
 
 export type ToolCall = Extract<DecodedMcpMessage, { readonly method: "tools/call" }>;
 
-export type McpToolResult = {
+type McpToolResult = {
   readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
   readonly isError?: true;
 };

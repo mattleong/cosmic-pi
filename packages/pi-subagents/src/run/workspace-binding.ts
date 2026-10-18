@@ -59,14 +59,16 @@ export type RevisionKnowledge =
   | {
       readonly kind: "prepared";
       readonly revisionId: string;
-      /** Recorded once its WorktreeCreate hooks succeeded; only a recorded preparation integrates. */
+      /** Recorded once ready, after any WorktreeCreate hooks; only a recorded preparation integrates. */
       readonly preparationId: string;
+      /** `prepare` builds a tree for the parent to test; a one-call apply's tree runs no hooks. */
+      readonly origin: "prepare" | "apply";
       /** Apply prepares without requiring any review. */
       readonly review?: ReviewProgress | undefined;
     };
 
 /** States outside any launch or revision; a root operation may hold the binding in one. */
-export type SettledBindingState =
+type SettledBindingState =
   | { readonly phase: "idle"; readonly knowledge: RevisionKnowledge }
   /** Integration stopped mid-publication; discard rolls it back, then releases these leases. */
   | { readonly phase: "stopped-integration"; readonly leases: ReadonlyArray<WriterLease> }
@@ -76,7 +78,7 @@ export type SettledBindingState =
       readonly outcome: "integrated" | "discarded" | "auto-discarded" | "unknown";
     };
 
-export type WorkspaceBindingState =
+type WorkspaceBindingState =
   /** Acquired by a launch not yet admitted or refused; `slot` is its parent's direct-child slot. */
   | { readonly phase: "creating"; readonly slot: LaunchSlot | undefined }
   /** A revise call holds the binding for its successor; a refused successor keeps `knowledge`. */
@@ -204,8 +206,16 @@ export interface WorkspaceControlContext extends WorkspaceControlDependencies {
     readonly workspaceIds: ReadonlyArray<string>;
     readonly creating: number;
   };
+  /**
+   * Waits, interruptibly, for the bound writer's process cleanup once it finished, so operations
+   * right after its report need no retry. A running writer or quarantined cleanup is left for
+   * `requireBinding` to refuse.
+   */
+  readonly awaitWriterCleanup: (workspaceId: string) => Effect.Effect<void, SubagentError>;
   readonly operations: Semaphore.Semaphore;
 }
+
+const WRITER_CLEANUP_WAIT = "30 seconds";
 
 export const mapWorkspaceError = (error: {
   readonly message: string;
@@ -395,18 +405,27 @@ export function workspaceControlContext(
       if (isAutoDiscarded(binding)) return yield* workspaceFinishedError(binding);
       const { state: current } = binding;
       if (current.phase === "busy" && current.token !== held) return yield* workspaceBusyError();
+      if (current.phase === "creating" || current.phase === "revising")
+        return yield* invalid(
+          "workspace_process_unsettled",
+          "A writer is still launching in this workspace. Await it first.",
+        );
+      const writer = binding.record;
+      if (writer?.cleanupDisposition === "quarantined")
+        return yield* invalid(
+          "workspace_process_unsettled",
+          "The workspace writer's process cleanup is quarantined. Inspect it with subagent_status and recover it first.",
+        );
       if (
-        current.phase === "creating" ||
-        current.phase === "revising" ||
-        (binding.record &&
-          (binding.record.process !== undefined ||
-            binding.record.cleanupPending ||
-            binding.record.cleanupDisposition !== "confirmed" ||
-            isActiveRunState(binding.record.view.state)))
+        writer &&
+        (writer.process !== undefined ||
+          writer.cleanupPending ||
+          writer.cleanupDisposition !== "confirmed" ||
+          isActiveRunState(writer.view.state))
       )
         return yield* invalid(
           "workspace_process_unsettled",
-          "Stop the workspace writer and confirm complete process cleanup before reviewing or changing its artifact.",
+          "The workspace writer is still running. Await or stop it first.",
         );
       // A shared-checkout writer its writer started may still be editing the worker tree; readers
       // there are fine, because integration keeps the trees they use.
@@ -419,7 +438,7 @@ export function workspaceControlContext(
       if (sharedWriter)
         return yield* invalid(
           "workspace_process_unsettled",
-          "A writer still works in this workspace's tree. Stop it and confirm cleanup before reviewing or changing the artifact.",
+          "A writer still works in this workspace's tree. Await or stop it first.",
         );
       yield* requireHooksSettled(
         engine,
@@ -428,6 +447,38 @@ export function workspaceControlContext(
       );
       return binding;
     });
+  const awaitWriterCleanup = (workspaceId: string) =>
+    dependencies
+      .withLock(
+        Effect.sync(() => {
+          const record = state.bindings.get(workspaceId)?.record;
+          return record &&
+            !isActiveRunState(record.view.state) &&
+            record.cleanupDisposition === "pending" &&
+            (record.cleanupPending || record.process !== undefined)
+            ? record.cleanupSettlement
+            : undefined;
+        }),
+      )
+      .pipe(
+        Effect.flatMap((settlement) =>
+          settlement === undefined
+            ? Effect.void
+            : Deferred.await(settlement).pipe(
+                Effect.asVoid,
+                Effect.timeoutOrElse({
+                  duration: WRITER_CLEANUP_WAIT,
+                  orElse: () =>
+                    Effect.fail(
+                      invalid(
+                        "workspace_process_unsettled",
+                        "The workspace writer's process cleanup is still settling. Retry shortly.",
+                      ),
+                    ),
+                }),
+              ),
+        ),
+      );
   return {
     ...dependencies,
     state,
@@ -436,6 +487,7 @@ export function workspaceControlContext(
     requireBinding,
     requireChildrenResolved,
     unresolvedChildrenLocked,
+    awaitWriterCleanup,
     operations: Semaphore.makeUnsafe(1),
   };
 }

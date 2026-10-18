@@ -27,7 +27,7 @@ import { PROFILE_IDS } from "../profiles/model.ts";
 import type { ProfileCandidateAttempt, ProfileResolution } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 
-export type DoctorStatus = "ok" | "warning" | "failed";
+type DoctorStatus = "ok" | "warning" | "failed";
 
 export interface DoctorCheck {
   readonly label: string;
@@ -35,7 +35,7 @@ export interface DoctorCheck {
   readonly detail: string;
 }
 
-export interface DoctorInput {
+interface DoctorInput {
   readonly pi: ExtensionAPI;
   readonly ctx: ExtensionContext;
   readonly agentDirectory: string;

@@ -137,7 +137,7 @@ const PublicationProgressSchema = Schema.Struct({
   directories: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   files: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 });
-export type PublicationProgress = typeof PublicationProgressSchema.Type;
+type PublicationProgress = typeof PublicationProgressSchema.Type;
 const MAX_PROGRESS_BYTES = 4096;
 const encodeProgress = Schema.encodeEffect(Schema.fromJsonString(PublicationProgressSchema));
 const decodeProgress = Schema.decodeUnknownEffect(Schema.fromJsonString(PublicationProgressSchema));

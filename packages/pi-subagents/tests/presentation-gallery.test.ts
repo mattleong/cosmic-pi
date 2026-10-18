@@ -552,6 +552,15 @@ const inspectionScenarios = Effect.all([
     { tool: "subagent_status", args: { runIds: ["agent-2", "agent-12"] } },
     { service: { status: lookup } },
   ),
+  scenario(
+    "finished worktree writer with verbose details",
+    { tool: "subagent_status", args: { runIds: ["agent-10"], verbose: true } },
+    {
+      service: {
+        status: () => Effect.succeed({ ...worktreeProposal, workspaceOutcome: proposalOutcome }),
+      },
+    },
+  ),
 ]);
 
 const guidance = "Also check the refresh-token rotation path.";
@@ -1412,6 +1421,7 @@ const completion = (
   finalText: run.finalText,
   error: run.error,
   profile: run.profile,
+  ...(run.workspaceId !== undefined && { workspaceId: run.workspaceId }),
   ...overrides,
 });
 
@@ -1457,16 +1467,32 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
         workspaceOutcome: proposalOutcome,
       }),
       completion(
-        { ...worktreeProposal, id: "agent-11", name: "lint-check", finalText: "Nothing to fix." },
+        {
+          ...worktreeProposal,
+          id: "agent-11",
+          name: "lint-check",
+          workspaceId: "ws-2",
+          finalText: "Nothing to fix.",
+        },
         { workspaceOutcome: { status: "auto-discarded" } },
       ),
     ],
+  }),
+  ...notified("worktree writer finishes before its proposal is counted", {
+    type: "completed",
+    runs: [completion(worktreeProposal)],
   }),
   ...notified("worktree writer changed nothing", {
     type: "completed",
     runs: [
       completion(
-        { ...worktreeProposal, id: "agent-11", name: "lint-check", finalText: "Nothing to fix." },
+        {
+          ...worktreeProposal,
+          id: "agent-11",
+          name: "lint-check",
+          workspaceId: "ws-2",
+          finalText: "Nothing to fix.",
+        },
         { workspaceOutcome: { status: "auto-discarded" } },
       ),
     ],

@@ -79,7 +79,7 @@ export type WorkspaceWarning = typeof WorkspaceWarningSchema.Type;
  * `parent-tested`: apply integrated the parent's own prepared pair. `untested`: apply prepared and
  * integrated in one call, testing nothing.
  */
-export const WORKSPACE_APPLY_TESTING = ["parent-tested", "untested"] as const;
+const WORKSPACE_APPLY_TESTING = ["parent-tested", "untested"] as const;
 
 export const WorkspaceToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
@@ -143,7 +143,7 @@ const UsageSchema = Schema.Struct({
   cost: Schema.optionalKey(nonNegativeNumber),
 });
 
-export const SkippedCandidateRouteSchema = Schema.Struct({
+const SkippedCandidateRouteSchema = Schema.Struct({
   runtime: RuntimeSchema,
   model: NonEmptyText(MAX_CARD_MODEL_CHARS),
   effort: CandidateEffortSchema,
@@ -226,7 +226,7 @@ const WorkspaceOutcomeCardSchema = Schema.Union([
   }),
 ]);
 
-export const SubagentRunCardSchema = Schema.Struct({
+const SubagentRunCardSchema = Schema.Struct({
   ...WorkspaceCardFields,
   workspaceOutcome: Schema.optionalKey(WorkspaceOutcomeCardSchema),
   id: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
@@ -328,7 +328,7 @@ const FailedUnavailableStartEntrySchema = Schema.Struct({
   status: Schema.Literal("failed"),
   routeStatus: Schema.Literal("unavailable"),
 });
-export const SubagentStartEntrySchema = Schema.Union([
+const SubagentStartEntrySchema = Schema.Union([
   PendingStartEntrySchema,
   StartedStartEntrySchema,
   FailedSelectedStartEntrySchema,
@@ -343,7 +343,7 @@ const FailedStartRecoverySchema = Schema.Struct({
   hasRemainingCandidate: Schema.Boolean,
 });
 
-export const SubagentCardFailureSchema = Schema.Struct({
+const SubagentCardFailureSchema = Schema.Struct({
   index: nonNegativeInteger,
   name: Schema.optionalKey(NonEmptyText(MAX_NAME_CHARS)),
   message: NonEmptyText(MAX_FAILURE_MESSAGE_CHARS),
@@ -366,7 +366,7 @@ const ProfileCandidateCardSchema = Schema.Struct({
   status: Schema.Literals(["eligible", "skipped"] as const),
   reason: NonEmptyText(MAX_PROFILE_CANDIDATE_REASON_CHARS),
 }).check(hasValidProfileCandidatePolicy);
-export const SubagentProfileRouteCardSchema = Schema.Struct({
+const SubagentProfileRouteCardSchema = Schema.Struct({
   id: ProfileIdSchema,
   description: NonEmptyText(MAX_PROFILE_DESCRIPTION_CHARS),
   source: ProfileSourceSchema,
@@ -378,7 +378,7 @@ export const SubagentProfileRouteCardSchema = Schema.Struct({
 });
 
 /** An agent's route after its overrides; tool lists appear only as counts. */
-export const SubagentAgentRouteCardSchema = Schema.Struct({
+const SubagentAgentRouteCardSchema = Schema.Struct({
   name: AgentNameSchema,
   description: NonEmptyText(MAX_CUSTOM_AGENT_DESCRIPTION_CHARS),
   profile: ProfileIdSchema,
@@ -394,7 +394,7 @@ export const SubagentAgentRouteCardSchema = Schema.Struct({
 
 export const PENDING_DELIVERY_FAILURE_CODE = "steer_outcome_uncertain";
 
-export const CompactToolActionFailureSchema = Schema.Struct({
+const CompactToolActionFailureSchema = Schema.Struct({
   id: NonEmptyText(MAX_ACTION_FAILURE_ID_CHARS),
   code: Schema.optionalKey(NonEmptyText(MAX_ACTION_FAILURE_CODE_CHARS)),
   message: NonEmptyText(MAX_ACTION_FAILURE_MESSAGE_CHARS),

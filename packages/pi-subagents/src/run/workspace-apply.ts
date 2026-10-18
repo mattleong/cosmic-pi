@@ -5,6 +5,7 @@ import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
   isBindingFinished,
+  revisionKnowledge,
   type WorkspaceControlContext,
   workspaceFinishedError,
 } from "./workspace-binding.ts";
@@ -15,12 +16,12 @@ import type {
 } from "./workspace-integration.ts";
 import type { workspaceReviewOperations } from "./workspace-review.ts";
 
-export const MAX_APPLY_LISTED_PATHS = 20;
+const MAX_APPLY_LISTED_PATHS = 20;
 
 /**
- * Without `preparationId`, apply freezes, prepares, and integrates; `revisionId` then optionally
- * pins the current frozen revision, and `paths` limits it to those changed paths. With it, apply
- * integrates exactly that reviewed and prepared pair.
+ * Without `preparationId`, apply integrates the parent's matching preparation, or else freezes,
+ * prepares, and integrates; `revisionId` then optionally pins the current revision, and `paths`
+ * limits it to those changed paths. With it, apply integrates exactly that prepared pair.
  */
 export type WorkspaceApplyOptions =
   | {
@@ -34,7 +35,7 @@ export type WorkspaceApplyOptions =
  * `parent-tested`: apply integrated the parent's own prepared pair, which the parent was to test.
  * `untested`: apply prepared and integrated in one call, testing nothing.
  */
-export type WorkspaceApplyTesting = "parent-tested" | "untested";
+type WorkspaceApplyTesting = "parent-tested" | "untested";
 
 export interface WorkspaceApplyResult extends WorkspaceIntegrationOutcome {
   readonly revisionId: string;
@@ -108,9 +109,10 @@ export function workspaceApplyOperations(
 ) {
   const { withLock, operations, requireEngine, state } = context;
   /**
-   * Freezes, prepares, and integrates in one call from the direct parent, without requiring the
-   * diff to be read. The binding stays busy throughout; the operations permit is held per phase
-   * and released while the WorktreeCreate hooks run. Only a committed integration publishes.
+   * Integrates the parent's own prepared pair when it matches the request; otherwise freezes,
+   * prepares, and integrates in one call, without requiring the diff to be read. That one-call
+   * preparation runs no WorktreeCreate hooks: nothing is tested in it. The binding stays busy
+   * throughout; the operations permit is held per phase. Only a committed integration publishes.
    */
   const applyCurrent = (
     workspaceId: string,
@@ -123,42 +125,48 @@ export function workspaceApplyOperations(
       return yield* phases.hold(workspaceId, caller, (held) =>
         Effect.gen(function* () {
           const { binding, token } = held;
-          const revision = yield* operations.withPermits(1)(
+          const integrate = (revisionId: string, preparationId: string) =>
+            integrateLocked(workspaceId, revisionId, preparationId, caller, token);
+          const prepared = yield* withLock(
             Effect.gen(function* () {
-              yield* withLock(
-                Effect.gen(function* () {
-                  if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
-                  if (state.integrationQuarantined)
-                    return yield* invalid(
-                      "workspace_integration_quarantined",
-                      "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
-                    );
-                  return undefined;
-                }),
-              );
-              return yield* phases.settledRevision(service, held, pinnedRevisionId);
+              if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
+              if (state.integrationQuarantined)
+                return yield* invalid(
+                  "workspace_integration_quarantined",
+                  "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
+                );
+              const knowledge = revisionKnowledge(binding);
+              return knowledge?.kind === "prepared" &&
+                knowledge.origin === "prepare" &&
+                requestedPaths === undefined &&
+                (pinnedRevisionId === undefined || pinnedRevisionId === knowledge.revisionId)
+                ? knowledge
+                : undefined;
             }),
+          );
+          if (prepared) {
+            const integration = yield* operations.withPermits(1)(
+              withLock(integrate(prepared.revisionId, prepared.preparationId)),
+            );
+            return appliedResult(
+              integration,
+              prepared.revisionId,
+              prepared.preparationId,
+              "parent-tested",
+            );
+          }
+          const revision = yield* operations.withPermits(1)(
+            phases.settledRevision(service, held, pinnedRevisionId),
           );
           const paths = yield* selectedPaths(revision, requestedPaths);
           const preparation = yield* operations.withPermits(1)(
             phases.prepareHeld(service, held, revision.revisionId, paths),
           );
-          yield* phases.provisionHeld(service, held, preparation);
           const integration = yield* operations.withPermits(1)(
             withLock(
               phases
-                .markPrepared(held, preparation)
-                .pipe(
-                  Effect.andThen(
-                    integrateLocked(
-                      workspaceId,
-                      revision.revisionId,
-                      preparation.preparationId,
-                      caller,
-                      token,
-                    ),
-                  ),
-                ),
+                .markPrepared(held, preparation, "apply")
+                .pipe(Effect.andThen(integrate(revision.revisionId, preparation.preparationId))),
             ),
           );
           return appliedResult(

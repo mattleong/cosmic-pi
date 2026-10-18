@@ -44,7 +44,7 @@ import {
 
 export type LocalCliRuntime = Extract<SubagentRuntime, "claude" | "codex">;
 
-export interface LocalCliPreflightRequest {
+interface LocalCliPreflightRequest {
   readonly runtime: LocalCliRuntime;
   readonly context: "fresh" | "fork";
   readonly writeIntent: SubagentWriteIntent;

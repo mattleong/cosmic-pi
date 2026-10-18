@@ -33,7 +33,7 @@ export interface ProfileWorkspaceSelectionMemory {
   readonly fields: ReadonlyArray<readonly [number, ProfileWorkspaceField]>;
   readonly expanded: ReadonlyArray<number>;
 }
-export type WorkspaceMessage = {
+type WorkspaceMessage = {
   readonly kind: "info" | "success" | "warning" | "error";
   readonly text: string;
 };

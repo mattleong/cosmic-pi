@@ -101,13 +101,11 @@ const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
   const summary =
     cleanup === "quarantined"
       ? "Cleanup remains unconfirmed; the task outcome is unchanged"
-      : cleanup === "pending"
-        ? "Cleanup verification is pending"
-        : cleanup === "pool-quarantined"
-          ? "Writer admission is blocked by another run's cleanup"
-          : reason
-            ? reason.split("\n", 1)[0]
-            : (run.currentTool ?? run.progress);
+      : cleanup === "pool-quarantined"
+        ? "Writer admission is blocked by another run's cleanup"
+        : reason
+          ? reason.split("\n", 1)[0]
+          : (run.currentTool ?? run.progress);
   return summary
     ? { summary: sanitizeDiagnosticContent(summary, { maximumLength: ACTIVITY_LIMITS.text }) }
     : {};

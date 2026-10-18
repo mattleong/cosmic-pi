@@ -9,7 +9,7 @@ import type { LocalCliRawEventOwnership } from "./local-cli-events.ts";
 
 const INTERRUPT_TIMEOUT = "10 seconds";
 
-export const classifyLocalCliInterruptOwnership = <A>(
+const classifyLocalCliInterruptOwnership = <A>(
   exit: Exit.Exit<A, SubagentError>,
 ): "release" | "retain" => {
   if (Exit.isSuccess(exit)) return "release";

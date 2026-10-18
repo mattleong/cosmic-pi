@@ -35,7 +35,7 @@ const decodeSystemMessageCompat = Schema.decodeUnknownOption(
  * Otherwise pi-ai merges every system message back into the leading prompt, so each change
  * rewrites the prompt and invalidates the provider's cached prefix.
  */
-export const keepsMidConversationSystemMessages = (model: ExtensionContext["model"]): boolean =>
+const keepsMidConversationSystemMessages = (model: ExtensionContext["model"]): boolean =>
   Option.match(decodeSystemMessageCompat(model), {
     onNone: () => false,
     onSome: ({ api, compat }) =>
@@ -77,7 +77,7 @@ const runsSection = (
  * launching duplicates. Only identity and coarse state appear: the section must stay byte-identical
  * while nothing changes, or every turn would patch the system prompt.
  */
-export const activeRunsSection = (projection: SubagentProjection): string | undefined =>
+const activeRunsSection = (projection: SubagentProjection): string | undefined =>
   runsSection(
     projection,
     "Subagents you started that are still active. Their reports arrive on their own; check subagent_status before starting work that may duplicate theirs.",
@@ -88,7 +88,7 @@ export const activeRunsSection = (projection: SubagentProjection): string | unde
  * The same list for models whose prompt must stay byte-identical between compactions: identity
  * only, as captured after the latest compaction, with no state that would go stale.
  */
-export const compactionRunsSection = (projection: SubagentProjection): string | undefined =>
+const compactionRunsSection = (projection: SubagentProjection): string | undefined =>
   runsSection(
     projection,
     "Subagents you started that were still active after the last context compaction. This list is not updated as they finish; their reports and questions arrive on their own, and subagent_status without runIds shows current state. Check it before starting work that may duplicate theirs.",

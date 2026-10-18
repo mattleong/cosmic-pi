@@ -29,8 +29,7 @@ const MAX_SHOWN_OUTPUT_CHARS = 80;
 
 // Release formats vary (semver plus suffixes, calendar versions), so only the first dotted
 // triple is read and anything else is left unjudged.
-export const parseCliVersion = (output: string): string | undefined =>
-  /\d+\.\d+\.\d+/u.exec(output)?.[0];
+const parseCliVersion = (output: string): string | undefined => /\d+\.\d+\.\d+/u.exec(output)?.[0];
 
 const compareVersions = (left: string, right: string): number => {
   const leftParts = left.split(".").map(Number);

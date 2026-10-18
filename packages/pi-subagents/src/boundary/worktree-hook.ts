@@ -32,7 +32,7 @@ export interface WorktreeHookInput {
   readonly runId?: string | undefined;
 }
 
-export interface WorktreeHookOptions {
+interface WorktreeHookOptions {
   readonly environment?: NodeJS.ProcessEnv;
   /** Reports whether the process group was confirmed stopped, including after interruption. */
   readonly onCleanup?: (confirmed: boolean) => void;

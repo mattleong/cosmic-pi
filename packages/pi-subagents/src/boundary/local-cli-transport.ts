@@ -31,7 +31,7 @@ export type LocalCliOutboundFrame =
 
 export type LocalCliHandle = ProcessTransportHandle<LocalCliMessage, LocalCliOutboundFrame>;
 
-export interface LocalCliTransportRequest {
+interface LocalCliTransportRequest {
   readonly executable: string;
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;

@@ -6,7 +6,7 @@ export interface AdaptiveHostRefreshTicker {
   readonly dispose: () => void;
 }
 
-export interface AdaptiveHostRefreshTickerOptions {
+interface AdaptiveHostRefreshTickerOptions {
   readonly getCadence: () => SubagentUiRefreshCadence | undefined;
   readonly startTicker: (intervalMs: number, tick: () => void) => () => void;
   readonly requestRender: () => void;

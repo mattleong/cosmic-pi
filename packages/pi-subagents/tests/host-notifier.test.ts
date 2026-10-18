@@ -89,6 +89,7 @@ describe("subagent host notifier", () => {
       type: "completed",
       runs: [
         completion("agent-1", "writer", {
+          workspaceId: "ws-1",
           workspaceOutcome: {
             status: "proposal",
             changedFileCount: 3,
@@ -105,7 +106,7 @@ describe("subagent host notifier", () => {
       ],
     });
     const text = content();
-    for (const evidence of ["+12", "-4", "src/session.ts", "assets/logo.png"])
+    for (const evidence of ["ws-1", "+12", "−4", "src/session.ts", "assets/logo.png"])
       expect(text).toContain(evidence);
   });
 
@@ -116,9 +117,13 @@ describe("subagent host notifier", () => {
     notify({
       type: "completed",
       runs: [
-        completion("agent-1", "writer", { workspaceOutcome: proposal }),
-        completion("agent-2", "idle-writer", { workspaceOutcome: { status: "auto-discarded" } }),
+        completion("agent-1", "writer", { workspaceId: "ws-1", workspaceOutcome: proposal }),
+        completion("agent-2", "idle-writer", {
+          workspaceId: "ws-2",
+          workspaceOutcome: { status: "auto-discarded" },
+        }),
         completion("agent-3", "reader"),
+        completion("agent-4", "settling-writer", { workspaceId: "ws-4" }),
       ],
     });
     const sections = content().split("## ").slice(1);
@@ -126,12 +131,17 @@ describe("subagent host notifier", () => {
       true,
       false,
       false,
+      true,
     ]);
+    expect(sections[3]).toContain("ws-4");
     const quiet = notifier();
     quiet.notify({
       type: "completed",
       runs: [
-        completion("agent-2", "idle-writer", { workspaceOutcome: { status: "auto-discarded" } }),
+        completion("agent-2", "idle-writer", {
+          workspaceId: "ws-2",
+          workspaceOutcome: { status: "auto-discarded" },
+        }),
       ],
     });
     const plain = notifier();
@@ -144,6 +154,7 @@ describe("subagent host notifier", () => {
       runs: [
         completion("agent-1", "writer", {
           finalText: "x".repeat(40 * 1024),
+          workspaceId: "ws-1",
           workspaceOutcome: proposal,
         }),
       ],

@@ -16,7 +16,7 @@ import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-s
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
 import { renderResponsiveRunRows, runTiming, type RunHierarchy } from "./render-run-rows.ts";
 
-export interface AwaitProgressRun {
+interface AwaitProgressRun {
   readonly id: string;
   readonly name: string;
   readonly state: SubagentRunCard["state"];
@@ -28,7 +28,7 @@ export interface AwaitProgressRun {
   readonly usage?: { readonly totalTokens: number; readonly cost?: number | undefined } | undefined;
 }
 
-export interface AwaitHierarchy extends RunHierarchy {
+interface AwaitHierarchy extends RunHierarchy {
   readonly awaitedRunIds: ReadonlySet<string>;
 }
 

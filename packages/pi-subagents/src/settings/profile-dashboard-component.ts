@@ -22,7 +22,7 @@ import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 
 type Child = Component & { focused?: boolean; dispose?: () => void };
 
-export interface ProfileDashboardOptions {
+interface ProfileDashboardOptions {
   readonly workspace: ProfileWorkspaceOptions;
   readonly ctx: ExtensionCommandContext;
   readonly actions: FleetManagerActions;

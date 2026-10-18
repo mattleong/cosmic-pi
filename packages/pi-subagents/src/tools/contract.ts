@@ -262,7 +262,7 @@ export const startContract = (
   };
 };
 
-export interface AwaitContractInput {
+interface AwaitContractInput {
   readonly observations: ReadonlyArray<SubagentRunObservation>;
   readonly fullyRenderedIds: ReadonlySet<string>;
   readonly until: SubagentAwaitUntil;
@@ -287,7 +287,7 @@ export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract 
   };
 };
 
-export interface CancelledAwaitContractInput {
+interface CancelledAwaitContractInput {
   readonly runs: ReadonlyArray<SubagentRunView>;
   readonly requestedRunIds: ReadonlyArray<string>;
   readonly until: SubagentAwaitUntil;
@@ -314,7 +314,7 @@ export const cancelledAwaitContract = (
   };
 };
 
-export interface StatusContractInput {
+interface StatusContractInput {
   readonly observations: ReadonlyArray<SubagentRunObservation>;
   readonly fullyRenderedIds: ReadonlySet<string>;
   readonly missingRunIds: ReadonlyArray<string>;

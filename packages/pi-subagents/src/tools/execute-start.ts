@@ -37,7 +37,7 @@ import type {
 import type { SubagentStartSpec } from "./schema.ts";
 import type { WorkspaceLaunch } from "../workspace/model.ts";
 
-export interface StartBatchInput {
+interface StartBatchInput {
   readonly agents: ReadonlyArray<SubagentStartSpec>;
   readonly pi: ExtensionAPI;
   readonly ctx: ExtensionContext;

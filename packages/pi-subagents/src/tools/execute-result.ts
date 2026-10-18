@@ -13,6 +13,7 @@ import {
   formatRun,
   formatStartResult,
   joinBoundedToolText,
+  type RunFormatOptions,
 } from "./format.ts";
 import { managementAcknowledgement } from "./format-acknowledgement.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
@@ -35,6 +36,7 @@ export const presentSubagentResult = (
   input: Exclude<SubagentToolInput, { readonly tool: "subagent_models" | "subagent_workspace" }>,
   executionResult: SubagentExecutionResult,
   requestedAwaitIds?: ReadonlyArray<string>,
+  formatOptions: RunFormatOptions = {},
 ): AgentToolResult<unknown> => {
   const { runs, awaitContextRuns, attentionRequired, text: formattedText } = executionResult;
   const startFailures = executionResult.startFailures ?? [];
@@ -60,7 +62,7 @@ export const presentSubagentResult = (
             ...(actionFailures.length > 0 && { actionFailures }),
             ...(answeredRunIds.length > 0 && { answeredRunIds }),
           });
-  const detailedText = () => formattedText ?? formatDetailedRuns(runs).text;
+  const detailedText = () => formattedText ?? formatDetailedRuns(runs, "", formatOptions).text;
   const resultText = (): string => {
     if (input.tool === SUBAGENT_TOOL_NAME.start)
       return formattedText ?? formatStartResult(runs, startFailures);

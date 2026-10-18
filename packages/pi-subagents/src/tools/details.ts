@@ -31,12 +31,12 @@ import {
 } from "./details-projection.ts";
 import type { SubagentAgentView, SubagentInvalidAgentView, SubagentProfileView } from "./model.ts";
 
-export interface StartDetailsInput {
+interface StartDetailsInput {
   readonly startEntries: ReadonlyArray<SubagentStartEntry>;
   readonly startFailures?: ReadonlyArray<SubagentCardFailure> | undefined;
 }
 
-export interface AwaitDetailsInput {
+interface AwaitDetailsInput {
   readonly runs: ReadonlyArray<SubagentRunView>;
   readonly contextRuns?: ReadonlyArray<SubagentRunView> | undefined;
   readonly awaitedRunIds?: ReadonlyArray<string> | undefined;
@@ -48,7 +48,7 @@ export interface AwaitDetailsInput {
   readonly cancellationCleanup?: "unconfirmed" | undefined;
 }
 
-export type CompactToolDetailsInput =
+type CompactToolDetailsInput =
   | {
       readonly action: "models";
       readonly profiles: ReadonlyArray<SubagentProfileView>;

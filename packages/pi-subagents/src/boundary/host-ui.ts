@@ -24,7 +24,7 @@ export interface SubagentProjectionBridge extends ProjectionBridge<SubagentProje
   readonly subscribeActivityPresentation: (listener: () => void) => () => void;
 }
 
-export interface SubagentProjectionBridgeOptions {
+interface SubagentProjectionBridgeOptions {
   readonly startTicker?: typeof startHostUiTicker | undefined;
   readonly getNow?: (() => number) | undefined;
 }

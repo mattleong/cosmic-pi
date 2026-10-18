@@ -195,6 +195,8 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - `tools/schema.ts` holds the one tool catalog: each tool's parameter schema plus any cross-field validator. Root execution and the nested-Pi wire carry the same `{ tool, args }` input.
 - Each `prepareArguments` hook validates and coerces as Pi does, rejects blank strings, and returns `[invalid_arguments]` lists naming allowed values and likely replacements for unknown fields.
 - `execute-result.ts` separates model text, persisted details, and version-2 script results.
+- Model text is compact. A start lists one line per run (`id name · profile · runtime/model:effort`, plus `worktree <id>` for an isolated writer) and its failures. A status or await card is a header line, then only the fields that need attention (parent, a cwd other than the caller's, retry, route warnings, workspace proposal, quarantined cleanup, warnings, failure, a pending question) and the final report. `subagent_status` with `verbose` adds route selection, context, capabilities, process, cwd, and timing. Pending cleanup is never reported; only quarantine is.
+- A worktree writer's proposal is stated once, as `proposal: N files, +A −D · subagent_workspace apply workspaceId=…`, in cards, issue details, and notifications.
 - `subagent_workspace` pages complete immutable diffs and keeps patches out of persisted details. Its producers record display spans while composing output, so expansion never parses text.
 - `boundary/host-tool-result.ts` owns the receipts that set Pi's error flag, including decoded child-proxy results, and tracks call provenance from native events, never arguments. Unknown provenance fails closed.
 
@@ -208,7 +210,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 
 - Typed projections emit one `CompactIssue` per problem or recovery step. Messages start with a subagent, launch, or profile name, never a run or workspace ID. `tools/compact-action-failures.ts` owns each failure code's message and recovery guidance.
 - Headings name runs by display name and show one combined count without routine IDs or route metadata.
-- Routine facts are `info` issues, such as a stop the call requested, a retry moving past its failed option, or an isolated writer's workspace outcome (`changes ready for review`, or an automatic discard).
+- Routine facts are `info` issues, such as a stop the call requested, a retry moving past its failed option, or an isolated writer's workspace outcome (`ready to apply`, or an automatic discard).
 - Workspace rows show whether the diff was reviewed and whether the parent tested its prepared pair or nothing was tested. Left-out worker files are a warning.
 - Static discovery counts eligible options and disabled or unavailable profiles without claiming launch readiness.
 - Report-only omissions use the optional `reportsOnlyOmitted: true` flag; other omissions keep warnings and full-status guidance.
@@ -216,7 +218,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 
 ### Notification rows
 
-`application/messages.ts` registers root and child message renderers. Each row shows typed counts and a lone run's name, with full content on expansion. `host-notifier.ts` attaches display metadata without altering content, delivery keys, or acknowledgement. A completed worktree writer's notification leads with its workspace outcome when known, so truncating a long report can't drop it.
+`application/messages.ts` registers root and child message renderers. Each row shows typed counts and a lone run's name, with full content on expansion. `host-notifier.ts` attaches display metadata without altering content, delivery keys, or acknowledgement. A completed worktree writer's notification leads with its proposal line, which names the workspace ID and adds the change counts once they are known, so truncating a long report can't drop it.
 
 ## Activity provider and fleet
 

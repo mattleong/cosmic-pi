@@ -9,7 +9,7 @@ import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 export const workspaceFailure = (operation: string, message: string) =>
   new WorkspaceError({ operation, message });
 
-export interface WorkspaceRefusalReason {
+interface WorkspaceRefusalReason {
   /** Relative to the tree being captured, when one file caused the refusal. */
   readonly path?: string;
   readonly rule: string;
@@ -68,7 +68,7 @@ const gitSubcommand = (args: ReadonlyArray<string>) => {
 
 export type GitResult = BoundedProcessResult;
 
-export interface GitOptions {
+interface GitOptions {
   readonly stdin?: Uint8Array;
   /** Extra variables, such as a temporary `GIT_INDEX_FILE` that keeps the real index untouched. */
   readonly environment?: Readonly<Record<string, string>>;

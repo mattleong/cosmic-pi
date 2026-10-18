@@ -9,7 +9,7 @@ export const SUPERVISOR_MCP_TOOL_NAMES = [
   ...SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
   "supervisor_submit_report",
 ] as const;
-export type SupervisorMcpToolName = (typeof SUPERVISOR_MCP_TOOL_NAMES)[number];
+type SupervisorMcpToolName = (typeof SUPERVISOR_MCP_TOOL_NAMES)[number];
 /** Tools that block on the parent or end the assignment, so only the child's main agent may call them. */
 export const SUPERVISOR_MCP_MAIN_AGENT_TOOL_NAMES = [
   "supervisor_question",

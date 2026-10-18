@@ -10,9 +10,9 @@ const DISALLOWED_LAUNCH_OVERRIDE_FIELDS = [
   "supersedes",
 ] as const;
 
-export type DisallowedLaunchOverrideField = (typeof DISALLOWED_LAUNCH_OVERRIDE_FIELDS)[number];
+type DisallowedLaunchOverrideField = (typeof DISALLOWED_LAUNCH_OVERRIDE_FIELDS)[number];
 
-export type LaunchSpecFields = Readonly<
+type LaunchSpecFields = Readonly<
   { task?: JsonValue } & Partial<Record<DisallowedLaunchOverrideField, JsonValue>>
 >;
 

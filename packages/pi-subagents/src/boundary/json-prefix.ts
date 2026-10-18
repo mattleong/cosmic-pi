@@ -1,7 +1,7 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-export type JsonPrefixScalar = string | boolean;
+type JsonPrefixScalar = string | boolean;
 
 const decodeJsonString = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.String));
 

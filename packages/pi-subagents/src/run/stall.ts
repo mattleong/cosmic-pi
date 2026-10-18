@@ -1,8 +1,8 @@
 import type { SubagentRunView } from "./model.ts";
 
-export const STALL_IDLE_MILLIS = 2 * 60 * 1000;
-export const STALL_TOOL_OPEN_MILLIS = 5 * 60 * 1000;
-export const STALL_FAILED_TOOL_STREAK = 3;
+const STALL_IDLE_MILLIS = 2 * 60 * 1000;
+const STALL_TOOL_OPEN_MILLIS = 5 * 60 * 1000;
+const STALL_FAILED_TOOL_STREAK = 3;
 
 export type RunStall =
   | { readonly kind: "idle"; readonly sinceMillis: number }

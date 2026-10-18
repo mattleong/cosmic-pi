@@ -19,7 +19,7 @@ export interface ProfileEditRestore {
 export type ProfileEditCommitReceipt =
   | { readonly kind: "session"; readonly snapshot: SessionProfileSnapshot }
   | { readonly kind: "saved"; readonly document: JsonObject };
-export interface ProfileEditUndoPlan {
+interface ProfileEditUndoPlan {
   readonly draft: ProfileRouteDraft;
   readonly restore?: ProfileEditRestore;
 }

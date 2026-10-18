@@ -15,16 +15,16 @@ import {
 import { treeEntries } from "./git-capture.ts";
 
 /** The file at a source checkout's top level naming untracked files isolated trees receive. */
-export const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
+const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
 /** Most patterns `.worktreeinclude` may hold. */
-export const MAX_WORKTREE_INCLUDE_PATTERNS = 64;
+const MAX_WORKTREE_INCLUDE_PATTERNS = 64;
 /** Longest pattern `.worktreeinclude` may hold. */
-export const MAX_WORKTREE_INCLUDE_PATTERN_CHARS = 1_024;
+const MAX_WORKTREE_INCLUDE_PATTERN_CHARS = 1_024;
 const MAX_WORKTREE_INCLUDE_BYTES = 64 * 1024;
 /** Most files `.worktreeinclude` may copy into one tree. */
-export const MAX_INCLUDED_FILES = 256;
+const MAX_INCLUDED_FILES = 256;
 /** Most bytes `.worktreeinclude` may copy into one tree. */
-export const MAX_INCLUDED_BYTES = 64 * 1024 * 1024;
+const MAX_INCLUDED_BYTES = 64 * 1024 * 1024;
 
 const tooMuchIncluded = (operation: string, files: number, bytes: number) =>
   workspaceRefusal(operation, ".worktreeinclude matches too many files to copy.", {
@@ -45,7 +45,7 @@ const unreadableInclude = (file: string, rule: string) =>
  * The gitignore-syntax patterns of a `.worktreeinclude` text: blank lines and `#` comments are
  * skipped, and unescaped trailing spaces dropped, as in a `.gitignore`.
  */
-export const parseWorktreeInclude = (text: string): ReadonlyArray<string> =>
+const parseWorktreeInclude = (text: string): ReadonlyArray<string> =>
   text.split("\n").flatMap((raw) => {
     const line = raw.replace(/\r$/u, "").replace(/(?<!\\) +$/u, "");
     return line === "" || line.startsWith("#") ? [] : [line];

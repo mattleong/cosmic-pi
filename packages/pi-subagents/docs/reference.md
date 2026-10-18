@@ -38,11 +38,11 @@ For scoped parallel implementation, give shared-checkout writers disjoint task s
 
 ## Reviewing and applying worktree proposals
 
-A completed writer's report does not approve its changes, and nothing applies them automatically. A completed writer that changed nothing has its workspace discarded once cleanup is confirmed. Otherwise its notification and status show the changed-file count and line totals for up to 20 files, and its direct parent takes one of two paths without asking for routine user approval. A worktree writer that started worktree writers does the same into its own worker tree before reporting. The engine contract is in [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle).
+Nothing applies a worktree writer's changes automatically. A completed writer that changed nothing has its workspace discarded. Otherwise its notification and status show `proposal: N files, +A −D · subagent_workspace apply workspaceId=…` with line counts for up to 20 files, and its direct parent takes one of two paths without asking for routine user approval. Each operation waits for the finished writer's process cleanup. A worktree writer that started worktree writers does the same into its own worker tree before reporting. The engine contract is in [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle).
 
 ### Quick path
 
-For small or trusted changes, call `subagent_workspace` with `{"action":"apply","workspaceId":"..."}` after process cleanup. It freezes, prepares, and integrates as uncommitted edits in one call, testing nothing. The result says whether the diff was read; run relevant tests in the parent checkout afterwards.
+For small or trusted changes, call `subagent_workspace` with `{"action":"apply","workspaceId":"..."}`. It freezes, prepares, and integrates as uncommitted edits in one call, testing nothing and running no hooks. The result says whether the diff was read; run relevant tests in the parent checkout afterwards.
 
 To take only part of a proposal, pass `paths` (exact changed paths from the review summary). The remaining changes stay in the workspace as an unreviewed proposal.
 
@@ -50,10 +50,10 @@ To take only part of a proposal, pass `paths` (exact changed paths from the revi
 
 For risky changes:
 
-1. Call `review` with the workspace ID after process cleanup. Keep the returned `revisionId` and read every page, passing it with each `nextOffset`. Each page holds up to 16,000 characters: first a summary (per-file line counts, binary, added, deleted, and mode markers, and credential files the worker left out), then the full diff.
-2. Call `prepare` with the workspace ID and reviewed `revisionId`. This creates a separate cwd combining the proposal with current parent edits.
+1. Call `review` with the workspace ID and read every page, passing each `nextOffset` as `offset`. Each page holds up to 16,000 characters: first a summary (per-file line counts, binary, added, deleted, and mode markers, and credential files the worker left out), then the full diff.
+2. Call `prepare` with the workspace ID and the reviewed `revisionId`. This creates a separate cwd combining the proposal with current parent edits and runs `WorktreeCreate` hooks there.
 3. Run relevant tests in that cwd without editing it. Worker-only tests don't replace this pass.
-4. Call `apply` with `workspaceId`, `revisionId`, and `preparationId`. It integrates exactly that pair as uncommitted edits, without preparing again, and reports `parent-tested`. It never merges, stages, or commits.
+4. Call `apply` with the workspace ID. It integrates that preparation as uncommitted edits, without preparing again, and reports `parent-tested`; `revisionId` and `preparationId` optionally pin the pair. It never merges, stages, or commits.
 
 ### What a worktree writer shares
 

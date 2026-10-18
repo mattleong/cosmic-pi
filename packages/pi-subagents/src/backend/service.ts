@@ -4,7 +4,7 @@ import { InvalidSubagentRequestError } from "../run/errors.ts";
 import type { SubagentContextMode, SubagentRuntime } from "../domain/routing.ts";
 import type { BackendDriver, BackendPreflightRequest } from "./model.ts";
 
-export interface BackendSelection {
+interface BackendSelection {
   readonly runtime: SubagentRuntime;
   readonly context: SubagentContextMode;
 }

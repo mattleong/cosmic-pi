@@ -20,7 +20,7 @@ export interface ArchivedReport {
   readonly lines: number;
 }
 
-export interface ReportArchiveEntry {
+interface ReportArchiveEntry {
   readonly id: string;
   readonly generation: number;
   readonly text: string;

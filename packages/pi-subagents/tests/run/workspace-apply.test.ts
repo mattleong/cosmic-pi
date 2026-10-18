@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { WorkspaceError } from "../../src/workspace/model.ts";
-import { completeLocalRun, withService } from "./fixtures/service-harness.ts";
+import { completeLocalRun, waitForCompleted, withService } from "./fixtures/service-harness.ts";
 import {
   pauseAt,
   repoWriter,
@@ -65,25 +65,56 @@ describe("one-step workspace apply", () => {
     });
   });
 
-  it.effect("runs WorktreeCreate in every prepared tree, a plain apply's included", () => {
+  it.effect("runs WorktreeCreate in a tree prepared for testing, not in a plain apply's", () => {
     const f = hooked();
     return withService(f.layer, function* (service) {
       const writer = yield* stoppedWriter(service);
-      const applied = yield* service.workspaceApply(writer.workspaceId!);
-      expect(f.hookRuns).toEqual([
-        { tree: "worker", runId: undefined },
-        { tree: applied.preparationId, runId: writer.id },
-      ]);
+      yield* service.workspaceApply(writer.workspaceId!);
+      expect(f.hookRuns).toEqual([{ tree: "worker", runId: undefined }]);
       const careful = yield* stoppedWriter(service);
       const { preparationId } = yield* reviewAndPrepare(service, careful.workspaceId!);
-      expect(f.hookRuns.slice(2)).toEqual([
+      expect(f.hookRuns.slice(1)).toEqual([
         { tree: "worker", runId: undefined },
         { tree: preparationId, runId: careful.id },
       ]);
     });
   });
 
-  it.effect("a failed WorktreeCreate hook in the prepared tree integrates nothing", () => {
+  it.effect("a plain apply integrates the parent's tested preparation", () => {
+    const f = hooked();
+    return withService(f.layer, function* (service) {
+      const id = (yield* stoppedWriter(service)).workspaceId!;
+      const tested = yield* reviewAndPrepare(service, id);
+      const hookRuns = f.hookRuns.length;
+      expect(yield* service.workspaceApply(id)).toMatchObject({
+        revisionId: tested.revisionId,
+        preparationId: tested.preparationId,
+        reviewed: true,
+        testing: "parent-tested",
+      });
+      expect(f.hookRuns).toHaveLength(hookRuns);
+      expect(f.integrations).toMatchObject([{ preparationId: tested.preparationId }]);
+    });
+  });
+
+  it.effect("pages a review by offset alone", () => {
+    const f = workspaceFixture();
+    return withService(f.layer, function* (service) {
+      const id = (yield* stoppedWriter(service)).workspaceId!;
+      const first = yield* service.workspaceReview(id, { limit: 1 });
+      let next = first.nextOffset;
+      while (next !== undefined) {
+        const page = yield* service.workspaceReview(id, { offset: next });
+        expect(page.revisionId).toBe(first.revisionId);
+        next = page.nextOffset;
+      }
+      expect(yield* service.workspacePrepare(id, first.revisionId)).toMatchObject({
+        revisionId: first.revisionId,
+      });
+    });
+  });
+
+  it.effect("a failed WorktreeCreate hook in the prepared tree leaves it untested", () => {
     const f = hooked();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
@@ -91,25 +122,24 @@ describe("one-step workspace apply", () => {
         operation: "hook",
         message: "Hook failed.",
       });
-      expect(yield* service.workspaceApply(id).pipe(Effect.flip)).toMatchObject({
+      expect(yield* reviewAndPrepare(service, id).pipe(Effect.flip)).toMatchObject({
         code: "workspace_hook_failed",
       });
       expect(f.integrations).toEqual([]);
-      f.hooks.createHookFailure = undefined;
       expect(yield* service.workspaceApply(id)).toMatchObject({ testing: "untested" });
       expect(f.entries.get(id)?.status).toBe("integrated");
     });
   });
 
-  it.effect("interrupting hooks leaves the workspace free, unpublished, and usable", () => {
+  it.effect("interrupting a preparation's hooks leaves the workspace free and usable", () => {
     const f = hooked();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const gate = yield* pauseAt;
       f.hooks.before.createHooks = gate.pause;
-      const applying = yield* service.workspaceApply(id).pipe(Effect.forkChild);
+      const preparing = yield* reviewAndPrepare(service, id).pipe(Effect.forkChild);
       yield* Deferred.await(gate.entered);
-      yield* Fiber.interrupt(applying);
+      yield* Fiber.interrupt(preparing);
       expect(f.integrations).toEqual([]);
       f.hooks.before.createHooks = undefined;
       expect(yield* service.workspaceApply(id)).toMatchObject({ testing: "untested" });
@@ -126,10 +156,10 @@ describe("one-step workspace apply", () => {
         message: "Hook cleanup is unconfirmed.",
         cleanupUnconfirmed: true,
       });
-      expect(yield* service.workspaceApply(id).pipe(Effect.flip)).toMatchObject({
+      expect(yield* reviewAndPrepare(service, id).pipe(Effect.flip)).toMatchObject({
         code: "workspace_hook_cleanup_unconfirmed",
       });
-      expect(yield* service.workspaceReview(id).pipe(Effect.flip)).toMatchObject({
+      expect(yield* service.workspaceApply(id).pipe(Effect.flip)).toMatchObject({
         code: "workspace_process_unsettled",
       });
       expect(yield* service.resume(writer.id).pipe(Effect.flip)).toMatchObject({
@@ -140,26 +170,41 @@ describe("one-step workspace apply", () => {
   });
 
   it.effect("keeps the workspace busy for resume and revision until apply finishes", () => {
-    const f = hooked();
+    const f = workspaceFixture();
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);
       const id = writer.workspaceId!;
       const gate = yield* pauseAt;
-      f.hooks.before.createHooks = gate.pause;
+      f.hooks.before.prepare = gate.pause;
       const applying = yield* service.workspaceApply(id).pipe(Effect.forkChild);
       yield* Deferred.await(gate.entered);
       expect(yield* service.resume(writer.id).pipe(Effect.flip)).toMatchObject({
         code: "workspace_operation_in_progress",
       });
-      expect(
-        yield* service.workspaceRevise(id, "Also cover docs.").pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_operation_in_progress" });
-      expect(yield* service.workspaceDiscard(id).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_operation_in_progress",
-      });
+      const revising = yield* service
+        .workspaceRevise(id, "Also cover docs.")
+        .pipe(Effect.flip, Effect.forkChild);
       yield* Deferred.succeed(gate.release, undefined);
       expect(yield* Fiber.join(applying)).toMatchObject({ testing: "untested" });
+      expect(yield* Fiber.join(revising)).toMatchObject({ code: "workspace_finished" });
       expect(f.children.controls).toHaveLength(1);
+    });
+  });
+
+  it.effect("waits for a finished writer's process cleanup instead of refusing", () => {
+    const f = workspaceFixture();
+    return withService(f.layer, function* (service) {
+      const writer = yield* service.start(repoWriter());
+      const control = f.children.controls.at(-1)!;
+      const cleanup = yield* Deferred.make<void>();
+      control.gateRelease(cleanup);
+      control.settle("Done.");
+      yield* waitForCompleted(service, writer.id);
+      const applying = yield* service.workspaceApply(writer.workspaceId!).pipe(Effect.forkChild);
+      for (let turn = 0; turn < 20; turn += 1) yield* Effect.yieldNow;
+      expect(f.integrations).toEqual([]);
+      yield* Deferred.succeed(cleanup, undefined);
+      expect(yield* Fiber.join(applying)).toMatchObject({ testing: "untested" });
     });
   });
 

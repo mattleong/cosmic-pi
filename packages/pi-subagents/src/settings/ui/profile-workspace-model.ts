@@ -38,7 +38,7 @@ export type ProfileWorkspaceField =
   | "add"
   | "reset";
 
-export interface ProfileWorkspaceFieldRow {
+interface ProfileWorkspaceFieldRow {
   readonly field: ProfileWorkspaceField;
   readonly label: string;
   readonly value: string;
@@ -46,20 +46,20 @@ export interface ProfileWorkspaceFieldRow {
   readonly fixedReason?: string | undefined;
 }
 
-export interface CandidateFieldChangeOptions {
+interface CandidateFieldChangeOptions {
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable?: boolean | undefined;
   readonly profile?: ProfileId | undefined;
   readonly parentEffort?: SubagentEffort | undefined;
 }
 
-export interface CandidateFieldChoice {
+interface CandidateFieldChoice {
   readonly value: string;
   readonly label: string;
   readonly description: string;
 }
 
-export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsScope): string => {
+const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsScope): string => {
   switch (draft.kind) {
     case "explicit":
       return "custom";

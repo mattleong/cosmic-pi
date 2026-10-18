@@ -12,7 +12,7 @@ import { workspaceArtifact } from "./git-worktree-trees.ts";
 // Git pathspec magic that matches the path exactly, whatever characters it holds.
 const literalPathspec = (name: string) => `:(literal)${name}`;
 
-export interface PatchRange {
+interface PatchRange {
   readonly from: string;
   readonly to: string;
 }

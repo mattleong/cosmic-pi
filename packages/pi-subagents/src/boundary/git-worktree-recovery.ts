@@ -240,7 +240,7 @@ const collectRecord = (registry: string, workspaceId: string, now: number) =>
     return true;
   });
 
-export interface WorkspaceCollection {
+interface WorkspaceCollection {
   readonly now: number;
   /** Records this session still owns are never collected. */
   readonly owned: (workspaceId: string) => boolean;

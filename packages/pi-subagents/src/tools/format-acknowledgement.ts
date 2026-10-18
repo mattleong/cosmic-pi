@@ -5,21 +5,8 @@ import { runStateLabel } from "../ui/run-state.ts";
 import { cleanupRecoveryText, formatRun } from "./format.ts";
 import type { SubagentToolAction } from "./schema.ts";
 
-const stopAcknowledgement = (run: SubagentRunView): string => {
-  const task = `${run.id}: task state is ${runStateLabel(run.state)}.`;
-  const disposition = run.cleanup?.disposition;
-  switch (disposition) {
-    case "confirmed":
-      return [`${task} Cleanup is confirmed for this run.`, ...cleanupRecoveryText(run)].join("\n");
-    case "pending":
-      return `${task} Cleanup verification is still pending.`;
-    case "quarantined":
-      return [task, ...cleanupRecoveryText(run)].join("\n");
-    case undefined:
-      return `${task} Cleanup verification is unknown in this observation; terminal state does not confirm cleanup.`;
-  }
-  return absurd(disposition);
-};
+const stopAcknowledgement = (run: SubagentRunView): string =>
+  [`${run.id}: ${runStateLabel(run.state)}.`, ...cleanupRecoveryText(run)].join("\n");
 
 const sendAcknowledgement = (
   runs: ReadonlyArray<SubagentRunView>,

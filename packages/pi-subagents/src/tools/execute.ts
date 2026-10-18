@@ -201,13 +201,17 @@ export const executeSubagentActionEffect = (
         );
 
   const action = subagentToolAction(input);
+  const formatOptions = {
+    parentCwd: environment.cwd,
+    verbose: input.tool === SUBAGENT_TOOL_NAME.status && input.args.verbose === true,
+  };
   const awaitState =
     input.tool === SUBAGENT_TOOL_NAME.await
       ? (awaitExecution ?? awaitExecutionFor(input.args.runIds, input.args.until, onUpdate))
       : undefined;
   const requestedAwaitIds = awaitState?.requestedIds;
   const present = (result: SubagentExecutionResult) =>
-    presentSubagentResult(input, result, requestedAwaitIds);
+    presentSubagentResult(input, result, requestedAwaitIds, formatOptions);
   return Effect.gen(function* () {
     const service = yield* SubagentService;
     const launchEnvironment =
@@ -241,7 +245,7 @@ export const executeSubagentActionEffect = (
             `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(attention)}`,
           );
         const prefix = [...sections, attentionRecoveryText(attention)].filter(Boolean).join("\n\n");
-        const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
+        const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "", formatOptions);
         const additional = extra();
         const contract =
           input.tool === SUBAGENT_TOOL_NAME.await

@@ -112,7 +112,7 @@ export interface ProfileModelPickerContext {
   readonly runtime: SubagentRuntime;
 }
 
-export interface ProfileModelPickerPageOptions extends SearchableSelectHostOptions {
+interface ProfileModelPickerPageOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
   readonly choices: ReadonlyArray<ProfileModelOption>;
   readonly scopedChoices?: ReadonlyArray<ProfileModelOption> | undefined;

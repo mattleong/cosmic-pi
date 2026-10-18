@@ -28,7 +28,7 @@ const drainSettled = (records: ReadonlyMap<string, RunRecord>): boolean => {
   return !working;
 };
 
-export interface ParentDrainDependencies {
+interface ParentDrainDependencies {
   readonly records: ReadonlyMap<string, RunRecord>;
   readonly withLock: WithRunLock;
   readonly revision: Effect.Effect<number>;

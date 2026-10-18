@@ -71,7 +71,7 @@ import {
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
 const PARENT_IDLE_CHECK_INTERVAL = "50 millis";
 
-export interface SubagentApplicationBoundaries {
+interface SubagentApplicationBoundaries {
   readonly loadSettings: (
     cwd: string,
     projectTrusted: boolean,

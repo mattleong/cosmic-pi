@@ -8,7 +8,7 @@ import { SESSION_FOOTER_ID, sessionFooterContribution } from "../ui/session-foot
 // Separate from the fleet status owner so clearing one never removes the other.
 const OWNER = "pi-subagents.session";
 
-export interface SubagentSessionFooter {
+interface SubagentSessionFooter {
   readonly show: (ctx: ExtensionContext, snapshot: SessionProfileSnapshot) => void;
   readonly clear: () => void;
 }

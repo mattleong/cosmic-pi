@@ -105,7 +105,6 @@ describe("subagent tool", () => {
       const result = yield* step(() => executing);
       expect(released).toBe(true);
       expect(result.details).not.toHaveProperty("cancellationCleanup");
-      expect(resultText(result)).toContain("Wait cleanup is complete");
       expect(result.details).toMatchObject({
         action: "await",
         cancelled: true,

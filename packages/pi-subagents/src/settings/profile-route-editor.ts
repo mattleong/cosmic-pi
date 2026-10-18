@@ -47,14 +47,14 @@ export interface ProfileSettingsInspection extends SubagentConfigInspection {
   readonly session: SessionProfileSnapshot;
 }
 
-export type ProfileRouteDraftKind = "explicit" | "disabled" | "reset" | "inherit" | "invalid";
+type ProfileRouteDraftKind = "explicit" | "disabled" | "reset" | "inherit" | "invalid";
 
 export interface ProfileRouteDraft {
   readonly kind: ProfileRouteDraftKind;
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
 
-export interface CandidateControlDefaults {
+interface CandidateControlDefaults {
   readonly nativeModel?: string | undefined;
 }
 
@@ -235,7 +235,7 @@ const candidateIssueMessage = (
   return absurd(code);
 };
 
-export const candidateValidationError = (candidate: ProfileCandidate): string | undefined => {
+const candidateValidationError = (candidate: ProfileCandidate): string | undefined => {
   const issue = profileCandidateValidationIssues(candidate)[0];
   return issue ? candidateIssueMessage(candidate, issue.code) : undefined;
 };
@@ -310,7 +310,7 @@ export function updateCandidateModel(
   return error ? { notices, error } : { candidate: next, notices };
 }
 
-export type RouteDeclarationResult =
+type RouteDeclarationResult =
   | { readonly valid: true; readonly route?: DeclaredProfileRoute | undefined }
   | { readonly valid: false; readonly error: string };
 

@@ -27,7 +27,7 @@ export interface ProjectedPiModel {
   readonly supportedEfforts: ReadonlyArray<SubagentEffort>;
 }
 
-export interface ProfileModelCatalogSnapshot {
+interface ProfileModelCatalogSnapshot {
   readonly piModels: ReadonlyArray<ProjectedPiModel>;
   readonly scopedPiModels: ReadonlyArray<ProjectedPiModel>;
 }
@@ -45,7 +45,7 @@ export interface ProfileModelRegistry {
   }) => Promise<ProfileModelRegistryRefreshResult>;
 }
 
-export type ProfileModelCatalogRefresh = "updated" | "failed" | "aborted";
+type ProfileModelCatalogRefresh = "updated" | "failed" | "aborted";
 
 const freezeCatalogSnapshot = (
   models: ReadonlyArray<ProjectedPiModel>,

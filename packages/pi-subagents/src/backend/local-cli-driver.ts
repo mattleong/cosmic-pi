@@ -49,9 +49,7 @@ export const missingReportMessage = (
 ): string =>
   `${LOCAL_CLI_LABELS[runtime]} ended its turn without an accepted supervisor report${reminded ? ", even after a reminder" : ""}. Work and writes may already exist; inspect them before an explicit retry.${partialOutput(finalText)}`;
 
-export const withLocalSupervisorInstructions = (
-  request: BackendLaunchRequest,
-): BackendLaunchRequest => ({
+const withLocalSupervisorInstructions = (request: BackendLaunchRequest): BackendLaunchRequest => ({
   ...request,
   systemPrompt: [
     request.systemPrompt,
@@ -66,7 +64,7 @@ export const withLocalSupervisorInstructions = (
 });
 
 /** The exit status on the first line, then the end of the CLI's bounded, redacted stderr. */
-export const localCliExitDiagnostic = (runtime: LocalCliRuntime, exit: ProcessExit): string => {
+const localCliExitDiagnostic = (runtime: LocalCliRuntime, exit: ProcessExit): string => {
   const summary = `${LOCAL_CLI_LABELS[runtime]} exited${exit.exitCode === null ? "" : ` with code ${exit.exitCode}`}${exit.signal ? ` (${exit.signal})` : ""}.`;
   const stderr = exit.stderr.trim();
   return stderr

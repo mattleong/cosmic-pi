@@ -43,16 +43,16 @@ export const DelegationModeSchema = Schema.Literals(DELEGATION_MODES);
 
 export const WORKTREE_HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove"] as const;
 export type WorktreeHookEvent = (typeof WORKTREE_HOOK_EVENTS)[number];
-export const MAX_WORKTREE_HOOKS_PER_EVENT = 16;
-export const MAX_WORKTREE_HOOK_ARGUMENTS = 64;
-export const MAX_WORKTREE_HOOK_ARGUMENT_CHARS = 4_096;
-export const MAX_WORKTREE_HOOK_TIMEOUT_SECONDS = 3_600;
+const MAX_WORKTREE_HOOKS_PER_EVENT = 16;
+const MAX_WORKTREE_HOOK_ARGUMENTS = 64;
+const MAX_WORKTREE_HOOK_ARGUMENT_CHARS = 4_096;
+const MAX_WORKTREE_HOOK_TIMEOUT_SECONDS = 3_600;
 export const DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS: Readonly<Record<WorktreeHookEvent, number>> = {
   WorktreeCreate: 600,
   WorktreeRemove: 60,
 };
 /** An argv command run without a shell at the root of an isolated writer or prepared tree. */
-export const WorktreeHookSchema = Schema.Struct({
+const WorktreeHookSchema = Schema.Struct({
   command: Schema.Array(
     Schema.String.check(
       Schema.isBetweenLength(1, MAX_WORKTREE_HOOK_ARGUMENT_CHARS),
@@ -73,16 +73,16 @@ const WorktreeHookListSchema = Schema.Array(WorktreeHookSchema).check(
   Schema.isMaxLength(MAX_WORKTREE_HOOKS_PER_EVENT),
 );
 /** Claude Code-style worktree hooks, which run after the engine creates or before it removes a tree. */
-export const WorktreeHooksSchema = Schema.Struct({
+const WorktreeHooksSchema = Schema.Struct({
   WorktreeCreate: Schema.optionalKey(WorktreeHookListSchema),
   WorktreeRemove: Schema.optionalKey(WorktreeHookListSchema),
 });
-export type WorktreeHooks = typeof WorktreeHooksSchema.Type;
+type WorktreeHooks = typeof WorktreeHooksSchema.Type;
 
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
 /** Optional cap, in US dollars, on what one session's subagents may spend before new starts stop. */
-export const SessionSpendLimitSchema = Schema.Finite.check(
+const SessionSpendLimitSchema = Schema.Finite.check(
   Schema.isGreaterThan(0),
   Schema.isLessThanOrEqualTo(100_000),
 );
@@ -102,11 +102,11 @@ export const normalizeProfileSetName = (value: string): string | undefined => {
   return isProfileSetName(normalized) ? normalized : undefined;
 };
 
-export interface SubagentProfileSet {
+interface SubagentProfileSet {
   readonly profiles: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>>;
 }
 
-export interface SubagentConfigFile {
+interface SubagentConfigFile {
   readonly version?: number | undefined;
   readonly defaultProfileSet?: string | undefined;
   readonly profileSets?: Readonly<Record<string, SubagentProfileSet>> | undefined;
@@ -200,7 +200,7 @@ export const ProfileRouteSchema = Schema.Struct({
   ),
 });
 
-export const decodeDeclaredProfileCandidate = flow(
+const decodeDeclaredProfileCandidate = flow(
   decodeUnknownOrUndefined(ProfileCandidateSchema, EXACT_FIELDS),
   (candidate): ProfileCandidate | undefined => candidate,
 );
@@ -376,7 +376,7 @@ const CustomAgentSchema = Schema.Struct({
     }),
   ),
 });
-export const decodeCustomAgentDefinition = flow(
+const decodeCustomAgentDefinition = flow(
   decodeUnknownOrUndefined(CustomAgentSchema, EXACT_FIELDS),
   (agent): CustomAgentDefinition | undefined => agent,
 );
@@ -410,7 +410,11 @@ const decodeCustomAgents = (
       return;
     }
     const agent = decodeCustomAgentDefinition(record[name]);
-    if (agent) agents[name] = agent;
+    // Isolation chooses a writer's workspace, so a read-only agent can't set it.
+    if (agent?.isolation !== undefined && agent.writeIntent === "read-only") {
+      diagnostics.push(`${entryPath}.isolation`);
+      invalidAgents.push(name);
+    } else if (agent) agents[name] = agent;
     else {
       diagnostics.push(entryPath);
       invalidAgents.push(name);

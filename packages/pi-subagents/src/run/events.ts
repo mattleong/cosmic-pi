@@ -26,7 +26,7 @@ import { samePiModel } from "./model-catalog.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
-export interface RunEventDependencies {
+interface RunEventDependencies {
   readonly settlement: RunSettlement;
   readonly queueQuestionLocked: RunNotificationDelivery["queueActionNotificationLocked"];
   readonly onProxyEvent: RunProxyExecution;

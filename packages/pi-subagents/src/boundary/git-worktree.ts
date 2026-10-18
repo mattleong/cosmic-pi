@@ -233,9 +233,7 @@ const listedChanges = (paths: ReadonlyArray<string>) =>
   }`;
 
 /** Serializes this process's workspace operations; WorktreeCreate hooks release it while they run. */
-export type WorkspaceOperationGate = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-) => Effect.Effect<A, E, R>;
+type WorkspaceOperationGate = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 
 const revision = (record: WorkspaceRecord, id: string) => {
   const current = record.revision;

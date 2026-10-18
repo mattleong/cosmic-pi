@@ -11,7 +11,7 @@ type AdmittedRun = NonNullable<
 >;
 const retryMessages = {
   eligible: "the launch can be retried",
-  pending: "retry waits for cleanup to settle",
+  pending: "the launch can be retried",
   blocked: "automatic retry is blocked",
   exhausted: "no profile options remain to retry",
   unavailable: "no route is left to retry",
@@ -25,9 +25,14 @@ const launchFailureIssue = (
   severity: uncertain ? "warning" : "error",
   code: `launch:${failure.index}:start-failed`,
   message: uncertain
-    ? `${label} may have started; startup and cleanup couldn't be confirmed`
+    ? `${label} may have started`
     : `${label} couldn't start: ${failureMessage(failure.message, "startup failed", QUOTED_TEXT_LIMIT)}`,
-  detail: `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
+  detail: [
+    `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
+    ...(uncertain && !failure.admittedRun
+      ? ["List runs with subagent_status before retrying or launching a replacement."]
+      : []),
+  ].join("\n"),
 });
 
 const startedCounter = (started: number, total: number, subject: string): string =>
@@ -56,28 +61,13 @@ export function summarizeStart(
     const uncertain = isUncertainToolFailure(failure);
     issues.push(launchFailureIssue(failure, label, uncertain));
     const recovery = failure.admittedRun;
-    if (!recovery) {
-      issues.push({
-        severity: "warning",
-        code: `launch:${failure.index}:recovery-unknown`,
-        message: `${label}: ownership and cleanup are unknown`,
-        detail: uncertain
-          ? "Do not retry or launch a replacement while outcome or cleanup is unconfirmed. Inspect full launch details and status before recovery. Missing retry data does not establish eligibility."
-          : "Inspect full launch details and status for ownership and cleanup before recovery. Missing retry data does not establish eligibility.",
-      });
-      continue;
-    }
-    const confirmed = recovery.cleanupDisposition === "confirmed";
+    if (!recovery) continue;
+    const quarantined = recovery.cleanupDisposition === "quarantined";
     issues.push({
-      severity: confirmed ? "info" : "warning",
-      code: `run:${recovery.runId}:cleanup-receipt`,
-      message: `${label}: ${confirmed ? `cleanup is confirmed; ${retryMessages[recovery.retryDisposition]}` : "cleanup isn't confirmed; processes may still be running"}`,
-      detail: [
-        formatFailedStartRecovery(recovery),
-        confirmed
-          ? failedStartRecoveryAction(recovery)
-          : "Do not retry or launch a replacement while cleanup is pending or quarantined. Inspect full subagent_status and confirm process and writer cleanup before recovery.",
-      ].join("\n"),
+      severity: quarantined ? "warning" : "info",
+      code: `run:${recovery.runId}:retry-receipt`,
+      message: `${label}: ${quarantined ? "cleanup is quarantined" : retryMessages[recovery.retryDisposition]}`,
+      detail: [formatFailedStartRecovery(recovery), failedStartRecoveryAction(recovery)].join("\n"),
     });
   }
   if (compactIssueSeverity(issues) === "error") summary.outcome = "error";

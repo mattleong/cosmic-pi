@@ -45,7 +45,7 @@ const NAMED_ROOTS: ReadonlySet<string> = new Set([
 ]);
 const RUN_DIRECTORY_PREFIX = "agent-";
 const TOMBSTONE_PREFIX = ".swept-";
-export const PRIVATE_STATE_OWNER_FILE = "owner.json";
+const PRIVATE_STATE_OWNER_FILE = "owner.json";
 const MAX_OWNER_BYTES = 1024;
 
 const PrivateStateOwner = Schema.Struct({
@@ -219,7 +219,7 @@ const sweepClaudeTemporaryRoots = (context: SweepContext, parent: string): Effec
       }).pipe(Effect.asVoid);
 };
 
-export interface PrivateStateSweepOptions {
+interface PrivateStateSweepOptions {
   readonly claudeTemporaryParent?: string | undefined;
 }
 

@@ -40,7 +40,7 @@ import {
 import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
 
 /** Reads a record the engine manages, refusing one that a worktree hook still quarantines. */
-export type ManagedWorkspaceRecord = (
+type ManagedWorkspaceRecord = (
   workspaceId: string,
 ) => Effect.Effect<WorkspaceRecord, WorkspaceError, SafeFile>;
 

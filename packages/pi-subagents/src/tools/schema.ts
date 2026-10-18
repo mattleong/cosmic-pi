@@ -90,7 +90,7 @@ const StartSpecOptionFields = {
   isolation: Type.Optional(
     StringEnum(WRITER_WORKSPACE_MODES, {
       description:
-        "Where a writer works: shared-checkout edits your checkout; worktree edits a private copy whose proposal you apply. Omit for the session default; read-only profiles ignore it.",
+        "Writers only (profile worker, or an agent or route with writer intent): shared-checkout edits your checkout; worktree edits a private copy whose proposal you apply. Omit for the session default; a read-only run rejects it.",
     }),
   ),
   model: Type.Optional(ModelOverrideParameters),
@@ -139,8 +139,7 @@ const startParameters = <
   Type.Object(
     {
       agents: Type.Array(spec, {
-        description:
-          "One to thirty-two independent subagents to launch, subject to the caller's configured direct-child capacity.",
+        description: "Independent subagents to launch, up to your direct-child limit.",
         minItems: 1,
         maxItems: MAX_START_BATCH,
       }),
@@ -191,11 +190,17 @@ const StatusParameters = Type.Object(
           "With runIds, reread the latest report you already received, without another notification.",
       }),
     ),
+    verbose: Type.Optional(
+      Type.Boolean({
+        description:
+          "With runIds, add route selection, context, capabilities, process, cwd, and timing details.",
+      }),
+    ),
   },
   strictObjectOptions,
 );
 
-export const MAX_AWAIT_TIMEOUT_SECONDS = 3_600;
+const MAX_AWAIT_TIMEOUT_SECONDS = 3_600;
 
 const AwaitParameters = Type.Object(
   {
@@ -240,15 +245,14 @@ export const WorkspaceParameters = Type.Object(
   {
     action: StringEnum(["list", "review", "prepare", "apply", "discard", "revise"] as const, {
       description:
-        "list needs no target. apply needs workspaceId: alone it freezes, prepares, and integrates in one call; revisionId optionally pins the revision and paths limits it to those changed files, keeping the rest as the proposal; with revisionId and preparationId it integrates exactly that reviewed and prepared pair. review freezes a cleaned-up workspace or pages an exact revision, starting with a summary. prepare needs revisionId. revise needs message and invalidates prior review/preparation; rebase first rebuilds the writer's tree from your current files. discard needs workspaceId only.",
+        "Every action but list needs workspaceId. prepare needs revisionId; revise needs message.",
     }),
     workspaceId: Type.Optional(RunIdParameter),
     revisionId: Type.Optional(RunIdParameter),
     preparationId: Type.Optional(RunIdParameter),
     paths: Type.Optional(
       Type.Array(nonblankString(1_023), {
-        description:
-          "apply only: exact changed paths from the revision to integrate now; the rest stay in the workspace as its proposal. Not with preparationId.",
+        description: "apply only: changed paths to integrate now; the rest stay as the proposal.",
         minItems: 1,
         maxItems: MAX_WORKSPACE_FILES,
         uniqueItems: true,
@@ -257,22 +261,21 @@ export const WorkspaceParameters = Type.Object(
     rebase: Type.Optional(
       Type.Boolean({
         description:
-          "revise only: rebuild the writer's tree from your current files and reapply its changes with a three-way merge; the writer resolves any conflicts.",
+          "revise only: rebuild the writer's tree from your current files first; the writer resolves any conflicts.",
       }),
     ),
     offset: Type.Optional(
       Type.Integer({
         minimum: 0,
         maximum: Number.MAX_SAFE_INTEGER,
-        description: "Zero-based character offset for list or immutable diff paging.",
+        description: "list or review paging offset, from the previous page.",
       }),
     ),
     limit: Type.Optional(
       Type.Integer({
         minimum: 1,
         maximum: 16_000,
-        description:
-          "Maximum review characters per page; default 16000. The careful path reads every page before prepare.",
+        description: "Maximum review characters per page; default 16000.",
       }),
     ),
     message: Type.Optional(MessageParameters),
@@ -311,12 +314,6 @@ export const workspaceOperationError = (operation: SubagentWorkspaceInput): stri
   );
   if (unexpected) return `Workspace ${operation.action} does not accept ${unexpected}.`;
   if (
-    operation.action === "review" &&
-    (operation.offset ?? 0) > 0 &&
-    operation.revisionId === undefined
-  )
-    return "Review paging requires the exact revisionId returned by the first page.";
-  if (
     operation.action === "apply" &&
     operation.preparationId !== undefined &&
     operation.revisionId === undefined
@@ -335,7 +332,7 @@ export type SubagentStartSpec = Static<typeof StartSpecParameters>;
 export type SubagentModelsInput = Static<typeof ModelsParameters>;
 export type SubagentStartInput = Static<typeof StartParameters>;
 export type SubagentLifecycleInput = Static<typeof LifecycleParameters>;
-export type SubagentStatusInput = Static<typeof StatusParameters>;
+type SubagentStatusInput = Static<typeof StatusParameters>;
 
 export const lifecycleMessageError = (input: SubagentLifecycleInput): string | undefined =>
   input.action !== "resume" && input.message !== undefined
@@ -343,9 +340,13 @@ export const lifecycleMessageError = (input: SubagentLifecycleInput): string | u
     : undefined;
 
 export const statusOperationError = (input: SubagentStatusInput): string | undefined =>
-  input.runIds === undefined && input.includeDeliveredReports !== undefined
-    ? "subagent_status includeDeliveredReports requires runIds."
-    : undefined;
+  input.runIds !== undefined
+    ? undefined
+    : input.includeDeliveredReports !== undefined
+      ? "subagent_status includeDeliveredReports requires runIds."
+      : input.verbose !== undefined
+        ? "subagent_status verbose requires runIds."
+        : undefined;
 
 export const SUBAGENT_TOOL_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.models]: { parameters: ModelsParameters },

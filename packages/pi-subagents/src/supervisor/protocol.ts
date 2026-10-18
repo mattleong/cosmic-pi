@@ -13,11 +13,11 @@ import {
 } from "./mcp-contract.ts";
 
 export const SUPERVISOR_CHANNEL_VERSION = 3 as const;
-export const MAX_SUPERVISOR_CHANNEL_ID_CHARS = 128;
-export const MAX_SUPERVISOR_RUN_ID_CHARS = 80;
+const MAX_SUPERVISOR_CHANNEL_ID_CHARS = 128;
+const MAX_SUPERVISOR_RUN_ID_CHARS = 80;
 export const MAX_SUPERVISOR_CHANNEL_LINE_BYTES = 3 * 1024 * 1024;
 export const MAX_SUPERVISOR_CONFIG_BYTES = 4 * 1024;
-export const SUPERVISOR_AUTH_TOKEN_CHARS = 64;
+const SUPERVISOR_AUTH_TOKEN_CHARS = 64;
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
 const CHANNEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -55,7 +55,7 @@ export const SupervisorDeliveryIdSchema = Schema.String.check(
 ).pipe(Schema.brand("SupervisorDeliveryId"));
 export type SupervisorDeliveryId = Schema.Schema.Type<typeof SupervisorDeliveryIdSchema>;
 
-export const SupervisorAssignmentEpochSchema = Schema.Number.check(
+const SupervisorAssignmentEpochSchema = Schema.Number.check(
   Schema.isInt(),
   Schema.isGreaterThan(0),
 );
@@ -68,7 +68,7 @@ const nonblankText = (maximum: number) =>
 export const SupervisorMessageSchema = nonblankText(MAX_SUPERVISOR_MCP_MESSAGE_CHARS);
 export const PARENT_REPLY_PREFIX = "Parent reply: ";
 
-export const SupervisorReplySchema = Schema.String.check(
+const SupervisorReplySchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS),
 );
@@ -126,7 +126,7 @@ export const SupervisorOpenSessionRpc = Rpc.make("SupervisorOpenSession", {
   error: SupervisorRpcFailure,
 });
 
-export const SupervisorWatchAssignmentsRpc = Rpc.make("SupervisorWatchAssignments", {
+const SupervisorWatchAssignmentsRpc = Rpc.make("SupervisorWatchAssignments", {
   payload: AuthenticatedPayload,
   success: Schema.Struct({
     kind: Schema.Literal("assignment"),
@@ -137,7 +137,7 @@ export const SupervisorWatchAssignmentsRpc = Rpc.make("SupervisorWatchAssignment
   stream: true,
 });
 
-export const SupervisorAcknowledgeAssignmentRpc = Rpc.make("SupervisorAcknowledgeAssignment", {
+const SupervisorAcknowledgeAssignmentRpc = Rpc.make("SupervisorAcknowledgeAssignment", {
   payload: {
     ...AssignedPayload,
     updateId: SupervisorChannelIdSchema,
@@ -148,9 +148,9 @@ export const SupervisorAcknowledgeAssignmentRpc = Rpc.make("SupervisorAcknowledg
 const contactRpc = <const Tag extends string>(tag: Tag) =>
   Rpc.make(tag, { payload: MessagePayload, success: Schema.String, error: SupervisorRpcFailure });
 export const SupervisorProgressRpc = contactRpc("SupervisorProgress");
-export const SupervisorWarningRpc = contactRpc("SupervisorWarning");
+const SupervisorWarningRpc = contactRpc("SupervisorWarning");
 
-export const SupervisorQuestionRpc = Rpc.make("SupervisorQuestion", {
+const SupervisorQuestionRpc = Rpc.make("SupervisorQuestion", {
   payload: { ...MessagePayload, ...MainAgentCallPayload },
   success: Schema.Struct({
     questionId: SupervisorChannelIdSchema,
@@ -159,18 +159,15 @@ export const SupervisorQuestionRpc = Rpc.make("SupervisorQuestion", {
   error: SupervisorRpcFailure,
 });
 
-export const SupervisorAcknowledgeQuestionReplyRpc = Rpc.make(
-  "SupervisorAcknowledgeQuestionReply",
-  {
-    payload: {
-      ...AssignedPayload,
-      questionId: SupervisorChannelIdSchema,
-    },
-    error: SupervisorRpcFailure,
+const SupervisorAcknowledgeQuestionReplyRpc = Rpc.make("SupervisorAcknowledgeQuestionReply", {
+  payload: {
+    ...AssignedPayload,
+    questionId: SupervisorChannelIdSchema,
   },
-);
+  error: SupervisorRpcFailure,
+});
 
-export const SupervisorReportRpc = Rpc.make("SupervisorReport", {
+const SupervisorReportRpc = Rpc.make("SupervisorReport", {
   payload: {
     ...AssignedPayload,
     requestId: SupervisorChannelIdSchema,

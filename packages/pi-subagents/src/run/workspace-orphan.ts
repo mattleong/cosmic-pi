@@ -22,7 +22,7 @@ const ORPHAN_UNAVAILABLE =
   "This session can only adopt or discard an orphaned workspace of its own checkout whose session has ended.";
 
 /** Orphans unchanged this long are discarded at root startup, keeping their revision patch. */
-export const ORPHAN_SWEEP_AGE = Duration.days(30);
+const ORPHAN_SWEEP_AGE = Duration.days(30);
 
 /**
  * What the root may do with another session's unfinished workspace once that session ended:

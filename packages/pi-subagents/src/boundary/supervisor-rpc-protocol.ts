@@ -36,7 +36,7 @@ export class SupervisorRpcConnection extends Context.Service<
   SupervisorRpcConnectionContract
 >()("pi-subagents/boundary/supervisor-rpc-protocol/SupervisorRpcConnection") {}
 
-export interface SupervisorRpcServerProtocolOptions {
+interface SupervisorRpcServerProtocolOptions {
   readonly server: SocketServer.SocketServer["Service"];
   readonly authTimeoutMillis: number;
   readonly onDisconnect: (clientId: number) => void;

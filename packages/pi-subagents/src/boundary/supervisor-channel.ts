@@ -58,7 +58,7 @@ const EVENT_CAPACITY = 64;
 const MAX_ACTIVE_RPC_REQUESTS = 32;
 const AUTH_TIMEOUT_MILLIS = 5_000;
 
-export interface ClaudeSupervisorMcpMetadata {
+interface ClaudeSupervisorMcpMetadata {
   readonly mcpServers: {
     readonly [SUPERVISOR_MCP_REGISTRATION]: {
       readonly type: "stdio";
@@ -69,7 +69,7 @@ export interface ClaudeSupervisorMcpMetadata {
   };
 }
 
-export interface CodexSupervisorMcpMetadata {
+interface CodexSupervisorMcpMetadata {
   readonly tomlFragment: string;
 }
 
@@ -94,7 +94,7 @@ export interface SupervisorChannelContract {
   ) => Effect.Effect<SupervisorChannelHandle, SupervisorChannelError, Scope.Scope>;
 }
 
-export interface SupervisorChannelOpenRequest {
+interface SupervisorChannelOpenRequest {
   readonly runId: string;
 }
 

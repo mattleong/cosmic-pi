@@ -55,7 +55,7 @@ export interface WorkspaceReviewOptions {
 }
 
 /** A binding this operation keeps busy; `heldLocked` confirms, under the run lock, it still does. */
-export interface HeldBinding {
+interface HeldBinding {
   readonly binding: WorkspaceBinding;
   readonly token: symbol;
   readonly heldLocked: () => Effect.Effect<void, SubagentError>;
@@ -68,7 +68,7 @@ const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
  * Where a page starting at `offset` ends: at most `limit` UTF-16 units, never between the two
  * halves of a character, unless that character alone is longer than the limit.
  */
-export const pageEnd = (text: string, offset: number, limit: number) => {
+const pageEnd = (text: string, offset: number, limit: number) => {
   const end = Math.min(text.length, offset + limit);
   if (
     end >= text.length ||
@@ -130,15 +130,16 @@ const withoutPreparation = (knowledge: RevisionKnowledge): RevisionKnowledge =>
       ? { kind: "frozen", review: knowledge.review }
       : { kind: "unreviewed" };
 
-/** Records a preparation whose WorktreeCreate hooks succeeded, which makes it integrable. */
-export const withPreparation =
-  (preparation: WorkspacePreparation) =>
+/** Records a ready preparation, which makes it integrable. */
+const withPreparation =
+  (preparation: WorkspacePreparation, origin: "prepare" | "apply") =>
   (knowledge: RevisionKnowledge): RevisionKnowledge => {
     const review = reviewProgress(knowledge);
     return {
       kind: "prepared",
       revisionId: preparation.revisionId,
       preparationId: preparation.preparationId,
+      origin,
       ...(review?.revisionId === preparation.revisionId && { review }),
     };
   };
@@ -246,8 +247,8 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
       return revision;
     });
   /**
-   * Prepares the revision, or only `paths` of it. The preparation isn't integrable until its
-   * WorktreeCreate hooks succeed (`provisionHeld`) and the caller records it.
+   * Prepares the revision, or only `paths` of it. The preparation isn't integrable until the
+   * caller records it, after `provisionHeld` runs its WorktreeCreate hooks when it is for testing.
    */
   const prepareHeld = (
     service: WorkspaceServiceContract,
@@ -278,9 +279,15 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
       runId: binding.record?.view.id,
     });
   /** Records a held binding's preparation under the run lock. */
-  const markPrepared = ({ binding, heldLocked }: HeldBinding, preparation: WorkspacePreparation) =>
+  const markPrepared = (
+    { binding, heldLocked }: HeldBinding,
+    preparation: WorkspacePreparation,
+    origin: "prepare" | "apply",
+  ) =>
     heldLocked().pipe(
-      Effect.andThen(Effect.sync(() => updateKnowledge(binding, withPreparation(preparation)))),
+      Effect.andThen(
+        Effect.sync(() => updateKnowledge(binding, withPreparation(preparation, origin))),
+      ),
     );
   /**
    * Like integration, destructive cleanup holds admission closed from the cwd check through
@@ -404,7 +411,7 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
           // The careful path leaves testing to the parent in the prepared tree.
           const preparation = yield* prepareHeld(service, held, revisionId);
           yield* provisionHeld(service, held, preparation);
-          yield* withLock(markPrepared(held, preparation));
+          yield* withLock(markPrepared(held, preparation, "prepare"));
           return { ...preparation, leftOutPaths: revision.uncapturedPaths ?? [] };
         }),
       );

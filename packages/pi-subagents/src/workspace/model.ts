@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import type { WorkspaceDiffStatFile } from "./diffstat.ts";
 
 /** Failures a caller can act on specifically; others surface as a generic workspace failure. */
-export const WORKSPACE_ERROR_CODES = [
+const WORKSPACE_ERROR_CODES = [
   "workspace_conflict",
   "workspace_parent_changed",
   "workspace_rollback_refused",
@@ -19,7 +19,7 @@ export class WorkspaceError extends Schema.TaggedError<WorkspaceError>()("Worksp
   cleanupUnconfirmed: Schema.optional(Schema.Boolean),
 }) {}
 
-export const WorkspaceHandleSchema = Schema.Struct({
+const WorkspaceHandleSchema = Schema.Struct({
   workspaceId: Schema.String,
   ownerId: Schema.String,
   sourceCwd: Schema.String,
@@ -43,7 +43,7 @@ export type WorkspaceHandle = typeof WorkspaceHandleSchema.Type;
 export const workspaceCheckoutRoot = (handle: WorkspaceHandle) =>
   handle.checkoutRoot ?? handle.sourceRoot;
 /** A frozen revision as its record keeps it; the patch is stored in a file beside the record. */
-export const WorkspaceRevisionMetadataSchema = Schema.Struct({
+const WorkspaceRevisionMetadataSchema = Schema.Struct({
   revisionId: Schema.String,
   changedPaths: Schema.Array(Schema.String),
   /** Untracked worker files left out on purpose because their names look like credentials. */
@@ -53,7 +53,7 @@ export type WorkspaceRevisionMetadata = typeof WorkspaceRevisionMetadataSchema.T
 export interface WorkspaceRevision extends WorkspaceRevisionMetadata {
   readonly diff: string;
 }
-export const WorkspacePreparationSchema = Schema.Struct({
+const WorkspacePreparationSchema = Schema.Struct({
   preparationId: Schema.String,
   revisionId: Schema.String,
   cwd: Schema.String,
@@ -69,7 +69,7 @@ const WorkspaceJournalFileSchema = Schema.Struct({
   permissions: Schema.Finite,
 });
 /** What the writer that created a workspace was launched as, so an adopting session can revise it. */
-export const WorkspaceLaunchSchema = Schema.Struct({
+const WorkspaceLaunchSchema = Schema.Struct({
   profile: Schema.optional(Schema.String),
   agent: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
@@ -197,7 +197,7 @@ export interface WorkspaceSwept {
 export interface WorkspaceSettledTarget extends WorkspaceTarget {
   readonly processCleanupConfirmed: true;
 }
-export interface WorkspaceRevisionTarget extends WorkspaceTarget {
+interface WorkspaceRevisionTarget extends WorkspaceTarget {
   readonly revisionId: string;
 }
 export interface WorkspacePreparationTarget extends WorkspaceRevisionTarget {

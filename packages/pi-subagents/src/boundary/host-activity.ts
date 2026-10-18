@@ -22,13 +22,7 @@ import {
   subagentActivityItems,
 } from "../ui/run-activity.ts";
 
-export type SubagentActivityAction =
-  | "stop"
-  | "interrupt"
-  | "resume"
-  | "message"
-  | "reply"
-  | "rename";
+type SubagentActivityAction = "stop" | "interrupt" | "resume" | "message" | "reply" | "rename";
 type SubagentActivityInput = "resume" | "message" | "reply" | "rename";
 
 class SubagentActivityInputError extends Schema.TaggedError<SubagentActivityInputError>()(

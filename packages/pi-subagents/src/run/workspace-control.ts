@@ -47,7 +47,7 @@ export interface WriterWorkspaceInspection {
   readonly unresolvedWorkspaceCount?: number;
 }
 
-export interface WorkspaceCoordinatorListing extends WorkspaceListing {
+interface WorkspaceCoordinatorListing extends WorkspaceListing {
   /** The root's listing marks other sessions' workspaces it may adopt or only discard. */
   readonly orphans?: ReadonlyMap<string, OrphanDisposition> | undefined;
 }
@@ -245,7 +245,7 @@ export function workspaceControl(
     Effect.suspend(() =>
       isOrphan(workspaceId, caller)
         ? orphans.adopt(workspaceId).pipe(Effect.andThen(operation))
-        : operation,
+        : context.awaitWriterCleanup(workspaceId).pipe(Effect.andThen(operation)),
     );
   // An orphan is discarded without adoption, so nested and mid-integration orphans can go too.
   const workspaceDiscard: WorkspaceCoordinatorContract["workspaceDiscard"] = (
@@ -255,7 +255,9 @@ export function workspaceControl(
     Effect.suspend(() =>
       isOrphan(workspaceId, caller)
         ? orphans.discardOrphan(workspaceId)
-        : review.workspaceDiscard(workspaceId, caller),
+        : context
+            .awaitWriterCleanup(workspaceId)
+            .pipe(Effect.andThen(review.workspaceDiscard(workspaceId, caller))),
     );
   const launch = workspaceLaunchOperations(context);
   const apply = workspaceApplyOperations(context, review.held, integrateLocked);

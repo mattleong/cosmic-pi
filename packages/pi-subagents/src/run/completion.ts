@@ -64,11 +64,12 @@ const completionNotification = (
     ...(completion.warning && { warning: completion.warning }),
     ...(record.view.profile && { profile: record.view.profile }),
     ...(retryAvailable && { retryAvailable: true, remainingCandidateCount }),
+    ...(record.view.workspaceId !== undefined && { workspaceId: record.view.workspaceId }),
     ...(record.view.workspaceOutcome && { workspaceOutcome: record.view.workspaceOutcome }),
   };
 };
 
-export interface CompletionDeliverySelection {
+interface CompletionDeliverySelection {
   readonly record: RunRecord;
   readonly completion: CompletionGenerationRecord;
   readonly notification: SubagentCompletionNotification;

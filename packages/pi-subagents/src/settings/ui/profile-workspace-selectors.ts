@@ -67,7 +67,7 @@ const targetLabel = (target: ProfileWorkspaceTarget): string =>
     ? "Editing Current Session"
     : `${qualifiedProfileSetLabel(target.set)} · session not affected`;
 
-export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
+interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
   readonly candidate: ProfileCandidate;
@@ -128,7 +128,7 @@ export const candidateFieldSelector = (
   });
 };
 
-export interface RouteActionsSelectorOptions extends SharedSelectorOptions {
+interface RouteActionsSelectorOptions extends SharedSelectorOptions {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
   readonly draft: ProfileRouteDraft;
@@ -159,7 +159,7 @@ export const routeActionsSelector = (
   });
 };
 
-export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
+interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
   readonly inspection: ProfileSettingsInspection;
   readonly current: ProfileId;
   readonly initialQuery?: string | undefined;

@@ -111,7 +111,7 @@ const runControls = (run: SubagentRunCard): string => {
 
 const runWriterSummary = (run: SubagentRunCard): string | undefined => {
   if (run.writeIntent !== "writer") return undefined;
-  return run.workspaceId ? "Writer · isolated workspace" : "Writer · shared cwd";
+  return run.workspaceId ? `Writer · worktree ${run.workspaceId}` : "Writer · shared cwd";
 };
 
 const dimLines = (text: string, width: number, theme: Theme): string[] =>
@@ -120,7 +120,7 @@ const dimLines = (text: string, width: number, theme: Theme): string[] =>
 const routineRunDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
   const selection = runSelectionSummary(run);
   const assignment = (run.reportGeneration || 1) > 1 ? ` · assignment ${run.reportGeneration}` : "";
-  const details = `${run.context === "fork" ? "Forked context" : "Fresh context"} · closes after its report${assignment} · ${runControls(run)}`;
+  const details = `${run.context === "fork" ? "Forked context" : "Fresh context"}${assignment} · ${runControls(run)}`;
   return [
     ...dimLines(`ID: ${run.id}`, width, theme),
     ...(selection ? dimLines(selection, width, theme) : []),

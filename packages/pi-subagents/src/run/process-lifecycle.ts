@@ -51,7 +51,7 @@ export function processControlOperations(withLock: WithRunLock) {
 
 export type RunProcessControls = ReturnType<typeof processControlOperations>;
 
-export interface RunProcessInitializerDependencies extends Pick<
+interface RunProcessInitializerDependencies extends Pick<
   RunContext,
   "ownerScope" | "withLock" | "publish"
 > {

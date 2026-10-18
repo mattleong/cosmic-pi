@@ -44,14 +44,14 @@ type JournalEntry = NonNullable<WorkspaceRecord["journal"]>[number];
 const EMPTY_DIGEST = contentDigest(new Uint8Array());
 
 /** A regular file's content as publication reads, installs, and backs it up. */
-export interface PublishedFile {
+interface PublishedFile {
   readonly digest: string;
   readonly mode: "100644" | "100755";
   readonly permissions: number;
   readonly bytes: Uint8Array;
 }
 /** Files by path relative to their tree's root; a missing path is absent there. */
-export type PublishedFiles = ReadonlyMap<string, PublishedFile>;
+type PublishedFiles = ReadonlyMap<string, PublishedFile>;
 
 const unpublishable = (relative: string, message: string, rule: string) =>
   workspaceRefusal("integrate", message, {

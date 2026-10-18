@@ -9,7 +9,7 @@ import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { decodeOutcomeDetails } from "./details-decode.ts";
 
-export type SubagentOutcomeDetails = SubagentStartAwaitCardDetails | CompactSubagentToolDetails;
+type SubagentOutcomeDetails = SubagentStartAwaitCardDetails | CompactSubagentToolDetails;
 
 export const decodeSubagentOutcomeDetails = (
   action: string,

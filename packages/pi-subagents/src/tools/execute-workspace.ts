@@ -134,7 +134,7 @@ const encodeWorkspaceMetadata = Schema.encodeEffect(
 );
 
 const ORPHAN_GUIDANCE =
-  "Metadata visibility does not authorize recovery. An entry with orphan=adoptable belongs to a session that has ended: review, prepare, apply, or revise takes it over for this session; orphan=discard-only entries (nested or left mid-integration) can only be discarded, which rolls back an interrupted integration. Adopt or discard another session's workspace only when the user asks. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the worker tree and recovery record before manual repair.";
+  "orphan=adoptable entries belong to ended sessions: review, prepare, apply, or revise takes one over. orphan=discard-only entries (nested or left mid-integration) can only be discarded, which rolls back an interrupted integration.";
 
 const executeWorkspaceList = (
   service: SubagentServiceContract,
@@ -204,7 +204,7 @@ const executeWorkspaceList = (
         nextOffset === undefined
           ? "End of workspace list."
           : `More workspaces: call list with offset=${nextOffset}.`,
-        ORPHAN_GUIDANCE,
+        ...(listing.orphans !== undefined && listing.orphans.size > 0 ? [ORPHAN_GUIDANCE] : []),
       ].join("\n"),
       {
         operation: "list",
@@ -243,8 +243,8 @@ const executeWorkspaceReview = (
       `Workspace ${workspaceId}; immutable revision ${review.revisionId}.`,
       `Review characters ${review.offset}..${review.offset + review.text.length} of ${review.totalChars}: a summary of changed files and line counts, then the diff.`,
       review.nextOffset !== undefined
-        ? `Incomplete review. Call review with workspaceId=${workspaceId}, revisionId=${review.revisionId}, offset=${review.nextOffset}. Read ALL pages before prepare.`
-        : "End of review. After reading every page, prepare this exact revision, run relevant tests in the returned combined cwd, then apply that revisionId and preparationId.",
+        ? `More pages: review workspaceId=${workspaceId} offset=${review.nextOffset}. Read every page before prepare.`
+        : "End of review. Apply it, or prepare it and test in the returned cwd first.",
       "BEGIN IMMUTABLE REVIEW PAGE",
     ].join("\n");
     return result([prefix, review.text, "END IMMUTABLE REVIEW PAGE"].join("\n"), {
@@ -276,7 +276,7 @@ const executeWorkspacePrepare = (
       [
         prefix,
         cwdLine,
-        "Run relevant tests in this cwd, which combines the proposal with current parent edits. Do not edit this prepared tree. After passing tests and complete diff review, apply with this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
+        `Run relevant tests in this cwd, which combines the proposal with your current edits; don't edit it. Then apply workspaceId=${operation.workspaceId ?? ""}, which integrates this preparation.`,
         ...warnings.map((warning) => `Warning: ${warning.detail}`),
       ].join("\n"),
       {
@@ -383,10 +383,7 @@ export const executeWorkspaceAction = (
         return yield* executeWorkspaceApply(service, operation, receipt, callerRunId);
       case "discard":
         yield* service.workspaceDiscard(workspaceId, callerRunId);
-        return result(
-          "Discarded the workspace proposal after confirmed cleanup; parent files were not changed.",
-          receipt,
-        );
+        return result("Discarded the workspace proposal; parent files were not changed.", receipt);
       case "revise": {
         const { run, rebase } = yield* service.workspaceRevise(
           workspaceId,
@@ -405,7 +402,7 @@ export const executeWorkspaceAction = (
               ];
         return result(
           [
-            `Revision requested; successor runId=${run.id}. Prior review and preparation are invalid. Await this run, then review its new immutable revision from the beginning before preparing and testing again.`,
+            `Revision requested; successor runId=${run.id}. Await it, then apply or review its new revision; earlier review and preparation no longer apply.`,
             ...rebased,
           ].join("\n"),
           {
